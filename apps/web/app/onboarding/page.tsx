@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@tm9657/flow-like-ui";
+import { Button } from "@flow-like/flow-like-ui";
 import { ArrowRight, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";

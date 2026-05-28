@@ -28,6 +28,7 @@ impl NodeLogic for UpdateConfluencePageNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -131,13 +132,12 @@ impl NodeLogic for UpdateConfluencePageNode {
         }
 
         let client = reqwest::Client::new();
-        let base = provider.base_url.trim_end_matches('/');
 
         // First, get the current page to get version and current values
-        let get_url = format!(
-            "{}/wiki/rest/api/content/{}?expand=version,body.storage,space",
-            base, page_id
-        );
+        let get_url = provider.confluence_rest_api_url(&format!(
+            "/content/{}?expand=version,body.storage,space",
+            page_id
+        ));
 
         let current_page = client
             .get(&get_url)
@@ -212,7 +212,7 @@ impl NodeLogic for UpdateConfluencePageNode {
         };
 
         // Build update request
-        let update_url = format!("{}/wiki/rest/api/content/{}", base, page_id);
+        let update_url = provider.confluence_rest_api_url(&format!("/content/{}", page_id));
 
         let mut request_body = json!({
             "id": page_id,

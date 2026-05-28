@@ -1,6 +1,6 @@
 "use client";
 
-import { TextEditor } from "@tm9657/flow-like-ui";
+import { TextEditor } from "@flow-like/flow-like-ui";
 import { type ChangeEvent, useState } from "react";
 
 export default function MarkdownDebugPage() {

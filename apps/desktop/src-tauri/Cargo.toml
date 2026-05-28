@@ -2,8 +2,8 @@
 name = "flow-like-desktop"
 version = "0.0.2"
 description = "Flow-Like, Automation done with the press of a Button"
-authors = ["TM9657 GmbH"]
-repository = "https://github.com/TM9657/flow-like/"
+authors = ["Rheosoph GmbH"]
+repository = "https://github.com/Rheosoph/flow-like/"
 edition = "2024"
 homepage = "https://flow-like.com"
 categories = ["GenAI", "AI", "Productivity"]
@@ -93,7 +93,7 @@ copilot-sdk.workspace = true
 once_cell = "1.21.3"
 tokio.workspace = true
 rayon = "1.11.0"
-tauri-plugin-remote-push = { git = "https://github.com/TM9657/tauri-plugin-remote-push.git", branch = "main" }
+tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-remote-push.git", branch = "main" }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }

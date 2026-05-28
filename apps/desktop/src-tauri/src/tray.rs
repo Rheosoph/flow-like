@@ -820,7 +820,7 @@ fn handle_menu_event(app_handle: &AppHandle, id: &str) {
         }
         MENU_REPORT_ISSUE => {
             let _ = app_handle.opener().open_url(
-                "https://github.com/TM9657/flow-like/issues/new",
+                "https://github.com/Rheosoph/flow-like/issues/new",
                 None::<&str>,
             );
         }

@@ -1,4 +1,4 @@
-import type { IIntercomEvent } from "@tm9657/flow-like-ui";
+import type { IIntercomEvent } from "@flow-like/flow-like-ui";
 
 export const FLOW_NOTIFICATION_EVENT = "flow-like:flow-notification";
 

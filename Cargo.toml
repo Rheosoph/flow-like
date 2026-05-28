@@ -124,6 +124,10 @@ imageproc = "0.25.0"
 webp = "0.3.1"
 ahash = "0.8.12"
 base64 = "0.22.1"
+aes-gcm = "0.10.3"
+argon2 = "0.5.3"
+chacha20poly1305 = "0.10.1"
+zeroize = "1.8.1"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 opentelemetry = "0.27"
@@ -146,7 +150,7 @@ thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/TM9657/markitdown-rs.git", rev = "2e2e7fd", default-features = false, features = ["rustls-tls", "static-liblzma"] }
+markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "1431d2f", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"
@@ -157,16 +161,26 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 getrandom = "0.4.1"
 dashmap = "6"
 
-rdev = { git = "https://github.com/TM9657/rdev", branch = "macos-thread-safety" }
+rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "43.0.2", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
-wasmtime-wasi = "43.0.2"
-wasmtime-wasi-http = "43.0.2"
+wasmtime = { version = "45.0.0", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "45.0.0"
+wasmtime-wasi-http = "45.0.0"
 
-# Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
-# conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)
 [patch.crates-io]
-esaxx-rs = { git = "https://github.com/thewh1teagle/esaxx-rs.git", branch = "feat/dynamic-msvc-link" }
+# Fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
+# conflicting with ort_sys which uses dynamic CRT /MD -> LNK2038).
+esaxx-rs = { git = "https://github.com/Rheosoph/esaxx-rs.git", branch = "main" }
+# Fix smartstring's allocator_api probe on newer stable Rust toolchains.
+smartstring = { git = "https://github.com/Rheosoph/smartstring.git", rev = "ea5608253d061dbc90a8f66022ebc3326bd65514" }
+# Fix io-extras's unstable vector feature probes on newer stable Rust toolchains.
+io-extras = { git = "https://github.com/Rheosoph/io-extras.git", rev = "515df16351274387cb14d661874ed731fff1350b" }
+# Fix cap-primitives's unstable io_error feature probes on newer stable Rust toolchains.
+cap-primitives = { git = "https://github.com/Rheosoph/cap-std.git", rev = "dca01d25b31c91da1aa7f2050c0eca4d4f361871" }
+# Fix cap-std's unstable vector feature probes on newer stable Rust toolchains.
+cap-std = { git = "https://github.com/Rheosoph/cap-std.git", rev = "dca01d25b31c91da1aa7f2050c0eca4d4f361871" }
+# Fix erasable's unstable extern type / never type probes on newer stable Rust toolchains.
+erasable = { git = "https://github.com/Rheosoph/pointer-utils.git", rev = "e1c31813a156e656f8d0b2c194410ac7192ffbd4" }
 
 # Use line-tables-only debug info and strip debuginfo to keep .so under 4GB for Android APK ZIP32 limit
 [profile.dev]

@@ -153,6 +153,8 @@ impl GcpRuntimeCredentials {
         let log_prefix = format!("runs/{}", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
         let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
+        let (content_path_prefix, user_content_path_prefix) =
+            scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
         let (allowed_prefixes, write_access) = match mode {
             CredentialsAccess::EditApp => (vec![apps_prefix.clone()], true),
@@ -166,43 +168,79 @@ impl GcpRuntimeCredentials {
             // bucket. Same scope as `ReadApp` / `EditApp`.
             CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
             CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
-            CredentialsAccess::EditUser => (vec![user_prefix], true),
-            CredentialsAccess::ReadUser => (vec![user_prefix], false),
-            CredentialsAccess::InvokeNone => {
-                (vec![user_prefix, temporary_user_prefix, log_prefix], true)
-            }
+            CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
+            CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
+            CredentialsAccess::InvokeNone => (
+                vec![
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    log_prefix.clone(),
+                ],
+                true,
+            ),
             CredentialsAccess::InvokeRead => (
                 vec![
-                    apps_prefix,
-                    user_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                    log_prefix,
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
                 ],
                 false,
             ),
             CredentialsAccess::InvokeWrite => (
                 vec![
-                    apps_prefix,
-                    user_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                    log_prefix,
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
                 ],
                 true,
             ),
-            CredentialsAccess::ReadLogs => (vec![log_prefix], false),
+            CredentialsAccess::ServerExecute => (
+                vec![
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
+                ],
+                true,
+            ),
+            CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
         };
 
         // Generate a base access token, then downscope it with Credential Access Boundary
         let base_token = generate_access_token(&service_account_key, state).await?;
-        let access_token = downscope_token(
-            &base_token,
-            &self.content_bucket,
-            &allowed_prefixes,
-            write_access,
-        )
-        .await?;
+        let access_token = if matches!(mode, CredentialsAccess::ServerExecute) {
+            downscope_token_for_rules(
+                &base_token,
+                &[
+                    GcpAccessRule::new(
+                        self.content_bucket.clone(),
+                        vec![
+                            apps_prefix.clone(),
+                            user_prefix.clone(),
+                            temporary_user_prefix.clone(),
+                            temporary_global_prefix.clone(),
+                        ],
+                        true,
+                    ),
+                    GcpAccessRule::new(self.logs_bucket.clone(), vec![log_prefix.clone()], true),
+                    GcpAccessRule::new(self.meta_bucket.clone(), vec![apps_prefix.clone()], false),
+                ],
+            )
+            .await?
+        } else {
+            downscope_token(
+                &base_token,
+                &self.content_bucket,
+                &allowed_prefixes,
+                write_access,
+            )
+            .await?
+        };
         let chrono_expiration = chrono::Utc::now() + chrono::Duration::hours(1);
 
         Ok(Self {
@@ -214,8 +252,8 @@ impl GcpRuntimeCredentials {
             allowed_prefixes,
             write_access,
             expiration: Some(chrono_expiration),
-            content_path_prefix: Some(format!("apps/{}", app_id)),
-            user_content_path_prefix: Some(format!("users/{}/apps/{}", sub, app_id)),
+            content_path_prefix,
+            user_content_path_prefix,
         })
     }
 
@@ -245,6 +283,8 @@ impl GcpRuntimeCredentials {
         let log_prefix = format!("runs/{}", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
         let temporary_global_prefix = format!("tmp/global/apps/{}", app_id);
+        let (content_path_prefix, user_content_path_prefix) =
+            scoped_content_path_prefixes(&apps_prefix, &user_prefix, &mode);
 
         let (allowed_prefixes, write_access) = match mode {
             CredentialsAccess::EditApp => (vec![apps_prefix.clone()], true),
@@ -258,43 +298,79 @@ impl GcpRuntimeCredentials {
             // bucket. Same scope as `ReadApp` / `EditApp`.
             CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
             CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
-            CredentialsAccess::EditUser => (vec![user_prefix], true),
-            CredentialsAccess::ReadUser => (vec![user_prefix], false),
-            CredentialsAccess::InvokeNone => {
-                (vec![user_prefix, temporary_user_prefix, log_prefix], true)
-            }
+            CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
+            CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
+            CredentialsAccess::InvokeNone => (
+                vec![
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    log_prefix.clone(),
+                ],
+                true,
+            ),
             CredentialsAccess::InvokeRead => (
                 vec![
-                    apps_prefix,
-                    user_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                    log_prefix,
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
                 ],
                 false,
             ),
             CredentialsAccess::InvokeWrite => (
                 vec![
-                    apps_prefix,
-                    user_prefix,
-                    temporary_user_prefix,
-                    temporary_global_prefix,
-                    log_prefix,
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
                 ],
                 true,
             ),
-            CredentialsAccess::ReadLogs => (vec![log_prefix], false),
+            CredentialsAccess::ServerExecute => (
+                vec![
+                    apps_prefix.clone(),
+                    user_prefix.clone(),
+                    temporary_user_prefix.clone(),
+                    temporary_global_prefix.clone(),
+                    log_prefix.clone(),
+                ],
+                true,
+            ),
+            CredentialsAccess::ReadLogs => (vec![log_prefix.clone()], false),
         };
 
         // Generate a base access token, then downscope it with Credential Access Boundary
         let base_token = generate_access_token_standalone(&service_account_key).await?;
-        let access_token = downscope_token(
-            &base_token,
-            &self.content_bucket,
-            &allowed_prefixes,
-            write_access,
-        )
-        .await?;
+        let access_token = if matches!(mode, CredentialsAccess::ServerExecute) {
+            downscope_token_for_rules(
+                &base_token,
+                &[
+                    GcpAccessRule::new(
+                        self.content_bucket.clone(),
+                        vec![
+                            apps_prefix.clone(),
+                            user_prefix.clone(),
+                            temporary_user_prefix.clone(),
+                            temporary_global_prefix.clone(),
+                        ],
+                        true,
+                    ),
+                    GcpAccessRule::new(self.logs_bucket.clone(), vec![log_prefix.clone()], true),
+                    GcpAccessRule::new(self.meta_bucket.clone(), vec![apps_prefix.clone()], false),
+                ],
+            )
+            .await?
+        } else {
+            downscope_token(
+                &base_token,
+                &self.content_bucket,
+                &allowed_prefixes,
+                write_access,
+            )
+            .await?
+        };
         let chrono_expiration = chrono::Utc::now() + chrono::Duration::hours(1);
 
         Ok(Self {
@@ -306,10 +382,42 @@ impl GcpRuntimeCredentials {
             allowed_prefixes,
             write_access,
             expiration: Some(chrono_expiration),
-            content_path_prefix: Some(format!("apps/{}", app_id)),
-            user_content_path_prefix: Some(format!("users/{}/apps/{}", sub, app_id)),
+            content_path_prefix,
+            user_content_path_prefix,
         })
     }
+}
+
+#[cfg(feature = "gcp")]
+fn scoped_content_path_prefixes(
+    apps_prefix: &str,
+    user_prefix: &str,
+    mode: &CredentialsAccess,
+) -> (Option<String>, Option<String>) {
+    let app = matches!(
+        mode,
+        CredentialsAccess::EditApp
+            | CredentialsAccess::ReadApp
+            | CredentialsAccess::ReadAppContent
+            | CredentialsAccess::EditAppContent
+            | CredentialsAccess::InvokeRead
+            | CredentialsAccess::InvokeWrite
+            | CredentialsAccess::ServerExecute
+    )
+    .then(|| apps_prefix.to_string());
+
+    let user = matches!(
+        mode,
+        CredentialsAccess::EditUser
+            | CredentialsAccess::ReadUser
+            | CredentialsAccess::InvokeNone
+            | CredentialsAccess::InvokeRead
+            | CredentialsAccess::InvokeWrite
+            | CredentialsAccess::ServerExecute
+    )
+    .then(|| user_prefix.to_string());
+
+    (app, user)
 }
 
 /// Generate a short-lived OAuth2 access token using the service account key
@@ -430,45 +538,80 @@ async fn downscope_token(
     allowed_prefixes: &[String],
     write_access: bool,
 ) -> Result<String> {
+    downscope_token_for_rules(
+        access_token,
+        &[GcpAccessRule::new(
+            bucket.to_string(),
+            allowed_prefixes.to_vec(),
+            write_access,
+        )],
+    )
+    .await
+}
+
+#[cfg(feature = "gcp")]
+struct GcpAccessRule {
+    bucket: String,
+    prefixes: Vec<String>,
+    write_access: bool,
+}
+
+#[cfg(feature = "gcp")]
+impl GcpAccessRule {
+    fn new(bucket: String, prefixes: Vec<String>, write_access: bool) -> Self {
+        Self {
+            bucket,
+            prefixes,
+            write_access,
+        }
+    }
+}
+
+#[cfg(feature = "gcp")]
+async fn downscope_token_for_rules(access_token: &str, rules: &[GcpAccessRule]) -> Result<String> {
     use serde_json::json;
 
-    let permission_role = if write_access {
-        "inRole:roles/storage.objectAdmin"
-    } else {
-        "inRole:roles/storage.objectViewer"
-    };
-
-    // Build condition expression for path restrictions
-    // This restricts both object access (resource.name) and list operations (objectListPrefix)
-    let conditions: Vec<String> = allowed_prefixes
+    let access_boundary_rules: Vec<serde_json::Value> = rules
         .iter()
-        .flat_map(|prefix| {
-            vec![
-                format!(
-                    "resource.name.startsWith('projects/_/buckets/{}/objects/{}')",
-                    bucket, prefix
-                ),
-                format!(
-                    "api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('{}')",
-                    prefix
-                ),
-            ]
+        .map(|rule| {
+            let permission_role = if rule.write_access {
+                "inRole:roles/storage.objectAdmin"
+            } else {
+                "inRole:roles/storage.objectViewer"
+            };
+
+            // Build condition expression for path restrictions.
+            // This restricts both object access (resource.name) and list operations (objectListPrefix).
+            let conditions: Vec<String> = rule
+                .prefixes
+                .iter()
+                .flat_map(|prefix| {
+                    vec![
+                        format!(
+                            "resource.name.startsWith('projects/_/buckets/{}/objects/{}')",
+                            rule.bucket, prefix
+                        ),
+                        format!(
+                            "api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith('{}')",
+                            prefix
+                        ),
+                    ]
+                })
+                .collect();
+
+            json!({
+                "availablePermissions": [permission_role],
+                "availableResource": format!("//storage.googleapis.com/projects/_/buckets/{}", rule.bucket),
+                "availabilityCondition": {
+                    "expression": conditions.join(" || ")
+                }
+            })
         })
         .collect();
 
-    let condition_expression = conditions.join(" || ");
-
     let cab = json!({
         "accessBoundary": {
-            "accessBoundaryRules": [
-                {
-                    "availablePermissions": [permission_role],
-                    "availableResource": format!("//storage.googleapis.com/projects/_/buckets/{}", bucket),
-                    "availabilityCondition": {
-                        "expression": condition_expression
-                    }
-                }
-            ]
+            "accessBoundaryRules": access_boundary_rules
         }
     });
 
@@ -1105,5 +1248,41 @@ mod tests {
         };
         assert!(creds.write_access);
         assert_eq!(creds.allowed_prefixes.len(), 5);
+    }
+
+    #[test]
+    fn test_gcp_invoke_none_does_not_advertise_app_content_prefix() {
+        let (app, user) = scoped_content_path_prefixes(
+            &format!("apps/{}", TEST_APP_ID),
+            &format!("users/{}/apps/{}", TEST_SUB, TEST_APP_ID),
+            &CredentialsAccess::InvokeNone,
+        );
+
+        assert_eq!(app, None);
+        assert_eq!(
+            user,
+            Some(format!("users/{}/apps/{}", TEST_SUB, TEST_APP_ID))
+        );
+    }
+
+    #[test]
+    fn test_gcp_app_content_modes_advertise_app_content_prefix() {
+        for mode in [
+            CredentialsAccess::InvokeRead,
+            CredentialsAccess::InvokeWrite,
+            CredentialsAccess::ServerExecute,
+        ] {
+            let (app, user) = scoped_content_path_prefixes(
+                &format!("apps/{}", TEST_APP_ID),
+                &format!("users/{}/apps/{}", TEST_SUB, TEST_APP_ID),
+                &mode,
+            );
+
+            assert_eq!(app, Some(format!("apps/{}", TEST_APP_ID)));
+            assert_eq!(
+                user,
+                Some(format!("users/{}/apps/{}", TEST_SUB, TEST_APP_ID))
+            );
+        }
     }
 }

@@ -9,7 +9,7 @@ use flow_like_model_provider::llm::{
     openrouter::OpenRouterModel, perplexity::PerplexityModel, together::TogetherModel,
     vertex::VertexModel, voyageai::VoyageAIModel, xai::XAIModel,
 };
-use flow_like_types::{Result, sync::Mutex, tokio::time::interval};
+use flow_like_types::{Result, json, sync::Mutex, tokio::time::interval};
 use local::LocalModel;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -44,6 +44,58 @@ pub struct ModelFactory {
     pub cached_models: HashMap<String, Arc<dyn ModelLogic>>,
     pub ttl_list: HashMap<String, SystemTime>,
     pub execution_settings: ExecutionSettings,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ModelUsageContext {
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+fn insert_usage_headers(
+    params: &mut HashMap<String, flow_like_types::Value>,
+    usage_context: Option<&ModelUsageContext>,
+) {
+    let Some(usage_context) = usage_context else {
+        return;
+    };
+
+    let mut headers = params
+        .get("headers")
+        .and_then(|value| value.as_object())
+        .cloned()
+        .unwrap_or_else(json::Map::new);
+
+    if let Some(app_id) = usage_context
+        .app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|app_id| !app_id.is_empty())
+    {
+        headers.insert(
+            "x-flow-like-app-id".to_string(),
+            flow_like_types::Value::String(app_id.to_string()),
+        );
+    }
+
+    if let Some(run_id) = usage_context
+        .run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+    {
+        headers.insert(
+            "x-flow-like-run-id".to_string(),
+            flow_like_types::Value::String(run_id.to_string()),
+        );
+    }
+
+    if !headers.is_empty() {
+        params.insert(
+            "headers".to_string(),
+            flow_like_types::Value::Object(headers),
+        );
+    }
 }
 
 impl Default for ModelFactory {
@@ -171,6 +223,7 @@ impl ModelFactory {
         bit: &Bit,
         app_state: Arc<FlowLikeState>,
         access_token: Option<String>,
+        usage_context: Option<ModelUsageContext>,
     ) -> Result<Arc<dyn ModelLogic>> {
         let provider_config = app_state.model_provider_config.clone();
         let settings = self.execution_settings.clone();
@@ -236,6 +289,7 @@ impl ModelFactory {
                 "model_id".into(),
                 flow_like_types::Value::String(bit.id.clone()),
             );
+            insert_usage_headers(&mut params, usage_context.as_ref());
 
             model_provider.model_id = Some(bit.id.clone());
             model_provider.params = Some(params.clone());

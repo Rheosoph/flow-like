@@ -141,6 +141,7 @@ import {
 	isValidConnection,
 	parseBoard,
 } from "../../lib/flow-board-utils";
+import { getErrorMessage } from "../../lib/error-message";
 import { toastError, toastSuccess } from "../../lib/messages";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
@@ -1012,8 +1013,7 @@ export function FlowBoard({
 					return;
 				}
 
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
+				const errorMessage = getErrorMessage(error, "");
 				toastError(
 					errorMessage || "Failed to execute board",
 					<PlayCircleIcon className="w-4 h-4" />,
@@ -1101,8 +1101,7 @@ export function FlowBoard({
 				);
 			} catch (error) {
 				console.warn("Failed to execute board remotely", error);
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
+				const errorMessage = getErrorMessage(error, "");
 				toastError(
 					errorMessage || "Failed to execute board on server",
 					<PlayCircleIcon className="w-4 h-4" />,

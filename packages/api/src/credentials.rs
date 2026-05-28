@@ -96,6 +96,11 @@ pub enum CredentialsAccess {
     InvokeNone,
     InvokeRead,
     InvokeWrite,
+    /// Server-side execution credentials. These are only sent to trusted
+    /// executors, not returned by the client-facing invoke presign route.
+    /// They include app content read/write for workflow storage and read-only
+    /// app metadata so the executor can load the board/event definition.
+    ServerExecute,
     ReadLogs,
 }
 
@@ -111,6 +116,7 @@ impl Display for CredentialsAccess {
             CredentialsAccess::InvokeNone => write!(f, "invoke_none"),
             CredentialsAccess::InvokeRead => write!(f, "invoke_read"),
             CredentialsAccess::InvokeWrite => write!(f, "invoke_write"),
+            CredentialsAccess::ServerExecute => write!(f, "server_execute"),
             CredentialsAccess::ReadLogs => write!(f, "read_logs"),
         }
     }
@@ -152,6 +158,15 @@ impl RuntimeCredentials {
         if let Some(mixed) = mixed_credentials::MixedRuntimeCredentials::detect_from_env() {
             return Ok(RuntimeCredentials::Mixed(
                 mixed.scoped_credentials(sub, app_id, state, mode).await?,
+            ));
+        }
+
+        #[cfg(feature = "r2")]
+        if matches!(mode, CredentialsAccess::ServerExecute) {
+            return Ok(RuntimeCredentials::Mixed(
+                R2RuntimeCredentials::from_env()
+                    .scoped_server_execute_credentials(sub, app_id)
+                    .await?,
             ));
         }
 

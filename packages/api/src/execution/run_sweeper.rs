@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flow_like_types::tokio::{self, task::JoinHandle};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, sea_query::Expr};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
 use crate::entity::execution_run;
 use crate::entity::prelude::ExecutionRun;
@@ -124,16 +124,15 @@ pub async fn sweep_once(db: &DatabaseConnection, grace: Duration) -> Result<u64,
     }
 
     let result = ExecutionRun::update_many()
-        .col_expr(
-            execution_run::Column::Status,
-            Expr::value(RunStatus::Timeout),
-        )
-        .col_expr(execution_run::Column::CompletedAt, Expr::value(now))
-        .col_expr(execution_run::Column::UpdatedAt, Expr::value(now))
-        .col_expr(
-            execution_run::Column::ErrorMessage,
-            Expr::value("Run exceeded grace period without completion event"),
-        )
+        .set(execution_run::ActiveModel {
+            status: Set(RunStatus::Timeout),
+            completed_at: Set(Some(now)),
+            updated_at: Set(now),
+            error_message: Set(Some(
+                "Run exceeded grace period without completion event".to_string(),
+            )),
+            ..Default::default()
+        })
         .filter(execution_run::Column::Id.is_in(ids))
         .filter(execution_run::Column::Status.is_in([RunStatus::Pending, RunStatus::Running]))
         .exec(db)

@@ -1,4 +1,4 @@
-import type { IProfile } from "@tm9657/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import type { AuthContextProps } from "react-oidc-context";
 
 function constructUrl(profile: IProfile, path: string): string {

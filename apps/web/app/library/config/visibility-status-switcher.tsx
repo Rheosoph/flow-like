@@ -7,14 +7,14 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	type AppPublicationRequestItem,
 	AppPublicationReviewCard,
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
-} from "@tm9657/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
-import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@tm9657/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
+} from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
 import { useCallback } from "react";
 
 interface VisibilityStatusSwitcherProps {

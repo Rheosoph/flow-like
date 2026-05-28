@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@tm9657/flow-like-ui/components/ui/button";
+import { Button } from "@flow-like/flow-like-ui/components/ui/button";
 import {
 	ArrowRight,
 	Cloud,

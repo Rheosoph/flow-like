@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod admin;
 pub mod ai;
+pub mod alias;
 pub mod app;
 pub mod audit;
 pub mod auth;
@@ -11,6 +12,7 @@ pub mod course;
 pub mod embeddings;
 pub mod execution;
 pub mod health;
+pub mod inbound;
 pub mod info;
 pub mod interaction;
 pub mod oauth;

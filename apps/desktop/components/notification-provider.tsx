@@ -3,12 +3,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
-import { useBackend, useHub } from "@tm9657/flow-like-ui";
+import { useBackend, useHub } from "@flow-like/flow-like-ui";
 import type {
 	IIntercomEvent,
 	INotificationEvent,
 	IPushNotificationsConfig,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "react-oidc-context";

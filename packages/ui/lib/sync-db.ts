@@ -1,4 +1,4 @@
-import type { IGenericCommand } from "@tm9657/flow-like-ui";
+import type { IGenericCommand } from "@flow-like/flow-like-ui";
 import Dexie, { type EntityTable } from "dexie";
 
 export interface ICommandSync {

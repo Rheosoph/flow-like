@@ -112,7 +112,7 @@ Before submitting a PR:
 
 ## Good First Issues
 
-New to the project? Look for issues labeled [`good first issue`](https://github.com/TM9657/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+New to the project? Look for issues labeled [`good first issue`](https://github.com/Rheosoph/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 
 ## Reporting Issues
 
@@ -129,7 +129,7 @@ For security vulnerabilities, **do not open a public issue**. Report privately t
 
 ## Code of Conduct
 
-By contributing, you agree to our [Code of Conduct](https://github.com/TM9657/flow-like/blob/main/CODE_OF_CONDUCT.md). We expect respectful, constructive interactions.
+By contributing, you agree to our [Code of Conduct](https://github.com/Rheosoph/flow-like/blob/main/CODE_OF_CONDUCT.md). We expect respectful, constructive interactions.
 
 ## Thank You
 

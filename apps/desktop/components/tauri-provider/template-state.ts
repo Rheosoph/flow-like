@@ -5,7 +5,7 @@ import {
 	type ITemplateState,
 	type IVersionType,
 	injectDataFunction,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { isEqual } from "lodash-es";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";

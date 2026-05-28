@@ -10,7 +10,7 @@ import {
 	StoreRecommendations,
 	TextEditor,
 	useStoreData,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -129,6 +129,7 @@ export default function Page() {
 							target="offline"
 							targets={["offline", "online"]}
 							onForkStarted={applyForkBundle}
+							hideUnlessAvailable
 						/>
 					) : null
 				}

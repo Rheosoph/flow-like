@@ -10,7 +10,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 	cn,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { AlertCircle, Check, ShieldAlert, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 

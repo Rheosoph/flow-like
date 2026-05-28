@@ -20,6 +20,7 @@ import {
 	type IBoard,
 	type IComment,
 	ICommentType,
+	IExecutionMode,
 	type ILayer,
 	ILayerType,
 } from "./schema/flow/board";
@@ -406,9 +407,16 @@ export function parseBoard(
 		addedNodeIds.add(node.id);
 
 		const hash = node.hash ?? -1;
+		const canRunWasmOnServer =
+			Boolean(node.wasm?.package_id) &&
+			!remoteBoardExecution?.isOffline &&
+			remoteBoardExecution?.onRemoteExecute !== undefined &&
+			board.execution_mode !== IExecutionMode.Local &&
+			!node.only_offline;
 		const isUnavailable = catalogLookup
 			? node.wasm?.package_id
-				? !catalogLookup.wasmNodeKeys.has(
+				? !canRunWasmOnServer &&
+					!catalogLookup.wasmNodeKeys.has(
 						`${node.wasm.package_id}:${node.name}`,
 					)
 				: !catalogLookup.nodeNames.has(node.name)

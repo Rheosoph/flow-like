@@ -1,6 +1,6 @@
 # @flow-like/wasm-sdk-typescript
 
-TypeScript SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using the **WIT Component Model** via [@bytecodealliance/componentize-js](https://github.com/bytecodealliance/ComponentizeJS).
+TypeScript SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using the **WIT Component Model** via [@bytecodealliance/componentize-js](https://github.com/bytecodealliance/ComponentizeJS).
 
 Unlike AssemblyScript (which compiles directly to WASM), this SDK targets a standard TypeScript/JavaScript runtime — your node logic is written in plain TypeScript, bundled with `esbuild`, and then compiled to a WASM component with `componentize-js`.
 

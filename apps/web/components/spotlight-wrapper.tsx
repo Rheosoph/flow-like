@@ -9,7 +9,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSpotlightStore,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	Bookmark,

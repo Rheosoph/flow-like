@@ -3,7 +3,7 @@ use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider}
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json, reqwest};
@@ -28,6 +28,7 @@ impl NodeLogic for UpdateJiraIssueNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -87,10 +88,11 @@ impl NodeLogic for UpdateJiraIssueNode {
         node.add_input_pin(
             "labels",
             "Labels",
-            "New comma-separated labels (replaces existing labels, leave empty to keep current)",
+            "New labels (replaces existing labels, leave empty to keep current)",
             VariableType::String,
         )
-        .set_default_value(Some(json!("")));
+        .set_value_type(ValueType::Array)
+        .set_default_value(Some(json!([])));
 
         node.add_input_pin(
             "comment",
@@ -148,7 +150,7 @@ impl NodeLogic for UpdateJiraIssueNode {
         let description: String = context.evaluate_pin("description").await?;
         let priority: String = context.evaluate_pin("priority").await?;
         let assignee_id: String = context.evaluate_pin("assignee_id").await?;
-        let labels: String = context.evaluate_pin("labels").await?;
+        let labels: Vec<String> = context.evaluate_pin("labels").await.unwrap_or_default();
         let comment: String = context.evaluate_pin("comment").await?;
 
         if issue_key.is_empty() {
@@ -206,8 +208,7 @@ impl NodeLogic for UpdateJiraIssueNode {
         }
 
         if !labels.is_empty() {
-            let label_list: Vec<&str> = labels.split(',').map(|s| s.trim()).collect();
-            fields["labels"] = json!(label_list);
+            fields["labels"] = json!(labels);
             has_updates = true;
         }
 

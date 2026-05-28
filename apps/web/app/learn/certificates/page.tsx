@@ -5,7 +5,7 @@ import {
 	EmptyState,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { motion } from "framer-motion";
 import { Award, Compass, ScrollText, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";

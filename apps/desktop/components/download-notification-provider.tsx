@@ -3,7 +3,7 @@
 import {
 	type DownloadCompleteListener,
 	useDownloadManager,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 

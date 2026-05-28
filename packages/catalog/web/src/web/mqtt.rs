@@ -1,6 +1,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::tls::TlsConfig;
+
+pub mod broker;
 pub mod connect;
 pub mod disconnect;
 pub mod publish;
@@ -19,6 +22,8 @@ pub struct MqttConfig {
     pub keep_alive_seconds: u64,
     #[serde(default)]
     pub use_tls: bool,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 fn default_keep_alive() -> u64 {
@@ -29,6 +34,22 @@ fn default_keep_alive() -> u64 {
 pub struct MqttSession {
     pub ref_id: String,
     pub client_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct MqttBrokerConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_broker_max_connections")]
+    pub max_connections: u32,
+    #[serde(default)]
+    pub tls: TlsConfig,
+}
+
+fn default_broker_max_connections() -> u32 {
+    128
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]

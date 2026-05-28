@@ -10,7 +10,7 @@
   Fully typed. Fully traceable. Fully yours.
 </p>
 <p align="center">
-  <a href="https://app.codacy.com/gh/TM9657/flow-like/dashboard?utm_source=gh&utm_medium=referral"><img src="https://app.codacy.com/project/badge/Grade/244d2db2a84f4e79b64d984639a2b18f" alt="Codacy Badge" /></a>
+  <a href="https://app.codacy.com/gh/Rheosoph/flow-like/dashboard?utm_source=gh&utm_medium=referral"><img src="https://app.codacy.com/project/badge/Grade/244d2db2a84f4e79b64d984639a2b18f" alt="Codacy Badge" /></a>
   <a href="https://discord.com/invite/mdBA9kMjFJ"><img src="https://img.shields.io/discord/673169081704120334" alt="Discord" /></a>
   <a href="https://app.fossa.com/projects/custom%2B49014%2Fflow-like?ref=badge_small"><img src="https://app.fossa.com/api/projects/custom%2B49014%2Fflow-like.svg?type=small" alt="FOSSA Status" /></a>
   <a href="https://flow-like.com"><img src="https://img.shields.io/badge/website-flow--like.com-0a7cff?logo=google-chrome&logoColor=white" alt="Website" /></a>
@@ -18,7 +18,7 @@
   <a href="https://flow-like.com/download"><img src="https://img.shields.io/badge/download-Desktop%20App-28a745?logo=tauri&logoColor=white" alt="Download" /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/TM9657/flow-like/stargazers"><strong>⭐ Star on GitHub</strong></a> ·
+  <a href="https://github.com/Rheosoph/flow-like/stargazers"><strong>⭐ Star on GitHub</strong></a> ·
   <a href="https://docs.flow-like.com"><strong>📖 Docs</strong></a> ·
   <a href="https://discord.com/invite/mdBA9kMjFJ"><strong>💬 Discord</strong></a> ·
   <a href="https://flow-like.com/download"><strong>📥 Download</strong></a>
@@ -186,7 +186,7 @@ Package workflows as shareable applications with built-in storage. Run them offl
 # Prerequisites: mise, Rust, Bun, Tauri prerequisites, Protobuf compiler
 # Full guide: https://docs.flow-like.com/contributing/getting-started/
 
-git clone https://github.com/TM9657/flow-like.git
+git clone https://github.com/Rheosoph/flow-like.git
 cd flow-like
 mise trust && mise install   # install toolchains (Rust, Bun, Node, Python, uv)
 bun install                  # install Node packages
@@ -239,7 +239,7 @@ We welcome contributions of all kinds — new nodes, bug fixes, docs, themes, an
 
 **→ [Read CONTRIBUTING.md](./CONTRIBUTING.md)** for setup instructions and guidelines.
 
-**→ [Browse `good first issue`](https://github.com/TM9657/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)** to find a place to start.
+**→ [Browse `good first issue`](https://github.com/Rheosoph/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)** to find a place to start.
 
 **→ [Join Discord](https://discord.com/invite/mdBA9kMjFJ)** for questions and discussion.
 
@@ -286,10 +286,10 @@ Yes. Flow-Like is white-label ready — embed the visual editor, customize the t
 The visual builder is no-code. For custom nodes, you write Rust. SDKs and REST APIs are available for programmatic control.
 
 **Is it production-ready?**
-Flow-Like is actively developed and used in production. We recommend thorough testing for mission-critical workflows. See the [releases page](https://github.com/TM9657/flow-like/releases) for version stability.
+Flow-Like is actively developed and used in production. We recommend thorough testing for mission-critical workflows. See the [releases page](https://github.com/Rheosoph/flow-like/releases) for version stability.
 
 **How do I get support?**
-[Discord](https://discord.com/invite/mdBA9kMjFJ) for quick help, [Docs](https://docs.flow-like.com) for guides, or [GitHub Issues](https://github.com/TM9657/flow-like/issues) for bugs and features.
+[Discord](https://discord.com/invite/mdBA9kMjFJ) for quick help, [Docs](https://docs.flow-like.com) for guides, or [GitHub Issues](https://github.com/Rheosoph/flow-like/issues) for bugs and features.
 
 </details>
 
@@ -322,7 +322,7 @@ Thank you to all maintainers and contributors of these projects! 🙏
     <img src="https://repobeats.axiom.co/api/embed/6fe5df31b9a96f584f8898beb4457bd8aa3852f1.svg" alt="Repobeats analytics" width="48%" />
   </picture>
   <picture>
-    <img src="https://api.star-history.com/svg?repos=TM9657/flow-like&type=Date" alt="Star History" width="48%" />
+    <img src="https://api.star-history.com/svg?repos=Rheosoph/flow-like&type=Date" alt="Star History" width="48%" />
   </picture>
 </p>
 

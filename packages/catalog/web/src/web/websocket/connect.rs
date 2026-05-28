@@ -9,7 +9,7 @@ use flow_like::flow::execution::{
 
 use flow_like::flow::{
     node::{Node, NodeLogic},
-    pin::PinOptions,
+    pin::{PinOptions, PinType},
     variable::VariableType,
 };
 use flow_like_types::async_trait;
@@ -25,10 +25,17 @@ use flow_like_types::Cacheable;
 #[cfg(feature = "execute")]
 use futures::StreamExt;
 
+#[cfg(feature = "execute")]
+use tokio_tungstenite::tungstenite::{
+    Message,
+    client::IntoClientRequest,
+    http::{HeaderName, HeaderValue},
+};
+
 use super::{WebSocketConfig, WebSocketSession};
 
 #[cfg(feature = "execute")]
-use super::CachedWebSocketConnection;
+use super::{CachedWebSocketConnection, CachedWebSocketSink};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -119,24 +126,72 @@ impl NodeLogic for WebSocketConnectNode {
 
         let config: WebSocketConfig = context.evaluate_pin("config").await?;
         let referenced_fns = context.get_referenced_functions().await?;
-        let handler = referenced_fns
-            .first()
-            .ok_or_else(|| flow_like_types::anyhow!("No on-message handler function referenced"))?
-            .clone();
+        let handler = referenced_fns.first().cloned();
+        if let Some(handler) = &handler {
+            let handler_node = handler.node.lock().await;
+            context.log_message(
+                &format!(
+                    "WebSocket on_message handler registered: {} [{}]",
+                    handler_node.name, handler_node.id
+                ),
+                LogLevel::Debug,
+            );
+            if referenced_fns.len() > 1 {
+                context.log_message(
+                    "WebSocket Connect uses only the first referenced on_message handler",
+                    LogLevel::Warn,
+                );
+            }
+        } else {
+            context.log_message(
+                "WebSocket Connect has no referenced on_message handler; incoming messages will be ignored",
+                LogLevel::Debug,
+            );
+        }
 
-        let mut request = tokio_tungstenite::tungstenite::http::Request::builder().uri(&config.url);
+        let url = effective_websocket_url(&config);
+        let mut request = url
+            .as_str()
+            .into_client_request()
+            .map_err(|e| flow_like_types::anyhow!("Failed to build WS request: {}", e))?;
 
         if let Some(headers) = &config.headers {
             for (key, value) in headers {
-                request = request.header(key.as_str(), value.as_str());
+                let header_name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
+                    flow_like_types::anyhow!("Invalid WS header name '{}': {}", key, e)
+                })?;
+
+                if is_reserved_websocket_header(&header_name) {
+                    context.log_message(
+                        &format!("Ignoring reserved WebSocket header '{}'", key),
+                        LogLevel::Warn,
+                    );
+                    continue;
+                }
+
+                let header_value = HeaderValue::from_str(value).map_err(|e| {
+                    flow_like_types::anyhow!("Invalid WS header value for '{}': {}", key, e)
+                })?;
+
+                request.headers_mut().insert(header_name, header_value);
             }
         }
 
-        let request = request
-            .body(())
-            .map_err(|e| flow_like_types::anyhow!("Failed to build WS request: {}", e))?;
+        let connect_result = if config.tls.secure {
+            let tls_config = crate::web::tls::client_config(&config.tls)?
+                .ok_or_else(|| flow_like_types::anyhow!("TLS client configuration is required"))?;
+            tokio_tungstenite::connect_async_tls_with_config(
+                request,
+                None,
+                false,
+                Some(tokio_tungstenite::Connector::Rustls(Arc::new(tls_config))),
+            )
+            .await
+        } else {
+            tokio_tungstenite::connect_async(request).await
+        };
 
-        let (ws_stream, _response) = match tokio_tungstenite::connect_async(request).await {
+        let (ws_stream, _response) = match connect_result {
             Ok(result) => result,
             Err(e) => {
                 context.log_message(
@@ -153,7 +208,7 @@ impl NodeLogic for WebSocketConnectNode {
         let close_notify = Arc::new(tokio::sync::Notify::new());
 
         let cached = CachedWebSocketConnection {
-            sink: Arc::new(tokio::sync::Mutex::new(sink)),
+            sink: CachedWebSocketSink::Client(Arc::new(tokio::sync::Mutex::new(sink))),
             close_notify: close_notify.clone(),
             reader_handle: tokio::sync::Mutex::new(None),
         };
@@ -162,7 +217,7 @@ impl NodeLogic for WebSocketConnectNode {
 
         let session = WebSocketSession {
             ref_id: ref_id.clone(),
-            url: config.url.clone(),
+            url,
         };
 
         context.set_pin_value("session", json!(session)).await?;
@@ -183,9 +238,11 @@ impl NodeLogic for WebSocketConnectNode {
             context.push_sub_context(&mut sub);
         }
 
-        spawn_message_reader(context, stream, &handler, &ref_id, close_notify.clone()).await?;
+        spawn_message_reader(context, stream, handler, &ref_id, close_notify.clone()).await?;
 
         let timeout = config.timeout_seconds;
+        let cancellation_token = context.get_cancellation_token();
+        let mut cancelled = false;
         if timeout > 0 {
             tokio::select! {
                 _ = close_notify.notified() => {}
@@ -194,14 +251,34 @@ impl NodeLogic for WebSocketConnectNode {
                     let cache = context.cache.read().await;
                     if let Some(conn) = cache.get(&ref_id)
                         && let Some(conn) = conn.as_any().downcast_ref::<CachedWebSocketConnection>() {
-                            let mut sink = conn.sink.lock().await;
-                            use futures::SinkExt;
-                            let _ = sink.close().await;
+                            close_cached_sink(&conn.sink).await;
+                        }
+                }
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("WebSocket connection cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let cache = context.cache.read().await;
+                    if let Some(conn) = cache.get(&ref_id)
+                        && let Some(conn) = conn.as_any().downcast_ref::<CachedWebSocketConnection>() {
+                            close_cached_sink(&conn.sink).await;
                         }
                 }
             }
         } else {
-            close_notify.notified().await;
+            tokio::select! {
+                _ = close_notify.notified() => {}
+                _ = super::super::wait_for_cancel(cancellation_token.clone()) => {
+                    cancelled = true;
+                    context.log_message("WebSocket connection cancelled", LogLevel::Warn);
+                    close_notify.notify_waiters();
+                    let cache = context.cache.read().await;
+                    if let Some(conn) = cache.get(&ref_id)
+                        && let Some(conn) = conn.as_any().downcast_ref::<CachedWebSocketConnection>() {
+                            close_cached_sink(&conn.sink).await;
+                        }
+                }
+            }
         }
 
         {
@@ -211,6 +288,10 @@ impl NodeLogic for WebSocketConnectNode {
 
         context.deactivate_exec_pin("on_connect").await?;
         context.activate_exec_pin("on_close").await?;
+
+        if cancelled {
+            return Err(flow_like_types::anyhow!("Execution was cancelled"));
+        }
 
         Ok(())
     }
@@ -224,18 +305,256 @@ impl NodeLogic for WebSocketConnectNode {
 }
 
 #[cfg(feature = "execute")]
-async fn spawn_message_reader(
-    context: &mut ExecutionContext,
-    mut stream: super::WsStream,
-    handler: &Arc<InternalNode>,
-    ref_id: &str,
-    close_notify: Arc<tokio::sync::Notify>,
-) -> flow_like_types::Result<()> {
-    use flow_like::flow::pin::PinType;
-    use flow_like_types::sync::{DashMap, Mutex};
-    use tokio_tungstenite::tungstenite::Message;
+fn is_reserved_websocket_header(header_name: &HeaderName) -> bool {
+    matches!(
+        header_name.as_str(),
+        "connection" | "host" | "sec-websocket-key" | "sec-websocket-version" | "upgrade"
+    )
+}
 
-    let reference_function = handler;
+#[cfg(feature = "execute")]
+fn effective_websocket_url(config: &WebSocketConfig) -> String {
+    if config.tls.secure && config.url.starts_with("ws://") {
+        format!("wss://{}", &config.url["ws://".len()..])
+    } else {
+        config.url.clone()
+    }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) async fn close_cached_sink(sink: &CachedWebSocketSink) {
+    use futures::SinkExt;
+
+    match sink {
+        CachedWebSocketSink::Client(sink) => {
+            let mut sink = sink.lock().await;
+            let _ = sink.close().await;
+        }
+        CachedWebSocketSink::Server(sink) => {
+            let mut sink = sink.lock().await;
+            let _ = sink.close().await;
+        }
+    }
+}
+
+#[cfg(feature = "execute")]
+fn normalize_pin_key(key: &str) -> String {
+    key.to_lowercase().replace('_', "")
+}
+
+#[cfg(feature = "execute")]
+fn remove_payload_field(
+    obj: &mut flow_like_types::json::Map<String, flow_like_types::Value>,
+) -> Option<flow_like_types::Value> {
+    if let Some(value) = obj.remove("payload") {
+        return Some(value);
+    }
+
+    let key = obj
+        .keys()
+        .find(|key| normalize_pin_key(key) == "payload")
+        .cloned();
+
+    key.and_then(|key| obj.remove(&key))
+}
+
+#[cfg(feature = "execute")]
+fn parse_text_message(text: &str) -> Option<flow_like_types::Value> {
+    flow_like_types::json::from_str::<flow_like_types::Value>(text).ok()
+}
+
+#[cfg(feature = "execute")]
+fn wrap_payload_value(value: flow_like_types::Value) -> flow_like_types::Value {
+    let mut payload = flow_like_types::json::Map::new();
+    payload.insert("payload".to_string(), value);
+    flow_like_types::Value::Object(payload)
+}
+
+#[cfg(feature = "execute")]
+async fn reset_handler_output_pins(context: &ExecutionContext) {
+    let pins: Vec<_> = context
+        .node
+        .pins
+        .iter()
+        .filter(|(_, pin)| {
+            pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+        })
+        .map(|(_, pin)| pin.clone())
+        .collect();
+
+    for pin in pins {
+        pin.reset().await;
+    }
+}
+
+#[cfg(feature = "execute")]
+async fn set_named_output_pin(
+    context: &ExecutionContext,
+    name: &str,
+    value: flow_like_types::Value,
+) -> bool {
+    let pins: Vec<_> = context
+        .node
+        .pins
+        .iter()
+        .filter(|(_, pin)| pin.pin_type == PinType::Output && pin.name == name)
+        .map(|(_, pin)| pin.clone())
+        .collect();
+
+    let matched = !pins.is_empty();
+    for pin in pins {
+        pin.set_value(value.clone()).await;
+    }
+
+    matched
+}
+
+#[cfg(feature = "execute")]
+async fn set_first_typed_output_pin(
+    context: &ExecutionContext,
+    data_type: VariableType,
+    value: flow_like_types::Value,
+) -> bool {
+    let pin = context
+        .node
+        .pins
+        .iter()
+        .find(|(_, pin)| {
+            pin.pin_type == PinType::Output && pin.data_type == data_type && pin.name != "payload"
+        })
+        .map(|(_, pin)| pin.clone());
+
+    if let Some(pin) = pin {
+        pin.set_value(value).await;
+        return true;
+    }
+
+    false
+}
+
+#[cfg(feature = "execute")]
+async fn map_object_to_output_pins(
+    context: &ExecutionContext,
+    remaining: &mut flow_like_types::json::Map<String, flow_like_types::Value>,
+) -> bool {
+    let pins: Vec<_> = context
+        .node
+        .pins
+        .iter()
+        .filter(|(_, pin)| {
+            pin.pin_type == PinType::Output
+                && pin.data_type != VariableType::Execution
+                && pin.name != "payload"
+        })
+        .map(|(_, pin)| (pin.name.clone(), pin.clone()))
+        .collect();
+
+    let mut matched = false;
+    for (name, pin) in pins {
+        if let Some(val) = remaining.remove(&name) {
+            pin.set_value(val).await;
+            matched = true;
+            continue;
+        }
+
+        let normalized = normalize_pin_key(&name);
+        let key = remaining
+            .keys()
+            .find(|key| normalize_pin_key(key) == normalized)
+            .cloned();
+        if let Some(key) = key
+            && let Some(val) = remaining.remove(&key)
+        {
+            pin.set_value(val).await;
+            matched = true;
+        }
+    }
+
+    matched
+}
+
+#[cfg(feature = "execute")]
+async fn apply_incoming_message_to_handler(
+    context: &mut ExecutionContext,
+    msg: &Message,
+    single_string: bool,
+    single_byte: bool,
+    only_payload: bool,
+    has_payload_pin: bool,
+) -> bool {
+    reset_handler_output_pins(context).await;
+    let mut matched_message = false;
+
+    match msg {
+        Message::Text(text) => {
+            if let Some(payload) = parse_text_message(text) {
+                let mut remaining = payload.as_object().cloned();
+
+                if !only_payload && let Some(remaining) = remaining.as_mut() {
+                    matched_message |= map_object_to_output_pins(context, remaining).await;
+                }
+
+                if has_payload_pin {
+                    let payload = remaining
+                        .as_mut()
+                        .and_then(remove_payload_field)
+                        .unwrap_or_else(|| {
+                            remaining
+                                .take()
+                                .map(flow_like_types::Value::Object)
+                                .unwrap_or(payload)
+                        });
+                    matched_message |= set_named_output_pin(context, "payload", payload).await;
+                }
+            } else if single_string {
+                matched_message |=
+                    set_first_typed_output_pin(context, VariableType::String, json!(text.as_str()))
+                        .await;
+            } else if has_payload_pin {
+                matched_message |= set_named_output_pin(
+                    context,
+                    "payload",
+                    wrap_payload_value(json!(text.as_str())),
+                )
+                .await;
+            }
+        }
+        Message::Binary(data) => {
+            let data = data.to_vec();
+            if single_byte {
+                matched_message |=
+                    set_first_typed_output_pin(context, VariableType::Byte, json!(data.clone()))
+                        .await;
+            }
+
+            if !single_byte && has_payload_pin {
+                matched_message |=
+                    set_named_output_pin(context, "payload", wrap_payload_value(json!(data))).await;
+            }
+        }
+        _ => {}
+    }
+
+    matched_message
+}
+
+#[cfg(feature = "execute")]
+struct MessageHandlerContext {
+    connected_nodes: Arc<
+        flow_like_types::sync::DashMap<String, Arc<flow_like_types::sync::Mutex<ExecutionContext>>>,
+    >,
+    single_string: bool,
+    single_byte: bool,
+    only_payload: bool,
+    has_payload_pin: bool,
+}
+
+#[cfg(feature = "execute")]
+async fn create_message_handler_context(
+    context: &ExecutionContext,
+    reference_function: Arc<InternalNode>,
+) -> MessageHandlerContext {
+    use flow_like_types::sync::{DashMap, Mutex};
 
     let ref_node_pins = reference_function.pins.clone();
     let mut has_string_pin = false;
@@ -259,26 +578,59 @@ async fn spawn_message_reader(
         }
     }
 
-    let single_string = typed_pin_count == 1 && has_string_pin;
-    let single_byte = typed_pin_count == 1 && has_byte_pin;
-    let only_payload = typed_pin_count == 0 && has_payload_pin;
-
     let connected_nodes: Arc<DashMap<String, Arc<Mutex<ExecutionContext>>>> =
         Arc::new(DashMap::new());
 
-    let on_message_node = reference_function.clone();
-    let sub = Arc::new(Mutex::new(
-        context.create_sub_context(&on_message_node).await,
-    ));
-    connected_nodes.insert(on_message_node.node.lock().await.id.clone(), sub);
+    let mut sub_context = context.create_sub_context(&reference_function).await;
+    sub_context.delegated = true;
+    let sub = Arc::new(Mutex::new(sub_context));
+    connected_nodes.insert(reference_function.node.lock().await.id.clone(), sub);
 
+    MessageHandlerContext {
+        connected_nodes,
+        single_string: typed_pin_count == 1 && has_string_pin,
+        single_byte: typed_pin_count == 1 && has_byte_pin,
+        only_payload: typed_pin_count == 0 && has_payload_pin,
+        has_payload_pin,
+    }
+}
+
+#[cfg(feature = "execute")]
+async fn spawn_message_reader(
+    context: &mut ExecutionContext,
+    mut stream: super::WsStream,
+    handler: Option<Arc<InternalNode>>,
+    ref_id: &str,
+    close_notify: Arc<tokio::sync::Notify>,
+) -> flow_like_types::Result<()> {
     let parent_node_id = context.node.node.lock().await.id.clone();
+    let handler_context = if let Some(reference_function) = handler {
+        Some(create_message_handler_context(context, reference_function).await)
+    } else {
+        None
+    };
 
     let handle = tokio::spawn(async move {
         while let Some(msg_result) = stream.next().await {
             let msg = match msg_result {
                 Ok(msg) => msg,
                 Err(e) => {
+                    if let Some(handler_context) = &handler_context {
+                        for entry in handler_context.connected_nodes.iter() {
+                            let (_id, ctx) = entry.pair();
+                            let mut ctx = ctx.lock().await;
+                            ctx.log_message(
+                                &format!("WebSocket read error: {}", e),
+                                LogLevel::Error,
+                            );
+                            if let Err(flush_err) = ctx.flush_logs().await {
+                                tracing::warn!(
+                                    "Failed to flush WebSocket read error log: {:?}",
+                                    flush_err
+                                );
+                            }
+                        }
+                    }
                     tracing::warn!("WebSocket read error: {}", e);
                     break;
                 }
@@ -290,174 +642,49 @@ async fn spawn_message_reader(
                 Message::Text(_) | Message::Binary(_) => {}
             }
 
+            let Some(handler_context) = &handler_context else {
+                continue;
+            };
+
             let mut recursion_guard = AHashSet::new();
             recursion_guard.insert(parent_node_id.clone());
 
-            for entry in connected_nodes.iter() {
+            for entry in handler_context.connected_nodes.iter() {
                 let (_id, ctx) = entry.pair();
                 let mut ctx = ctx.lock().await;
+                let matched_message = apply_incoming_message_to_handler(
+                    &mut ctx,
+                    &msg,
+                    handler_context.single_string,
+                    handler_context.single_byte,
+                    handler_context.only_payload,
+                    handler_context.has_payload_pin,
+                )
+                .await;
 
-                match &msg {
-                    Message::Text(text) => {
-                        if single_string {
-                            let pins = &ctx.node.pins;
-                            for (_, pin) in pins.iter() {
-                                if pin.pin_type == PinType::Output
-                                    && pin.data_type == VariableType::String
-                                    && pin.name != "payload"
-                                {
-                                    pin.set_value(json!(text.as_str())).await;
-                                    break;
-                                }
-                            }
-                        } else if only_payload {
-                            if let Ok(parsed) =
-                                flow_like_types::json::from_str::<flow_like_types::Value>(text)
-                            {
-                                let payload_pins: Vec<_> = ctx
-                                    .node
-                                    .pins
-                                    .iter()
-                                    .filter(|(_, p)| {
-                                        p.pin_type == PinType::Output && p.name == "payload"
-                                    })
-                                    .map(|(_, p)| p.clone())
-                                    .collect();
-                                for pin in payload_pins {
-                                    pin.set_value(parsed.clone()).await;
-                                }
-                            } else {
-                                let payload_pins: Vec<_> = ctx
-                                    .node
-                                    .pins
-                                    .iter()
-                                    .filter(|(_, p)| {
-                                        p.pin_type == PinType::Output && p.name == "payload"
-                                    })
-                                    .map(|(_, p)| p.clone())
-                                    .collect();
-                                for pin in payload_pins {
-                                    pin.set_value(json!(text.as_str())).await;
-                                }
-                            }
-                        } else if let Ok(parsed) =
-                            flow_like_types::json::from_str::<flow_like_types::Value>(text)
-                        {
-                            if let Some(obj) = parsed.as_object() {
-                                let mut remaining = obj.clone();
-                                let pins: Vec<_> = ctx
-                                    .node
-                                    .pins
-                                    .iter()
-                                    .filter(|(_, p)| {
-                                        p.pin_type == PinType::Output
-                                            && p.data_type != VariableType::Execution
-                                            && p.name != "payload"
-                                    })
-                                    .map(|(_, p)| (p.name.clone(), p.clone()))
-                                    .collect();
-
-                                for (name, pin) in &pins {
-                                    if let Some(val) = remaining.remove(name) {
-                                        pin.set_value(val).await;
-                                    } else {
-                                        let normalized = name.to_lowercase().replace('_', "");
-                                        let key = remaining
-                                            .keys()
-                                            .find(|k| {
-                                                k.to_lowercase().replace('_', "") == normalized
-                                            })
-                                            .cloned();
-                                        if let Some(k) = key
-                                            && let Some(val) = remaining.remove(&k)
-                                        {
-                                            pin.set_value(val).await;
-                                        }
-                                    }
-                                }
-                                let payload_pins: Vec<_> = ctx
-                                    .node
-                                    .pins
-                                    .iter()
-                                    .filter(|(_, p)| {
-                                        p.pin_type == PinType::Output && p.name == "payload"
-                                    })
-                                    .map(|(_, p)| p.clone())
-                                    .collect();
-                                for pin in payload_pins {
-                                    pin.set_value(json!(remaining)).await;
-                                }
-                            } else {
-                                let payload_pins: Vec<_> = ctx
-                                    .node
-                                    .pins
-                                    .iter()
-                                    .filter(|(_, p)| {
-                                        p.pin_type == PinType::Output && p.name == "payload"
-                                    })
-                                    .map(|(_, p)| p.clone())
-                                    .collect();
-                                for pin in payload_pins {
-                                    pin.set_value(parsed.clone()).await;
-                                }
-                            }
-                        } else {
-                            let payload_pins: Vec<_> = ctx
-                                .node
-                                .pins
-                                .iter()
-                                .filter(|(_, p)| {
-                                    p.pin_type == PinType::Output && p.name == "payload"
-                                })
-                                .map(|(_, p)| p.clone())
-                                .collect();
-                            for pin in payload_pins {
-                                pin.set_value(json!(text.as_str())).await;
-                            }
-                        }
-                    }
-                    Message::Binary(data) => {
-                        if single_byte {
-                            let pins: Vec<_> = ctx
-                                .node
-                                .pins
-                                .iter()
-                                .filter(|(_, p)| {
-                                    p.pin_type == PinType::Output
-                                        && p.data_type == VariableType::Byte
-                                        && p.name != "payload"
-                                })
-                                .map(|(_, p)| p.clone())
-                                .collect();
-                            for pin in pins {
-                                pin.set_value(json!(data.to_vec())).await;
-                                break;
-                            }
-                        } else {
-                            let payload_pins: Vec<_> = ctx
-                                .node
-                                .pins
-                                .iter()
-                                .filter(|(_, p)| {
-                                    p.pin_type == PinType::Output && p.name == "payload"
-                                })
-                                .map(|(_, p)| p.clone())
-                                .collect();
-                            for pin in payload_pins {
-                                pin.set_value(json!(data.to_vec())).await;
-                            }
-                        }
-                    }
-                    _ => continue,
+                if !matched_message {
+                    ctx.log_message(
+                        "WebSocket incoming message did not match any output pin on the referenced handler",
+                        LogLevel::Warn,
+                    );
                 }
 
                 let mut log_message =
                     LogMessage::new("WebSocket on_message", LogLevel::Debug, None);
                 let run =
                     InternalNode::trigger(&mut ctx, &mut Some(recursion_guard.clone()), true).await;
+                if let Err(e) = &run {
+                    ctx.log_message(
+                        &format!("WebSocket on_message handler failed: {:?}", e),
+                        LogLevel::Error,
+                    );
+                }
                 log_message.end();
                 ctx.log(log_message);
                 ctx.end_trace();
+                if let Err(e) = ctx.flush_logs().await {
+                    tracing::warn!("Failed to flush WebSocket on_message logs: {:?}", e);
+                }
                 if let Err(e) = run {
                     tracing::warn!("WebSocket on_message handler error: {:?}", e);
                 }
@@ -476,4 +703,457 @@ async fn spawn_message_reader(
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use ahash::AHashMap;
+    use flow_like::flow::{
+        board::ExecutionStage,
+        execution::{
+            Run, context::ExecutionContext, internal_node::InternalNode, internal_pin::InternalPin,
+        },
+        node::{Node, NodeLogic},
+    };
+    use flow_like::{
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_types::{
+        async_trait,
+        json::json,
+        sync::{Mutex, RwLock},
+    };
+    use futures::SinkExt;
+    use std::sync::{Arc, Weak};
+    use tokio::net::TcpListener;
+
+    #[derive(Default)]
+    struct NoopLogic;
+
+    #[async_trait]
+    impl NodeLogic for NoopLogic {
+        fn get_node(&self) -> Node {
+            Node::new("test_noop", "Test Noop", "No-op test node", "Tests")
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn internal_node(node: Node) -> Arc<InternalNode> {
+        let mut pins = AHashMap::new();
+        let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+
+        for pin in node.pins.values() {
+            let internal_pin = Arc::new(InternalPin::new(pin, false));
+            name_cache
+                .entry(pin.name.clone())
+                .or_default()
+                .push(internal_pin.clone());
+            pins.insert(pin.id.clone(), internal_pin);
+        }
+
+        let internal = Arc::new(InternalNode::new(
+            node,
+            pins,
+            Arc::new(NoopLogic),
+            name_cache,
+        ));
+
+        for pin in internal.pins.values() {
+            pin.init_node(Arc::downgrade(&internal));
+            pin.init_connected_to(Vec::new());
+            pin.init_depends_on(Vec::new());
+        }
+
+        internal
+    }
+
+    fn node_with_outputs(outputs: &[(&str, VariableType)]) -> Arc<InternalNode> {
+        let mut node = Node::new("test_handler", "Test Handler", "Handler test node", "Tests");
+        node.add_output_pin("exec_out", "Exec", "Execute", VariableType::Execution);
+        for (name, data_type) in outputs {
+            node.add_output_pin(name, name, name, data_type.clone());
+        }
+        internal_node(node)
+    }
+
+    async fn test_context(
+        current: Arc<InternalNode>,
+        nodes: Vec<Arc<InternalNode>>,
+    ) -> ExecutionContext {
+        let mut node_map = AHashMap::new();
+        for node in nodes {
+            node_map.insert(node.node_id().to_string(), node);
+        }
+        node_map
+            .entry(current.node_id().to_string())
+            .or_insert_with(|| current.clone());
+
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let variables = Arc::new(Mutex::new(AHashMap::new()));
+        let cache = Arc::new(RwLock::new(AHashMap::new()));
+        let run: Weak<Mutex<Run>> = Weak::new();
+
+        ExecutionContext::new(
+            Arc::new(node_map),
+            &run,
+            &state,
+            &current,
+            &variables,
+            &cache,
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+        )
+        .await
+    }
+
+    async fn output_value(context: &ExecutionContext, name: &str) -> flow_like_types::Value {
+        raw_output_value(context, name).await.unwrap()
+    }
+
+    async fn raw_output_value(
+        context: &ExecutionContext,
+        name: &str,
+    ) -> Option<flow_like_types::Value> {
+        context
+            .node
+            .get_pin_by_name(name)
+            .await
+            .unwrap()
+            .get_raw_value()
+            .await
+    }
+
+    async fn run_local_websocket_message(
+        message: Message,
+        handler: Arc<InternalNode>,
+    ) -> ExecutionContext {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            websocket.send(message).await.unwrap();
+            websocket.close(None).await.unwrap();
+        });
+
+        let mut connect_node = WebSocketConnectNode::new().get_node();
+        connect_node
+            .fn_refs
+            .as_mut()
+            .unwrap()
+            .fn_refs
+            .push(handler.node_id().to_string());
+
+        let parent = internal_node(connect_node);
+        let mut context = test_context(parent, vec![handler.clone()]).await;
+        context
+            .set_pin_value(
+                "config",
+                json!(WebSocketConfig {
+                    url: format!("ws://{}", addr),
+                    headers: None,
+                    timeout_seconds: 5,
+                    tls: Default::default(),
+                }),
+            )
+            .await
+            .unwrap();
+
+        WebSocketConnectNode::new().run(&mut context).await.unwrap();
+        server.await.unwrap();
+
+        test_context(handler, Vec::new()).await
+    }
+
+    async fn run_local_websocket_tls_message(
+        message: Message,
+        handler: Arc<InternalNode>,
+    ) -> ExecutionContext {
+        let ca = crate::web::tls::create_ca_certificate("FlowLike WS Connect Test CA").unwrap();
+        let leaf = crate::web::tls::create_signed_certificate(
+            &ca,
+            "localhost",
+            vec!["localhost".to_string(), "127.0.0.1".to_string()],
+            "Server",
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let tls_acceptor = crate::web::tls::server_acceptor(&crate::web::tls::TlsConfig {
+            secure: true,
+            certificate: Some(leaf),
+            ..Default::default()
+        })
+        .unwrap()
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let stream = tls_acceptor.accept(stream).await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            websocket.send(message).await.unwrap();
+            websocket.close(None).await.unwrap();
+        });
+
+        let mut connect_node = WebSocketConnectNode::new().get_node();
+        connect_node
+            .fn_refs
+            .as_mut()
+            .unwrap()
+            .fn_refs
+            .push(handler.node_id().to_string());
+
+        let parent = internal_node(connect_node);
+        let mut context = test_context(parent, vec![handler.clone()]).await;
+        context
+            .set_pin_value(
+                "config",
+                json!(WebSocketConfig {
+                    url: format!("ws://{}", addr),
+                    headers: None,
+                    timeout_seconds: 5,
+                    tls: crate::web::tls::TlsConfig {
+                        secure: true,
+                        ca_certificate_pem: Some(ca.certificate_pem),
+                        ..Default::default()
+                    },
+                }),
+            )
+            .await
+            .unwrap();
+
+        WebSocketConnectNode::new().run(&mut context).await.unwrap();
+        server.await.unwrap();
+
+        test_context(handler, Vec::new()).await
+    }
+
+    #[tokio::test]
+    async fn referenced_handler_context_is_delegated_to_avoid_payload_lookup_regression() {
+        let parent = internal_node(WebSocketConnectNode::new().get_node());
+        let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+        let parent_context = test_context(parent, vec![handler.clone()]).await;
+
+        let handler_context = create_message_handler_context(&parent_context, handler).await;
+        let sub_context = handler_context
+            .connected_nodes
+            .iter()
+            .next()
+            .expect("handler context should exist")
+            .value()
+            .clone();
+        let sub_context = sub_context.lock().await;
+
+        assert!(
+            sub_context.delegated,
+            "referenced event handlers must be delegated so Generic Event does not call get_payload()"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_payload_field_maps_to_generic_payload_pin() {
+        let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Text(r#"{"payload":{"ok":true},"ignored":1}"#.into()),
+            false,
+            false,
+            true,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(output_value(&context, "payload").await, json!({"ok": true}));
+    }
+
+    #[tokio::test]
+    async fn json_object_maps_named_pins_and_leftovers_to_payload() {
+        let handler = node_with_outputs(&[
+            ("event_type", VariableType::String),
+            ("payload", VariableType::Struct),
+        ]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Text(r#"{"eventType":"chat","body":"hi"}"#.into()),
+            false,
+            false,
+            false,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(output_value(&context, "event_type").await, json!("chat"));
+        assert_eq!(
+            output_value(&context, "payload").await,
+            json!({"body": "hi"})
+        );
+    }
+
+    #[tokio::test]
+    async fn non_json_text_maps_to_wrapped_payload_struct() {
+        let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Text("plain echo".into()),
+            false,
+            false,
+            true,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(
+            output_value(&context, "payload").await,
+            json!({"payload": "plain echo"})
+        );
+    }
+
+    #[tokio::test]
+    async fn non_json_text_uses_single_string_pin_when_payload_is_the_only_other_output() {
+        let handler = node_with_outputs(&[
+            ("message", VariableType::String),
+            ("payload", VariableType::Struct),
+        ]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Text("plain echo".into()),
+            true,
+            false,
+            false,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(output_value(&context, "message").await, json!("plain echo"));
+        assert_eq!(
+            raw_output_value(&context, "payload").await,
+            None,
+            "non-JSON string should prefer the single string pin over the payload struct"
+        );
+    }
+
+    #[tokio::test]
+    async fn json_text_does_not_use_single_string_shortcut() {
+        let handler = node_with_outputs(&[
+            ("message", VariableType::String),
+            ("payload", VariableType::Struct),
+        ]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Text(r#"{"payload":{"server":"banner"}}"#.into()),
+            true,
+            false,
+            false,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(raw_output_value(&context, "message").await, None);
+        assert_eq!(
+            output_value(&context, "payload").await,
+            json!({"server": "banner"})
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_message_uses_single_byte_pin_when_payload_is_the_only_other_output() {
+        let handler = node_with_outputs(&[
+            ("bytes", VariableType::Byte),
+            ("payload", VariableType::Struct),
+        ]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Binary(vec![1_u8, 2, 3].into()),
+            false,
+            true,
+            false,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(output_value(&context, "bytes").await, json!([1, 2, 3]));
+        assert_eq!(
+            raw_output_value(&context, "payload").await,
+            None,
+            "binary data should prefer the single byte pin over the payload struct"
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_message_without_single_byte_pin_maps_to_wrapped_payload_struct() {
+        let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+        let mut context = test_context(handler, Vec::new()).await;
+
+        let matched = apply_incoming_message_to_handler(
+            &mut context,
+            &Message::Binary(vec![1_u8, 2, 3].into()),
+            false,
+            false,
+            true,
+            true,
+        )
+        .await;
+
+        assert!(matched);
+        assert_eq!(
+            output_value(&context, "payload").await,
+            json!({"payload": [1, 2, 3]})
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_connect_e2e_wraps_non_json_text_into_payload_struct() {
+        let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+        let context =
+            run_local_websocket_message(Message::Text("plain echo".into()), handler).await;
+
+        assert_eq!(
+            output_value(&context, "payload").await,
+            json!({"payload": "plain echo"})
+        );
+    }
+
+    #[tokio::test]
+    async fn websocket_connect_tls_e2e_wraps_non_json_text_into_payload_struct() {
+        let handler = node_with_outputs(&[("payload", VariableType::Struct)]);
+        let context =
+            run_local_websocket_tls_message(Message::Text("secure echo".into()), handler).await;
+
+        assert_eq!(
+            output_value(&context, "payload").await,
+            json!({"payload": "secure echo"})
+        );
+    }
 }

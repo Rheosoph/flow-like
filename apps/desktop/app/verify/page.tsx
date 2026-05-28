@@ -6,7 +6,7 @@ import {
 	Input,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { motion } from "framer-motion";
 import {
 	ArrowLeft,

@@ -1,12 +1,12 @@
 "use client";
 
-import type { IBoard } from "@tm9657/flow-like-ui";
+import type { IBoard } from "@flow-like/flow-like-ui";
 import {
 	type IOAuthProvider,
 	type IOAuthToken,
 	type IStoredOAuthToken,
 	checkOAuthTokens,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useCallback, useState } from "react";
 import { oauthTokenStore } from "../lib/oauth-db";
 import { oauthService } from "../lib/oauth-service";

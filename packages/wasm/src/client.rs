@@ -223,8 +223,12 @@ impl RegistryClient {
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
+            let has_platform_artifact = !cfg!(target_os = "ios")
+                || installed.wasm_path.with_extension("cwasm").exists();
+
             if (version.is_none() || version == Some(&installed.version))
                 && installed.wasm_path.exists()
+                && has_platform_artifact
             {
                 let wasm_data = tokio::fs::read(&installed.wasm_path).await?;
                 return Ok(CachedPackage {
@@ -929,6 +933,19 @@ impl RegistryClient {
 
         let wasm_hash = calculate_hash(wasm_bytes);
         if let Some(aot) = engine.aot_cache() {
+            #[cfg(feature = "component-model")]
+            if crate::component::is_component_model(wasm_bytes) {
+                if let Err(e) = aot.inject_component(&wasm_hash, &cwasm_bytes) {
+                    tracing::warn!("Failed to inject component cwasm into AOT cache: {}", e);
+                } else {
+                    tracing::info!(
+                        "Injected precompiled component cwasm into AOT cache for {}",
+                        wasm_hash
+                    );
+                }
+                return;
+            }
+
             if let Err(e) = aot.inject_module(&wasm_hash, &cwasm_bytes) {
                 tracing::warn!("Failed to inject cwasm into AOT cache: {}", e);
             } else {

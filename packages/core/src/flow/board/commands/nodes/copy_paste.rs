@@ -65,22 +65,8 @@ impl Command for CopyPasteCommand {
     async fn validate(
         &self,
         _board: &Board,
-        state: Arc<FlowLikeState>,
+        _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        let node_registry = state.node_registry.read().await.node_registry.clone();
-        for node in &self.original_nodes {
-            if node_registry.get_node(&node.name).is_err() && node.wasm.is_some() {
-                return Err(flow_like_types::anyhow!(
-                    "External node '{}' from package '{}' is not installed. Please install the package first.",
-                    node.friendly_name,
-                    node.wasm
-                        .as_ref()
-                        .map(|w| w.package_id.as_str())
-                        .unwrap_or("unknown")
-                ));
-            }
-        }
-
         Ok(())
     }
 

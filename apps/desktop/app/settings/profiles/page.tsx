@@ -8,8 +8,8 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { ProfileSettingsPage } from "@tm9657/flow-like-ui/components/settings/profile/profile-settings-page";
+} from "@flow-like/flow-like-ui";
+import { ProfileSettingsPage } from "@flow-like/flow-like-ui/components/settings/profile/profile-settings-page";
 import { useDebounce } from "@uidotdev/usehooks";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

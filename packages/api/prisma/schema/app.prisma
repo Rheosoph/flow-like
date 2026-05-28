@@ -101,6 +101,7 @@ model App {
 
   technicalUsers TechnicalUser[]
   llmUsage       LLMUsageTracking[]
+  usageLimits    AppUsageLimit[]
   executionUsage ExecutionUsageTracking[]
   executionRuns  ExecutionRun[]
   executionMode  ExecutionMode            @default(ANY)
@@ -109,6 +110,10 @@ model App {
   bits   String[]    @default([])
   events Event[]
   sinks  EventSink[]
+
+  eventRemoteAuths         EventRemoteAuth[]
+  eventRemoteRegistrations EventRemoteRegistration[]
+  eventAliases             EventAlias[]
 
   packages   AppPackage[]
   purchases  AppPurchase[]
@@ -126,6 +131,30 @@ model App {
   @@index([relevanceScore])
   @@index([ratingSum])
   @@index([status])
+}
+
+model AppUsageLimit {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+  /// Empty string means app-wide. A user id means per-user limit within the app.
+  userId String @default("")
+
+  /// Valid values are weekly, monthly, yearly.
+  period           String
+  costMicroDollars BigInt?
+  tokenLimit       BigInt?
+  enabled Boolean @default(true)
+  hard Boolean @default(true)
+  warningThresholdPercent Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, userId, period])
+  @@index([appId])
+  @@index([userId])
 }
 
 model TechnicalUser {
@@ -338,6 +367,25 @@ model Event {
 
   sink EventSink?
 
+  /// Status of the most recent remote setup run: "running", "ok", "error".
+  /// Only meaningful for events whose underlying flow
+  /// contains REST/MCP server nodes that are executed remotely.
+  setupStatus String?
+
+  /// Timestamp of the last setup run completion.
+  lastSetupAt DateTime?
+
+  /// Event version that was active during the last successful setup. Used to
+  /// match `EventRemoteRegistration` rows when serving inbound requests.
+  lastSetupVersion String?
+
+  /// Last setup error message (truncated), populated only when setupStatus = "error".
+  lastSetupError String?
+
+  remoteAuths         EventRemoteAuth[]
+  remoteRegistrations EventRemoteRegistration[]
+  aliases             EventAlias[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -348,6 +396,113 @@ model Event {
   @@index([appId, isDefault])
   @@index([boardId])
   @@index([pageId])
+}
+
+/// Auth configuration captured per remote server node during setup.
+/// Inbound requests look this up via EventRemoteRegistration.authId.
+model EventRemoteAuth {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+
+  /// Event version this auth config belongs to. Replaced atomically per setup.
+  eventVersion String
+
+  /// node_id of the server node that emitted this config.
+  nodeId String
+
+  /// "rest" or "mcp".
+  kind String
+
+  /// Serialized RestAuthConfig / McpAuthConfig. Secret fields are stored as
+  /// *_encrypted values using the sink token encryption key.
+  configJson Json
+
+  registrations EventRemoteRegistration[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([appId, eventId, eventVersion])
+  @@index([appId, eventId, eventVersion, nodeId, kind])
+}
+
+/// Registration row written by the setup-collector for every route, file,
+/// openapi spec, tool, resource, or prompt emitted by remote server nodes.
+model EventRemoteRegistration {
+  id String @id @default(cuid())
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+
+  /// Event version this registration belongs to. The inbound dispatcher
+  /// always reads the rows matching event.lastSetupVersion.
+  eventVersion String
+
+  /// One of: "rest_fn", "rest_file", "rest_openapi", "rest_openapi_ui",
+  /// "mcp_raw", "mcp_tool", "mcp_resource", "mcp_prompt".
+  kind String
+
+  /// HTTP method for rest_fn (uppercase, or "ANY"). NULL for everything else.
+  method String?
+
+  /// Route path for REST kinds. For mcp_resource this is the URI. For
+  /// mcp_tool / mcp_prompt this is the tool/prompt name.
+  path String
+
+  /// Target node ID to dispatch into for function-like registrations
+  /// (rest_fn, mcp_tool, mcp_prompt). NULL for file/openapi/resource rows
+  /// that serve static content.
+  nodeId String?
+
+  /// JSON Schema for input validation / MCP advertising.
+  schemaJson Json?
+
+  /// Kind-specific extras (content_type, ui_path, mime_type, …).
+  extrasJson Json?
+
+  /// Optional auth row to apply.
+  auth   EventRemoteAuth? @relation(fields: [authId], references: [id], onDelete: SetNull)
+  authId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([appId, eventId, eventVersion])
+  @@index([appId, eventId, eventVersion, kind])
+  @@index([appId, eventId, eventVersion, kind, method, path])
+}
+
+/// Vanity slug -> event mapping. Slug is the global URL key; uniqueness
+/// is enforced by the PK. Router/common slugs and generated-id-length
+/// slugs are hard-reserved; brand-sensitive slugs (see
+/// `utils::event_alias::is_admin_reserved_slug`) require platform admin.
+model EventAlias {
+  /// URL-safe slug, e.g. "checkout" or "twilio-inbound".
+  /// Regex: [a-z0-9-]{3,64}. Reserved: api, r, m, health, metrics,
+  /// generated id lengths, swagger, api-doc, openapi, docs, __, etc.
+  slug String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+
+  createdBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, eventId])
+  @@index([appId])
+  @@index([eventId])
 }
 
 /// Event Sink Registration - tracks which events have active server-side sinks

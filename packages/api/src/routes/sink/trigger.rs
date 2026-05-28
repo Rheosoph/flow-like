@@ -118,7 +118,7 @@ fn parse_pat_token(value: &str) -> Option<(&str, &str)> {
     Some((pat_id, secret))
 }
 
-async fn resolve_sink_pat_user_id(
+pub(crate) async fn resolve_sink_pat_user_id(
     state: &AppState,
     sink: &event_sink::Model,
     stored_pat: Option<&str>,
@@ -485,7 +485,7 @@ async fn parse_http_request_payload(
 /// calls the provider's token endpoint. On success, updates the map entry with
 /// the new token data and persists the updated encrypted blob back to the
 /// EventSink row.
-async fn maybe_refresh_oauth_tokens(
+pub(crate) async fn maybe_refresh_oauth_tokens(
     state: &AppState,
     sink_id: &str,
     mut tokens: std::collections::HashMap<String, serde_json::Value>,
@@ -675,7 +675,7 @@ pub async fn trigger_event(
         .scoped_credentials(
             &executor_subject,
             &sink.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await?;
     let shared_credentials = credentials.into_shared_credentials();
@@ -918,7 +918,7 @@ pub async fn trigger_http(
         .scoped_credentials(
             &executor_subject,
             &app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
@@ -1353,7 +1353,7 @@ pub async fn trigger_telegram(
         .scoped_credentials(
             &executor_subject,
             &sink.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;
@@ -1679,7 +1679,7 @@ pub async fn trigger_discord(
         .scoped_credentials(
             &executor_subject,
             &sink.app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to get credentials: {}", e)))?;

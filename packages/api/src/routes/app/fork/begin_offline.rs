@@ -146,7 +146,10 @@ pub async fn begin_offline_fork(
     // didn't make it because they only run server-side."
     let token_sites = detect_remote_token_sites(&state, &app_id).await?;
 
-    let user_sub = user.sub()?;
+    let credential_subject = match &user {
+        AppUser::Unauthorized => "anonymous-fork".to_string(),
+        _ => user.sub()?,
+    };
     // `body` is currently empty (see `BeginOfflineForkBody` doc) but
     // kept on the signature so adding fields later is non-breaking.
     let _ = body;
@@ -178,7 +181,7 @@ pub async fn begin_offline_fork(
     // meta bucket from the policy so a misbehaving client can't
     // bypass the API by GETting raw `*.board` / `*.event` files.
     let scoped = RuntimeCredentials::scoped(
-        &user_sub,
+        &credential_subject,
         &app_id,
         &state,
         CredentialsAccess::ReadAppContent,

@@ -54,13 +54,13 @@
 		{
 			"name": "GitHub",
 			"short_name": "GitHub",
-			"url": "https://github.com/TM9657/flow-like?utm_source=pwa-shortcut",
+			"url": "https://github.com/Rheosoph/flow-like?utm_source=pwa-shortcut",
 			"description": "View the repository"
 		},
 		{
 			"name": "Download",
 			"short_name": "Download",
-			"url": "https://github.com/TM9657/flow-like/releases?utm_source=pwa-shortcut",
+			"url": "https://github.com/Rheosoph/flow-like/releases?utm_source=pwa-shortcut",
 			"description": "Get the latest release"
 		}
 	],

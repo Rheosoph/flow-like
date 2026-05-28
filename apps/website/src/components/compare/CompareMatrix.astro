@@ -10,6 +10,7 @@ type Support = "native" | "partial" | "none" | string;
 interface Competitor {
   name: string;
   capabilities: Record<string, Support>;
+  warning?: string;
 }
 
 interface Category {
@@ -18,31 +19,37 @@ interface Category {
   competitors: Competitor[];
 }
 
-const capabilities = [
-  "visual_workflow",
-  "replayable",
-  "high_volume",
-  "compiled",
-  "ai_agents",
-  "ui_builder",
-  "full_apps",
-  "customer_facing",
-  "desktop",
-  "mobile",
-  "offline",
-  "local_first",
-  "file_native",
-  "data_science",
-  "governance",
-  "self_hosted",
-  "lock_in",
+const capabilityGroups: { id: string; capabilities: string[] }[] = [
+  {
+    id: "execution",
+    capabilities: ["visual_workflow", "replayable", "high_volume", "compiled"],
+  },
+  {
+    id: "data",
+    capabilities: ["file_size", "file_native", "data_science"],
+  },
+  {
+    id: "ai_ux",
+    capabilities: ["ai_agents", "ui_builder", "full_apps", "customer_facing"],
+  },
+  {
+    id: "distribution",
+    capabilities: ["desktop", "mobile", "offline", "local_first"],
+  },
+  {
+    id: "trust",
+    capabilities: ["governance", "self_hosted", "lock_in", "sandbox_isolation", "concurrent_state"],
+  },
 ];
+
+const capabilities = capabilityGroups.flatMap((g) => g.capabilities);
 
 const flowLikeCapabilities: Record<string, Support> = {
   visual_workflow: "native",
   replayable: "native",
   high_volume: "native",
   compiled: "native",
+  file_size: "unlimited",
   ai_agents: "native",
   ui_builder: "native",
   full_apps: "native",
@@ -55,7 +62,9 @@ const flowLikeCapabilities: Record<string, Support> = {
   data_science: "native",
   governance: "native",
   self_hosted: "native",
-  lock_in: "none-lock-in",
+  lock_in: "low",
+  sandbox_isolation: "native",
+  concurrent_state: "native",
 };
 
 const categories: Category[] = [
@@ -70,6 +79,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "none",
+          file_size: "limited-25mb",
           ai_agents: "none",
           ui_builder: "none",
           full_apps: "none",
@@ -83,6 +93,8 @@ const categories: Category[] = [
           governance: "saas",
           self_hosted: "none",
           lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
         },
       },
       {
@@ -92,6 +104,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "js",
+          file_size: "limited-50mb",
           ai_agents: "partial",
           ui_builder: "none",
           full_apps: "none",
@@ -105,6 +118,8 @@ const categories: Category[] = [
           governance: "basic",
           self_hosted: "native",
           lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "partial",
         },
       },
       {
@@ -114,6 +129,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "js",
+          file_size: "depends",
           ai_agents: "partial",
           ui_builder: "none",
           full_apps: "none",
@@ -127,6 +143,8 @@ const categories: Category[] = [
           governance: "none",
           self_hosted: "native",
           lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
         },
       },
     ],
@@ -142,6 +160,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "none",
+          file_size: "limited-40mb",
           ai_agents: "partial",
           ui_builder: "native",
           full_apps: "native",
@@ -155,6 +174,8 @@ const categories: Category[] = [
           governance: "basic",
           self_hosted: "partial",
           lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
         },
       },
       {
@@ -164,6 +185,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "none",
+          file_size: "limited-128mb",
           ai_agents: "partial",
           ui_builder: "native",
           full_apps: "native",
@@ -177,6 +199,8 @@ const categories: Category[] = [
           governance: "enterprise",
           self_hosted: "none",
           lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
         },
       },
       {
@@ -186,6 +210,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "none",
+          file_size: "limited-25mb",
           ai_agents: "partial",
           ui_builder: "native",
           full_apps: "native",
@@ -199,6 +224,8 @@ const categories: Category[] = [
           governance: "basic",
           self_hosted: "partial",
           lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
         },
       },
       {
@@ -208,6 +235,7 @@ const categories: Category[] = [
           replayable: "none",
           high_volume: "none",
           compiled: "none",
+          file_size: "limited-5mb",
           ai_agents: "partial",
           ui_builder: "native",
           full_apps: "native",
@@ -221,6 +249,8 @@ const categories: Category[] = [
           governance: "basic",
           self_hosted: "native",
           lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "partial",
         },
       },
     ],
@@ -236,6 +266,7 @@ const categories: Category[] = [
           replayable: "native",
           high_volume: "native",
           compiled: "native",
+          file_size: "depends",
           ai_agents: "none",
           ui_builder: "none",
           full_apps: "none",
@@ -249,6 +280,8 @@ const categories: Category[] = [
           governance: "none",
           self_hosted: "native",
           lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "native",
         },
       },
       {
@@ -258,6 +291,7 @@ const categories: Category[] = [
           replayable: "native",
           high_volume: "native",
           compiled: "native",
+          file_size: "limited-2mb",
           ai_agents: "none",
           ui_builder: "none",
           full_apps: "none",
@@ -271,6 +305,645 @@ const categories: Category[] = [
           governance: "none",
           self_hosted: "native",
           lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "native",
+        },
+      },
+    ],
+  },
+  {
+    name: t("compare.category.enterprise_data"),
+    desc: t("compare.category.enterprise_data.desc"),
+    competitors: [
+      {
+        name: "Ontology data platform",
+        capabilities: {
+          visual_workflow: "partial",
+          replayable: "native",
+          high_volume: "native",
+          compiled: "none",
+          file_size: "unlimited",
+          ai_agents: "partial",
+          ui_builder: "native",
+          full_apps: "partial",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "partial",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "native",
+          governance: "enterprise",
+          self_hosted: "partial",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "native",
+        },
+      },
+      {
+        name: "ERP process platform",
+        capabilities: {
+          visual_workflow: "partial",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "limited-100mb",
+          ai_agents: "partial",
+          ui_builder: "native",
+          full_apps: "native",
+          customer_facing: "partial",
+          desktop: "none",
+          mobile: "partial",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "enterprise",
+          self_hosted: "partial",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "native",
+        },
+      },
+    ],
+  },
+  {
+    name: t("compare.category.enterprise_automation"),
+    desc: t("compare.category.enterprise_automation.desc"),
+    competitors: [
+      {
+        name: "UiPath",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "limited-30mb",
+          ai_agents: "partial",
+          ui_builder: "native",
+          full_apps: "native",
+          customer_facing: "partial",
+          desktop: "none",
+          mobile: "partial",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "enterprise",
+          self_hosted: "partial",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "Salesforce",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "limited-25mb",
+          ai_agents: "partial",
+          ui_builder: "native",
+          full_apps: "native",
+          customer_facing: "native",
+          desktop: "none",
+          mobile: "native",
+          offline: "partial",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "enterprise",
+          self_hosted: "none",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "native",
+        },
+      },
+      {
+        name: "Regrello",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "partial",
+          full_apps: "none",
+          customer_facing: "partial",
+          desktop: "none",
+          mobile: "partial",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "enterprise",
+          self_hosted: "none",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+    ],
+  },
+  {
+    name: t("compare.category.agent_runtimes"),
+    desc: t("compare.category.agent_runtimes.desc"),
+    competitors: [
+      {
+        name: "CrewAI",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "native",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "AutoGen",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "LangGraph",
+        capabilities: {
+          visual_workflow: "partial",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "partial",
+          governance: "basic",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "Dify",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "limited-15mb",
+          ai_agents: "native",
+          ui_builder: "partial",
+          full_apps: "none",
+          customer_facing: "partial",
+          desktop: "none",
+          mobile: "none",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "basic",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "native",
+        },
+      },
+      {
+        name: "Flowise",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "limited-50mb",
+          ai_agents: "native",
+          ui_builder: "partial",
+          full_apps: "none",
+          customer_facing: "partial",
+          desktop: "none",
+          mobile: "none",
+          offline: "none",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "none",
+          governance: "basic",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "Pydantic AI",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "Agno",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "Google ADK",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "partial",
+          self_hosted: "partial",
+          lock_in: "high",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+    ],
+  },
+  {
+    name: t("compare.category.llm_frameworks"),
+    desc: t("compare.category.llm_frameworks.desc"),
+    competitors: [
+      {
+        name: "LangChain",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "partial",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "LlamaIndex",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "partial",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "native",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "Haystack",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "partial",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "none",
+          data_science: "native",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+    ],
+  },
+  {
+    name: t("compare.category.ai_ipaas"),
+    desc: t("compare.category.ai_ipaas.desc"),
+    competitors: [
+      {
+        name: "Make.com",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "limited-250mb",
+          ai_agents: "partial",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "none",
+          governance: "basic",
+          self_hosted: "none",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "Workato",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "partial",
+          high_volume: "partial",
+          compiled: "none",
+          file_size: "limited-50mb",
+          ai_agents: "partial",
+          ui_builder: "partial",
+          full_apps: "none",
+          customer_facing: "partial",
+          desktop: "none",
+          mobile: "none",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "partial",
+          governance: "enterprise",
+          self_hosted: "partial",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "Pipedream",
+        capabilities: {
+          visual_workflow: "native",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "limited-10mb",
+          ai_agents: "partial",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "none",
+          local_first: "none",
+          file_native: "none",
+          data_science: "none",
+          governance: "basic",
+          self_hosted: "partial",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+    ],
+  },
+  {
+    name: t("compare.category.coding_agents"),
+    desc: t("compare.category.coding_agents.desc"),
+    competitors: [
+      {
+        name: "OpenClaw",
+        warning: t("compare.warning.openclaw"),
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "partial",
+          mobile: "none",
+          offline: "partial",
+          local_first: "native",
+          file_native: "native",
+          data_science: "none",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "none",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "Hermes Agent",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "partial",
+          mobile: "none",
+          offline: "partial",
+          local_first: "native",
+          file_native: "native",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "partial",
+        },
+      },
+      {
+        name: "OpenHands",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "none",
+          mobile: "none",
+          offline: "partial",
+          local_first: "partial",
+          file_native: "native",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "Goose",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "partial",
+          high_volume: "none",
+          compiled: "native",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "partial",
+          mobile: "none",
+          offline: "partial",
+          local_first: "native",
+          file_native: "native",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "native",
+          lock_in: "low",
+          sandbox_isolation: "partial",
+          concurrent_state: "none",
+        },
+      },
+      {
+        name: "Gemini CLI",
+        capabilities: {
+          visual_workflow: "none",
+          replayable: "none",
+          high_volume: "none",
+          compiled: "none",
+          file_size: "depends",
+          ai_agents: "native",
+          ui_builder: "none",
+          full_apps: "none",
+          customer_facing: "none",
+          desktop: "partial",
+          mobile: "none",
+          offline: "none",
+          local_first: "none",
+          file_native: "native",
+          data_science: "partial",
+          governance: "none",
+          self_hosted: "none",
+          lock_in: "high",
+          sandbox_isolation: "partial",
+          concurrent_state: "none",
         },
       },
     ],
@@ -281,20 +954,244 @@ const renderSupport = (support: Support, cap: string): { icon: string; color: st
   if (support === "native") return { icon: "✓", color: "emerald" };
   if (support === "partial") return { icon: "◐", color: "amber" };
   if (support === "none") return { icon: "✗", color: "red" };
-  if (support === "none-lock-in") return { icon: "✓", color: "emerald" };
-  if (support === "high") return { icon: "⚠", color: "red", label: "High" };
-  if (support === "low") return { icon: "○", color: "emerald", label: "Low" };
+  if (support === "high") return { icon: "⚠", color: "red", label: t("compare.support.high") };
+  if (support === "low") return { icon: "○", color: "emerald", label: t("compare.support.low") };
   if (support === "saas") return { icon: "◐", color: "amber", label: "SaaS" };
-  if (support === "basic") return { icon: "◐", color: "amber", label: "Basic" };
+  if (support === "basic") return { icon: "◐", color: "amber", label: t("compare.support.basic") };
   if (support === "enterprise") return { icon: "◐", color: "amber", label: "Enterprise" };
   if (support === "js") return { icon: "◐", color: "amber", label: "JS" };
+  if (support === "unlimited") return { icon: "∞", color: "emerald", label: t("compare.support.unlimited") };
+  if (support === "depends") return { icon: "?", color: "muted", label: t("compare.support.depends") };
+  if (typeof support === "string" && support.startsWith("limited-")) {
+    const size = support.replace("limited-", "").toUpperCase();
+    return { icon: "⚠", color: "red", label: size };
+  }
   return { icon: support, color: "muted", label: support };
+};
+
+const supportScore = (support: Support): number => {
+  if (support === "native" || support === "unlimited" || support === "low") return 1;
+  if (support === "partial" || support === "js" || support === "enterprise") return 0.55;
+  if (support === "saas" || support === "basic" || support === "depends") return 0.4;
+  if (support === "none" || support === "high") return 0;
+  if (typeof support === "string" && support.startsWith("limited-")) return 0.2;
+  return 0.3;
+};
+
+// Per-category axis spec. Each category gets the two dimensions that actually
+// differentiate its competitors, so the bubble plot tells a relevant story.
+interface AxisSpec {
+  caps: string[];
+  labelKey: string;
+  lowKey: string;
+  highKey: string;
+}
+
+interface CategorySpec {
+  x: AxisSpec;
+  y: AxisSpec;
+}
+
+// Each category is plotted against THE two pain points its competitors share.
+// Flow-Like lands top-right because it solves both — that's the story.
+const categorySpecs: Record<string, CategorySpec> = {
+  // SaaS workflow tools die at scale; open ones aren't production-grade.
+  [t("compare.category.execution")]: {
+    x: {
+      caps: ["replayable", "high_volume", "compiled"],
+      labelKey: "compare.matrix.plot.axis.production_scale",
+      lowKey: "compare.matrix.plot.axis.production_scale.low",
+      highKey: "compare.matrix.plot.axis.production_scale.high",
+    },
+    y: {
+      caps: ["self_hosted", "lock_in"],
+      labelKey: "compare.matrix.plot.axis.openness",
+      lowKey: "compare.matrix.plot.axis.openness.low",
+      highKey: "compare.matrix.plot.axis.openness.high",
+    },
+  },
+  // Low-code is browser-locked internal tools — never reaches customers/mobile/offline.
+  [t("compare.category.lowcode")]: {
+    x: {
+      caps: ["mobile", "offline", "desktop"],
+      labelKey: "compare.matrix.plot.axis.customer_distribution",
+      lowKey: "compare.matrix.plot.axis.customer_distribution.low",
+      highKey: "compare.matrix.plot.axis.customer_distribution.high",
+    },
+    y: {
+      caps: ["self_hosted", "lock_in"],
+      labelKey: "compare.matrix.plot.axis.openness",
+      lowKey: "compare.matrix.plot.axis.openness.low",
+      highKey: "compare.matrix.plot.axis.openness.high",
+    },
+  },
+  // Engineer-only runtimes with no business UX and no AI-native primitives.
+  [t("compare.category.orchestration")]: {
+    x: {
+      caps: ["visual_workflow", "ui_builder", "full_apps"],
+      labelKey: "compare.matrix.plot.axis.business_ux",
+      lowKey: "compare.matrix.plot.axis.business_ux.low",
+      highKey: "compare.matrix.plot.axis.business_ux.high",
+    },
+    y: {
+      caps: ["ai_agents", "data_science"],
+      labelKey: "compare.matrix.plot.axis.ai_native",
+      lowKey: "compare.matrix.plot.axis.ai_native.low",
+      highKey: "compare.matrix.plot.axis.ai_native.high",
+    },
+  },
+  // Enterprise data: powerful but internal-only AND locked behind 6-figure contracts.
+  [t("compare.category.enterprise_data")]: {
+    x: {
+      caps: ["self_hosted", "lock_in"],
+      labelKey: "compare.matrix.plot.axis.portability",
+      lowKey: "compare.matrix.plot.axis.portability.low",
+      highKey: "compare.matrix.plot.axis.portability.high",
+    },
+    y: {
+      caps: ["customer_facing", "mobile", "offline"],
+      labelKey: "compare.matrix.plot.axis.customer_reach",
+      lowKey: "compare.matrix.plot.axis.customer_reach.low",
+      highKey: "compare.matrix.plot.axis.customer_reach.high",
+    },
+  },
+  // Legacy RPA stacks bolt "AI" on top of brittle screen-scraping, all SaaS-locked.
+  [t("compare.category.enterprise_automation")]: {
+    x: {
+      caps: ["ai_agents", "data_science", "replayable"],
+      labelKey: "compare.matrix.plot.axis.ai_native",
+      lowKey: "compare.matrix.plot.axis.ai_native.low",
+      highKey: "compare.matrix.plot.axis.ai_native.high",
+    },
+    y: {
+      caps: ["self_hosted", "lock_in"],
+      labelKey: "compare.matrix.plot.axis.portability",
+      lowKey: "compare.matrix.plot.axis.portability.low",
+      highKey: "compare.matrix.plot.axis.portability.high",
+    },
+  },
+  // Agent runtimes: zero sandboxing + file-based concurrent state = production death trap.
+  [t("compare.category.agent_runtimes")]: {
+    x: {
+      caps: ["sandbox_isolation", "concurrent_state", "governance"],
+      labelKey: "compare.matrix.plot.axis.agent_safety",
+      lowKey: "compare.matrix.plot.axis.agent_safety.low",
+      highKey: "compare.matrix.plot.axis.agent_safety.high",
+    },
+    y: {
+      caps: ["high_volume", "replayable", "compiled"],
+      labelKey: "compare.matrix.plot.axis.production_readiness",
+      lowKey: "compare.matrix.plot.axis.production_readiness.low",
+      highKey: "compare.matrix.plot.axis.production_readiness.high",
+    },
+  },
+  // LLM frameworks are code-only SDK building blocks — no UX, no deployment story.
+  [t("compare.category.llm_frameworks")]: {
+    x: {
+      caps: ["visual_workflow", "ui_builder", "full_apps"],
+      labelKey: "compare.matrix.plot.axis.business_ux",
+      lowKey: "compare.matrix.plot.axis.business_ux.low",
+      highKey: "compare.matrix.plot.axis.business_ux.high",
+    },
+    y: {
+      caps: ["high_volume", "compiled", "replayable"],
+      labelKey: "compare.matrix.plot.axis.production_scale",
+      lowKey: "compare.matrix.plot.axis.production_scale.low",
+      highKey: "compare.matrix.plot.axis.production_scale.high",
+    },
+  },
+  // AI-augmented iPaaS: cloud-only connector glue with thin AI wrappers, no real portability.
+  [t("compare.category.ai_ipaas")]: {
+    x: {
+      caps: ["ai_agents", "data_science", "replayable"],
+      labelKey: "compare.matrix.plot.axis.ai_native",
+      lowKey: "compare.matrix.plot.axis.ai_native.low",
+      highKey: "compare.matrix.plot.axis.ai_native.high",
+    },
+    y: {
+      caps: ["self_hosted", "lock_in"],
+      labelKey: "compare.matrix.plot.axis.portability",
+      lowKey: "compare.matrix.plot.axis.portability.low",
+      highKey: "compare.matrix.plot.axis.portability.high",
+    },
+  },
+  // Personal AI agents: host-OS exposure + file-based state vs. Flow-Like's WASM sandbox + transactions.
+  [t("compare.category.coding_agents")]: {
+    x: {
+      caps: ["sandbox_isolation", "concurrent_state", "governance"],
+      labelKey: "compare.matrix.plot.axis.agent_safety",
+      lowKey: "compare.matrix.plot.axis.agent_safety.low",
+      highKey: "compare.matrix.plot.axis.agent_safety.high",
+    },
+    y: {
+      caps: ["visual_workflow", "ui_builder", "full_apps"],
+      labelKey: "compare.matrix.plot.axis.business_ux",
+      lowKey: "compare.matrix.plot.axis.business_ux.low",
+      highKey: "compare.matrix.plot.axis.business_ux.high",
+    },
+  },
+};
+
+const axisScore = (caps: Record<string, Support>, axis: AxisSpec): number => {
+  if (axis.caps.length === 0) return 0;
+  const sum = axis.caps.reduce((acc, k) => acc + supportScore(caps[k] ?? "none"), 0);
+  return sum / axis.caps.length;
+};
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+const competitorPosition = (
+  caps: Record<string, Support>,
+  spec: CategorySpec,
+  index = 0,
+  count = 1,
+) => {
+  // Map 0..1 to 10..78 to keep bubbles inside the chart frame.
+  const baseX = 10 + axisScore(caps, spec.x) * 68;
+  const baseY = 10 + axisScore(caps, spec.y) * 68;
+  // Deterministic jitter so identical-cap competitors fan out instead of stacking.
+  const spread = count > 1 ? 5 : 0;
+  const jitterX = count > 1 ? (index - (count - 1) / 2) * spread : 0;
+  const jitterY = count > 1 ? (((index * 7) % Math.max(count, 3)) - (count - 1) / 2) * (spread * 0.6) : 0;
+  return {
+    x: clamp(baseX + jitterX, 6, 88),
+    y: clamp(baseY + jitterY, 6, 88),
+  };
+};
+
+const categoryAccent: Record<string, string> = {
+  [t("compare.category.execution")]: "amber",
+  [t("compare.category.lowcode")]: "blue",
+  [t("compare.category.orchestration")]: "purple",
+  [t("compare.category.enterprise_data")]: "fuchsia",
+  [t("compare.category.enterprise_automation")]: "rose",
+  [t("compare.category.agent_runtimes")]: "teal",
+  [t("compare.category.llm_frameworks")]: "violet",
+  [t("compare.category.ai_ipaas")]: "cyan",
+  [t("compare.category.coding_agents")]: "sky",
 };
 ---
 
 <section id="matrix" class="relative py-20 lg:py-28">
   <div class="mx-auto max-w-7xl px-4 lg:px-8">
-    {categories.map((category, catIndex) => (
+    {categories.map((category, catIndex) => {
+      const spec = categorySpecs[category.name];
+      const accent = categoryAccent[category.name] ?? "rose";
+      const colorClasses = {
+        amber: "bg-amber-500/20 ring-amber-500/50 text-amber-700 dark:text-amber-300",
+        blue: "bg-blue-500/20 ring-blue-500/50 text-blue-700 dark:text-blue-300",
+        purple: "bg-purple-500/20 ring-purple-500/50 text-purple-700 dark:text-purple-300",
+        fuchsia: "bg-fuchsia-500/20 ring-fuchsia-500/50 text-fuchsia-700 dark:text-fuchsia-300",
+        rose: "bg-rose-500/20 ring-rose-500/50 text-rose-700 dark:text-rose-300",
+        teal: "bg-teal-500/20 ring-teal-500/50 text-teal-700 dark:text-teal-300",
+        violet: "bg-violet-500/20 ring-violet-500/50 text-violet-700 dark:text-violet-300",
+        cyan: "bg-cyan-500/20 ring-cyan-500/50 text-cyan-700 dark:text-cyan-300",
+        sky: "bg-sky-500/20 ring-sky-500/50 text-sky-700 dark:text-sky-300",
+      };
+      const bubbleColor = (colorClasses as any)[accent] ?? colorClasses.rose;
+      const compCount = category.competitors.length;
+      const flPos = spec ? competitorPosition(flowLikeCapabilities, spec) : { x: 90, y: 90 };
+      return (
       <div class:list={["mb-16 last:mb-0", catIndex > 0 && "pt-16 border-t border-border/30"]}>
         <!-- Category Header -->
         <div class="mb-8">
@@ -303,12 +1200,12 @@ const renderSupport = (support: Support, cap: string): { icon: string; color: st
         </div>
 
         <!-- Comparison Table -->
-        <div class="overflow-x-auto -mx-4 px-4 pb-4">
+        <div class="compare-scroll overflow-x-auto -mx-4 px-4 pb-4">
           <div class="min-w-[800px]">
             <table class="w-full border-collapse">
               <thead>
                 <tr class="border-b border-border/50">
-                  <th class="text-left py-4 pr-4 font-medium text-muted-foreground text-sm w-48">Capability</th>
+                  <th class="sticky-col text-left py-4 pr-4 font-medium text-muted-foreground text-sm w-48">{t("compare.matrix.col.capability")}</th>
                   <th class="text-center py-4 px-3 font-semibold text-emerald-600 dark:text-emerald-400 text-sm">
                     <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
                       <span class="relative flex h-2 w-2">
@@ -319,56 +1216,172 @@ const renderSupport = (support: Support, cap: string): { icon: string; color: st
                     </div>
                   </th>
                   {category.competitors.map((comp) => (
-                    <th class="text-center py-4 px-3 font-medium text-muted-foreground text-sm">{comp.name}</th>
+                    <th class="text-center py-4 px-3 font-medium text-muted-foreground text-sm">
+                      <div class="flex flex-col items-center gap-1">
+                        <span>{comp.name}</span>
+                        {comp.warning && (
+                          <span
+                            class="inline-flex items-center gap-1 rounded-full bg-red-500/15 border border-red-500/40 px-2 py-0.5 text-[10px] font-semibold text-red-400 leading-tight cursor-help"
+                            title={comp.warning}
+                          >
+                            ⚠ {t("compare.matrix.security_risk")}
+                          </span>
+                        )}
+                      </div>
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {capabilities.map((cap) => {
-                  const flowLikeSupport = renderSupport(flowLikeCapabilities[cap], cap);
-                  return (
-                    <tr class="border-b border-border/20 hover:bg-muted/30 transition-colors">
-                      <td class="py-3 pr-4 text-sm">{t(`compare.cap.${cap}`)}</td>
-                      <td class="py-3 px-3 text-center">
-                        <span class:list={[
-                          "inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold",
-                          flowLikeSupport.color === "emerald" && "bg-emerald-500/20 text-emerald-500",
-                          flowLikeSupport.color === "amber" && "bg-amber-500/20 text-amber-500",
-                          flowLikeSupport.color === "red" && "bg-red-500/20 text-red-500",
-                        ]}>
-                          {flowLikeSupport.icon}
-                        </span>
+                {capabilityGroups.map((group) => (
+                  <>
+                    <tr class="compare-group-row">
+                      <td
+                        colspan={2 + category.competitors.length}
+                        class="py-2 pr-4 pl-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground"
+                      >
+                        {t(`compare.group.${group.id}`)}
                       </td>
-                      {category.competitors.map((comp) => {
-                        const support = renderSupport(comp.capabilities[cap], cap);
-                        return (
+                    </tr>
+                    {group.capabilities.map((cap) => {
+                      const flowLikeSupport = renderSupport(flowLikeCapabilities[cap], cap);
+                      return (
+                        <tr class="compare-row border-b border-border/20 hover:bg-muted/30 transition-colors">
+                          <td class="sticky-col py-3 pr-4 pl-3 text-sm">{t(`compare.cap.${cap}`)}</td>
                           <td class="py-3 px-3 text-center">
-                            <div class="flex items-center justify-center gap-1.5">
+                            <div class="flex flex-col items-center justify-center gap-0.5">
                               <span class:list={[
-                                "flex items-center justify-center w-6 h-6 rounded-full text-xs",
-                                support.color === "emerald" && "bg-emerald-500/20 text-emerald-500",
-                                support.color === "amber" && "bg-amber-500/20 text-amber-500",
-                                support.color === "red" && "bg-red-500/20 text-red-500",
-                                support.color === "muted" && "bg-muted/50 text-muted-foreground",
+                                "inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-semibold",
+                                flowLikeSupport.color === "emerald" && "bg-emerald-500/20 text-emerald-500",
+                                flowLikeSupport.color === "amber" && "bg-amber-500/20 text-amber-500",
+                                flowLikeSupport.color === "red" && "bg-red-500/20 text-red-500",
                               ]}>
-                                {support.icon}
+                                {flowLikeSupport.icon}
                               </span>
-                              {support.label && (
-                                <span class="text-xs text-muted-foreground">{support.label}</span>
+                              {flowLikeSupport.label && (
+                                <span class="text-[10px] text-muted-foreground leading-tight">{flowLikeSupport.label}</span>
                               )}
                             </div>
                           </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
+                          {category.competitors.map((comp) => {
+                            const support = renderSupport(comp.capabilities[cap], cap);
+                            return (
+                              <td class="py-3 px-3 text-center">
+                                <div class="flex flex-col items-center justify-center gap-0.5">
+                                  <span class:list={[
+                                    "flex items-center justify-center w-6 h-6 rounded-full text-xs",
+                                    support.color === "emerald" && "bg-emerald-500/20 text-emerald-500",
+                                    support.color === "amber" && "bg-amber-500/20 text-amber-500",
+                                    support.color === "red" && "bg-red-500/20 text-red-500",
+                                    support.color === "muted" && "bg-muted/50 text-muted-foreground",
+                                  ]}>
+                                    {support.icon}
+                                  </span>
+                                  {support.label && (
+                                    <span class="text-[10px] text-muted-foreground leading-tight">{support.label}</span>
+                                  )}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </>
+                ))}
               </tbody>
             </table>
           </div>
         </div>
+
+        <!-- Position map: competitors on the workflow × app-building plane -->
+        <div class="mt-6 rounded-2xl border border-border/40 bg-card/40 backdrop-blur-sm p-5 sm:p-6">
+          <div class="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <div class="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                {t("compare.matrix.plot.title")}
+              </div>
+              <div class="text-xs text-muted-foreground/80 mt-1 max-w-md">
+                {t("compare.matrix.plot.description")}
+              </div>
+            </div>
+            <div class="hidden sm:block text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-500 whitespace-nowrap">
+              ↗ {t("compare.matrix.plot.ideal")}
+            </div>
+          </div>
+
+          <div class="flex gap-3">
+            <div class="flex flex-col items-center justify-center text-[10px] uppercase tracking-[0.18em] text-muted-foreground w-4 shrink-0">
+              <span class="[writing-mode:vertical-rl] rotate-180 whitespace-nowrap">{spec ? t(spec.y.labelKey) : ""}</span>
+            </div>
+
+            <div class="relative flex-1 aspect-video rounded-xl border border-border/40 bg-linear-to-br from-background/40 via-background/20 to-emerald-500/4 overflow-hidden">
+              <!-- Quadrant lines -->
+              <div aria-hidden="true" class="absolute inset-0">
+                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-border/40"></div>
+                <div class="absolute top-1/2 left-0 right-0 h-px bg-border/40"></div>
+              </div>
+
+              <!-- Ideal diagonal -->
+              <svg aria-hidden="true" class="absolute inset-0 w-full h-full opacity-50 pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <line x1="0" y1="100" x2="100" y2="0" stroke="hsl(160 84% 39%)" stroke-opacity="0.4" stroke-width="0.4" stroke-dasharray="1 1.5" vector-effect="non-scaling-stroke" />
+              </svg>
+
+              <!-- Axis tick labels (corners describe axis extremes) -->
+              {spec && (
+                <div aria-hidden="true" class="absolute inset-0 text-[9px] sm:text-[10px] font-semibold tracking-[0.16em] uppercase text-muted-foreground/60 pointer-events-none">
+                  <span class="sm:hidden absolute top-2 right-2 text-emerald-500/80">↗ {t("compare.matrix.plot.ideal")}</span>
+                </div>
+              )}
+
+              <!-- Flow-Like reference bubble -->
+              <div
+                class="absolute -translate-x-1/2 -translate-y-1/2 rounded-full flex items-center justify-center ring-4 ring-emerald-500/70 bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 shadow-[0_0_32px_-4px] shadow-emerald-500/50 transition-transform duration-300 hover:scale-110 z-10"
+                style={`left: ${flPos.x}%; top: ${100 - flPos.y}%; width: 4.25rem; height: 4.25rem;`}
+                title="Flow-Like"
+              >
+                <span class="text-[10px] font-bold leading-tight">Flow-Like</span>
+              </div>
+
+              <!-- Competitor bubbles -->
+              {spec && category.competitors.map((comp, compIdx) => {
+                const pos = competitorPosition(comp.capabilities, spec, compIdx, compCount);
+                const bubbleSize = compCount >= 4 ? "2.75rem" : compCount === 3 ? "3rem" : "3.5rem";
+                const fontSize = compCount >= 4 ? "9px" : "10px";
+                return (
+                  <div
+                    class:list={[
+                      "absolute -translate-x-1/2 -translate-y-1/2 rounded-full flex items-center justify-center ring-2 backdrop-blur-sm transition-transform duration-300 hover:scale-125 hover:z-20",
+                      bubbleColor,
+                    ]}
+                    style={`left: ${pos.x}%; top: ${100 - pos.y}%; width: ${bubbleSize}; height: ${bubbleSize}; font-size: ${fontSize};`}
+                    title={comp.warning ? `${comp.name} — ${comp.warning}` : comp.name}
+                  >
+                    <span class="font-semibold leading-tight text-center px-1">{comp.name}</span>
+                    {comp.warning && (
+                      <span class="absolute -top-1 -right-1 flex h-3 w-3">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500 items-center justify-center text-[7px] text-white font-bold">!</span>
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <!-- X axis label -->
+          {spec && (
+            <div class="flex items-center justify-between mt-2 pl-0 sm:pl-7 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              <span>{t(spec.x.lowKey)}</span>
+              <span class="font-semibold text-foreground/70">{t(spec.x.labelKey)} →</span>
+              <span>{t(spec.x.highKey)}</span>
+            </div>
+          )}
+        </div>
       </div>
-    ))}
+      );
+    })}
   </div>
 </section>
 
@@ -378,5 +1391,22 @@ const renderSupport = (support: Support, cap: string): { icon: string; color: st
   }
   th, td {
     vertical-align: middle;
+  }
+
+  /* Sticky first column when scrolling horizontally on mobile */
+  .sticky-col {
+    position: sticky;
+    left: 0;
+    background: var(--background);
+    z-index: 2;
+  }
+  thead th.sticky-col {
+    z-index: 3;
+  }
+  .compare-group-row td {
+    background: color-mix(in oklch, var(--muted) 40%, var(--background));
+  }
+  .compare-row:hover .sticky-col {
+    background: color-mix(in oklch, var(--muted) 30%, var(--background));
   }
 </style>

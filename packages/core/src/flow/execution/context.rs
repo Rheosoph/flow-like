@@ -2,6 +2,7 @@ use super::{
     EventTrigger, InternalNode, LogLevel, Run, RunPayload, internal_pin::InternalPin,
     log::LogMessage, trace::Trace,
 };
+use crate::models::llm::ModelUsageContext;
 use crate::{
     credentials::SharedCredentials,
     flow::{
@@ -30,6 +31,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Weak},
+    time::{Duration, Instant},
 };
 
 #[derive(Clone)]
@@ -180,6 +182,9 @@ pub struct ExecutionContext {
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     /// User context containing information about who triggered the execution
     pub user_context: Option<super::UserExecutionContext>,
+    log_spill_threshold: usize,
+    log_flush_interval: Duration,
+    last_log_spill: Instant,
     cancellation_token: Option<CancellationToken>,
     run_id: String,
     state: NodeState,
@@ -212,12 +217,22 @@ impl ExecutionContext {
             trace.snapshot_variables(variables).await;
         }
 
-        let (run_id, stream_state) = match run.upgrade() {
+        let (run_id, stream_state, log_spill_threshold, log_flush_interval) = match run.upgrade() {
             Some(run) => {
                 let run = run.lock().await;
-                (run.id.clone(), run.stream_state)
+                (
+                    run.id.clone(),
+                    run.stream_state,
+                    run.log_spill_threshold,
+                    super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+                )
             }
-            None => ("".to_string(), false),
+            None => (
+                "".to_string(),
+                false,
+                super::DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+                super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+            ),
         };
 
         ExecutionContext {
@@ -250,10 +265,21 @@ impl ExecutionContext {
             oauth_tokens,
             cancellation_token: None,
             user_context: None,
+            log_spill_threshold,
+            log_flush_interval,
+            last_log_spill: Instant::now(),
         }
     }
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    pub fn model_usage_context(&self) -> Option<ModelUsageContext> {
+        let cache = self.execution_cache.as_ref()?;
+        Some(ModelUsageContext {
+            app_id: Some(cache.app_id.clone()),
+            run_id: Some(self.run_id.clone()),
+        })
     }
 
     pub fn callback(&self) -> &InterComCallback {
@@ -324,6 +350,9 @@ impl ExecutionContext {
             oauth_tokens,
             cancellation_token: None,
             user_context: None,
+            log_spill_threshold: run_meta.log_spill_threshold,
+            log_flush_interval: run_meta.log_flush_interval,
+            last_log_spill: Instant::now(),
         }
     }
 
@@ -456,6 +485,7 @@ impl ExecutionContext {
         context.cancellation_token = self.cancellation_token.clone();
         context.user_context = self.user_context.clone();
         context.local_variables = self.local_variables.clone();
+        context.log_flush_interval = self.log_flush_interval;
 
         context
     }
@@ -693,6 +723,7 @@ impl ExecutionContext {
         let mut log = log;
         log.node_id = Some(self.trace.node_id.clone());
         self.trace.logs.push(log);
+        self.spill_trace_if_needed();
     }
 
     pub fn log_message(&mut self, message: &str, log_level: LogLevel) {
@@ -703,6 +734,43 @@ impl ExecutionContext {
         let mut log = LogMessage::new(message, log_level, None);
         log.node_id = Some(self.trace.node_id.clone());
         self.trace.logs.push(log);
+        self.spill_trace_if_needed();
+    }
+
+    fn spill_trace_if_needed(&mut self) {
+        if self.trace.logs.is_empty() {
+            return;
+        }
+
+        let spill_threshold = self.log_spill_threshold.max(1);
+        let spill_by_size = self.trace.logs.len() >= spill_threshold;
+        let spill_by_time = self.last_log_spill.elapsed() >= self.log_flush_interval;
+        if !spill_by_size && !spill_by_time {
+            return;
+        }
+
+        let Some(run) = self.run.upgrade() else {
+            trim_trace_logs_for_backpressure(
+                &mut self.trace.logs,
+                spill_threshold,
+                &self.trace.node_id,
+            );
+            return;
+        };
+
+        let Ok(mut run) = run.try_lock() else {
+            trim_trace_logs_for_backpressure(
+                &mut self.trace.logs,
+                spill_threshold,
+                &self.trace.node_id,
+            );
+            return;
+        };
+
+        let mut trace = std::mem::replace(&mut self.trace, Trace::new(&self.id));
+        trace.finish();
+        run.traces.push(trace);
+        self.last_log_spill = Instant::now();
     }
 
     pub async fn set_state(&mut self, state: NodeState) {
@@ -1208,5 +1276,107 @@ impl ExecutionContext {
     pub async fn close_dialog(&mut self, dialog_id: Option<String>) -> flow_like_types::Result<()> {
         let message = crate::a2ui::A2UIServerMessage::close_dialog(dialog_id);
         self.stream_a2ui_update(message).await
+    }
+}
+
+fn trim_trace_logs_for_backpressure(
+    logs: &mut Vec<LogMessage>,
+    spill_threshold: usize,
+    node_id: &str,
+) -> usize {
+    let target = spill_threshold.max(1);
+    let max_backlog = target.saturating_mul(2).max(target + 1);
+    if logs.len() <= max_backlog {
+        return 0;
+    }
+
+    let mut dropped_low_priority = 0usize;
+    for level in [LogLevel::Debug, LogLevel::Info] {
+        while logs.len() > target {
+            let Some(index) = logs.iter().position(|log| log.log_level == level) else {
+                break;
+            };
+            logs.remove(index);
+            dropped_low_priority += 1;
+        }
+    }
+
+    let mut dropped_high_priority = 0usize;
+    while logs.len() > max_backlog {
+        logs.remove(0);
+        dropped_high_priority += 1;
+    }
+
+    let dropped = dropped_low_priority + dropped_high_priority;
+    if dropped == 0 {
+        return 0;
+    }
+
+    let message = if dropped_high_priority == 0 {
+        format!("Dropped {dropped_low_priority} low-priority logs after log buffer saturation")
+    } else {
+        format!(
+            "Dropped {dropped_low_priority} low-priority logs and {dropped_high_priority} older high-priority logs after log buffer saturation"
+        )
+    };
+
+    let mut warning = LogMessage::new(&message, LogLevel::Warn, None);
+    warning.node_id = Some(node_id.to_string());
+    logs.push(warning);
+
+    dropped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_log(message: &str, level: LogLevel) -> LogMessage {
+        LogMessage::new(message, level, None)
+    }
+
+    #[test]
+    fn log_backpressure_drops_low_priority_logs_first() {
+        let mut logs = vec![
+            test_log("debug-1", LogLevel::Debug),
+            test_log("info-1", LogLevel::Info),
+            test_log("warn-1", LogLevel::Warn),
+            test_log("error-1", LogLevel::Error),
+            test_log("info-2", LogLevel::Info),
+            test_log("fatal-1", LogLevel::Fatal),
+            test_log("debug-2", LogLevel::Debug),
+        ];
+
+        let dropped = trim_trace_logs_for_backpressure(&mut logs, 2, "node");
+
+        assert_eq!(dropped, 4);
+        assert!(logs.iter().any(|log| log.message == "warn-1"));
+        assert!(logs.iter().any(|log| log.message == "error-1"));
+        assert!(logs.iter().any(|log| log.message == "fatal-1"));
+        assert!(
+            logs.iter()
+                .any(|log| log.message.contains("low-priority logs"))
+        );
+    }
+
+    #[test]
+    fn log_backpressure_bounds_high_priority_bursts() {
+        let mut logs = vec![
+            test_log("warn-1", LogLevel::Warn),
+            test_log("error-1", LogLevel::Error),
+            test_log("fatal-1", LogLevel::Fatal),
+            test_log("warn-2", LogLevel::Warn),
+            test_log("error-2", LogLevel::Error),
+        ];
+
+        let dropped = trim_trace_logs_for_backpressure(&mut logs, 2, "node");
+
+        assert_eq!(dropped, 1);
+        assert_eq!(logs.len(), 5);
+        assert!(!logs.iter().any(|log| log.message == "warn-1"));
+        assert!(
+            logs.iter()
+                .any(|log| log.message.contains("older high-priority logs"))
+        );
     }
 }

@@ -1,8 +1,14 @@
 use std::sync::Arc;
 
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::wasm_catalog::{
+        app_wasm_nodes, hydrate_board_wasm_metadata, sanitize_wasm_command_metadata,
+    },
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -41,7 +47,7 @@ pub async fn execute_commands(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((app_id, board_id)): Path<(String, String)>,
-    Json(params): Json<ExecuteCommandsBody>,
+    Json(mut params): Json<ExecuteCommandsBody>,
 ) -> Result<Json<Vec<GenericCommand>>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
 
@@ -67,6 +73,12 @@ pub async fn execute_commands(
             Arc::new(flow_state)
         }
     };
+    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    let builtin_nodes = state.registry.as_ref().get_nodes();
+    if hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &builtin_nodes) {
+        board.mark_changed();
+    }
+    sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
     let commands = board.execute_commands(params.commands, flow_state).await?;
 

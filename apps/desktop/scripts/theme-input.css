@@ -34,7 +34,7 @@
 	--font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 	--font-serif: "Playfair Display", "Didot", Georgia, serif;
 	--font-mono: "JetBrains Mono", ui-monospace, monospace;
-	--radius: 0.875rem;
+	--radius: 0.375rem;
 	--shadow-x: 0px;
 	--shadow-y: 2px;
 	--shadow-blur: 0px;
@@ -94,7 +94,7 @@
 	--font-sans: Open Sans, sans-serif;
 	--font-serif: Georgia, serif;
 	--font-mono: Menlo, monospace;
-	--radius: 0.2rem;
+	--radius: 0.375rem;
 	--shadow-x: 0px;
 	--shadow-y: 2px;
 	--shadow-blur: 0px;

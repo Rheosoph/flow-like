@@ -1,4 +1,7 @@
-use super::{JiraIssue, parse_jira_issue};
+use super::{
+    JiraIssue, build_jira_search_body, jira_search_has_more, jira_search_next_page_token,
+    jira_search_total, parse_jira_issue,
+};
 use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -28,6 +31,7 @@ impl NodeLogic for SearchJiraIssuesNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -64,7 +68,7 @@ impl NodeLogic for SearchJiraIssuesNode {
         node.add_input_pin(
             "start_at",
             "Start At",
-            "Index of the first result to return (for pagination)",
+            "Index of the first result to return (server/Data Center pagination)",
             VariableType::Integer,
         )
         .set_default_value(Some(json!(0)));
@@ -72,7 +76,16 @@ impl NodeLogic for SearchJiraIssuesNode {
         node.add_input_pin(
             "fields",
             "Fields",
-            "Comma-separated list of fields to return (leave empty for default fields)",
+            "Fields to return (leave empty for default fields)",
+            VariableType::String,
+        )
+        .set_value_type(ValueType::Array)
+        .set_default_value(Some(json!([])));
+
+        node.add_input_pin(
+            "next_page_token",
+            "Next Page Token",
+            "Cloud pagination token from a previous search response",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -115,6 +128,13 @@ impl NodeLogic for SearchJiraIssuesNode {
             VariableType::Boolean,
         );
 
+        node.add_output_pin(
+            "next_page_token",
+            "Next Page Token",
+            "Cloud pagination token for the next page",
+            VariableType::String,
+        );
+
         node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["read:jira-work"]);
         node.set_scores(
             NodeScores::new()
@@ -138,21 +158,22 @@ impl NodeLogic for SearchJiraIssuesNode {
         let jql: String = context.evaluate_pin("jql").await?;
         let max_results: i64 = context.evaluate_pin("max_results").await?;
         let start_at: i64 = context.evaluate_pin("start_at").await?;
-        let fields: String = context.evaluate_pin("fields").await?;
+        let fields: Vec<String> = context.evaluate_pin("fields").await.unwrap_or_default();
+        let next_page_token: String = context
+            .evaluate_pin("next_page_token")
+            .await
+            .unwrap_or_default();
 
         let client = reqwest::Client::new();
-        let url = provider.jira_api_url("/search");
-
-        let mut body = json!({
-            "jql": jql,
-            "maxResults": max_results.clamp(1, 100),
-            "startAt": start_at.max(0)
-        });
-
-        if !fields.is_empty() {
-            let field_list: Vec<&str> = fields.split(',').map(|s| s.trim()).collect();
-            body["fields"] = json!(field_list);
-        }
+        let url = provider.jira_search_api_url();
+        let body = build_jira_search_body(
+            &provider,
+            jql.clone(),
+            max_results,
+            start_at,
+            fields,
+            next_page_token,
+        );
 
         context.log_message(
             &format!("Searching Jira with JQL: {}", jql),
@@ -197,7 +218,6 @@ impl NodeLogic for SearchJiraIssuesNode {
             }
         };
 
-        let total = data.get("total").and_then(|v| v.as_i64()).unwrap_or(0);
         let issues_data = data.get("issues").and_then(|v| v.as_array());
 
         let issues: Vec<JiraIssue> = issues_data
@@ -209,7 +229,9 @@ impl NodeLogic for SearchJiraIssuesNode {
             .unwrap_or_default();
 
         let returned_count = issues.len() as i64;
-        let has_more = start_at + returned_count < total;
+        let total = jira_search_total(&data, returned_count);
+        let has_more = jira_search_has_more(&data, start_at, returned_count, total);
+        let next_page_token = jira_search_next_page_token(&data);
 
         context.log_message(
             &format!("Found {} issues (total: {})", returned_count, total),
@@ -219,6 +241,9 @@ impl NodeLogic for SearchJiraIssuesNode {
         context.set_pin_value("issues", json!(issues)).await?;
         context.set_pin_value("total", json!(total)).await?;
         context.set_pin_value("has_more", json!(has_more)).await?;
+        context
+            .set_pin_value("next_page_token", json!(next_page_token))
+            .await?;
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())

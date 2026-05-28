@@ -1,11 +1,13 @@
 use crate::{
     ensure_permission,
-    entity::app_package,
-    entity::wasm_package_version,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::{board::secrets::filter_board_secrets, template::get_template::VersionQuery},
+    routes::app::{
+        board::secrets::filter_board_secrets,
+        template::get_template::VersionQuery,
+        wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
+    },
     state::AppState,
 };
 use axum::{
@@ -17,11 +19,7 @@ use flow_like::{
     flow::{board::Board, node::Node},
 };
 use flow_like_types::anyhow;
-use flow_like_wasm::manifest::PackageNodeEntry;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
-
-use super::super::internal::get_nodes::package_node_to_node;
 
 #[derive(Serialize)]
 pub struct WorkspaceResponse {
@@ -87,42 +85,12 @@ pub async fn workspace(
         .master_board(&sub, &app_id, &board_id, &state, version_opt)
         .await?;
 
+    let mut catalog = state.registry.as_ref().get_nodes();
+    let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
+    hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &catalog);
     filter_board_secrets(&mut board);
 
     // 2. Load catalog (builtin + app WASM nodes)
-    let packages = app_package::Entity::find()
-        .filter(app_package::Column::AppId.eq(&app_id))
-        .filter(app_package::Column::Stale.eq(false))
-        .all(&state.db)
-        .await?;
-
-    let mut wasm_nodes: Vec<Node> = Vec::with_capacity(packages.len() * 5);
-
-    for pkg in &packages {
-        if pkg.stale {
-            continue;
-        }
-
-        let version_record = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
-            .filter(wasm_package_version::Column::Version.eq(&pkg.version))
-            .one(&state.db)
-            .await?;
-
-        let version_record = match version_record {
-            Some(v) => v,
-            None => continue,
-        };
-
-        let entries: Vec<PackageNodeEntry> =
-            serde_json::from_value(version_record.nodes).unwrap_or_default();
-
-        for entry in &entries {
-            wasm_nodes.push(package_node_to_node(entry, &pkg.package_id));
-        }
-    }
-
-    let mut catalog = state.registry.as_ref().get_nodes();
     catalog.extend(wasm_nodes);
 
     // 3. Load app

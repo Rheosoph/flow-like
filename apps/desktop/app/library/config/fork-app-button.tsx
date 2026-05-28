@@ -9,8 +9,8 @@ import {
 	CardTitle,
 	type IApp,
 	IAppVisibility,
-} from "@tm9657/flow-like-ui";
-import { ForkAppCard } from "@tm9657/flow-like-ui/components/settings/forking/fork-app-card";
+} from "@flow-like/flow-like-ui";
+import { ForkAppCard } from "@flow-like/flow-like-ui/components/settings/forking/fork-app-card";
 import { GitForkIcon, Loader2Icon } from "lucide-react";
 import { useApplyForkBundle } from "../../../lib/use-apply-fork-bundle";
 import { useOfflineToOnlineFork } from "../../../lib/use-offline-to-online-fork";

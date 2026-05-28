@@ -6,7 +6,7 @@ import type {
 	IOAuthToken,
 	IRunPayload,
 	IVersionType,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export class EmptyEventState implements IEventState {
 	getEvent(

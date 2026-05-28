@@ -2,12 +2,12 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Badge, Button, Input, Label, cn } from "@tm9657/flow-like-ui";
+import { Badge, Button, Input, Label, cn } from "@flow-like/flow-like-ui";
 import type {
 	DeveloperProject,
 	TemplateLanguage,
-} from "@tm9657/flow-like-ui/lib/schema/developer";
-import { TEMPLATE_LANGUAGES } from "@tm9657/flow-like-ui/lib/schema/developer";
+} from "@flow-like/flow-like-ui/lib/schema/developer";
+import { TEMPLATE_LANGUAGES } from "@flow-like/flow-like-ui/lib/schema/developer";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	ArrowLeft,

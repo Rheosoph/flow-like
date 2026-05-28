@@ -7,13 +7,13 @@
 // In test builds they come from `crate::wit_stub::flow_like::node::*`.
 #[cfg(target_arch = "wasm32")]
 use crate::flow_like::node::{
-    auth, cache, db, http, image, logging, metadata, models, schema, storage, streaming,
-    variables, websocket,
+    auth, cache, db, http, image, logging, metadata, models, schema, storage, streaming, variables,
+    websocket,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use crate::wit_stub::flow_like::node::{
-    auth, cache, db, http, image, logging, metadata, models, schema, storage, streaming,
-    variables, websocket,
+    auth, cache, db, http, image, logging, metadata, models, schema, storage, streaming, variables,
+    websocket,
 };
 
 // ============================================================================
@@ -214,8 +214,7 @@ pub fn embed_text_query(model_json: &str, texts: &[String]) -> Option<Vec<Vec<f3
 
 pub fn embed_text_document(model_json: &str, texts: &[String]) -> Option<Vec<Vec<f32>>> {
     let texts_json = serde_json::to_string(texts).ok()?;
-    models::embed_text_document(model_json, &texts_json)
-        .and_then(|s| serde_json::from_str(&s).ok())
+    models::embed_text_document(model_json, &texts_json).and_then(|s| serde_json::from_str(&s).ok())
 }
 
 pub fn embed_image(model_json: &str, image_json: &str) -> Option<Vec<f32>> {
@@ -273,18 +272,15 @@ fn db_call(op: u32, conn_json: &str, payload_json: &str) -> Option<String> {
 }
 
 pub fn db_vector_search(conn_json: &str, query_json: &str) -> Option<Vec<serde_json::Value>> {
-    db_call(DB_OP_VECTOR_SEARCH, conn_json, query_json)
-        .and_then(|s| serde_json::from_str(&s).ok())
+    db_call(DB_OP_VECTOR_SEARCH, conn_json, query_json).and_then(|s| serde_json::from_str(&s).ok())
 }
 
 pub fn db_fts_search(conn_json: &str, query_json: &str) -> Option<Vec<serde_json::Value>> {
-    db_call(DB_OP_FTS_SEARCH, conn_json, query_json)
-        .and_then(|s| serde_json::from_str(&s).ok())
+    db_call(DB_OP_FTS_SEARCH, conn_json, query_json).and_then(|s| serde_json::from_str(&s).ok())
 }
 
 pub fn db_hybrid_search(conn_json: &str, query_json: &str) -> Option<Vec<serde_json::Value>> {
-    db_call(DB_OP_HYBRID_SEARCH, conn_json, query_json)
-        .and_then(|s| serde_json::from_str(&s).ok())
+    db_call(DB_OP_HYBRID_SEARCH, conn_json, query_json).and_then(|s| serde_json::from_str(&s).ok())
 }
 
 pub fn db_insert(conn_json: &str, payload_json: &str) -> bool {

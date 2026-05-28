@@ -18,7 +18,9 @@ use rig::message::{
     AssistantContent, Audio, Document, DocumentSourceKind, Image, MimeType, Reasoning, Text,
     ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent, Video,
 };
-use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse, StreamingResult};
+use rig::streaming::{
+    RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse, StreamingResult,
+};
 use rig::tool::Tool;
 use rig::OneOrMany;
 
@@ -105,9 +107,7 @@ fn rig_assistant_content_to_parts(
                     .content
                     .iter()
                     .filter_map(|c| match c {
-                        rig::message::ReasoningContent::Text { text, .. } => {
-                            Some(text.clone())
-                        }
+                        rig::message::ReasoningContent::Text { text, .. } => Some(text.clone()),
                         rig::message::ReasoningContent::Summary(s) => Some(s.clone()),
                         _ => None,
                     })
@@ -206,8 +206,9 @@ fn completion_request_to_messages(request: &CompletionRequest) -> Vec<ChatMessag
             // Flatten User messages that contain ToolResult items into
             // separate "tool"-role messages (OpenAI format).
             Message::User { content } => {
-                let has_tool_results =
-                    content.iter().any(|c| matches!(c, UserContent::ToolResult(_)));
+                let has_tool_results = content
+                    .iter()
+                    .any(|c| matches!(c, UserContent::ToolResult(_)));
 
                 if has_tool_results {
                     for uc in content.iter() {
@@ -370,7 +371,9 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
 
         if let Some(content) = &resp.content {
             if !content.is_empty() {
-                items.push(AssistantContent::Text(Text { text: content.clone() }));
+                items.push(AssistantContent::Text(Text {
+                    text: content.clone(),
+                }));
             }
         }
 
@@ -383,13 +386,16 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
             }
         }
 
-        let usage = resp.usage.map(|u| {
-            usage_from_host_tokens(u.prompt_tokens, u.completion_tokens, u.total_tokens)
-        });
+        let usage = resp
+            .usage
+            .map(|u| usage_from_host_tokens(u.prompt_tokens, u.completion_tokens, u.total_tokens));
 
         if !items.is_empty() {
-            let choice = OneOrMany::many(items)
-                .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text { text: String::new() })));
+            let choice = OneOrMany::many(items).unwrap_or_else(|_| {
+                OneOrMany::one(AssistantContent::Text(Text {
+                    text: String::new(),
+                }))
+            });
             return ParsedLlmResponse {
                 choice,
                 message_id: resp.message_id,
@@ -497,9 +503,8 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                         for part in parts {
                             match part {
                                 ContentPart::Text { text } => {
-                                    assistant_contents.push(AssistantContent::Text(Text {
-                                        text: text.clone(),
-                                    }));
+                                    assistant_contents
+                                        .push(AssistantContent::Text(Text { text: text.clone() }));
                                 }
                                 ContentPart::Image { image } => {
                                     assistant_contents.push(AssistantContent::Image(Image {
@@ -524,12 +529,10 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                 // Extract tool calls from the dedicated field
                 if let Some(tool_calls) = &msg.tool_calls {
                     for tc in tool_calls {
-                        assistant_contents.push(AssistantContent::ToolCall(
-                            ToolCall::new(tc.id.clone(), ToolFunction::new(
-                                tc.name.clone(),
-                                tc.arguments.clone(),
-                            )),
-                        ));
+                        assistant_contents.push(AssistantContent::ToolCall(ToolCall::new(
+                            tc.id.clone(),
+                            ToolFunction::new(tc.name.clone(), tc.arguments.clone()),
+                        )));
                     }
                 }
 
@@ -539,21 +542,16 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                     }));
                 }
 
-                let content = OneOrMany::many(assistant_contents)
-                    .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text {
+                let content = OneOrMany::many(assistant_contents).unwrap_or_else(|_| {
+                    OneOrMany::one(AssistantContent::Text(Text {
                         text: String::new(),
-                    })));
-
-                rig_messages.push(Message::Assistant {
-                    id: None,
-                    content,
+                    }))
                 });
+
+                rig_messages.push(Message::Assistant { id: None, content });
             }
             "tool" => {
-                let tool_call_id = msg
-                    .tool_call_id
-                    .clone()
-                    .unwrap_or_default();
+                let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
 
                 rig_messages.push(Message::User {
                     content: OneOrMany::one(UserContent::ToolResult(ToolResult {
@@ -587,7 +585,6 @@ pub struct FlowLikeResponse;
 #[derive(Clone)]
 pub struct FlowLikeCompletionModel {
     pub(crate) bit: Bit,
-    ctx: *const Context,
 }
 
 unsafe impl Send for FlowLikeCompletionModel {}
@@ -595,19 +592,8 @@ unsafe impl Sync for FlowLikeCompletionModel {}
 
 impl FlowLikeCompletionModel {
     /// Wrap a `Bit` and execution `Context` into a rig-compatible completion model.
-    ///
-    /// # Safety
-    /// The `Context` reference must remain valid for the lifetime of this model. In practice
-    /// this is always the case inside a WASM node's `run` function.
-    pub fn new(bit: Bit, ctx: &Context) -> Self {
-        Self {
-            bit,
-            ctx: ctx as *const Context,
-        }
-    }
-
-    fn ctx(&self) -> &Context {
-        unsafe { &*self.ctx }
+    pub fn new(bit: Bit, _ctx: &Context) -> Self {
+        Self { bit }
     }
 }
 
@@ -623,9 +609,8 @@ impl CompletionModel for FlowLikeCompletionModel {
     fn completion(
         &self,
         request: CompletionRequest,
-    ) -> impl std::future::Future<
-        Output = Result<CompletionResponse<Self::Response>, CompletionError>,
-    > {
+    ) -> impl std::future::Future<Output = Result<CompletionResponse<Self::Response>, CompletionError>>
+    {
         crate::host::info(&format!(
             "FlowLikeCompletionModel::completion: tools={}, history={}",
             request.tools.len(),
@@ -647,7 +632,10 @@ impl CompletionModel for FlowLikeCompletionModel {
 
         async move {
             let text = result.ok_or_else(|| {
-                CompletionError::ProviderError("FlowLike host LLM prompt returned None (MODELS capability may not be granted)".into())
+                CompletionError::ProviderError(
+                    "FlowLike host LLM prompt returned None (MODELS capability may not be granted)"
+                        .into(),
+                )
             })?;
 
             // Check for host-side error response
@@ -696,7 +684,9 @@ impl CompletionModel for FlowLikeCompletionModel {
             }
 
             let parsed = parse_llm_response(&text);
-            let mut items: Vec<Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError>> = Vec::new();
+            let mut items: Vec<
+                Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError>,
+            > = Vec::new();
 
             if let Some(id) = parsed.message_id {
                 items.push(Ok(RawStreamingChoice::MessageId(id)));
@@ -731,13 +721,11 @@ impl CompletionModel for FlowLikeCompletionModel {
                         items.push(Ok(RawStreamingChoice::Message(t.text.clone())));
                     }
                     AssistantContent::ToolCall(tc) => {
-                        items.push(Ok(RawStreamingChoice::ToolCall(
-                            RawStreamingToolCall::new(
-                                tc.id.clone(),
-                                tc.function.name.clone(),
-                                tc.function.arguments.clone(),
-                            ),
-                        )));
+                        items.push(Ok(RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                            tc.id.clone(),
+                            tc.function.name.clone(),
+                            tc.function.arguments.clone(),
+                        ))));
                     }
                     _ => {}
                 }
@@ -846,8 +834,8 @@ impl WasiAgent {
             };
 
             let json = json.ok_or("Failed to serialize messages")?;
-            let bit_json =
-                serde_json::to_string(&self.model.bit).map_err(|e| format!("Bit serialize: {e}"))?;
+            let bit_json = serde_json::to_string(&self.model.bit)
+                .map_err(|e| format!("Bit serialize: {e}"))?;
 
             let resp_str = crate::host::llm_prompt(&bit_json, &json, false)
                 .ok_or("Host LLM prompt returned None (MODELS capability may not be granted)")?;
@@ -904,14 +892,15 @@ impl WasiAgent {
 
             // Execute each tool call and append result messages
             for tc in &tool_calls {
-                let result = if let Some(entry) = self.tools.iter().find(|t| t.definition.name == tc.name) {
-                    match (entry.call)(tc.arguments.clone()) {
-                        Ok(r) => r,
-                        Err(e) => format!("Tool error: {e}"),
-                    }
-                } else {
-                    format!("Unknown tool: {}", tc.name)
-                };
+                let result =
+                    if let Some(entry) = self.tools.iter().find(|t| t.definition.name == tc.name) {
+                        match (entry.call)(tc.arguments.clone()) {
+                            Ok(r) => r,
+                            Err(e) => format!("Tool error: {e}"),
+                        }
+                    } else {
+                        format!("Unknown tool: {}", tc.name)
+                    };
 
                 messages.push(ChatMessage {
                     role: "tool".into(),
@@ -1114,10 +1103,7 @@ impl Tool for FlowPathListTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
 
         let target = if path.is_empty() {
             self.base.clone()
@@ -1332,8 +1318,7 @@ mod tests {
             id: None,
             content: OneOrMany::many(vec![
                 AssistantContent::Reasoning(
-                    Reasoning::multi(vec!["Step 1".into(), "Step 2".into()])
-                        .with_id("r1".into()),
+                    Reasoning::multi(vec!["Step 1".into(), "Step 2".into()]).with_id("r1".into()),
                 ),
                 AssistantContent::Text(Text {
                     text: "The answer is 4.".into(),
@@ -1345,7 +1330,9 @@ mod tests {
         let sdk_msg = rig_message_to_chat(&rig_msg);
         assert_eq!(sdk_msg.role, "assistant");
         if let ChatContent::Parts { parts } = &sdk_msg.content {
-            assert!(parts.iter().any(|p| matches!(p, ContentPart::Reasoning { .. })));
+            assert!(parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::Reasoning { .. })));
             assert!(parts.iter().any(|p| matches!(p, ContentPart::Text { .. })));
         } else {
             panic!("Expected Parts content with reasoning");
@@ -1367,9 +1354,16 @@ mod tests {
         );
 
         let items: Vec<_> = parsed.choice.iter().collect();
-        assert!(items.iter().any(|item| matches!(item, AssistantContent::Reasoning(_))));
-        assert!(items.iter().any(|item| matches!(item, AssistantContent::Text(_))));
-        assert_eq!(parsed.usage.expect("usage should be present").total_tokens, 3);
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, AssistantContent::Reasoning(_))));
+        assert!(items
+            .iter()
+            .any(|item| matches!(item, AssistantContent::Text(_))));
+        assert_eq!(
+            parsed.usage.expect("usage should be present").total_tokens,
+            3
+        );
     }
 
     #[test]

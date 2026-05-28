@@ -1,7 +1,7 @@
 use super::{
     list_issues::GitHubIssueUser,
     list_pull_requests::{GitHubPullRequest, parse_pr},
-    provider::{GITHUB_PROVIDER_ID, GitHubProvider},
+    provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider},
 };
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
@@ -184,9 +184,9 @@ impl NodeLogic for GetGitHubPullRequestNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -263,6 +263,7 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -282,7 +283,8 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             "Repository name",
             VariableType::String,
         );
-        node.add_input_pin("title", "Title", "Pull request title", VariableType::String);
+        node.add_input_pin("title", "Title", "Pull request title", VariableType::String)
+            .set_default_value(Some(json!("")));
         node.add_input_pin(
             "head",
             "Head",
@@ -290,6 +292,22 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             VariableType::String,
         );
         node.add_input_pin("base", "Base", "Branch to merge into", VariableType::String);
+
+        node.add_input_pin(
+            "issue",
+            "Issue",
+            "Issue number to convert into a pull request",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(0)));
+
+        node.add_input_pin(
+            "head_repo",
+            "Head Repository",
+            "Repository name containing the head branch when both repos are owned by the same organization",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
 
         node.add_input_pin(
             "body",
@@ -367,9 +385,11 @@ impl NodeLogic for CreateGitHubPullRequestNode {
         let provider: GitHubProvider = context.evaluate_pin("provider").await?;
         let owner: String = context.evaluate_pin("owner").await?;
         let repo: String = context.evaluate_pin("repo").await?;
-        let title: String = context.evaluate_pin("title").await?;
+        let title: String = context.evaluate_pin("title").await.unwrap_or_default();
         let head: String = context.evaluate_pin("head").await?;
         let base: String = context.evaluate_pin("base").await?;
+        let issue: i64 = context.evaluate_pin("issue").await.unwrap_or(0);
+        let head_repo: String = context.evaluate_pin("head_repo").await.unwrap_or_default();
         let body: String = context.evaluate_pin("body").await.unwrap_or_default();
         let draft: bool = context.evaluate_pin("draft").await.unwrap_or(false);
         let maintainer_can_modify: bool = context
@@ -377,14 +397,18 @@ impl NodeLogic for CreateGitHubPullRequestNode {
             .await
             .unwrap_or(true);
 
-        if owner.is_empty()
-            || repo.is_empty()
-            || title.is_empty()
-            || head.is_empty()
-            || base.is_empty()
-        {
+        if owner.is_empty() || repo.is_empty() || head.is_empty() || base.is_empty() {
             context.log_message(
-                "Owner, repository, title, head, and base are required",
+                "Owner, repository, head, and base are required",
+                LogLevel::Error,
+            );
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
+
+        if issue <= 0 && title.is_empty() {
+            context.log_message(
+                "Title is required unless an issue number is provided",
                 LogLevel::Error,
             );
             context.activate_exec_pin("error").await?;
@@ -394,12 +418,21 @@ impl NodeLogic for CreateGitHubPullRequestNode {
         let url = provider.api_url(&format!("/repos/{}/{}/pulls", owner, repo));
 
         let mut request_body = json!({
-            "title": title,
             "head": head,
             "base": base,
             "draft": draft,
             "maintainer_can_modify": maintainer_can_modify
         });
+
+        if issue > 0 {
+            request_body["issue"] = json!(issue);
+        } else {
+            request_body["title"] = json!(title);
+        }
+
+        if !head_repo.is_empty() {
+            request_body["head_repo"] = json!(head_repo);
+        }
 
         if !body.is_empty() {
             request_body["body"] = json!(body);
@@ -408,9 +441,9 @@ impl NodeLogic for CreateGitHubPullRequestNode {
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()
@@ -461,6 +494,214 @@ impl NodeLogic for CreateGitHubPullRequestNode {
 }
 
 // =============================================================================
+// Update Pull Request Node
+// =============================================================================
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct UpdateGitHubPullRequestNode {}
+
+impl UpdateGitHubPullRequestNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for UpdateGitHubPullRequestNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "data_github_update_pull_request",
+            "Update Pull Request",
+            "Update an existing pull request",
+            "Data/GitHub",
+        );
+        node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
+
+        node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
+        node.add_input_pin(
+            "provider",
+            "Provider",
+            "GitHub provider",
+            VariableType::Struct,
+        )
+        .set_schema::<GitHubProvider>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin("owner", "Owner", "Repository owner", VariableType::String);
+        node.add_input_pin(
+            "repo",
+            "Repository",
+            "Repository name",
+            VariableType::String,
+        );
+        node.add_input_pin(
+            "pr_number",
+            "PR Number",
+            "Pull request number",
+            VariableType::Integer,
+        );
+        node.add_input_pin(
+            "title",
+            "Title",
+            "New title (leave empty to keep current)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "body",
+            "Body",
+            "New body (leave empty to keep current)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin("state", "State", "New state", VariableType::String)
+            .set_default_value(Some(json!("")))
+            .set_options(
+                PinOptions::new()
+                    .set_valid_values(vec![
+                        "".to_string(),
+                        "open".to_string(),
+                        "closed".to_string(),
+                    ])
+                    .build(),
+            );
+        node.add_input_pin(
+            "base",
+            "Base",
+            "New base branch (leave empty to keep current)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "maintainer_can_modify",
+            "Maintainer Can Modify",
+            "Allow maintainers to modify the PR when connected",
+            VariableType::Boolean,
+        );
+
+        node.add_output_pin(
+            "exec_out",
+            "Success",
+            "Triggered on success",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "error",
+            "Error",
+            "Triggered on error",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "pull_request",
+            "Pull Request",
+            "Updated pull request",
+            VariableType::Struct,
+        )
+        .set_schema::<GitHubPullRequest>();
+
+        node.add_required_oauth_scopes(GITHUB_PROVIDER_ID, vec!["repo"]);
+        node.set_scores(
+            NodeScores::new()
+                .set_privacy(6)
+                .set_security(7)
+                .set_performance(8)
+                .set_governance(6)
+                .set_reliability(8)
+                .set_cost(8)
+                .build(),
+        );
+
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("error").await?;
+
+        let provider: GitHubProvider = context.evaluate_pin("provider").await?;
+        let owner: String = context.evaluate_pin("owner").await?;
+        let repo: String = context.evaluate_pin("repo").await?;
+        let pr_number: i64 = context.evaluate_pin("pr_number").await?;
+        let title: String = context.evaluate_pin("title").await.unwrap_or_default();
+        let body: String = context.evaluate_pin("body").await.unwrap_or_default();
+        let state: String = context.evaluate_pin("state").await.unwrap_or_default();
+        let base: String = context.evaluate_pin("base").await.unwrap_or_default();
+
+        if owner.is_empty() || repo.is_empty() {
+            context.log_message("Owner and repository are required", LogLevel::Error);
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
+
+        let url = provider.api_url(&format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number));
+
+        let mut request_body = json!({});
+        if !title.is_empty() {
+            request_body["title"] = json!(title);
+        }
+        if !body.is_empty() {
+            request_body["body"] = json!(body);
+        }
+        if !state.is_empty() {
+            request_body["state"] = json!(state);
+        }
+        if !base.is_empty() {
+            request_body["base"] = json!(base);
+        }
+        if let Ok(maintainer_can_modify) =
+            context.evaluate_pin::<bool>("maintainer_can_modify").await
+        {
+            request_body["maintainer_can_modify"] = json!(maintainer_can_modify);
+        }
+
+        let client = reqwest::Client::new();
+        let response = client
+            .patch(&url)
+            .header("Authorization", provider.auth_header())
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+            .header("User-Agent", "flow-like")
+            .json(&request_body)
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let error_text = resp.text().await.unwrap_or_default();
+                    context.log_message(
+                        &format!("GitHub API error {}: {}", status, error_text),
+                        LogLevel::Error,
+                    );
+                    context.activate_exec_pin("error").await?;
+                    return Ok(());
+                }
+
+                let pr_json: Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| flow_like_types::anyhow!("Failed to parse response: {}", e))?;
+                if let Some(pr) = parse_pr(&pr_json) {
+                    context.set_pin_value("pull_request", json!(pr)).await?;
+                    context.activate_exec_pin("exec_out").await?;
+                } else {
+                    context.log_message("Failed to parse updated PR", LogLevel::Error);
+                    context.activate_exec_pin("error").await?;
+                }
+            }
+            Err(e) => {
+                context.log_message(&format!("Network error: {}", e), LogLevel::Error);
+                context.activate_exec_pin("error").await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// =============================================================================
 // Merge Pull Request Node
 // =============================================================================
 
@@ -491,6 +732,7 @@ impl NodeLogic for MergeGitHubPullRequestNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -521,6 +763,14 @@ impl NodeLogic for MergeGitHubPullRequestNode {
             "commit_title",
             "Commit Title",
             "Title for the merge commit (leave empty for default)",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "sha",
+            "Head SHA",
+            "Expected SHA of the pull request head to guard against merging stale changes",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -604,6 +854,7 @@ impl NodeLogic for MergeGitHubPullRequestNode {
             .evaluate_pin("commit_title")
             .await
             .unwrap_or_default();
+        let sha: String = context.evaluate_pin("sha").await.unwrap_or_default();
         let commit_message: String = context
             .evaluate_pin("commit_message")
             .await
@@ -631,6 +882,9 @@ impl NodeLogic for MergeGitHubPullRequestNode {
         if !commit_title.is_empty() {
             request_body["commit_title"] = json!(commit_title);
         }
+        if !sha.is_empty() {
+            request_body["sha"] = json!(sha);
+        }
         if !commit_message.is_empty() {
             request_body["commit_message"] = json!(commit_message);
         }
@@ -638,9 +892,9 @@ impl NodeLogic for MergeGitHubPullRequestNode {
         let client = reqwest::Client::new();
         let response = client
             .put(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()
@@ -832,9 +1086,9 @@ impl NodeLogic for ListGitHubPullRequestFilesNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -905,6 +1159,7 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -930,6 +1185,17 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
             "Pull request number",
             VariableType::Integer,
         );
+
+        node.add_input_pin(
+            "per_page",
+            "Per Page",
+            "Results per page (max 100)",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(30)));
+
+        node.add_input_pin("page", "Page", "Page number", VariableType::Integer)
+            .set_default_value(Some(json!(1)));
 
         node.add_output_pin(
             "exec_out",
@@ -979,6 +1245,8 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
         let owner: String = context.evaluate_pin("owner").await?;
         let repo: String = context.evaluate_pin("repo").await?;
         let pr_number: i64 = context.evaluate_pin("pr_number").await?;
+        let per_page: i64 = context.evaluate_pin("per_page").await.unwrap_or(30);
+        let page: i64 = context.evaluate_pin("page").await.unwrap_or(1);
 
         if owner.is_empty() || repo.is_empty() {
             context.log_message("Owner and repository are required", LogLevel::Error);
@@ -987,16 +1255,20 @@ impl NodeLogic for ListGitHubPullRequestReviewsNode {
         }
 
         let url = provider.api_url(&format!(
-            "/repos/{}/{}/pulls/{}/reviews",
-            owner, repo, pr_number
+            "/repos/{}/{}/pulls/{}/reviews?per_page={}&page={}",
+            owner,
+            repo,
+            pr_number,
+            per_page.clamp(1, 100),
+            page.max(1)
         ));
 
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -1063,6 +1335,7 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -1091,6 +1364,22 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
 
         node.add_input_pin("body", "Body", "Review comment body", VariableType::String)
             .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "commit_id",
+            "Commit ID",
+            "SHA of the commit needing a review",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "comments",
+            "Comments",
+            "Inline review comments with path, position or line, and body",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_input_pin("event", "Event", "Review event type", VariableType::String)
             .set_default_value(Some(json!("COMMENT")))
@@ -1152,6 +1441,11 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
         let repo: String = context.evaluate_pin("repo").await?;
         let pr_number: i64 = context.evaluate_pin("pr_number").await?;
         let body: String = context.evaluate_pin("body").await.unwrap_or_default();
+        let commit_id: String = context.evaluate_pin("commit_id").await.unwrap_or_default();
+        let comments: Value = context
+            .evaluate_pin("comments")
+            .await
+            .unwrap_or_else(|_| json!([]));
         let event: String = context
             .evaluate_pin("event")
             .await
@@ -1168,6 +1462,20 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
             owner, repo, pr_number
         ));
 
+        let comments_count = comments.as_array().map(|items| items.len()).unwrap_or(0);
+
+        if matches!(event.as_str(), "COMMENT" | "REQUEST_CHANGES")
+            && body.is_empty()
+            && comments_count == 0
+        {
+            context.log_message(
+                "Body or inline comments are required for COMMENT and REQUEST_CHANGES reviews",
+                LogLevel::Error,
+            );
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
+
         let mut request_body = json!({
             "event": event
         });
@@ -1175,13 +1483,19 @@ impl NodeLogic for CreateGitHubPullRequestReviewNode {
         if !body.is_empty() {
             request_body["body"] = json!(body);
         }
+        if !commit_id.is_empty() {
+            request_body["commit_id"] = json!(commit_id);
+        }
+        if comments_count > 0 {
+            request_body["comments"] = comments;
+        }
 
         let client = reqwest::Client::new();
         let response = client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .json(&request_body)
             .send()

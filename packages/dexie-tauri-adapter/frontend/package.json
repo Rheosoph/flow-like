@@ -3,10 +3,10 @@
 	"version": "0.1.0",
 	"description": "Dexie DBCore middleware that offloads large values to Tauri's native filesystem via tauri-plugin-flow-like-dexie-blob-offload",
 	"license": "MIT",
-	"author": "TM9657 GmbH",
+	"author": "Rheosoph GmbH",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/TM9657/flow-like.git",
+		"url": "https://github.com/Rheosoph/flow-like.git",
 		"directory": "packages/dexie-tauri-adapter/frontend"
 	},
 	"homepage": "https://flow-like.com",

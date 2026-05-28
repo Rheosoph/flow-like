@@ -1,4 +1,4 @@
-use crate::data::atlassian::provider::AtlassianProvider;
+use crate::data::atlassian::provider::{ATLASSIAN_PROVIDER_ID, AtlassianProvider};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -40,6 +40,7 @@ impl NodeLogic for AddConfluenceCommentNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -86,6 +87,8 @@ impl NodeLogic for AddConfluenceCommentNode {
         .set_schema::<ConfluenceComment>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.add_required_oauth_scopes(ATLASSIAN_PROVIDER_ID, vec!["write:confluence-content"]);
+
         node
     }
 
@@ -116,8 +119,8 @@ impl NodeLogic for AddConfluenceCommentNode {
             (url, body_json)
         } else {
             // Server API
-            let base = provider.base_url.trim_end_matches('/');
-            let url = format!("{}/wiki/rest/api/content/{}/child/comment", base, page_id);
+            let url =
+                provider.confluence_rest_api_url(&format!("/content/{}/child/comment", page_id));
             let body_json = json!({
                 "type": "comment",
                 "container": {

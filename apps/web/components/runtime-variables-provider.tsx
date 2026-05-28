@@ -3,7 +3,7 @@
 import {
 	type RuntimeVariableValue,
 	RuntimeVariablesProvider,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useCallback, useMemo } from "react";
 import {
 	getRuntimeVarsForApp,

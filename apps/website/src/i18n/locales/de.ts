@@ -309,7 +309,7 @@ export const de = {
 	"nav.github": "GitHub",
 	"nav.blog": "Blog",
 	"nav.contact": "Kontakt",
-	"footer.copyright": "© 2024 TM9657 GmbH. Alle Rechte vorbehalten.",
+	"footer.copyright": "© 2026 Rheosoph GmbH. Alle Rechte vorbehalten.",
 
 	// Compare page — capability deep-dive cards
 	"compare.explain.how_does_it": "So macht es Flow-Like",
@@ -642,48 +642,49 @@ export const de = {
 
 	// ───── V3 Meta ─────
 	"v3.meta.title":
-		"Flow-Like — Open-Source-Plattform für Workflow-Automatisierung & Solution Engineering",
+		"Flow-Like — Open-Source-Unternehmensplattform für Daten, AI, Automation & Apps",
 	"v3.meta.description":
-		"Erstelle AI Agents, Datenpipelines, Automatisierungen & Apps visuell. Open Source, selbst gehostet, No-Code bis Pro-Code. Für Einzelpersonen kostenlos. Jetzt Flow-Like testen.",
+		"Vereine Data Layer, AI Agents, Big-Data-Pipelines, Automatisierung, BI und Apps in einer gesteuerten Open-Source-Plattform. Self-hosted, No-Code bis Pro-Code.",
 	"v3.meta.keywords":
-		"open source workflow automation,solution engineering platform,AI agents,data pipelines,dashboard builder,application builder,self-hosted automation,no-code,pro-code,rust workflow engine,visual programming,type-safe workflows",
+		"open source company platform,data layer,enterprise data platform,big data pipelines,workflow automation,solution engineering platform,AI agents,dashboard builder,application builder,self-hosted automation,no-code,pro-code,rust workflow engine,visual programming,type-safe workflows",
 	"v3.meta.ogAlt":
-		"Flow-Like — Open-Source-Plattform für Workflow-Automatisierung & Solution Engineering",
+		"Flow-Like — Open-Source-Unternehmensplattform für Daten, AI, Automation & Apps",
 
 	// ───── V3 §1: Hero ─────
-	"v3.hero.badge": "Die Solution-Engineering-Plattform — Jetzt in Alpha",
+	"v3.hero.badge": "Die Unternehmensplattform für Daten, AI, Automation und Apps",
 	"v3.hero.headline":
-		"Eine Plattform. Jede Lösung. Vom Drag-and-Drop bis zur Produktion.",
+		"Eine Plattform für Unternehmensdaten, AI, Automation und Apps.",
 	"v3.hero.subtitle":
-		"Die Open-Source-Plattform für Workflow-Automatisierung, AI Agents, Datenpipelines, Dashboards und vollständige Anwendungen. No-Code bis Pro-Code. Für Einzelpersonen kostenlos — für immer.",
+		"Flow-Like ist eine gesteuerte Betriebsebene für moderne Unternehmen: Data Layer, Big-Data-Pipelines, AI Agents, Workflow-Automatisierung, BI-Dashboards und vollständige Anwendungen in einem System. No-Code bis Pro-Code. Für Einzelpersonen kostenlos — für immer.",
 	"v3.hero.cta.download": "Studio herunterladen — Kostenlos",
 	"v3.hero.cta.web": "Web-App testen",
 	"v3.hero.cta.github": "Auf GitHub ansehen",
 	"v3.hero.trust.free": "Für immer kostenlos",
 	"v3.hero.trust.noAccount": "Kein Konto erforderlich",
 	"v3.hero.trust.noCode": "No-Code & Pro-Code",
+	"v3.hero.trust.dataLayer": "Data Layer inklusive",
 	"v3.hero.trust.offline": "Funktioniert offline",
 	"v3.hero.trust.openSource": "Open Source",
 	"v3.hero.trust.onPrem": "On-Prem-fähig",
 	"v3.hero.tab.automation": "Automatisierung",
 	"v3.hero.tab.aiAgent": "AI Agent",
 	"v3.hero.tab.dashboard": "Dashboard",
-	"v3.hero.tab.dataPipeline": "Datenpipeline",
+	"v3.hero.tab.dataPipeline": "Data Layer",
 	"v3.hero.tab.app": "App",
 
 	// ───── V3 §2: Solution Engineering ─────
-	"v3.se.headline": "Starte mit dem Problem, nicht mit dem Tool.",
+	"v3.se.headline": "Starte mit deinem Betriebsmodell, nicht mit dem nächsten Tool.",
 	"v3.se.subheadline":
-		"Solution Engineering bedeutet: Du beschreibst, was du brauchst — wir kümmern uns um den Rest.",
+		"Solution Engineering bedeutet: ein gesteuerter Stack für Daten, Logik, AI, Automation und nutzernahe Apps.",
 	"v3.se.slider.before": "Tool-Wildwuchs",
 	"v3.se.slider.after": "Solution Engineering",
 	"v3.se.slider.label.before": "separater Login",
 	"v3.se.slider.label.after": "ein Login, eine Rechnung, ein Deploy",
 	"v3.se.description":
-		"Du konzentrierst dich auf deine Geschäftslogik. Flow-Like übernimmt den Rest.",
-	"v3.se.pillar.infra": "Infrastruktur",
+		"Du definierst, wie das Unternehmen laufen soll. Flow-Like verbindet die Daten, Entscheidungen, Automatisierungen und Oberflächen dahinter.",
+	"v3.se.pillar.infra": "Data Layer",
 	"v3.se.pillar.infra.desc":
-		"Desktop, Cloud, Edge, Air-Gapped — überall mit einem Klick deployen.",
+		"Operative Daten aus Systemen, Dateien, APIs und Events aufnehmen, transformieren, katalogisieren und steuern.",
 	"v3.se.pillar.security": "Sicherheit",
 	"v3.se.pillar.security.desc":
 		"WASM-Sandboxing, SBOM, null Telemetrie, vollständiger Audit-Trail inklusive.",
@@ -698,7 +699,7 @@ export const de = {
 		"Freigabe-Gates, Versionskontrolle, rollenbasierter Zugriff. Enterprise-ready ab Werk.",
 	"v3.se.pillar.scaling": "Skalierung",
 	"v3.se.pillar.scaling.desc":
-		"Vom Raspberry Pi bis zum Produktionscluster. Gleicher Workflow, gleiche Engine.",
+		"Vom lokalen Prototyp bis zu Big-Data-Flows in Produktion. Gleicher Workflow, gleiche Rust-Engine.",
 
 	// ───── V3 §3: Use-Case Showcase ─────
 	"v3.showcase.label": "Solution Engineering in der Praxis",
@@ -720,15 +721,15 @@ export const de = {
 		"Flow-Like befindet sich noch in der Alpha-Phase. Enterprise-Support und SLAs sind verfügbar, aber rechne damit, ein Early Adopter zu sein, kein Late-Majority-Käufer.",
 	"v3.showcase.data.title": "Visueller Datenpipeline-Builder",
 	"v3.showcase.data.subtitle":
-		"Baue ETL-Pipelines, die dein Business-Team wirklich lesen kann",
+		"Baue einen gesteuerten Data Layer, den dein Business-Team wirklich lesen kann",
 	"v3.showcase.data.scenario":
-		"Ziehe tägliche Verkaufsdaten aus Postgres, bereinige und validiere sie, aggregiere nach Region und pushe auf ein Live-BI-Dashboard. Jede Verbindung ist typgeprüft — Schema-Konflikte werden erkannt, bevor die Datenpipeline läuft, nicht um 3 Uhr nachts.",
+		"Ziehe Sales-, Produkt- und Operations-Daten aus Datenbanken, APIs, Dateien und Event-Streams; bereinige, validiere, verknüpfe und publiziere sie an BI, AI Agents und operative Apps. Jede Verbindung ist typgeprüft, sodass Schema-Konflikte vor dem Lauf auffallen, nicht um 3 Uhr nachts.",
 	"v3.showcase.data.pro1":
-		"Typsichere Verbindungen über die gesamte ETL-Pipeline — Schluss mit „bei mir hat's funktioniert\"",
+		"Typsichere Verträge über den gesamten Unternehmens-Data-Layer — kein versteckter Schema-Drift",
 	"v3.showcase.data.pro2":
 		"Nicht-Entwickler können die Pipeline-Logik auf derselben Canvas lesen, annotieren und validieren",
 	"v3.showcase.data.pro3":
-		"Dieselbe Datenpipeline skaliert vom Prototyp zur Produktion ohne Umschreiben in einem anderen Tool",
+		"Derselbe Data Layer skaliert vom Prototyp zur Produktion ohne Umschreiben in einem anderen Tool",
 	"v3.showcase.data.note":
 		"Wenn du tiefe Integration mit dbt, Airflow oder dem Spark-Ökosystem brauchst, prüfe zuerst die Node-Bibliothek. Die Abdeckung ist breit (1.000+ Nodes), aber nicht jedes Nischen-Tool hat bereits einen Node.",
 	"v3.showcase.ai.title": "AI-Agent-Builder",
@@ -801,12 +802,12 @@ export const de = {
 	// ───── V3 §5: What You Build (Bento) ─────
 	"v3.bento.label": "Lösungen, die du entwickelst",
 	"v3.bento.headline":
-		"Workflow-Automatisierung für jeden Anwendungsfall — BI, AI, Daten, Apps.",
+		"Eine Unternehmensplattform für Daten, BI, AI, Automation und Apps.",
 	"v3.bento.description":
-		"1.000+ integrierte Nodes für das gesamte Spektrum. Von Datenpipelines und ETL bis zu kundenorientierten Anwendungen — mit unbegrenzten Erweiterungsmöglichkeiten über unser Developer SDK.",
+		"1.000+ integrierte Nodes über den gesamten Enterprise-Stack. Baue einen gesteuerten Data Layer, verarbeite große Datenmengen, automatisiere Prozesse, führe AI Agents aus und liefere Apps aus einem Projekt.",
 	"v3.bento.bi.title": "BI-Dashboards & Analytics",
 	"v3.bento.bi.desc":
-		"Interaktive Dashboards aus beliebigen Datenquellen — Echtzeit, eingebettet oder standalone. Eine moderne BI-Alternative auf Basis deiner Workflow-Engine.",
+		"Interaktive Dashboards auf demselben gesteuerten Data Layer, den deine Automatisierungen und AI Agents nutzen — in Echtzeit, eingebettet oder standalone.",
 	"v3.bento.bi.quote":
 		"Wir haben drei Tableau-Lizenzen durch ein Flow-Like-Projekt ersetzt.",
 	"v3.bento.auto.title": "Workflow-Automatisierung & RPA",
@@ -819,9 +820,9 @@ export const de = {
 		"Baue mehrstufige AI-Agent-Systeme auf der visuellen Canvas. Jeder Prompt, Token, Kosten und jede Entscheidung wird mit voller Observability protokolliert.",
 	"v3.bento.ai.quote":
 		"Volle Observability — wir wissen genau, warum der Agent jede Entscheidung getroffen hat.",
-	"v3.bento.etl.title": "Datenpipelines & ETL",
+	"v3.bento.etl.title": "Data Layer, Pipelines & Big Data",
 	"v3.bento.etl.desc":
-		"Visueller ETL/ELT-Pipeline-Builder mit typsicheren Verbindungen. Einlesen, transformieren, katalogisieren — kein Code erforderlich.",
+		"Visueller ETL/ELT- und Big-Data-Pipeline-Builder mit typsicheren Verbindungen. Aufnehmen, transformieren, katalogisieren und verlässliche operative Daten bereitstellen.",
 	"v3.bento.etl.quote":
 		"Unser Data-Team baut Pipelines. Das Business liest sie. Keine Übersetzung nötig.",
 	"v3.bento.apps.title": "Interne Tools & Anwendungen",
@@ -831,15 +832,15 @@ export const de = {
 		"Wir haben ein internes Tool an einem Tag ausgeliefert, für das Engineering zwei Sprints gebraucht hätte.",
 	"v3.bento.api.title": "API-Integrationen & Konnektoren",
 	"v3.bento.api.desc":
-		"Verbinde Kafka, MQTT, ERPs, CRMs, REST APIs und hunderte mehr. Der Integrations-Hub für dein gesamtes Ökosystem.",
+		"Verbinde Kafka, MQTT, ERPs, CRMs, REST APIs, Dateien, Warehouses und hunderte mehr. Der Integrations- und Daten-Hub für dein gesamtes Unternehmen.",
 	"v3.bento.api.quote":
 		"ERP mit Slack mit Jira verbunden — an einem Nachmittag.",
 	"v3.bento.unified.headline":
-		"BI + Automatisierung + AI Agents + Datenpipelines + Anwendungen = Ein Solution-Engineering-Projekt",
+		"Data Layer + Big Data + AI + Automation + Anwendungen = Eine Unternehmensplattform",
 	"v3.bento.unified.desc":
-		"Nicht sechs Tools zusammengestöpselt — ein Projekt, ein Deployment. Baue eine Datenpipeline, die einen AI Agent speist, der ein Dashboard in einer kundenorientierten App antreibt. Das ist Solution Engineering.",
+		"Kein Flickwerk aus Spezialtools — ein Projekt, eine gesteuerte Runtime, ein Deployment-Modell. Baue einen verlässlichen Data Layer, der AI Agents speist, Automatisierungen antreibt, BI versorgt und in internen oder kundenorientierten Apps landet.",
 	"v3.bento.unified.tags":
-		"Whitelabel Ready | OEM Licensing | Embed in Your Product",
+		"Governed Data Layer | Big Data Ready | AI-Native Automation | On-Prem / White-Label",
 	"v3.bento.explore": "Entdecken →",
 
 	// ───── V3 §6: Teams ─────

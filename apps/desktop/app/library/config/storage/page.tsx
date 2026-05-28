@@ -1,7 +1,7 @@
 "use client";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { StorageSystem } from "@tm9657/flow-like-ui";
+import { StorageSystem } from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
 

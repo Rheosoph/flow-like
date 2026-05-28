@@ -1,10 +1,17 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{
+        flow_path_filename, graph_error_message, graph_get_json, graph_get_paginated_values,
+        normalize_graph_path, upload_flow_path_to_drive,
+    },
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+use flow_like_catalog_core::FlowPath;
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +80,7 @@ impl NodeLogic for ListOneDriveItemsNode {
             "List files and folders in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -120,38 +128,21 @@ impl NodeLogic for ListOneDriveItemsNode {
             .await
             .unwrap_or_default();
 
-        let url = if folder_path.is_empty() {
-            "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string()
+        let url = if folder_path.trim().is_empty() {
+            provider.api_url("/me/drive/root/children")
         } else {
-            format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/children",
-                folder_path
-            )
+            let folder_path = normalize_graph_path(&folder_path);
+            provider.api_url(&format!("/me/drive/root:{}:/children", folder_path))
         };
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let items: Vec<OneDriveItem> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_item).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url).await {
+            Ok(values) => {
+                let items: Vec<OneDriveItem> = values.iter().filter_map(parse_item).collect();
                 let count = items.len() as i64;
                 context.set_pin_value("items", json!(items)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -188,6 +179,7 @@ impl NodeLogic for GetOneDriveItemNode {
             "Get metadata for a OneDrive item",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -228,20 +220,17 @@ impl NodeLogic for GetOneDriveItemNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let item_path: String = context.evaluate_pin("item_path").await?;
+        let item_path = normalize_graph_path(&item_path);
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}",
-                item_path
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(
+            &client,
+            &provider,
+            provider.api_url(&format!("/me/drive/root:{}", item_path)),
+        )
+        .await
+        {
+            Ok(body) => {
                 if let Some(item) = parse_item(&body) {
                     context.set_pin_value("item", json!(item)).await?;
                     context.activate_exec_pin("exec_out").await?;
@@ -251,11 +240,6 @@ impl NodeLogic for GetOneDriveItemNode {
                         .await?;
                     context.activate_exec_pin("error").await?;
                 }
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -292,6 +276,7 @@ impl NodeLogic for DownloadOneDriveFileNode {
             "Download a file from OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -331,13 +316,11 @@ impl NodeLogic for DownloadOneDriveFileNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let item_path: String = context.evaluate_pin("item_path").await?;
+        let item_path = normalize_graph_path(&item_path);
 
         let client = reqwest::Client::new();
         let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/content",
-                item_path
-            ))
+            .get(provider.api_url(&format!("/me/drive/root:{}:/content", item_path)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -351,8 +334,9 @@ impl NodeLogic for DownloadOneDriveFileNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -387,9 +371,10 @@ impl NodeLogic for UploadOneDriveFileNode {
         let mut node = Node::new(
             "data_microsoft_onedrive_upload",
             "Upload File",
-            "Upload a file to OneDrive (max 4MB)",
+            "Upload a FlowPath file to OneDrive; automatically uses an upload session for larger files",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -403,16 +388,19 @@ impl NodeLogic for UploadOneDriveFileNode {
         .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin(
             "file_path",
-            "File Path",
-            "Destination path including filename",
+            "Destination Path",
+            "Destination path including filename. Leave empty to use the FlowPath filename.",
             VariableType::String,
-        );
+        )
+        .set_default_value(Some(json!("")));
         node.add_input_pin(
-            "content",
-            "Content",
-            "File content (base64 encoded)",
-            VariableType::String,
-        );
+            "file",
+            "File",
+            "FlowPath file to upload",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_input_pin(
             "conflict_behavior",
             "Conflict Behavior",
@@ -439,6 +427,18 @@ impl NodeLogic for UploadOneDriveFileNode {
             VariableType::Struct,
         )
         .set_schema::<OneDriveItem>();
+        node.add_output_pin(
+            "used_upload_session",
+            "Used Upload Session",
+            "True when large-file upload session was used",
+            VariableType::Boolean,
+        );
+        node.add_output_pin(
+            "size",
+            "Size",
+            "Uploaded size in bytes",
+            VariableType::Integer,
+        );
         node.add_output_pin("error_message", "Error Message", "", VariableType::String);
 
         node.add_required_oauth_scopes(MICROSOFT_PROVIDER_ID, vec!["Files.ReadWrite.All"]);
@@ -451,39 +451,45 @@ impl NodeLogic for UploadOneDriveFileNode {
         context.deactivate_exec_pin("error").await?;
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
-        let file_path: String = context.evaluate_pin("file_path").await?;
-        let content: String = context.evaluate_pin("content").await?;
+        let source_file: FlowPath = context.evaluate_pin("file").await?;
+        let file_path: String = context.evaluate_pin("file_path").await.unwrap_or_default();
         let conflict_behavior: String = context
             .evaluate_pin("conflict_behavior")
             .await
             .unwrap_or_else(|_| "rename".to_string());
 
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&content)
-            .map_err(|e| flow_like_types::anyhow!("Invalid base64: {}", e))?;
+        let destination_path = if file_path.trim().is_empty() {
+            flow_path_filename(&source_file)?
+        } else {
+            file_path
+        };
+        let destination_path = normalize_graph_path(&destination_path);
 
         let client = reqwest::Client::new();
-        let response = client
-            .put(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/content",
-                file_path
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/octet-stream")
-            .query(&[(
-                "@microsoft.graph.conflictBehavior",
-                conflict_behavior.as_str(),
-            )])
-            .body(bytes)
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                if let Some(item) = parse_item(&body) {
+        match upload_flow_path_to_drive(
+            context,
+            &client,
+            &provider,
+            provider.api_url(&format!("/me/drive/root:{}:/content", destination_path)),
+            provider.api_url(&format!(
+                "/me/drive/root:{}:/createUploadSession",
+                destination_path
+            )),
+            &source_file,
+            &destination_path,
+            &conflict_behavior,
+        )
+        .await
+        {
+            Ok(upload) => {
+                if let Some(item) = parse_item(&upload.item) {
                     context.set_pin_value("item", json!(item)).await?;
+                    context
+                        .set_pin_value("used_upload_session", json!(upload.used_upload_session))
+                        .await?;
+                    context
+                        .set_pin_value("size", json!(upload.size as i64))
+                        .await?;
                     context.activate_exec_pin("exec_out").await?;
                 } else {
                     context
@@ -491,11 +497,6 @@ impl NodeLogic for UploadOneDriveFileNode {
                         .await?;
                     context.activate_exec_pin("error").await?;
                 }
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -532,6 +533,7 @@ impl NodeLogic for CreateOneDriveFolderNode {
             "Create a new folder in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -590,13 +592,11 @@ impl NodeLogic for CreateOneDriveFolderNode {
             "@microsoft.graph.conflictBehavior": "rename"
         });
 
-        let url = if parent_path.is_empty() {
-            "https://graph.microsoft.com/v1.0/me/drive/root/children".to_string()
+        let url = if parent_path.trim().is_empty() {
+            provider.api_url("/me/drive/root/children")
         } else {
-            format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/children",
-                parent_path
-            )
+            let parent_path = normalize_graph_path(&parent_path);
+            provider.api_url(&format!("/me/drive/root:{}:/children", parent_path))
         };
 
         let client = reqwest::Client::new();
@@ -622,8 +622,9 @@ impl NodeLogic for CreateOneDriveFolderNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -661,6 +662,7 @@ impl NodeLogic for DeleteOneDriveItemNode {
             "Delete a file or folder from OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -694,13 +696,11 @@ impl NodeLogic for DeleteOneDriveItemNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let item_path: String = context.evaluate_pin("item_path").await?;
+        let item_path = normalize_graph_path(&item_path);
 
         let client = reqwest::Client::new();
         let response = client
-            .delete(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}",
-                item_path
-            ))
+            .delete(provider.api_url(&format!("/me/drive/root:{}", item_path)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -710,8 +710,9 @@ impl NodeLogic for DeleteOneDriveItemNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -749,6 +750,7 @@ impl NodeLogic for MoveOneDriveItemNode {
             "Move a file or folder to a new location in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -799,16 +801,15 @@ impl NodeLogic for MoveOneDriveItemNode {
         let item_path: String = context.evaluate_pin("item_path").await?;
         let destination_path: String = context.evaluate_pin("destination_path").await?;
         let new_name: String = context.evaluate_pin("new_name").await.unwrap_or_default();
+        let item_path = normalize_graph_path(&item_path);
 
         // First get the destination folder ID
         let client = reqwest::Client::new();
-        let dest_url = if destination_path.is_empty() {
-            "https://graph.microsoft.com/v1.0/me/drive/root".to_string()
+        let dest_url = if destination_path.trim().is_empty() {
+            provider.api_url("/me/drive/root")
         } else {
-            format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}",
-                destination_path
-            )
+            let destination_path = normalize_graph_path(&destination_path);
+            provider.api_url(&format!("/me/drive/root:{}", destination_path))
         };
 
         let dest_response = client
@@ -842,10 +843,7 @@ impl NodeLogic for MoveOneDriveItemNode {
         }
 
         let response = client
-            .patch(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}",
-                item_path
-            ))
+            .patch(provider.api_url(&format!("/me/drive/root:{}", item_path)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -866,8 +864,9 @@ impl NodeLogic for MoveOneDriveItemNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -905,6 +904,7 @@ impl NodeLogic for CopyOneDriveItemNode {
             "Copy a file or folder in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -958,16 +958,15 @@ impl NodeLogic for CopyOneDriveItemNode {
         let item_path: String = context.evaluate_pin("item_path").await?;
         let destination_path: String = context.evaluate_pin("destination_path").await?;
         let new_name: String = context.evaluate_pin("new_name").await.unwrap_or_default();
+        let item_path = normalize_graph_path(&item_path);
 
         // Get destination folder ID
         let client = reqwest::Client::new();
-        let dest_url = if destination_path.is_empty() {
-            "https://graph.microsoft.com/v1.0/me/drive/root".to_string()
+        let dest_url = if destination_path.trim().is_empty() {
+            provider.api_url("/me/drive/root")
         } else {
-            format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}",
-                destination_path
-            )
+            let destination_path = normalize_graph_path(&destination_path);
+            provider.api_url(&format!("/me/drive/root:{}", destination_path))
         };
 
         let dest_response = client
@@ -1008,10 +1007,7 @@ impl NodeLogic for CopyOneDriveItemNode {
         }
 
         let response = client
-            .post(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root:{}:/copy",
-                item_path
-            ))
+            .post(provider.api_url(&format!("/me/drive/root:{}:/copy", item_path)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -1023,8 +1019,9 @@ impl NodeLogic for CopyOneDriveItemNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
+                context
+                    .set_pin_value("error_message", json!(graph_error_message(resp).await))
+                    .await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -1062,6 +1059,7 @@ impl NodeLogic for SearchOneDriveNode {
             "Search for files and folders in OneDrive",
             "Data/Microsoft/OneDrive",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/onedrive.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1096,31 +1094,18 @@ impl NodeLogic for SearchOneDriveNode {
         let query: String = context.evaluate_pin("query").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!(
-                "https://graph.microsoft.com/v1.0/me/drive/root/search(q='{}')",
-                urlencoding::encode(&query)
-            ))
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
+        let url = provider.api_url(&format!(
+            "/me/drive/root/search(q='{}')",
+            urlencoding::encode(&query)
+        ));
 
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let items: Vec<OneDriveItem> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_item).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url).await {
+            Ok(values) => {
+                let items: Vec<OneDriveItem> = values.iter().filter_map(parse_item).collect();
                 let count = items.len() as i64;
                 context.set_pin_value("items", json!(items)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context

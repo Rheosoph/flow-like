@@ -136,7 +136,10 @@ run = "bun run --cwd ./apps/desktop tauri build --verbose"
 
 [tasks."build:desktop:linux:x64"]
 description = "Build desktop app for Linux x64"
-run = "bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.linux.x64.conf.json --verbose"
+run = """
+export LD_LIBRARY_PATH="$PWD/apps/desktop/src-tauri/binaries/linux/x64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.linux.x64.conf.json --verbose
+"""
 
 [tasks."build:web"]
 description = "Build Next.js web app"

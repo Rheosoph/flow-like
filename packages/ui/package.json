@@ -1,5 +1,5 @@
 {
-	"name": "@tm9657/flow-like-ui",
+	"name": "@flow-like/flow-like-ui",
 	"type": "module",
 	"dependencies": {
 		"@ai-sdk/react": "^1.2.12",

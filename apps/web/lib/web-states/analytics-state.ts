@@ -4,7 +4,7 @@ import type {
 	IAnalyticsState,
 	IAnalyticsStats,
 	IPaginatedFeedback,
-} from "@tm9657/flow-like-ui/state/backend-state/analytics-state";
+} from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { type WebBackendRef, apiGet } from "./api-utils";
 
 export class WebAnalyticsState implements IAnalyticsState {

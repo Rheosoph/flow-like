@@ -83,8 +83,16 @@ impl NodeLogic for WebSocketCloseNode {
                     .as_any()
                     .downcast_ref::<super::CachedWebSocketConnection>()
                 {
-                    let mut sink = conn.sink.lock().await;
-                    sink.close().await.err()
+                    match &conn.sink {
+                        super::CachedWebSocketSink::Client(sink) => {
+                            let mut sink = sink.lock().await;
+                            sink.close().await.err()
+                        }
+                        super::CachedWebSocketSink::Server(sink) => {
+                            let mut sink = sink.lock().await;
+                            sink.close().await.err()
+                        }
+                    }
                 } else {
                     None
                 }

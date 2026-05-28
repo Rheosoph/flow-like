@@ -7,8 +7,8 @@ import {
 	useInvalidateInfiniteInvoke,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IProfile } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import type { IProfile } from "@flow-like/flow-like-ui";
 import { Amplify } from "aws-amplify";
 import {
 	type AuthTokens,

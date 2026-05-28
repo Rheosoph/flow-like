@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-swift
 
-Swift SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using [SwiftWasm](https://swiftwasm.org/).
+Swift SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using [SwiftWasm](https://swiftwasm.org/).
 
 ## Prerequisites
 

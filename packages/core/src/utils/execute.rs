@@ -28,6 +28,17 @@ fn set_library_path(cmd: &mut StdCommand, binary_path: &std::path::Path) {
     }
 }
 
+#[cfg(windows)]
+fn hide_sidecar_window(cmd: &mut StdCommand) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_sidecar_window(_: &mut StdCommand) {}
+
 fn set_library_path_async(cmd: &mut Command, binary_path: &std::path::Path) {
     if let Some(dir) = binary_path.parent() {
         #[cfg(target_os = "macos")]
@@ -77,6 +88,7 @@ pub async fn sidecar(
 
     let mut sidecar = StdCommand::new(&path);
     set_library_path(&mut sidecar, &path);
+    hide_sidecar_window(&mut sidecar);
     Ok(sidecar)
 }
 

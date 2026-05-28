@@ -13,14 +13,14 @@ import {
 	Skeleton,
 	StorePackageDetail,
 	useBackend,
-} from "@tm9657/flow-like-ui";
-import { getErrorMessage } from "@tm9657/flow-like-ui/lib/error-message";
+} from "@flow-like/flow-like-ui";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import type {
 	InstalledPackage,
 	PackageSummary,
 	SearchFilters,
 	SearchResults,
-} from "@tm9657/flow-like-ui/lib/schema/wasm";
+} from "@flow-like/flow-like-ui/lib/schema/wasm";
 import {
 	Check,
 	Download,

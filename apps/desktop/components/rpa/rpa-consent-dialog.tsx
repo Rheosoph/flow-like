@@ -8,7 +8,7 @@ import {
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { MonitorCog, ShieldAlert } from "lucide-react";
 import type { RpaConsentContext, RpaConsentRememberScope } from "./rpa-consent";
 

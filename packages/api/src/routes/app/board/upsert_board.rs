@@ -95,6 +95,7 @@ pub async fn upsert_board(
     board.execution_mode = params
         .execution_mode
         .unwrap_or(board.execution_mode.clone());
+    board.mark_changed();
     board.save(None).await?;
 
     audit_branch!(

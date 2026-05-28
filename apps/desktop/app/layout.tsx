@@ -5,14 +5,14 @@ import {
 	PersistQueryClientProvider,
 	QueryClient,
 	ReactFlowProvider,
-} from "@tm9657/flow-like-ui";
-import { ThemeProvider } from "@tm9657/flow-like-ui/components/theme-provider";
-import { Toaster } from "@tm9657/flow-like-ui/components/ui/sonner";
-import { TooltipProvider } from "@tm9657/flow-like-ui/components/ui/tooltip";
-import "@tm9657/flow-like-ui/global.css";
-import { NetworkStatusIndicator } from "@tm9657/flow-like-ui/components/ui/network-status-indicator";
-import { useNetworkStatus } from "@tm9657/flow-like-ui/hooks/use-network-status";
-import { createIDBPersister } from "@tm9657/flow-like-ui/lib/persister";
+} from "@flow-like/flow-like-ui";
+import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
+import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
+import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
+import "@flow-like/flow-like-ui/global.css";
+import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
+import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
+import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
 import {
 	Architects_Daughter,
 	DM_Sans,

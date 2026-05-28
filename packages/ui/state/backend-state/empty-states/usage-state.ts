@@ -4,7 +4,7 @@ import type {
 	ILlmUsageRecord,
 	IPaginatedResponse,
 	IUsageSummary,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type { IUsageState } from "../usage-state";
 
 export class EmptyUsageState implements IUsageState {

@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk
 
-Rust SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes
+Rust SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes
 using the Component Model (`wasm32-wasip2`). Produces compact, zero-overhead binaries.
 
 ## Setup

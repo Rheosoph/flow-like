@@ -30,6 +30,7 @@ impl NodeLogic for SearchUsersNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -115,17 +116,18 @@ impl NodeLogic for SearchUsersNode {
 
         let users = if provider.is_cloud {
             // Cloud uses user search endpoint
-            let url = format!(
-                "{}/wiki/rest/api/search/user?cql=user.fullname~\"{}\" OR user.email~\"{}\"&limit={}",
-                provider.base_url,
-                urlencoding::encode(&query),
-                urlencoding::encode(&query),
-                limit
+            let url = provider.confluence_rest_api_url("/search/user");
+            let escaped_query = query.replace('"', "\\\"");
+            let cql = format!(
+                "user.fullname~\"{}\" OR user.email~\"{}\"",
+                escaped_query, escaped_query
             );
+            let limit = limit.to_string();
 
             let response = client
                 .get(&url)
                 .header("Authorization", provider.auth_header())
+                .query(&[("cql", cql.as_str()), ("limit", limit.as_str())])
                 .send()
                 .await?;
 
@@ -149,16 +151,13 @@ impl NodeLogic for SearchUsersNode {
                 .collect::<Vec<_>>()
         } else {
             // Server v1 API
-            let url = format!(
-                "{}/rest/api/user/list?prefix={}&limit={}",
-                provider.base_url,
-                urlencoding::encode(&query),
-                limit
-            );
+            let url = provider.confluence_rest_api_url("/user/list");
+            let limit = limit.to_string();
 
             let response = client
                 .get(&url)
                 .header("Authorization", provider.auth_header())
+                .query(&[("prefix", query.as_str()), ("limit", limit.as_str())])
                 .send()
                 .await?;
 
@@ -211,6 +210,7 @@ impl NodeLogic for GetCurrentUserNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -258,11 +258,7 @@ impl NodeLogic for GetCurrentUserNode {
 
         let client = reqwest::Client::new();
 
-        let url = if provider.is_cloud {
-            format!("{}/wiki/rest/api/user/current", provider.base_url)
-        } else {
-            format!("{}/rest/api/user/current", provider.base_url)
-        };
+        let url = provider.confluence_rest_api_url("/user/current");
 
         let response = client
             .get(&url)

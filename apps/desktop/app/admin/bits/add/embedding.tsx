@@ -17,7 +17,7 @@ import {
 	SelectValue,
 	Slider,
 	Textarea,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { X } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 

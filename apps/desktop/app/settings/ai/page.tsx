@@ -1,6 +1,6 @@
 "use client";
 
-import { AIModelPage, useBackend, useInvoke } from "@tm9657/flow-like-ui";
+import { AIModelPage, useBackend, useInvoke } from "@flow-like/flow-like-ui";
 
 export default function SettingsAiPage() {
 	const backend = useBackend();

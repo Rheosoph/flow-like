@@ -69,7 +69,7 @@ model User {
 }
 
 model Profile {
-  id String @id
+  id String
 
   name        String
   thumbnail   String?
@@ -95,6 +95,7 @@ model Profile {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  @@id([userId, id])
   @@index([userId])
   @@index([userId, deletedAt])
 }
@@ -134,6 +135,11 @@ model LLMUsageTracking {
   id String @id
 
   modelId  String
+  provider String?
+  endpoint String?
+  invocationId String?
+  providerRequestId String?
+  rawUsage Json?
   tokenIn  BigInt
   tokenOut BigInt
 
@@ -149,12 +155,24 @@ model LLMUsageTracking {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([appId, createdAt])
+  @@index([userId, createdAt])
+  @@index([modelId, createdAt])
+  @@index([provider, createdAt])
+  @@index([invocationId])
 }
 
 model EmbeddingUsageTracking {
   id String @id
 
   modelId    String
+  provider   String?
+  endpoint   String?
+  invocationId String?
+  providerRequestId String?
+  rawUsage Json?
   tokenCount BigInt
   latency    Float?
 
@@ -168,6 +186,13 @@ model EmbeddingUsageTracking {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([appId, createdAt])
+  @@index([userId, createdAt])
+  @@index([modelId, createdAt])
+  @@index([provider, createdAt])
+  @@index([invocationId])
 }
 
 enum ExecutionStatus {
@@ -198,6 +223,98 @@ model ExecutionUsageTracking {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([appId, createdAt])
+  @@index([userId, createdAt])
+  @@index([version])
+}
+
+model UsageInvocation {
+  id String @id
+
+  /// llm, embedding, execution, etc.
+  kind String
+  /// pending, completed, failed, cancelled, unknown_usage.
+  status String
+
+  userId String?
+  appId  String?
+
+  provider String?
+  endpoint String?
+  modelId  String?
+  providerRequestId String?
+
+  estimatedTokens BigInt @default(0)
+  estimatedCostMicroDollars BigInt @default(0)
+  inputTokens BigInt @default(0)
+  outputTokens BigInt @default(0)
+  embeddingTokens BigInt @default(0)
+  costMicroDollars BigInt @default(0)
+
+  latency Float?
+  rawUsage Json?
+  error String?
+
+  startedAt DateTime @default(now())
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([kind, createdAt])
+  @@index([appId, createdAt])
+  @@index([userId, createdAt])
+  @@index([provider, modelId, createdAt])
+  @@index([providerRequestId])
+}
+
+model UsageAlert {
+  id String @id
+
+  kind String
+  severity String
+  period String?
+  message String
+
+  appId String?
+  userId String?
+
+  thresholdPercent Int?
+  currentCostMicroDollars BigInt?
+  currentTokens BigInt?
+
+  acknowledgedAt DateTime?
+  acknowledgedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([appId, createdAt])
+  @@index([userId, createdAt])
+  @@index([kind, severity, createdAt])
+  @@index([acknowledgedAt])
+}
+
+model UsageLimitAuditLog {
+  id String @id
+
+  appId String?
+  userId String?
+  actorUserId String?
+  action String
+  before Json?
+  after  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([appId, createdAt])
+  @@index([userId, createdAt])
+  @@index([actorUserId, createdAt])
 }
 
 enum RunStatus {

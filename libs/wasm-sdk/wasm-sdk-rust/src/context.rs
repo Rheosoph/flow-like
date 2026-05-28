@@ -361,11 +361,7 @@ impl Context {
         crate::host::embed_text_document(&model_json, texts)
     }
 
-    pub fn embed_image(
-        &self,
-        model: &CachedEmbeddingModel,
-        image: &NodeImage,
-    ) -> Option<Vec<f32>> {
+    pub fn embed_image(&self, model: &CachedEmbeddingModel, image: &NodeImage) -> Option<Vec<f32>> {
         let model_json = serde_json::to_string(model).ok()?;
         let image_json = serde_json::to_string(image).ok()?;
         crate::host::embed_image(&model_json, &image_json)
@@ -420,8 +416,8 @@ impl Context {
 
     pub fn db_delete(&self, conn: &NodeDBConnection, filter: &str) -> bool {
         let conn_json = serde_json::to_string(conn).ok().unwrap_or_default();
-        let payload_json = serde_json::to_string(&serde_json::json!({ "filter": filter }))
-            .unwrap_or_default();
+        let payload_json =
+            serde_json::to_string(&serde_json::json!({ "filter": filter })).unwrap_or_default();
         crate::host::db_delete(&conn_json, &payload_json)
     }
 

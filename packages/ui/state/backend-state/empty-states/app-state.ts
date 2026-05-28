@@ -5,8 +5,8 @@ import type {
 	IAppVisibility,
 	IBoard,
 	IMetadata,
-} from "@tm9657/flow-like-ui";
-import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
+} from "@flow-like/flow-like-ui";
+import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
@@ -14,7 +14,7 @@ import type {
 	IForkPreviewTarget,
 	IOnlineForkBody,
 	IOnlineForkResponse,
-} from "@tm9657/flow-like-ui/lib/schema/app/fork";
+} from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type {
 	AppCommentsResponse,
 	IMediaItem,

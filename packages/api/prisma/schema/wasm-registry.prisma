@@ -141,6 +141,7 @@ model WasmPackageVersion {
 
   compilationStatus WasmCompilationStatus @default(PENDING)
   compiledPlatforms String[]              @default([])
+  supportedWasmtimeVersions String[]      @default([])
   compilationError  String?
 
   duplicateOfPackageId String?

@@ -5,10 +5,10 @@ import {
 	IAppVisibility,
 	useBackend,
 	useInvalidateInvoke,
-} from "@tm9657/flow-like-ui";
-import type { IBeginForkResponse } from "@tm9657/flow-like-ui/components/settings/forking/fork-app-dialog";
-import type { IBeginOfflineForkResponse } from "@tm9657/flow-like-ui/lib/schema/app/fork";
-import type { IProfileApp } from "@tm9657/flow-like-ui/lib/schema/profile/profile";
+} from "@flow-like/flow-like-ui";
+import type { IBeginForkResponse } from "@flow-like/flow-like-ui/components/settings/forking/fork-app-dialog";
+import type { IBeginOfflineForkResponse } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { appsDB } from "./apps-db";

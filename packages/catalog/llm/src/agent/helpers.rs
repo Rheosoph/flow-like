@@ -502,10 +502,16 @@ pub async fn generate_tool_from_function(
     };
     use std::collections::HashMap;
 
+    const EMPTY_STRING_REF_HASH: &str = "16248035215404677707";
+
     fn resolve_ref(value: &str, refs: &HashMap<String, String>) -> String {
-        refs.get(value)
+        let trimmed = value.trim();
+        if trimmed == EMPTY_STRING_REF_HASH {
+            return String::new();
+        }
+        refs.get(trimmed)
             .cloned()
-            .unwrap_or_else(|| value.to_string())
+            .unwrap_or_else(|| trimmed.to_string())
     }
 
     fn nested_schema_from_string(
@@ -1338,7 +1344,8 @@ pub async fn execute_agent_streaming(
             name: "_memory_store".to_string(),
             description:
                 "Store an observation in persistent memory. Use this to remember important facts, \
-                 user preferences, decisions, and context worth preserving across conversations."
+                 user preferences, decisions, and context worth preserving across conversations. \
+                 If the user explicitly asks you to remember something, call this tool immediately."
                     .to_string(),
             parameters: json::json!({
                 "type": "object",
@@ -1354,6 +1361,18 @@ pub async fn execute_agent_streaming(
                     }
                 },
                 "required": ["content"]
+            }),
+        });
+        tool_definitions.push(ToolDefinition {
+            name: "_memory_compress".to_string(),
+            description:
+                "Compress accumulated non-summary memory observations into a concise summary. \
+                 This is normally automatic; call it only when explicitly asked to compact memory \
+                 or after storing many related observations."
+                    .to_string(),
+            parameters: json::json!({
+                "type": "object",
+                "properties": {}
             }),
         });
     }
@@ -2407,13 +2426,19 @@ async fn handle_memory_tool_call(
                 "timestamp": now,
             });
 
-            let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-            db.insert(vec![record]).await?;
-            let count = db
-                .count(Some("role != 'summary'".to_string()))
-                .await
-                .unwrap_or(0);
-            drop(db);
+            {
+                let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
+                db.insert(vec![record]).await?;
+            }
+
+            cached_db.ensure_flushed().await?;
+
+            let count = {
+                let db = cached_db.db.read().await;
+                db.count(Some("role != 'summary'".to_string()))
+                    .await
+                    .unwrap_or(0)
+            };
 
             context.log_message(
                 &format!(
@@ -2456,6 +2481,7 @@ async fn handle_memory_tool_call(
                 "observation_count": count,
             }))
         }
+        "_memory_compress" => run_memory_compress(context, agent, memory, &cached_db).await,
         _ => Err(anyhow!("Unknown memory tool: {}", tool_name)),
     }
 }
@@ -2526,6 +2552,12 @@ async fn store_evicted_to_memory(
 
     let embeddings = embed_memory_document(context, memory, &content).await?;
 
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    content.to_lowercase().hash(&mut hasher);
+    let content_hash = format!("{:x}", hasher.finish());
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -2534,6 +2566,7 @@ async fn store_evicted_to_memory(
     let record = json::json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "content": content,
+        "content_hash": content_hash,
         "role": "context",
         "vector": embeddings,
         "timestamp": now,
@@ -2554,6 +2587,7 @@ async fn store_evicted_to_memory(
     let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
     db.insert(vec![record]).await?;
     drop(db);
+    cached_db.ensure_flushed().await?;
 
     context.log_message(
         &format!(

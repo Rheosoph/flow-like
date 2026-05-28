@@ -28,6 +28,7 @@ impl NodeLogic for ListConfluenceSpacesNode {
             "Data/Atlassian/Confluence",
         );
         node.add_icon("/flow/icons/confluence.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -153,7 +154,6 @@ impl NodeLogic for ListConfluenceSpacesNode {
         let client = reqwest::Client::new();
 
         // Build URL with query parameters
-        let base = provider.base_url.trim_end_matches('/');
         let mut params = vec![
             format!("limit={}", limit.clamp(1, 100)),
             format!("start={}", start.max(0)),
@@ -165,7 +165,7 @@ impl NodeLogic for ListConfluenceSpacesNode {
             params.push(format!("type={}", space_type));
         }
 
-        let url = format!("{}/wiki/rest/api/space?{}", base, params.join("&"));
+        let url = provider.confluence_rest_api_url(&format!("/space?{}", params.join("&")));
 
         context.log_message("Fetching Confluence spaces", LogLevel::Debug);
 

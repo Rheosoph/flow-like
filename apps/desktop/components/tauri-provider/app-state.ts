@@ -16,8 +16,8 @@ import {
 	type UpsertAppCommentRequest,
 	type UpsertAppCommentResponse,
 	injectDataFunction,
-} from "@tm9657/flow-like-ui";
-import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
+} from "@flow-like/flow-like-ui";
+import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
@@ -25,8 +25,8 @@ import type {
 	IForkPreviewTarget,
 	IOnlineForkBody,
 	IOnlineForkResponse,
-} from "@tm9657/flow-like-ui/lib/schema/app/fork";
-import type { IMediaItem } from "@tm9657/flow-like-ui/state/backend-state/app-state";
+} from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
 import { fetcher, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
@@ -680,14 +680,14 @@ export class AppState implements IAppState {
 		appId: string,
 		target: IForkPreviewTarget,
 	): Promise<IForkPreviewResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
-			throw new Error("not authenticated");
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot preview fork.");
 		}
 		return fetcher<IForkPreviewResponse>(
 			this.backend.profile,
 			`apps/${appId}/fork/preview?target=${target}`,
 			{ method: "GET" },
-			this.backend.auth,
+			this.getRemoteAuth(),
 		);
 	}
 
@@ -695,8 +695,8 @@ export class AppState implements IAppState {
 		appId: string,
 		body: IBeginOfflineForkBody,
 	): Promise<IBeginOfflineForkResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
-			throw new Error("not authenticated");
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot create offline fork.");
 		}
 		return fetcher<IBeginOfflineForkResponse>(
 			this.backend.profile,
@@ -705,7 +705,7 @@ export class AppState implements IAppState {
 				method: "POST",
 				body: JSON.stringify(body),
 			},
-			this.backend.auth,
+			this.getRemoteAuth(),
 		);
 	}
 

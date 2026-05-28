@@ -113,6 +113,7 @@ pub async fn get_versions(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<PackageVersion>>, ApiError> {
     let sub = user.sub().ok();
+    let mut access = None;
 
     if !state.platform_config.features.unauthorized_read && sub.is_none() {
         return Err(ApiError::FORBIDDEN);
@@ -131,7 +132,7 @@ pub async fn get_versions(
 
     if package.status != crate::entity::sea_orm_active_enums::WasmPackageStatus::Active {
         if let Some(ref uid) = sub {
-            let access = crate::check_wasm_access!(state, uid, &id);
+            access = crate::check_wasm_access!(state, uid, &id);
             if access.is_none() {
                 return Err(ApiError::not_found(format!("Package '{}' not found", id)));
             }
@@ -141,14 +142,32 @@ pub async fn get_versions(
     }
 
     if package.visibility == WasmPackageVisibility::Private {
-        let uid = sub.ok_or(ApiError::FORBIDDEN)?;
-        let access = crate::check_wasm_access!(state, &uid, &id);
+        let uid = sub.as_ref().ok_or(ApiError::FORBIDDEN)?;
+        if access.is_none() {
+            access = crate::check_wasm_access!(state, uid, &id);
+        }
         if access.is_none() {
             return Err(ApiError::FORBIDDEN);
         }
     }
 
-    let versions = registry.get_versions_approved(&id).await?;
+    if access.is_none()
+        && let Some(uid) = sub.as_ref()
+    {
+        access = crate::check_wasm_access!(state, uid, &id);
+    }
+
+    let can_manage = access.is_some_and(|permission| {
+        permission.has_permission(
+            crate::permission::wasm_package_permission::WasmPackagePermission::Maintainer,
+        )
+    });
+    let show_all_versions = package.visibility == WasmPackageVisibility::Private || can_manage;
+    let versions = if show_all_versions {
+        registry.get_versions(&id).await?
+    } else {
+        registry.get_versions_approved(&id).await?
+    };
 
     Ok(Json(versions))
 }

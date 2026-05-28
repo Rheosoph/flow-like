@@ -10,7 +10,7 @@ const t = (key: TranslationKey): string => {
   return l?.[key] ?? e[key] ?? key;
 };
 
-const github = "https://github.com/TM9657/flow-like";
+const github = "https://github.com/Rheosoph/flow-like";
 const webAppUrl = "https://app.flow-like.com";
 
 
@@ -27,6 +27,7 @@ const trustPills = [
   "v3.hero.trust.free",
   "v3.hero.trust.noAccount",
   "v3.hero.trust.noCode",
+  "v3.hero.trust.dataLayer",
   "v3.hero.trust.offline",
   "v3.hero.trust.openSource",
   "v3.hero.trust.onPrem",
@@ -1276,7 +1277,7 @@ const trustPills = [
       }
     } catch {}
 
-    fetch("https://api.github.com/repos/TM9657/flow-like", {
+    fetch("https://api.github.com/repos/Rheosoph/flow-like", {
       headers: { Accept: "application/vnd.github.v3+json" },
     })
       .then(r => r.ok ? r.json() : Promise.reject())

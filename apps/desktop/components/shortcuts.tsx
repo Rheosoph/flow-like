@@ -5,8 +5,8 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { IBitTypes } from "@tm9657/flow-like-ui/lib/schema/hub/bit-search-query";
+} from "@flow-like/flow-like-ui";
+import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import { useLiveQuery } from "dexie-react-hooks";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback } from "react";

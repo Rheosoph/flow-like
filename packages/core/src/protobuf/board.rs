@@ -130,6 +130,7 @@ impl ToProto<flow_like_types::proto::Board> for Board {
             log_level: self.log_level.to_proto(),
             execution_mode: self.execution_mode.to_proto(),
             refs: self.refs.clone(),
+            hash: self.hash,
             created_at: Some(Timestamp::from(self.created_at)),
             updated_at: Some(Timestamp::from(self.updated_at)),
         }
@@ -173,6 +174,7 @@ impl FromProto<flow_like_types::proto::Board> for Board {
             log_level: LogLevel::from_proto(proto.log_level),
             execution_mode: ExecutionMode::from_proto(proto.execution_mode),
             refs: proto.refs,
+            hash: proto.hash,
             created_at: proto
                 .created_at
                 .map(|t| SystemTime::try_from(t).unwrap_or(SystemTime::UNIX_EPOCH))

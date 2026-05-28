@@ -18,7 +18,7 @@ import {
 	Separator,
 	Switch,
 	Textarea,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertCircle,

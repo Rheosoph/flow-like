@@ -60,11 +60,11 @@ export interface PackageManifest {
 
 export interface PackageVersion {
 	version: string;
-	wasm_hash: string;
-	wasm_size: number;
-	download_url?: string;
-	published_at: string;
-	release_notes?: string;
+	wasmHash: string;
+	wasmSize: number;
+	downloadUrl?: string;
+	publishedAt: string;
+	releaseNotes?: string;
 	yanked: boolean;
 }
 
@@ -73,9 +73,9 @@ export interface RegistryEntry {
 	manifest: PackageManifest;
 	versions: PackageVersion[];
 	status: string;
-	download_count: number;
-	created_at: string;
-	updated_at: string;
+	downloadCount: number;
+	createdAt: string;
+	updatedAt: string;
 	verified: boolean;
 	price: number;
 	visibility: string;

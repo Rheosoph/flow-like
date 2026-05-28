@@ -8,6 +8,7 @@ use flow_like_types::{JsonSchema, async_trait, json::json};
 use serde::{Deserialize, Serialize};
 
 pub const GITHUB_PROVIDER_ID: &str = "github";
+pub const GITHUB_API_VERSION: &str = "2026-03-10";
 
 /// GitHub provider - works with OAuth, PAT, or GitHub App tokens
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -25,6 +26,51 @@ impl GitHubProvider {
         } else {
             format!("{}/{}", base, path)
         }
+    }
+
+    pub fn upload_api_url(&self, path: &str) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let upload_base = if base == "https://api.github.com" {
+            "https://uploads.github.com"
+        } else {
+            base
+        };
+
+        if path.starts_with('/') {
+            format!("{}{}", upload_base, path)
+        } else {
+            format!("{}/{}", upload_base, path)
+        }
+    }
+
+    pub fn auth_header(&self) -> String {
+        format!("Bearer {}", self.access_token)
+    }
+
+    pub fn clone_url(&self, owner: &str, repo: &str) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        let web_base = if base == "https://api.github.com" {
+            "https://github.com"
+        } else {
+            base.strip_suffix("/api/v3")
+                .or_else(|| base.strip_suffix("/api"))
+                .unwrap_or(base)
+        };
+
+        let authed_base = if let Some(rest) = web_base.strip_prefix("https://") {
+            format!("https://{}@{}", self.access_token, rest)
+        } else if let Some(rest) = web_base.strip_prefix("http://") {
+            format!("http://{}@{}", self.access_token, rest)
+        } else {
+            format!("{}@", self.access_token)
+        };
+
+        format!(
+            "{}/{}/{}.git",
+            authed_base.trim_end_matches('/'),
+            owner,
+            repo
+        )
     }
 }
 

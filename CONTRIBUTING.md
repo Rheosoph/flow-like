@@ -57,15 +57,15 @@ flow-like/
 | Area | Difficulty | Description |
 |------|-----------|-------------|
 | **New Nodes** | 🟢 Easy | Add integrations, data transforms, or utility nodes |
-| **Bug Fixes** | 🟢–🟡 | Fix reported issues — check the [issue tracker](https://github.com/TM9657/flow-like/issues) |
+| **Bug Fixes** | 🟢–🟡 | Fix reported issues — check the [issue tracker](https://github.com/Rheosoph/flow-like/issues) |
 | **Documentation** | 🟢 Easy | Tutorials, guides, API docs, README improvements |
 | **UI/UX** | 🟡 Medium | Improve the visual editor, add themes, polish interactions |
 | **Core Engine** | 🔴 Advanced | DAG scheduler, execution runtime, type system |
 | **Testing** | 🟢–🟡 | Add test coverage for existing features |
 
-**→ [Browse `good first issue` labels](https://github.com/TM9657/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)**
+**→ [Browse `good first issue` labels](https://github.com/Rheosoph/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)**
 
-**→ [Browse `help wanted` labels](https://github.com/TM9657/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)**
+**→ [Browse `help wanted` labels](https://github.com/Rheosoph/flow-like/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)**
 
 ---
 
@@ -136,7 +136,7 @@ Then open a Pull Request against the `dev` branch. In your PR description:
 
 - Don't introduce new linters or formatters — we use Clippy (Rust) and Biome (TS)
 - If a change touches public APIs, update the relevant documentation
-- If you're unsure about an approach, open a [Discussion](https://github.com/TM9657/flow-like/discussions) first
+- If you're unsure about an approach, open a [Discussion](https://github.com/Rheosoph/flow-like/discussions) first
 
 ---
 
@@ -156,7 +156,7 @@ Open an issue with:
 
 We love feature ideas! Before opening an issue:
 
-1. Search [existing issues](https://github.com/TM9657/flow-like/issues) and [Discussions](https://github.com/TM9657/flow-like/discussions) to avoid duplicates
+1. Search [existing issues](https://github.com/Rheosoph/flow-like/issues) and [Discussions](https://github.com/Rheosoph/flow-like/discussions) to avoid duplicates
 2. Describe the **problem** you're trying to solve (not just the solution)
 3. Include mockups or examples if possible
 
@@ -179,7 +179,7 @@ By participating, you agree to our [Code of Conduct](./CODE_OF_CONDUCT.md). Be r
 Stuck? Have questions?
 
 - **[Discord](https://discord.com/invite/mdBA9kMjFJ)** — fastest way to get help
-- **[GitHub Discussions](https://github.com/TM9657/flow-like/discussions)** — longer-form questions and ideas
+- **[GitHub Discussions](https://github.com/Rheosoph/flow-like/discussions)** — longer-form questions and ideas
 - **[Documentation](https://docs.flow-like.com)** — guides and API reference
 
 ---

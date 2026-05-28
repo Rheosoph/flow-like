@@ -1,4 +1,4 @@
-import { type IProfile, isAzureBlobStorageUrl } from "@tm9657/flow-like-ui";
+import { type IProfile, isAzureBlobStorageUrl } from "@flow-like/flow-like-ui";
 import type {
 	AttemptResult,
 	CertificateView,
@@ -21,7 +21,7 @@ import type {
 	OptimizeCourseAssetResponse,
 	UserCourseEnrollment,
 	UserLessonProgress,
-} from "@tm9657/flow-like-ui/lib/learn/types";
+} from "@flow-like/flow-like-ui/lib/learn/types";
 import type { AuthContextProps } from "react-oidc-context";
 import { fetcher } from "./api";
 

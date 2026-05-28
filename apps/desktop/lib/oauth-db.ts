@@ -3,4 +3,4 @@ export {
 	oauthDB,
 	oauthConsentStore,
 	oauthTokenStore,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";

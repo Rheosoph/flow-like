@@ -10,7 +10,7 @@ import {
 	useBackend,
 	useInvoke,
 	useSpotlightStore,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { EyeIcon, FilesIcon, LayoutGridIcon, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";

@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-cpp
 
-C++ SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes using [Emscripten](https://emscripten.org/) or [wasi-sdk](https://github.com/WebAssembly/wasi-sdk). C++ gives you full control over memory and performance with zero-overhead abstractions.
+C++ SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes using [Emscripten](https://emscripten.org/) or [wasi-sdk](https://github.com/WebAssembly/wasi-sdk). C++ gives you full control over memory and performance with zero-overhead abstractions.
 
 ## Prerequisites
 

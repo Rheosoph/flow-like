@@ -1,7 +1,7 @@
 ---
 export const prerender = false;
 
-import { TextEditor } from "@tm9657/flow-like-ui";
+import { TextEditor } from "@flow-like/flow-like-ui";
 import StoreLayout from "../../../layouts/StoreLayout.astro";
 import {
 	getPackage,
@@ -10,7 +10,6 @@ import {
 	isStoreEnabled,
 	formatPrice,
 	storeDeepLink,
-	starRating,
 	extractPlainText,
 	contentIsMarkdown,
 	formatDate,
@@ -46,8 +45,8 @@ const icon = meta?.icon;
 const thumbnail = meta?.thumbnail;
 const links = storeDeepLink("package", pkg.id);
 const latestVersion = pkg.versions.find((v) => !v.yanked);
-const publishedDate = formatDate(pkg.created_at);
-const updatedDate = formatDate(pkg.updated_at);
+const publishedDate = formatDate(pkg.createdAt);
+const updatedDate = formatDate(pkg.updatedAt);
 
 // Fetch related packages (excluding current)
 let relatedPackages: Array<{ id: string; name: string; icon?: string; desc: string; downloads: number; price: number }> = [];
@@ -76,8 +75,8 @@ const jsonLd = {
 	programmingLanguage: "WebAssembly",
 	license: pkg.manifest.license || undefined,
 	version: latestVersion?.version || pkg.manifest.version,
-	dateModified: pkg.updated_at,
-	datePublished: pkg.created_at,
+	dateModified: pkg.updatedAt,
+	datePublished: pkg.createdAt,
 	...(pkg.manifest.authors?.length && {
 		author: pkg.manifest.authors.map((a) => ({
 			"@type": "Person",
@@ -88,10 +87,10 @@ const jsonLd = {
 		keywords: pkg.manifest.keywords.join(", "),
 	}),
 	aggregateRating:
-		pkg.download_count > 0
+		pkg.downloadCount > 0
 			? {
 					"@type": "AggregateRating",
-					ratingCount: pkg.download_count,
+					ratingCount: pkg.downloadCount,
 				}
 			: undefined,
 	offers: {
@@ -165,7 +164,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 
 				<div class="flex flex-wrap items-center gap-4 text-sm text-muted-foreground mb-4">
 					{latestVersion && <span>v{latestVersion.version}</span>}
-					<span>{pkg.download_count.toLocaleString()} downloads</span>
+					<span>{pkg.downloadCount.toLocaleString()} downloads</span>
 					{pkg.verified && (
 						<span class="text-green-600 dark:text-green-400 font-medium">
 							✓ Verified
@@ -247,11 +246,11 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 					</section>
 				)}
 
-				{latestVersion?.release_notes && (
+				{latestVersion?.releaseNotes && (
 					<section>
 						<h2 class="text-xl font-semibold mb-3">Release Notes</h2>
 						<div class="text-sm text-muted-foreground">
-							<TextEditor client:only="react" initialContent={latestVersion.release_notes} isMarkdown={contentIsMarkdown(latestVersion.release_notes)} minimal />
+							<TextEditor client:only="react" initialContent={latestVersion.releaseNotes} isMarkdown={contentIsMarkdown(latestVersion.releaseNotes)} minimal />
 						</div>
 					</section>
 				)}
@@ -269,11 +268,11 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 										<div class="flex items-center gap-3">
 											<span class="font-mono font-medium">v{v.version}</span>
 											<span class="text-muted-foreground">
-												{formatDate(v.published_at) || "—"}
+												{formatDate(v.publishedAt) || "—"}
 											</span>
 										</div>
 										<span class="text-muted-foreground text-xs">
-											{(v.wasm_size / 1024).toFixed(0)} KB
+											{(v.wasmSize / 1024).toFixed(0)} KB
 										</span>
 									</div>
 								))}
@@ -467,7 +466,7 @@ Astro.response.headers.set("Cache-Control", "public, max-age=300, s-maxage=600, 
 			</p>
 			<div class="flex flex-wrap items-center justify-center gap-3">
 				<a
-					href="https://github.com/TM9657/flow-like/discussions"
+					href="https://github.com/Rheosoph/flow-like/discussions"
 					target="_blank"
 					rel="noopener"
 					class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-medium hover:bg-muted/50 transition-colors"

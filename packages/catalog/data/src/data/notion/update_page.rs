@@ -1,4 +1,7 @@
 use super::provider::{NOTION_PROVIDER_ID, NotionProvider};
+use super::utils::{
+    NOTION_API_VERSION, auth_header, log_and_error, notion_error, optional_json_value,
+};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -7,8 +10,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
-
-const NOTION_API_VERSION: &str = "2022-06-28";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct UpdatedNotionPage {
@@ -36,6 +37,7 @@ impl NodeLogic for UpdateNotionPageNode {
             "Updates properties of an existing Notion page",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -63,10 +65,13 @@ impl NodeLogic for UpdateNotionPageNode {
 
         node.add_input_pin(
             "properties",
-            "Properties (JSON)",
-            "Page properties to update in Notion format. Example: {\"Status\": {\"status\": {\"name\": \"Done\"}}}",
-            VariableType::String,
-        );
+            "Properties",
+            "Page properties to update in Notion API format",
+            VariableType::Struct,
+        )
+        .set_schema::<Value>()
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_default_value(Some(json!({})));
 
         node.add_input_pin(
             "icon_emoji",
@@ -78,8 +83,16 @@ impl NodeLogic for UpdateNotionPageNode {
 
         node.add_input_pin(
             "archived",
-            "Archive",
-            "Set to true to archive the page, false to unarchive",
+            "In Trash",
+            "Target trash state. True moves the page to trash; false restores it when Change Trash State is enabled.",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+
+        node.add_input_pin(
+            "change_archive_state",
+            "Change Trash State",
+            "Enable to apply the In Trash value. True is still applied automatically for backward compatibility.",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));
@@ -130,30 +143,34 @@ impl NodeLogic for UpdateNotionPageNode {
         let access_token = provider.access_token;
 
         let page_id: String = context.evaluate_pin("page_id").await?;
-        let properties_str: String = context.evaluate_pin("properties").await?;
+        let properties_raw: Value = context
+            .evaluate_pin("properties")
+            .await
+            .unwrap_or(json!({}));
         let icon_emoji: String = context.evaluate_pin("icon_emoji").await?;
-        let archived: bool = context.evaluate_pin("archived").await?;
+        let in_trash: bool = context.evaluate_pin("archived").await?;
+        let change_archive_state: bool = context
+            .evaluate_pin("change_archive_state")
+            .await
+            .unwrap_or(false);
 
         if page_id.is_empty() {
-            context.log_message("Page ID cannot be empty", LogLevel::Error);
-            context.activate_exec_pin("error").await?;
+            log_and_error(context, "Page ID cannot be empty").await?;
             return Ok(());
         }
 
         let mut body = json!({});
 
-        if !properties_str.is_empty() {
-            match flow_like_types::json::from_str::<Value>(&properties_str) {
-                Ok(properties) => {
-                    body["properties"] = properties;
-                }
-                Err(e) => {
-                    context
-                        .log_message(&format!("Invalid properties JSON: {}", e), LogLevel::Error);
-                    context.activate_exec_pin("error").await?;
-                    return Ok(());
-                }
+        let properties = match optional_json_value(properties_raw, "properties") {
+            Ok(value) => value,
+            Err(err) => {
+                log_and_error(context, err.to_string()).await?;
+                return Ok(());
             }
+        };
+
+        if let Some(properties) = properties {
+            body["properties"] = properties;
         }
 
         if !icon_emoji.is_empty() {
@@ -163,8 +180,13 @@ impl NodeLogic for UpdateNotionPageNode {
             });
         }
 
-        if archived {
-            body["archived"] = json!(true);
+        if in_trash || change_archive_state {
+            body["in_trash"] = json!(in_trash);
+        }
+
+        if body.as_object().map(|obj| obj.is_empty()).unwrap_or(true) {
+            log_and_error(context, "No page updates were provided").await?;
+            return Ok(());
         }
 
         let client = reqwest::Client::new();
@@ -177,7 +199,7 @@ impl NodeLogic for UpdateNotionPageNode {
 
         let response = client
             .patch(&url)
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", auth_header(&access_token))
             .header("Notion-Version", NOTION_API_VERSION)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -187,12 +209,7 @@ impl NodeLogic for UpdateNotionPageNode {
         match response {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    let status = resp.status();
-                    let error_text = resp.text().await.unwrap_or_default();
-                    context.log_message(
-                        &format!("Notion API error {}: {}", status, error_text),
-                        LogLevel::Error,
-                    );
+                    context.log_message(&notion_error(resp).await, LogLevel::Error);
                     context.activate_exec_pin("error").await?;
                     return Ok(());
                 }

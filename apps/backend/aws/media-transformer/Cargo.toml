@@ -6,8 +6,6 @@ edition = "2021"
 [dependencies]
 aws_lambda_events = { version = "0.16.1", default-features = false, features = ["s3", "sqs"] }
 image.workspace = true
-imageproc.workspace = true
-flow-like-types.workspace = true
 
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true

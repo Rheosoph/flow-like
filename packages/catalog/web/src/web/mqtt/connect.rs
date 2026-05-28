@@ -109,7 +109,12 @@ impl NodeLogic for MqttConnectNode {
             options.set_credentials(user, pass);
         }
 
-        if config.use_tls {
+        if config.tls.secure {
+            let tls_config = crate::web::tls::client_config(&config.tls)?
+                .ok_or_else(|| flow_like_types::anyhow!("TLS client configuration is required"))?;
+            let transport = rumqttc::Transport::tls_with_config(tls_config.into());
+            options.set_transport(transport);
+        } else if config.use_tls {
             let transport = rumqttc::Transport::tls_with_default_config();
             options.set_transport(transport);
         }

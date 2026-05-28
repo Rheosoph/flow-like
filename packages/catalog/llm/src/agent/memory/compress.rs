@@ -216,6 +216,12 @@ impl NodeLogic for CompressMemoryNode {
             bail!("Embedding returned empty vector for summary");
         }
 
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        summary.to_lowercase().hash(&mut hasher);
+        let content_hash = format!("{:x}", hasher.finish());
+
         let cached_db = config.database.load(context).await?;
 
         // Delete old observations
@@ -239,6 +245,7 @@ impl NodeLogic for CompressMemoryNode {
         let summary_record = json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "content": summary,
+            "content_hash": content_hash,
             "role": "summary",
             "vector": embeddings[0],
             "timestamp": now,

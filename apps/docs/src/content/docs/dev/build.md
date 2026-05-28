@@ -7,10 +7,10 @@ sidebar:
 
 ## Get the Source Code
 
-Head to the official [GitHub Repository](https://github.com/TM9657/flow-like) and clone the repository to your local machine:
+Head to the official [GitHub Repository](https://github.com/Rheosoph/flow-like) and clone the repository to your local machine:
 
 ```bash
-git clone https://github.com/TM9657/flow-like.git
+git clone https://github.com/Rheosoph/flow-like.git
 cd flow-like
 ```
 
@@ -93,7 +93,7 @@ mise run build:desktop
 The build binary will be located at `./target/release/flow-like-desktop`. Bundled app installers can be found in `./target/release/bundle`.
 
 ## Further Build Scripts
-You can find all available tasks in the [`mise.toml`](https://github.com/TM9657/flow-like/blob/main/mise.toml) file at the repository root.
+You can find all available tasks in the [`mise.toml`](https://github.com/Rheosoph/flow-like/blob/main/mise.toml) file at the repository root.
 Run `mise tasks` to list them all, or `mise run <task>` to execute one.
 
 ## Known Issues

@@ -1,15 +1,15 @@
 export const esCompare = {
 	// Meta
-	"compare.meta.title": "Flow-Like vs Alternativas | Comparación Completa",
+	"compare.meta.title": "Flow-Like vs Alternativas | Datos, AI, Automatización & Apps",
 	"compare.meta.description":
-		"Descubre cómo Flow-Like se compara con Zapier, n8n, Retool, Power Apps, Airflow y más. La única plataforma que combina automatización con desarrollo de apps.",
+		"Compara Flow-Like en automatización de workflows, capas de datos enterprise, AI agents, BI y construcción de apps. Una plataforma gobernada para soluciones de empresa.",
 
 	// Hero
 	"compare.hero.tagline": "La Imagen Completa",
 	"compare.hero.headline": "¿Cómo se",
 	"compare.hero.headline.highlight": "compara Flow-Like?",
 	"compare.hero.description":
-		"La mayoría de herramientas te obligan a elegir: automatizar O crear apps. Flow-Like es la única plataforma que hace ambas—con el rendimiento y gobernanza que las empresas exigen.",
+		"La mayoría de herramientas separan la capa de datos, AI, automatización y apps en productos distintos. Flow-Like las une en una plataforma empresarial gobernada y de alto rendimiento.",
 	"compare.hero.cta": "Probar Flow-Like gratis",
 	"compare.hero.cta.demo": "Ver en acción",
 
@@ -23,17 +23,126 @@ export const esCompare = {
 	"compare.category.orchestration": "Orquestación de Datos & Workflows",
 	"compare.category.orchestration.desc":
 		"Herramientas enterprise para pipelines de datos complejos y orquestación. Potentes pero requieren experiencia técnica.",
+	"compare.category.enterprise_data": "Plataformas de Datos Empresariales",
+	"compare.category.enterprise_data.desc":
+		"Plataformas basadas en ontologías y ERPs sobre modelos de datos empresariales propietarios. Potentes para grandes organizaciones, pero lentas de adoptar, caras y atadas a un único proveedor.",
+	"compare.category.enterprise_automation": "Suites de Automatización Empresarial",
+	"compare.category.enterprise_automation.desc":
+		"Suites de procesos y workflows construidas alrededor de RPA, CRM o agentes de IA. Fuertes para flujos específicos, pero atadas a SaaS, con licenciamiento pesado y poca portabilidad.",
+	"compare.category.agent_runtimes": "Runtimes de Agentes",
+	"compare.category.agent_runtimes.desc":
+		"Frameworks de Python para orquestar agentes IA autónomos. Ideales para prototipos rápidos, pero con estado basado en archivos sin protección de escritura concurrente, herramientas que se ejecutan sin sandbox y un rendimiento limitado a un único proceso.",
+	"compare.category.llm_frameworks": "Frameworks de Apps LLM",
+	"compare.category.llm_frameworks.desc":
+		"SDKs code-first para lógica de retrieval, embedding y pipelines de IA. Potentes como bloques de construcción, pero cada UI, despliegue y preocupación de gobernanza queda en tus manos.",
+	"compare.category.ai_ipaas": "iPaaS Potenciada con IA",
+	"compare.category.ai_ipaas.desc":
+		"Plataformas de integración (iPaaS) que añadieron pasos de IA a su modelo de conectores. Convenientes para pegamento en la nube, pero solo SaaS, limitadas en payload y lejos de una orquestación nativa de agentes.",
+	"compare.category.coding_agents": "Agentes Personales Autónomos",
+	"compare.category.coding_agents.desc":
+		"Agentes IA personales que ejecutan tareas, escriben código y navegan la web de forma autónoma en tu máquina local. Potentes para uso individual, pero las llamadas a herramientas se ejecutan directamente en el OS anfitrión sin sandbox — una inyección de prompt se convierte en ejecución de código arbitrario — y todo el estado vive en archivos planos sin protección contra escrituras concurrentes.",
 
 	// Legend
 	"compare.legend.native": "Soporte nativo",
 	"compare.legend.partial": "Parcial / Add-on",
 	"compare.legend.none": "No soportado",
 
+	// Category Quadrant (bubble map)
+	"compare.quadrant.tagline": "El mapa",
+	"compare.quadrant.headline": "Dónde se ubica cada categoría",
+	"compare.quadrant.description":
+		"Cada categoría sobre los dos ejes que importan: qué tan bien automatiza workflows y qué tan bien construye apps reales sobre datos confiables. Flow-Like es la única burbuja arriba a la derecha.",
+	"compare.quadrant.axis.x": "Automatización de workflows →",
+	"compare.quadrant.axis.x.low": "Débil",
+	"compare.quadrant.axis.x.high": "Fuerte",
+	"compare.quadrant.axis.y": "↑ Construcción de apps y UI",
+	"compare.quadrant.axis.y.short": "Apps",
+	"compare.quadrant.label.tl": "Solo UI",
+	"compare.quadrant.label.tr": "Apps + Workflows",
+	"compare.quadrant.label.bl": "Limitado",
+	"compare.quadrant.label.br": "Solo workflows",
+	"compare.quadrant.corner.target": "↗ El punto ideal",
+
+	// Per-category mini bubble plot inside the matrix
+	"compare.matrix.plot.title": "Posicionamiento frente a Flow-Like",
+	"compare.matrix.plot.description":
+		"Dónde se ubican estas herramientas en los dos ejes que realmente diferencian esta categoría. Flow-Like siempre está arriba a la derecha.",
+	"compare.matrix.plot.ideal": "Punto ideal",
+
+	// Per-category axes (X & Y differ per category to highlight what matters most)
+	"compare.matrix.plot.axis.extensibility": "Código y Extensibilidad",
+	"compare.matrix.plot.axis.extensibility.low": "Solo clics",
+	"compare.matrix.plot.axis.extensibility.high": "Código profundo",
+	"compare.matrix.plot.axis.openness": "Apertura y Self-Host",
+	"compare.matrix.plot.axis.openness.low": "Bloqueo por proveedor",
+	"compare.matrix.plot.axis.openness.high": "Abierto y portátil",
+	"compare.matrix.plot.axis.data_headroom": "Capacidad de Datos",
+	"compare.matrix.plot.axis.data_headroom.low": "Escala de juguete",
+	"compare.matrix.plot.axis.data_headroom.high": "Datos de producción",
+	"compare.matrix.plot.axis.data_native": "Potencia Data-Native",
+	"compare.matrix.plot.axis.data_native.low": "Solo workflows",
+	"compare.matrix.plot.axis.data_native.high": "Files + DataFrames",
+	"compare.matrix.plot.axis.business_ux": "UX de Negocio",
+	"compare.matrix.plot.axis.business_ux.low": "Solo ingeniería",
+	"compare.matrix.plot.axis.business_ux.high": "Visual + Apps",
+	"compare.matrix.plot.axis.portability": "Portabilidad y Self-Host",
+	"compare.matrix.plot.axis.portability.low": "Atado a SaaS",
+	"compare.matrix.plot.axis.portability.high": "Corre en cualquier lugar",
+	"compare.matrix.plot.axis.customer_reach": "Alcance al Cliente",
+	"compare.matrix.plot.axis.customer_reach.low": "Solo interno",
+	"compare.matrix.plot.axis.customer_reach.high": "Apps + Móvil + Offline",
+	"compare.matrix.plot.axis.ai_reach": "Agentes IA y Alcance UX",
+	"compare.matrix.plot.axis.ai_reach.low": "Solo RPA",
+	"compare.matrix.plot.axis.ai_reach.high": "Agéntico + Móvil",
+	"compare.matrix.plot.axis.production_scale": "Escala de Producción",
+	"compare.matrix.plot.axis.production_scale.low": "Se rompe al escalar",
+	"compare.matrix.plot.axis.production_scale.high": "Replay y alto volumen",
+	"compare.matrix.plot.axis.customer_distribution": "Distribución al Cliente",
+	"compare.matrix.plot.axis.customer_distribution.low": "Solo herramientas internas en el navegador",
+	"compare.matrix.plot.axis.customer_distribution.high": "Escritorio, móvil, sin conexión",
+	"compare.matrix.plot.axis.ai_native": "Profundidad IA-Nativa",
+	"compare.matrix.plot.axis.ai_native.low": "IA superpuesta",
+	"compare.matrix.plot.axis.ai_native.high": "Agentes + data-native",
+	"compare.matrix.plot.axis.agent_safety": "Seguridad y Confianza de Agentes",
+	"compare.matrix.plot.axis.agent_safety.low": "Sin sandbox, estado en archivos",
+	"compare.matrix.plot.axis.agent_safety.high": "Sandboxed + transaccional",
+	"compare.matrix.plot.axis.production_readiness": "Preparación para Producción",
+	"compare.matrix.plot.axis.production_readiness.low": "Nivel prototipo",
+	"compare.matrix.plot.axis.production_readiness.high": "Compilado y reproducible",
+
+	// Category Overview
+	"compare.overview.tagline": "De un vistazo",
+	"compare.overview.headline": "El stack operativo empresarial",
+	"compare.overview.description":
+		"Nueve categorías, una rúbrica honesta. Así se comporta cada clase de herramienta en ejecución, profundidad de datos, AI, entrega de apps, portabilidad y gobernanza.",
+	"compare.overview.flowlike": "Flow-Like",
+	"compare.overview.col.category": "Categoría",
+	"compare.overview.crit.workflows": "Workflows",
+	"compare.overview.crit.apps": "UI / Apps",
+	"compare.overview.crit.agents": "Agentes IA",
+	"compare.overview.crit.performance": "Rendimiento",
+	"compare.overview.crit.self_host": "Self-Host",
+	"compare.overview.crit.customer_facing": "Cara al cliente",
+	"compare.overview.crit.portability": "Portabilidad",
+	"compare.overview.rating.strong": "Fuerte",
+	"compare.overview.rating.partial": "Parcial",
+	"compare.overview.rating.weak": "Débil",
+	"compare.overview.footnote":
+		"Resumen a nivel de categoría. Más abajo encontrarás el desglose por proveedor con fuentes y límites exactos.",
+
+	// Capability Group Headers
+	"compare.group.execution": "Ejecución y Rendimiento",
+	"compare.group.data": "Capa de Datos y Archivos",
+	"compare.group.ai_ux": "IA, UI y Apps",
+	"compare.group.distribution": "Distribución y Offline",
+	"compare.group.trust": "Confianza, Operación y Portabilidad",
+
 	// Capability Labels
 	"compare.cap.visual_workflow": "Constructor visual de workflows",
 	"compare.cap.replayable": "Ejecución reproducible",
-	"compare.cap.high_volume": "Flujos de datos de alto volumen",
+	"compare.cap.high_volume": "Rendimiento big data",
 	"compare.cap.compiled": "Lógica de negocio compilada",
+	"compare.cap.file_size": "Límites de archivo / payload",
 	"compare.cap.ai_agents": "Agentes IA integrados",
 	"compare.cap.ui_builder": "Constructor de interfaz de usuario",
 	"compare.cap.full_apps": "Entregar aplicaciones completas",
@@ -42,16 +151,19 @@ export const esCompare = {
 	"compare.cap.mobile": "Aplicaciones móviles",
 	"compare.cap.offline": "Ejecución sin conexión",
 	"compare.cap.local_first": "Arquitectura local-first",
-	"compare.cap.file_native": "Estado basado en archivos",
-	"compare.cap.data_science": "Workflows de data-science",
+	"compare.cap.file_native": "Capa de datos object-store",
+	"compare.cap.data_science": "Workflows de analytics & ML",
 	"compare.cap.governance": "Gobernanza & RBAC",
 	"compare.cap.self_hosted": "Opción self-hosted",
 	"compare.cap.lock_in": "Sin dependencia del proveedor",
+	"compare.cap.sandbox_isolation": "Ejecución de herramientas aislada",
+	"compare.cap.concurrent_state": "Estado concurrente seguro",
 
 	// Flow-Like Values
 	"compare.fl.visual_workflow": "IR tipado",
 	"compare.fl.high_volume": "255k/s",
 	"compare.fl.compiled": "Rust",
+	"compare.fl.file_size": "Object store",
 	"compare.fl.desktop": "Tauri",
 	"compare.fl.file_native": "Object store",
 	"compare.fl.governance": "Grafo + alcance de datos",
@@ -70,9 +182,9 @@ export const esCompare = {
 	"compare.explain.replayable.flow":
 		"Flow-Like registra cada ejecución con event sourcing completo. Reproduce cualquier ejecución con exactamente los mismos datos y obtén resultados idénticos.",
 
-	"compare.explain.high_volume.title": "Flujos de Datos de Alto Volumen",
+	"compare.explain.high_volume.title": "Rendimiento Big Data",
 	"compare.explain.high_volume.what":
-		"Procesa miles de eventos por segundo sin esfuerzo.",
+		"Procesa datos operativos y analíticos de alto volumen sin convertir cada workflow en un proyecto de ingeniería a medida.",
 	"compare.explain.high_volume.flow":
 		"El motor Rust de Flow-Like alcanza 255,000 eventos por segundo en hardware estándar. Eso es 1,000× más rápido que motores típicos.",
 
@@ -81,6 +193,12 @@ export const esCompare = {
 		"Tu lógica de automatización se ejecuta como código nativo optimizado—no scripts interpretados.",
 	"compare.explain.compiled.flow":
 		"Flow-Like compila workflows a código Rust nativo. Sin sobrecarga de intérprete JavaScript, sin arranques en frío.",
+
+	"compare.explain.file_size.title": "Tamaño de Archivo y Payload",
+	"compare.explain.file_size.what":
+		"Qué tan grande puede ser un archivo o payload sin romper la plataforma.",
+	"compare.explain.file_size.flow":
+		"Flow-Like transmite datos binarios a través de un object store (disco local o compatible con S3). No hay límite duro para archivos o payloads—archivos de gigabytes fluyen igual que los de kilobytes. n8n por defecto en modo binario en BD ronda los 50 MB, los payloads de Temporal los 2 MB, y la mayoría de constructores low-code limitan a unos pocos MB.",
 
 	"compare.explain.ai_agents.title": "Agentes IA Integrados",
 	"compare.explain.ai_agents.what":
@@ -135,11 +253,11 @@ export const esCompare = {
 	"compare.explain.file_native.flow":
 		"Flow-Like usa un formato de object store. Tu proyecto completo son archivos portátiles.",
 
-	"compare.explain.data_science.title": "Workflows de Data-Science",
+	"compare.explain.data_science.title": "Capa de Datos, Analytics & ML",
 	"compare.explain.data_science.what":
-		"Procesa datasets, ejecuta modelos ML y construye pipelines de analytics.",
+		"Procesa datasets, ejecuta modelos ML y construye pipelines analíticos sobre la misma capa de datos gobernada.",
 	"compare.explain.data_science.flow":
-		"Soporte nativo para transformaciones de datos, inferencia de modelos ML y visualización.",
+		"Soporte nativo para transformaciones de datos, inferencia de modelos ML y visualización. Conecta sistemas y archivos, forma datos operativos confiables y envía resultados a BI, automatizaciones, AI agents o apps.",
 
 	"compare.explain.governance.title": "Gobernanza & RBAC",
 	"compare.explain.governance.what":
@@ -163,7 +281,7 @@ export const esCompare = {
 	"compare.insight.tagline": "El Insight Clave",
 	"compare.insight.headline": "Otras herramientas te obligan a elegir",
 	"compare.insight.description":
-		"n8n, Node-RED, Zapier, Airflow, Temporal son motores de ejecución. Retool, Power Apps, Appsmith son shells de UI. Flow-Like es el único sistema que es ambos—y puede entregar el resultado como una aplicación real.",
+		"Los motores de ejecución corren workflows. Los shells UI construyen interfaces. Las suites enterprise tradicionales modelan datos de empresa, pero siguen siendo pesadas y cerradas. Las suites SaaS de automatización cubren procesos estrechos. Los runtimes de agentes y SDKs LLM dejan seguridad, estado, deployment y gobernanza a tu equipo. Flow-Like combina datos gobernados, ejecución big data, AI, automatización, BI y aplicaciones portables reales.",
 
 	// CTA Section
 	"compare.cta.tagline": "¿Listo para ver la diferencia?",
@@ -193,7 +311,50 @@ export const esCompare = {
 		"Estándar de la industria para orquestación de workflows. Potente para pipelines de datos, pero requiere experiencia en Python y sin desarrollo de UI.",
 	"compare.competitor.temporal":
 		"Plataforma de ejecución durable. Excelente para workflows complejos, pero orientada a desarrolladores con curva de aprendizaje pronunciada.",
+	"compare.competitor.palantir":
+		"Plataforma empresarial basada en ontologías usada por gobiernos y Fortune 500. Muy capaz para operaciones de datos a gran escala, pero con mínimos contractuales altos, despliegue lento y fuerte dependencia del proveedor.",
+	"compare.competitor.sap":
+		"Una plataforma líder de procesos ERP añade low-code y automatización a su propia suite. Fuerte si toda la empresa ya vive allí, costosa y lenta fuera de ese ecosistema.",
+	"compare.competitor.uipath":
+		"El gigante de la RPA convertido en plataforma de automatización con Studio, Apps y AI Center. Potente para automatización de escritorio heredada, pero con licenciamiento caro, runtime atado a .NET y límites estrictos de payload en las colas de Orchestrator.",
+	"compare.competitor.regrello":
+		"Orquestación de procesos nativa de IA para equipos de supply chain y compras. Buen relato de agentes, pero solo SaaS, sin constructor de apps real y atado a su grafo alojado.",
+	"compare.competitor.salesforce":
+		"El gigante del CRM con Flow, Lightning App Builder y Agentforce. Excelente si vives en Sales/Service Cloud—pero solo SaaS, precio por usuario y cada workflow te ata más al modelo de datos de Salesforce.",
 
-	// Capability Deep Dive
-	"compare.explain.how_does_it": "Cómo lo hace Flow-Like",
+	// Runtimes de Agentes
+	"compare.competitor.crewai":
+		"El framework multi-agente Python más popular. Fácil de empezar, pero los agentes llaman a las herramientas directamente en el proceso anfitrión sin ningún aislamiento—cualquier inyección de prompt se convierte en ejecución de código arbitrario. Los resultados de tareas son archivos planos: dos agentes escribiendo simultáneamente se corrompen en silencio.",
+	"compare.competitor.autogen":
+		"El framework multi-agente conversacional de Microsoft. Modelo de paso de mensajes flexible, pero sin sandboxing integrado por defecto (Docker es opt-in), el estado vive en memoria y desaparece al reiniciar, y escalar más allá de un único proceso Python requiere una inversión de infraestructura considerable.",
+	"compare.competitor.langgraph":
+		"El framework de agentes con estado basado en grafos de LangChain. Bueno para bucles de razonamiento complejos, pero sin sandbox para herramientas, el checkpointing vía SQLite/Postgres puede generar condiciones de carrera bajo escrituras concurrentes, y sigue siendo un SDK solo para desarrolladores sin herramientas visuales ni estrategia de despliegue.",
+	"compare.competitor.dify":
+		"Constructor de apps LLM open-source con canvas visual y opción self-host. El más cercano a Flow-Like en esta categoría, pero limitado a pipelines centrados en LLMs, sin distribución nativa (escritorio/móvil/offline) y un límite de 15 MB que bloquea flujos de trabajo documentales reales.",
+	"compare.competitor.flowise":
+		"Constructor drag-and-drop de cadenas LLM basado en Node.js. Visual y accesible, pero sin sandbox para ejecución de código, el estado SQLite no soporta carga concurrente, sin empaquetado móvil/escritorio y limitado a topologías de cadenas tipo LangChain.",
+
+	// Frameworks de Apps LLM
+	"compare.competitor.langchain":
+		"El SDK LLM original—cadenas, retrievers, agentes, herramientas. Extremadamente popular, pero es una librería de código, no una plataforma: sin constructor visual, sin destino de despliegue, sin gestión de estado, sin gobernanza. Tú conectas cada pieza a mano.",
+	"compare.competitor.llamaindex":
+		"SDK de retrieval e ingesta de datos optimizado para RAG y consultas estructuradas. El mejor en su clase para pipelines de indexación, pero como LangChain no ofrece UI, runtime de orquestación, despliegue ni garantías de estado concurrente.",
+	"compare.competitor.haystack":
+		"El framework NLP de deepset, ahora IA-nativo. Sólido para pipelines de búsqueda y extracción con tipado fuerte. Sigue siendo un SDK para desarrolladores: sin canvas visual, sin UI de usuario final, sin distribución móvil/escritorio y la gobernanza es enteramente tu responsabilidad.",
+
+	// iPaaS Potenciada con IA
+	"compare.competitor.makecom":
+		"La iPaaS visual anteriormente conocida como Integromat. Integración drag-and-drop accesible con cientos de conectores y pasos de IA. Pero solo en la nube sin self-host, los payloads de archivos tienen tope de 5 MB (gratuito) a 250 MB (enterprise), y 'IA' significa llamar a una API LLM—no hay runtime nativo de agentes.",
+	"compare.competitor.workato":
+		"iPaaS empresarial con una capa de IA Copilot en crecimiento. Buena biblioteca de conectores y gobernanza para equipos de IT, pero totalmente SaaS, precio costoso por tarea, límite de payload de 50 MB y las funciones de IA son envoltorios de OpenAI en lugar de un motor de orquestación real.",
+	"compare.competitor.pipedream":
+		"Plataforma de integración serverless orientada a desarrolladores con editor de workflow code-first. Rápida para conectar APIs, soporta pasos Node.js personalizados, pero solo en la nube, límite de payload de 10 MB, sin constructor de UI, sin ejecución offline y la IA es un wrapper delgado—sin capa nativa de agentes.",
+
+	// Agentes Personales Autónomos
+	"compare.competitor.openclaw":
+		"El popular asistente IA personal open-source (‘the lobster way 🦞’). Funciona con cualquier modelo en cualquier OS y almacena todo localmente en archivos Markdown. Cero sandboxing: los comandos de shell, escrituras de archivos y fetches web se ejecutan directamente en el proceso anfitrión — una sola inyección de prompt desde cualquier página web le da a un atacante acceso completo al OS. Todos los recuerdos, habilidades y claves API viven en archivos planos; dos sesiones concurrentes corrompen el estado silenciosamente sin transacciones ni bloqueos.",
+	"compare.competitor.hermes_agent":
+		"El agente IA auto-mejorable de Nous Research (163k estrellas). Sistema de habilidades, memoria entre sesiones, pasarela Telegram/Discord y siete backends de terminal incluyendo Docker. El sandboxing Docker es opt-in, no predeterminado; el estado es principalmente basado en archivos (SOUL.md, MEMORY.md) con SQLite parcial para historial de sesión. Incluso tiene un comando de migración integrado para usuarios de OpenClaw: hermes claw migrate.",
+	"compare.competitor.openhands":
+		"Anteriormente OpenDevin — un agente autónomo enfocado en ingeniería de software. Ejecuta código en contenedores Docker por defecto (mejor aislamiento que la mayoría), pero diseñado para tareas SWE de sesión única en lugar de orquestación multi-tenant escalable. Sin constructor visual, sin transacciones de estado, sin estrategia de distribución más allá de una UI web local.",
 };

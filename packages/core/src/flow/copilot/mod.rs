@@ -1209,7 +1209,7 @@ impl Copilot {
         let model = model_factory
             .lock()
             .await
-            .build(&bit, self.state.clone(), token)
+            .build(&bit, self.state.clone(), token, None)
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
         let provider = model.provider().await?;

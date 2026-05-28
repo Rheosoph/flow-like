@@ -22,16 +22,16 @@ import {
 	checkOAuthTokens,
 	finishAllProgressToasts,
 	showProgressToast,
-} from "@tm9657/flow-like-ui";
-import type { SurfaceComponent } from "@tm9657/flow-like-ui/components/a2ui/types";
+} from "@flow-like/flow-like-ui";
+import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import type {
 	ChatImage,
 	CopilotScope,
 	UIActionContext,
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
-} from "@tm9657/flow-like-ui/lib/schema/copilot";
-import type { IPrerunBoardResponse } from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui/lib/schema/copilot";
+import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";

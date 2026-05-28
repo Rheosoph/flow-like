@@ -25,6 +25,16 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub endpoint: Option<String>,
+    #[sea_orm(column_name = "invocationId", column_type = "Text", nullable)]
+    pub invocation_id: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub provider: Option<String>,
+    #[sea_orm(column_name = "providerRequestId", column_type = "Text", nullable)]
+    pub provider_request_id: Option<String>,
+    #[sea_orm(column_name = "rawUsage", column_type = "JsonBinary", nullable)]
+    pub raw_usage: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

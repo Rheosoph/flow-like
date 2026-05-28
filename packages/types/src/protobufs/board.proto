@@ -83,4 +83,5 @@ message Board {
   map<string, Layer> layers = 18;
   repeated string page_ids = 19;
   ExecutionMode execution_mode = 20;
+  optional uint64 hash = 21;
 }

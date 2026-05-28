@@ -9,7 +9,7 @@ import {
 	useBackend,
 	useFlowBoardParentState,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 

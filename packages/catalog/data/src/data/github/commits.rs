@@ -1,4 +1,4 @@
-use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
+use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -106,6 +106,7 @@ impl NodeLogic for ListGitHubCommitsNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -146,6 +147,14 @@ impl NodeLogic for ListGitHubCommitsNode {
             "author",
             "Author",
             "GitHub username or email to filter by",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "committer",
+            "Committer",
+            "GitHub username or email to filter by committer",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
@@ -233,6 +242,7 @@ impl NodeLogic for ListGitHubCommitsNode {
         let sha: String = context.evaluate_pin("sha").await.unwrap_or_default();
         let path: String = context.evaluate_pin("path").await.unwrap_or_default();
         let author: String = context.evaluate_pin("author").await.unwrap_or_default();
+        let committer: String = context.evaluate_pin("committer").await.unwrap_or_default();
         let since: String = context.evaluate_pin("since").await.unwrap_or_default();
         let until: String = context.evaluate_pin("until").await.unwrap_or_default();
         let per_page: i64 = context.evaluate_pin("per_page").await.unwrap_or(30);
@@ -261,6 +271,9 @@ impl NodeLogic for ListGitHubCommitsNode {
         if !author.is_empty() {
             url.push_str(&format!("&author={}", urlencoding::encode(&author)));
         }
+        if !committer.is_empty() {
+            url.push_str(&format!("&committer={}", urlencoding::encode(&committer)));
+        }
         if !since.is_empty() {
             url.push_str(&format!("&since={}", urlencoding::encode(&since)));
         }
@@ -273,9 +286,9 @@ impl NodeLogic for ListGitHubCommitsNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&full_url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -445,9 +458,9 @@ impl NodeLogic for GetGitHubCommitNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;
@@ -652,9 +665,9 @@ impl NodeLogic for CompareGitHubCommitsNode {
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

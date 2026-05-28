@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_json, graph_get_paginated_values},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
@@ -240,6 +243,7 @@ impl NodeLogic for ListOutlookMailFoldersNode {
             "List Outlook mail folders",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -276,43 +280,24 @@ impl NodeLogic for ListOutlookMailFoldersNode {
 
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
-        let url = format!("{}/me/mailFolders", provider.base_url);
-
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let folders = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_mail_folder).collect::<Vec<_>>())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, provider.api_url("/me/mailFolders"))
+            .await
+        {
+            Ok(values) => {
+                let folders = values
+                    .iter()
+                    .filter_map(parse_mail_folder)
+                    .collect::<Vec<_>>();
 
                 let count = folders.len() as i64;
                 context.set_pin_value("folders", json!(folders)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -345,6 +330,7 @@ impl NodeLogic for ListOutlookMessagesNode {
             "List Outlook email messages",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -412,57 +398,33 @@ impl NodeLogic for ListOutlookMessagesNode {
         let top: i64 = context.evaluate_pin("top").await.unwrap_or(25);
 
         let base_url = if folder_id.is_empty() {
-            format!("{}/me/messages", provider.base_url)
+            provider.api_url("/me/messages")
         } else {
-            format!(
-                "{}/me/mailFolders/{}/messages",
-                provider.base_url, folder_id
-            )
+            provider.api_url(&format!("/me/mailFolders/{}/messages", folder_id))
         };
 
-        let mut query_params = vec![format!("$top={}", top)];
+        let mut query_params = vec![
+            ("$top".to_string(), top.to_string()),
+            ("$orderby".to_string(), "receivedDateTime desc".to_string()),
+        ];
         if !filter.is_empty() {
-            query_params.push(format!("$filter={}", urlencoding::encode(&filter)));
+            query_params.push(("$filter".to_string(), filter));
         }
-        query_params.push("$orderby=receivedDateTime desc".to_string());
-
-        let url = format!("{}?{}", base_url, query_params.join("&"));
+        let url = reqwest::Url::parse_with_params(&base_url, query_params)?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let messages = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_message).collect::<Vec<_>>())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url.to_string()).await {
+            Ok(values) => {
+                let messages = values.iter().filter_map(parse_message).collect::<Vec<_>>();
 
                 let count = messages.len() as i64;
                 context.set_pin_value("messages", json!(messages)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -495,6 +457,7 @@ impl NodeLogic for GetOutlookMessageNode {
             "Get a single Outlook email message by ID",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -537,19 +500,11 @@ impl NodeLogic for GetOutlookMessageNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let message_id: String = context.evaluate_pin("message_id").await?;
 
-        let url = format!("{}/me/messages/{}", provider.base_url, message_id);
+        let url = provider.api_url(&format!("/me/messages/{}", message_id));
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
+        match graph_get_json(&client, &provider, url).await {
+            Ok(body) => {
                 if let Some(message) = parse_message(&body) {
                     context.set_pin_value("message", json!(message)).await?;
                     context.activate_exec_pin("exec_out").await?;
@@ -560,20 +515,9 @@ impl NodeLogic for GetOutlookMessageNode {
                     context.activate_exec_pin("error").await?;
                 }
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -606,6 +550,7 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
             "Fetch attachments for an Outlook message",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -656,27 +601,18 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let message: OutlookMessage = context.evaluate_pin("message").await?;
 
-        let url = format!(
-            "{}/me/messages/{}/attachments",
-            provider.base_url,
+        let url = provider.api_url(&format!(
+            "/me/messages/{}/attachments",
             urlencoding::encode(&message.id)
-        );
+        ));
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let attachments = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_attachment).collect::<Vec<_>>())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url).await {
+            Ok(values) => {
+                let attachments = values
+                    .iter()
+                    .filter_map(parse_attachment)
+                    .collect::<Vec<_>>();
 
                 let count = attachments.len() as i64;
                 context
@@ -685,20 +621,9 @@ impl NodeLogic for GetOutlookMessageAttachmentsNode {
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -727,6 +652,7 @@ impl NodeLogic for OutlookAttachmentFieldsNode {
             "Access Outlook attachment fields and bytes",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin(
@@ -1005,7 +931,7 @@ impl NodeLogic for SendOutlookMessageNode {
             "saveToSentItems": save_to_sent
         });
 
-        let url = format!("{}/me/sendMail", provider.base_url);
+        let url = provider.api_url("/me/sendMail");
 
         let client = reqwest::Client::new();
         let response = client
@@ -1021,14 +947,8 @@ impl NodeLogic for SendOutlookMessageNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -1066,6 +986,7 @@ impl NodeLogic for ListOutlookCalendarEventsNode {
             "List Outlook calendar events",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1134,59 +1055,40 @@ impl NodeLogic for ListOutlookCalendarEventsNode {
         let top: i64 = context.evaluate_pin("top").await.unwrap_or(50);
 
         let url = if !start_date_time.is_empty() && !end_date_time.is_empty() {
-            format!(
-                "{}/me/calendarView?startDateTime={}&endDateTime={}&$top={}",
-                provider.base_url,
-                urlencoding::encode(&start_date_time),
-                urlencoding::encode(&end_date_time),
-                top
-            )
+            reqwest::Url::parse_with_params(
+                &provider.api_url("/me/calendarView"),
+                [
+                    ("startDateTime", start_date_time),
+                    ("endDateTime", end_date_time),
+                    ("$top", top.to_string()),
+                ],
+            )?
         } else {
-            format!(
-                "{}/me/events?$top={}&$orderby=start/dateTime",
-                provider.base_url, top
-            )
+            reqwest::Url::parse_with_params(
+                &provider.api_url("/me/events"),
+                [
+                    ("$top", top.to_string()),
+                    ("$orderby", "start/dateTime".to_string()),
+                ],
+            )?
         };
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let events = body["value"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(parse_calendar_event)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url.to_string()).await {
+            Ok(values) => {
+                let events = values
+                    .iter()
+                    .filter_map(parse_calendar_event)
+                    .collect::<Vec<_>>();
 
                 let count = events.len() as i64;
                 context.set_pin_value("events", json!(events)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -1219,6 +1121,7 @@ impl NodeLogic for ListOutlookContactsNode {
             "List Outlook contacts",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1277,46 +1180,25 @@ impl NodeLogic for ListOutlookContactsNode {
         let search: String = context.evaluate_pin("search").await.unwrap_or_default();
         let top: i64 = context.evaluate_pin("top").await.unwrap_or(100);
 
-        let mut url = format!("{}/me/contacts?$top={}", provider.base_url, top);
+        let mut query_params = vec![("$top".to_string(), top.to_string())];
         if !search.is_empty() {
-            url.push_str(&format!("&$search=\"{}\"", urlencoding::encode(&search)));
+            query_params.push(("$search".to_string(), format!("\"{}\"", search)));
         }
+        let url = reqwest::Url::parse_with_params(&provider.api_url("/me/contacts"), query_params)?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .header("Content-Type", "application/json")
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let contacts = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_contact).collect::<Vec<_>>())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url.to_string()).await {
+            Ok(values) => {
+                let contacts = values.iter().filter_map(parse_contact).collect::<Vec<_>>();
 
                 let count = contacts.len() as i64;
                 context.set_pin_value("contacts", json!(contacts)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
-            Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
-                context.activate_exec_pin("error").await?;
-            }
             Err(e) => {
                 context
-                    .set_pin_value("error_message", json!(format!("Request failed: {}", e)))
+                    .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -1349,6 +1231,7 @@ impl NodeLogic for CreateOutlookCalendarEventNode {
             "Create a new Outlook calendar event",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1521,7 +1404,7 @@ impl NodeLogic for CreateOutlookCalendarEventNode {
             event_payload["onlineMeetingProvider"] = json!("teamsForBusiness");
         }
 
-        let url = format!("{}/me/events", provider.base_url);
+        let url = provider.api_url("/me/events");
 
         let client = reqwest::Client::new();
         let response = client
@@ -1548,14 +1431,8 @@ impl NodeLogic for CreateOutlookCalendarEventNode {
                 }
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -1593,6 +1470,7 @@ impl NodeLogic for UpdateOutlookCalendarEventNode {
             "Update an existing Outlook calendar event",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1713,7 +1591,7 @@ impl NodeLogic for UpdateOutlookCalendarEventNode {
             event_payload["location"] = json!({ "displayName": location });
         }
 
-        let url = format!("{}/me/events/{}", provider.base_url, event_id);
+        let url = provider.api_url(&format!("/me/events/{}", event_id));
 
         let client = reqwest::Client::new();
         let response = client
@@ -1738,14 +1616,8 @@ impl NodeLogic for UpdateOutlookCalendarEventNode {
                 }
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -1783,6 +1655,7 @@ impl NodeLogic for DeleteOutlookCalendarEventNode {
             "Delete an Outlook calendar event",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1817,7 +1690,7 @@ impl NodeLogic for DeleteOutlookCalendarEventNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let event_id: String = context.evaluate_pin("event_id").await?;
 
-        let url = format!("{}/me/events/{}", provider.base_url, event_id);
+        let url = provider.api_url(&format!("/me/events/{}", event_id));
 
         let client = reqwest::Client::new();
         let response = client
@@ -1831,14 +1704,8 @@ impl NodeLogic for DeleteOutlookCalendarEventNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -1876,6 +1743,7 @@ impl NodeLogic for GetOutlookCalendarEventNode {
             "Get a single Outlook calendar event by ID",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1912,7 +1780,7 @@ impl NodeLogic for GetOutlookCalendarEventNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
         let event_id: String = context.evaluate_pin("event_id").await?;
 
-        let url = format!("{}/me/events/{}", provider.base_url, event_id);
+        let url = provider.api_url(&format!("/me/events/{}", event_id));
 
         let client = reqwest::Client::new();
         let response = client
@@ -1935,14 +1803,8 @@ impl NodeLogic for GetOutlookCalendarEventNode {
                 }
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -1980,6 +1842,7 @@ impl NodeLogic for RsvpOutlookCalendarEventNode {
             "Accept, decline, or tentatively accept a calendar event invitation",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -2050,7 +1913,7 @@ impl NodeLogic for RsvpOutlookCalendarEventNode {
         let comment: String = context.evaluate_pin("comment").await.unwrap_or_default();
         let send_response: bool = context.evaluate_pin("send_response").await.unwrap_or(true);
 
-        let url = format!("{}/me/events/{}/{}", provider.base_url, event_id, response);
+        let url = provider.api_url(&format!("/me/events/{}/{}", event_id, response));
 
         let payload = json!({
             "comment": comment,
@@ -2071,14 +1934,8 @@ impl NodeLogic for RsvpOutlookCalendarEventNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {
@@ -2116,6 +1973,7 @@ impl NodeLogic for ForwardOutlookCalendarEventNode {
             "Forward a calendar event to other recipients",
             "Data/Microsoft/Outlook",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -2172,7 +2030,7 @@ impl NodeLogic for ForwardOutlookCalendarEventNode {
             .map(|email| json!({ "emailAddress": { "address": email } }))
             .collect();
 
-        let url = format!("{}/me/events/{}/forward", provider.base_url, event_id);
+        let url = provider.api_url(&format!("/me/events/{}/forward", event_id));
 
         let payload = json!({
             "toRecipients": recipients,
@@ -2193,14 +2051,8 @@ impl NodeLogic for ForwardOutlookCalendarEventNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
-                context
-                    .set_pin_value(
-                        "error_message",
-                        json!(format!("API error {}: {}", status, error_text)),
-                    )
-                    .await?;
+                let error = graph_error_message(resp).await;
+                context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
             Err(e) => {

@@ -33,7 +33,7 @@ import {
 	nowSystemTime,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	AudioLines,
 	Binary,

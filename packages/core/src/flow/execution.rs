@@ -21,6 +21,7 @@ use flow_like_types::dispatch::REQUEST_FILES_STORE_REF;
 use flow_like_types::intercom::InterComCallback;
 use flow_like_types::json::to_vec;
 use flow_like_types::sync::{Mutex, RwLock};
+use flow_like_types::tokio_util::sync::CancellationToken;
 use flow_like_types::utils::ptr_key;
 use flow_like_types::{Cacheable, anyhow, create_id};
 use flow_like_types::{Context, Value};
@@ -53,6 +54,8 @@ pub use user_context::{RoleContext, UserExecutionContext};
 
 const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
+pub const DEFAULT_RUN_LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+pub const DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD: usize = 500;
 static STORED_META_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
     Vec::<FieldRef>::from_type::<StoredLogMeta>(
         TracingOptions::default()
@@ -331,6 +334,7 @@ pub struct Run {
     pub log_initialized: bool,
     pub logs: u64,
     pub stream_state: bool,
+    pub log_spill_threshold: usize,
 
     pub event_id: Option<String>,
     pub event_version: Option<String>,
@@ -632,6 +636,8 @@ pub struct RunMeta {
     pub board_dir: Path,
     pub sub: String,
     pub stream_state: bool,
+    pub log_spill_threshold: usize,
+    pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
 }
 
@@ -670,6 +676,10 @@ pub struct InternalRun {
     completion_callbacks: Arc<RwLock<Vec<EventTrigger>>>,
     /// Set to true when any node execution fails
     has_node_errors: Arc<AtomicBool>,
+    log_flush_interval: Duration,
+    cancellation_token: Option<CancellationToken>,
+    cancellation_log_level: LogLevel,
+    cancellation_log_message: String,
 
     // Cached immutable fields from Run to avoid locking
     pub meta: RunMeta,
@@ -776,6 +786,7 @@ impl InternalRun {
             log_initialized: false,
             logs: 0,
             stream_state,
+            log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
 
             event_id: event.as_ref().map(|e| e.id.clone()),
             event_version: event.as_ref().map(|e| {
@@ -1082,6 +1093,10 @@ impl InternalRun {
             completion_callbacks: Arc::new(RwLock::new(vec![])),
             user_context: None,
             has_node_errors: Arc::new(AtomicBool::new(false)),
+            log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+            cancellation_token: None,
+            cancellation_log_level: LogLevel::Fatal,
+            cancellation_log_message: "Run cancelled".to_string(),
             // Cached immutable fields from Run
             meta: RunMeta {
                 run_id: run_id.clone(),
@@ -1090,10 +1105,42 @@ impl InternalRun {
                 board_dir: board.board_dir.clone(),
                 sub: sub_value.clone(),
                 stream_state,
+                log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+                log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 nodes_executed: Arc::new(AtomicU64::new(0)),
             },
             board: board.clone(),
         })
+    }
+
+    pub async fn set_log_flush_policy(
+        &mut self,
+        flush_interval: Duration,
+        spill_threshold: usize,
+    ) -> flow_like_types::Result<()> {
+        self.log_flush_interval = if flush_interval.is_zero() {
+            DEFAULT_RUN_LOG_FLUSH_INTERVAL
+        } else {
+            flush_interval
+        };
+
+        let spill_threshold = spill_threshold.max(1);
+        self.meta.log_spill_threshold = spill_threshold;
+        self.meta.log_flush_interval = self.log_flush_interval;
+
+        let mut run = lock_with_timeout(self.run.as_ref(), "set_log_flush_policy").await?;
+        run.log_spill_threshold = spill_threshold;
+
+        Ok(())
+    }
+
+    pub fn set_cancellation_token(&mut self, token: CancellationToken) {
+        self.cancellation_token = Some(token);
+    }
+
+    pub fn set_cancellation_log(&mut self, message: impl Into<String>, level: LogLevel) {
+        self.cancellation_log_message = message.into();
+        self.cancellation_log_level = level;
     }
 
     /// Set the user execution context for this run
@@ -1174,6 +1221,9 @@ impl InternalRun {
         let meta = self.meta.clone();
         let user_context = self.user_context.clone();
         let has_node_errors = self.has_node_errors.clone();
+        let cancellation_token = self.cancellation_token.clone();
+        let cancellation_log_level = self.cancellation_log_level;
+        let cancellation_log_message = self.cancellation_log_message.clone();
 
         let new_stack = futures::stream::iter(stack.stack.clone())
             .map(|target| {
@@ -1193,6 +1243,9 @@ impl InternalRun {
                 let oauth_tokens = self.oauth_tokens.clone();
                 let user_context = user_context.clone();
                 let has_node_errors = has_node_errors.clone();
+                let cancellation_token = cancellation_token.clone();
+                let cancellation_log_level = cancellation_log_level;
+                let cancellation_log_message = cancellation_log_message.clone();
 
                 async move {
                     step_core(
@@ -1214,6 +1267,9 @@ impl InternalRun {
                         token,
                         oauth_tokens,
                         user_context,
+                        cancellation_token,
+                        cancellation_log_level,
+                        cancellation_log_message,
                         &has_node_errors,
                     )
                     .await
@@ -1276,6 +1332,9 @@ impl InternalRun {
             self.token.clone(),
             self.oauth_tokens.clone(),
             self.user_context.clone(),
+            self.cancellation_token.clone(),
+            self.cancellation_log_level,
+            self.cancellation_log_message.clone(),
             &self.has_node_errors,
         )
         .await;
@@ -1317,7 +1376,7 @@ impl InternalRun {
 
     pub async fn execute(&mut self, handler: Arc<FlowLikeState>) -> Option<LogMeta> {
         let start = Instant::now();
-        const FLUSH_INTERVAL_SECS: u64 = 5;
+        let flush_interval = self.log_flush_interval;
 
         {
             match lock_with_timeout(self.run.as_ref(), "run_start").await {
@@ -1335,9 +1394,7 @@ impl InternalRun {
         let flush_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flush_cancel_clone = flush_cancel.clone();
         let flush_task = flow_like_types::tokio::spawn(async move {
-            let mut interval = flow_like_types::tokio::time::interval(
-                std::time::Duration::from_secs(FLUSH_INTERVAL_SECS),
-            );
+            let mut interval = flow_like_types::tokio::time::interval(flush_interval);
             interval.tick().await; // Skip first immediate tick
 
             while !flush_cancel_clone.load(Ordering::Relaxed) {
@@ -1415,6 +1472,12 @@ impl InternalRun {
         if self.has_node_errors.load(Ordering::Relaxed) {
             errored = true;
         }
+        let cancelled = self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled());
+        let cancellation_log_level = self.cancellation_log_level;
+        let cancellation_log_message = self.cancellation_log_message.clone();
 
         // Stop background flush task
         flush_cancel.store(true, Ordering::Relaxed);
@@ -1428,11 +1491,30 @@ impl InternalRun {
                 match lock_with_timeout(self.run.as_ref(), "run_finalize").await {
                     Ok(mut run) => {
                         run.end = SystemTime::now();
-                        run.status = if errored {
+                        run.status = if cancelled {
+                            RunStatus::Stopped
+                        } else if errored {
                             RunStatus::Failed
                         } else {
                             RunStatus::Success
                         };
+                        if cancelled {
+                            if cancellation_log_level > run.highest_log_level {
+                                run.highest_log_level = cancellation_log_level;
+                            }
+                            let cancel_log = LogMessage::new(
+                                &cancellation_log_message,
+                                cancellation_log_level,
+                                None,
+                            );
+                            if let Some(trace) = run.traces.last_mut() {
+                                trace.logs.push(cancel_log);
+                            } else {
+                                let mut system_trace = Trace::new("system");
+                                system_trace.logs.push(cancel_log);
+                                run.traces.push(system_trace);
+                            }
+                        }
                         match run.prepare_flush(true) {
                             Ok(prepared) => prepared,
                             Err(err) => {
@@ -1659,6 +1741,9 @@ async fn step_core(
     token: Option<String>,
     oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     user_context: Option<UserExecutionContext>,
+    cancellation_token: Option<CancellationToken>,
+    cancellation_log_level: LogLevel,
+    cancellation_log_message: String,
     has_node_errors: &Arc<AtomicBool>,
 ) -> flow_like_types::Result<(Vec<ExecutionTarget>, Vec<Trace>)> {
     // Check Node State and Validate Execution Count (to stop infinite loops)
@@ -1690,11 +1775,21 @@ async fn step_core(
     )
     .await;
     context.user_context = user_context;
+    if let Some(token) = cancellation_token {
+        context.set_cancellation_token(token);
+    }
     context.started_by = if target.through_pins.is_empty() {
         None
     } else {
         Some(target.through_pins.clone())
     };
+
+    if context.is_cancelled() {
+        context.log_message(&cancellation_log_message, cancellation_log_level);
+        has_node_errors.store(true, Ordering::Relaxed);
+        let traces = context.take_traces();
+        return Ok((Vec::new(), traces));
+    }
 
     if USE_DEPENDENCY_GRAPH {
         if let Err(err) =

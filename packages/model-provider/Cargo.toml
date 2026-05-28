@@ -48,16 +48,16 @@ reqwest = { workspace = true, optional = true }
 # We can enable the standard ort crate again with the next release, when PR: https://github.com/pykeio/ort/pull/430 is merged and released.
 # ort = { version = "=2.0.0-rc.10", features = ["download-binaries", "copy-dylibs", "ndarray"] }
 #fastembed = { version = "5.2.0", default-features = false, features = ["ort-download-binaries"] }
-ort = { git = "https://github.com/TM9657/ort.git", rev = "1d64032", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
-fastembed = { git = "https://github.com/TM9657/fastembed-rs.git", rev = "8cddfc6", default-features = false, features = ["ort-download-binaries"], optional = true }
+ort = { git = "https://github.com/Rheosoph/ort.git", rev = "1d64032", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
+fastembed = { git = "https://github.com/Rheosoph/fastembed-rs.git", rev = "784042c", default-features = false, features = ["ort-download-binaries"], optional = true }
 
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))'.dependencies]
 # Mobile targets: no prebuilt binaries available for download, so disable download-binaries and copy-dylibs
 #ort = { version = "=2.0.0-rc.10", default-features = false, features=["ndarray"] }
 #fastembed = { version = "5.2.0", default-features = false, features = []}
-ort = { git = "https://github.com/TM9657/ort.git", rev = "1d64032", default-features = false, features=["ndarray"], optional = true }
-fastembed = { git = "https://github.com/TM9657/fastembed-rs.git", rev = "8cddfc6", default-features = false, features = [], optional = true }
+ort = { git = "https://github.com/Rheosoph/ort.git", rev = "1d64032", default-features = false, features=["ndarray"], optional = true }
+fastembed = { git = "https://github.com/Rheosoph/fastembed-rs.git", rev = "784042c", default-features = false, features = [], optional = true }
 
 [dev-dependencies]
 dotenv = "0.15.0"

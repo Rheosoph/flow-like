@@ -2,16 +2,19 @@ import { createId } from "@paralleldrive/cuid2";
 import {
 	ChatInterface,
 	CronJobConfig,
+	DaemonConfig,
 	DeeplinkConfig,
 	DiscordConfig,
 	GenericEventFormInterface,
 	GenericFormConfig,
 	HttpConfig,
 	type IEventMapping,
+	McpConfig,
+	RestConfig,
 	SimpleChatConfig,
 	TelegramConfig,
 	UserMailConfig,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export const EVENT_CONFIG: IEventMapping = {
 	events_chat: {
@@ -136,18 +139,33 @@ export const EVENT_CONFIG: IEventMapping = {
 			quick_action: GenericFormConfig,
 			api: HttpConfig,
 			cron: CronJobConfig,
+			daemon: DaemonConfig,
 			deeplink: DeeplinkConfig,
+			rest: RestConfig,
+			mcp: McpConfig,
 		},
 		defaultEventType: "quick_action",
-		eventTypes: ["quick_action", "api", "cron", "deeplink"],
+		eventTypes: [
+			"quick_action",
+			"api",
+			"cron",
+			"daemon",
+			"deeplink",
+			"rest",
+			"mcp",
+		],
 		useInterfaces: {
 			quick_action: GenericEventFormInterface,
 		},
-		withSink: ["cron", "api", "deeplink"],
+		withSink: ["cron", "api", "daemon", "deeplink", "rest", "mcp"],
 		sinkAvailability: {
 			cron: {
 				availability: "both",
 				description: "Scheduled execution - runs locally or on server",
+			},
+			daemon: {
+				availability: "local",
+				description: "Long-running supervised local workflow",
 			},
 			api: {
 				availability: "both",
@@ -156,6 +174,15 @@ export const EVENT_CONFIG: IEventMapping = {
 			deeplink: {
 				availability: "local",
 				description: "Deep links only work on desktop",
+			},
+			rest: {
+				availability: "remote",
+				description:
+					"Multi-endpoint REST API server with auth - remote only",
+			},
+			mcp: {
+				availability: "remote",
+				description: "Model Context Protocol server - remote only",
 			},
 		},
 		configs: {
@@ -169,9 +196,25 @@ export const EVENT_CONFIG: IEventMapping = {
 				sink_type: "cron",
 				expression: "0 */1 * * *",
 			},
+			daemon: {
+				sink_type: "daemon",
+				restart_policy: "on_failure",
+				min_restart_delay_ms: 1000,
+				max_restart_delay_ms: 30000,
+				board_poll_interval_ms: 3000,
+				log_flush_interval_ms: 5000,
+				log_batch_size: 500,
+				healthy_reset_ms: 60000,
+			},
 			deeplink: {
 				sink_type: "deeplink",
 				route: createId(),
+			},
+			rest: {
+				sink_type: "rest",
+			},
+			mcp: {
+				sink_type: "mcp",
 			},
 		},
 	},

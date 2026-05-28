@@ -1,18 +1,18 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { INode, IPin } from "@tm9657/flow-like-ui";
-import { IPinType, IVariableType } from "@tm9657/flow-like-ui";
+import type { INode, IPin } from "@flow-like/flow-like-ui";
+import { IPinType, IVariableType } from "@flow-like/flow-like-ui";
 import {
 	detectFormat,
 	translateDify,
 	translateN8n,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type {
 	DifyWorkflow,
 	N8nManualMappingOverrides,
 	N8nWorkflow,
 	TranslationResult,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	addExecPins,
 	connectPins,
@@ -21,7 +21,7 @@ import {
 	createPin,
 	createVariable,
 	findPinByName,
-} from "@tm9657/flow-like-ui/lib/importer/board-builder";
+} from "@flow-like/flow-like-ui/lib/importer/board-builder";
 import { describe, expect, it } from "vitest";
 
 const FIXTURES = resolve(__dirname, "fixtures");

@@ -49,7 +49,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 				},
 			],
 			editLink: {
-				baseUrl: "https://github.com/TM9657/flow-like/edit/main/apps/docs/",
+				baseUrl: "https://github.com/Rheosoph/flow-like/edit/main/apps/docs/",
 			},
 			logo: {
 				light: "./src/assets/app-logo-light.webp",
@@ -65,7 +65,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 				{
 					icon: "github",
 					label: "GitHub",
-					href: "https://github.com/TM9657/flow-like",
+					href: "https://github.com/Rheosoph/flow-like",
 				},
 				{ icon: "x.com", label: "X.com", href: "https://x.com/greatco_de" },
 				{
@@ -493,7 +493,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 			noExternal: [
 				"katex",
 				"rehype-katex",
-				"@tm9657/flow-like-ui",
+				"@flow-like/flow-like-ui",
 				"lodash-es",
 				"@platejs/math",
 				"react-lite-youtube-embed",

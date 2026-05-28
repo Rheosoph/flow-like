@@ -1,4 +1,5 @@
 use super::provider::{NOTION_PROVIDER_ID, NotionProvider};
+use super::utils::{NOTION_API_VERSION, auth_header, notion_error, optional_json_value};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -8,8 +9,6 @@ use flow_like::flow::{
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
 
-const NOTION_API_VERSION: &str = "2022-06-28";
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotionPage {
     pub id: String,
@@ -17,6 +16,7 @@ pub struct NotionPage {
     pub created_time: String,
     pub last_edited_time: String,
     pub archived: bool,
+    pub in_trash: bool,
     pub icon_emoji: Option<String>,
     pub properties: Value,
 }
@@ -47,6 +47,7 @@ impl NodeLogic for QueryNotionDatabaseNode {
             "Queries a Notion database and returns matching pages",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -74,11 +75,24 @@ impl NodeLogic for QueryNotionDatabaseNode {
 
         node.add_input_pin(
             "filter",
-            "Filter (JSON)",
-            "Optional filter object in Notion filter format (JSON string). Example: {\"property\": \"Status\", \"status\": {\"equals\": \"Done\"}}",
-            VariableType::String,
+            "Filter",
+            "Optional filter object in Notion filter format",
+            VariableType::Struct,
         )
-        .set_default_value(Some(json!("")));
+        .set_schema::<Value>()
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_default_value(Some(json!({})));
+
+        node.add_input_pin(
+            "sorts",
+            "Sorts",
+            "Optional Notion sorts array. Overrides Sort Property when provided.",
+            VariableType::Struct,
+        )
+        .set_value_type(ValueType::Array)
+        .set_schema::<Value>()
+        .set_options(PinOptions::new().set_enforce_schema(false).build())
+        .set_default_value(Some(json!([])));
 
         node.add_input_pin(
             "sort_property",
@@ -108,6 +122,22 @@ impl NodeLogic for QueryNotionDatabaseNode {
             VariableType::Integer,
         )
         .set_default_value(Some(json!(100)));
+
+        node.add_input_pin(
+            "start_cursor",
+            "Start Cursor",
+            "Pagination cursor from a previous query",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "fetch_all",
+            "Fetch All",
+            "Fetch every available page of database results",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "exec_out",
@@ -147,6 +177,13 @@ impl NodeLogic for QueryNotionDatabaseNode {
             VariableType::Boolean,
         );
 
+        node.add_output_pin(
+            "next_cursor",
+            "Next Cursor",
+            "Cursor to request the next page of pages",
+            VariableType::String,
+        );
+
         node.add_required_oauth_scopes(NOTION_PROVIDER_ID, vec![]);
         node.set_scores(
             NodeScores::new()
@@ -170,10 +207,16 @@ impl NodeLogic for QueryNotionDatabaseNode {
         let access_token = provider.access_token;
 
         let database_id: String = context.evaluate_pin("database_id").await?;
-        let filter_str: String = context.evaluate_pin("filter").await?;
+        let filter_raw: Value = context.evaluate_pin("filter").await.unwrap_or(json!({}));
+        let sorts_raw: Value = context.evaluate_pin("sorts").await.unwrap_or(json!([]));
         let sort_property: String = context.evaluate_pin("sort_property").await?;
         let sort_direction: String = context.evaluate_pin("sort_direction").await?;
         let page_size: i64 = context.evaluate_pin("page_size").await?;
+        let start_cursor: String = context
+            .evaluate_pin("start_cursor")
+            .await
+            .unwrap_or_default();
+        let fetch_all: bool = context.evaluate_pin("fetch_all").await.unwrap_or(false);
 
         if database_id.is_empty() {
             context.log_message("Database ID cannot be empty", LogLevel::Error);
@@ -188,20 +231,30 @@ impl NodeLogic for QueryNotionDatabaseNode {
             "page_size": page_size.clamp(1, 100)
         });
 
-        if !filter_str.is_empty() {
-            match flow_like_types::json::from_str::<Value>(&filter_str) {
-                Ok(filter) => {
-                    body["filter"] = filter;
-                }
-                Err(e) => {
-                    context.log_message(&format!("Invalid filter JSON: {}", e), LogLevel::Error);
-                    context.activate_exec_pin("error").await?;
-                    return Ok(());
-                }
+        let filter = match optional_json_value(filter_raw, "filter") {
+            Ok(value) => value,
+            Err(err) => {
+                context.log_message(&err.to_string(), LogLevel::Error);
+                context.activate_exec_pin("error").await?;
+                return Ok(());
             }
+        };
+        if let Some(filter) = filter {
+            body["filter"] = filter;
         }
 
-        if !sort_property.is_empty() {
+        let sorts = match optional_json_value(sorts_raw, "sorts") {
+            Ok(value) => value,
+            Err(err) => {
+                context.log_message(&err.to_string(), LogLevel::Error);
+                context.activate_exec_pin("error").await?;
+                return Ok(());
+            }
+        };
+
+        if let Some(sorts) = sorts {
+            body["sorts"] = sorts;
+        } else if !sort_property.is_empty() {
             body["sorts"] = json!([{
                 "property": sort_property,
                 "direction": sort_direction
@@ -213,77 +266,108 @@ impl NodeLogic for QueryNotionDatabaseNode {
             LogLevel::Debug,
         );
 
-        let response = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Notion-Version", NOTION_API_VERSION)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
+        let mut cursor = if start_cursor.is_empty() {
+            None
+        } else {
+            Some(start_cursor)
+        };
+        let mut all_pages = Vec::new();
+        let mut has_more: bool;
+        let mut next_cursor: Option<String>;
 
-        match response {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let error_text = resp.text().await.unwrap_or_default();
-                    context.log_message(
-                        &format!("Notion API error {}: {}", status, error_text),
-                        LogLevel::Error,
-                    );
+        loop {
+            let mut request_body = body.clone();
+            if let Some(cursor) = &cursor {
+                request_body["start_cursor"] = json!(cursor);
+            }
+
+            let response = client
+                .post(&url)
+                .header("Authorization", auth_header(&access_token))
+                .header("Notion-Version", NOTION_API_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await;
+
+            let query_response = match response {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        context.log_message(&notion_error(resp).await, LogLevel::Error);
+                        context.activate_exec_pin("error").await?;
+                        return Ok(());
+                    }
+
+                    resp.json::<QueryResponse>().await.map_err(|e| {
+                        context.log_message(
+                            &format!("Failed to parse response: {}", e),
+                            LogLevel::Error,
+                        );
+                        flow_like_types::anyhow!("Failed to parse Notion response")
+                    })?
+                }
+                Err(e) => {
+                    context.log_message(&format!("Network error: {}", e), LogLevel::Error);
                     context.activate_exec_pin("error").await?;
                     return Ok(());
                 }
+            };
 
-                let query_response: QueryResponse = resp.json().await.map_err(|e| {
-                    context
-                        .log_message(&format!("Failed to parse response: {}", e), LogLevel::Error);
-                    flow_like_types::anyhow!("Failed to parse Notion response")
-                })?;
+            has_more = query_response.has_more;
+            next_cursor = query_response.next_cursor;
+            all_pages.extend(query_response.results);
 
-                let pages: Vec<NotionPage> = query_response
-                    .results
-                    .into_iter()
-                    .filter_map(|page| {
-                        let id = page["id"].as_str()?.to_string();
-                        let url = page["url"].as_str()?.to_string();
-                        let created_time = page["created_time"].as_str()?.to_string();
-                        let last_edited_time = page["last_edited_time"].as_str()?.to_string();
-                        let archived = page["archived"].as_bool().unwrap_or(false);
-                        let icon_emoji = page["icon"]["emoji"].as_str().map(String::from);
-                        let properties = page["properties"].clone();
-
-                        Some(NotionPage {
-                            id,
-                            url,
-                            created_time,
-                            last_edited_time,
-                            archived,
-                            icon_emoji,
-                            properties,
-                        })
-                    })
-                    .collect();
-
-                let count = pages.len() as i64;
-
-                context.log_message(
-                    &format!("Found {} pages in database", count),
-                    LogLevel::Info,
-                );
-
-                context.set_pin_value("pages", json!(pages)).await?;
-                context.set_pin_value("count", json!(count)).await?;
-                context
-                    .set_pin_value("has_more", json!(query_response.has_more))
-                    .await?;
-                context.activate_exec_pin("exec_out").await?;
+            if !fetch_all || !has_more {
+                break;
             }
-            Err(e) => {
-                context.log_message(&format!("Network error: {}", e), LogLevel::Error);
-                context.activate_exec_pin("error").await?;
+
+            cursor = next_cursor.clone();
+            if cursor.is_none() {
+                break;
             }
         }
+
+        let pages: Vec<NotionPage> = all_pages
+            .into_iter()
+            .filter_map(|page| {
+                let id = page["id"].as_str()?.to_string();
+                let url = page["url"].as_str()?.to_string();
+                let created_time = page["created_time"].as_str()?.to_string();
+                let last_edited_time = page["last_edited_time"].as_str()?.to_string();
+                let in_trash = page["in_trash"]
+                    .as_bool()
+                    .or_else(|| page["archived"].as_bool())
+                    .unwrap_or(false);
+                let icon_emoji = page["icon"]["emoji"].as_str().map(String::from);
+                let properties = page["properties"].clone();
+
+                Some(NotionPage {
+                    id,
+                    url,
+                    created_time,
+                    last_edited_time,
+                    archived: in_trash,
+                    in_trash,
+                    icon_emoji,
+                    properties,
+                })
+            })
+            .collect();
+
+        let count = pages.len() as i64;
+
+        context.log_message(
+            &format!("Found {} pages in database", count),
+            LogLevel::Info,
+        );
+
+        context.set_pin_value("pages", json!(pages)).await?;
+        context.set_pin_value("count", json!(count)).await?;
+        context.set_pin_value("has_more", json!(has_more)).await?;
+        context
+            .set_pin_value("next_cursor", json!(next_cursor.unwrap_or_default()))
+            .await?;
+        context.activate_exec_pin("exec_out").await?;
 
         Ok(())
     }

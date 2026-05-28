@@ -1,6 +1,6 @@
 # @flow-like/wasm-sdk-assemblyscript
 
-AssemblyScript SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes. AssemblyScript compiles **directly to WASM** — no JavaScript runtime is involved, resulting in small, fast binaries ideal for compute-intensive nodes.
+AssemblyScript SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes. AssemblyScript compiles **directly to WASM** — no JavaScript runtime is involved, resulting in small, fast binaries ideal for compute-intensive nodes.
 
 ## Install
 

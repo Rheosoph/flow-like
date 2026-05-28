@@ -11,15 +11,15 @@ import {
 	SelectValue,
 	Slider,
 	humanFileSize,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	Card,
 	CardContent,
 	CardDescription,
 	CardHeader,
 	CardTitle,
-} from "@tm9657/flow-like-ui";
-import { Label } from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
+import { Label } from "@flow-like/flow-like-ui";
 import type { Dispatch, SetStateAction } from "react";
 
 export function LLMConfiguration({

@@ -8,6 +8,8 @@ use flow_like::flow::{
 };
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::{async_trait, bail, json::json};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[crate::register_node]
@@ -133,6 +135,10 @@ impl NodeLogic for StoreMemoryNode {
             bail!("Embedding returned empty vector");
         }
 
+        let mut hasher = DefaultHasher::new();
+        content.to_lowercase().hash(&mut hasher);
+        let content_hash = format!("{:x}", hasher.finish());
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -140,18 +146,24 @@ impl NodeLogic for StoreMemoryNode {
         let record = json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "content": content,
+            "content_hash": content_hash,
             "role": role,
             "vector": embeddings[0],
             "timestamp": now,
         });
 
         let cached_db = config.database.load(context).await?;
-        let mut db = cached_db.db.write().await;
-        db.insert(vec![record]).await?;
+        {
+            let mut db = cached_db.db.write().await;
+            db.insert(vec![record]).await?;
+        }
 
-        let count = db.count(None).await.unwrap_or(0);
+        cached_db.ensure_flushed().await?;
 
-        drop(db);
+        let count = {
+            let db = cached_db.db.read().await;
+            db.count(None).await.unwrap_or(0)
+        };
 
         context
             .set_pin_value("observation_count", json!(count as i64))

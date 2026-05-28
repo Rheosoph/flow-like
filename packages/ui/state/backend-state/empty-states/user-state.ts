@@ -3,12 +3,12 @@ import type {
 	IProfileApp,
 	ISettingsProfile,
 	IUserState,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import type {
 	INotification,
 	INotificationsOverview,
 	IUserLookup,
-} from "@tm9657/flow-like-ui/state/backend-state/types";
+} from "@flow-like/flow-like-ui/state/backend-state/types";
 import type {
 	IBillingSession,
 	IPricingResponse,
@@ -18,7 +18,7 @@ import type {
 	IUserTemplateInfo,
 	IUserUpdate,
 	IUserWidgetInfo,
-} from "@tm9657/flow-like-ui/state/backend-state/user-state";
+} from "@flow-like/flow-like-ui/state/backend-state/user-state";
 
 export class EmptyUserState implements IUserState {
 	lookupUser(userId: string): Promise<IUserLookup> {

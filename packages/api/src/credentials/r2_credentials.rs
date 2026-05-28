@@ -3,7 +3,10 @@
 //! R2 uses a proprietary temporary credentials API instead of AWS STS.
 //! See: https://developers.cloudflare.com/api/resources/r2/subresources/temporary_credentials/
 
-use crate::credentials::{CredentialsAccess, RuntimeCredentialsTrait};
+use crate::credentials::{
+    CredentialsAccess, RuntimeCredentials, RuntimeCredentialsTrait,
+    mixed_credentials::MixedRuntimeCredentials,
+};
 use crate::state::{AppState, State};
 use flow_like::credentials::{
     BucketConfig, SharedCredentials, aws_credentials::AwsSharedCredentials,
@@ -167,6 +170,13 @@ impl R2RuntimeCredentials {
         let log_prefix = format!("runs/{}/", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}/", sub, app_id);
         let temporary_global_prefix = format!("tmp/global/apps/{}/", app_id);
+        let app_content_path_prefix = format!("apps/{}", app_id);
+        let user_content_path_prefix_value = format!("users/{}/apps/{}", sub, app_id);
+        let (content_path_prefix, user_content_path_prefix) = scoped_content_path_prefixes(
+            &app_content_path_prefix,
+            &user_content_path_prefix_value,
+            &mode,
+        );
 
         let (permission, prefixes) = match mode {
             CredentialsAccess::EditApp => ("object-read-write", vec![apps_prefix.clone()]),
@@ -204,6 +214,16 @@ impl R2RuntimeCredentials {
                     temporary_global_prefix,
                 ],
             ),
+            CredentialsAccess::ServerExecute => (
+                "object-read-write",
+                vec![
+                    apps_prefix,
+                    user_prefix,
+                    log_prefix,
+                    temporary_user_prefix,
+                    temporary_global_prefix,
+                ],
+            ),
             CredentialsAccess::ReadLogs => ("object-read-only", vec![log_prefix]),
         };
 
@@ -232,8 +252,144 @@ impl R2RuntimeCredentials {
             endpoint: self.endpoint.clone(),
             account_id: self.account_id.clone(),
             expiration: Some(chrono_expiration),
-            content_path_prefix: Some(format!("apps/{}", app_id)),
-            user_content_path_prefix: Some(format!("users/{}/apps/{}", sub, app_id)),
+            content_path_prefix,
+            user_content_path_prefix,
+        })
+    }
+
+    async fn scoped_server_meta_read_credentials(&self, sub: &str, app_id: &str) -> Result<Self> {
+        if sub.is_empty() || app_id.is_empty() {
+            return Err(anyhow!("Sub or App ID cannot be empty"));
+        }
+
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
+
+        let apps_prefix = format!("apps/{}/", app_id);
+        self.scoped_bucket_credentials(
+            &self.meta_bucket,
+            "object-read-only",
+            vec![apps_prefix],
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn scoped_server_content_write_credentials(
+        &self,
+        sub: &str,
+        app_id: &str,
+    ) -> Result<Self> {
+        if sub.is_empty() || app_id.is_empty() {
+            return Err(anyhow!("Sub or App ID cannot be empty"));
+        }
+
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
+
+        let apps_prefix = format!("apps/{}/", app_id);
+        let user_prefix = format!("users/{}/apps/{}/", sub, app_id);
+        let temporary_user_prefix = format!("tmp/user/{}/apps/{}/", sub, app_id);
+        let temporary_global_prefix = format!("tmp/global/apps/{}/", app_id);
+        let app_content_path_prefix = format!("apps/{}", app_id);
+        let user_content_path_prefix = format!("users/{}/apps/{}", sub, app_id);
+
+        self.scoped_bucket_credentials(
+            &self.content_bucket,
+            "object-read-write",
+            vec![
+                apps_prefix,
+                user_prefix,
+                temporary_user_prefix,
+                temporary_global_prefix,
+            ],
+            Some(app_content_path_prefix),
+            Some(user_content_path_prefix),
+        )
+        .await
+    }
+
+    async fn scoped_server_logs_write_credentials(&self, sub: &str, app_id: &str) -> Result<Self> {
+        if sub.is_empty() || app_id.is_empty() {
+            return Err(anyhow!("Sub or App ID cannot be empty"));
+        }
+
+        crate::credentials::validate_path_component(sub, "sub")?;
+        crate::credentials::validate_path_component(app_id, "app_id")?;
+
+        let log_prefix = format!("runs/{}/", app_id);
+        self.scoped_bucket_credentials(
+            &self.logs_bucket,
+            "object-read-write",
+            vec![log_prefix],
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn scoped_server_execute_credentials(
+        &self,
+        sub: &str,
+        app_id: &str,
+    ) -> Result<MixedRuntimeCredentials> {
+        let (meta, content, logs) = flow_like_types::tokio::join!(
+            self.scoped_server_meta_read_credentials(sub, app_id),
+            self.scoped_server_content_write_credentials(sub, app_id),
+            self.scoped_server_logs_write_credentials(sub, app_id),
+        );
+
+        Ok(MixedRuntimeCredentials {
+            meta: Box::new(RuntimeCredentials::R2(meta?)),
+            content: Box::new(RuntimeCredentials::R2(content?)),
+            logs: Box::new(RuntimeCredentials::R2(logs?)),
+        })
+    }
+
+    async fn scoped_bucket_credentials(
+        &self,
+        bucket: &str,
+        permission: &str,
+        prefixes: Vec<String>,
+        content_path_prefix: Option<String>,
+        user_content_path_prefix: Option<String>,
+    ) -> Result<Self> {
+        if bucket.is_empty() {
+            return Err(anyhow!("R2 bucket is empty"));
+        }
+
+        let api_token = std::env::var("R2_API_TOKEN")
+            .map_err(|_| anyhow!("R2_API_TOKEN environment variable not set"))?;
+
+        let parent_key_id = self
+            .access_key_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("R2_ACCESS_KEY_ID not set"))?;
+
+        let temp_creds = self
+            .get_temp_credentials(
+                &api_token,
+                parent_key_id,
+                bucket,
+                permission,
+                &prefixes,
+                3600,
+            )
+            .await?;
+
+        Ok(Self {
+            access_key_id: Some(temp_creds.access_key_id),
+            secret_access_key: Some(temp_creds.secret_access_key),
+            session_token: Some(temp_creds.session_token),
+            meta_bucket: self.meta_bucket.clone(),
+            content_bucket: self.content_bucket.clone(),
+            logs_bucket: self.logs_bucket.clone(),
+            endpoint: self.endpoint.clone(),
+            account_id: self.account_id.clone(),
+            expiration: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            content_path_prefix,
+            user_content_path_prefix,
         })
     }
 
@@ -287,6 +443,37 @@ impl R2RuntimeCredentials {
         resp.result
             .ok_or_else(|| anyhow!("R2 temp credentials response missing result"))
     }
+}
+
+fn scoped_content_path_prefixes(
+    apps_prefix: &str,
+    user_prefix: &str,
+    mode: &CredentialsAccess,
+) -> (Option<String>, Option<String>) {
+    let app = matches!(
+        mode,
+        CredentialsAccess::EditApp
+            | CredentialsAccess::ReadApp
+            | CredentialsAccess::ReadAppContent
+            | CredentialsAccess::EditAppContent
+            | CredentialsAccess::InvokeRead
+            | CredentialsAccess::InvokeWrite
+            | CredentialsAccess::ServerExecute
+    )
+    .then(|| apps_prefix.to_string());
+
+    let user = matches!(
+        mode,
+        CredentialsAccess::EditUser
+            | CredentialsAccess::ReadUser
+            | CredentialsAccess::InvokeNone
+            | CredentialsAccess::InvokeRead
+            | CredentialsAccess::InvokeWrite
+            | CredentialsAccess::ServerExecute
+    )
+    .then(|| user_prefix.to_string());
+
+    (app, user)
 }
 
 #[async_trait]
@@ -402,6 +589,37 @@ fn make_r2_builder(
             builder.storage_option("aws_session_token".to_string(), session_token.clone())
         } else {
             builder
+        }
+    }
+}
+
+#[cfg(all(test, feature = "r2"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_r2_invoke_none_does_not_advertise_app_content_prefix() {
+        let (app, user) = scoped_content_path_prefixes(
+            "apps/app-1",
+            "users/user-1/apps/app-1",
+            &CredentialsAccess::InvokeNone,
+        );
+
+        assert_eq!(app, None);
+        assert_eq!(user, Some("users/user-1/apps/app-1".to_string()));
+    }
+
+    #[test]
+    fn test_r2_invoke_read_and_write_advertise_app_content_prefix() {
+        for mode in [
+            CredentialsAccess::InvokeRead,
+            CredentialsAccess::InvokeWrite,
+        ] {
+            let (app, user) =
+                scoped_content_path_prefixes("apps/app-1", "users/user-1/apps/app-1", &mode);
+
+            assert_eq!(app, Some("apps/app-1".to_string()));
+            assert_eq!(user, Some("users/user-1/apps/app-1".to_string()));
         }
     }
 }

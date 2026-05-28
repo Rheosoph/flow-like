@@ -1,7 +1,7 @@
 import type {
 	IOAuthPendingAuth,
 	IStoredOAuthToken,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 
 export const OAUTH_CALLBACK_CHANNEL = "flow-like-oauth";
 export const OAUTH_CALLBACK_PENDING_KEY = "oauth-callback-pending";

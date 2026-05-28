@@ -322,7 +322,74 @@ impl AzureRuntimeCredentials {
                 )
             }
             CredentialsAccess::InvokeNone => {
-                // InvokeNone: write access to BOTH app content AND user content, write to logs
+                // No app meta/content access for execute-only callers.
+                let user_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("users/{}/apps/{}", sub, app_id),
+                    "rwdl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                let logs_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.logs_container,
+                    &format!("runs/{}", app_id),
+                    "rwdl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    None,
+                    Some(user_content_sas),
+                    Some(logs_sas),
+                    None,
+                    Some(format!("users/{}/apps/{}", sub, app_id)),
+                )
+            }
+            CredentialsAccess::InvokeRead => {
+                // App metadata remains server-only; this mode grants content reads.
+                let app_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{}", app_id),
+                    "rl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                let user_content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("users/{}/apps/{}", sub, app_id),
+                    "rl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                let logs_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.logs_container,
+                    &format!("runs/{}", app_id),
+                    "rl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    Some(app_content_sas),
+                    Some(user_content_sas),
+                    Some(logs_sas),
+                    Some(format!("apps/{}", app_id)),
+                    Some(format!("users/{}/apps/{}", sub, app_id)),
+                )
+            }
+            CredentialsAccess::InvokeWrite => {
+                // App metadata remains server-only; this mode grants content writes.
                 let app_content_sas = generate_directory_sas(
                     &self.account_name,
                     &self.content_container,
@@ -359,55 +426,7 @@ impl AzureRuntimeCredentials {
                     Some(format!("users/{}/apps/{}", sub, app_id)),
                 )
             }
-            CredentialsAccess::InvokeRead => {
-                // InvokeRead: read app from meta, read BOTH app content AND user content, read logs
-                let meta_sas = generate_directory_sas(
-                    &self.account_name,
-                    &self.meta_container,
-                    &format!("apps/{}", app_id),
-                    "rl",
-                    &start,
-                    &expiry_str,
-                    &account_key,
-                )?;
-                let app_content_sas = generate_directory_sas(
-                    &self.account_name,
-                    &self.content_container,
-                    &format!("apps/{}", app_id),
-                    "rl",
-                    &start,
-                    &expiry_str,
-                    &account_key,
-                )?;
-                let user_content_sas = generate_directory_sas(
-                    &self.account_name,
-                    &self.content_container,
-                    &format!("users/{}/apps/{}", sub, app_id),
-                    "rl",
-                    &start,
-                    &expiry_str,
-                    &account_key,
-                )?;
-                let logs_sas = generate_directory_sas(
-                    &self.account_name,
-                    &self.logs_container,
-                    &format!("runs/{}", app_id),
-                    "rl",
-                    &start,
-                    &expiry_str,
-                    &account_key,
-                )?;
-                (
-                    Some(meta_sas),
-                    Some(app_content_sas),
-                    Some(user_content_sas),
-                    Some(logs_sas),
-                    Some(format!("apps/{}", app_id)),
-                    Some(format!("users/{}/apps/{}", sub, app_id)),
-                )
-            }
-            CredentialsAccess::InvokeWrite => {
-                // InvokeWrite: read app from meta, write BOTH app content AND user content, write logs
+            CredentialsAccess::ServerExecute => {
                 let meta_sas = generate_directory_sas(
                     &self.account_name,
                     &self.meta_container,
@@ -517,6 +536,7 @@ impl AzureRuntimeCredentials {
             CredentialsAccess::InvokeNone => "racwdl",
             CredentialsAccess::InvokeRead => "rl",
             CredentialsAccess::InvokeWrite => "racwdl",
+            CredentialsAccess::ServerExecute => "racwdl",
             CredentialsAccess::ReadLogs => "rl",
         };
 
@@ -524,10 +544,11 @@ impl AzureRuntimeCredentials {
         let expiry_str = expiry.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let start = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-        // Determine the directory path based on access mode
-        // EditApp/ReadApp: apps/{app_id}
+        // Determine the app/user content paths based on access mode
+        // EditApp/ReadApp/ReadAppContent/EditAppContent: apps/{app_id}
         // EditUser/ReadUser: users/{sub}/apps/{app_id}
-        // InvokeRead/InvokeWrite/InvokeNone: both app and user paths
+        // InvokeNone: user path only
+        // InvokeRead/InvokeWrite/ServerExecute: both app and user paths
         // ReadLogs: logs/{app_id}
         let (app_directory, user_directory) = match mode {
             CredentialsAccess::EditApp
@@ -537,9 +558,10 @@ impl AzureRuntimeCredentials {
             CredentialsAccess::EditUser | CredentialsAccess::ReadUser => {
                 (None, Some(format!("users/{}/apps/{}", sub, app_id)))
             }
+            CredentialsAccess::InvokeNone => (None, Some(format!("users/{}/apps/{}", sub, app_id))),
             CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
-            | CredentialsAccess::InvokeNone => (
+            | CredentialsAccess::ServerExecute => (
                 Some(format!("apps/{}", app_id)),
                 Some(format!("users/{}/apps/{}", sub, app_id)),
             ),
@@ -575,11 +597,39 @@ impl AzureRuntimeCredentials {
             None
         };
 
+        let meta_sas_token = match mode {
+            CredentialsAccess::EditApp | CredentialsAccess::ReadApp => app_sas_token.clone(),
+            CredentialsAccess::ServerExecute => Some(generate_directory_sas(
+                &self.account_name,
+                &self.meta_container,
+                &format!("apps/{}", app_id),
+                "rl",
+                &start,
+                &expiry_str,
+                &account_key,
+            )?),
+            _ => None,
+        };
+
+        let logs_sas_token = if matches!(mode, CredentialsAccess::ServerExecute) {
+            Some(generate_directory_sas(
+                &self.account_name,
+                &self.logs_container,
+                &format!("runs/{}", app_id),
+                "racwdl",
+                &start,
+                &expiry_str,
+                &account_key,
+            )?)
+        } else {
+            None
+        };
+
         Ok(Self {
-            meta_sas_token: app_sas_token.clone(),
+            meta_sas_token,
             content_sas_token: app_sas_token,
             user_content_sas_token: user_sas_token,
-            logs_sas_token: None,
+            logs_sas_token,
             meta_container: self.meta_container.clone(),
             content_container: self.content_container.clone(),
             logs_container: self.logs_container.clone(),
@@ -908,6 +958,122 @@ mod integration_tests {
                 let _ = dotenv::dotenv();
             }
         });
+    }
+
+    fn test_azure_runtime_credentials() -> AzureRuntimeCredentials {
+        AzureRuntimeCredentials {
+            meta_sas_token: None,
+            content_sas_token: None,
+            user_content_sas_token: None,
+            logs_sas_token: None,
+            meta_container: "meta-secret".to_string(),
+            content_container: "content-data".to_string(),
+            logs_container: "logs".to_string(),
+            account_name: "account".to_string(),
+            account_key: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string()),
+            expiration: None,
+            content_path_prefix: None,
+            user_content_path_prefix: None,
+        }
+    }
+
+    fn sas_permissions(token: &str) -> Option<&str> {
+        token.split('&').find_map(|part| part.strip_prefix("sp="))
+    }
+
+    #[tokio::test]
+    async fn test_azure_invoke_scopes_do_not_expose_meta_access() {
+        let creds = test_azure_runtime_credentials();
+
+        for mode in [
+            CredentialsAccess::InvokeNone,
+            CredentialsAccess::InvokeRead,
+            CredentialsAccess::InvokeWrite,
+        ] {
+            let scoped = creds
+                .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, mode.clone())
+                .await
+                .expect("scoped credentials should be generated");
+
+            assert!(
+                scoped.meta_sas_token.is_none(),
+                "{mode} must not expose app metadata"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_azure_invoke_none_does_not_grant_app_content_access() {
+        let creds = test_azure_runtime_credentials();
+        let scoped = creds
+            .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, CredentialsAccess::InvokeNone)
+            .await
+            .expect("scoped credentials should be generated");
+
+        assert!(scoped.content_sas_token.is_none());
+        assert_eq!(scoped.content_path_prefix, None);
+        assert!(scoped.user_content_sas_token.is_some());
+        assert_eq!(
+            scoped.user_content_path_prefix,
+            Some(format!("users/{}/apps/{}", TEST_SUB, TEST_APP_ID))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_azure_invoke_read_and_write_app_content_permissions() {
+        let creds = test_azure_runtime_credentials();
+
+        let read = creds
+            .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, CredentialsAccess::InvokeRead)
+            .await
+            .expect("read credentials should be generated");
+        let read_content = read
+            .content_sas_token
+            .as_deref()
+            .expect("InvokeRead should include app content read credentials");
+        assert_eq!(sas_permissions(read_content), Some("rl"));
+
+        let write = creds
+            .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, CredentialsAccess::InvokeWrite)
+            .await
+            .expect("write credentials should be generated");
+        let write_content = write
+            .content_sas_token
+            .as_deref()
+            .expect("InvokeWrite should include app content write credentials");
+        let permissions = sas_permissions(write_content).expect("SAS should include permissions");
+        assert!(permissions.contains('w'));
+        assert!(permissions.contains('d'));
+    }
+
+    #[tokio::test]
+    async fn test_azure_server_execute_has_meta_read_and_content_write() {
+        let creds = test_azure_runtime_credentials();
+        let scoped = creds
+            .scoped_credentials_for_test(TEST_SUB, TEST_APP_ID, CredentialsAccess::ServerExecute)
+            .await
+            .expect("server execute credentials should be generated");
+
+        let meta = scoped
+            .meta_sas_token
+            .as_deref()
+            .expect("ServerExecute should include meta read credentials");
+        assert_eq!(sas_permissions(meta), Some("rl"));
+
+        let content = scoped
+            .content_sas_token
+            .as_deref()
+            .expect("ServerExecute should include content credentials");
+        let content_permissions =
+            sas_permissions(content).expect("content SAS should include permissions");
+        assert!(content_permissions.contains('w'));
+        assert!(content_permissions.contains('d'));
+
+        assert!(scoped.logs_sas_token.is_some());
+        assert_eq!(
+            scoped.content_path_prefix,
+            Some(format!("apps/{}", TEST_APP_ID))
+        );
     }
 
     #[tokio::test]

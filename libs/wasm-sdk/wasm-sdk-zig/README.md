@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-zig
 
-Zig SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes. Zig compiles to extremely compact WASM with deterministic performance, no hidden allocations, and full control over memory.
+Zig SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes. Zig compiles to extremely compact WASM with deterministic performance, no hidden allocations, and full control over memory.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ Add the SDK as a dependency in `build.zig.zon`:
     .flow_like_wasm_sdk = .{
         .path = "../../libs/wasm-sdk/wasm-sdk-zig",
         // or once published:
-        // .url = "https://github.com/TM9657/flow-like/archive/refs/tags/v0.1.0.tar.gz",
+        // .url = "https://github.com/Rheosoph/flow-like/archive/refs/tags/v0.1.0.tar.gz",
         // .hash = "...",
     },
 },

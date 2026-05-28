@@ -1,9 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
-import { Download, HardDrive, Package, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Download, HardDrive, Loader2, Package, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import {
 	type InstalledPackage,
@@ -32,6 +32,8 @@ export interface PackageSearchDialogProps {
 	excludePackageIds?: string[];
 	appId?: string;
 }
+
+const PAGE_SIZE = 50;
 
 function installedToSummary(pkg: InstalledPackage): PackageSummary {
 	return {
@@ -71,18 +73,24 @@ export function PackageSearchDialog({
 		enabled: !!appId && open,
 	});
 
-	const results = useQuery<SearchResults>({
+	const remote = useInfiniteQuery<SearchResults>({
 		queryKey: ["registry-search-dialog", debouncedSearch],
-		queryFn: async () => {
+		initialPageParam: 0,
+		queryFn: async ({ pageParam }) => {
 			if (!profile.data) throw new Error("Profile not loaded");
 			const params = new URLSearchParams();
 			if (debouncedSearch) params.set("query", debouncedSearch);
-			params.set("limit", "20");
+			params.set("limit", String(PAGE_SIZE));
+			params.set("offset", String(pageParam));
 			params.set("include_own", "true");
 			return backend.apiState.get<SearchResults>(
 				profile.data,
 				`registry/search?${params.toString()}`,
 			);
+		},
+		getNextPageParam: (last) => {
+			const next = last.offset + last.packages.length;
+			return next < last.totalCount ? next : undefined;
 		},
 		enabled: !!profile.data && open && !isOffline.data,
 	});
@@ -93,16 +101,21 @@ export function PackageSearchDialog({
 		enabled: open && isOffline.data === true,
 	});
 
-	const mergedPackages = useMemo<PackageSummary[]>(() => {
-		const remote = results.data?.packages ?? [];
-		if (!isOffline.data) return remote;
+	const remotePackages = useMemo<PackageSummary[]>(
+		() => remote.data?.pages.flatMap((p) => p.packages) ?? [],
+		[remote.data],
+	);
 
-		const localSummaries = (localPackages.data ?? []).map(installedToSummary);
-		const remoteIds = new Set(remote.map((p) => p.id));
-		const merged = [
-			...remote,
-			...localSummaries.filter((p) => !remoteIds.has(p.id)),
-		];
+	const totalRemote = remote.data?.pages[0]?.totalCount ?? 0;
+
+	const mergedPackages = useMemo<PackageSummary[]>(() => {
+		if (!isOffline.data) return remotePackages;
+
+		const remoteIds = new Set(remotePackages.map((p) => p.id));
+		const localSummaries = (localPackages.data ?? [])
+			.map(installedToSummary)
+			.filter((p) => !remoteIds.has(p.id));
+		const merged = [...remotePackages, ...localSummaries];
 
 		if (!debouncedSearch) return merged;
 		const q = debouncedSearch.toLowerCase();
@@ -112,9 +125,39 @@ export function PackageSearchDialog({
 				p.description.toLowerCase().includes(q) ||
 				p.id.toLowerCase().includes(q),
 		);
-	}, [results.data, localPackages.data, isOffline.data, debouncedSearch]);
+	}, [remotePackages, localPackages.data, isOffline.data, debouncedSearch]);
 
-	const excludeSet = new Set(excludePackageIds);
+	const excludeSet = useMemo(
+		() => new Set(excludePackageIds),
+		[excludePackageIds],
+	);
+
+	const sentinelRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		if (isOffline.data) return;
+		const node = sentinelRef.current;
+		if (!node) return;
+		if (!remote.hasNextPage || remote.isFetchingNextPage) return;
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((e) => e.isIntersecting)) remote.fetchNextPage();
+			},
+			{ rootMargin: "200px" },
+		);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [
+		remote.hasNextPage,
+		remote.isFetchingNextPage,
+		remote.fetchNextPage,
+		isOffline.data,
+	]);
+
+	const initialLoading =
+		(remote.isLoading && !isOffline.data) ||
+		(localPackages.isLoading && isOffline.data === true);
+	const hasMore = !isOffline.data && remote.hasNextPage;
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -122,7 +165,9 @@ export function PackageSearchDialog({
 				<DialogHeader>
 					<DialogTitle>Add Package</DialogTitle>
 					<DialogDescription>
-						Search the registry and select a package to add.
+						{isOffline.data
+							? "Add a locally installed package to this project."
+							: "Search the registry and select a package to add."}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="relative shrink-0">
@@ -135,8 +180,14 @@ export function PackageSearchDialog({
 						autoFocus
 					/>
 				</div>
+				{!isOffline.data && totalRemote > 0 && (
+					<div className="shrink-0 px-1 text-[11px] text-muted-foreground">
+						Showing {mergedPackages.length.toLocaleString()} of{" "}
+						{totalRemote.toLocaleString()} packages
+					</div>
+				)}
 				<DialogBody>
-					{results.isLoading || localPackages.isLoading ? (
+					{initialLoading ? (
 						<SearchResultsSkeleton />
 					) : !mergedPackages.length ? (
 						<EmptyState
@@ -168,6 +219,21 @@ export function PackageSearchDialog({
 									/>
 								);
 							})}
+							{hasMore && (
+								<div
+									ref={sentinelRef}
+									className="flex items-center justify-center py-3 text-xs text-muted-foreground"
+								>
+									{remote.isFetchingNextPage ? (
+										<span className="inline-flex items-center gap-2">
+											<Loader2 className="h-3 w-3 animate-spin" />
+											Loading more...
+										</span>
+									) : (
+										"Scroll for more"
+									)}
+								</div>
+							)}
 						</div>
 					)}
 				</DialogBody>
@@ -239,8 +305,8 @@ function SearchResultItem({
 function SearchResultsSkeleton() {
 	return (
 		<div className="space-y-2 p-1">
-			{Array.from({ length: 4 }).map((_, i) => (
-				<div key={i} className="flex items-start gap-3 rounded-lg p-3">
+			{["a", "b", "c", "d"].map((k) => (
+				<div key={k} className="flex items-start gap-3 rounded-lg p-3">
 					<Skeleton className="h-4 w-4 mt-0.5 rounded" />
 					<div className="flex-1 space-y-2">
 						<Skeleton className="h-4 w-40" />

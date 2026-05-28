@@ -56,7 +56,7 @@ else()
     # Remote fetch for standalone template usage
     FetchContent_Declare(
         flow_like_wasm_sdk_lua
-        GIT_REPOSITORY https://github.com/TM9657/flow-like.git
+        GIT_REPOSITORY https://github.com/Rheosoph/flow-like.git
         GIT_TAG        dev
         SOURCE_SUBDIR  templates/wasm-sdk-lua
     )

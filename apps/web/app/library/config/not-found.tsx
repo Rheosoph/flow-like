@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@tm9657/flow-like-ui";
+import { Button } from "@flow-like/flow-like-ui";
 import { ArrowBigLeftIcon } from "lucide-react";
 
 export default function NotFound() {

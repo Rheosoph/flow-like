@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { IPage, IPageState, PageListItem } from "@tm9657/flow-like-ui";
+import type { IPage, IPageState, PageListItem } from "@flow-like/flow-like-ui";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

@@ -274,7 +274,7 @@ impl Agent {
         } else if let Some(history) = &self.history {
             history.get_system_prompt().unwrap_or_default()
         } else {
-            return None;
+            String::new()
         };
 
         // Append DataFusion context information
@@ -324,12 +324,18 @@ impl Agent {
                  to memory automatically so you can retrieve them with `_memory_search`.\n\n\
                  **Guidelines:**\n\
                  - ALWAYS search memory at the start of a new conversation\n\
+                 - If the user asks you to remember something, call `_memory_store` immediately\n\
+                 - Do not merely say you will remember something; store it with `_memory_store`\n\
                  - Store key facts, preferences, and decisions after learning them\n\
                  - Don't store trivial or transient information\n",
             );
         }
 
-        Some(base_prompt)
+        if base_prompt.trim().is_empty() {
+            None
+        } else {
+            Some(base_prompt)
+        }
     }
 
     /// Add a lazy function reference (points to a vector DB index)
@@ -350,5 +356,47 @@ impl Agent {
     /// Set persistent memory configuration
     pub fn set_memory(&mut self, config: MemoryConfig) {
         self.memory = Some(config);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generative::embedding::CachedEmbeddingModel;
+    use flow_like::bit::{Bit, BitTypes};
+    use flow_like_catalog_core::NodeDBConnection;
+
+    fn memory_config() -> MemoryConfig {
+        MemoryConfig::new(
+            NodeDBConnection {
+                cache_key: "memory-db".to_string(),
+            },
+            CachedEmbeddingModel {
+                cache_key: "embedding-model".to_string(),
+                model_type: BitTypes::Embedding,
+            },
+        )
+    }
+
+    #[test]
+    fn memory_prompt_is_added_without_base_system_prompt() {
+        let mut agent = Agent::new(Bit::default(), 4);
+        agent.set_memory(memory_config());
+
+        let prompt = agent
+            .get_system_prompt()
+            .expect("memory-enabled agent should get memory instructions");
+
+        assert!(prompt.contains("## Memory"));
+        assert!(prompt.contains("_memory_search"));
+        assert!(prompt.contains("_memory_store"));
+        assert!(prompt.contains("call `_memory_store` immediately"));
+    }
+
+    #[test]
+    fn empty_agent_without_capabilities_has_no_system_prompt() {
+        let agent = Agent::new(Bit::default(), 4);
+
+        assert!(agent.get_system_prompt().is_none());
     }
 }

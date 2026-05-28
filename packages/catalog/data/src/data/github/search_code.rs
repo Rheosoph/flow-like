@@ -1,4 +1,4 @@
-use super::provider::{GITHUB_PROVIDER_ID, GitHubProvider};
+use super::provider::{GITHUB_API_VERSION, GITHUB_PROVIDER_ID, GitHubProvider};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -51,6 +51,7 @@ impl NodeLogic for SearchGitHubCodeNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
+        node.set_version(1);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -96,6 +97,22 @@ impl NodeLogic for SearchGitHubCodeNode {
             VariableType::String,
         )
         .set_default_value(Some(json!("")));
+
+        node.add_input_pin("sort", "Sort", "Sort field", VariableType::String)
+            .set_default_value(Some(json!("")))
+            .set_options(
+                PinOptions::new()
+                    .set_valid_values(vec!["".to_string(), "indexed".to_string()])
+                    .build(),
+            );
+
+        node.add_input_pin("order", "Order", "Sort order", VariableType::String)
+            .set_default_value(Some(json!("desc")))
+            .set_options(
+                PinOptions::new()
+                    .set_valid_values(vec!["asc".to_string(), "desc".to_string()])
+                    .build(),
+            );
 
         node.add_input_pin(
             "per_page",
@@ -164,6 +181,11 @@ impl NodeLogic for SearchGitHubCodeNode {
         let language: String = context.evaluate_pin("language").await.unwrap_or_default();
         let path: String = context.evaluate_pin("path").await.unwrap_or_default();
         let extension: String = context.evaluate_pin("extension").await.unwrap_or_default();
+        let sort: String = context.evaluate_pin("sort").await.unwrap_or_default();
+        let order: String = context
+            .evaluate_pin("order")
+            .await
+            .unwrap_or_else(|_| "desc".to_string());
         let per_page: i64 = context.evaluate_pin("per_page").await.unwrap_or(30);
         let page: i64 = context.evaluate_pin("page").await.unwrap_or(1);
 
@@ -191,19 +213,26 @@ impl NodeLogic for SearchGitHubCodeNode {
             q.push_str(&format!(" extension:{}", extension));
         }
 
-        let url = provider.api_url(&format!(
+        let mut url = provider.api_url(&format!(
             "/search/code?q={}&per_page={}&page={}",
             urlencoding::encode(&q),
             per_page.clamp(1, 100),
             page.max(1)
         ));
+        if !sort.is_empty() {
+            url.push_str(&format!(
+                "&sort={}&order={}",
+                urlencoding::encode(&sort),
+                urlencoding::encode(&order)
+            ));
+        }
 
         let client = reqwest::Client::new();
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
+            .header("Authorization", provider.auth_header())
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header("User-Agent", "flow-like")
             .send()
             .await;

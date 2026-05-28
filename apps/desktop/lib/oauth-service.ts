@@ -1,8 +1,8 @@
-import { type OAuthService, createOAuthService } from "@tm9657/flow-like-ui";
+import { type OAuthService, createOAuthService } from "@flow-like/flow-like-ui";
 import { oauthTokenStore } from "./oauth-db";
 import { tauriOAuthRuntime } from "./tauri-oauth-runtime";
 
-export type { IOAuthProvider } from "@tm9657/flow-like-ui";
+export type { IOAuthProvider } from "@flow-like/flow-like-ui";
 
 let cachedService: OAuthService | null = null;
 let cachedApiBaseUrl: string | undefined;

@@ -10,13 +10,13 @@ import type {
 	IPurchaseResponse,
 	UpsertAppCommentRequest,
 	UpsertAppCommentResponse,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import {
 	IExecutionStage,
 	ILogLevel,
 	isAzureBlobStorageUrl,
-} from "@tm9657/flow-like-ui";
-import type { IAppSearchSort } from "@tm9657/flow-like-ui/lib/schema/app/app-search-query";
+} from "@flow-like/flow-like-ui";
+import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
@@ -24,8 +24,8 @@ import type {
 	IForkPreviewTarget,
 	IOnlineForkBody,
 	IOnlineForkResponse,
-} from "@tm9657/flow-like-ui/lib/schema/app/fork";
-import type { IMediaItem } from "@tm9657/flow-like-ui/state/backend-state/app-state";
+} from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
 import {
 	type WebBackendRef,
 	apiDelete,

@@ -4,7 +4,7 @@ import type {
 	IAnalyticsState,
 	IAnalyticsStats,
 	IPaginatedFeedback,
-} from "@tm9657/flow-like-ui/state/backend-state/analytics-state";
+} from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

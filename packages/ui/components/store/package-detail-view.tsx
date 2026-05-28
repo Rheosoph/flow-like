@@ -36,6 +36,7 @@ import {
 import {
 	type PackageMeta,
 	type PackageReview,
+	type PackageVersion,
 	PackageStatus,
 	type RegistryEntry,
 } from "../../lib/schema/wasm";
@@ -90,6 +91,14 @@ function PermissionBadge({
 	);
 }
 
+function PackageMarkdown({ content }: { content: string }) {
+	return (
+		<div className="text-sm leading-7 text-foreground/90 [&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:decoration-primary/50 [&_a]:underline-offset-4 [&_a:hover]:decoration-primary [&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1.5 [&_code]:py-0.5 [&_h1]:mb-2 [&_h1]:mt-7 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:tracking-tight [&_h1:first-of-type]:mt-0 [&_h2]:mb-2 [&_h2]:mt-6 [&_h2]:text-xl [&_h2]:font-semibold [&_h2:first-of-type]:mt-0 [&_h3]:mb-1.5 [&_h3]:mt-5 [&_h3]:text-lg [&_h3]:font-semibold [&_h3:first-of-type]:mt-0 [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:py-0.5 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-6">
+			<TextEditor initialContent={content} isMarkdown />
+		</div>
+	);
+}
+
 function NodeCard({
 	node,
 }: {
@@ -115,26 +124,59 @@ function NodeCard({
 function VersionRow({
 	version,
 	isLatest,
+	canInstall,
+	installedVersion,
+	isInstalling,
+	onInstall,
 }: {
-	version: {
-		version: string;
-		publishedAt: string;
-		releaseNotes?: string;
-		yanked: boolean;
-	};
+	version: PackageVersion;
 	isLatest: boolean;
+	canInstall: boolean;
+	installedVersion?: string | null;
+	isInstalling?: boolean;
+	onInstall?: (version: string) => void;
 }) {
+	const isInstalled = installedVersion === version.version;
+	const isPending = version.status === PackageStatus.PendingReview;
+	const isRejected = version.status === PackageStatus.Rejected;
+	const isDisabled = version.status === PackageStatus.Disabled;
+	const isVersionInstallable = !version.yanked && !isRejected && !isDisabled;
+
 	return (
-		<div className="flex items-center justify-between py-2 border-b last:border-0">
-			<div className="flex items-center gap-2">
+		<div className="flex items-center justify-between gap-3 py-2 border-b last:border-0">
+			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
 				<code className="text-sm font-mono">{version.version}</code>
 				{isLatest && <Badge variant="secondary">Latest</Badge>}
+				{isPending && <Badge variant="outline">Pending Review</Badge>}
+				{isRejected && <Badge variant="destructive">Rejected</Badge>}
+				{isDisabled && <Badge variant="secondary">Disabled</Badge>}
 				{version.yanked && <Badge variant="destructive">Yanked</Badge>}
 			</div>
-			<RelativeTime
-				className="text-sm text-muted-foreground"
-				value={version.publishedAt}
-			/>
+			<div className="flex shrink-0 items-center gap-3">
+				<RelativeTime
+					className="text-sm text-muted-foreground"
+					value={version.publishedAt}
+				/>
+				{canInstall && isVersionInstallable && onInstall && (
+					<Button
+						size="sm"
+						variant={isInstalled ? "secondary" : "outline"}
+						disabled={isInstalled || isInstalling}
+						onClick={() => onInstall(version.version)}
+					>
+						{isInstalled ? (
+							<Check className="mr-2 h-3.5 w-3.5" />
+						) : (
+							<Download className="mr-2 h-3.5 w-3.5" />
+						)}
+						{isInstalled
+							? "Installed"
+							: isPending
+								? "Install for testing"
+								: "Install"}
+					</Button>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -481,31 +523,48 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	}
 
 	const manifest = pkg.manifest;
+	const canManagePublication =
+		currentUserPermission != null &&
+		isMaintainer(currentUserPermission) &&
+		!!fetcher;
+	const hasPendingVersion = pkg.versions.some(
+		(version) => version.status === PackageStatus.PendingReview,
+	);
 	const latestVersion =
-		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
+		pkg.versions.find(
+			(v) =>
+				!v.yanked &&
+				v.status !== PackageStatus.Rejected &&
+				v.status !== PackageStatus.Disabled,
+		)?.version ?? pkg.versions[0]?.version;
+	const canInstallForReview =
+		canManagePublication &&
+		!!latestVersion &&
+		(hasPendingVersion || pkg.status === PackageStatus.PendingReview);
 	const isInstallable =
 		pkg.status === PackageStatus.Active ||
-		pkg.status === PackageStatus.Deprecated;
+		pkg.status === PackageStatus.Deprecated ||
+		canInstallForReview;
 	const isInstalled = !!installedVersion;
 	const hasUpdate =
-		isInstallable && isInstalled && installedVersion !== latestVersion;
+		isInstallable &&
+		isInstalled &&
+		!!latestVersion &&
+		installedVersion !== latestVersion;
 	const unavailableActionLabel =
 		pkg.status === PackageStatus.PendingReview
 			? "Pending review"
 			: pkg.status === PackageStatus.Disabled
 				? "Disabled"
-				: "Unavailable";
+				: pkg.status === PackageStatus.Rejected
+					? "Rejected"
+					: "Unavailable";
 	const unavailableActionMessage = isInstalled
 		? `Updates are unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`
 		: `Install is unavailable while this package is ${unavailableActionLabel.toLowerCase()}.`;
-	const canManagePublication =
-		currentUserPermission != null &&
-		isMaintainer(currentUserPermission) &&
-		!!fetcher;
 	const showPublicationAudit =
 		canManagePublication &&
-		visibility === "private" &&
-		pkg.status !== PackageStatus.Active;
+		(pkg.status !== PackageStatus.Active || hasPendingVersion);
 	const showPublicationRequest =
 		currentUserPermission != null &&
 		isOwner(currentUserPermission) &&
@@ -523,8 +582,18 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 				</Button>
 
 				{/* Header Card */}
-				<Card>
-					<CardHeader>
+				<Card className="relative overflow-hidden bg-card/75">
+					{meta?.thumbnail && (
+						<>
+							<img
+								src={meta.thumbnail}
+								alt=""
+								className="absolute inset-0 h-full w-full scale-[1.02] object-cover opacity-[0.18] saturate-125 dark:opacity-[0.26]"
+							/>
+							<div className="absolute inset-0 bg-linear-to-r from-card via-card/85 to-card/55" />
+						</>
+					)}
+					<CardHeader className="relative z-10">
 						<div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
 							<div className="flex items-start gap-4">
 								<Avatar className="h-14 w-14 rounded-lg">
@@ -552,6 +621,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										{pkg.status === PackageStatus.PendingReview && (
 											<Badge variant="secondary" className="gap-1">
 												Pending Review
+											</Badge>
+										)}
+										{pkg.status === PackageStatus.Rejected && (
+											<Badge variant="destructive" className="gap-1">
+												Rejected
 											</Badge>
 										)}
 										{pkg.verified && (
@@ -681,7 +755,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 										) : (
 											<Download className="mr-2 h-4 w-4" />
 										)}
-										Install
+										{canInstallForReview ? "Install for testing" : "Install"}
 									</Button>
 								)}
 							</div>
@@ -718,18 +792,12 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 					<TabsContent value="overview" className="space-y-4">
 						{/* Long Description */}
 						{meta?.longDescription && (
-							<Card>
+							<Card className="gap-3">
 								<CardHeader>
 									<CardTitle className="text-base">About</CardTitle>
 								</CardHeader>
 								<CardContent>
-									<div className="leading-relaxed">
-										<TextEditor
-											initialContent={meta.longDescription}
-											isMarkdown
-											minimal
-										/>
-									</div>
+									<PackageMarkdown content={meta.longDescription} />
 								</CardContent>
 							</Card>
 						)}
@@ -1210,6 +1278,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 												key={v.version}
 												version={v}
 												isLatest={idx === 0}
+												canInstall={canManagePublication}
+												installedVersion={installedVersion}
+												isInstalling={isInstalling}
+												onInstall={onInstall}
 											/>
 										))}
 									</div>

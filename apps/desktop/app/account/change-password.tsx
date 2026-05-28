@@ -11,7 +11,7 @@ import {
 	DialogTitle,
 	Input,
 	Label,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { updatePassword } from "aws-amplify/auth";
 import { Eye, EyeOff } from "lucide-react";
 import { useCallback, useState } from "react";

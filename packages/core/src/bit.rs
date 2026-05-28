@@ -873,7 +873,12 @@ impl Bit {
             let model = model_factory
                 .lock()
                 .await
-                .build(self, context.app_state.clone(), context.token.clone())
+                .build(
+                    self,
+                    context.app_state.clone(),
+                    context.token.clone(),
+                    context.model_usage_context(),
+                )
                 .await?;
             let additional_params = model.additional_params(history);
             let default_model = model.default_model().await.unwrap_or_default();

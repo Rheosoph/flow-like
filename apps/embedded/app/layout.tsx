@@ -1,5 +1,5 @@
 "use client";
-import "@tm9657/flow-like-ui/globals.css";
+import "@flow-like/flow-like-ui/globals.css";
 import type { Viewport } from "next";
 
 import {
@@ -11,7 +11,7 @@ import {
 	Toaster,
 	TooltipProvider,
 	createIDBPersister,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { Inter } from "next/font/google";
 import { Suspense } from "react";
 

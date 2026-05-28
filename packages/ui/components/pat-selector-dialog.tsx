@@ -23,8 +23,8 @@ import {
 	Separator,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
-import { cn } from "@tm9657/flow-like-ui/lib/utils";
+} from "@flow-like/flow-like-ui";
+import { cn } from "@flow-like/flow-like-ui/lib/utils";
 import { format } from "date-fns";
 import {
 	CalendarIcon,

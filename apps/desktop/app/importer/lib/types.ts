@@ -1,4 +1,4 @@
-import type { IBoard, INode } from "@tm9657/flow-like-ui";
+import type { IBoard, INode } from "@flow-like/flow-like-ui";
 
 export type ImportFormat = "n8n" | "dify" | "unknown";
 

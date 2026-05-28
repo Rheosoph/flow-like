@@ -1,5 +1,5 @@
-import type { IRoleState } from "@tm9657/flow-like-ui";
-import type { IBackendRole } from "@tm9657/flow-like-ui/state/backend-state/types";
+import type { IRoleState } from "@flow-like/flow-like-ui";
+import type { IBackendRole } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

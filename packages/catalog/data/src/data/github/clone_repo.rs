@@ -140,10 +140,7 @@ impl NodeLogic for CloneGitHubRepoNode {
             return Ok(());
         }
 
-        let clone_url = format!(
-            "https://{}@github.com/{}/{}.git",
-            provider.access_token, owner, repo
-        );
+        let clone_url = provider.clone_url(&owner, &repo);
 
         let store = target_dir.to_store(context).await?;
         let is_local = matches!(&store, FlowLikeStore::Local(_));

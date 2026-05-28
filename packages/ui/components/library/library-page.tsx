@@ -65,7 +65,15 @@ export function LibraryPage({
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [visibilityMode, setVisibilityMode] = useState(false);
-	const [sortMode, setSortMode] = useState<SortMode>("recent");
+	const [sortMode, setSortMode] = useState<SortMode>(() => {
+		if (typeof window === "undefined") return "recent";
+		const stored = window.localStorage.getItem("library.sortMode");
+		return stored === "alpha" || stored === "recent" ? stored : "recent";
+	});
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		window.localStorage.setItem("library.sortMode", sortMode);
+	}, [sortMode]);
 	const isMobile = useIsMobile();
 
 	const handleAppClick = useCallback(
@@ -83,8 +91,11 @@ export function LibraryPage({
 	const appHref = useCallback((appId: string) => `/use?id=${appId}`, []);
 
 	const handleSettingsClick = useCallback(
-		(appId: string) => router.push(`/library/config?id=${appId}`),
-		[router],
+		(appId: string) => {
+			queryClient.invalidateQueries();
+			router.push(`/library/config?id=${appId}`);
+		},
+		[queryClient, router],
 	);
 
 	const profileAppMap = useMemo(() => {
@@ -193,14 +204,7 @@ export function LibraryPage({
 	}, [allItems, profileAppMap]);
 
 	const recentItems = useMemo(
-		() =>
-			itemsForDisplay
-				.toSorted(
-					(a, b) =>
-						(b.updated_at?.secs_since_epoch ?? 0) -
-						(a.updated_at?.secs_since_epoch ?? 0),
-				)
-				.slice(0, 10),
+		() => sortItems(itemsForDisplay, "recent").slice(0, 10),
 		[itemsForDisplay],
 	);
 

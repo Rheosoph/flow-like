@@ -1,6 +1,6 @@
 "use client";
 import { createId } from "@paralleldrive/cuid2";
-import { SidebarTrigger } from "@tm9657/flow-like-ui";
+import { SidebarTrigger } from "@flow-like/flow-like-ui";
 import React, {
 	createContext,
 	useCallback,

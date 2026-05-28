@@ -14,7 +14,7 @@ import {
 	Textarea,
 	useBackend,
 	useInvoke,
-} from "@tm9657/flow-like-ui";
+} from "@flow-like/flow-like-ui";
 import { Save } from "lucide-react";
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";

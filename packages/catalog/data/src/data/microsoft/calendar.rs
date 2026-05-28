@@ -1,4 +1,7 @@
-use super::provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider};
+use super::{
+    graph::{graph_error_message, graph_get_paginated_values},
+    provider::{MICROSOFT_PROVIDER_ID, MicrosoftGraphProvider},
+};
 use chrono::{DateTime, Utc};
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -144,6 +147,7 @@ impl NodeLogic for ListCalendarsNode {
             "List all calendars for the user",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -176,28 +180,15 @@ impl NodeLogic for ListCalendarsNode {
         let provider: MicrosoftGraphProvider = context.evaluate_pin("provider").await?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get("https://graph.microsoft.com/v1.0/me/calendars")
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let calendars: Vec<Calendar> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_calendar).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, provider.api_url("/me/calendars"))
+            .await
+        {
+            Ok(values) => {
+                let calendars: Vec<Calendar> = values.iter().filter_map(parse_calendar).collect();
                 let count = calendars.len() as i64;
                 context.set_pin_value("calendars", json!(calendars)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -234,6 +225,7 @@ impl NodeLogic for CreateCalendarNode {
             "Create a new calendar",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -294,7 +286,7 @@ impl NodeLogic for CreateCalendarNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/me/calendars")
+            .post(provider.api_url("/me/calendars"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -315,7 +307,7 @@ impl NodeLogic for CreateCalendarNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -354,6 +346,7 @@ impl NodeLogic for ListEventsNode {
             "List calendar events within a time range",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -408,43 +401,28 @@ impl NodeLogic for ListEventsNode {
         let end_date: DateTime<Utc> = context.evaluate_pin("end_date").await?;
         let top: i64 = context.evaluate_pin("top").await.unwrap_or(50);
 
-        let url = if calendar_id.is_empty() {
-            "https://graph.microsoft.com/v1.0/me/calendar/calendarView".to_string()
+        let base_url = if calendar_id.is_empty() {
+            provider.api_url("/me/calendar/calendarView")
         } else {
-            format!(
-                "https://graph.microsoft.com/v1.0/me/calendars/{}/calendarView",
-                calendar_id
-            )
+            provider.api_url(&format!("/me/calendars/{}/calendarView", calendar_id))
         };
+        let url = reqwest::Url::parse_with_params(
+            &base_url,
+            [
+                ("startDateTime", start_date.to_rfc3339()),
+                ("endDateTime", end_date.to_rfc3339()),
+                ("$top", top.to_string()),
+            ],
+        )?;
 
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", provider.access_token))
-            .query(&[
-                ("startDateTime", &start_date.to_rfc3339()),
-                ("endDateTime", &end_date.to_rfc3339()),
-                ("$top", &top.to_string()),
-            ])
-            .send()
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                let body: Value = resp.json().await?;
-                let events: Vec<CalendarEvent> = body["value"]
-                    .as_array()
-                    .map(|arr| arr.iter().filter_map(parse_event).collect())
-                    .unwrap_or_default();
+        match graph_get_paginated_values(&client, &provider, url.to_string()).await {
+            Ok(values) => {
+                let events: Vec<CalendarEvent> = values.iter().filter_map(parse_event).collect();
                 let count = events.len() as i64;
                 context.set_pin_value("events", json!(events)).await?;
                 context.set_pin_value("count", json!(count)).await?;
                 context.activate_exec_pin("exec_out").await?;
-            }
-            Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
-                context.set_pin_value("error_message", json!(error)).await?;
-                context.activate_exec_pin("error").await?;
             }
             Err(e) => {
                 context
@@ -481,6 +459,7 @@ impl NodeLogic for CreateEventNode {
             "Create a new calendar event",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -616,7 +595,7 @@ impl NodeLogic for CreateEventNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/me/calendar/events")
+            .post(provider.api_url("/me/calendar/events"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -637,7 +616,7 @@ impl NodeLogic for CreateEventNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -676,6 +655,7 @@ impl NodeLogic for DeleteEventNode {
             "Delete a calendar event",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -712,10 +692,7 @@ impl NodeLogic for DeleteEventNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .delete(format!(
-                "https://graph.microsoft.com/v1.0/me/events/{}",
-                event_id
-            ))
+            .delete(provider.api_url(&format!("/me/events/{}", event_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .send()
             .await;
@@ -725,7 +702,7 @@ impl NodeLogic for DeleteEventNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -764,6 +741,7 @@ impl NodeLogic for FindMeetingTimesNode {
             "Find available meeting times for attendees",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -865,7 +843,7 @@ impl NodeLogic for FindMeetingTimesNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/me/findMeetingTimes")
+            .post(provider.api_url("/me/findMeetingTimes"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -887,7 +865,7 @@ impl NodeLogic for FindMeetingTimesNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -926,6 +904,7 @@ impl NodeLogic for GetScheduleNode {
             "Get free/busy schedule for users",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1015,7 +994,7 @@ impl NodeLogic for GetScheduleNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .post("https://graph.microsoft.com/v1.0/me/calendar/getSchedule")
+            .post(provider.api_url("/me/calendar/getSchedule"))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -1029,7 +1008,7 @@ impl NodeLogic for GetScheduleNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }
@@ -1068,6 +1047,7 @@ impl NodeLogic for UpdateEventNode {
             "Update an existing calendar event",
             "Data/Microsoft/Calendar",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/outlook.svg");
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
@@ -1171,10 +1151,7 @@ impl NodeLogic for UpdateEventNode {
 
         let client = reqwest::Client::new();
         let response = client
-            .patch(format!(
-                "https://graph.microsoft.com/v1.0/me/events/{}",
-                event_id
-            ))
+            .patch(provider.api_url(&format!("/me/events/{}", event_id)))
             .header("Authorization", format!("Bearer {}", provider.access_token))
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -1195,7 +1172,7 @@ impl NodeLogic for UpdateEventNode {
                 }
             }
             Ok(resp) => {
-                let error = resp.text().await.unwrap_or_default();
+                let error = graph_error_message(resp).await;
                 context.set_pin_value("error_message", json!(error)).await?;
                 context.activate_exec_pin("error").await?;
             }

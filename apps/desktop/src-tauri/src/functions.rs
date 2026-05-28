@@ -34,6 +34,14 @@ impl TauriFunctionError {
     }
 }
 
+impl std::fmt::Display for TauriFunctionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.error)
+    }
+}
+
+impl std::error::Error for TauriFunctionError {}
+
 // impl From<flow_like::flow_like_storage::async_duckdb::Error> for TauriFunctionError {
 //     fn from(error: flow_like::flow_like_storage::async_duckdb::Error) -> Self {
 //         Self {

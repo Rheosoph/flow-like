@@ -1,6 +1,6 @@
 # flow-like-wasm-sdk-nim
 
-Nim SDK for building [Flow-Like](https://github.com/TM9657/flow-like) WASM nodes. Nim compiles to C, then Emscripten compiles the C output to WebAssembly. This gives you Nim's expressive syntax with near-native WASM performance.
+Nim SDK for building [Flow-Like](https://github.com/Rheosoph/flow-like) WASM nodes. Nim compiles to C, then Emscripten compiles the C output to WebAssembly. This gives you Nim's expressive syntax with near-native WASM performance.
 
 ## Prerequisites
 

@@ -1,14 +1,13 @@
 use super::provider::{NOTION_PROVIDER_ID, NotionProvider};
+use super::utils::{NOTION_API_VERSION, auth_header, notion_error, plain_text_from_rich_text};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
-
-const NOTION_API_VERSION: &str = "2022-06-28";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotionDatabaseProperty {
@@ -19,12 +18,19 @@ pub struct NotionDatabaseProperty {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NotionDatabaseDataSource {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotionDatabaseSchema {
     pub id: String,
     pub title: String,
     pub description: Option<String>,
     pub url: String,
     pub properties: Vec<NotionDatabaseProperty>,
+    pub data_sources: Vec<NotionDatabaseDataSource>,
     pub is_inline: bool,
     pub created_time: String,
     pub last_edited_time: String,
@@ -49,6 +55,7 @@ impl NodeLogic for GetNotionDatabaseNode {
             "Retrieves a Notion database schema with its properties",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -105,7 +112,15 @@ impl NodeLogic for GetNotionDatabaseNode {
             "List of property names in the database",
             VariableType::String,
         )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        .set_value_type(ValueType::Array);
+
+        node.add_output_pin(
+            "data_source_ids",
+            "Data Source IDs",
+            "List of data source IDs belonging to this database",
+            VariableType::String,
+        )
+        .set_value_type(ValueType::Array);
 
         node.add_required_oauth_scopes(NOTION_PROVIDER_ID, vec![]);
         node.set_scores(
@@ -147,7 +162,7 @@ impl NodeLogic for GetNotionDatabaseNode {
 
         let response = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", auth_header(&access_token))
             .header("Notion-Version", NOTION_API_VERSION)
             .send()
             .await;
@@ -155,12 +170,7 @@ impl NodeLogic for GetNotionDatabaseNode {
         match response {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    let status = resp.status();
-                    let error_text = resp.text().await.unwrap_or_default();
-                    context.log_message(
-                        &format!("Notion API error {}: {}", status, error_text),
-                        LogLevel::Error,
-                    );
+                    context.log_message(&notion_error(resp).await, LogLevel::Error);
                     context.activate_exec_pin("error").await?;
                     return Ok(());
                 }
@@ -170,18 +180,19 @@ impl NodeLogic for GetNotionDatabaseNode {
                     .await
                     .map_err(|e| flow_like_types::anyhow!("Failed to parse response: {}", e))?;
 
-                let title = db_data["title"]
-                    .as_array()
-                    .and_then(|arr| arr.first())
-                    .and_then(|t| t["plain_text"].as_str())
-                    .unwrap_or("Untitled")
-                    .to_string();
+                let title_text = plain_text_from_rich_text(&db_data["title"]);
+                let title = if title_text.is_empty() {
+                    "Untitled".to_string()
+                } else {
+                    title_text
+                };
 
-                let description = db_data["description"]
-                    .as_array()
-                    .and_then(|arr| arr.first())
-                    .and_then(|t| t["plain_text"].as_str())
-                    .map(String::from);
+                let description_text = plain_text_from_rich_text(&db_data["description"]);
+                let description = if description_text.is_empty() {
+                    None
+                } else {
+                    Some(description_text)
+                };
 
                 let mut properties: Vec<NotionDatabaseProperty> = Vec::new();
                 let mut property_names: Vec<String> = Vec::new();
@@ -201,12 +212,32 @@ impl NodeLogic for GetNotionDatabaseNode {
                     }
                 }
 
+                let data_sources: Vec<NotionDatabaseDataSource> = db_data["data_sources"]
+                    .as_array()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|data_source| {
+                                Some(NotionDatabaseDataSource {
+                                    id: data_source["id"].as_str()?.to_string(),
+                                    name: data_source["name"].as_str().unwrap_or("").to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let data_source_ids: Vec<String> = data_sources
+                    .iter()
+                    .map(|data_source| data_source.id.clone())
+                    .collect();
+
                 let schema = NotionDatabaseSchema {
                     id: db_data["id"].as_str().unwrap_or("").to_string(),
                     title: title.clone(),
                     description,
                     url: db_data["url"].as_str().unwrap_or("").to_string(),
                     properties,
+                    data_sources,
                     is_inline: db_data["is_inline"].as_bool().unwrap_or(false),
                     created_time: db_data["created_time"].as_str().unwrap_or("").to_string(),
                     last_edited_time: db_data["last_edited_time"]
@@ -224,6 +255,9 @@ impl NodeLogic for GetNotionDatabaseNode {
                 context.set_pin_value("title", json!(title)).await?;
                 context
                     .set_pin_value("property_names", json!(property_names))
+                    .await?;
+                context
+                    .set_pin_value("data_source_ids", json!(data_source_ids))
                     .await?;
                 context.activate_exec_pin("exec_out").await?;
             }

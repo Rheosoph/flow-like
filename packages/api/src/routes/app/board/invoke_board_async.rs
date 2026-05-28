@@ -71,10 +71,9 @@ pub struct InvokeBoardAsyncResponse {
     pub backend: String,
 }
 
-/// Get credentials access for invoke - always InvokeWrite since
-/// server-side execution is scoped through workflow logic
+/// Get credentials access for remote server-side execution.
 fn get_credentials_access() -> crate::credentials::CredentialsAccess {
-    crate::credentials::CredentialsAccess::InvokeWrite
+    crate::credentials::CredentialsAccess::ServerExecute
 }
 
 /// POST /apps/{app_id}/board/{board_id}/invoke/async
@@ -196,9 +195,19 @@ pub async fn invoke_board_async(
         ApiError::internal_error(anyhow!("Failed to sign user JWT: {}", e))
     })?;
 
-    // Get scoped credentials based on user permissions
+    // Resolve independent dispatch inputs concurrently: STS scoped
+    // credentials, user profile, and WASM package URLs do not depend on each
+    // other and are all on the hot invoke path.
     let access = get_credentials_access();
-    let credentials = state.scoped_credentials(&sub, &app_id, access).await?;
+    let (credentials_result, profile, wasm_packages) = {
+        use flow_like_types::tokio;
+        tokio::join!(
+            state.scoped_credentials(&sub, &app_id, access),
+            fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id),
+            resolve_wasm_packages(&state, &app_id),
+        )
+    };
+    let credentials = credentials_result?;
 
     // Convert to SharedCredentials for runtime compatibility
     let shared_credentials = credentials.into_shared_credentials();
@@ -222,11 +231,6 @@ pub async fn invoke_board_async(
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
-
-    let profile =
-        fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id).await;
-
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     let request = DispatchRequest {
         run_id: run_id.clone(),

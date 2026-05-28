@@ -1,4 +1,5 @@
 use super::provider::{NOTION_PROVIDER_ID, NotionProvider};
+use super::utils::{NOTION_API_VERSION, auth_header, notion_error, title_from_object};
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
@@ -7,8 +8,6 @@ use flow_like::flow::{
 };
 use flow_like_types::{JsonSchema, Value, async_trait, json::json, reqwest};
 use serde::{Deserialize, Serialize};
-
-const NOTION_API_VERSION: &str = "2022-06-28";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NotionSearchResult {
@@ -47,6 +46,7 @@ impl NodeLogic for SearchNotionNode {
             "Searches across all pages and databases the integration has access to",
             "Data/Notion",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/notion.svg");
 
         node.add_input_pin(
@@ -105,6 +105,22 @@ impl NodeLogic for SearchNotionNode {
         )
         .set_default_value(Some(json!(100)));
 
+        node.add_input_pin(
+            "start_cursor",
+            "Start Cursor",
+            "Pagination cursor from a previous search",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "fetch_all",
+            "Fetch All",
+            "Fetch every available page of results",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+
         node.add_output_pin(
             "exec_out",
             "Success",
@@ -143,6 +159,13 @@ impl NodeLogic for SearchNotionNode {
             VariableType::Boolean,
         );
 
+        node.add_output_pin(
+            "next_cursor",
+            "Next Cursor",
+            "Cursor to request the next page of results",
+            VariableType::String,
+        );
+
         node.add_required_oauth_scopes(NOTION_PROVIDER_ID, vec![]);
         node.set_scores(
             NodeScores::new()
@@ -169,6 +192,11 @@ impl NodeLogic for SearchNotionNode {
         let filter_type: String = context.evaluate_pin("filter_type").await?;
         let sort_direction: String = context.evaluate_pin("sort_direction").await?;
         let page_size: i64 = context.evaluate_pin("page_size").await?;
+        let start_cursor: String = context
+            .evaluate_pin("start_cursor")
+            .await
+            .unwrap_or_default();
+        let fetch_all: bool = context.evaluate_pin("fetch_all").await.unwrap_or(false);
 
         let mut body = json!({
             "page_size": page_size.clamp(1, 100),
@@ -193,89 +221,98 @@ impl NodeLogic for SearchNotionNode {
 
         context.log_message(&format!("Searching Notion for: {}", query), LogLevel::Debug);
 
-        let response = client
-            .post("https://api.notion.com/v1/search")
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("Notion-Version", NOTION_API_VERSION)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
+        let mut cursor = if start_cursor.is_empty() {
+            None
+        } else {
+            Some(start_cursor)
+        };
+        let mut all_items: Vec<Value> = Vec::new();
+        let mut has_more: bool;
+        let mut next_cursor: Option<String>;
 
-        match response {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let error_text = resp.text().await.unwrap_or_default();
-                    context.log_message(
-                        &format!("Notion API error {}: {}", status, error_text),
-                        LogLevel::Error,
-                    );
+        loop {
+            let mut request_body = body.clone();
+            if let Some(cursor) = &cursor {
+                request_body["start_cursor"] = json!(cursor);
+            }
+
+            let response = client
+                .post("https://api.notion.com/v1/search")
+                .header("Authorization", auth_header(&access_token))
+                .header("Notion-Version", NOTION_API_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await;
+
+            let search_response = match response {
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        context.log_message(&notion_error(resp).await, LogLevel::Error);
+                        context.activate_exec_pin("error").await?;
+                        return Ok(());
+                    }
+
+                    resp.json::<SearchResponse>()
+                        .await
+                        .map_err(|e| flow_like_types::anyhow!("Failed to parse response: {}", e))?
+                }
+                Err(e) => {
+                    context.log_message(&format!("Network error: {}", e), LogLevel::Error);
                     context.activate_exec_pin("error").await?;
                     return Ok(());
                 }
+            };
 
-                let search_response: SearchResponse = resp
-                    .json()
-                    .await
-                    .map_err(|e| flow_like_types::anyhow!("Failed to parse response: {}", e))?;
+            has_more = search_response.has_more;
+            next_cursor = search_response.next_cursor;
+            all_items.extend(search_response.results);
 
-                let results: Vec<NotionSearchResult> = search_response
-                    .results
-                    .into_iter()
-                    .filter_map(|item| {
-                        let id = item["id"].as_str()?.to_string();
-                        let object_type = item["object"].as_str()?.to_string();
-                        let url = item["url"].as_str()?.to_string();
-                        let created_time = item["created_time"].as_str()?.to_string();
-                        let last_edited_time = item["last_edited_time"].as_str()?.to_string();
-                        let icon_emoji = item["icon"]["emoji"].as_str().map(String::from);
-
-                        let title = if object_type == "database" {
-                            item["title"]
-                                .as_array()
-                                .and_then(|arr| arr.first())
-                                .and_then(|t| t["plain_text"].as_str())
-                                .unwrap_or("Untitled")
-                                .to_string()
-                        } else {
-                            item["properties"]["title"]["title"]
-                                .as_array()
-                                .or_else(|| item["properties"]["Name"]["title"].as_array())
-                                .and_then(|arr| arr.first())
-                                .and_then(|t| t["plain_text"].as_str())
-                                .unwrap_or("Untitled")
-                                .to_string()
-                        };
-
-                        Some(NotionSearchResult {
-                            id,
-                            object_type,
-                            title,
-                            url,
-                            created_time,
-                            last_edited_time,
-                            icon_emoji,
-                        })
-                    })
-                    .collect();
-
-                let count = results.len() as i64;
-
-                context.log_message(&format!("Found {} results", count), LogLevel::Info);
-
-                context.set_pin_value("results", json!(results)).await?;
-                context.set_pin_value("count", json!(count)).await?;
-                context
-                    .set_pin_value("has_more", json!(search_response.has_more))
-                    .await?;
-                context.activate_exec_pin("exec_out").await?;
+            if !fetch_all || !has_more {
+                break;
             }
-            Err(e) => {
-                context.log_message(&format!("Network error: {}", e), LogLevel::Error);
-                context.activate_exec_pin("error").await?;
+
+            cursor = next_cursor.clone();
+            if cursor.is_none() {
+                break;
             }
         }
+
+        let results: Vec<NotionSearchResult> = all_items
+            .into_iter()
+            .filter_map(|item| {
+                let id = item["id"].as_str()?.to_string();
+                let object_type = item["object"].as_str()?.to_string();
+                let url = item["url"].as_str()?.to_string();
+                let created_time = item["created_time"].as_str()?.to_string();
+                let last_edited_time = item["last_edited_time"].as_str()?.to_string();
+                let icon_emoji = item["icon"]["emoji"].as_str().map(String::from);
+
+                let title = title_from_object(&item);
+
+                Some(NotionSearchResult {
+                    id,
+                    object_type,
+                    title,
+                    url,
+                    created_time,
+                    last_edited_time,
+                    icon_emoji,
+                })
+            })
+            .collect();
+
+        let count = results.len() as i64;
+
+        context.log_message(&format!("Found {} results", count), LogLevel::Info);
+
+        context.set_pin_value("results", json!(results)).await?;
+        context.set_pin_value("count", json!(count)).await?;
+        context.set_pin_value("has_more", json!(has_more)).await?;
+        context
+            .set_pin_value("next_cursor", json!(next_cursor.unwrap_or_default()))
+            .await?;
+        context.activate_exec_pin("exec_out").await?;
 
         Ok(())
     }

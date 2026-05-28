@@ -35,6 +35,7 @@ pub mod route;
 pub mod sales;
 pub mod team;
 pub mod template;
+pub mod wasm_catalog;
 pub mod widget;
 
 pub fn routes() -> Router<AppState> {
