@@ -121,7 +121,12 @@ export default function Page() {
 				onJoinOrRequest={onJoinOrRequest}
 				actionsExtra={
 					appData.allow_forking ? (
-						<StoreForkButton appId={id} appName={appName} target="online" />
+						<StoreForkButton
+							appId={id}
+							appName={appName}
+							target="online"
+							hideUnlessAvailable
+						/>
 					) : null
 				}
 			/>

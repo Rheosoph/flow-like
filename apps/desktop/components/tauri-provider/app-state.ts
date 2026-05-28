@@ -680,14 +680,14 @@ export class AppState implements IAppState {
 		appId: string,
 		target: IForkPreviewTarget,
 	): Promise<IForkPreviewResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
-			throw new Error("not authenticated");
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot preview fork.");
 		}
 		return fetcher<IForkPreviewResponse>(
 			this.backend.profile,
 			`apps/${appId}/fork/preview?target=${target}`,
 			{ method: "GET" },
-			this.backend.auth,
+			this.getRemoteAuth(),
 		);
 	}
 
@@ -695,8 +695,8 @@ export class AppState implements IAppState {
 		appId: string,
 		body: IBeginOfflineForkBody,
 	): Promise<IBeginOfflineForkResponse> {
-		if (!this.backend.profile || !this.backend.auth) {
-			throw new Error("not authenticated");
+		if (!this.backend.profile) {
+			throw new Error("Profile not set. Cannot create offline fork.");
 		}
 		return fetcher<IBeginOfflineForkResponse>(
 			this.backend.profile,
@@ -705,7 +705,7 @@ export class AppState implements IAppState {
 				method: "POST",
 				body: JSON.stringify(body),
 			},
-			this.backend.auth,
+			this.getRemoteAuth(),
 		);
 	}
 

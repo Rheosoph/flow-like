@@ -3,7 +3,10 @@
 import { GitForkIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "react-oidc-context";
+import { useInvoke } from "../../hooks/use-invoke";
 import type {
+	IForkPreviewResponse,
 	IForkPreviewTarget,
 	IOnlineForkBody,
 } from "../../lib/schema/app/fork";
@@ -30,6 +33,7 @@ export interface StoreForkButtonProps {
 		| "destructive"
 		| "link";
 	label?: string;
+	hideUnlessAvailable?: boolean;
 }
 
 export function StoreForkButton({
@@ -41,8 +45,10 @@ export function StoreForkButton({
 	size = "sm",
 	variant = "outline",
 	label = "Fork",
+	hideUnlessAvailable = false,
 }: Readonly<StoreForkButtonProps>) {
 	const backend = useBackend();
+	const auth = useAuth();
 	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [selectedTarget, setSelectedTarget] =
@@ -61,6 +67,20 @@ export function StoreForkButton({
 	const loadPreview = useCallback(
 		() => backend.appState.getForkPreview(appId, selectedTarget),
 		[backend.appState, appId, selectedTarget],
+	);
+	const availability = useInvoke<
+		IForkPreviewResponse,
+		[appId: string, target: IForkPreviewTarget]
+	>(
+		backend.appState.getForkPreview,
+		backend.appState,
+		[appId, selectedTarget],
+		hideUnlessAvailable,
+		[
+			auth?.isAuthenticated ? "authenticated" : "anonymous",
+			auth?.user?.profile?.sub,
+		],
+		30_000,
 	);
 
 	const beginFork = useCallback(
@@ -82,6 +102,17 @@ export function StoreForkButton({
 		},
 		[onForkStarted, selectedTarget, router],
 	);
+
+	if (hideUnlessAvailable) {
+		const preview = availability.data;
+		if (
+			!preview?.allow_forking ||
+			!preview.user_can_fork ||
+			!preview.within_limits
+		) {
+			return null;
+		}
+	}
 
 	return (
 		<>

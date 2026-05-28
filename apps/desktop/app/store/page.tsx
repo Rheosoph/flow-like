@@ -129,6 +129,7 @@ export default function Page() {
 							target="offline"
 							targets={["offline", "online"]}
 							onForkStarted={applyForkBundle}
+							hideUnlessAvailable
 						/>
 					) : null
 				}
