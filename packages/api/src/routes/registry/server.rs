@@ -21,7 +21,7 @@ use flow_like_types::create_id;
 use flow_like_wasm::manifest::{PackageManifest, PackageNodeEntry};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -724,26 +724,29 @@ impl ServerRegistry {
             .count(&self.db)
             .await? as i64;
 
-        let pending_package_rows = wasm_package::Entity::find()
+        let pending_packages = wasm_package::Entity::find()
             .filter(wasm_package::Column::Status.eq(WasmPackageStatus::PendingReview))
-            .all(&self.db)
+            .count(&self.db)
             .await?;
 
-        let mut pending_package_ids: std::collections::HashSet<String> =
-            pending_package_rows.into_iter().map(|pkg| pkg.id).collect();
-
-        let pending_version_rows = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview))
-            .all(&self.db)
+        let pending_version_packages = wasm_package::Entity::find()
+            .filter(wasm_package::Column::Status.ne(WasmPackageStatus::PendingReview))
+            .filter(
+                wasm_package::Column::Id.in_subquery(
+                    wasm_package_version::Entity::find()
+                        .select_only()
+                        .column(wasm_package_version::Column::PackageId)
+                        .filter(
+                            wasm_package_version::Column::Status
+                                .eq(WasmPackageStatus::PendingReview),
+                        )
+                        .into_query(),
+                ),
+            )
+            .count(&self.db)
             .await?;
 
-        pending_package_ids.extend(
-            pending_version_rows
-                .into_iter()
-                .map(|version| version.package_id),
-        );
-
-        let pending_review = pending_package_ids.len() as i64;
+        let pending_review = (pending_packages + pending_version_packages) as i64;
 
         let rejected_packages = wasm_package::Entity::find()
             .filter(wasm_package::Column::Status.eq(WasmPackageStatus::Rejected))
@@ -1970,23 +1973,22 @@ impl ServerRegistry {
 
         if let Some(status) = status_filter {
             if status == "pending_review" {
-                let pending_version_package_ids: Vec<String> = wasm_package_version::Entity::find()
-                    .filter(
-                        wasm_package_version::Column::Status.eq(WasmPackageStatus::PendingReview),
-                    )
-                    .all(&self.db)
-                    .await?
-                    .into_iter()
-                    .map(|version| version.package_id)
-                    .collect();
-
-                let mut condition = sea_orm::Condition::any()
-                    .add(wasm_package::Column::Status.eq(WasmPackageStatus::PendingReview));
-                if !pending_version_package_ids.is_empty() {
-                    condition =
-                        condition.add(wasm_package::Column::Id.is_in(pending_version_package_ids));
-                }
-                query = query.filter(condition);
+                query = query.filter(
+                    sea_orm::Condition::any()
+                        .add(wasm_package::Column::Status.eq(WasmPackageStatus::PendingReview))
+                        .add(
+                            wasm_package::Column::Id.in_subquery(
+                                wasm_package_version::Entity::find()
+                                    .select_only()
+                                    .column(wasm_package_version::Column::PackageId)
+                                    .filter(
+                                        wasm_package_version::Column::Status
+                                            .eq(WasmPackageStatus::PendingReview),
+                                    )
+                                    .into_query(),
+                            ),
+                        ),
+                );
             } else {
                 query = query.filter(wasm_package::Column::Status.eq(status_to_enum(status)));
             }

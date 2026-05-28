@@ -1156,7 +1156,6 @@ export class BoardState implements IBoardState {
 		const board = await this.getBoard(appId, boardId, undefined, true);
 		const remotePackages = await this.syncRemoteAppPackages(appId);
 		await this.ensureRemoteAppPackagesInstalled(remotePackages, {
-			forceReload: true,
 			throwOnError: true,
 		});
 		const { requires_local_execution } =

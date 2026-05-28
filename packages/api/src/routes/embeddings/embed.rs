@@ -245,6 +245,10 @@ pub async fn embed_text(
 
     // 3. Build upstream request based on implementation
     let start = Instant::now();
+    let implementation = remote_config
+        .implementation
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("Remote execution not configured for this model"))?;
     let token_count_estimate = payload.input.iter().map(|s| s.len() / 4).sum::<usize>() as i64;
     let price_estimate = estimate_embedding_price(&payload.model, token_count_estimate);
     let invocation_id = start_usage_invocation(
@@ -262,14 +266,9 @@ pub async fn embed_text(
     )
     .await?;
 
-    let result = match remote_config.implementation {
-        Some(RemoteEmbeddingProvider::Internal) => {
+    let result = match implementation {
+        RemoteEmbeddingProvider::Internal => {
             call_internal(&state, &embedding_provider, &remote_config, &payload).await
-        }
-        None => {
-            return Err(ApiError::bad_request(
-                "Remote execution not configured for this model",
-            ));
         }
     };
     let result = match result {

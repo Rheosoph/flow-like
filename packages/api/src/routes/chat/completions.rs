@@ -507,10 +507,73 @@ async fn finalize_llm_usage(
         invocation_id,
         provider_request_id.as_deref(),
         raw_usage,
+        crate::usage_accounting::STATUS_COMPLETED,
     )
     .await
     {
         tracing::warn!(error=%e, "Failed to track LLM usage");
+    }
+}
+
+async fn finalize_cancelled_llm_usage(
+    state: &AppState,
+    user_sub: &str,
+    model_id: &str,
+    usage_context: &UsageRequestContext,
+    provider: &str,
+    endpoint: &str,
+    invocation_id: Option<&str>,
+    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
+    latency_ms: f64,
+) {
+    let (in_tok, out_tok, cost_micro, provider_request_id, raw_usage) = {
+        let a = accum.lock().unwrap();
+        (
+            a.in_tok,
+            a.out_tok,
+            a.cost_micro,
+            a.provider_request_id.clone(),
+            a.raw_usage.clone(),
+        )
+    };
+
+    if in_tok.is_none() && out_tok.is_none() && cost_micro.is_none() {
+        if let Err(e) = settle_usage_invocation(
+            &state.db,
+            invocation_id,
+            UsageInvocationSettlement {
+                status: crate::usage_accounting::STATUS_CANCELLED,
+                latency_ms: Some(latency_ms),
+                error: Some("Client disconnected before streaming response completed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            tracing::warn!(error=%e, "Failed to settle cancelled LLM usage");
+        }
+        return;
+    }
+
+    if let Err(e) = track_llm_usage(
+        state,
+        user_sub,
+        model_id,
+        in_tok.unwrap_or(0),
+        out_tok.unwrap_or(0),
+        cost_micro.unwrap_or(0),
+        latency_ms,
+        usage_context.app_id.as_deref(),
+        Some(provider),
+        Some(endpoint),
+        invocation_id,
+        provider_request_id.as_deref(),
+        raw_usage,
+        crate::usage_accounting::STATUS_CANCELLED,
+    )
+    .await
+    {
+        tracing::warn!(error=%e, "Failed to track cancelled LLM usage");
     }
 }
 
@@ -578,20 +641,21 @@ async fn handle_streaming(
 
         flow_like_types::tokio::spawn(async move {
             let mut upstream = resp.bytes_stream();
-            let mut client_connected = true;
+            let mut client_disconnected = false;
 
             while let Some(chunk) = upstream.next().await {
                 match chunk {
                     Ok(chunk_bytes) => {
                         parse_sse_bytes(&accum_task, &chunk_bytes);
-                        if client_connected && tx.send(Ok(chunk_bytes)).await.is_err() {
-                            client_connected = false;
+                        if tx.send(Ok(chunk_bytes)).await.is_err() {
+                            client_disconnected = true;
+                            break;
                         }
                     }
                     Err(error) => {
                         tracing::error!(error=%error, "Error reading upstream stream");
-                        if client_connected {
-                            let _ = tx.send(Ok(Bytes::from_static(b""))).await;
+                        if tx.send(Ok(Bytes::from_static(b""))).await.is_err() {
+                            client_disconnected = true;
                         }
                         break;
                     }
@@ -599,18 +663,33 @@ async fn handle_streaming(
             }
 
             let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-            finalize_llm_usage(
-                &state,
-                &user_sub,
-                &model_id,
-                &usage_context,
-                &provider,
-                &endpoint,
-                invocation_id_task.as_deref(),
-                &accum_task,
-                latency_ms,
-            )
-            .await;
+            if client_disconnected {
+                finalize_cancelled_llm_usage(
+                    &state,
+                    &user_sub,
+                    &model_id,
+                    &usage_context,
+                    &provider,
+                    &endpoint,
+                    invocation_id_task.as_deref(),
+                    &accum_task,
+                    latency_ms,
+                )
+                .await;
+            } else {
+                finalize_llm_usage(
+                    &state,
+                    &user_sub,
+                    &model_id,
+                    &usage_context,
+                    &provider,
+                    &endpoint,
+                    invocation_id_task.as_deref(),
+                    &accum_task,
+                    latency_ms,
+                )
+                .await;
+            }
         });
 
         let body_stream = async_stream::stream! {
@@ -722,6 +801,7 @@ async fn handle_non_streaming(
                 invocation_id,
                 usage.provider_request_id.as_deref(),
                 usage.raw_usage,
+                crate::usage_accounting::STATUS_COMPLETED,
             )
             .await
             {
@@ -902,6 +982,7 @@ async fn track_llm_usage(
     invocation_id: Option<&str>,
     provider_request_id: Option<&str>,
     raw_usage: Option<JsonValue>,
+    settlement_status: &'static str,
 ) -> Result<(), flow_like_types::Error> {
     use chrono::Utc;
     use llm_usage_tracking::ActiveModel;
@@ -930,7 +1011,7 @@ async fn track_llm_usage(
         &state.db,
         invocation_id,
         UsageInvocationSettlement {
-            status: crate::usage_accounting::STATUS_COMPLETED,
+            status: settlement_status,
             input_tokens: token_in,
             output_tokens: token_out,
             cost_micro_dollars: price,

@@ -9,7 +9,9 @@ use flow_like_wasm::host_functions::ModelContext;
 use flow_like_wasm::manifest::PackageManifest;
 use flow_like_wasm::{WasmEngine, WasmNodeLogic, WasmSecurityConfig, build_node_from_definition};
 use serde::{Deserialize, Serialize};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter};
@@ -133,6 +135,241 @@ fn collect_dir_names(dir: &Path) -> std::collections::HashSet<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EditorLauncher {
+    executable: &'static str,
+    #[cfg(target_os = "macos")]
+    app_names: &'static [&'static str],
+}
+
+fn editor_launcher(editor: &str) -> Result<EditorLauncher, TauriFunctionError> {
+    match editor {
+        "vscode" => Ok(EditorLauncher {
+            executable: "code",
+            #[cfg(target_os = "macos")]
+            app_names: &["Visual Studio Code", "Visual Studio Code - Insiders"],
+        }),
+        "cursor" => Ok(EditorLauncher {
+            executable: "cursor",
+            #[cfg(target_os = "macos")]
+            app_names: &["Cursor"],
+        }),
+        "zed" => Ok(EditorLauncher {
+            executable: "zed",
+            #[cfg(target_os = "macos")]
+            app_names: &["Zed"],
+        }),
+        "idea" | "jetbrains" => Ok(EditorLauncher {
+            executable: "idea",
+            #[cfg(target_os = "macos")]
+            app_names: &[
+                "IntelliJ IDEA",
+                "IntelliJ IDEA Ultimate",
+                "IntelliJ IDEA CE",
+                "RustRover",
+                "WebStorm",
+                "PyCharm",
+                "CLion",
+                "GoLand",
+            ],
+        }),
+        "fleet" => Ok(EditorLauncher {
+            executable: "fleet",
+            #[cfg(target_os = "macos")]
+            app_names: &["Fleet"],
+        }),
+        "sublime" => Ok(EditorLauncher {
+            executable: "subl",
+            #[cfg(target_os = "macos")]
+            app_names: &["Sublime Text"],
+        }),
+        "vim" | "nvim" => Ok(EditorLauncher {
+            executable: "nvim",
+            #[cfg(target_os = "macos")]
+            app_names: &[],
+        }),
+        other => Err(TauriFunctionError::new(&format!(
+            "Unknown editor '{}'. Please select a supported editor in settings.",
+            other
+        ))),
+    }
+}
+
+fn push_unique_path(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
+    if !dirs.iter().any(|existing| existing == &dir) {
+        dirs.push(dir);
+    }
+}
+
+fn editor_extra_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        push_unique_path(&mut dirs, PathBuf::from("/opt/homebrew/bin"));
+        push_unique_path(&mut dirs, PathBuf::from("/usr/local/bin"));
+        push_unique_path(&mut dirs, PathBuf::from("/usr/bin"));
+        push_unique_path(&mut dirs, PathBuf::from("/bin"));
+        push_unique_path(
+            &mut dirs,
+            PathBuf::from("/Applications/Visual Studio Code.app/Contents/Resources/app/bin"),
+        );
+        push_unique_path(
+            &mut dirs,
+            PathBuf::from(
+                "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin",
+            ),
+        );
+        push_unique_path(
+            &mut dirs,
+            PathBuf::from("/Applications/Cursor.app/Contents/Resources/app/bin"),
+        );
+        push_unique_path(
+            &mut dirs,
+            PathBuf::from("/Applications/Sublime Text.app/Contents/SharedSupport/bin"),
+        );
+    }
+
+    if let Some(home) = dirs_next::home_dir() {
+        push_unique_path(&mut dirs, home.join(".local/bin"));
+        push_unique_path(&mut dirs, home.join(".cargo/bin"));
+        push_unique_path(&mut dirs, home.join(".volta/bin"));
+        push_unique_path(&mut dirs, home.join(".bun/bin"));
+        push_unique_path(&mut dirs, home.join(".npm-global/bin"));
+        push_unique_path(&mut dirs, home.join(".npm-packages/bin"));
+        push_unique_path(&mut dirs, home.join(".local/share/pnpm"));
+        push_unique_path(&mut dirs, home.join(".local/share/mise/shims"));
+
+        #[cfg(target_os = "macos")]
+        {
+            push_unique_path(
+                &mut dirs,
+                home.join("Applications/Visual Studio Code.app/Contents/Resources/app/bin"),
+            );
+            push_unique_path(
+                &mut dirs,
+                home.join(
+                    "Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin",
+                ),
+            );
+            push_unique_path(
+                &mut dirs,
+                home.join("Applications/Cursor.app/Contents/Resources/app/bin"),
+            );
+            push_unique_path(
+                &mut dirs,
+                home.join("Applications/Sublime Text.app/Contents/SharedSupport/bin"),
+            );
+            push_unique_path(
+                &mut dirs,
+                home.join("Library/Application Support/JetBrains/Toolbox/scripts"),
+            );
+        }
+    }
+
+    dirs
+}
+
+fn editor_path_env() -> Option<OsString> {
+    let mut dirs = Vec::new();
+
+    if let Some(current) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&current) {
+            push_unique_path(&mut dirs, dir);
+        }
+    }
+
+    for dir in editor_extra_bin_dirs() {
+        if dir.exists() {
+            push_unique_path(&mut dirs, dir);
+        }
+    }
+
+    std::env::join_paths(dirs).ok()
+}
+
+fn resolve_executable_on_path(executable: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
+    let executable_path = Path::new(executable);
+    if executable_path.components().count() > 1 {
+        return executable_path
+            .is_file()
+            .then(|| executable_path.to_path_buf());
+    }
+
+    let path_env = path_env?;
+    for dir in std::env::split_paths(path_env) {
+        let candidate = dir.join(executable);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn apply_editor_path(command: &mut Command, path_env: Option<&OsStr>) {
+    if let Some(path_env) = path_env {
+        command.env("PATH", path_env);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_editor_app(app_names: &[&str], project_path: &str) -> Result<(), TauriFunctionError> {
+    if app_names.is_empty() {
+        return Err(TauriFunctionError::new(
+            "No macOS application fallback is configured for this editor.",
+        ));
+    }
+
+    let mut errors = Vec::new();
+    for app_name in app_names {
+        match Command::new("/usr/bin/open")
+            .args(["-a", app_name])
+            .arg(project_path)
+            .status()
+        {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => errors.push(format!("{} exited with {}", app_name, status)),
+            Err(error) => errors.push(format!("{} failed: {}", app_name, error)),
+        }
+    }
+
+    Err(TauriFunctionError::new(&format!(
+        "Failed to open editor app. Tried: {}. {}",
+        app_names.join(", "),
+        errors.join("; ")
+    )))
+}
+
+fn open_project_in_editor(
+    launcher: EditorLauncher,
+    project_path: &str,
+) -> Result<(), TauriFunctionError> {
+    let path_env = editor_path_env();
+    let executable = resolve_executable_on_path(launcher.executable, path_env.as_deref())
+        .unwrap_or_else(|| PathBuf::from(launcher.executable));
+    let mut command = Command::new(&executable);
+    command.arg(project_path);
+    apply_editor_path(&mut command, path_env.as_deref());
+
+    match command.spawn() {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            #[cfg(target_os = "macos")]
+            {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return open_macos_editor_app(launcher.app_names, project_path);
+                }
+            }
+
+            Err(TauriFunctionError::new(&format!(
+                "Failed to open editor '{}': {}. Make sure it is installed or select another editor in settings.",
+                launcher.executable, error
+            )))
+        }
+    }
 }
 
 fn load_store(user_dir: &Path) -> DeveloperProjectStore {
@@ -318,35 +555,10 @@ pub async fn developer_open_in_editor(
     let settings_guard = settings.lock().await;
     let store = load_store(&settings_guard.user_dir);
     let editor = &store.preferred_editor;
+    let launcher = editor_launcher(editor)?;
     drop(settings_guard);
 
-    let cmd = match editor.as_str() {
-        "vscode" => "code",
-        "cursor" => "cursor",
-        "zed" => "zed",
-        "idea" | "jetbrains" => "idea",
-        "fleet" => "fleet",
-        "sublime" => "subl",
-        "vim" | "nvim" => "nvim",
-        other => {
-            return Err(TauriFunctionError::new(&format!(
-                "Unknown editor '{}'. Please select a supported editor in settings.",
-                other
-            )));
-        }
-    };
-
-    std::process::Command::new(cmd)
-        .arg(&project_path)
-        .spawn()
-        .map_err(|e| {
-            TauriFunctionError::new(&format!(
-                "Failed to open editor '{}': {}. Make sure it is installed and available in PATH.",
-                cmd, e
-            ))
-        })?;
-
-    Ok(())
+    open_project_in_editor(launcher, &project_path)
 }
 
 #[tauri::command]
