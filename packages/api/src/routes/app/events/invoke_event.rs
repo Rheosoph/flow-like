@@ -37,7 +37,7 @@ use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
 };
-use flow_like_types::{anyhow, create_id, tokio};
+use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -88,10 +88,9 @@ pub struct InvokeEventResponse {
     pub poll_token: Option<String>,
 }
 
-/// Get credentials access for invoke - always InvokeWrite since
-/// server-side execution is scoped through workflow logic
+/// Get credentials access for remote server-side execution.
 fn get_credentials_access() -> crate::credentials::CredentialsAccess {
-    crate::credentials::CredentialsAccess::InvokeWrite
+    crate::credentials::CredentialsAccess::ServerExecute
 }
 
 /// POST /apps/{app_id}/events/{event_id}/invoke
@@ -434,13 +433,9 @@ fn proxy_lambda_sse_response(
                                             _ => RunStatus::Completed,
                                         };
 
-                                        let db = db.clone();
-                                        let run_id_clone = run_id.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = update_run_on_completion(db.as_ref(), &run_id_clone, run_status, log_level).await {
-                                                tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                                            }
-                                        });
+                                        if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
+                                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                                        }
                                     }
 
                         let sse_event = Event::default()

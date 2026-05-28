@@ -32,9 +32,9 @@ pub struct Model {
     pub hub: String,
     pub hubs: Option<Vec<String>>,
     #[sea_orm(
+        column_name = "userId",
         primary_key,
         auto_increment = false,
-        column_name = "userId",
         column_type = "Text"
     )]
     pub user_id: String,

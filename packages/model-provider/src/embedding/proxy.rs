@@ -21,6 +21,7 @@ pub struct ProxyEmbeddingModel {
     provider: EmbeddingModelProvider,
     bit_id: String,
     access_token: String,
+    usage_headers: Vec<(String, String)>,
     client: reqwest::Client,
 }
 
@@ -55,11 +56,17 @@ struct EmbedUsage {
 }
 
 impl ProxyEmbeddingModel {
-    pub fn new(provider: EmbeddingModelProvider, bit_id: String, access_token: String) -> Self {
+    pub fn new(
+        provider: EmbeddingModelProvider,
+        bit_id: String,
+        access_token: String,
+        usage_headers: Vec<(String, String)>,
+    ) -> Self {
         Self {
             provider,
             bit_id,
             access_token,
+            usage_headers,
             client: reqwest::Client::new(),
         }
     }
@@ -73,12 +80,18 @@ impl ProxyEmbeddingModel {
             embed_type: embed_type.to_string(),
         };
 
-        let response = self
+        let mut request_builder = self
             .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.access_token))
             .header("Content-Type", "application/json")
-            .json(&request)
+            .json(&request);
+
+        for (name, value) in &self.usage_headers {
+            request_builder = request_builder.header(name, value);
+        }
+
+        let response = request_builder
             .send()
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to call embedding API: {}", e))?;

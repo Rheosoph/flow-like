@@ -3,13 +3,16 @@
 //! Provides robust SSE parsing using `eventsource-stream` to properly handle
 //! SSE protocol edge cases like multi-line data, reconnection, and buffering.
 
-use crate::entity::sea_orm_active_enums::RunStatus;
-use crate::entity::{execution_run, prelude::*};
+use crate::entity::sea_orm_active_enums::{ExecutionStatus, RunStatus};
+use crate::entity::{execution_run, execution_usage_tracking, prelude::*};
 use crate::execution::dispatch::ByteStream;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use eventsource_stream::Eventsource;
+use flow_like_types::create_id;
 use futures_util::{Stream, StreamExt};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection, EntityTrait};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+};
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -72,13 +75,9 @@ fn create_sse_stream(
                                         _ => RunStatus::Completed,
                                     };
 
-                                    let db = db.clone();
-                                    let run_id_clone = run_id.clone();
-                                    flow_like_types::tokio::spawn(async move {
-                                        if let Err(e) = update_run_on_completion(&db, &run_id_clone, run_status, log_level).await {
-                                            tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                                        }
-                                    });
+                                    if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
+                                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                                    }
                                 }
 
                     let event = Event::default()
@@ -166,16 +165,11 @@ pub async fn collect_generic_result(
                         "Timeout" => RunStatus::Timeout,
                         _ => RunStatus::Completed,
                     };
-                    let db = db.clone();
-                    let run_id_clone = run_id.clone();
-                    flow_like_types::tokio::spawn(async move {
-                        if let Err(e) =
-                            update_run_on_completion(&db, &run_id_clone, run_status, log_level)
-                                .await
-                        {
-                            tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                        }
-                    });
+                    if let Err(e) =
+                        update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await
+                    {
+                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                    }
                 }
                 // `completed` is the terminator — we can stop reading.
                 break;
@@ -251,16 +245,11 @@ pub async fn collect_generic_result_bytes(
                         "Timeout" => RunStatus::Timeout,
                         _ => RunStatus::Completed,
                     };
-                    let db = db.clone();
-                    let run_id_clone = run_id.clone();
-                    flow_like_types::tokio::spawn(async move {
-                        if let Err(e) =
-                            update_run_on_completion(&db, &run_id_clone, run_status, log_level)
-                                .await
-                        {
-                            tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                        }
-                    });
+                    if let Err(e) =
+                        update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await
+                    {
+                        tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                    }
                 }
                 break;
             }
@@ -287,6 +276,23 @@ pub async fn update_run_on_completion(
         let now = chrono::Utc::now().naive_utc();
         let started_at = existing.started_at;
         let created_at = existing.created_at;
+        let tracking_board_id = existing.board_id.clone();
+        let tracking_node_id = existing
+            .node_id
+            .clone()
+            .or_else(|| existing.event_id.clone())
+            .unwrap_or_default();
+        let tracking_user_id = existing.user_id.clone();
+        let tracking_app_id = existing.app_id.clone();
+        let tracking_started_at = started_at.unwrap_or(created_at);
+        let tracking_duration_us = (now - tracking_started_at).num_microseconds().unwrap_or(0);
+        let tracking_status = match status {
+            RunStatus::Completed => ExecutionStatus::Info,
+            RunStatus::Failed | RunStatus::Timeout => ExecutionStatus::Error,
+            RunStatus::Cancelled => ExecutionStatus::Warn,
+            _ => ExecutionStatus::Info,
+        };
+
         let mut model: execution_run::ActiveModel = existing.into();
         model.status = Set(status);
         model.log_level = Set(log_level);
@@ -296,7 +302,58 @@ pub async fn update_run_on_completion(
         model.completed_at = Set(Some(now));
         model.updated_at = Set(now);
         model.update(db).await?;
+        track_execution_usage_from_run(
+            db,
+            run_id,
+            &tracking_board_id,
+            &tracking_node_id,
+            tracking_duration_us,
+            tracking_status,
+            tracking_user_id.as_deref(),
+            &tracking_app_id,
+            now,
+        )
+        .await?;
         tracing::info!(run_id = %run_id, log_level = log_level, "Updated run status on completion");
     }
+    Ok(())
+}
+
+async fn track_execution_usage_from_run(
+    db: &DatabaseConnection,
+    run_id: &str,
+    board_id: &str,
+    node_id: &str,
+    microseconds: i64,
+    status: ExecutionStatus,
+    user_id: Option<&str>,
+    app_id: &str,
+    now: chrono::NaiveDateTime,
+) -> Result<(), sea_orm::DbErr> {
+    let existing = execution_usage_tracking::Entity::find()
+        .filter(execution_usage_tracking::Column::Version.eq(run_id))
+        .one(db)
+        .await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let instance = std::env::var("INSTANCE_ID").ok();
+    execution_usage_tracking::ActiveModel {
+        id: Set(create_id()),
+        instance: Set(instance),
+        board_id: Set(board_id.to_string()),
+        node_id: Set(node_id.to_string()),
+        version: Set(run_id.to_string()),
+        microseconds: Set(microseconds.max(0)),
+        status: Set(status),
+        user_id: Set(user_id.map(ToOwned::to_owned)),
+        app_id: Set(Some(app_id.to_string())),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(db)
+    .await?;
+
     Ok(())
 }

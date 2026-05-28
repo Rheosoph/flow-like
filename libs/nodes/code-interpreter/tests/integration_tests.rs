@@ -33,7 +33,6 @@ mod aot_cache {
 
     fn test_engine() -> Engine {
         let mut config = Config::new();
-        config.async_support(true);
         config.epoch_interruption(true);
         Engine::new(&config).unwrap()
     }

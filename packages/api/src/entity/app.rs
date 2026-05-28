@@ -68,6 +68,8 @@ pub enum Relation {
     AppPurchase,
     #[sea_orm(has_many = "super::app_sales_daily::Entity")]
     AppSalesDaily,
+    #[sea_orm(has_many = "super::app_usage_limit::Entity")]
+    AppUsageLimit,
     #[sea_orm(has_many = "super::board_sync::Entity")]
     BoardSync,
     #[sea_orm(has_many = "super::comment::Entity")]
@@ -78,6 +80,12 @@ pub enum Relation {
     EmbeddingUsageTracking,
     #[sea_orm(has_many = "super::event::Entity")]
     Event,
+    #[sea_orm(has_many = "super::event_alias::Entity")]
+    EventAlias,
+    #[sea_orm(has_many = "super::event_remote_auth::Entity")]
+    EventRemoteAuth,
+    #[sea_orm(has_many = "super::event_remote_registration::Entity")]
+    EventRemoteRegistration,
     #[sea_orm(has_many = "super::event_sink::Entity")]
     EventSink,
     #[sea_orm(has_many = "super::execution_run::Entity")]
@@ -160,6 +168,12 @@ impl Related<super::app_sales_daily::Entity> for Entity {
     }
 }
 
+impl Related<super::app_usage_limit::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppUsageLimit.def()
+    }
+}
+
 impl Related<super::board_sync::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::BoardSync.def()
@@ -187,6 +201,24 @@ impl Related<super::embedding_usage_tracking::Entity> for Entity {
 impl Related<super::event::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Event.def()
+    }
+}
+
+impl Related<super::event_alias::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventAlias.def()
+    }
+}
+
+impl Related<super::event_remote_auth::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventRemoteAuth.def()
+    }
+}
+
+impl Related<super::event_remote_registration::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EventRemoteRegistration.def()
     }
 }
 

@@ -22,6 +22,8 @@ pub enum PackageStatus {
     Disabled,
     /// Package is pending review
     PendingReview,
+    /// Package or version was rejected during review
+    Rejected,
 }
 
 /// Source type for a package
@@ -465,6 +467,10 @@ mod tests {
             serde_json::to_string(&PackageStatus::Disabled).unwrap(),
             "\"disabled\""
         );
+        assert_eq!(
+            serde_json::to_string(&PackageStatus::Rejected).unwrap(),
+            "\"rejected\""
+        );
     }
 
     #[test]
@@ -476,6 +482,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<PackageStatus>("\"pending_review\"").unwrap(),
             PackageStatus::PendingReview
+        );
+        assert_eq!(
+            serde_json::from_str::<PackageStatus>("\"rejected\"").unwrap(),
+            PackageStatus::Rejected
         );
     }
 

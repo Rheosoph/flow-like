@@ -101,6 +101,7 @@ model App {
 
   technicalUsers TechnicalUser[]
   llmUsage       LLMUsageTracking[]
+  usageLimits    AppUsageLimit[]
   executionUsage ExecutionUsageTracking[]
   executionRuns  ExecutionRun[]
   executionMode  ExecutionMode            @default(ANY)
@@ -130,6 +131,30 @@ model App {
   @@index([relevanceScore])
   @@index([ratingSum])
   @@index([status])
+}
+
+model AppUsageLimit {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+  /// Empty string means app-wide. A user id means per-user limit within the app.
+  userId String @default("")
+
+  /// Valid values are weekly, monthly, yearly.
+  period           String
+  costMicroDollars BigInt?
+  tokenLimit       BigInt?
+  enabled Boolean @default(true)
+  hard Boolean @default(true)
+  warningThresholdPercent Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, userId, period])
+  @@index([appId])
+  @@index([userId])
 }
 
 model TechnicalUser {

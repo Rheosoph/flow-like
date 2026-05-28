@@ -1,6 +1,6 @@
 [package]
 name = "flow-like-wasm-sdk"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2021"
 description = "SDK for building Flow-Like WASM nodes (Component Model)"
 license = "MIT"
@@ -18,7 +18,9 @@ serde_json = "1.0.149"
 schemars = { version = "1.2.1", features = ["preserve_order"] }
 base64 = "0.22"
 inventory = "0.3"
-flow-like-wasm-sdk-macros = "0.3.6"
+flow-like-wasm-sdk-macros = "0.3.7"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rig-core = { version = "0.34.0", default-features = false, optional = true }
 futures = { version = "0.3", optional = true }
 

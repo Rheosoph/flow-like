@@ -7,6 +7,8 @@ use flow_like_model_provider::{
 
 use crate::{bit::Bit, state::FlowLikeState};
 
+#[cfg(feature = "remote-ml")]
+use super::llm::ModelUsageContext;
 #[cfg(feature = "local-ml")]
 use super::{
     embedding::local::LocalEmbeddingModel, image_embedding::local::LocalImageEmbeddingModel,
@@ -129,6 +131,7 @@ impl EmbeddingFactory {
         &mut self,
         bit: &Bit,
         access_token: String,
+        usage_context: Option<ModelUsageContext>,
     ) -> flow_like_types::Result<Arc<dyn EmbeddingModelLogic>> {
         let embedding_provider = bit
             .try_to_embedding()
@@ -141,19 +144,36 @@ impl EmbeddingFactory {
             ));
         }
 
-        // Check cache first
-        let cache_key = format!("{}_proxy", bit.id);
-        if let Some(model) = self.cached_text_models.get(&cache_key) {
-            self.ttl_list.insert(cache_key.clone(), SystemTime::now());
-            return Ok(model.clone());
-        }
+        let usage_headers = usage_context
+            .map(|context| {
+                let mut headers = Vec::new();
+                if let Some(app_id) = context
+                    .app_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|app_id| !app_id.is_empty())
+                {
+                    headers.push(("x-flow-like-app-id".to_string(), app_id.to_string()));
+                }
+                if let Some(run_id) = context
+                    .run_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|run_id| !run_id.is_empty())
+                {
+                    headers.push(("x-flow-like-run-id".to_string(), run_id.to_string()));
+                }
+                headers
+            })
+            .unwrap_or_default();
 
-        let proxy_model =
-            ProxyEmbeddingModel::new(embedding_provider, bit.id.clone(), access_token);
+        let proxy_model = ProxyEmbeddingModel::new(
+            embedding_provider,
+            bit.id.clone(),
+            access_token,
+            usage_headers,
+        );
         let model: Arc<dyn EmbeddingModelLogic> = Arc::new(proxy_model);
-
-        self.ttl_list.insert(cache_key.clone(), SystemTime::now());
-        self.cached_text_models.insert(cache_key, model.clone());
 
         Ok(model)
     }

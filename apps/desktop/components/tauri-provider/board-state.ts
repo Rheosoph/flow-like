@@ -34,6 +34,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
@@ -462,8 +463,12 @@ export class BoardState implements IBoardState {
 
 	private async ensureRemoteAppPackagesInstalled(
 		packages: Array<{ packageId: string; version: string }>,
+		options: { forceReload?: boolean; throwOnError?: boolean } = {},
 	): Promise<void> {
 		if (!this.backend.registryState || packages.length === 0) {
+			if (options.throwOnError && packages.length > 0) {
+				throw new Error("Package registry is not available on this client.");
+			}
 			return;
 		}
 
@@ -475,7 +480,11 @@ export class BoardState implements IBoardState {
 			);
 
 			const installTasks = packages
-				.filter((pkg) => installedVersionMap.get(pkg.packageId) !== pkg.version)
+				.filter(
+					(pkg) =>
+						options.forceReload ||
+						installedVersionMap.get(pkg.packageId) !== pkg.version,
+				)
 				.map((pkg) =>
 					this.backend.registryState.installPackage(pkg.packageId, pkg.version),
 				);
@@ -488,6 +497,14 @@ export class BoardState implements IBoardState {
 				"Failed to install remote app packages into local registry:",
 				error,
 			);
+			if (options.throwOnError) {
+				throw new Error(
+					getErrorMessage(
+						error,
+						"Failed to install remote app packages into local registry",
+					),
+				);
+			}
 		}
 	}
 
@@ -1137,6 +1154,10 @@ export class BoardState implements IBoardState {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
 		const board = await this.getBoard(appId, boardId, undefined, true);
+		const remotePackages = await this.syncRemoteAppPackages(appId);
+		await this.ensureRemoteAppPackagesInstalled(remotePackages, {
+			throwOnError: true,
+		});
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
 

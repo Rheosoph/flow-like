@@ -175,6 +175,7 @@ export enum PackageStatus {
 	Deprecated = "deprecated",
 	PendingReview = "pending_review",
 	Disabled = "disabled",
+	Rejected = "rejected",
 	Yanked = "yanked",
 }
 
@@ -197,6 +198,7 @@ export interface PackageVersion {
 	version: string;
 	wasmHash: string;
 	wasmSize: number;
+	status?: PackageStatus;
 	downloadUrl?: string;
 	publishedAt: string;
 	minFlowLikeVersion?: string;
@@ -377,6 +379,25 @@ export interface AdminPackageListResponse {
 export interface AdminPackageDetailResponse {
 	package: PackageDetails;
 	reviews: PackageReview[];
+}
+
+export interface AdminEnsureWasmArtifactsFailure {
+	packageId: string;
+	version: string;
+	message: string;
+}
+
+export interface AdminEnsureWasmArtifactsResponse {
+	targetPlatform: string;
+	wasmtimeVersion: string;
+	activePackages: number;
+	checkedVersions: number;
+	skippedVersions: number;
+	alreadyAvailable: number;
+	alreadyPending: number;
+	jobsStarted: number;
+	failed: number;
+	failures: AdminEnsureWasmArtifactsFailure[];
 }
 
 // Package visibility and compilation

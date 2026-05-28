@@ -2042,7 +2042,10 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     // Build model and invoke
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
-                        match factory.build(&bit, app_state.clone(), access_token.clone()).await {
+                        match factory
+                            .build(&bit, app_state.clone(), access_token.clone(), None)
+                            .await
+                        {
                             Ok(m) => m,
                             Err(e) => {
                                 println!("llm_prompt: failed to build model: {e}");
@@ -2329,7 +2332,10 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
 
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
-                        match factory.build(&bit, app_state.clone(), access_token.clone()).await {
+                        match factory
+                            .build(&bit, app_state.clone(), access_token.clone(), None)
+                            .await
+                        {
                             Ok(m) => m,
                             Err(e) => {
                                 let err = serde_json::json!({"error": format!("Failed to build model: {e}")}).to_string();

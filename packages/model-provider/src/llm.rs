@@ -88,12 +88,84 @@ pub fn merge_additional_params(base: Option<Value>, extra: Option<Value>) -> Opt
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UsageReportingMode {
+    #[default]
+    None,
+    OpenAIStreamOptions,
+    OpenRouterUsageInclude,
+}
+
+fn ensure_object_param(mut params: Option<Value>) -> Value {
+    match params.take() {
+        Some(value) if value.is_object() => value,
+        _ => Value::Object(Default::default()),
+    }
+}
+
+fn enable_openai_stream_usage(mut params: Option<Value>, is_streaming: bool) -> Option<Value> {
+    if !is_streaming {
+        return params;
+    }
+
+    let mut value = ensure_object_param(params.take());
+    let Some(obj) = value.as_object_mut() else {
+        return Some(value);
+    };
+
+    let stream_options = obj
+        .entry("stream_options".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    if !stream_options.is_object() {
+        *stream_options = Value::Object(Default::default());
+    }
+    if let Some(stream_options) = stream_options.as_object_mut() {
+        stream_options.insert("include_usage".to_string(), Value::Bool(true));
+    }
+
+    Some(value)
+}
+
+fn enable_openrouter_usage_include(mut params: Option<Value>) -> Option<Value> {
+    let mut value = ensure_object_param(params.take());
+    let Some(obj) = value.as_object_mut() else {
+        return Some(value);
+    };
+
+    let usage = obj
+        .entry("usage".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    if !usage.is_object() {
+        *usage = Value::Object(Default::default());
+    }
+    if let Some(usage) = usage.as_object_mut() {
+        usage.insert("include".to_string(), Value::Bool(true));
+    }
+
+    Some(value)
+}
+
+fn apply_usage_reporting(
+    params: Option<Value>,
+    mode: UsageReportingMode,
+    is_streaming: bool,
+) -> Option<Value> {
+    match mode {
+        UsageReportingMode::None => params,
+        UsageReportingMode::OpenAIStreamOptions => enable_openai_stream_usage(params, is_streaming),
+        UsageReportingMode::OpenRouterUsageInclude => enable_openrouter_usage_include(params),
+    }
+}
+
 #[async_trait]
 pub trait ModelLogic: Send + Sync {
     async fn provider(&self) -> Result<ModelConstructor>;
     async fn default_model(&self) -> Option<String>;
     fn additional_params(&self, _history: &Option<History>) -> Option<flow_like_types::Value> {
         None
+    }
+    fn usage_reporting(&self) -> UsageReportingMode {
+        UsageReportingMode::None
     }
 
     fn transform_history(&self, _history: &mut History) {}
@@ -187,14 +259,15 @@ pub trait ModelLogic: Send + Sync {
         // Some providers (like Gemini) need to filter certain fields from history params
         // So we let the model implementation handle the merging in additional_params()
         // Only add history params here if the model doesn't provide custom params
-        let model_additional_params = self.additional_params(&Some(history.clone()));
-
+        let mut model_additional_params = self.additional_params(&Some(history.clone()));
         if model_additional_params.is_none() {
-            // Model doesn't provide custom params, use history params directly
-            if let Some(params) = history.build_additional_params()? {
-                builder = builder.additional_params(params);
-            }
+            model_additional_params = history.build_additional_params()?;
         }
+        model_additional_params = apply_usage_reporting(
+            model_additional_params,
+            self.usage_reporting(),
+            lambda.is_some(),
+        );
 
         if let Some(callback) = lambda {
             invoke_with_stream(builder, callback, &model_name, model_additional_params).await
@@ -418,4 +491,56 @@ async fn invoke_with_stream<'a>(
     }
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::json::json;
+
+    #[test]
+    fn openai_stream_usage_preserves_existing_stream_options() {
+        let params = Some(json!({
+            "stream_options": {
+                "include_obfuscation": false
+            }
+        }));
+
+        let result =
+            apply_usage_reporting(params, UsageReportingMode::OpenAIStreamOptions, true).unwrap();
+
+        assert_eq!(
+            result
+                .get("stream_options")
+                .and_then(|v| v.get("include_usage"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            result
+                .get("stream_options")
+                .and_then(|v| v.get("include_obfuscation"))
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn openai_stream_usage_skips_non_streaming_requests() {
+        let params = apply_usage_reporting(None, UsageReportingMode::OpenAIStreamOptions, false);
+        assert!(params.is_none());
+    }
+
+    #[test]
+    fn openrouter_usage_include_is_always_enabled() {
+        let result =
+            apply_usage_reporting(None, UsageReportingMode::OpenRouterUsageInclude, false).unwrap();
+        assert_eq!(
+            result
+                .get("usage")
+                .and_then(|v| v.get("include"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
 }

@@ -29,8 +29,13 @@ impl WasmNode for RepeatTextNode {
             "Custom/WASM",
         );
         node.add_input_pin("exec", "Exec", "Trigger pin", VariableType::Execution);
-        node.add_input_pin("input_text", "Input Text", "Text to repeat", VariableType::String)
-            .set_default_value(json!(""));
+        node.add_input_pin(
+            "input_text",
+            "Input Text",
+            "Text to repeat",
+            VariableType::String,
+        )
+        .set_default_value(json!(""));
         node.add_input_pin(
             "multiplier",
             "Multiplier",
@@ -38,7 +43,12 @@ impl WasmNode for RepeatTextNode {
             VariableType::Integer,
         )
         .set_default_value(json!(1));
-        node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Execution continues",
+            VariableType::Execution,
+        );
         node.add_output_pin(
             "output_text",
             "Output Text",
@@ -73,9 +83,19 @@ impl WasmNode for CharCountNode {
             "Custom/WASM",
         );
         node.add_input_pin("exec", "Exec", "Trigger pin", VariableType::Execution);
-        node.add_input_pin("input_text", "Input Text", "Text to measure", VariableType::String)
-            .set_default_value(json!(""));
-        node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
+        node.add_input_pin(
+            "input_text",
+            "Input Text",
+            "Text to measure",
+            VariableType::String,
+        )
+        .set_default_value(json!(""));
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Execution continues",
+            VariableType::Execution,
+        );
         node.add_output_pin(
             "char_count",
             "Char Count",
@@ -121,15 +141,25 @@ impl WasmNode for GreetingNode {
             "Custom/WASM",
         );
         node.add_input_pin("exec", "Exec", "Trigger pin", VariableType::Execution);
-        node.add_input_pin("config", "Config", "Greeting configuration", VariableType::Struct)
-            .set_schema::<GreetingConfig>()
-            .set_enforce_schema(true)
-            .set_default_value(json!({
-                "greeting": "Hello",
-                "uppercase": false,
-                "repeat": 1
-            }));
-        node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
+        node.add_input_pin(
+            "config",
+            "Config",
+            "Greeting configuration",
+            VariableType::Struct,
+        )
+        .set_schema::<GreetingConfig>()
+        .set_enforce_schema(true)
+        .set_default_value(json!({
+            "greeting": "Hello",
+            "uppercase": false,
+            "repeat": 1
+        }));
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Execution continues",
+            VariableType::Execution,
+        );
         node.add_output_pin("result", "Result", "Greeting result", VariableType::Struct)
             .set_schema::<GreetingResult>()
             .set_enforce_schema(true);
@@ -172,16 +202,46 @@ impl WasmNode for FileWriterNode {
             "Custom/WASM/Storage",
         );
         node.add_input_pin("exec", "Exec", "Trigger pin", VariableType::Execution);
-        node.add_input_pin("directory", "Directory", "Storage directory", VariableType::Struct)
-            .set_schema::<FlowPath>();
-        node.add_input_pin("filename", "Filename", "Name of the file to write", VariableType::String)
-            .set_default_value(json!("output.txt"));
-        node.add_input_pin("content", "Content", "Text content to write", VariableType::String)
-            .set_default_value(json!(""));
-        node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
-        node.add_output_pin("file_path", "File Path", "Path of the written file", VariableType::Struct)
-            .set_schema::<FlowPath>();
-        node.add_output_pin("file_count", "File Count", "Number of files in directory", VariableType::Integer);
+        node.add_input_pin(
+            "directory",
+            "Directory",
+            "Storage directory",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+        node.add_input_pin(
+            "filename",
+            "Filename",
+            "Name of the file to write",
+            VariableType::String,
+        )
+        .set_default_value(json!("output.txt"));
+        node.add_input_pin(
+            "content",
+            "Content",
+            "Text content to write",
+            VariableType::String,
+        )
+        .set_default_value(json!(""));
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Execution continues",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "file_path",
+            "File Path",
+            "Path of the written file",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+        node.add_output_pin(
+            "file_count",
+            "File Count",
+            "Number of files in directory",
+            VariableType::Integer,
+        );
         node.add_permission(NodePermission::StorageRead);
         node.add_permission(NodePermission::StorageWrite);
         node
@@ -192,7 +252,9 @@ impl WasmNode for FileWriterNode {
             Ok(d) => d,
             Err(e) => return ctx.fail(e),
         };
-        let filename = ctx.get_string("filename").unwrap_or_else(|| "output.txt".into());
+        let filename = ctx
+            .get_string("filename")
+            .unwrap_or_else(|| "output.txt".into());
         let content = ctx.get_string("content").unwrap_or_default();
 
         let file = dir.child(&filename);
@@ -227,9 +289,24 @@ impl WasmNode for FileReaderNode {
         node.add_input_pin("exec", "Exec", "Trigger pin", VariableType::Execution);
         node.add_input_pin("file", "File", "FlowPath to the file", VariableType::Struct)
             .set_schema::<FlowPath>();
-        node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
-        node.add_output_pin("content", "Content", "File text content", VariableType::String);
-        node.add_output_pin("exists", "Exists", "Whether the file exists", VariableType::Boolean);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Execution continues",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "content",
+            "Content",
+            "File text content",
+            VariableType::String,
+        );
+        node.add_output_pin(
+            "exists",
+            "Exists",
+            "Whether the file exists",
+            VariableType::Boolean,
+        );
         node.add_permission(NodePermission::StorageRead);
         node
     }
@@ -270,16 +347,31 @@ impl WasmNode for WeatherAgentNode {
         let mut node = NodeDefinition::new(
             "weather_agent",
             "Weather Agent",
-            "A rig-powered agent that can look up weather using a tool",
+            "A WASI agent that can look up weather using a tool",
             "Custom/WASM/AI",
         );
         node.add_input_pin("exec", "Exec", "Trigger pin", VariableType::Execution);
-        node.add_input_pin("model", "Model", "Bit model descriptor", VariableType::Struct)
-            .set_schema_raw(&Bit::schema());
+        node.add_input_pin(
+            "model",
+            "Model",
+            "Bit model descriptor",
+            VariableType::Struct,
+        )
+        .set_schema_raw(&Bit::schema());
         node.add_input_pin("message", "Message", "User message", VariableType::String)
             .set_default_value(json!("What's the weather like in San Francisco?"));
-        node.add_output_pin("exec_out", "Done", "Execution continues", VariableType::Execution);
-        node.add_output_pin("response", "Response", "Agent response", VariableType::String);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Execution continues",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "response",
+            "Response",
+            "Agent response",
+            VariableType::String,
+        );
         node.set_long_running(true);
         node.add_permission(NodePermission::Models);
         node.add_permission(NodePermission::NetworkHttp);
@@ -393,7 +485,10 @@ impl WasmNode for WeatherAgentNode {
         log::info("WeatherAgent: agent built, calling prompt");
         match agent.prompt(&message) {
             Ok(response) => {
-                log::info(&format!("WeatherAgent: success, response len={}", response.len()));
+                log::info(&format!(
+                    "WeatherAgent: success, response len={}",
+                    response.len()
+                ));
                 ctx.set_output("response", response);
                 ctx.activate_exec("exec_out");
                 ctx.success()
@@ -441,10 +536,15 @@ mod tests {
         assert_eq!(config_pin.data_type, VariableType::Struct);
         assert_eq!(config_pin.enforce_schema, Some(true));
 
-        let schema_str = config_pin.schema.as_ref().expect("config pin must have schema");
-        let schema: serde_json::Value = serde_json::from_str(schema_str)
-            .expect("schema must be valid JSON");
-        let props = schema.get("properties").expect("schema must have properties");
+        let schema_str = config_pin
+            .schema
+            .as_ref()
+            .expect("config pin must have schema");
+        let schema: serde_json::Value =
+            serde_json::from_str(schema_str).expect("schema must be valid JSON");
+        let props = schema
+            .get("properties")
+            .expect("schema must have properties");
         assert!(props.get("greeting").is_some());
         assert!(props.get("uppercase").is_some());
         assert!(props.get("repeat").is_some());
@@ -459,7 +559,10 @@ mod tests {
         assert_eq!(result_pin.data_type, VariableType::Struct);
         assert_eq!(result_pin.enforce_schema, Some(true));
 
-        let schema_str = result_pin.schema.as_ref().expect("result pin must have schema");
+        let schema_str = result_pin
+            .schema
+            .as_ref()
+            .expect("result pin must have schema");
         let schema: serde_json::Value = serde_json::from_str(schema_str).unwrap();
         let props = schema.get("properties").unwrap();
         assert!(props.get("message").is_some());
@@ -470,8 +573,8 @@ mod tests {
     fn greeting_node_roundtrip_to_runtime() {
         let node = GreetingNode.get_node();
         let json = serde_json::to_string(&node).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json)
-            .expect("SDK NodeDefinition must produce valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("SDK NodeDefinition must produce valid JSON");
 
         assert_eq!(parsed["name"], "greeting");
         let pins = parsed["pins"].as_array().unwrap();
@@ -517,7 +620,10 @@ mod tests {
         let dir_pin = &node.pins[1];
         assert_eq!(dir_pin.name, "directory");
         assert_eq!(dir_pin.data_type, VariableType::Struct);
-        assert!(dir_pin.schema.is_some(), "directory pin must have FlowPath schema");
+        assert!(
+            dir_pin.schema.is_some(),
+            "directory pin must have FlowPath schema"
+        );
 
         let file_path_pin = node.pins.iter().find(|p| p.name == "file_path").unwrap();
         assert_eq!(file_path_pin.data_type, VariableType::Struct);
@@ -546,7 +652,9 @@ mod tests {
         let dir_pin = &node.pins[1];
         let schema_str = dir_pin.schema.as_ref().unwrap();
         let schema: serde_json::Value = serde_json::from_str(schema_str).unwrap();
-        let props = schema.get("properties").expect("FlowPath schema must have properties");
+        let props = schema
+            .get("properties")
+            .expect("FlowPath schema must have properties");
         assert!(props.get("path").is_some());
         assert!(props.get("store_ref").is_some());
     }
@@ -603,6 +711,4 @@ mod tests {
         assert_eq!(fp.path, fp2.path);
         assert_eq!(fp.store_ref, fp2.store_ref);
     }
-
-
 }

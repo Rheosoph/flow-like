@@ -14,8 +14,6 @@
 //!   - Desktop: the JS layer keeps a UUID in the AppData FS, which already
 //!     survives uninstall/reinstall on macOS/Windows/Linux. We return `None`
 //!     here and let the client fall through to that path.
-use flow_like_types::create_id;
-
 #[cfg(target_os = "ios")]
 const KEYCHAIN_SERVICE: &str = "com.flow_like.app.device_id";
 #[cfg(target_os = "ios")]
@@ -23,6 +21,7 @@ const KEYCHAIN_ACCOUNT: &str = "stable_device_id";
 
 #[cfg(target_os = "ios")]
 fn ios_read_or_create() -> Option<String> {
+    use flow_like_types::create_id;
     use security_framework::passwords::{get_generic_password, set_generic_password};
 
     if let Ok(bytes) = get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)

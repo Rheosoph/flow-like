@@ -123,7 +123,12 @@ impl NodeLogic for InvokeLLM {
         let model = model_factory
             .lock()
             .await
-            .build(&model, context.app_state.clone(), context.token.clone())
+            .build(
+                &model,
+                context.app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
             .await?;
 
         let on_stream = context.get_pin_by_name("on_stream").await?;

@@ -240,7 +240,12 @@ impl NodeLogic for SummarizeNode {
         let model = model_factory
             .lock()
             .await
-            .build(&model_bit, context.app_state.clone(), context.token.clone())
+            .build(
+                &model_bit,
+                context.app_state.clone(),
+                context.token.clone(),
+                context.model_usage_context(),
+            )
             .await?;
 
         let config = SummarizationConfig {

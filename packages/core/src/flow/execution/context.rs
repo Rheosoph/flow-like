@@ -2,6 +2,7 @@ use super::{
     EventTrigger, InternalNode, LogLevel, Run, RunPayload, internal_pin::InternalPin,
     log::LogMessage, trace::Trace,
 };
+use crate::models::llm::ModelUsageContext;
 use crate::{
     credentials::SharedCredentials,
     flow::{
@@ -271,6 +272,14 @@ impl ExecutionContext {
     }
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    pub fn model_usage_context(&self) -> Option<ModelUsageContext> {
+        let cache = self.execution_cache.as_ref()?;
+        Some(ModelUsageContext {
+            app_id: Some(cache.app_id.clone()),
+            run_id: Some(self.run_id.clone()),
+        })
     }
 
     pub fn callback(&self) -> &InterComCallback {

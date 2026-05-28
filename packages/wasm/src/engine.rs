@@ -147,6 +147,14 @@ impl WasmConfig {
         self
     }
 
+    fn uses_ios_memory_layout(&self) -> bool {
+        cfg!(target_os = "ios")
+            || self
+                .target
+                .as_deref()
+                .is_some_and(|triple| triple.contains("apple-ios"))
+    }
+
     /// Build wasmtime Config from our config
     fn to_wasmtime_config(&self) -> WasmResult<Config> {
         let mut config = Config::new();
@@ -159,7 +167,6 @@ impl WasmConfig {
         // Runtime settings
         config.consume_fuel(self.fuel_metering);
         config.epoch_interruption(self.epoch_interruption);
-        config.async_support(true);
 
         // Enable WASM GC and exception handling proposals (needed for Kotlin/Wasm, etc.)
         config.wasm_gc(true);
@@ -173,6 +180,15 @@ impl WasmConfig {
 
         // Memory settings
         config.memory_init_cow(true);
+        if self.uses_ios_memory_layout() {
+            // iOS can reject Wasmtime's default 4GiB+ linear-memory reservation
+            // during component instantiation. Use moving dynamic memories there
+            // and keep only a modest growth reservation.
+            config.memory_init_cow(false);
+            config.memory_reservation(0);
+            config.memory_guard_size(0);
+            config.memory_reservation_for_growth(64 * 1024 * 1024);
+        }
 
         // Apply resource limits
         let limits = &self.default_security.limits;

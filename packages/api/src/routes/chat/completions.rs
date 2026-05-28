@@ -1,5 +1,14 @@
-use crate::entity::llm_usage_tracking;
-use crate::{entity::bit, error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::entity::{llm_usage_tracking, user};
+use crate::{
+    entity::bit,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    state::AppState,
+    usage_accounting::{
+        UsageInvocationSettlement, UsageInvocationStart, estimate_text_tokens,
+        settle_usage_invocation, start_usage_invocation,
+    },
+};
 use axum::{
     Extension, Json,
     body::Body,
@@ -16,6 +25,8 @@ use sea_orm::EntityTrait;
 use sea_orm::{ActiveModelTrait, Set};
 use serde_json::Value as JsonValue;
 use std::convert::Infallible;
+
+const APP_ID_HEADER: &str = "x-flow-like-app-id";
 
 #[derive(Debug, Clone, PartialEq)]
 enum HostedProvider {
@@ -93,6 +104,50 @@ impl HostedProvider {
     fn uses_bearer_auth(&self) -> bool {
         !matches!(self, Self::Anthropic)
     }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::OpenRouter => "openrouter",
+            Self::OpenAI => "openai",
+            Self::Anthropic => "anthropic",
+            Self::Bedrock => "bedrock",
+            Self::Azure => "azure",
+            Self::Vertex => "vertex",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct UsageRequestContext {
+    app_id: Option<String>,
+}
+
+fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|header| header.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+async fn resolve_usage_context(
+    state: &AppState,
+    user: &AppUser,
+    headers: &HeaderMap,
+) -> Result<UsageRequestContext, ApiError> {
+    if let AppUser::Executor(executor) = user {
+        return Ok(UsageRequestContext {
+            app_id: Some(executor.app_id.clone()),
+        });
+    }
+
+    let app_id = header_string(headers, APP_ID_HEADER);
+    if let Some(app_id) = app_id.as_deref() {
+        user.execution_app_permission(app_id, state).await?;
+    }
+
+    Ok(UsageRequestContext { app_id })
 }
 
 // --- helpers ---
@@ -185,6 +240,18 @@ fn ensure_user_first_message(body: &mut serde_json::Value) {
     }
 }
 
+fn enable_stream_usage_options(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let stream_options = obj
+        .entry("stream_options".to_string())
+        .or_insert_with(|| json!({}));
+    if !stream_options.is_object() {
+        *stream_options = json!({});
+    }
+    if let Some(stream_options) = stream_options.as_object_mut() {
+        stream_options.insert("include_usage".to_string(), json!(true));
+    }
+}
+
 fn prepare_upstream_body(
     payload: &serde_json::Value,
     upstream_model_id: &str,
@@ -192,6 +259,11 @@ fn prepare_upstream_body(
     hosted_provider: &HostedProvider,
 ) -> (serde_json::Value, bool) {
     let mut body = payload.clone();
+    let stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     if let Some(obj) = body.as_object_mut() {
         obj.insert("model".to_string(), json!(upstream_model_id));
 
@@ -208,7 +280,12 @@ fn prepare_upstream_body(
             HostedProvider::Anthropic => {
                 obj.insert("max_tokens".to_string(), json!(4096));
             }
-            _ => {}
+            HostedProvider::OpenAI | HostedProvider::Azure => {
+                if stream {
+                    enable_stream_usage_options(obj);
+                }
+            }
+            HostedProvider::Bedrock | HostedProvider::Vertex => {}
         }
 
         if let Some(u) = tracking_user {
@@ -219,10 +296,6 @@ fn prepare_upstream_body(
     deduplicate_tools(&mut body);
     ensure_user_first_message(&mut body);
 
-    let stream = body
-        .get("stream")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     (body, stream)
 }
 
@@ -272,11 +345,20 @@ struct StreamingAccum {
     in_tok: Option<i64>,
     out_tok: Option<i64>,
     cost_micro: Option<i64>,
+    provider_request_id: Option<String>,
+    raw_usage: Option<JsonValue>,
 }
 
-fn extract_usage_and_cost_from_json(
-    v: &serde_json::Value,
-) -> Option<(Option<i64>, Option<i64>, Option<i64>)> {
+#[derive(Clone, Debug, Default)]
+struct ProviderUsageSnapshot {
+    in_tok: Option<i64>,
+    out_tok: Option<i64>,
+    cost_micro: Option<i64>,
+    provider_request_id: Option<String>,
+    raw_usage: Option<JsonValue>,
+}
+
+fn extract_usage_and_cost_from_json(v: &serde_json::Value) -> Option<ProviderUsageSnapshot> {
     let usage = v.get("usage")?;
     let in_tok = usage
         .get("prompt_tokens")
@@ -287,15 +369,69 @@ fn extract_usage_and_cost_from_json(
         .or_else(|| usage.get("output_tokens"))
         .and_then(|v| v.as_i64());
     let cost_micro = usage
-        .get("cost")
-        .or_else(|| usage.get("total_cost"))
-        .and_then(|c| c.as_f64())
-        .map(|f| (f * 1_000_000.0) as i64);
-    if in_tok.is_some() || out_tok.is_some() || cost_micro.is_some() {
-        Some((in_tok, out_tok, cost_micro))
+        .get("cost_micro_dollars")
+        .or_else(|| usage.get("cost_micros"))
+        .and_then(|c| c.as_i64())
+        .or_else(|| {
+            usage
+                .get("cost")
+                .or_else(|| usage.get("total_cost"))
+                .and_then(|c| c.as_f64())
+                .map(|f| (f * 1_000_000.0) as i64)
+        });
+    let provider_request_id = v
+        .get("id")
+        .or_else(|| v.get("request_id"))
+        .and_then(|id| id.as_str())
+        .map(ToOwned::to_owned);
+    if in_tok.is_some()
+        || out_tok.is_some()
+        || cost_micro.is_some()
+        || provider_request_id.is_some()
+    {
+        Some(ProviderUsageSnapshot {
+            in_tok,
+            out_tok,
+            cost_micro,
+            provider_request_id,
+            raw_usage: Some(usage.clone()),
+        })
     } else {
         None
     }
+}
+
+fn estimate_chat_tokens(body: &JsonValue) -> i64 {
+    fn collect_string_tokens(value: &JsonValue) -> i64 {
+        match value {
+            JsonValue::String(text) => estimate_text_tokens(text),
+            JsonValue::Array(items) => items.iter().map(collect_string_tokens).sum(),
+            JsonValue::Object(map) => map.values().map(collect_string_tokens).sum(),
+            _ => 0,
+        }
+    }
+
+    let prompt_tokens = collect_string_tokens(body);
+    let max_output_tokens = body
+        .get("max_tokens")
+        .or_else(|| body.get("max_completion_tokens"))
+        .and_then(|value| value.as_i64())
+        .unwrap_or(1024);
+    (prompt_tokens + max_output_tokens).max(1)
+}
+
+fn update_accum_from_snapshot(
+    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
+    snapshot: ProviderUsageSnapshot,
+) {
+    let mut a = accum.lock().unwrap();
+    a.in_tok = snapshot.in_tok.or(a.in_tok);
+    a.out_tok = snapshot.out_tok.or(a.out_tok);
+    a.cost_micro = snapshot.cost_micro.or(a.cost_micro);
+    a.provider_request_id = snapshot
+        .provider_request_id
+        .or(a.provider_request_id.take());
+    a.raw_usage = snapshot.raw_usage.or(a.raw_usage.take());
 }
 
 fn parse_sse_bytes(accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>, bytes: &Bytes) {
@@ -310,81 +446,134 @@ fn parse_sse_bytes(accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>, byt
                 continue;
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data)
-                && let Some((in_tok, out_tok, cost_micro)) = extract_usage_and_cost_from_json(&json)
-                && (in_tok.is_some() || out_tok.is_some() || cost_micro.is_some())
+                && let Some(snapshot) = extract_usage_and_cost_from_json(&json)
             {
-                let mut a = accum.lock().unwrap();
-                a.in_tok = in_tok.or(a.in_tok);
-                a.out_tok = out_tok.or(a.out_tok);
-                a.cost_micro = cost_micro.or(a.cost_micro);
+                update_accum_from_snapshot(accum, snapshot);
             }
         }
     }
 }
 
-use futures_util::Stream;
-use futures_util::task::{Context, Poll};
-use pin_project_lite::pin_project;
-use std::pin::Pin;
+async fn finalize_llm_usage(
+    state: &AppState,
+    user_sub: &str,
+    model_id: &str,
+    usage_context: &UsageRequestContext,
+    provider: &str,
+    endpoint: &str,
+    invocation_id: Option<&str>,
+    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
+    latency_ms: f64,
+) {
+    let (in_tok, out_tok, cost_micro, provider_request_id, raw_usage) = {
+        let a = accum.lock().unwrap();
+        (
+            a.in_tok,
+            a.out_tok,
+            a.cost_micro,
+            a.provider_request_id.clone(),
+            a.raw_usage.clone(),
+        )
+    };
 
-pin_project! {
-    struct TrackingStream<S> {
-        #[pin]
-        inner: S,
-        accum: std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
-        finalized: bool,
-        state: AppState,
-        user: String,
-        model: String,
-        started_at: std::time::Instant,
+    if in_tok.is_none() && out_tok.is_none() && cost_micro.is_none() {
+        if let Err(e) = settle_usage_invocation(
+            &state.db,
+            invocation_id,
+            UsageInvocationSettlement {
+                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+                latency_ms: Some(latency_ms),
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            tracing::warn!(error=%e, "Failed to settle unknown LLM usage");
+        }
+        return;
+    }
+
+    if let Err(e) = track_llm_usage(
+        state,
+        user_sub,
+        model_id,
+        in_tok.unwrap_or(0),
+        out_tok.unwrap_or(0),
+        cost_micro.unwrap_or(0),
+        latency_ms,
+        usage_context.app_id.as_deref(),
+        Some(provider),
+        Some(endpoint),
+        invocation_id,
+        provider_request_id.as_deref(),
+        raw_usage,
+        crate::usage_accounting::STATUS_COMPLETED,
+    )
+    .await
+    {
+        tracing::warn!(error=%e, "Failed to track LLM usage");
     }
 }
 
-impl<S> Stream for TrackingStream<S>
-where
-    S: Stream<Item = Result<Bytes, flow_like_types::reqwest::Error>>,
-{
-    type Item = Result<Bytes, Infallible>;
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-        match this.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(chunk_bytes))) => {
-                parse_sse_bytes(this.accum, &chunk_bytes);
-                Poll::Ready(Some(Ok(chunk_bytes)))
-            }
-            Poll::Ready(Some(Err(e))) => {
-                tracing::error!(error=%e, "Error reading upstream stream");
-                Poll::Ready(Some(Ok(Bytes::from_static(b""))))
-            }
-            Poll::Ready(None) => {
-                if !*this.finalized {
-                    *this.finalized = true;
-                    let acc = this.accum.clone();
-                    let state_c = this.state.clone();
-                    let user_c = this.user.clone();
-                    let model_c = this.model.clone();
-                    let latency_ms = this.started_at.elapsed().as_secs_f64() * 1000.0;
-                    flow_like_types::tokio::spawn(async move {
-                        let (in_tok, out_tok, cost_micro) = {
-                            let a = acc.lock().unwrap();
-                            (a.in_tok, a.out_tok, a.cost_micro)
-                        };
-                        if let (Some(in_t), Some(out_t)) = (in_tok, out_tok) {
-                            let price = cost_micro.unwrap_or(0);
-                            if let Err(e) = track_llm_usage(
-                                &state_c, &user_c, &model_c, in_t, out_t, price, latency_ms,
-                            )
-                            .await
-                            {
-                                tracing::warn!(error=%e, "Failed to track streaming LLM usage");
-                            }
-                        }
-                    });
-                }
-                Poll::Ready(None)
-            }
-            Poll::Pending => Poll::Pending,
+async fn finalize_cancelled_llm_usage(
+    state: &AppState,
+    user_sub: &str,
+    model_id: &str,
+    usage_context: &UsageRequestContext,
+    provider: &str,
+    endpoint: &str,
+    invocation_id: Option<&str>,
+    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
+    latency_ms: f64,
+) {
+    let (in_tok, out_tok, cost_micro, provider_request_id, raw_usage) = {
+        let a = accum.lock().unwrap();
+        (
+            a.in_tok,
+            a.out_tok,
+            a.cost_micro,
+            a.provider_request_id.clone(),
+            a.raw_usage.clone(),
+        )
+    };
+
+    if in_tok.is_none() && out_tok.is_none() && cost_micro.is_none() {
+        if let Err(e) = settle_usage_invocation(
+            &state.db,
+            invocation_id,
+            UsageInvocationSettlement {
+                status: crate::usage_accounting::STATUS_CANCELLED,
+                latency_ms: Some(latency_ms),
+                error: Some("Client disconnected before streaming response completed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            tracing::warn!(error=%e, "Failed to settle cancelled LLM usage");
         }
+        return;
+    }
+
+    if let Err(e) = track_llm_usage(
+        state,
+        user_sub,
+        model_id,
+        in_tok.unwrap_or(0),
+        out_tok.unwrap_or(0),
+        cost_micro.unwrap_or(0),
+        latency_ms,
+        usage_context.app_id.as_deref(),
+        Some(provider),
+        Some(endpoint),
+        invocation_id,
+        provider_request_id.as_deref(),
+        raw_usage,
+        crate::usage_accounting::STATUS_CANCELLED,
+    )
+    .await
+    {
+        tracing::warn!(error=%e, "Failed to track cancelled LLM usage");
     }
 }
 
@@ -393,15 +582,45 @@ async fn handle_streaming(
     state: AppState,
     user_sub: String,
     model_id: String,
+    usage_context: UsageRequestContext,
+    provider: String,
+    endpoint: String,
+    invocation_id: Option<String>,
 ) -> Result<AxumResponse, ApiError> {
-    let resp = request_builder.send().await.map_err(|e| {
-        tracing::error!(error=%e, "Upstream streaming request failed");
-        anyhow!("Upstream request failed: {e}")
-    })?;
+    let started_at = std::time::Instant::now();
+    let resp = match request_builder.send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(error=%e, "Upstream streaming request failed");
+            let _ = settle_usage_invocation(
+                &state.db,
+                invocation_id.as_deref(),
+                UsageInvocationSettlement {
+                    status: crate::usage_accounting::STATUS_FAILED,
+                    error: Some(e.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            return Err(ApiError::internal_error(anyhow!(
+                "Upstream request failed: {e}"
+            )));
+        }
+    };
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         tracing::error!(status=%status, body=%text, "Upstream error");
+        let _ = settle_usage_invocation(
+            &state.db,
+            invocation_id.as_deref(),
+            UsageInvocationSettlement {
+                status: crate::usage_accounting::STATUS_FAILED,
+                error: Some(format!("Upstream error {status}: {text}")),
+                ..Default::default()
+            },
+        )
+        .await;
         return Err(ApiError::bad_request("Upstream error"));
     }
 
@@ -412,20 +631,120 @@ async fn handle_streaming(
         builder = builder.header(axum::http::header::CONTENT_TYPE, "text/event-stream");
     }
 
-    // Wrap upstream stream so we can observe chunks while leaving bytes unchanged.
-    let upstream = resp.bytes_stream();
-    let tracking_stream = TrackingStream {
-        inner: upstream,
-        accum: std::sync::Arc::new(std::sync::Mutex::new(StreamingAccum::default())),
-        finalized: false,
-        state,
-        user: user_sub,
-        model: model_id,
-        started_at: std::time::Instant::now(),
+    let accum = std::sync::Arc::new(std::sync::Mutex::new(StreamingAccum::default()));
+
+    if llm_stream_background_drain_enabled() {
+        let (tx, mut rx) =
+            flow_like_types::tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let accum_task = accum.clone();
+        let invocation_id_task = invocation_id.clone();
+
+        flow_like_types::tokio::spawn(async move {
+            let mut upstream = resp.bytes_stream();
+            let mut client_disconnected = false;
+
+            while let Some(chunk) = upstream.next().await {
+                match chunk {
+                    Ok(chunk_bytes) => {
+                        parse_sse_bytes(&accum_task, &chunk_bytes);
+                        if tx.send(Ok(chunk_bytes)).await.is_err() {
+                            client_disconnected = true;
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(error=%error, "Error reading upstream stream");
+                        if tx.send(Ok(Bytes::from_static(b""))).await.is_err() {
+                            client_disconnected = true;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+            if client_disconnected {
+                finalize_cancelled_llm_usage(
+                    &state,
+                    &user_sub,
+                    &model_id,
+                    &usage_context,
+                    &provider,
+                    &endpoint,
+                    invocation_id_task.as_deref(),
+                    &accum_task,
+                    latency_ms,
+                )
+                .await;
+            } else {
+                finalize_llm_usage(
+                    &state,
+                    &user_sub,
+                    &model_id,
+                    &usage_context,
+                    &provider,
+                    &endpoint,
+                    invocation_id_task.as_deref(),
+                    &accum_task,
+                    latency_ms,
+                )
+                .await;
+            }
+        });
+
+        let body_stream = async_stream::stream! {
+            while let Some(item) = rx.recv().await {
+                yield item;
+            }
+        };
+        let body = passthrough_byte_stream(body_stream);
+        return Ok(builder.body(body).unwrap());
+    }
+
+    let accum_stream = accum.clone();
+    let body_stream = async_stream::stream! {
+        let mut upstream = resp.bytes_stream();
+
+        while let Some(chunk) = upstream.next().await {
+            match chunk {
+                Ok(chunk_bytes) => {
+                    parse_sse_bytes(&accum_stream, &chunk_bytes);
+                    yield Ok(chunk_bytes);
+                }
+                Err(error) => {
+                    tracing::error!(error=%error, "Error reading upstream stream");
+                    yield Ok(Bytes::from_static(b""));
+                    break;
+                }
+            }
+        }
+
+        let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+        finalize_llm_usage(
+            &state,
+            &user_sub,
+            &model_id,
+            &usage_context,
+            &provider,
+            &endpoint,
+            invocation_id.as_deref(),
+            &accum_stream,
+            latency_ms,
+        )
+        .await;
     };
-    let body_stream = tracking_stream.map(|res| res);
     let body = passthrough_byte_stream(body_stream);
     Ok(builder.body(body).unwrap())
+}
+
+fn llm_stream_background_drain_enabled() -> bool {
+    if cfg!(feature = "lambda") {
+        return false;
+    }
+
+    std::env::var("FLOWLIKE_LLM_STREAM_BACKGROUND_DRAIN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true)
 }
 
 async fn handle_non_streaming(
@@ -433,12 +752,31 @@ async fn handle_non_streaming(
     upstream_model_id: &str,
     state: &AppState,
     user_sub: &str,
+    usage_context: &UsageRequestContext,
+    provider: &str,
+    endpoint: &str,
+    invocation_id: Option<&str>,
 ) -> Result<AxumResponse, ApiError> {
     let start = std::time::Instant::now();
-    let resp = request_builder.send().await.map_err(|e| {
-        tracing::error!(error=%e, "Upstream request failed");
-        anyhow!("Upstream request failed: {e}")
-    })?;
+    let resp = match request_builder.send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!(error=%e, "Upstream request failed");
+            let _ = settle_usage_invocation(
+                &state.db,
+                invocation_id,
+                UsageInvocationSettlement {
+                    status: crate::usage_accounting::STATUS_FAILED,
+                    error: Some(e.to_string()),
+                    ..Default::default()
+                },
+            )
+            .await;
+            return Err(ApiError::internal_error(anyhow!(
+                "Upstream request failed: {e}"
+            )));
+        }
+    };
     let status = resp.status();
     let headers = resp.headers().clone();
     let body_bytes = resp.bytes().await.map_err(|e| {
@@ -448,22 +786,56 @@ async fn handle_non_streaming(
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
     if status.is_success() {
         tracing::info!(model = %upstream_model_id, bytes = body_bytes.len(), latency_ms = latency_ms, "LLM invoke success (non-stream)");
-        if let Some((in_tok, out_tok)) = extract_usage_from_body(&body_bytes)
-            && let Err(e) = track_llm_usage(
+        if let Some(usage) = extract_usage_from_body(&body_bytes) {
+            if let Err(e) = track_llm_usage(
                 state,
                 user_sub,
                 upstream_model_id,
-                in_tok,
-                out_tok,
-                0,
+                usage.in_tok.unwrap_or(0),
+                usage.out_tok.unwrap_or(0),
+                usage.cost_micro.unwrap_or(0),
                 latency_ms,
+                usage_context.app_id.as_deref(),
+                Some(provider),
+                Some(endpoint),
+                invocation_id,
+                usage.provider_request_id.as_deref(),
+                usage.raw_usage,
+                crate::usage_accounting::STATUS_COMPLETED,
             )
             .await
+            {
+                tracing::warn!(error=%e, "Failed to track LLM usage");
+            }
+        } else if let Err(e) = settle_usage_invocation(
+            &state.db,
+            invocation_id,
+            UsageInvocationSettlement {
+                status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
+                latency_ms: Some(latency_ms),
+                ..Default::default()
+            },
+        )
+        .await
         {
-            tracing::warn!(error=%e, "Failed to track LLM usage");
+            tracing::warn!(error=%e, "Failed to settle unknown LLM usage");
         }
     } else {
         tracing::warn!(status = %status, body = %String::from_utf8_lossy(&body_bytes), "LLM invoke upstream error");
+        let _ = settle_usage_invocation(
+            &state.db,
+            invocation_id,
+            UsageInvocationSettlement {
+                status: crate::usage_accounting::STATUS_FAILED,
+                error: Some(format!(
+                    "Upstream error {status}: {}",
+                    String::from_utf8_lossy(&body_bytes)
+                )),
+                latency_ms: Some(latency_ms),
+                ..Default::default()
+            },
+        )
+        .await;
     }
     let mut out_headers = HeaderMap::new();
     if let Some(ct) = headers.get(axum::http::header::CONTENT_TYPE) {
@@ -494,6 +866,7 @@ async fn handle_non_streaming(
 pub async fn invoke_llm(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
+    headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<AxumResponse, ApiError> {
     user.executor_scoped_sub()?;
@@ -503,6 +876,7 @@ pub async fn invoke_llm(
         .ok_or_else(|| ApiError::bad_request("Missing 'model' field"))?;
     let (provider, hosted_provider) = fetch_provider(&state, model_field).await?;
     enforce_tier(&user, &state, &provider).await?;
+    let usage_context = resolve_usage_context(&state, &user, &headers).await?;
     let upstream_model_id = provider
         .model_id
         .clone()
@@ -515,6 +889,23 @@ pub async fn invoke_llm(
         &hosted_provider,
     );
     let (url, api_key) = build_provider_url(&state, &hosted_provider).await?;
+    let provider_label = hosted_provider.label().to_string();
+    let user_sub = user.executor_scoped_sub()?;
+    let estimated_tokens = estimate_chat_tokens(&upstream_body);
+    let invocation_id = start_usage_invocation(
+        &state,
+        UsageInvocationStart {
+            kind: "llm",
+            user_id: Some(&user_sub),
+            app_id: usage_context.app_id.as_deref(),
+            provider: Some(&provider_label),
+            endpoint: Some(&url),
+            model_id: Some(&upstream_model_id),
+            estimated_tokens,
+            estimated_cost_micro_dollars: 0,
+        },
+    )
+    .await?;
     let client = flow_like_types::reqwest::Client::new();
 
     let mut request_builder = if hosted_provider.uses_bearer_auth() {
@@ -542,29 +933,37 @@ pub async fn invoke_llm(
         request_builder = request_builder.header("X-User-Id", tracking_id);
     }
 
-    let user_sub = user.executor_scoped_sub()?;
     if stream {
-        handle_streaming(request_builder, state, user_sub, upstream_model_id).await
+        handle_streaming(
+            request_builder,
+            state,
+            user_sub,
+            upstream_model_id,
+            usage_context,
+            provider_label,
+            url,
+            invocation_id,
+        )
+        .await
     } else {
-        handle_non_streaming(request_builder, &upstream_model_id, &state, &user_sub).await
+        handle_non_streaming(
+            request_builder,
+            &upstream_model_id,
+            &state,
+            &user_sub,
+            &usage_context,
+            &provider_label,
+            &url,
+            invocation_id.as_deref(),
+        )
+        .await
     }
 }
 
 // -------- Cost Tracking --------
-fn extract_usage_from_body(body: &[u8]) -> Option<(i64, i64)> {
+fn extract_usage_from_body(body: &[u8]) -> Option<ProviderUsageSnapshot> {
     if let Ok(v) = serde_json::from_slice::<JsonValue>(body) {
-        // Try common OpenAI style usage fields
-        if let Some(usage) = v.get("usage") {
-            let in_tok = usage
-                .get("prompt_tokens")
-                .or_else(|| usage.get("input_tokens"))?
-                .as_i64()?;
-            let out_tok = usage
-                .get("completion_tokens")
-                .or_else(|| usage.get("output_tokens"))?
-                .as_i64()?;
-            return Some((in_tok, out_tok));
-        }
+        return extract_usage_and_cost_from_json(&v);
     }
     None
 }
@@ -577,6 +976,13 @@ async fn track_llm_usage(
     token_out: i64,
     price: i64,
     latency_ms: f64,
+    app_id: Option<&str>,
+    provider: Option<&str>,
+    endpoint: Option<&str>,
+    invocation_id: Option<&str>,
+    provider_request_id: Option<&str>,
+    raw_usage: Option<JsonValue>,
+    settlement_status: &'static str,
 ) -> Result<(), flow_like_types::Error> {
     use chrono::Utc;
     use llm_usage_tracking::ActiveModel;
@@ -584,20 +990,50 @@ async fn track_llm_usage(
     let record = ActiveModel {
         id: Set(create_id()),
         model_id: Set(model.to_string()),
+        provider: Set(provider.map(ToOwned::to_owned)),
+        endpoint: Set(endpoint.map(ToOwned::to_owned)),
+        invocation_id: Set(invocation_id.map(ToOwned::to_owned)),
+        provider_request_id: Set(provider_request_id.map(ToOwned::to_owned)),
+        raw_usage: Set(raw_usage.clone()),
         token_in: Set(token_in),
         token_out: Set(token_out),
         latency: Set(Some(latency_ms)),
         user_id: Set(Some(user_sub.to_string())),
-        app_id: Set(None),
+        app_id: Set(app_id.map(ToOwned::to_owned)),
         price: Set(price),
         created_at: Set(now),
         updated_at: Set(now),
     };
     // Best-effort insert
-    match record.insert(&state.db).await {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e.into()),
+    record.insert(&state.db).await?;
+
+    settle_usage_invocation(
+        &state.db,
+        invocation_id,
+        UsageInvocationSettlement {
+            status: settlement_status,
+            input_tokens: token_in,
+            output_tokens: token_out,
+            cost_micro_dollars: price,
+            latency_ms: Some(latency_ms),
+            provider_request_id: provider_request_id.map(ToOwned::to_owned),
+            raw_usage,
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    if price != 0
+        && let Some(existing) = user::Entity::find_by_id(user_sub).one(&state.db).await?
+    {
+        let total_llm_price = existing.total_llm_price.saturating_add(price);
+        let mut active: user::ActiveModel = existing.into();
+        active.total_llm_price = Set(total_llm_price);
+        active.updated_at = Set(now);
+        active.update(&state.db).await?;
     }
+
+    Ok(())
 }
 
 // Turn a stream of Bytes into a Body verbatim.
@@ -651,6 +1087,38 @@ mod tests {
         assert!(!stream);
         assert_eq!(rewritten.get("model").unwrap().as_str().unwrap(), "gpt-4o");
         assert!(rewritten.get("usage").is_none());
+        assert!(rewritten.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn test_prepare_upstream_body_enables_openai_compatible_stream_usage() {
+        let payload = serde_json::json!({
+            "model": "bit_123",
+            "messages": [],
+            "stream": true,
+            "stream_options": {
+                "include_obfuscation": false
+            }
+        });
+
+        for hosted_provider in [HostedProvider::OpenAI, HostedProvider::Azure] {
+            let (rewritten, stream) =
+                prepare_upstream_body(&payload, "gpt-4o", None, &hosted_provider);
+            assert!(stream);
+            let stream_options = rewritten.get("stream_options").unwrap();
+            assert_eq!(
+                stream_options
+                    .get("include_usage")
+                    .and_then(|v| v.as_bool()),
+                Some(true)
+            );
+            assert_eq!(
+                stream_options
+                    .get("include_obfuscation")
+                    .and_then(|v| v.as_bool()),
+                Some(false)
+            );
+        }
     }
 
     #[test]
@@ -702,7 +1170,10 @@ mod tests {
         });
         let bytes = serde_json::to_vec(&body).unwrap();
         let usage = extract_usage_from_body(&bytes).unwrap();
-        assert_eq!(usage, (12, 34));
+        assert_eq!(usage.in_tok, Some(12));
+        assert_eq!(usage.out_tok, Some(34));
+        assert_eq!(usage.cost_micro, None);
+        assert_eq!(usage.provider_request_id.as_deref(), Some("chatcmpl-test"));
     }
 
     #[test]

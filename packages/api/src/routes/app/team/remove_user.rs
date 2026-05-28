@@ -104,6 +104,7 @@ pub async fn remove_user(
     membership.delete(&txn).await?;
 
     txn.commit().await?;
+    state.invalidate_wasm_resolve(&app_id);
 
     audit_branch!(
         state,

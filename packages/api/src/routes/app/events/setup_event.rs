@@ -283,7 +283,7 @@ pub(crate) async fn run_event_setup(
         .scoped_credentials(
             &sub,
             &app_id,
-            crate::credentials::CredentialsAccess::InvokeWrite,
+            crate::credentials::CredentialsAccess::ServerExecute,
         )
         .await?;
     let shared_credentials = credentials.into_shared_credentials();

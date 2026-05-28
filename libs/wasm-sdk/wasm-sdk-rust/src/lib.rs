@@ -69,13 +69,29 @@ mod context;
 pub mod host;
 pub mod interop;
 pub mod mock;
-#[cfg(feature = "rig")]
+
+#[cfg(all(feature = "rig", not(target_arch = "wasm32")))]
 pub mod rig_provider;
-#[cfg(feature = "rig")]
+#[cfg(all(feature = "rig", not(target_arch = "wasm32")))]
+pub use rig;
+#[cfg(all(feature = "rig", not(target_arch = "wasm32")))]
+pub use rig::completion::ToolDefinition;
+#[cfg(all(feature = "rig", not(target_arch = "wasm32")))]
 pub use rig_provider::{
     FlowLikeCompletionModel, FlowPathListTool, FlowPathReadTool, FlowPathToolError,
     FlowPathWriteTool, WasiAgent,
 };
+
+#[cfg(all(feature = "rig", target_arch = "wasm32"))]
+pub mod wasi_agent;
+#[cfg(all(feature = "rig", target_arch = "wasm32"))]
+pub mod rig {
+    pub mod completion {
+        pub use crate::wasi_agent::ToolDefinition;
+    }
+}
+#[cfg(all(feature = "rig", target_arch = "wasm32"))]
+pub use wasi_agent::{FlowLikeCompletionModel, ToolDefinition, WasiAgent};
 mod types;
 
 pub use context::*;

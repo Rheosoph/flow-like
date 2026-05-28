@@ -78,6 +78,7 @@ pub enum PackageStatus {
     Deprecated,
     Disabled,
     PendingReview,
+    Rejected,
 }
 
 /// Source type for a package
@@ -103,6 +104,8 @@ pub struct PackageVersion {
     pub version: String,
     pub wasm_hash: String,
     pub wasm_size: u64,
+    #[serde(default)]
+    pub status: PackageStatus,
     #[serde(default)]
     pub download_url: Option<String>,
     pub published_at: chrono::DateTime<chrono::Utc>,

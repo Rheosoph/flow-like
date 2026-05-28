@@ -95,6 +95,41 @@ async fn reload_wasm_nodes(
     Ok(())
 }
 
+async fn load_installed_package_nodes(
+    app_handle: &AppHandle,
+    registry_client: &RegistryClient,
+    package_id: &str,
+    emit_catalog_updated: bool,
+) -> Result<(), TauriFunctionError> {
+    let flow_state = TauriFlowLikeState::construct(app_handle).await?;
+    let engine = TauriWasmEngineState::construct(app_handle)
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+
+    let nodes = registry_client
+        .load_nodes(package_id, engine)
+        .await
+        .map_err(|e| {
+            TauriFunctionError::new(&format!("Failed to load package '{}': {}", package_id, e))
+        })?;
+
+    if !nodes.is_empty() {
+        let registry_guard = flow_state.node_registry.clone();
+        let mut registry = registry_guard.write().await;
+        registry.push_nodes(
+            nodes
+                .into_iter()
+                .map(|node| Arc::new(node) as Arc<dyn NodeLogic>)
+                .collect(),
+        );
+    }
+
+    if emit_catalog_updated {
+        let _ = app_handle.emit("catalog-updated", ());
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFiltersInput {
@@ -190,11 +225,14 @@ pub async fn registry_install_package(
             emit_package_status(&app_handle, &package_id, "error");
         })?;
 
-    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
-        tracing::warn!("Failed to reload WASM nodes after install: {:?}", e);
-    } else {
-        clear_package_status(&app_handle, &package_id);
-    }
+    load_installed_package_nodes(&app_handle, &registry_client, &package_id, true)
+        .await
+        .inspect_err(|error| {
+            log_registry_package_error("registry_install_package:load_nodes", &package_id, error);
+            emit_package_status(&app_handle, &package_id, "error");
+        })?;
+
+    clear_package_status(&app_handle, &package_id);
 
     Ok(installed)
 }

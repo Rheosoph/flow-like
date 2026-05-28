@@ -179,7 +179,12 @@ impl NodeLogic for LLMBranchNode {
             let model = model_factory
                 .lock()
                 .await
-                .build(&model, context.app_state.clone(), context.token.clone())
+                .build(
+                    &model,
+                    context.app_state.clone(),
+                    context.token.clone(),
+                    context.model_usage_context(),
+                )
                 .await?;
             model.invoke(&history, None).await?
         }; // drop model

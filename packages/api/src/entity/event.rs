@@ -48,14 +48,14 @@ pub struct Model {
     pub updated_at: DateTime,
     #[sea_orm(column_name = "executionMode", column_type = "Text")]
     pub execution_mode: String,
-    #[sea_orm(column_name = "setupStatus", column_type = "Text", nullable)]
-    pub setup_status: Option<String>,
-    #[sea_orm(column_name = "lastSetupAt", nullable)]
+    #[sea_orm(column_name = "lastSetupAt")]
     pub last_setup_at: Option<DateTime>,
-    #[sea_orm(column_name = "lastSetupVersion", column_type = "Text", nullable)]
-    pub last_setup_version: Option<String>,
     #[sea_orm(column_name = "lastSetupError", column_type = "Text", nullable)]
     pub last_setup_error: Option<String>,
+    #[sea_orm(column_name = "lastSetupVersion", column_type = "Text", nullable)]
+    pub last_setup_version: Option<String>,
+    #[sea_orm(column_name = "setupStatus", column_type = "Text", nullable)]
+    pub setup_status: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -68,14 +68,14 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     App,
-    #[sea_orm(has_one = "super::event_sink::Entity")]
-    EventSink,
+    #[sea_orm(has_many = "super::event_alias::Entity")]
+    EventAlias,
     #[sea_orm(has_many = "super::event_remote_auth::Entity")]
     EventRemoteAuth,
     #[sea_orm(has_many = "super::event_remote_registration::Entity")]
     EventRemoteRegistration,
-    #[sea_orm(has_many = "super::event_alias::Entity")]
-    EventAlias,
+    #[sea_orm(has_one = "super::event_sink::Entity")]
+    EventSink,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -84,9 +84,9 @@ impl Related<super::app::Entity> for Entity {
     }
 }
 
-impl Related<super::event_sink::Entity> for Entity {
+impl Related<super::event_alias::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::EventSink.def()
+        Relation::EventAlias.def()
     }
 }
 
@@ -102,9 +102,9 @@ impl Related<super::event_remote_registration::Entity> for Entity {
     }
 }
 
-impl Related<super::event_alias::Entity> for Entity {
+impl Related<super::event_sink::Entity> for Entity {
     fn to() -> RelationDef {
-        Relation::EventAlias.def()
+        Relation::EventSink.def()
     }
 }
 

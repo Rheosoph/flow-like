@@ -36,7 +36,7 @@ use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
 };
-use flow_like_types::{anyhow, create_id, tokio};
+use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -96,10 +96,9 @@ pub struct InvokeBoardResponse {
     pub poll_token: Option<String>,
 }
 
-/// Get credentials access for invoke - always InvokeWrite since
-/// server-side execution is scoped through workflow logic
+/// Get credentials access for remote server-side execution.
 fn get_credentials_access() -> crate::credentials::CredentialsAccess {
-    crate::credentials::CredentialsAccess::InvokeWrite
+    crate::credentials::CredentialsAccess::ServerExecute
 }
 
 /// POST /apps/{app_id}/board/{board_id}/invoke
@@ -252,9 +251,19 @@ pub async fn invoke_board(
         )));
     }
 
-    // Get scoped credentials based on user permissions
+    // Resolve independent dispatch inputs concurrently: STS scoped
+    // credentials, user profile, and WASM package URLs do not depend on each
+    // other and are all on the hot invoke path.
     let access = get_credentials_access();
-    let credentials = state.scoped_credentials(&sub, &app_id, access).await?;
+    let (credentials_result, profile, wasm_packages) = {
+        use flow_like_types::tokio;
+        tokio::join!(
+            state.scoped_credentials(&sub, &app_id, access),
+            fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id),
+            resolve_wasm_packages(&state, &app_id),
+        )
+    };
+    let credentials = credentials_result?;
 
     // Convert to SharedCredentials for runtime compatibility
     let shared_credentials = credentials.into_shared_credentials();
@@ -278,11 +287,6 @@ pub async fn invoke_board(
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
-
-    let profile =
-        fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id).await;
-
-    let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     let request = DispatchRequest {
         run_id: run_id.clone(),
@@ -433,13 +437,9 @@ fn proxy_lambda_sse_response(
                                             _ => RunStatus::Completed,
                                         };
 
-                                        let db = db.clone();
-                                        let run_id_clone = run_id.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = update_run_on_completion(db.as_ref(), &run_id_clone, run_status, log_level).await {
-                                                tracing::error!(run_id = %run_id_clone, error = %e, "Failed to update run on completion");
-                                            }
-                                        });
+                                        if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
+                                            tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
+                                        }
                                     }
 
                         let sse_event = Event::default()

@@ -52,12 +52,13 @@ impl Command for AddNodeCommand {
             super::validate_and_deduplicate_fn_refs(fn_refs, board);
         }
 
-        // Populate wasm metadata from the registry - never trust frontend-supplied values
+        // Populate wasm metadata from the runtime registry when available.
+        // App-scoped WASM nodes in online projects are validated by the API
+        // against the package DB before this command is executed; the API does
+        // not mount executable WASM artifacts just to edit board metadata.
         let node_registry = state.node_registry.read().await.node_registry.clone();
         if let Ok(blueprint) = node_registry.get_node(&self.node.name) {
             self.node.wasm = blueprint.wasm.clone();
-        } else {
-            self.node.wasm = None;
         }
 
         self.node.layer = self.current_layer.clone();

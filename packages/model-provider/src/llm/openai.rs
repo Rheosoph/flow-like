@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use super::{ModelLogic, extract_headers, merge_additional_params};
+use super::{ModelLogic, UsageReportingMode, extract_headers, merge_additional_params};
 use crate::provider::random_provider;
 use crate::{
     history::History,
@@ -163,6 +163,10 @@ impl ModelLogic for OpenAIModel {
 
     async fn default_model(&self) -> Option<String> {
         self.default_model.clone()
+    }
+
+    fn usage_reporting(&self) -> UsageReportingMode {
+        UsageReportingMode::OpenAIStreamOptions
     }
 
     fn additional_params(&self, history: &Option<History>) -> Option<flow_like_types::Value> {

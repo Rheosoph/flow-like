@@ -163,14 +163,24 @@ dashmap = "6"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "43.0.2", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
-wasmtime-wasi = "43.0.2"
-wasmtime-wasi-http = "43.0.2"
+wasmtime = { version = "45.0.0", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "45.0.0"
+wasmtime-wasi-http = "45.0.0"
 
-# Patch esaxx-rs to fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
-# conflicting with ort_sys which uses dynamic CRT /MD → LNK2038)
 [patch.crates-io]
+# Fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
+# conflicting with ort_sys which uses dynamic CRT /MD -> LNK2038).
 esaxx-rs = { git = "https://github.com/Rheosoph/esaxx-rs.git", branch = "main" }
+# Fix smartstring's allocator_api probe on newer stable Rust toolchains.
+smartstring = { git = "https://github.com/Rheosoph/smartstring.git", rev = "ea5608253d061dbc90a8f66022ebc3326bd65514" }
+# Fix io-extras's unstable vector feature probes on newer stable Rust toolchains.
+io-extras = { git = "https://github.com/Rheosoph/io-extras.git", rev = "515df16351274387cb14d661874ed731fff1350b" }
+# Fix cap-primitives's unstable io_error feature probes on newer stable Rust toolchains.
+cap-primitives = { git = "https://github.com/Rheosoph/cap-std.git", rev = "dca01d25b31c91da1aa7f2050c0eca4d4f361871" }
+# Fix cap-std's unstable vector feature probes on newer stable Rust toolchains.
+cap-std = { git = "https://github.com/Rheosoph/cap-std.git", rev = "dca01d25b31c91da1aa7f2050c0eca4d4f361871" }
+# Fix erasable's unstable extern type / never type probes on newer stable Rust toolchains.
+erasable = { git = "https://github.com/Rheosoph/pointer-utils.git", rev = "e1c31813a156e656f8d0b2c194410ac7192ffbd4" }
 
 # Use line-tables-only debug info and strip debuginfo to keep .so under 4GB for Android APK ZIP32 limit
 [profile.dev]

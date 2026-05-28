@@ -236,10 +236,6 @@ impl WasmComponentInstance {
             .await
             .map_err(|e| WasmError::execution(func_name, format!("Call failed: {}", e)))?;
 
-        func.post_return_async(&mut self.store)
-            .await
-            .map_err(|e| WasmError::execution(func_name, format!("Post-return failed: {}", e)))?;
-
         // Try parsing as array first (multi-node), fall back to single object
         if let Ok(defs) = serde_json::from_str::<Vec<WasmNodeDefinition>>(&json_str) {
             return Ok(defs);
@@ -259,10 +255,6 @@ impl WasmComponentInstance {
             .call_async(&mut self.store, ())
             .await
             .map_err(|e| WasmError::execution("get-abi-version", format!("Call failed: {}", e)))?;
-
-        func.post_return_async(&mut self.store).await.map_err(|e| {
-            WasmError::execution("get-abi-version", format!("Post-return failed: {}", e))
-        })?;
 
         Ok(version)
     }
@@ -320,10 +312,6 @@ impl WasmComponentInstance {
                 }
                 WasmError::execution("run", format!("Call failed: {}", e))
             })?;
-
-        func.post_return_async(&mut self.store)
-            .await
-            .map_err(|e| WasmError::execution("run", format!("Post-return failed: {}", e)))?;
 
         serde_json::from_str(&result_json)
             .map_err(|e| WasmError::execution("run", format!("Invalid JSON result: {}", e)))

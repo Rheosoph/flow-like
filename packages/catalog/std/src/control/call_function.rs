@@ -546,6 +546,7 @@ mod tests {
             board_dir: Default::default(),
             logic_nodes: std::collections::HashMap::new(),
             app_state: None,
+            hash: None,
         }
     }
 
