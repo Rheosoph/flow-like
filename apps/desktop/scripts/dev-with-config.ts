@@ -48,8 +48,11 @@ function prepareWindowsPrereqs(): void {
 		{ stdio: "inherit" },
 	);
 
-	if (result.status !== 0) {
-		throw new Error("Failed to prepare Windows prerequisites");
+	if (result.error || result.status !== 0) {
+		const reason =
+			result.error?.message ??
+			(result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);
+		throw new Error(`Failed to prepare Windows prerequisites: ${reason}`);
 	}
 }
 

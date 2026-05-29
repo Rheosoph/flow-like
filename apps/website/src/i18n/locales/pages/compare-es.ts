@@ -66,10 +66,10 @@ export const esCompare = {
 	// Per-category mini bubble plot inside the matrix
 	"compare.competitor.ontology.examples": "Ejemplos: Palantir Foundry / AIP",
 	"compare.competitor.ontology.note":
-		"Comparacion de categoria. Palantir Foundry y Palantir AIP se mencionan solo como ejemplos publicos de plataformas de datos basadas en ontologias. No se implica afiliacion, patrocinio ni respaldo. Las marcas de terceros siguen siendo propiedad de sus respectivos propietarios.",
+		"Comparación de categoría. Palantir Foundry y Palantir AIP se mencionan solo como ejemplos públicos de plataformas de datos basadas en ontologías. No se implica afiliación, patrocinio ni respaldo. Las marcas de terceros siguen siendo propiedad de sus respectivos propietarios.",
 	"compare.competitor.erp.examples": "Ejemplos: SAP Build / SAP BTP",
 	"compare.competitor.erp.note":
-		"Comparacion de categoria. SAP Build Process Automation y SAP Business Technology Platform se mencionan solo como ejemplos publicos de plataformas de procesos cercanas a ERP. No se implica afiliacion, patrocinio ni respaldo. Las marcas de terceros siguen siendo propiedad de sus respectivos propietarios.",
+		"Comparación de categoría. SAP Build Process Automation y SAP Business Technology Platform se mencionan solo como ejemplos públicos de plataformas de procesos cercanas a ERP. No se implica afiliación, patrocinio ni respaldo. Las marcas de terceros siguen siendo propiedad de sus respectivos propietarios.",
 	"compare.matrix.plot.title": "Posicionamiento frente a Flow-Like",
 	"compare.matrix.plot.description":
 		"Dónde se ubican estas herramientas en los dos ejes que realmente diferencian esta categoría. Flow-Like siempre está arriba a la derecha.",

@@ -182,6 +182,10 @@ function candidateRuntimeDirs(root: string, arch: Architecture): string[] {
 }
 
 function detectVisualStudioRedistRoots(): string[] {
+	if (process.platform !== "win32") {
+		return [];
+	}
+
 	const roots: string[] = [];
 	const vcToolsRedistDir = process.env.VCToolsRedistDir;
 	const vcInstallDir = process.env.VCINSTALLDIR;
@@ -199,7 +203,7 @@ function detectVisualStudioRedistRoots(): string[] {
 		"Microsoft Visual Studio/Installer/vswhere.exe",
 	);
 
-	if (process.platform === "win32" && fs.existsSync(vswhere)) {
+	if (fs.existsSync(vswhere)) {
 		try {
 			const output = execFileSync(
 				vswhere,
