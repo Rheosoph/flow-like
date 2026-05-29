@@ -50,7 +50,7 @@ export const toLocalProfile = (onlineProfile: OnlineProfile) => ({
 		updated: onlineProfile.updated_at,
 	},
 	execution_settings: {
-		gpu_mode: false,
+		gpu_mode: true,
 		max_context_size: 32000,
 	},
 	updated: onlineProfile.updated_at,

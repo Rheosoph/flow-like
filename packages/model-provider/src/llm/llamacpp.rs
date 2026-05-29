@@ -17,7 +17,7 @@ pub struct LlamaCppModel {
 impl LlamaCppModel {
     pub async fn new(provider: &ModelProvider, port: u16) -> flow_like_types::Result<Self> {
         let model_id = provider.model_id.clone();
-        let base_url = format!("http://localhost:{}", port);
+        let base_url = format!("http://127.0.0.1:{}", port);
 
         let client = LlamaCppClient::new(&base_url);
 

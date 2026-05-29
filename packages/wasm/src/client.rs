@@ -223,8 +223,8 @@ impl RegistryClient {
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
-            let has_platform_artifact = !cfg!(target_os = "ios")
-                || installed.wasm_path.with_extension("cwasm").exists();
+            let has_platform_artifact =
+                !cfg!(target_os = "ios") || installed.wasm_path.with_extension("cwasm").exists();
 
             if (version.is_none() || version == Some(&installed.version))
                 && installed.wasm_path.exists()

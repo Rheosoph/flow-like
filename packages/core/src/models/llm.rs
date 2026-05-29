@@ -24,6 +24,8 @@ pub struct ExecutionSettings {
     pub max_context_size: usize,
 }
 
+pub const DEFAULT_MAX_CONTEXT_SIZE: usize = 32_000;
+
 impl Default for ExecutionSettings {
     fn default() -> Self {
         ExecutionSettings::new()
@@ -33,8 +35,8 @@ impl Default for ExecutionSettings {
 impl ExecutionSettings {
     pub fn new() -> Self {
         Self {
-            gpu_mode: false,
-            max_context_size: 32_000,
+            gpu_mode: true,
+            max_context_size: DEFAULT_MAX_CONTEXT_SIZE,
         }
     }
 }
