@@ -88,8 +88,8 @@ function printHelp(): void {
 Stages app-local Microsoft Visual C++ runtime DLLs into:
   ${path.relative(process.cwd(), path.join(SRC_TAURI_DIR, "binaries/win"))}
 
-The Windows Tauri configs bundle these files as external binaries so MSI,
-NSIS and updater installs all place the DLLs beside Flow Like.exe.
+The Windows Tauri configs bundle these files as resources so MSI, NSIS
+and updater installs include the VC runtime DLLs with the app.
 
 By default this script locates the Visual Studio Redistributable directory
 from VCToolsRedistDir, VCINSTALLDIR or vswhere. Set FLOWLIKE_VC_REDIST_DIR

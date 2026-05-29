@@ -3,19 +3,19 @@
 	"bundle": {
 		"targets": ["msi", "nsis"],
 		"externalBin": [
-			"binaries/win/arm/ggml-base.dll",
-			"binaries/win/arm/ggml-cpu.dll",
-			"binaries/win/arm/ggml-rpc.dll",
-			"binaries/win/arm/ggml.dll",
-			"binaries/win/arm/libomp140.aarch64.dll",
-			"binaries/win/arm/llama.dll",
-			"binaries/win/arm/msvcp140.dll",
-			"binaries/win/arm/mtmd.dll",
-			"binaries/win/arm/vcruntime140.dll",
-			"binaries/win/arm/vcruntime140_1.dll",
 			"binaries/win/arm/llama-server.exe"
 		],
 		"resources": {
+			"binaries/win/arm/ggml-base.dll-aarch64-pc-windows-msvc": "ggml-base.dll",
+			"binaries/win/arm/ggml-cpu.dll-aarch64-pc-windows-msvc": "ggml-cpu.dll",
+			"binaries/win/arm/ggml-rpc.dll-aarch64-pc-windows-msvc": "ggml-rpc.dll",
+			"binaries/win/arm/ggml.dll-aarch64-pc-windows-msvc": "ggml.dll",
+			"binaries/win/arm/libomp140.aarch64.dll-aarch64-pc-windows-msvc": "libomp140.aarch64.dll",
+			"binaries/win/arm/llama.dll-aarch64-pc-windows-msvc": "llama.dll",
+			"binaries/win/arm/msvcp140.dll-aarch64-pc-windows-msvc": "msvcp140.dll",
+			"binaries/win/arm/mtmd.dll-aarch64-pc-windows-msvc": "mtmd.dll",
+			"binaries/win/arm/vcruntime140.dll-aarch64-pc-windows-msvc": "vcruntime140.dll",
+			"binaries/win/arm/vcruntime140_1.dll-aarch64-pc-windows-msvc": "vcruntime140_1.dll",
 			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
 		}
 	}

@@ -3,10 +3,7 @@
 	"bundle": {
 		"targets": ["msi", "nsis"],
 		"externalBin": [
-			"binaries/win/x64/llama-server",
-			"binaries/win/x64/msvcp140.dll",
-			"binaries/win/x64/vcruntime140.dll",
-			"binaries/win/x64/vcruntime140_1.dll"
+			"binaries/win/x64/llama-server"
 		],
 		"resources": {
 			"binaries/win/x64/ggml-base.dll": "ggml-base.dll",
@@ -29,7 +26,10 @@
 			"binaries/win/x64/ggml.dll": "ggml.dll",
 			"binaries/win/x64/libomp140.x86_64.dll": "libomp140.x86_64.dll",
 			"binaries/win/x64/llama.dll": "llama.dll",
+			"binaries/win/x64/msvcp140.dll-x86_64-pc-windows-msvc": "msvcp140.dll",
 			"binaries/win/x64/mtmd.dll": "mtmd.dll",
+			"binaries/win/x64/vcruntime140.dll-x86_64-pc-windows-msvc": "vcruntime140.dll",
+			"binaries/win/x64/vcruntime140_1.dll-x86_64-pc-windows-msvc": "vcruntime140_1.dll",
 			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
 		}
 	}
