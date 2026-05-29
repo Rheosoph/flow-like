@@ -414,15 +414,25 @@ fn split_target(target: &str) -> (String, HashMap<String, String>) {
     let mut query = HashMap::new();
     for pair in query_string.split('&').filter(|pair| !pair.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = urlencoding::decode(&key.replace('+', " "))
-            .map(|value| value.into_owned())
-            .unwrap_or_else(|_| key.to_string());
-        let value = urlencoding::decode(&value.replace('+', " "))
-            .map(|value| value.into_owned())
-            .unwrap_or_else(|_| value.to_string());
+        let key = decode_query_component(key);
+        let value = decode_query_component(value);
         query.insert(key, value);
     }
     (normalize_path(path), query)
+}
+
+#[cfg(feature = "execute")]
+fn decode_query_component(component: &str) -> String {
+    if component.contains('+') {
+        let replaced = component.replace('+', " ");
+        return urlencoding::decode(&replaced)
+            .map(|value| value.into_owned())
+            .unwrap_or_else(|_| component.to_string());
+    }
+
+    urlencoding::decode(component)
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|_| component.to_string())
 }
 
 #[cfg(feature = "execute")]
