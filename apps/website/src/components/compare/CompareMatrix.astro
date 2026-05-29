@@ -11,6 +11,8 @@ interface Competitor {
   name: string;
   capabilities: Record<string, Support>;
   warning?: string;
+  examples?: string;
+  exampleNote?: string;
 }
 
 interface Category {
@@ -317,6 +319,8 @@ const categories: Category[] = [
     competitors: [
       {
         name: "Ontology data platform",
+        examples: t("compare.competitor.ontology.examples"),
+        exampleNote: t("compare.competitor.ontology.note"),
         capabilities: {
           visual_workflow: "partial",
           replayable: "native",
@@ -342,6 +346,8 @@ const categories: Category[] = [
       },
       {
         name: "ERP process platform",
+        examples: t("compare.competitor.erp.examples"),
+        exampleNote: t("compare.competitor.erp.note"),
         capabilities: {
           visual_workflow: "partial",
           replayable: "partial",
@@ -1219,6 +1225,16 @@ const categoryAccent: Record<string, string> = {
                     <th class="text-center py-4 px-3 font-medium text-muted-foreground text-sm">
                       <div class="flex flex-col items-center gap-1">
                         <span>{comp.name}</span>
+                        {comp.examples && comp.exampleNote && (
+                          <span
+                            class="max-w-[13rem] cursor-help text-[10px] font-normal leading-tight text-muted-foreground/70 underline decoration-dotted underline-offset-2"
+                            title={comp.exampleNote}
+                            aria-label={comp.exampleNote}
+                            tabindex="0"
+                          >
+                            {comp.examples}
+                          </span>
+                        )}
                         {comp.warning && (
                           <span
                             class="inline-flex items-center gap-1 rounded-full bg-red-500/15 border border-red-500/40 px-2 py-0.5 text-[10px] font-semibold text-red-400 leading-tight cursor-help"
@@ -1355,7 +1371,7 @@ const categoryAccent: Record<string, string> = {
                       bubbleColor,
                     ]}
                     style={`left: ${pos.x}%; top: ${100 - pos.y}%; width: ${bubbleSize}; height: ${bubbleSize}; font-size: ${fontSize};`}
-                    title={comp.warning ? `${comp.name} — ${comp.warning}` : comp.name}
+                    title={comp.warning ? `${comp.name} — ${comp.warning}` : comp.exampleNote ? `${comp.name} — ${comp.exampleNote}` : comp.name}
                   >
                     <span class="font-semibold leading-tight text-center px-1">{comp.name}</span>
                     {comp.warning && (

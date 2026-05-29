@@ -1,32 +1,36 @@
 {
 	"identifier": "com.flow-like.app",
 	"bundle": {
+		"targets": ["msi", "nsis"],
 		"externalBin": [
-            "binaries/win/x64/llama-server"
-        ],
-        "resources": {
-            "binaries/win/x64/ggml-base.dll": "ggml-base.dll",
-            "binaries/win/x64/ggml-cpu-alderlake.dll": "ggml-cpu-alderlake.dll",
-            "binaries/win/x64/ggml-cpu-cannonlake.dll": "ggml-cpu-cannonlake.dll",
-            "binaries/win/x64/ggml-cpu-cascadelake.dll": "ggml-cpu-cascadelake.dll",
-            "binaries/win/x64/ggml-cpu-cooperlake.dll": "ggml-cpu-cooperlake.dll",
-            "binaries/win/x64/ggml-cpu-haswell.dll": "ggml-cpu-haswell.dll",
-            "binaries/win/x64/ggml-cpu-icelake.dll": "ggml-cpu-icelake.dll",
-            "binaries/win/x64/ggml-cpu-ivybridge.dll": "ggml-cpu-ivybridge.dll",
-            "binaries/win/x64/ggml-cpu-piledriver.dll": "ggml-cpu-piledriver.dll",
-            "binaries/win/x64/ggml-cpu-sandybridge.dll": "ggml-cpu-sandybridge.dll",
-            "binaries/win/x64/ggml-cpu-sapphirerapids.dll": "ggml-cpu-sapphirerapids.dll",
-            "binaries/win/x64/ggml-cpu-skylakex.dll": "ggml-cpu-skylakex.dll",
-            "binaries/win/x64/ggml-cpu-sse42.dll": "ggml-cpu-sse42.dll",
-            "binaries/win/x64/ggml-cpu-x64.dll": "ggml-cpu-x64.dll",
-            "binaries/win/x64/ggml-cpu-zen4.dll": "ggml-cpu-zen4.dll",
-            "binaries/win/x64/ggml-rpc.dll": "ggml-rpc.dll",
-            "binaries/win/x64/ggml-vulkan.dll": "ggml-vulkan.dll",
-            "binaries/win/x64/ggml.dll": "ggml.dll",
-            "binaries/win/x64/libomp140.x86_64.dll": "libomp140.x86_64.dll",
-            "binaries/win/x64/llama.dll": "llama.dll",
-            "binaries/win/x64/mtmd.dll": "mtmd.dll",
-            "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
-        }
+			"binaries/win/x64/llama-server",
+			"binaries/win/x64/msvcp140.dll",
+			"binaries/win/x64/vcruntime140.dll",
+			"binaries/win/x64/vcruntime140_1.dll"
+		],
+		"resources": {
+			"binaries/win/x64/ggml-base.dll": "ggml-base.dll",
+			"binaries/win/x64/ggml-cpu-alderlake.dll": "ggml-cpu-alderlake.dll",
+			"binaries/win/x64/ggml-cpu-cannonlake.dll": "ggml-cpu-cannonlake.dll",
+			"binaries/win/x64/ggml-cpu-cascadelake.dll": "ggml-cpu-cascadelake.dll",
+			"binaries/win/x64/ggml-cpu-cooperlake.dll": "ggml-cpu-cooperlake.dll",
+			"binaries/win/x64/ggml-cpu-haswell.dll": "ggml-cpu-haswell.dll",
+			"binaries/win/x64/ggml-cpu-icelake.dll": "ggml-cpu-icelake.dll",
+			"binaries/win/x64/ggml-cpu-ivybridge.dll": "ggml-cpu-ivybridge.dll",
+			"binaries/win/x64/ggml-cpu-piledriver.dll": "ggml-cpu-piledriver.dll",
+			"binaries/win/x64/ggml-cpu-sandybridge.dll": "ggml-cpu-sandybridge.dll",
+			"binaries/win/x64/ggml-cpu-sapphirerapids.dll": "ggml-cpu-sapphirerapids.dll",
+			"binaries/win/x64/ggml-cpu-skylakex.dll": "ggml-cpu-skylakex.dll",
+			"binaries/win/x64/ggml-cpu-sse42.dll": "ggml-cpu-sse42.dll",
+			"binaries/win/x64/ggml-cpu-x64.dll": "ggml-cpu-x64.dll",
+			"binaries/win/x64/ggml-cpu-zen4.dll": "ggml-cpu-zen4.dll",
+			"binaries/win/x64/ggml-rpc.dll": "ggml-rpc.dll",
+			"binaries/win/x64/ggml-vulkan.dll": "ggml-vulkan.dll",
+			"binaries/win/x64/ggml.dll": "ggml.dll",
+			"binaries/win/x64/libomp140.x86_64.dll": "libomp140.x86_64.dll",
+			"binaries/win/x64/llama.dll": "llama.dll",
+			"binaries/win/x64/mtmd.dll": "mtmd.dll",
+			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
+		}
 	}
 }

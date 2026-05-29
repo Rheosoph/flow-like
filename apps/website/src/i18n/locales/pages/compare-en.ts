@@ -80,6 +80,12 @@ export const enCompare = {
 	// Per-category mini bubble plot inside the matrix
 	"compare.matrix.col.capability": "Capability",
 	"compare.matrix.security_risk": "Security Risk",
+	"compare.competitor.ontology.examples": "Examples: Palantir Foundry / AIP",
+	"compare.competitor.ontology.note":
+		"Category comparison. Palantir Foundry and Palantir AIP are named only as public examples of ontology-driven data platforms. No affiliation, sponsorship, or endorsement is implied. Third-party marks remain the property of their respective owners.",
+	"compare.competitor.erp.examples": "Examples: SAP Build / SAP BTP",
+	"compare.competitor.erp.note":
+		"Category comparison. SAP Build Process Automation and SAP Business Technology Platform are named only as public examples of ERP-adjacent process platforms. No affiliation, sponsorship, or endorsement is implied. Third-party marks remain the property of their respective owners.",
 	"compare.matrix.plot.title": "Positioning vs. Flow-Like",
 	"compare.matrix.plot.description":
 		"Where these tools land on the two axes that actually differentiate this category. Flow-Like always sits in the top-right.",

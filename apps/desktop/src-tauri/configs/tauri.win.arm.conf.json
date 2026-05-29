@@ -1,18 +1,22 @@
 {
 	"identifier": "com.flow-like.app",
 	"bundle": {
+		"targets": ["msi", "nsis"],
 		"externalBin": [
-            "binaries/win/arm/ggml-base.dll",
-            "binaries/win/arm/ggml-cpu.dll",
-            "binaries/win/arm/ggml-rpc.dll",
-            "binaries/win/arm/ggml.dll",
-            "binaries/win/arm/libomp140.aarch64.dll",
-            "binaries/win/arm/llama.dll",
-            "binaries/win/arm/mtmd.dll",
-            "binaries/win/arm/llama-server.exe"
-        ],
-        "resources": {
-            "assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
-        }
+			"binaries/win/arm/ggml-base.dll",
+			"binaries/win/arm/ggml-cpu.dll",
+			"binaries/win/arm/ggml-rpc.dll",
+			"binaries/win/arm/ggml.dll",
+			"binaries/win/arm/libomp140.aarch64.dll",
+			"binaries/win/arm/llama.dll",
+			"binaries/win/arm/msvcp140.dll",
+			"binaries/win/arm/mtmd.dll",
+			"binaries/win/arm/vcruntime140.dll",
+			"binaries/win/arm/vcruntime140_1.dll",
+			"binaries/win/arm/llama-server.exe"
+		],
+		"resources": {
+			"assets/THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt"
+		}
 	}
 }

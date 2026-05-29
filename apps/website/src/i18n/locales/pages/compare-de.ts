@@ -80,6 +80,12 @@ export const deCompare = {
 	// Per-category mini bubble plot inside the matrix
 	"compare.matrix.col.capability": "Merkmal",
 	"compare.matrix.security_risk": "Sicherheitsrisiko",
+	"compare.competitor.ontology.examples": "Beispiele: Palantir Foundry / AIP",
+	"compare.competitor.ontology.note":
+		"Kategorievergleich. Palantir Foundry und Palantir AIP werden nur als oeffentliche Beispiele fuer ontologiegetriebene Datenplattformen genannt. Es wird keine Zugehoerigkeit, Foerderung oder Empfehlung impliziert. Marken Dritter bleiben Eigentum ihrer jeweiligen Inhaber.",
+	"compare.competitor.erp.examples": "Beispiele: SAP Build / SAP BTP",
+	"compare.competitor.erp.note":
+		"Kategorievergleich. SAP Build Process Automation und SAP Business Technology Platform werden nur als oeffentliche Beispiele fuer ERP-nahe Prozessplattformen genannt. Es wird keine Zugehoerigkeit, Foerderung oder Empfehlung impliziert. Marken Dritter bleiben Eigentum ihrer jeweiligen Inhaber.",
 	"compare.matrix.plot.title": "Positionierung gegenüber Flow-Like",
 	"compare.matrix.plot.description":
 		"Wo diese Tools auf den zwei Achsen landen, die diese Kategorie wirklich unterscheiden. Flow-Like sitzt immer oben rechts.",

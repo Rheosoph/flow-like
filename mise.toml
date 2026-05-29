@@ -124,11 +124,11 @@ run = "bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri
 
 [tasks."build:desktop:win:arm"]
 description = "Build desktop app for Windows ARM"
-run = "bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.win.arm.conf.json --verbose"
+run = "bun --cwd ./apps/desktop ./scripts/prepare-windows-prereqs.ts --arch arm64 && bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.win.arm.conf.json --verbose"
 
 [tasks."build:desktop:win:x64"]
 description = "Build desktop app for Windows x64"
-run = "bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.win.x64.conf.json --verbose"
+run = "bun --cwd ./apps/desktop ./scripts/prepare-windows-prereqs.ts --arch x64 && bun run --cwd ./apps/desktop tauri build --config src-tauri/configs/tauri.win.x64.conf.json --verbose"
 
 [tasks."build:desktop:linux:arm"]
 description = "Build desktop app for Linux ARM"
