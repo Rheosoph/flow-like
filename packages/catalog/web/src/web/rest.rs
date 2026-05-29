@@ -2305,7 +2305,7 @@ fn rest_arguments(
     client: &flow_like_types::Value,
     body: flow_like_types::Value,
 ) -> flow_like_types::Value {
-    let mut args = body.as_object().cloned().unwrap_or_default();
+    let mut args = rest_args_from_body_and_query(&body, &request.query);
     let payload = super::auth::payload_with_client(body.clone(), client);
     args.insert("payload".to_string(), payload);
     let request_value = rest_request_to_value_with_client(request, client, &body);
@@ -2322,6 +2322,28 @@ fn rest_arguments(
     args.insert("body_bytes".to_string(), json!(request.body));
     args.insert("_client".to_string(), client.clone());
     flow_like_types::Value::Object(args)
+}
+
+#[cfg(feature = "execute")]
+fn rest_args_from_body_and_query(
+    body: &flow_like_types::Value,
+    query: &HashMap<String, String>,
+) -> json::Map<String, flow_like_types::Value> {
+    let mut args = json::Map::new();
+
+    for (key, value) in query {
+        if !is_rest_internal_arg_pin(key) {
+            args.insert(key.clone(), flow_like_types::Value::String(value.clone()));
+        }
+    }
+
+    if let Some(body_object) = body.as_object() {
+        for (key, value) in body_object {
+            args.insert(key.clone(), value.clone());
+        }
+    }
+
+    args
 }
 
 #[cfg(feature = "execute")]
@@ -2576,6 +2598,37 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RestQueryLogic;
+
+    #[async_trait]
+    impl NodeLogic for RestQueryLogic {
+        fn get_node(&self) -> Node {
+            Node::new(
+                "rest_query_echo",
+                "REST Query Echo",
+                "REST query echo test",
+                "Tests",
+            )
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            let name: String = context.evaluate_pin("name").await?;
+            let payload: Value = context.evaluate_pin("payload").await?;
+            let query: Value = context.evaluate_pin("query").await?;
+            let request: Value = context.evaluate_pin("request").await?;
+            context.set_result(json!({
+                "body": {
+                    "name": name,
+                    "payload": payload,
+                    "query": query,
+                    "request_query": request.get("query").cloned().unwrap_or(Value::Null)
+                }
+            }));
+            Ok(())
+        }
+    }
+
     fn rest_handler() -> Arc<InternalNode> {
         let mut node = Node::new(
             "test_rest_handler",
@@ -2587,6 +2640,20 @@ mod tests {
         node.add_output_pin("payload", "Payload", "Payload", VariableType::Struct);
         node.add_output_pin("_client", "Client", "Client", VariableType::Struct);
         internal_node_with_logic(node, Arc::new(RestEchoLogic))
+    }
+
+    fn rest_query_handler() -> Arc<InternalNode> {
+        let mut node = Node::new(
+            "test_rest_query_handler",
+            "Test REST Query Handler",
+            "Handler query test node",
+            "Tests",
+        );
+        node.add_output_pin("name", "Name", "Name", VariableType::String);
+        node.add_output_pin("payload", "Payload", "Payload", VariableType::Struct);
+        node.add_output_pin("query", "Query", "Query", VariableType::Struct);
+        node.add_output_pin("request", "Request", "Request", VariableType::Struct);
+        internal_node_with_logic(node, Arc::new(RestQueryLogic))
     }
 
     #[tokio::test]
@@ -2704,6 +2771,66 @@ mod tests {
         assert_eq!(body["payload"]["_client"]["protocol"], json!("rest"));
         assert_eq!(body["client"]["protocol"], json!("rest"));
         assert_eq!(body["client"]["remote_addr"], json!("127.0.0.1:1234"));
+    }
+
+    #[tokio::test]
+    async fn rest_route_uses_query_params_as_named_args_with_body_precedence() {
+        let handler = rest_query_handler();
+        let parent = internal_node(RestServerNode::new().get_node());
+        let context = test_context(parent, vec![handler.clone()]).await;
+        let mut functions = FunctionContextMap::new();
+        functions.insert(
+            handler.node_id().to_string(),
+            super::super::http_runtime::create_shared_function_context(&context, &handler).await,
+        );
+        let config = RestServerConfig {
+            function_routes: vec![RestFunctionRoute {
+                path: "/search".to_string(),
+                methods: vec!["GET".to_string(), "POST".to_string()],
+                function_refs: vec![handler.node_id().to_string()],
+            }],
+            ..Default::default()
+        };
+
+        let get_request = super::super::http_runtime::HttpRequest {
+            method: "GET".to_string(),
+            path: "/search".to_string(),
+            query: HashMap::from([
+                ("name".to_string(), "from-query".to_string()),
+                ("payload".to_string(), "ignored".to_string()),
+            ]),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            remote_addr: "127.0.0.1:1234".to_string(),
+        };
+        let response =
+            route_request(get_request, &config, &functions, &[], &[], None, "parent").await;
+        assert_eq!(response.status_code, 200);
+        let body: Value = flow_like_types::json::from_slice(&response.body).unwrap();
+        assert_eq!(body["name"], json!("from-query"));
+        assert_eq!(body["query"]["name"], json!("from-query"));
+        assert_eq!(body["request_query"]["name"], json!("from-query"));
+        assert_eq!(body["payload"]["_client"]["protocol"], json!("rest"));
+        assert_ne!(body["payload"], json!("ignored"));
+
+        let post_request = super::super::http_runtime::HttpRequest {
+            method: "POST".to_string(),
+            path: "/search".to_string(),
+            query: HashMap::from([("name".to_string(), "from-query".to_string())]),
+            headers: HashMap::from([("content-type".to_string(), "application/json".to_string())]),
+            body: flow_like_types::json::to_vec(&json!({
+                "name": "from-body"
+            }))
+            .unwrap(),
+            remote_addr: "127.0.0.1:1234".to_string(),
+        };
+        let response =
+            route_request(post_request, &config, &functions, &[], &[], None, "parent").await;
+        assert_eq!(response.status_code, 200);
+        let body: Value = flow_like_types::json::from_slice(&response.body).unwrap();
+        assert_eq!(body["name"], json!("from-body"));
+        assert_eq!(body["query"]["name"], json!("from-query"));
+        assert_eq!(body["request_query"]["name"], json!("from-query"));
     }
 
     #[tokio::test]

@@ -1445,7 +1445,7 @@ async fn dispatch_rest_fn(
     let body_value = parse_rest_body_value(body, &content_type)?;
     let headers_single = header_map_to_json(headers);
     let query_single = parse_query_single(raw_query);
-    let mut args = body_value.as_object().cloned().unwrap_or_default();
+    let mut args = rest_args_from_body_and_query(&body_value, &query_single);
 
     let request_id = headers
         .get("traceparent")
@@ -1466,7 +1466,7 @@ async fn dispatch_rest_fn(
     let request_value = json!({
         "method": method.as_str(),
         "path": request_path,
-        "query": query_single,
+        "query": query_single.clone(),
         "headers": headers_single,
         "body": body_value.clone(),
         "body_text": String::from_utf8(body.to_vec()).ok(),
@@ -1478,7 +1478,7 @@ async fn dispatch_rest_fn(
     args.insert("request".to_string(), request_value);
     args.insert("method".to_string(), json!(method.as_str()));
     args.insert("path".to_string(), json!(request_path));
-    args.insert("query".to_string(), json!(parse_query_single(raw_query)));
+    args.insert("query".to_string(), json!(query_single));
     args.insert("headers".to_string(), json!(header_map_to_json(headers)));
     args.insert("body".to_string(), body_value.clone());
     args.insert(
@@ -1716,6 +1716,44 @@ fn parse_query_single(raw: &str) -> HashMap<String, String> {
         out.insert(key, value);
     }
     out
+}
+
+fn rest_args_from_body_and_query(
+    body: &Value,
+    query: &HashMap<String, String>,
+) -> serde_json::Map<String, Value> {
+    let mut args = serde_json::Map::new();
+
+    for (key, value) in query {
+        if !is_rest_internal_arg_key(key) {
+            args.insert(key.clone(), Value::String(value.clone()));
+        }
+    }
+
+    if let Some(body_object) = body.as_object() {
+        for (key, value) in body_object {
+            args.insert(key.clone(), value.clone());
+        }
+    }
+
+    args
+}
+
+fn is_rest_internal_arg_key(name: &str) -> bool {
+    matches!(
+        name,
+        "_client"
+            | "request"
+            | "method"
+            | "path"
+            | "query"
+            | "headers"
+            | "body"
+            | "body_text"
+            | "body_bytes"
+            | "payload"
+            | "__inbound_rest"
+    )
 }
 
 fn header_map_to_json(headers: &HeaderMap) -> HashMap<String, String> {
@@ -4206,7 +4244,8 @@ mod tests {
 
     use super::{
         canonical_auth_kind, inbound_base_path, is_asymmetric_jwt_algorithm,
-        jwk_matches_oauth_header, mcp_resource_url, with_inbound_openapi_server,
+        jwk_matches_oauth_header, mcp_resource_url, parse_query_single,
+        rest_args_from_body_and_query, with_inbound_openapi_server,
     };
 
     #[test]
@@ -4257,6 +4296,26 @@ mod tests {
 
         assert_eq!(spec["servers"][0]["url"], json!("/r/public-alias"));
         assert_eq!(spec["paths"]["/hi"], json!({"get": {}}));
+    }
+
+    #[test]
+    fn rest_query_params_fill_named_args_without_overwriting_body_or_internal_args() {
+        let query = parse_query_single(
+            "name=from-query&limit=10&payload=ignored&body=ignored&encoded=hello+world",
+        );
+        let body = json!({
+            "name": "from-body",
+            "active": true
+        });
+
+        let args = rest_args_from_body_and_query(&body, &query);
+
+        assert_eq!(args.get("name").cloned(), Some(json!("from-body")));
+        assert_eq!(args.get("limit").cloned(), Some(json!("10")));
+        assert_eq!(args.get("active").cloned(), Some(json!(true)));
+        assert_eq!(args.get("encoded").cloned(), Some(json!("hello world")));
+        assert!(!args.contains_key("payload"));
+        assert!(!args.contains_key("body"));
     }
 
     #[test]
