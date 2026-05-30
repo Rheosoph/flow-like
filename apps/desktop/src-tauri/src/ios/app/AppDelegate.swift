@@ -17,14 +17,14 @@ class AppDelegate: TauriAppDelegate {
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
-    PushNotificationPlugin.handleToken(deviceToken)
+    PushNotificationPlugin.applicationDidRegisterForRemoteNotifications(deviceToken: deviceToken)
   }
 
   override func application(
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error
   ) {
-    PushNotificationPlugin.handleRegistrationFailure(error)
+    PushNotificationPlugin.applicationDidFailToRegisterForRemoteNotifications(error: error)
     print("Failed to register for remote notifications: \(error.localizedDescription)")
   }
 
@@ -33,7 +33,7 @@ class AppDelegate: TauriAppDelegate {
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
-    PushNotificationPlugin.handleNotification(userInfo)
+    PushNotificationPlugin.applicationDidReceiveRemoteNotification(userInfo: userInfo)
     completionHandler(.newData)
   }
 
@@ -42,7 +42,7 @@ class AppDelegate: TauriAppDelegate {
     willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    PushNotificationPlugin.handleNotification(notification.request.content.userInfo)
+    PushNotificationPlugin.applicationDidReceiveRemoteNotification(userInfo: notification.request.content.userInfo)
     completionHandler([.banner, .sound, .badge])
   }
 
@@ -51,7 +51,7 @@ class AppDelegate: TauriAppDelegate {
     didReceive response: UNNotificationResponse,
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
-    PushNotificationPlugin.handleNotificationTapped(response.notification.request.content.userInfo)
+    PushNotificationPlugin.applicationDidReceiveNotificationResponse(userInfo: response.notification.request.content.userInfo)
     completionHandler()
   }
 }

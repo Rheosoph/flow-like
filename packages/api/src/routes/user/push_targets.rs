@@ -6,6 +6,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     push_notifications::{configured_provider, prepare_provider_target_registration},
+    routes::app::events::db::decrypt_token,
     routes::user::ensure_user_exists,
     state::AppState,
 };
@@ -17,7 +18,8 @@ use axum::{
 use base64::Engine;
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -143,12 +145,15 @@ pub async fn register_push_target(
         .exec(&state.db)
         .await?;
 
-    let existing = push_notification_target::Entity::find()
-        .filter(push_notification_target::Column::UserId.eq(sub.clone()))
-        .filter(push_notification_target::Column::DeviceId.eq(body.device_id.clone()))
-        .filter(push_notification_target::Column::Provider.eq(provider.clone()))
-        .one(&state.db)
-        .await?;
+    let existing = find_existing_push_target(
+        &state,
+        &sub,
+        &body.device_id,
+        &platform,
+        &provider,
+        &body.token,
+    )
+    .await?;
 
     let provider_registration = prepare_provider_target_registration(
         &state,
@@ -296,6 +301,64 @@ fn provider_name(provider: &PushNotificationTargetProvider) -> &'static str {
     }
 }
 
+async fn find_existing_push_target(
+    state: &AppState,
+    user_id: &str,
+    device_id: &str,
+    platform: &PushNotificationTargetPlatform,
+    provider: &PushNotificationTargetProvider,
+    token: &str,
+) -> Result<Option<push_notification_target::Model>, sea_orm::DbErr> {
+    if let Some(existing) = push_notification_target::Entity::find()
+        .filter(push_notification_target::Column::UserId.eq(user_id.to_string()))
+        .filter(push_notification_target::Column::DeviceId.eq(device_id.to_string()))
+        .filter(push_notification_target::Column::Provider.eq(provider.clone()))
+        .one(&state.db)
+        .await?
+    {
+        return Ok(Some(existing));
+    }
+
+    let candidates = push_notification_target::Entity::find()
+        .filter(push_notification_target::Column::UserId.eq(user_id.to_string()))
+        .filter(push_notification_target::Column::Platform.eq(platform.clone()))
+        .filter(push_notification_target::Column::Provider.eq(provider.clone()))
+        .order_by_desc(push_notification_target::Column::LastSeenAt)
+        .all(&state.db)
+        .await?;
+
+    let matching = find_matching_token_target(candidates, token, &state.encryption_key);
+    if let Some(target) = matching.as_ref() {
+        tracing::info!(
+            target_id = %target.id,
+            user_id = %user_id,
+            old_device_id = %target.device_id,
+            new_device_id = %device_id,
+            platform = ?platform,
+            provider = ?provider,
+            push_enabled = target.push_enabled,
+            invalidated_at = ?target.invalidated_at,
+            invalidation_reason = ?target.invalidation_reason,
+            "Reusing push target by token match after device id drift"
+        );
+    }
+
+    Ok(matching)
+}
+
+fn find_matching_token_target<I>(
+    candidates: I,
+    token: &str,
+    encryption_key: &[u8; 32],
+) -> Option<push_notification_target::Model>
+where
+    I: IntoIterator<Item = push_notification_target::Model>,
+{
+    candidates.into_iter().find(|candidate| {
+        decrypt_token(&candidate.token_encrypted, encryption_key).as_deref() == Some(token)
+    })
+}
+
 fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
     let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
     let mut nonce_bytes = [0u8; 12];
@@ -308,4 +371,64 @@ fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
     let mut combined = nonce_bytes.to_vec();
     combined.extend(ciphertext);
     base64::engine::general_purpose::STANDARD.encode(combined)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(
+        id: &str,
+        token: &str,
+        encryption_key: &[u8; 32],
+        push_enabled: bool,
+        invalidation_reason: Option<&str>,
+    ) -> push_notification_target::Model {
+        let now = chrono::Utc::now().naive_utc();
+        push_notification_target::Model {
+            id: id.to_string(),
+            user_id: "user-1".to_string(),
+            device_id: format!("device-{id}"),
+            platform: PushNotificationTargetPlatform::Ios,
+            provider: PushNotificationTargetProvider::Fcm,
+            token_encrypted: encrypt_token(token, encryption_key),
+            endpoint_arn: None,
+            installation_id: None,
+            channel_id: None,
+            device_name: None,
+            metadata: None,
+            push_enabled,
+            last_registered_at: now,
+            last_seen_at: now,
+            invalidated_at: None,
+            invalidation_reason: invalidation_reason.map(str::to_string),
+            created_at: now,
+            updated_at: now,
+            failure_count: 0,
+        }
+    }
+
+    #[test]
+    fn find_matching_token_target_reuses_disabled_legacy_row() {
+        let encryption_key = [7u8; 32];
+        let matching = target("old-ios", "ios-token", &encryption_key, false, None);
+        let other = target("other-ios", "other-token", &encryption_key, true, None);
+
+        let found = find_matching_token_target(vec![other, matching], "ios-token", &encryption_key)
+            .expect("expected token match");
+
+        assert_eq!(found.id, "old-ios");
+        assert!(!found.push_enabled);
+        assert_eq!(found.invalidation_reason, None);
+    }
+
+    #[test]
+    fn find_matching_token_target_ignores_different_tokens() {
+        let encryption_key = [9u8; 32];
+        let other = target("other-ios", "other-token", &encryption_key, true, None);
+
+        let found = find_matching_token_target(vec![other], "ios-token", &encryption_key);
+
+        assert!(found.is_none());
+    }
 }
