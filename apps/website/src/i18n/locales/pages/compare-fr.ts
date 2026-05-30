@@ -20,6 +20,9 @@ export const frCompare = {
 	"compare.category.lowcode": "Constructeurs d'Apps Low-Code",
 	"compare.category.lowcode.desc":
 		"Outils pour créer des apps internes et des tableaux de bord. Excellents pour les interfaces, mais capacités d'automatisation limitées.",
+	"compare.category.bi_analytics": "BI & Analytics",
+	"compare.category.bi_analytics.desc":
+		"Outils de dashboards et de reporting sémantique pour analyser les données métier. Forts pour la visibilité, mais faibles pour transformer les insights en workflows opérationnels et apps gouvernés.",
 	"compare.category.orchestration": "Orchestration de Données & Workflows",
 	"compare.category.orchestration.desc":
 		"Outils enterprise pour pipelines de données complexes et orchestration. Puissants mais nécessitent une expertise technique.",
@@ -28,7 +31,13 @@ export const frCompare = {
 		"Plateformes pilotées par ontologie ou ERP autour de modèles de données d'entreprise propriétaires. Puissantes pour les grands groupes, mais longues à déployer, onéreuses et liées à un seul fournisseur.",
 	"compare.category.enterprise_automation": "Suites d'Automatisation Enterprise",
 	"compare.category.enterprise_automation.desc":
-		"Suites de processus et workflows construites autour de la RPA, du CRM ou des agents IA. Fortes pour des flux métier spécifiques, mais SaaS, lourdement licenciées et peu portables.",
+		"Suites de processus et workflows construites autour du CRM, du service management ou des agents IA. Fortes pour des flux métier spécifiques, mais SaaS, lourdement licenciées et peu portables.",
+	"compare.category.rpa": "Robotic Process Automation",
+	"compare.category.rpa.desc":
+		"Automatisation par bots pour écrans legacy et tâches desktop répétitives. Utile comme passerelle, mais fragile, difficile à gouverner et coûteuse à étendre.",
+	"compare.category.compliance_grc": "Compliance & GRC",
+	"compare.category.compliance_grc.desc":
+		"Suites de gouvernance, risque et conformité pour contrôles, preuves et workflows de politiques. Fortes pour l'audit, mais déconnectées des workflows opérationnels qui produisent les preuves.",
 	"compare.category.agent_runtimes": "Runtimes d'Agents",
 	"compare.category.agent_runtimes.desc":
 		"Frameworks Python pour orchestrer des agents IA autonomes. Pratiques pour le prototypage rapide, mais livrés avec un état basé sur des fichiers sans protection d'écriture concurrente, exécutent les outils sans isolation et plafonnent au débit d'un seul processus.",
@@ -41,6 +50,9 @@ export const frCompare = {
 	"compare.category.coding_agents": "Agents Personnels Autonomes",
 	"compare.category.coding_agents.desc":
 		"Agents IA personnels qui exécutent des tâches, écrivent du code et naviguent sur le web de façon autonome sur votre machine locale. Puissants pour un usage individuel, mais les appels d'outils s'exécutent directement sur l'OS hôte sans sandbox — une injection de prompt devient une exécution de code arbitraire — et tout l'état réside dans des fichiers plats sans protection contre les écritures concurrentes.",
+	"compare.category.custom_development": "Développement Sur Mesure",
+	"compare.category.custom_development.desc":
+		"Équipes internes, agences et contractants construisant des apps de workflow sur mesure. Flexible en théorie, mais chaque nouveau processus devient un projet avec intégrations codées, maintenance et risque de transfert de connaissances.",
 	// Legend
 	"compare.legend.native": "Support natif",
 	"compare.legend.partial": "Partiel / Add-on",
@@ -118,7 +130,7 @@ export const frCompare = {
 	"compare.overview.tagline": "En un coup d'œil",
 	"compare.overview.headline": "La pile opérationnelle enterprise",
 	"compare.overview.description":
-		"Neuf catégories, une grille de notation honnête. Comment chaque classe d'outil se comporte sur l'exécution, la profondeur data layer, l'AI, la livraison d'apps, la portabilité et la gouvernance.",
+		"Treize catégories, une grille de notation honnête. Comment chaque classe d'outil se comporte sur l'exécution, la profondeur data layer, l'AI, la livraison d'apps, la portabilité et la gouvernance.",
 	"compare.overview.flowlike": "Flow-Like",
 	"compare.overview.col.category": "Catégorie",
 	"compare.overview.crit.workflows": "Workflows",

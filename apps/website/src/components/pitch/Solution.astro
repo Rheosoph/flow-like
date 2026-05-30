@@ -26,33 +26,45 @@ const steps = [
     </div>
 
     <div class="relative">
-      <div class="absolute left-0 lg:left-16 top-0 bottom-0 w-px bg-border" />
+      <div class="absolute left-0 lg:left-20 top-1.5 bottom-1.5 w-px bg-border" />
 
       <div class="space-y-20">
         {steps.map(({ key, color }) => (
-          <div class="relative pl-10 lg:pl-36">
-            <div class:list={[
-              "absolute left-0 lg:left-16 top-2 -translate-x-1/2 w-3 h-3 rounded-full ring-4 ring-background",
+          <div class="relative pl-10 lg:pl-0 lg:grid lg:grid-cols-[6rem_1fr] lg:gap-x-16">
+            <div class="absolute left-0 top-2 -translate-x-1/2 w-3 h-3 rounded-full ring-4 ring-background lg:hidden" class:list={[
               color === "primary" && "bg-primary",
               color === "muted" && "bg-muted-foreground/50",
               color === "emerald" && "bg-emerald-500",
             ]} />
-            <div class="absolute left-0 lg:left-4 top-0 w-10 text-right hidden lg:block">
+
+            <div class="hidden lg:grid grid-cols-[3.5rem_1.5rem] gap-3 items-start">
               <span class:list={[
-                "text-2xl font-bold",
+                "text-2xl font-bold leading-none text-right",
                 color === "primary" && "text-primary",
                 color === "muted" && "text-muted-foreground/50",
                 color === "emerald" && "text-emerald-500",
               ]}>{t(`pitch.solution.${key}.number`)}</span>
+              <span class:list={[
+                "relative z-10 mt-1.5 justify-self-center w-3 h-3 rounded-full ring-4 ring-background",
+                color === "primary" && "bg-primary",
+                color === "muted" && "bg-muted-foreground/50",
+                color === "emerald" && "bg-emerald-500",
+              ]} />
             </div>
+
             <span class:list={[
               "lg:hidden text-sm font-bold mb-2 block",
               color === "primary" && "text-primary",
               color === "muted" && "text-muted-foreground/50",
               color === "emerald" && "text-emerald-500",
-            ]}>{t(`pitch.solution.${key}.number`)}</span>
-            <h3 class="text-xl font-semibold mb-3">{t(`pitch.solution.${key}.title`)}</h3>
-            <p class="text-muted-foreground max-w-lg leading-relaxed">{t(`pitch.solution.${key}.description`)}</p>
+            ]}>
+              {t(`pitch.solution.${key}.number`)}
+            </span>
+
+            <div>
+              <h3 class="text-xl font-semibold mb-3 leading-none">{t(`pitch.solution.${key}.title`)}</h3>
+              <p class="text-muted-foreground max-w-lg leading-relaxed">{t(`pitch.solution.${key}.description`)}</p>
+            </div>
           </div>
         ))}
       </div>

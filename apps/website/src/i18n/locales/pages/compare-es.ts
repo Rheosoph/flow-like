@@ -20,6 +20,9 @@ export const esCompare = {
 	"compare.category.lowcode": "Constructores de Apps Low-Code",
 	"compare.category.lowcode.desc":
 		"Herramientas para crear apps internas y dashboards. Excelentes para interfaces, pero capacidades de automatización limitadas.",
+	"compare.category.bi_analytics": "BI & Analytics",
+	"compare.category.bi_analytics.desc":
+		"Herramientas de dashboards y reporting semántico para analizar datos de negocio. Fuertes en visibilidad, pero débiles para convertir insights en workflows operativos y apps gobernadas.",
 	"compare.category.orchestration": "Orquestación de Datos & Workflows",
 	"compare.category.orchestration.desc":
 		"Herramientas enterprise para pipelines de datos complejos y orquestación. Potentes pero requieren experiencia técnica.",
@@ -28,7 +31,13 @@ export const esCompare = {
 		"Plataformas basadas en ontologías y ERPs sobre modelos de datos empresariales propietarios. Potentes para grandes organizaciones, pero lentas de adoptar, caras y atadas a un único proveedor.",
 	"compare.category.enterprise_automation": "Suites de Automatización Empresarial",
 	"compare.category.enterprise_automation.desc":
-		"Suites de procesos y workflows construidas alrededor de RPA, CRM o agentes de IA. Fuertes para flujos específicos, pero atadas a SaaS, con licenciamiento pesado y poca portabilidad.",
+		"Suites de procesos y workflows construidas alrededor de CRM, service management o agentes de IA. Fuertes para flujos específicos, pero atadas a SaaS, con licenciamiento pesado y poca portabilidad.",
+	"compare.category.rpa": "Robotic Process Automation",
+	"compare.category.rpa.desc":
+		"Automatización basada en bots para pantallas legacy y tareas repetitivas de escritorio. Útil como puente, pero frágil, difícil de gobernar y cara de escalar.",
+	"compare.category.compliance_grc": "Compliance & GRC",
+	"compare.category.compliance_grc.desc":
+		"Suites de gobernanza, riesgo y cumplimiento para controles, evidencias y workflows de políticas. Fuertes como sistemas de auditoría, pero desconectadas de los workflows operativos que producen la evidencia.",
 	"compare.category.agent_runtimes": "Runtimes de Agentes",
 	"compare.category.agent_runtimes.desc":
 		"Frameworks de Python para orquestar agentes IA autónomos. Ideales para prototipos rápidos, pero con estado basado en archivos sin protección de escritura concurrente, herramientas que se ejecutan sin sandbox y un rendimiento limitado a un único proceso.",
@@ -41,6 +50,9 @@ export const esCompare = {
 	"compare.category.coding_agents": "Agentes Personales Autónomos",
 	"compare.category.coding_agents.desc":
 		"Agentes IA personales que ejecutan tareas, escriben código y navegan la web de forma autónoma en tu máquina local. Potentes para uso individual, pero las llamadas a herramientas se ejecutan directamente en el OS anfitrión sin sandbox — una inyección de prompt se convierte en ejecución de código arbitrario — y todo el estado vive en archivos planos sin protección contra escrituras concurrentes.",
+	"compare.category.custom_development": "Desarrollo a Medida",
+	"compare.category.custom_development.desc":
+		"Equipos internos, agencias y contratistas creando apps de workflow a medida. Flexible en teoría, pero cada nuevo proceso se convierte en un proyecto con integraciones manuales, mantenimiento y riesgo de transferencia de conocimiento.",
 
 	// Legend
 	"compare.legend.native": "Soporte nativo",
@@ -120,7 +132,7 @@ export const esCompare = {
 	"compare.overview.tagline": "De un vistazo",
 	"compare.overview.headline": "El stack operativo empresarial",
 	"compare.overview.description":
-		"Nueve categorías, una rúbrica honesta. Así se comporta cada clase de herramienta en ejecución, profundidad de datos, AI, entrega de apps, portabilidad y gobernanza.",
+		"Trece categorías, una rúbrica honesta. Así se comporta cada clase de herramienta en ejecución, profundidad de datos, AI, entrega de apps, portabilidad y gobernanza.",
 	"compare.overview.flowlike": "Flow-Like",
 	"compare.overview.col.category": "Categoría",
 	"compare.overview.crit.workflows": "Workflows",
