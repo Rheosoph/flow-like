@@ -1,6 +1,32 @@
 import type { IProfile } from "@flow-like/flow-like-ui";
 import type { AuthContextProps } from "react-oidc-context";
 
+const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
+	"analytics",
+	"api",
+	"board",
+	"comments",
+	"data",
+	"db",
+	"events",
+	"fork",
+	"graph",
+	"invoke",
+	"nodes",
+	"notifications",
+	"packages",
+	"pages",
+	"publication",
+	"roles",
+	"routes",
+	"sales",
+	"settings",
+	"team",
+	"templates",
+	"visibility",
+	"widgets",
+]);
+
 function constructUrl(profile: IProfile, path: string): string {
 	// Use profile.hub if available, then NEXT_PUBLIC_API_URL as fallback, then default
 	let baseUrl =
@@ -18,11 +44,57 @@ function constructUrl(profile: IProfile, path: string): string {
 	return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
 }
 
+function cleanApiPath(path: string): string {
+	return path
+		.replace(/^\/+/, "")
+		.replace(/^api\/v1\/+/, "")
+		.split(/[?#]/, 1)[0];
+}
+
+function isProtectedAppRoute(path: string, method: string): boolean {
+	const parts = cleanApiPath(path).split("/").filter(Boolean);
+	if (parts[0] !== "apps" || parts.length < 2) return false;
+
+	const appOrRoute = parts[1];
+	if (appOrRoute === "search" || appOrRoute === "nodes") return false;
+	if (appOrRoute === "new") return true;
+
+	if (parts.length === 2) return method !== "GET";
+
+	const segment = parts[2];
+	if (segment === "comments") return method !== "GET";
+	if (segment === "fork" && parts[3] === "preview" && method === "GET") {
+		return false;
+	}
+	if (segment === "meta") return method !== "GET";
+	return PROTECTED_APP_ROUTE_SEGMENTS.has(segment);
+}
+
+function ensureProtectedAppRouteAuth(
+	path: string,
+	auth?: AuthContextProps,
+	method = "GET",
+): void {
+	if (!isProtectedAppRoute(path, method)) return;
+	if (auth?.user?.access_token) return;
+
+	if (auth?.isAuthenticated) {
+		try {
+			auth.startSilentRenew();
+		} catch (error) {
+			console.warn("[Auth] Silent renew failed before API request:", error);
+		}
+	}
+
+	throw new Error(`Authentication token required for app request: ${path}`);
+}
+
 export async function get<T>(
 	profile: IProfile,
 	path: string,
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
+	ensureProtectedAppRouteAuth(path, auth, "GET");
 	const authHeader: Record<string, string> = auth?.user?.access_token
 		? { Authorization: `Bearer ${auth.user.access_token}` }
 		: {};
@@ -50,6 +122,7 @@ export async function post<T>(
 	body?: any,
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
+	ensureProtectedAppRouteAuth(path, auth, "POST");
 	const authHeader: Record<string, string> = auth?.user?.access_token
 		? { Authorization: `Bearer ${auth.user.access_token}` }
 		: {};
@@ -78,6 +151,7 @@ export async function put<T>(
 	body?: any,
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
+	ensureProtectedAppRouteAuth(path, auth, "PUT");
 	const authHeader: Record<string, string> = auth?.user?.access_token
 		? { Authorization: `Bearer ${auth.user.access_token}` }
 		: {};
@@ -105,6 +179,7 @@ export async function del<T>(
 	path: string,
 	auth?: AuthContextProps,
 ): Promise<T | undefined> {
+	ensureProtectedAppRouteAuth(path, auth, "DELETE");
 	const authHeader: Record<string, string> = auth?.user?.access_token
 		? { Authorization: `Bearer ${auth.user.access_token}` }
 		: {};
@@ -132,6 +207,7 @@ export async function fetcher<T>(
 	options?: RequestInit,
 	auth?: AuthContextProps,
 ): Promise<T> {
+	ensureProtectedAppRouteAuth(path, auth, (options?.method ?? "GET").toUpperCase());
 	const headers: HeadersInit = {};
 	if (auth?.user?.access_token) {
 		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;

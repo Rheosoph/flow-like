@@ -149,12 +149,17 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .layer(inbound_layers);
 
     Router::new()
-        .merge(
-            SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
-        )
+        .merge(openapi_routes())
         .nest("/r", inbound_rest)
         .nest("/m", inbound_mcp)
         .nest("/api/v1", router)
+}
+
+fn openapi_routes() -> Router {
+    Router::from(
+        SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
+    )
+    .layer(CorsLayer::permissive())
 }
 
 #[tracing::instrument(name = "GET /", skip(state))]

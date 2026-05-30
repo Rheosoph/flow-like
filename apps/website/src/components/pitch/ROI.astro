@@ -6,13 +6,19 @@ interface Props {
 const { t } = Astro.props;
 
 const costCards = [
-  { key: "bi",         icon: "chart" },
-  { key: "ipaas",      icon: "link" },
-  { key: "automation", icon: "zap" },
-  { key: "rpa",        icon: "bot" },
-  { key: "dev",        icon: "code" },
-  { key: "ai",         icon: "sparkles" },
-  { key: "compliance", icon: "shield" },
+  { key: "execution",             icon: "zap" },
+  { key: "lowcode",               icon: "app" },
+  { key: "bi_analytics",          icon: "chart" },
+  { key: "orchestration",         icon: "flow" },
+  { key: "enterprise_data",       icon: "database" },
+  { key: "enterprise_automation", icon: "bot" },
+  { key: "rpa",                   icon: "bot" },
+  { key: "compliance_grc",        icon: "shield" },
+  { key: "agent_runtimes",        icon: "sparkles" },
+  { key: "llm_frameworks",        icon: "code" },
+  { key: "ai_ipaas",              icon: "link" },
+  { key: "personal_agents",       icon: "terminal" },
+  { key: "custom_development",    icon: "code" },
 ] as const;
 
 const tiles = [
@@ -30,9 +36,9 @@ const tiles = [
 
   <!-- ── ACT 1 — What you're already paying for ── -->
   <div class="roi-act1-scroll relative">
-    <div class="sticky top-0 min-h-screen flex items-center py-16 lg:py-20">
-      <div class="mx-auto max-w-5xl px-6 lg:px-8 w-full">
-        <div class="mb-12 text-center">
+    <div class="sticky top-0 min-h-screen flex items-center py-12 lg:py-14">
+      <div class="mx-auto max-w-6xl px-6 lg:px-8 w-full">
+        <div class="mb-6 text-center">
           <p class="text-[11px] font-medium tracking-[0.3em] uppercase text-destructive/70 mb-4">
             {t("pitch.roi.act1.tagline")}
           </p>
@@ -42,25 +48,37 @@ const tiles = [
         </div>
 
         <!-- Invoice-pile card stack -->
-        <div class="roi-stack space-y-3">
+        <div class="roi-stack space-y-2">
           {costCards.map(({ key, icon }, i) => (
             <div
-              class="roi-card group relative grid grid-cols-1 sm:grid-cols-[auto_1fr_auto_1fr] items-center gap-3 sm:gap-5 px-5 sm:px-6 py-4 sm:py-5 rounded-xl border border-border bg-card hover:border-destructive/20 transition-colors"
+              class="roi-card group relative grid grid-cols-[1fr_auto] lg:grid-cols-[2.25rem_minmax(0,1fr)_11rem_minmax(19rem,1fr)] items-center gap-x-4 gap-y-2 sm:gap-5 px-5 sm:px-6 py-2 sm:py-2.5 rounded-xl border border-border bg-card hover:border-destructive/20 transition-colors"
               style={`z-index:${costCards.length - i}`}
             >
               {/* Icon */}
-              <div class="hidden sm:flex w-9 h-9 rounded-lg bg-destructive/8 items-center justify-center shrink-0">
-                {icon === "chart" && (
-                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /></svg>
-                )}
+              <div class="hidden lg:flex w-9 h-9 rounded-lg bg-destructive/8 items-center justify-center shrink-0">
                 {icon === "link" && (
                   <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
                 )}
                 {icon === "bot" && (
                   <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" /></svg>
                 )}
+                {icon === "app" && (
+                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 6A2.25 2.25 0 016 3.75h12A2.25 2.25 0 0120.25 6v12A2.25 2.25 0 0118 20.25H6A2.25 2.25 0 013.75 18V6zM3.75 9h16.5M8.25 13.5h3m-3 3h7.5" /></svg>
+                )}
+                {icon === "flow" && (
+                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.75 6.75h.008v.008H6.75V6.75zm0 10.5h.008v.008H6.75v-.008zm10.5-10.5h.008v.008h-.008V6.75zm0 10.5h.008v.008h-.008v-.008zM7.5 7.5h9m-9 9h9m-9-8.25v7.5m9-7.5v7.5" /></svg>
+                )}
+                {icon === "database" && (
+                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125v-3.75" /></svg>
+                )}
                 {icon === "code" && (
                   <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" /></svg>
+                )}
+                {icon === "chart" && (
+                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 19.5h16.5M6.75 16.5V9.75m5.25 6.75V4.5m5.25 12V12" /></svg>
+                )}
+                {icon === "shield" && (
+                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3.75l7.5 2.625v5.532c0 4.035-2.584 7.617-6.415 8.891L12 21.15l-1.085-.352C7.084 19.524 4.5 15.942 4.5 11.907V6.375L12 3.75zm-2.25 8.5l1.5 1.5 3.25-3.25" /></svg>
                 )}
                 {icon === "zap" && (
                   <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" /></svg>
@@ -68,8 +86,8 @@ const tiles = [
                 {icon === "sparkles" && (
                   <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" /></svg>
                 )}
-                {icon === "shield" && (
-                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" /></svg>
+                {icon === "terminal" && (
+                  <svg class="w-4 h-4 text-destructive/70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.75 7.5l3 3-3 3m4.5 0h6M4.5 5.25h15A2.25 2.25 0 0121.75 7.5v9A2.25 2.25 0 0119.5 18.75h-15A2.25 2.25 0 012.25 16.5v-9A2.25 2.25 0 014.5 5.25z" /></svg>
                 )}
               </div>
 
@@ -84,18 +102,18 @@ const tiles = [
               </div>
 
               {/* Struck-through price */}
-              <span class="roi-price text-base sm:text-lg font-bold text-destructive line-through decoration-destructive/40 decoration-2 whitespace-nowrap tabular-nums text-right">
+              <span class="roi-price text-base font-bold text-destructive line-through decoration-destructive/40 decoration-2 whitespace-nowrap tabular-nums text-right">
                 {t(`pitch.roi.act1.${key}.price`)}
               </span>
 
               {/* Flow-Like replacement */}
-              <div class="flex items-center gap-2 sm:justify-end">
+              <div class="col-span-2 lg:col-span-1 flex items-center gap-2 pl-5 sm:pl-8 lg:pl-10 xl:pl-12 lg:justify-start">
                 <span class="flex items-center justify-center w-5 h-5 rounded-full bg-emerald-500/15 shrink-0">
                   <svg class="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
                   </svg>
                 </span>
-                <span class="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                <span class="text-sm font-medium text-emerald-600 dark:text-emerald-400 lg:whitespace-nowrap">
                   {t(`pitch.roi.act1.${key}.replacement`)}
                 </span>
               </div>
@@ -104,9 +122,9 @@ const tiles = [
         </div>
 
         <!-- Running total -->
-        <div class="roi-total mt-12 relative overflow-hidden rounded-2xl border border-border">
+        <div class="roi-total mt-6 relative overflow-hidden rounded-2xl border border-border">
           <div class="absolute inset-0 bg-linear-to-r from-destructive/5 via-transparent to-emerald-500/5" />
-          <div class="relative flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-10 py-8 px-8">
+          <div class="relative flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-10 py-6 px-8">
             <div class="text-center sm:text-right">
               <span class="block text-[10px] font-medium text-muted-foreground mb-2 uppercase tracking-widest">
                 {t("pitch.roi.act1.total.label")}
@@ -254,7 +272,7 @@ const tiles = [
 
 <style>
   .roi-act1-scroll {
-    min-height: 250vh;
+    min-height: 360vh;
   }
 
   .roi-animated .roi-card {

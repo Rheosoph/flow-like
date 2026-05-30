@@ -2,6 +2,7 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { IApiState, IProfile } from "@flow-like/flow-like-ui";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
+import { ensureProtectedAppRouteAuth } from "../../lib/api";
 
 function constructUrl(profile: IProfile, path: string): string {
 	let baseUrl = profile.hub ?? "api.flow-like.com";
@@ -131,6 +132,11 @@ export class TauriApiState implements IApiState {
 		path: string,
 		options?: RequestInit,
 	): Promise<T> {
+		ensureProtectedAppRouteAuth(
+			path,
+			this.auth,
+			(options?.method ?? "GET").toUpperCase(),
+		);
 		const url = constructUrl(profile, path);
 		const authHeader = this.getAuthHeader();
 

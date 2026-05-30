@@ -32,6 +32,25 @@ impl RegistrationStorage {
         Ok(storage)
     }
 
+    fn ensure_registration_column(conn: &Connection, column: &str, definition: &str) -> Result<()> {
+        let has_column: bool = conn
+            .prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('event_registrations') WHERE name = ?1",
+            )?
+            .query_row([column], |row| row.get::<_, i32>(0))
+            .map(|count| count > 0)
+            .unwrap_or(false);
+
+        if !has_column {
+            conn.execute(
+                &format!("ALTER TABLE event_registrations ADD COLUMN {definition}"),
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn connection(&self) -> DbConnection {
         Arc::clone(&self.conn)
     }
@@ -86,19 +105,13 @@ impl RegistrationStorage {
             [],
         )?;
 
-        // Migration: add oauth_tokens column if it doesn't exist
-        let has_oauth_tokens: bool = conn
-            .prepare("SELECT COUNT(*) FROM pragma_table_info('event_registrations') WHERE name='oauth_tokens'")?
-            .query_row([], |row| row.get::<_, i32>(0))
-            .map(|count| count > 0)
-            .unwrap_or(false);
-
-        if !has_oauth_tokens {
-            conn.execute(
-                "ALTER TABLE event_registrations ADD COLUMN oauth_tokens TEXT",
-                [],
-            )?;
-        }
+        Self::ensure_registration_column(&conn, "default_payload", "default_payload TEXT")?;
+        Self::ensure_registration_column(
+            &conn,
+            "personal_access_token",
+            "personal_access_token TEXT",
+        )?;
+        Self::ensure_registration_column(&conn, "oauth_tokens", "oauth_tokens TEXT")?;
 
         Ok(())
     }

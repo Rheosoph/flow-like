@@ -123,20 +123,20 @@ impl RSSSink {
             // TODO: Compare with last_item_guid
             // For now, we'll trigger an event on each check
 
-            // Get app_id, offline flag, and oauth_tokens from registration
+            // Get app_id, offline flag, token, and oauth_tokens from registration
             let registration_info = {
                 let conn = db.lock().unwrap();
                 let mut stmt = conn.prepare(
-                    "SELECT app_id, offline, oauth_tokens FROM event_registrations WHERE event_id = ?1",
+                    "SELECT app_id, offline, personal_access_token, oauth_tokens FROM event_registrations WHERE event_id = ?1",
                 )?;
                 stmt.query_row(params![event_id], |row| {
-                    let oauth_tokens_json: Option<String> = row.get(2)?;
+                    let oauth_tokens_json: Option<String> = row.get(3)?;
                     let oauth_tokens: HashMap<String, OAuthToken> = oauth_tokens_json
                         .map(|json| serde_json::from_str(&json))
                         .transpose()
                         .map_err(|e| {
                             rusqlite::Error::FromSqlConversionFailure(
-                                2,
+                                3,
                                 rusqlite::types::Type::Text,
                                 Box::new(e),
                             )
@@ -145,13 +145,15 @@ impl RSSSink {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, bool>(1)?,
+                        row.get::<_, Option<String>>(2)?,
                         oauth_tokens,
                     ))
                 })
                 .ok()
             };
 
-            if let Some((app_id, offline, oauth_tokens)) = registration_info {
+            if let Some((app_id, offline, personal_access_token, oauth_tokens)) = registration_info
+            {
                 if let Some(event_bus_state) = _app_handle.try_state::<TauriEventBusState>() {
                     let event_bus = &event_bus_state.0;
 
@@ -166,7 +168,7 @@ impl RSSSink {
                         app_id,
                         event_id.clone(),
                         offline,
-                        None,
+                        personal_access_token,
                         None,
                         oauth_tokens_opt,
                     ) {

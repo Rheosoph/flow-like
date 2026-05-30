@@ -3,6 +3,32 @@ import type { IProfile } from "@flow-like/flow-like-ui";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
 
+const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
+	"analytics",
+	"api",
+	"board",
+	"comments",
+	"data",
+	"db",
+	"events",
+	"fork",
+	"graph",
+	"invoke",
+	"nodes",
+	"notifications",
+	"packages",
+	"pages",
+	"publication",
+	"roles",
+	"routes",
+	"sales",
+	"settings",
+	"team",
+	"templates",
+	"visibility",
+	"widgets",
+]);
+
 function constructUrl(profile: IProfile, path: string): string {
 	let baseUrl = profile.hub ?? "api.flow-like.com";
 	if (process.env.NEXT_PUBLIC_API_URL)
@@ -18,6 +44,55 @@ function constructUrl(profile: IProfile, path: string): string {
 
 	const protocol = profile.secure === false ? "http" : "https";
 	return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
+}
+
+function cleanApiPath(path: string): string {
+	return path
+		.replace(/^\/+/, "")
+		.replace(/^api\/v1\/+/, "")
+		.split(/[?#]/, 1)[0];
+}
+
+function methodOf(options?: RequestInit, fallback = "GET"): string {
+	return (options?.method ?? fallback).toUpperCase();
+}
+
+function isProtectedAppRoute(path: string, method: string): boolean {
+	const parts = cleanApiPath(path).split("/").filter(Boolean);
+	if (parts[0] !== "apps" || parts.length < 2) return false;
+
+	const appOrRoute = parts[1];
+	if (appOrRoute === "search" || appOrRoute === "nodes") return false;
+	if (appOrRoute === "new") return true;
+
+	if (parts.length === 2) return method !== "GET";
+
+	const segment = parts[2];
+	if (segment === "comments") return method !== "GET";
+	if (segment === "fork" && parts[3] === "preview" && method === "GET") {
+		return false;
+	}
+	if (segment === "meta") return method !== "GET";
+	return PROTECTED_APP_ROUTE_SEGMENTS.has(segment);
+}
+
+export function ensureProtectedAppRouteAuth(
+	path: string,
+	auth?: AuthContextProps | null,
+	method = "GET",
+): void {
+	if (!isProtectedAppRoute(path, method)) return;
+	if (auth?.user?.access_token) return;
+
+	if (auth?.isAuthenticated) {
+		try {
+			auth.startSilentRenew();
+		} catch (error) {
+			console.warn("[Auth] Silent renew failed before API request:", error);
+		}
+	}
+
+	throw new Error(`Authentication token required for app request: ${path}`);
 }
 
 type SSEMessage = {
@@ -88,11 +163,12 @@ export async function streamFetcher<T>(
 	auth?: AuthContextProps,
 	onMessage?: (data: T) => void,
 ): Promise<void> {
+	const method = methodOf(options);
+	ensureProtectedAppRouteAuth(path, auth, method);
 	const authHeader: Record<string, string> = auth?.user?.access_token
 		? { Authorization: `Bearer ${auth.user.access_token}` }
 		: {};
 	const url = constructUrl(profile, path);
-	const method = options?.method ?? "GET";
 
 	console.log("[SSE Debug] Starting stream to:", url);
 	console.log("[SSE Debug] Method:", method);
@@ -319,6 +395,7 @@ export async function fetcher<T>(
 	options?: RequestInit,
 	auth?: AuthContextProps,
 ): Promise<T> {
+	ensureProtectedAppRouteAuth(path, auth, methodOf(options));
 	const headers: HeadersInit = {};
 	if (auth?.user?.access_token) {
 		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;

@@ -3,11 +3,10 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::{Path, blake3};
 use flow_like_types::intercom::{InterComCallback, InterComEvent};
 use flow_like_types::reqwest::Client;
-use flow_like_types::sync::mpsc;
 use flow_like_types::tokio::fs::{self as async_fs, OpenOptions};
 use flow_like_types::tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use flow_like_types::tokio::spawn;
-use flow_like_types::tokio::sync::{Semaphore, oneshot};
+use flow_like_types::tokio::sync::Semaphore;
 use flow_like_types::tokio::task::yield_now;
 use flow_like_types::tokio::time::Instant;
 use flow_like_types::{anyhow, bail, reqwest};
@@ -36,49 +35,6 @@ fn global_download_semaphore() -> &'static Semaphore {
             .filter(|&n| n > 0)
             .unwrap_or(10);
         Semaphore::new(max)
-    })
-}
-
-// Download job queue and dispatcher.
-struct DownloadJob {
-    bit: crate::bit::Bit,
-    app_state: Arc<FlowLikeState>,
-    retries: usize,
-    callback: InterComCallback,
-    respond_to: oneshot::Sender<flow_like_types::Result<Path>>,
-}
-
-fn global_download_queue() -> &'static mpsc::Sender<DownloadJob> {
-    static TX: OnceLock<mpsc::Sender<DownloadJob>> = OnceLock::new();
-    TX.get_or_init(|| {
-        let (tx, mut rx) = mpsc::channel::<DownloadJob>(1024);
-
-        // Dispatcher: spawns a task per job; semaphore enforces active concurrency.
-        spawn(async move {
-            while let Some(job) = rx.recv().await {
-                spawn(async move {
-                    let _permit = match global_download_semaphore().acquire().await {
-                        Ok(p) => p,
-                        Err(_) => {
-                            let _ = job.respond_to.send(Err(anyhow!("Download queue closed")));
-                            return;
-                        }
-                    };
-
-                    let res = process_download_bit(
-                        &job.bit,
-                        job.app_state.clone(),
-                        job.retries,
-                        &job.callback,
-                    )
-                    .await;
-
-                    let _ = job.respond_to.send(res);
-                });
-            }
-        });
-
-        tx
     })
 }
 
@@ -162,21 +118,21 @@ pub async fn download_bit(
     retries: usize,
     callback: &InterComCallback,
 ) -> flow_like_types::Result<Path> {
-    let (tx, rx) = oneshot::channel();
-    let job = DownloadJob {
-        bit: bit.clone(),
-        app_state,
-        retries,
-        callback: callback.clone(),
-        respond_to: tx,
-    };
+    let bit = bit.clone();
+    let callback = callback.clone();
 
-    global_download_queue()
-        .send(job)
+    let handle = spawn(async move {
+        let _permit = global_download_semaphore()
+            .acquire()
+            .await
+            .map_err(|_| anyhow!("Download limiter closed"))?;
+
+        process_download_bit(&bit, app_state, retries, &callback).await
+    });
+
+    handle
         .await
-        .map_err(|_| anyhow!("Failed to enqueue download"))?;
-
-    rx.await.map_err(|_| anyhow!("Download worker dropped"))?
+        .map_err(|err| anyhow!("Download worker dropped: {}", err))?
 }
 
 async fn process_download_bit(

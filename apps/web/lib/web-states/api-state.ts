@@ -1,6 +1,10 @@
 import type { IApiState } from "@flow-like/flow-like-ui";
 import type { IProfile } from "@flow-like/flow-like-ui/types";
-import { type WebBackendRef, getApiBaseUrl } from "./api-utils";
+import {
+	type WebBackendRef,
+	ensureProtectedAppRouteAuth,
+	getApiBaseUrl,
+} from "./api-utils";
 
 export class WebApiState implements IApiState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -116,6 +120,11 @@ export class WebApiState implements IApiState {
 		path: string,
 		options?: RequestInit,
 	): Promise<T> {
+		ensureProtectedAppRouteAuth(
+			path,
+			this.backend.auth,
+			(options?.method ?? "GET").toUpperCase(),
+		);
 		const url = this.constructUrl(profile, path);
 		const response = await fetch(url, {
 			...options,

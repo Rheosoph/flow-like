@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { arch, platform } from "os";
 
 function getConfigPath(): string {
@@ -36,11 +36,32 @@ function shouldRunTranslationServer(): boolean {
 	return osType === "darwin" || osType === "linux";
 }
 
+function prepareWindowsPrereqs(): void {
+	if (platform() !== "win32") return;
+
+	const vcArch = arch() === "arm64" ? "arm64" : "x64";
+	console.log(`Preparing Windows VC runtime DLLs for ${vcArch}...`);
+
+	const result = spawnSync(
+		"bun",
+		["./scripts/prepare-windows-prereqs.ts", "--arch", vcArch],
+		{ stdio: "inherit" },
+	);
+
+	if (result.error || result.status !== 0) {
+		const reason =
+			result.error?.message ??
+			(result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);
+		throw new Error(`Failed to prepare Windows prerequisites: ${reason}`);
+	}
+}
+
 async function main() {
 	try {
 		const configPath = getConfigPath();
 		console.log(`Detected OS: ${platform()}, Architecture: ${arch()}`);
 		console.log(`Using config: ${configPath}`);
+		prepareWindowsPrereqs();
 
 		if (shouldRunTranslationServer()) {
 			console.log(`Starting Tauri dev with config and translation server...`);

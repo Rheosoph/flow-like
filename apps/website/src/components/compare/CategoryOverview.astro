@@ -52,6 +52,19 @@ const rows: CategoryRow[] = [
     },
   },
   {
+    id: "bi_analytics",
+    nameKey: "compare.category.bi_analytics",
+    examples: "Tableau, Power BI, Looker",
+    accent: "text-lime-500",
+    cells: {
+      execution: "weak",
+      data: "strong",
+      ai_ux: "partial",
+      distribution: "weak",
+      trust: "partial",
+    },
+  },
+  {
     id: "orchestration",
     nameKey: "compare.category.orchestration",
     examples: "Airflow, Temporal",
@@ -80,7 +93,7 @@ const rows: CategoryRow[] = [
   {
     id: "enterprise_automation",
     nameKey: "compare.category.enterprise_automation",
-    examples: "UiPath, Salesforce, Regrello",
+    examples: "Salesforce, ServiceNow, Regrello",
     accent: "text-rose-500",
     cells: {
       execution: "strong",
@@ -88,6 +101,32 @@ const rows: CategoryRow[] = [
       ai_ux: "partial",
       distribution: "partial",
       trust: "weak",
+    },
+  },
+  {
+    id: "rpa",
+    nameKey: "compare.category.rpa",
+    examples: "UiPath, Automation Anywhere, Blue Prism",
+    accent: "text-orange-500",
+    cells: {
+      execution: "strong",
+      data: "weak",
+      ai_ux: "partial",
+      distribution: "weak",
+      trust: "partial",
+    },
+  },
+  {
+    id: "compliance_grc",
+    nameKey: "compare.category.compliance_grc",
+    examples: "ServiceNow GRC, Archer, OneTrust",
+    accent: "text-emerald-700",
+    cells: {
+      execution: "weak",
+      data: "partial",
+      ai_ux: "weak",
+      distribution: "weak",
+      trust: "strong",
     },
   },
   {
@@ -140,6 +179,19 @@ const rows: CategoryRow[] = [
       ai_ux: "weak",
       distribution: "weak",
       trust: "weak",
+    },
+  },
+  {
+    id: "custom_development",
+    nameKey: "compare.category.custom_development",
+    examples: "Internal dev teams, agencies, contractors",
+    accent: "text-slate-500",
+    cells: {
+      execution: "partial",
+      data: "partial",
+      ai_ux: "partial",
+      distribution: "partial",
+      trust: "partial",
     },
   },
   {

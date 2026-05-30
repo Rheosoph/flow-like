@@ -34,6 +34,9 @@ export const deCompare = {
 	"compare.category.lowcode": "Low-Code App-Builder",
 	"compare.category.lowcode.desc":
 		"Tools zum Erstellen interner Apps und Dashboards. Gut für UIs, aber eingeschränkte Automatisierungs- und Workflow-Fähigkeiten.",
+	"compare.category.bi_analytics": "BI & Analytics",
+	"compare.category.bi_analytics.desc":
+		"Dashboard- und Reporting-Tools zur Analyse von Geschäftsdaten. Stark für Transparenz, aber schwach darin, Erkenntnisse in gesteuerte operative Workflows und Apps zu verwandeln.",
 	"compare.category.orchestration": "Daten- & Workflow-Orchestrierung",
 	"compare.category.orchestration.desc":
 		"Enterprise-Tools für komplexe Datenpipelines und Workflow-Orchestrierung. Leistungsstark, erfordern aber Engineering-Expertise.",
@@ -42,7 +45,13 @@ export const deCompare = {
 		"Ontologie- und ERP-getriebene Plattformen rund um proprietäre Unternehmensdatenmodelle. Mächtig für Großkonzerne, aber langsam einzuführen, teuer und an einen Hersteller gebunden.",
 	"compare.category.enterprise_automation": "Enterprise-Automatisierungs-Suiten",
 	"compare.category.enterprise_automation.desc":
-		"Prozess- und Workflow-Suiten rund um RPA, CRM oder KI-Agenten. Stark für spezifische Geschäftsabläufe, aber SaaS-gebunden, mit teurer Lizenzierung und geringer Portabilität.",
+		"Prozess- und Workflow-Suiten rund um CRM, Service-Management oder KI-Agenten. Stark für spezifische Geschäftsabläufe, aber SaaS-gebunden, mit teurer Lizenzierung und geringer Portabilität.",
+	"compare.category.rpa": "Robotic Process Automation",
+	"compare.category.rpa.desc":
+		"Bot-basierte Automatisierung für Legacy-Oberflächen und repetitive Desktop-Aufgaben. Nützlich als Brücke, aber fragil, schwer zu steuern und teuer in der Skalierung.",
+	"compare.category.compliance_grc": "Compliance & GRC",
+	"compare.category.compliance_grc.desc":
+		"Governance-, Risiko- und Compliance-Suiten für Kontrollen, Nachweise und Policy-Workflows. Stark als Audit-Systeme, aber getrennt von den operativen Workflows, die Nachweise erzeugen.",
 	"compare.category.agent_runtimes": "Agent-Runtimes",
 	"compare.category.agent_runtimes.desc":
 		"Python-Frameworks zur Orchestrierung autonomer KI-Agenten. Gut für schnelle Prototypen, aber mit dateibasiertem Zustand ohne Schutz vor gleichzeitigen Schreibzugriffen, ohne konsequentes Tool-Sandboxing und mit Durchsatzgrenzen eines einzelnen Prozesses.",
@@ -55,6 +64,9 @@ export const deCompare = {
 	"compare.category.coding_agents": "Autonome persönliche Agenten",
 	"compare.category.coding_agents.desc":
 		"Persönliche KI-Agenten, die Aufgaben erledigen, Code schreiben und autonom im Web surfen. Mächtig für Einzelnutzer, aber Tool-Aufrufe laufen ohne Sandboxing direkt auf dem Host-Betriebssystem. Prompt-Injection kann so zu beliebiger Code-Ausführung werden, während der gesamte Zustand in flachen Dateien ohne Schutz vor gleichzeitigen Schreibzugriffen liegt.",
+	"compare.category.custom_development": "Individuelle Entwicklung",
+	"compare.category.custom_development.desc":
+		"Interne Teams, Agenturen und Auftragnehmer bauen individuelle Workflow-Apps. Theoretisch flexibel, aber jeder neue Prozess wird zu einem Projekt mit eigener Integration, Wartung und Wissenstransfer-Risiko.",
 
 	// Legend
 	"compare.legend.native": "Native Unterstützung",
@@ -80,6 +92,12 @@ export const deCompare = {
 	// Per-category mini bubble plot inside the matrix
 	"compare.matrix.col.capability": "Merkmal",
 	"compare.matrix.security_risk": "Sicherheitsrisiko",
+	"compare.competitor.ontology.examples": "Beispiele: Palantir Foundry / AIP",
+	"compare.competitor.ontology.note":
+		"Kategorievergleich. Palantir Foundry und Palantir AIP werden nur als öffentliche Beispiele für ontologiegetriebene Datenplattformen genannt. Es wird keine Zugehörigkeit, Förderung oder Empfehlung impliziert. Marken Dritter bleiben Eigentum ihrer jeweiligen Inhaber.",
+	"compare.competitor.erp.examples": "Beispiele: SAP Build / SAP BTP",
+	"compare.competitor.erp.note":
+		"Kategorievergleich. SAP Build Process Automation und SAP Business Technology Platform werden nur als öffentliche Beispiele für ERP-nahe Prozessplattformen genannt. Es wird keine Zugehörigkeit, Förderung oder Empfehlung impliziert. Marken Dritter bleiben Eigentum ihrer jeweiligen Inhaber.",
 	"compare.matrix.plot.title": "Positionierung gegenüber Flow-Like",
 	"compare.matrix.plot.description":
 		"Wo diese Tools auf den zwei Achsen landen, die diese Kategorie wirklich unterscheiden. Flow-Like sitzt immer oben rechts.",
@@ -135,7 +153,7 @@ export const deCompare = {
 	"compare.overview.tagline": "Auf einen Blick",
 	"compare.overview.headline": "Der Enterprise Operating Stack",
 	"compare.overview.description":
-		"Neun Kategorien, ein ehrliches Bewertungsraster. So schneidet jede Tool-Klasse bei Ausführung, Data-Layer-Tiefe, AI, App-Auslieferung, Portabilität und Governance ab.",
+		"Dreizehn Kategorien, ein ehrliches Bewertungsraster. So schneidet jede Tool-Klasse bei Ausführung, Data-Layer-Tiefe, AI, App-Auslieferung, Portabilität und Governance ab.",
 	"compare.overview.flowlike": "Flow-Like",
 	"compare.overview.badge.us": "WIR",
 	"compare.overview.col.category": "Kategorie",
@@ -326,7 +344,7 @@ export const deCompare = {
 	"compare.insight.card.enterprise_data.body1": "Ontologie- / ERP-zentriert.",
 	"compare.insight.card.enterprise_data.body2": "Mächtig, schwergewichtig, lock-in-lastig.",
 	"compare.insight.card.enterprise_automation.title": "Enterprise-Automation",
-	"compare.insight.card.enterprise_automation.body1": "RPA / CRM / Agenten.",
+	"compare.insight.card.enterprise_automation.body1": "CRM / Service / Agenten.",
 	"compare.insight.card.enterprise_automation.body2": "SaaS-gebunden & pro Nutzer bepreist.",
 	"compare.insight.flowlike.badge": "Alles davon",
 	"compare.insight.flowlike.cap.workflows": "Workflows",
