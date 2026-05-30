@@ -55,20 +55,6 @@ pub async fn dashboard(
     Path(app_id): Path<String>,
     Query(query): Query<AnalyticsDashboardQuery>,
 ) -> Result<Json<AnalyticsDashboardResponse>, ApiError> {
-    let overview = super::overview::get_analytics_overview(
-        State(state.clone()),
-        Extension(user.clone()),
-        Path(app_id.clone()),
-        Query(AnalyticsStatsQuery {
-            start_date: None,
-            end_date: None,
-            event_id: query.event_id.clone(),
-            period: default_period(),
-        }),
-    )
-    .await?
-    .0;
-
     let stats = super::overview::get_analytics_stats(
         State(state.clone()),
         Extension(user.clone()),
@@ -82,6 +68,7 @@ pub async fn dashboard(
     )
     .await?
     .0;
+    let overview = stats.summary.clone();
 
     Ok(Json(AnalyticsDashboardResponse { overview, stats }))
 }

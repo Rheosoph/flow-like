@@ -256,10 +256,7 @@ function getTickValues(labels: string[]): string[] {
 }
 
 function getSuccessfulExecutions(day: IDailyAnalyticsStat): number {
-	return (
-		day.successfulExecutions ??
-		Math.max(day.executions - getFailedExecutions(day), 0)
-	);
+	return Math.max(day.executions - getFailedExecutions(day), 0);
 }
 
 function getFailedExecutions(day: IDailyAnalyticsStat): number {
@@ -880,6 +877,10 @@ export function AnalyticsDashboard() {
 			: dateRange === "30d"
 				? "Last 30 days"
 				: "Last 90 days";
+	const analyticsScopeCopy =
+		selectedEventId === "all"
+			? "Usage, reliability, cost, and feedback"
+			: "Usage, reliability, and feedback";
 	const eventOptions = useMemo(
 		() =>
 			[...events]
@@ -903,8 +904,11 @@ export function AnalyticsDashboard() {
 		selectedEventId !== "all" && !selectedEvent && selectedEventId.trim();
 
 	const totalExecutions = overview?.totalExecutions ?? 0;
-	const successfulExecutions = overview?.successfulExecutions ?? 0;
 	const failedExecutions = overview?.failedExecutions ?? 0;
+	const successfulExecutions =
+		totalExecutions > 0
+			? Math.max(totalExecutions - failedExecutions, 0)
+			: (overview?.successfulExecutions ?? 0);
 	const uniqueUsers = overview?.uniqueUsers ?? 0;
 	const successRate =
 		totalExecutions > 0 ? (successfulExecutions / totalExecutions) * 100 : null;
@@ -970,8 +974,8 @@ export function AnalyticsDashboard() {
 				<div className="space-y-1">
 					<h1 className="text-2xl font-semibold">Analytics</h1>
 					<p className="text-sm text-muted-foreground">
-						Usage, reliability, cost, and feedback for{" "}
-						{dateRangeLabel.toLowerCase()} across {selectedEventLabel}
+						{analyticsScopeCopy} for {dateRangeLabel.toLowerCase()} across{" "}
+						{selectedEventLabel}
 					</p>
 				</div>
 				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
