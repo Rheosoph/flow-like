@@ -19,11 +19,15 @@ export interface IAnalyticsOverview {
 export interface IDailyAnalyticsStat {
 	date: string;
 	executions: number;
+	successfulExecutions: number;
+	failedExecutions: number;
 	uniqueUsers: number;
 	feedbackCount: number;
 	avgRating: number | null;
 	llmCost: number;
+	embeddingCost: number;
 	avgLatency: number | null;
+	p95Latency: number | null;
 	positiveFeedback: number;
 	negativeFeedback: number;
 }

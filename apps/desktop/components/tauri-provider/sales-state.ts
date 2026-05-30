@@ -21,6 +21,7 @@ export class SalesState implements ISalesState {
 			this.backend.profile,
 			`apps/${appId}/sales`,
 			undefined,
+			this.backend.auth,
 		);
 	}
 
@@ -42,7 +43,12 @@ export class SalesState implements ISalesState {
 		const url = query
 			? `apps/${appId}/sales/stats?${query}`
 			: `apps/${appId}/sales/stats`;
-		return await fetcher<ISalesStats>(this.backend.profile, url, undefined);
+		return await fetcher<ISalesStats>(
+			this.backend.profile,
+			url,
+			undefined,
+			this.backend.auth,
+		);
 	}
 
 	async listPurchases(
@@ -67,6 +73,7 @@ export class SalesState implements ISalesState {
 			this.backend.profile,
 			url,
 			undefined,
+			this.backend.auth,
 		);
 	}
 
@@ -84,6 +91,7 @@ export class SalesState implements ISalesState {
 				method: "PATCH",
 				body: JSON.stringify({ price }),
 			},
+			this.backend.auth,
 		);
 	}
 
@@ -101,7 +109,12 @@ export class SalesState implements ISalesState {
 		const url = query
 			? `apps/${appId}/sales/discounts?${query}`
 			: `apps/${appId}/sales/discounts`;
-		return await fetcher<IDiscount[]>(this.backend.profile, url, undefined);
+		return await fetcher<IDiscount[]>(
+			this.backend.profile,
+			url,
+			undefined,
+			this.backend.auth,
+		);
 	}
 
 	async getDiscount(appId: string, discountId: string): Promise<IDiscount> {
@@ -112,6 +125,7 @@ export class SalesState implements ISalesState {
 			this.backend.profile,
 			`apps/${appId}/sales/discounts/${discountId}`,
 			undefined,
+			this.backend.auth,
 		);
 	}
 
@@ -126,7 +140,7 @@ export class SalesState implements ISalesState {
 			this.backend.profile,
 			`apps/${appId}/sales/discounts`,
 			discount,
-			undefined,
+			this.backend.auth,
 		);
 	}
 
@@ -145,6 +159,7 @@ export class SalesState implements ISalesState {
 				method: "PATCH",
 				body: JSON.stringify(updates),
 			},
+			this.backend.auth,
 		);
 	}
 
@@ -158,6 +173,7 @@ export class SalesState implements ISalesState {
 			{
 				method: "DELETE",
 			},
+			this.backend.auth,
 		);
 	}
 
@@ -169,7 +185,7 @@ export class SalesState implements ISalesState {
 			this.backend.profile,
 			`apps/${appId}/sales/discounts/${discountId}/toggle`,
 			{},
-			undefined,
+			this.backend.auth,
 		);
 	}
 }
