@@ -58,6 +58,16 @@ export interface PackageManifest {
 	permissions: unknown;
 }
 
+export interface PackageNodeSummary {
+	id: string;
+	name: string;
+	friendly_name?: string;
+	description?: string;
+	category?: string;
+	icon?: string | null;
+	permissions?: string[];
+}
+
 export interface PackageVersion {
 	version: string;
 	wasmHash: string;
@@ -71,6 +81,7 @@ export interface PackageVersion {
 export interface RegistryEntry {
 	id: string;
 	manifest: PackageManifest;
+	nodes?: PackageNodeSummary[];
 	versions: PackageVersion[];
 	status: string;
 	downloadCount: number;
@@ -82,19 +93,21 @@ export interface RegistryEntry {
 }
 
 export interface PackageMeta {
+	id?: string;
+	lang?: string;
 	name: string;
-	description: string;
-	long_description?: string;
-	release_notes?: string;
+	description?: string;
+	longDescription?: string;
+	releaseNotes?: string;
 	tags: string[];
-	use_case?: string;
+	useCase?: string;
 	icon?: string;
 	thumbnail?: string;
-	preview_media: string[];
-	age_rating?: number;
+	previewMedia: string[];
+	ageRating?: number;
 	website?: string;
-	support_url?: string;
-	docs_url?: string;
+	supportUrl?: string;
+	docsUrl?: string;
 }
 
 // ---------- App types ----------
@@ -184,7 +197,7 @@ export async function getPackageMeta(
 	);
 	if (res.status === 404) return null;
 	if (!res.ok) return null;
-	return res.json();
+	return normalizePackageMeta(await res.json());
 }
 
 export async function getPackageReadme(id: string): Promise<string | null> {
@@ -258,6 +271,36 @@ export function storeDeepLink(
 	};
 }
 
+type RawPackageMeta = Partial<PackageMeta> & {
+	long_description?: string;
+	release_notes?: string;
+	use_case?: string;
+	preview_media?: string[];
+	age_rating?: number;
+	support_url?: string;
+	docs_url?: string;
+};
+
+function normalizePackageMeta(raw: RawPackageMeta): PackageMeta {
+	return {
+		id: raw.id,
+		lang: raw.lang,
+		name: raw.name ?? "",
+		description: raw.description,
+		longDescription: raw.longDescription ?? raw.long_description,
+		releaseNotes: raw.releaseNotes ?? raw.release_notes,
+		tags: raw.tags ?? [],
+		useCase: raw.useCase ?? raw.use_case,
+		icon: raw.icon,
+		thumbnail: raw.thumbnail,
+		previewMedia: raw.previewMedia ?? raw.preview_media ?? [],
+		ageRating: raw.ageRating ?? raw.age_rating,
+		website: raw.website,
+		supportUrl: raw.supportUrl ?? raw.support_url,
+		docsUrl: raw.docsUrl ?? raw.docs_url,
+	};
+}
+
 export function starRating(avg?: number): string {
 	if (!avg) return "☆☆☆☆☆";
 	const full = Math.round(avg);
@@ -265,6 +308,25 @@ export function starRating(avg?: number): string {
 }
 
 const PLATE_JSON_PREFIX = "plate_json::";
+
+type PlateTextNode = {
+	text?: string;
+	bold?: boolean;
+	italic?: boolean;
+	underline?: boolean;
+	strikethrough?: boolean;
+	code?: boolean;
+};
+
+type PlateElementNode = {
+	type?: string;
+	children?: PlateNode[];
+	url?: string;
+	listStyleType?: string;
+	[key: string]: unknown;
+};
+
+type PlateNode = PlateTextNode | PlateElementNode;
 
 function extractTextFromPlateNodes(nodes: unknown[]): string {
 	const parts: string[] = [];
@@ -279,6 +341,208 @@ function extractTextFromPlateNodes(nodes: unknown[]): string {
 		}
 	}
 	return parts.join(" ");
+}
+
+function escapeHtml(text: string): string {
+	return text
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
+function safeUrl(url: unknown): string | null {
+	if (typeof url !== "string") return null;
+	try {
+		const parsed = new URL(url);
+		if (["http:", "https:", "mailto:"].includes(parsed.protocol)) {
+			return parsed.toString();
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+function renderInlineMarkdown(text: string): string {
+	const linkTokens: string[] = [];
+	const withLinkTokens = text.replace(
+		/\[([^\]]+)\]\(([^)\s]+)\)/g,
+		(match, label: string, url: string) => {
+			const href = safeUrl(url);
+			if (!href) return match;
+			const token = `\u0000${linkTokens.length}\u0000`;
+			linkTokens.push(
+				`<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${renderInlineMarkdown(label)}</a>`,
+			);
+			return token;
+		},
+	);
+
+	return escapeHtml(withLinkTokens)
+		.replace(/`([^`]+)`/g, "<code>$1</code>")
+		.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+		.replace(/__([^_]+)__/g, "<strong>$1</strong>")
+		.replace(/\*([^*]+)\*/g, "<em>$1</em>")
+		.replace(/_([^_]+)_/g, "<em>$1</em>")
+		.replace(/\u0000(\d+)\u0000/g, (_, index: string) => linkTokens[Number(index)] ?? "");
+}
+
+function renderMarkdown(content: string): string {
+	const lines = content.replace(/\r\n?/g, "\n").split("\n");
+	const html: string[] = [];
+	let paragraph: string[] = [];
+	let listItems: string[] = [];
+	let listType: "ul" | "ol" | null = null;
+	let codeFence: string[] | null = null;
+
+	const flushParagraph = () => {
+		if (!paragraph.length) return;
+		html.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+		paragraph = [];
+	};
+	const flushList = () => {
+		if (!listType || !listItems.length) return;
+		html.push(`<${listType}>${listItems.join("")}</${listType}>`);
+		listItems = [];
+		listType = null;
+	};
+
+	for (const line of lines) {
+		if (line.trim().startsWith("```") || line.trim().startsWith("~~~")) {
+			if (codeFence) {
+				html.push(`<pre><code>${escapeHtml(codeFence.join("\n"))}</code></pre>`);
+				codeFence = null;
+			} else {
+				flushParagraph();
+				flushList();
+				codeFence = [];
+			}
+			continue;
+		}
+
+		if (codeFence) {
+			codeFence.push(line);
+			continue;
+		}
+
+		if (!line.trim()) {
+			flushParagraph();
+			flushList();
+			continue;
+		}
+
+		const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+		if (heading) {
+			flushParagraph();
+			flushList();
+			const level = heading[1].length;
+			html.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+			continue;
+		}
+
+		const unordered = /^\s*[-*+]\s+(.+)$/.exec(line);
+		const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+		if (unordered || ordered) {
+			flushParagraph();
+			const nextType = unordered ? "ul" : "ol";
+			if (listType && listType !== nextType) flushList();
+			listType = nextType;
+			listItems.push(
+				`<li>${renderInlineMarkdown((unordered?.[1] ?? ordered?.[1] ?? "").trim())}</li>`,
+			);
+			continue;
+		}
+
+		paragraph.push(line.trim());
+	}
+
+	flushParagraph();
+	flushList();
+	if (codeFence) {
+		html.push(`<pre><code>${escapeHtml(codeFence.join("\n"))}</code></pre>`);
+	}
+	return html.join("");
+}
+
+function isTextNode(node: PlateNode): node is PlateTextNode {
+	return typeof (node as PlateTextNode).text === "string";
+}
+
+function renderPlateInline(node: PlateNode): string {
+	if (isTextNode(node)) {
+		let html = escapeHtml(node.text ?? "");
+		if (node.code) html = `<code>${html}</code>`;
+		if (node.bold) html = `<strong>${html}</strong>`;
+		if (node.italic) html = `<em>${html}</em>`;
+		if (node.underline) html = `<u>${html}</u>`;
+		if (node.strikethrough) html = `<s>${html}</s>`;
+		return html;
+	}
+
+	const children = renderPlateChildren(node.children);
+	if (node.type === "a") {
+		const href = safeUrl(node.url);
+		if (!href) return children;
+		return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${children}</a>`;
+	}
+	return children;
+}
+
+function renderPlateChildren(children: PlateNode[] | undefined): string {
+	return (children ?? []).map(renderPlateInline).join("");
+}
+
+function renderPlateBlock(node: PlateNode): string {
+	if (isTextNode(node)) return renderPlateInline(node);
+
+	const type = node.type ?? "p";
+	const children = renderPlateChildren(node.children);
+	if (!children.trim() && type !== "img") return "";
+
+	if (/^h[1-6]$/.test(type)) return `<${type}>${children}</${type}>`;
+	if (type === "blockquote") return `<blockquote>${children}</blockquote>`;
+	if (type === "code_block") return `<pre><code>${children}</code></pre>`;
+	if (type === "li") return `<li>${children}</li>`;
+	if (type === "ul" || type === "ol") {
+		const listChildren = (node.children ?? []).map(renderPlateBlock).join("");
+		return `<${type}>${listChildren || children}</${type}>`;
+	}
+	if (type === "img") {
+		const src = safeUrl(node.url);
+		return src ? `<img src="${escapeHtml(src)}" alt="" loading="lazy" />` : "";
+	}
+	if (type === "tr" || type === "td" || type === "th") {
+		const cellChildren = (node.children ?? []).map(renderPlateBlock).join("");
+		return `<${type}>${cellChildren || children}</${type}>`;
+	}
+	if (type === "table") {
+		const tableChildren = (node.children ?? []).map(renderPlateBlock).join("");
+		return `<table>${tableChildren || children}</table>`;
+	}
+	if (node.listStyleType) {
+		const listType = node.listStyleType === "decimal" ? "ol" : "ul";
+		return `<${listType}><li>${children}</li></${listType}>`;
+	}
+	return `<p>${children}</p>`;
+}
+
+function renderPlateContent(content: string): string {
+	try {
+		const nodes = JSON.parse(content.slice(PLATE_JSON_PREFIX.length));
+		if (!Array.isArray(nodes)) return "";
+		return nodes.map((node) => renderPlateBlock(node as PlateNode)).join("");
+	} catch {
+		return `<p>${escapeHtml(content.slice(PLATE_JSON_PREFIX.length))}</p>`;
+	}
+}
+
+/** Render trusted store rich text as sanitized server-side HTML. */
+export function renderRichContent(content: string): string {
+	if (!content.trim()) return "";
+	if (content.startsWith(PLATE_JSON_PREFIX)) return renderPlateContent(content);
+	return renderMarkdown(content);
 }
 
 function stripMarkdown(md: string): string {

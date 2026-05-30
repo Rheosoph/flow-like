@@ -261,21 +261,50 @@ fn handle_trigger(app_handle: &AppHandle, url: &Url) {
 fn handle_store(app_handle: &AppHandle, url: &Url) {
     // Parse URL:
     // - flow-like://store?id={app_id}
+    // - flow-like://store/packages?id={package_id}
     // - https://app.flow-like.com/store?id={app_id}
     // - https://app.flow-like.com/store/{app_id}
-    let mut app_id = url
+    // - https://app.flow-like.com/store/packages?id={package_id}
+    // - https://app.flow-like.com/store/packages/{package_id}
+    let query_id = url
         .query_pairs()
         .find(|(k, _)| k == "id")
         .map(|(_, v)| v.to_string());
 
-    if app_id.is_none() {
-        let path = url.path().trim_matches('/');
-        if let Some(rest) = path.strip_prefix("store/")
-            && !rest.is_empty()
-        {
-            app_id = Some(rest.to_string());
-        }
+    let path = url.path().trim_matches('/');
+    let store_path = if path == "store" {
+        ""
+    } else {
+        path.strip_prefix("store/").unwrap_or(path)
+    };
+
+    if store_path == "packages" || store_path.starts_with("packages/") {
+        let package_id = query_id.or_else(|| {
+            store_path
+                .strip_prefix("packages/")
+                .filter(|rest| !rest.is_empty())
+                .map(ToString::to_string)
+        });
+
+        println!("Package store deep link: package_id={:?}", package_id);
+
+        crate::utils::emit_throttled(
+            app_handle,
+            crate::utils::UiEmitTarget::All,
+            "deeplink/store",
+            json::json!({ "appId": null, "packageId": package_id }),
+            std::time::Duration::from_millis(200),
+        );
+        return;
     }
+
+    let app_id = query_id.or_else(|| {
+        if store_path.is_empty() {
+            None
+        } else {
+            Some(store_path.to_string())
+        }
+    });
 
     println!("Store deep link: app_id={:?}", app_id);
 
@@ -283,7 +312,7 @@ fn handle_store(app_handle: &AppHandle, url: &Url) {
         app_handle,
         crate::utils::UiEmitTarget::All,
         "deeplink/store",
-        json::json!({ "appId": app_id }),
+        json::json!({ "appId": app_id, "packageId": null }),
         std::time::Duration::from_millis(200),
     );
 }

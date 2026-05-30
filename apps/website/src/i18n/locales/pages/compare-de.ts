@@ -54,7 +54,7 @@ export const deCompare = {
 		"Governance-, Risiko- und Compliance-Suiten für Kontrollen, Nachweise und Policy-Workflows. Stark als Audit-Systeme, aber getrennt von den operativen Workflows, die Nachweise erzeugen.",
 	"compare.category.agent_runtimes": "Agent-Runtimes",
 	"compare.category.agent_runtimes.desc":
-		"Python-Frameworks zur Orchestrierung autonomer KI-Agenten. Gut für schnelle Prototypen, aber mit dateibasiertem Zustand ohne Schutz vor gleichzeitigen Schreibzugriffen, ohne konsequentes Tool-Sandboxing und mit Durchsatzgrenzen eines einzelnen Prozesses.",
+		"Agent-Runtimes und KI-Workflow-Plattformen zur Orchestrierung autonomer Agenten. Gut für Prototypen und den KI-Rollout im Unternehmen, lassen aber produktionsreifes Sandboxing, sicheren Zustand, App-Auslieferung und Portabilität oft unvollständig.",
 	"compare.category.llm_frameworks": "LLM-App-Frameworks",
 	"compare.category.llm_frameworks.desc":
 		"Code-first-SDKs für Retrieval-, Embedding- und KI-Pipeline-Logik. Leistungsstarke Bausteine, aber UI, Deployment und Governance müssen Sie selbst integrieren.",
@@ -107,6 +107,12 @@ export const deCompare = {
 	"compare.support.basic": "Basis",
 	"compare.support.unlimited": "Unbegrenzt",
 	"compare.support.depends": "Abhängig",
+	"compare.note.open": "Warum diese Bewertung",
+	"compare.note.close": "Schließen",
+	"compare.note.evidence": "Nachweis",
+	"compare.note.caveat": "Einschränkung",
+	"compare.note.sources": "Quellen",
+	"compare.note.checked": "Zuletzt geprüft",
 
 	// Per-category axes (X & Y differ per category to highlight what matters most)
 	"compare.matrix.plot.axis.extensibility": "Code & Erweiterbarkeit",

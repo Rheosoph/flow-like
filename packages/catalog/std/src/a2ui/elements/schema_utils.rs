@@ -101,6 +101,14 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<ButtonProps>();
             true
         }
+        "feedback" => {
+            pin.set_schema::<FeedbackProps>();
+            true
+        }
+        "applink" => {
+            pin.set_schema::<AppLinkProps>();
+            true
+        }
         "textfield" => {
             pin.set_schema::<TextFieldProps>();
             true
@@ -272,6 +280,8 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "skeleton",
         // Interactive
         "button",
+        "feedback",
+        "appLink",
         "textField",
         "select",
         "slider",

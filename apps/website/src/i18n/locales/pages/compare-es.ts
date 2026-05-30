@@ -40,7 +40,7 @@ export const esCompare = {
 		"Suites de gobernanza, riesgo y cumplimiento para controles, evidencias y workflows de políticas. Fuertes como sistemas de auditoría, pero desconectadas de los workflows operativos que producen la evidencia.",
 	"compare.category.agent_runtimes": "Runtimes de Agentes",
 	"compare.category.agent_runtimes.desc":
-		"Frameworks de Python para orquestar agentes IA autónomos. Ideales para prototipos rápidos, pero con estado basado en archivos sin protección de escritura concurrente, herramientas que se ejecutan sin sandbox y un rendimiento limitado a un único proceso.",
+		"Runtimes de agentes y plataformas de workflows de IA para orquestar agentes autónomos. Ideales para prototipos y adopción empresarial de IA, pero a menudo dejan incompletos el sandboxing de producción, la seguridad del estado, la entrega de apps y la portabilidad.",
 	"compare.category.llm_frameworks": "Frameworks de Apps LLM",
 	"compare.category.llm_frameworks.desc":
 		"SDKs code-first para lógica de retrieval, embedding y pipelines de IA. Potentes como bloques de construcción, pero cada UI, despliegue y preocupación de gobernanza queda en tus manos.",
@@ -86,6 +86,12 @@ export const esCompare = {
 	"compare.matrix.plot.description":
 		"Dónde se ubican estas herramientas en los dos ejes que realmente diferencian esta categoría. Flow-Like siempre está arriba a la derecha.",
 	"compare.matrix.plot.ideal": "Punto ideal",
+	"compare.note.open": "Por qué esta valoración",
+	"compare.note.close": "Cerrar",
+	"compare.note.evidence": "Evidencia",
+	"compare.note.caveat": "Matiz",
+	"compare.note.sources": "Fuentes",
+	"compare.note.checked": "Última revisión",
 
 	// Per-category axes (X & Y differ per category to highlight what matters most)
 	"compare.matrix.plot.axis.extensibility": "Código y Extensibilidad",

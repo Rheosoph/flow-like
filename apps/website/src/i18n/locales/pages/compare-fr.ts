@@ -40,7 +40,7 @@ export const frCompare = {
 		"Suites de gouvernance, risque et conformité pour contrôles, preuves et workflows de politiques. Fortes pour l'audit, mais déconnectées des workflows opérationnels qui produisent les preuves.",
 	"compare.category.agent_runtimes": "Runtimes d'Agents",
 	"compare.category.agent_runtimes.desc":
-		"Frameworks Python pour orchestrer des agents IA autonomes. Pratiques pour le prototypage rapide, mais livrés avec un état basé sur des fichiers sans protection d'écriture concurrente, exécutent les outils sans isolation et plafonnent au débit d'un seul processus.",
+		"Runtimes d'agents et plateformes de workflows IA pour orchestrer des agents autonomes. Pratiques pour le prototypage et le déploiement de l'IA en entreprise, mais le sandboxing de production, la sûreté de l'état, la livraison d'apps et la portabilité restent souvent incomplets.",
 	"compare.category.llm_frameworks": "Frameworks d'Apps LLM",
 	"compare.category.llm_frameworks.desc":
 		"SDK code-first pour la logique de retrieval, d'embedding et de pipeline IA. Briques puissantes, mais chaque UI, déploiement et préoccupation de gouvernance restent à votre charge.",
@@ -85,6 +85,12 @@ export const frCompare = {
 	"compare.matrix.plot.description":
 		"Où ces outils se situent sur les deux axes qui différencient réellement cette catégorie. Flow-Like est toujours en haut à droite.",
 	"compare.matrix.plot.ideal": "Sweet spot",
+	"compare.note.open": "Pourquoi cette note",
+	"compare.note.close": "Fermer",
+	"compare.note.evidence": "Preuve",
+	"compare.note.caveat": "Réserve",
+	"compare.note.sources": "Sources",
+	"compare.note.checked": "Dernière vérification",
 
 	// Per-category axes (X & Y differ per category to highlight what matters most)
 	"compare.matrix.plot.axis.extensibility": "Code & Extensibilité",
