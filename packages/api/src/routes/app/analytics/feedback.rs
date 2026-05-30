@@ -32,6 +32,8 @@ pub struct FeedbackQuery {
     pub min_rating: Option<i64>,
     /// Maximum rating filter
     pub max_rating: Option<i64>,
+    /// Optional event ID filter
+    pub event_id: Option<String>,
 }
 
 fn default_limit() -> u64 {
@@ -197,7 +199,8 @@ pub struct PaginatedFeedback {
         ("offset" = Option<u64>, Query, description = "Pagination offset"),
         ("limit" = Option<u64>, Query, description = "Items per page (max 100)"),
         ("min_rating" = Option<i64>, Query, description = "Minimum rating filter"),
-        ("max_rating" = Option<i64>, Query, description = "Maximum rating filter")
+        ("max_rating" = Option<i64>, Query, description = "Maximum rating filter"),
+        ("event_id" = Option<String>, Query, description = "Optional event ID filter")
     ),
     responses(
         (status = 200, description = "Feedback list", body = PaginatedFeedback),
@@ -229,6 +232,15 @@ pub async fn list_feedback(
     }
     if let Some(max) = query.max_rating {
         condition = condition.add(feedback::Column::Rating.lte(max));
+    }
+    if let Some(event_id) = query
+        .event_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|event_id| !event_id.is_empty())
+        .filter(|event_id| !event_id.eq_ignore_ascii_case("all"))
+    {
+        condition = condition.add(feedback::Column::EventId.eq(event_id));
     }
 
     let total = feedback::Entity::find()
