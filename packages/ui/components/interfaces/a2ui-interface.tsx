@@ -76,6 +76,7 @@ export function A2UIInterface({
 					onMessage={handleClientMessage}
 					className="w-full min-h-full"
 					appId={appId}
+					eventId={event.id}
 					isPreviewMode={true}
 				/>
 			))}

@@ -10,7 +10,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
+import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import type { IBoard } from "../../lib/schema/flow/board";
 import { useBackend } from "../../state/backend-state";
@@ -194,6 +196,7 @@ interface ActionContextValue {
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
+	eventId?: string;
 	components?: Record<string, SurfaceComponent>;
 	globalState: Record<string, unknown>;
 	pageState: Record<string, unknown>;
@@ -221,6 +224,7 @@ interface ActionProviderProps {
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
+	eventId?: string;
 	components?: Record<string, SurfaceComponent>;
 	children: ReactNode;
 	isPreviewMode?: boolean;
@@ -239,6 +243,7 @@ export function ActionProvider({
 	surfaceId,
 	appId,
 	boardId,
+	eventId,
 	components,
 	children,
 	isPreviewMode = false,
@@ -510,6 +515,7 @@ export function ActionProvider({
 				surfaceId,
 				appId,
 				boardId,
+				eventId,
 				components,
 				globalState,
 				pageState,
@@ -535,6 +541,7 @@ export function useActionContext() {
 		return {
 			appId: undefined,
 			boardId: undefined,
+			eventId: undefined,
 			surfaceId: "",
 			isPreviewMode: false,
 		};
@@ -542,6 +549,7 @@ export function useActionContext() {
 	return {
 		appId: context.appId,
 		boardId: context.boardId,
+		eventId: context.eventId,
 		surfaceId: context.surfaceId,
 		isPreviewMode: context.isPreviewMode,
 	};
@@ -710,6 +718,7 @@ export function useExecuteAction() {
 		surfaceId,
 		appId,
 		boardId,
+		eventId,
 		components,
 		globalState,
 		pageState,
@@ -977,6 +986,122 @@ export function useExecuteAction() {
 						if (url) {
 							window.open(url, "_blank", "noopener,noreferrer");
 						}
+						break;
+					}
+					case "navigate_app_config": {
+						const contextAppId = context.appId as string | undefined;
+						const targetAppId = contextAppId || appId;
+						if (!targetAppId) {
+							console.warn("[A2UI] navigate_app_config missing appId");
+							break;
+						}
+
+						router.push(
+							`/library/config?id=${encodeURIComponent(targetAppId)}`,
+						);
+						break;
+					}
+					case "navigate_app_overview": {
+						const contextAppId = context.appId as string | undefined;
+						const contextEventId = context.eventId as string | undefined;
+						const targetAppId = contextAppId || appId;
+						const targetEventId = contextEventId || eventId;
+						if (!targetAppId) {
+							console.warn("[A2UI] navigate_app_overview missing appId");
+							break;
+						}
+
+						const params = new URLSearchParams();
+						params.set("id", targetAppId);
+						if (targetEventId) params.set("eventId", targetEventId);
+						router.push(`/store?${params.toString()}`);
+						break;
+					}
+					case "submit_feedback": {
+						const contextAppId = context.appId as string | undefined;
+						const contextEventId = context.eventId as string | undefined;
+						const targetAppId = contextAppId || appId;
+						const targetEventId = contextEventId || eventId;
+
+						if (!targetAppId || !targetEventId) {
+							console.warn("[A2UI] submit_feedback missing appId or eventId", {
+								appId: targetAppId,
+								eventId: targetEventId,
+							});
+							toast.error("Feedback is not available on this page.");
+							break;
+						}
+
+						const rawRating = Number(context.rating ?? 5);
+						const rating = Number.isFinite(rawRating)
+							? Math.max(0, Math.min(5, Math.round(rawRating)))
+							: 5;
+						const feedbackId =
+							typeof context.feedbackId === "string" &&
+							context.feedbackId.trim()
+								? context.feedbackId.trim()
+								: (triggeringComponentId ?? "feedback");
+						const namespacedFeedbackId = `${surfaceId}:${feedbackId}`;
+
+						let comment =
+							typeof context.comment === "string" ? context.comment : "";
+						const commentComponentId = context.commentComponentId as
+							| string
+							| undefined;
+						const storedElementValues = getElementValues?.() ?? {};
+						if (commentComponentId) {
+							const elementId = commentComponentId.includes("/")
+								? commentComponentId
+								: `${surfaceId}/${commentComponentId}`;
+							const value = storedElementValues[elementId];
+							if (value !== undefined && value !== null) {
+								comment = String(value);
+							}
+						}
+
+						const includeState = context.includeState !== false;
+						const pageContext = getCurrentPageContext(pathname, {
+							mode:
+								typeof context.pageContextMode === "string"
+									? context.pageContextMode
+									: "path",
+							queryParamAllowlist:
+								typeof context.pageContextQueryParamAllowlist === "string"
+									? context.pageContextQueryParamAllowlist
+									: undefined,
+							queryParamDenylist:
+								typeof context.pageContextQueryParamDenylist === "string"
+									? context.pageContextQueryParamDenylist
+									: undefined,
+							includeHash: context.includePageHash === true,
+						});
+						const localState = {
+							...(includeState
+								? {
+										...pageState,
+										elementValues: storedElementValues,
+									}
+								: {}),
+							pageContext,
+						};
+
+						await backend.eventState.upsertEventFeedback(
+							targetAppId,
+							targetEventId,
+							namespacedFeedbackId,
+							{
+								rating,
+								comment,
+								globalState: includeState ? globalState : undefined,
+								localState,
+							},
+						);
+
+						const successMessage =
+							typeof context.successMessage === "string"
+								? context.successMessage
+								: "Thanks for the feedback.";
+						toast.success(successMessage);
 						break;
 					}
 					case "workflow_event": {
@@ -1307,6 +1432,7 @@ export function useExecuteAction() {
 			surfaceId,
 			appId,
 			boardId,
+			eventId,
 			components,
 			globalState,
 			pageState,

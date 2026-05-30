@@ -16,6 +16,7 @@ import {
 	checkOAuthTokens,
 	extractOAuthRequirementsFromBoard,
 	finishAllProgressToasts,
+	getCurrentPageContext,
 	injectDataFunction,
 	isEqual,
 	showProgressToast,
@@ -43,6 +44,21 @@ import { resolveLocalFirstPrerun } from "./prerun-utils";
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
+
+function withFeedbackPageContext(localState?: Record<string, any>) {
+	if (
+		localState &&
+		Object.prototype.hasOwnProperty.call(localState, "pageContext")
+	) {
+		return localState;
+	}
+
+	const pageContext = getCurrentPageContext(undefined, { mode: "path" });
+	return {
+		...(localState ?? {}),
+		...(pageContext ? { pageContext } : {}),
+	};
+}
 
 async function getHubConfig(profile?: { hub?: string }): Promise<
 	IHub | undefined
@@ -506,6 +522,7 @@ export class EventState implements IEventState {
 			);
 		}
 
+		const localState = withFeedbackPageContext(feedback.localState);
 		const response = await fetcher<{ feedback_id: string }>(
 			this.backend.profile,
 			`apps/${appId}/events/${eventId}/feedback`,
@@ -516,7 +533,7 @@ export class EventState implements IEventState {
 					context: {
 						history: feedback.history,
 						global_state: feedback.globalState,
-						local_state: feedback.localState,
+						local_state: localState,
 					},
 					comment: feedback.comment ?? "",
 					feedback_id: feedbackId,

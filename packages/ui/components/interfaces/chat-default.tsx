@@ -31,6 +31,7 @@ import {
 } from "../../lib";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import { useSetQueryParams } from "../../lib/set-query-params";
+import { getCurrentPageContext } from "../../lib/page-context";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
@@ -1451,6 +1452,20 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					{
 						rating: feedbackRating,
 						comment: nextMessage.ratingSettings?.comment ?? "",
+						localState: {
+							pageContext: getCurrentPageContext(pathname, { mode: "path" }),
+							eventContext: {
+								id: event.id,
+								name: event.name,
+								route:
+									typeof event.route === "string" ? event.route : undefined,
+								defaultPageId:
+									typeof event.default_page_id === "string"
+										? event.default_page_id
+										: undefined,
+								eventType: event.event_type,
+							},
+						},
 						history: nextMessage.ratingSettings?.includeChatHistory
 							? (
 									await chatDb.messages
@@ -1463,7 +1478,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			}
 		},
-		[appId, event.id, backend.eventState],
+		[
+			appId,
+			backend.eventState,
+			event.default_page_id,
+			event.event_type,
+			event.id,
+			event.name,
+			event.route,
+			pathname,
+		],
 	);
 
 	const showWelcome = useMemo(

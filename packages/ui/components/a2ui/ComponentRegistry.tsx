@@ -51,9 +51,11 @@ import {
 
 // Interactive components
 import {
+	A2UIAppLink,
 	A2UIButton,
 	A2UICheckbox,
 	A2UIDateTimeInput,
+	A2UIFeedback,
 	A2UIFileInput,
 	A2UIImageHotspot,
 	A2UIImageInput,
@@ -151,6 +153,8 @@ const registry: Record<string, ComponentRenderer> = {
 
 	// Interactive
 	button: A2UIButton as ComponentRenderer,
+	feedback: A2UIFeedback as ComponentRenderer,
+	appLink: A2UIAppLink as ComponentRenderer,
 	textField: A2UITextField as ComponentRenderer,
 	select: A2UISelect as ComponentRenderer,
 	slider: A2UISlider as ComponentRenderer,

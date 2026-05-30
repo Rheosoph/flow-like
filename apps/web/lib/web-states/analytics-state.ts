@@ -10,11 +10,18 @@ import { type WebBackendRef, apiGet } from "./api-utils";
 export class WebAnalyticsState implements IAnalyticsState {
 	constructor(private readonly backend: WebBackendRef) {}
 
-	async getAnalyticsOverview(appId: string): Promise<IAnalyticsOverview> {
-		return await apiGet<IAnalyticsOverview>(
-			`apps/${appId}/analytics/`,
-			this.backend.auth,
-		);
+	async getAnalyticsOverview(
+		appId: string,
+		eventId?: string,
+	): Promise<IAnalyticsOverview> {
+		const params = new URLSearchParams();
+		if (eventId) params.set("event_id", eventId);
+
+		const query = params.toString();
+		const url = query
+			? `apps/${appId}/analytics/?${query}`
+			: `apps/${appId}/analytics/`;
+		return await apiGet<IAnalyticsOverview>(url, this.backend.auth);
 	}
 
 	async getAnalyticsDashboard(
@@ -22,11 +29,13 @@ export class WebAnalyticsState implements IAnalyticsState {
 		startDate?: string,
 		endDate?: string,
 		period?: "day" | "week" | "month",
+		eventId?: string,
 	): Promise<IAnalyticsDashboard> {
 		const params = new URLSearchParams();
 		if (startDate) params.set("start_date", startDate);
 		if (endDate) params.set("end_date", endDate);
 		if (period) params.set("period", period);
+		if (eventId) params.set("event_id", eventId);
 
 		const query = params.toString();
 		const url = query
@@ -40,11 +49,13 @@ export class WebAnalyticsState implements IAnalyticsState {
 		startDate?: string,
 		endDate?: string,
 		period?: "day" | "week" | "month",
+		eventId?: string,
 	): Promise<IAnalyticsStats> {
 		const params = new URLSearchParams();
 		if (startDate) params.set("start_date", startDate);
 		if (endDate) params.set("end_date", endDate);
 		if (period) params.set("period", period);
+		if (eventId) params.set("event_id", eventId);
 
 		const query = params.toString();
 		const url = query
@@ -59,12 +70,14 @@ export class WebAnalyticsState implements IAnalyticsState {
 		limit?: number,
 		minRating?: number,
 		maxRating?: number,
+		eventId?: string,
 	): Promise<IPaginatedFeedback> {
 		const params = new URLSearchParams();
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
 		if (minRating !== undefined) params.set("min_rating", minRating.toString());
 		if (maxRating !== undefined) params.set("max_rating", maxRating.toString());
+		if (eventId) params.set("event_id", eventId);
 
 		const query = params.toString();
 		const url = query

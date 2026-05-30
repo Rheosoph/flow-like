@@ -44,6 +44,8 @@ pub enum A2UIComponentType {
 
     // Interactive components
     Button(ButtonProps),
+    Feedback(FeedbackProps),
+    AppLink(AppLinkProps),
     TextField(TextFieldProps),
     Select(SelectProps),
     Slider(SliderProps),
@@ -467,6 +469,82 @@ pub struct ButtonProps {
     pub icon_position: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tooltip: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub positive_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub negative_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub positive_rating: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub negative_rating: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_comment: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_mode: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_placeholder: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_title: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_description: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_submit_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_cancel_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback_id: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_state: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_context_mode: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_context_query_param_allowlist: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_context_query_param_denylist: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_page_hash: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success_message: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AppLinkProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_position: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

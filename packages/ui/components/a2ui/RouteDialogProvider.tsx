@@ -551,6 +551,7 @@ function RouteDialogRenderer({
 							widgetRefs={page?.widgetRefs}
 							appId={appId}
 							boardId={page?.boardId || routeEvent?.board_id}
+							eventId={routeEvent?.id}
 							onA2UIMessage={handleServerMessage}
 							isPreviewMode={true}
 							openDialog={openDialog}
