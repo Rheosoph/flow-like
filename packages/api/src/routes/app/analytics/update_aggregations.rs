@@ -9,7 +9,7 @@ use crate::{
 use chrono::{Duration, NaiveDate, Utc};
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, sea_query::OnConflict,
 };
 use std::collections::HashSet;
 
@@ -133,62 +133,61 @@ pub async fn update_analytics_daily(
     let total_embedding_tokens: i64 = embedding_records.iter().map(|r| r.token_count).sum();
     let total_embedding_cost: i64 = embedding_records.iter().map(|r| r.price).sum();
 
-    let existing = app_analytics_daily::Entity::find()
-        .filter(app_analytics_daily::Column::AppId.eq(app_id))
-        .filter(app_analytics_daily::Column::Date.eq(date))
-        .one(&state.db)
-        .await?;
-
     let now = Utc::now().naive_utc();
 
-    if let Some(existing) = existing {
-        let mut active: app_analytics_daily::ActiveModel = existing.into();
-        active.total_executions = Set(total_executions);
-        active.successful_executions = Set(successful_executions);
-        active.failed_executions = Set(failed_executions);
-        active.unique_users = Set(unique_users);
-        active.feedback_count = Set(feedback_count);
-        active.avg_feedback_rating = Set(avg_feedback_rating);
-        active.positive_feedback = Set(positive_feedback);
-        active.negative_feedback = Set(negative_feedback);
-        active.total_llm_calls = Set(total_llm_calls);
-        active.total_llm_tokens_in = Set(total_llm_tokens_in);
-        active.total_llm_tokens_out = Set(total_llm_tokens_out);
-        active.total_llm_cost = Set(total_llm_cost);
-        active.avg_latency_ms = Set(avg_latency_ms);
-        active.p95_latency_ms = Set(p95_latency_ms);
-        active.total_embedding_calls = Set(total_embedding_calls);
-        active.total_embedding_tokens = Set(total_embedding_tokens);
-        active.total_embedding_cost = Set(total_embedding_cost);
-        active.updated_at = Set(now);
-        active.update(&state.db).await?;
-    } else {
-        let new_agg = app_analytics_daily::ActiveModel {
-            id: Set(create_id()),
-            app_id: Set(app_id.to_string()),
-            date: Set(date),
-            total_executions: Set(total_executions),
-            successful_executions: Set(successful_executions),
-            failed_executions: Set(failed_executions),
-            unique_users: Set(unique_users),
-            feedback_count: Set(feedback_count),
-            avg_feedback_rating: Set(avg_feedback_rating),
-            positive_feedback: Set(positive_feedback),
-            negative_feedback: Set(negative_feedback),
-            total_llm_calls: Set(total_llm_calls),
-            total_llm_tokens_in: Set(total_llm_tokens_in),
-            total_llm_tokens_out: Set(total_llm_tokens_out),
-            total_llm_cost: Set(total_llm_cost),
-            avg_latency_ms: Set(avg_latency_ms),
-            p95_latency_ms: Set(p95_latency_ms),
-            total_embedding_calls: Set(total_embedding_calls),
-            total_embedding_tokens: Set(total_embedding_tokens),
-            total_embedding_cost: Set(total_embedding_cost),
-            created_at: Set(now),
-            updated_at: Set(now),
-        };
-        new_agg.insert(&state.db).await?;
-    }
+    app_analytics_daily::Entity::insert(app_analytics_daily::ActiveModel {
+        id: Set(create_id()),
+        app_id: Set(app_id.to_string()),
+        date: Set(date),
+        total_executions: Set(total_executions),
+        successful_executions: Set(successful_executions),
+        failed_executions: Set(failed_executions),
+        unique_users: Set(unique_users),
+        feedback_count: Set(feedback_count),
+        avg_feedback_rating: Set(avg_feedback_rating),
+        positive_feedback: Set(positive_feedback),
+        negative_feedback: Set(negative_feedback),
+        total_llm_calls: Set(total_llm_calls),
+        total_llm_tokens_in: Set(total_llm_tokens_in),
+        total_llm_tokens_out: Set(total_llm_tokens_out),
+        total_llm_cost: Set(total_llm_cost),
+        avg_latency_ms: Set(avg_latency_ms),
+        p95_latency_ms: Set(p95_latency_ms),
+        total_embedding_calls: Set(total_embedding_calls),
+        total_embedding_tokens: Set(total_embedding_tokens),
+        total_embedding_cost: Set(total_embedding_cost),
+        created_at: Set(now),
+        updated_at: Set(now),
+    })
+    .on_conflict(
+        OnConflict::columns([
+            app_analytics_daily::Column::AppId,
+            app_analytics_daily::Column::Date,
+        ])
+        .update_columns([
+            app_analytics_daily::Column::TotalExecutions,
+            app_analytics_daily::Column::SuccessfulExecutions,
+            app_analytics_daily::Column::FailedExecutions,
+            app_analytics_daily::Column::UniqueUsers,
+            app_analytics_daily::Column::FeedbackCount,
+            app_analytics_daily::Column::AvgFeedbackRating,
+            app_analytics_daily::Column::PositiveFeedback,
+            app_analytics_daily::Column::NegativeFeedback,
+            app_analytics_daily::Column::TotalLlmCalls,
+            app_analytics_daily::Column::TotalLlmTokensIn,
+            app_analytics_daily::Column::TotalLlmTokensOut,
+            app_analytics_daily::Column::TotalLlmCost,
+            app_analytics_daily::Column::AvgLatencyMs,
+            app_analytics_daily::Column::P95LatencyMs,
+            app_analytics_daily::Column::TotalEmbeddingCalls,
+            app_analytics_daily::Column::TotalEmbeddingTokens,
+            app_analytics_daily::Column::TotalEmbeddingCost,
+            app_analytics_daily::Column::UpdatedAt,
+        ])
+        .to_owned(),
+    )
+    .exec(&state.db)
+    .await?;
 
     Ok(())
 }
