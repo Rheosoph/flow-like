@@ -4,7 +4,6 @@ import { GitForkIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
-import { useInvoke } from "../../hooks/use-invoke";
 import type {
 	IForkPreviewResponse,
 	IForkPreviewTarget,
@@ -36,6 +35,14 @@ export interface StoreForkButtonProps {
 	hideUnlessAvailable?: boolean;
 }
 
+function isForkAvailable(
+	preview: IForkPreviewResponse | null | undefined,
+): preview is IForkPreviewResponse {
+	return Boolean(
+		preview?.allow_forking && preview.user_can_fork && preview.within_limits,
+	);
+}
+
 export function StoreForkButton({
 	appId,
 	appName,
@@ -53,10 +60,26 @@ export function StoreForkButton({
 	const [open, setOpen] = useState(false);
 	const [selectedTarget, setSelectedTarget] =
 		useState<IForkPreviewTarget>(target);
+	const targetsKey = targets?.join("|") ?? "";
 	const targetOptions = useMemo(
-		() => normalizeForkTargetOptions(target, targets),
-		[target, targets],
+		() =>
+			normalizeForkTargetOptions(
+				target,
+				targetsKey
+					? (targetsKey.split("|") as IForkPreviewTarget[])
+					: undefined,
+			),
+		[target, targetsKey],
 	);
+	const targetValues = useMemo(
+		() => targetOptions.map((option) => option.value),
+		[targetOptions],
+	);
+	const targetValuesKey = targetValues.join("|");
+	const [availabilityByTarget, setAvailabilityByTarget] = useState<
+		Partial<Record<IForkPreviewTarget, IForkPreviewResponse | null>>
+	>({});
+	const [availabilitySettled, setAvailabilitySettled] = useState(false);
 
 	useEffect(() => {
 		if (!targetOptions.some((option) => option.value === selectedTarget)) {
@@ -68,20 +91,63 @@ export function StoreForkButton({
 		() => backend.appState.getForkPreview(appId, selectedTarget),
 		[backend.appState, appId, selectedTarget],
 	);
-	const availability = useInvoke<
-		IForkPreviewResponse,
-		[appId: string, target: IForkPreviewTarget]
-	>(
-		backend.appState.getForkPreview,
+
+	useEffect(() => {
+		if (!hideUnlessAvailable) return;
+
+		let cancelled = false;
+		setAvailabilitySettled(false);
+		setAvailabilityByTarget({});
+
+		Promise.all(
+			targetValues.map(async (previewTarget) => {
+				try {
+					const preview = await backend.appState.getForkPreview(
+						appId,
+						previewTarget,
+					);
+					return [previewTarget, preview] as const;
+				} catch (error) {
+					console.warn(
+						`Failed to load fork availability for ${previewTarget}:`,
+						error,
+					);
+					return [previewTarget, null] as const;
+				}
+			}),
+		).then((entries) => {
+			if (cancelled) return;
+
+			const nextAvailability = Object.fromEntries(entries) as Partial<
+				Record<IForkPreviewTarget, IForkPreviewResponse | null>
+			>;
+			setAvailabilityByTarget(nextAvailability);
+			setAvailabilitySettled(true);
+
+			const firstAvailableTarget = entries.find(([, preview]) =>
+				isForkAvailable(preview),
+			)?.[0];
+
+			setSelectedTarget((current) => {
+				if (!firstAvailableTarget) return current;
+				return isForkAvailable(nextAvailability[current])
+					? current
+					: firstAvailableTarget;
+			});
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		appId,
 		backend.appState,
-		[appId, selectedTarget],
 		hideUnlessAvailable,
-		[
-			auth?.isAuthenticated ? "authenticated" : "anonymous",
-			auth?.user?.profile?.sub,
-		],
-		30_000,
-	);
+		targetValues,
+		targetValuesKey,
+		auth?.isAuthenticated,
+		auth?.user?.profile?.sub,
+	]);
 
 	const beginFork = useCallback(
 		(body: IOnlineForkBody): Promise<IBeginForkResponse> => {
@@ -104,12 +170,10 @@ export function StoreForkButton({
 	);
 
 	if (hideUnlessAvailable) {
-		const preview = availability.data;
-		if (
-			!preview?.allow_forking ||
-			!preview.user_can_fork ||
-			!preview.within_limits
-		) {
+		const hasAvailableTarget =
+			availabilitySettled &&
+			Object.values(availabilityByTarget).some(isForkAvailable);
+		if (!hasAvailableTarget) {
 			return null;
 		}
 	}
