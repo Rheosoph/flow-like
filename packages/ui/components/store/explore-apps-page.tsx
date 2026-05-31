@@ -24,6 +24,7 @@ import {
 } from "../../lib/schema/app/app-search-query";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
+import type { IEventMapping } from "../interfaces/interfaces";
 import {
 	CARD_MIN_W_DESKTOP,
 	CARD_MIN_W_MOBILE,
@@ -75,7 +76,11 @@ const SORT_ICON: Record<
 	updated: Clock,
 };
 
-export function ExploreAppsPage() {
+export interface ExploreAppsPageProps {
+	eventConfig?: IEventMapping;
+}
+
+export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	const router = useRouter();
 	const backend = useBackend();
 	const isMobile = useIsMobile();
@@ -122,19 +127,60 @@ export function ExploreAppsPage() {
 		[userApps.data],
 	);
 
-	const handleAppClick = useCallback(
-		(appId: string) => {
-			router.push(
-				userAppIds.has(appId) ? `/use?id=${appId}` : `/store?id=${appId}`,
+	const usableEvents = useMemo(() => {
+		const set = new Set<string>();
+		Object.values(eventConfig ?? {}).forEach((config) => {
+			const usable = Object.keys(config.useInterfaces);
+			for (const eventType of usable) {
+				if (config.eventTypes.includes(eventType)) set.add(eventType);
+			}
+		});
+		return set;
+	}, [eventConfig]);
+
+	const resolveUseHref = useCallback(
+		async (appId: string) => {
+			if (!userAppIds.has(appId) || usableEvents.size === 0) return null;
+
+			const [routes, events] = await Promise.all([
+				backend.routeState.getRoutes(appId, true).catch(() => []),
+				backend.eventState.getEvents(appId, true).catch(() => []),
+			]);
+			const activeEvents = events.filter((event) => event.active);
+			const activeEventsById = new Map(
+				activeEvents.map((event) => [event.id, event] as const),
 			);
+
+			const hasUsableRoute = routes.some((route) => {
+				const routeEvent = activeEventsById.get(route.eventId);
+				return Boolean(
+					routeEvent?.default_page_id ||
+						(routeEvent && usableEvents.has(routeEvent.event_type)),
+				);
+			});
+			if (hasUsableRoute) return `/use?id=${appId}`;
+
+			const fallbackEvent = activeEvents.find(
+				(event) => event.default_page_id || usableEvents.has(event.event_type),
+			);
+			if (!fallbackEvent) return null;
+
+			return `/use?id=${appId}&eventId=${fallbackEvent.id}`;
 		},
-		[router, userAppIds],
+		[backend.eventState, backend.routeState, usableEvents, userAppIds],
+	);
+
+	const handleAppClick = useCallback(
+		async (appId: string) => {
+			const useHref = await resolveUseHref(appId);
+			router.push(useHref ?? `/store?id=${appId}`);
+		},
+		[resolveUseHref, router],
 	);
 
 	const appHref = useCallback(
-		(appId: string) =>
-			userAppIds.has(appId) ? `/use?id=${appId}` : `/store?id=${appId}`,
-		[userAppIds],
+		(appId: string) => `/store?id=${appId}`,
+		[],
 	);
 
 	const hasActiveFilters =
