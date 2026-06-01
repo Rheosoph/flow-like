@@ -49,6 +49,7 @@ impl NodeLogic for BatchImageInferenceNode {
             "Run ONNX inference on multiple images in batches",
             "AI/ML/ONNX/Batch",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/layers.svg");
 

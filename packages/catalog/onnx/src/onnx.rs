@@ -46,6 +46,12 @@ pub use execution_providers::{get_ep_info, initialize_ort, is_initialized};
 pub enum Provider {
     DfineLike(detection::DfineLike),
     YoloLike(detection::YoloLike),
+    BoxLabelsScoresLike(detection::BoxLabelsScoresLike),
+    SsdMobileNetLike(detection::SsdMobileNetLike),
+    YoloV2GridLike(detection::YoloV2GridLike),
+    YoloV3Like(detection::YoloV3Like),
+    YoloV4Like(detection::YoloV4Like),
+    RetinaNetLike(detection::RetinaNetLike),
     TimmLike(classification::TimmLike),
     /// Generic provider for models that don't match known patterns
     Generic,
