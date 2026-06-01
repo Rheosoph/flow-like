@@ -1062,6 +1062,50 @@ mod object_detection_tests {
     }
 
     #[test]
+    #[ignore]
+    fn test_yolov3_boxes_stay_in_wide_image_bounds() {
+        let model_path = download_if_missing(
+            "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov3/model/yolov3-12.onnx",
+            "yolov3-12.onnx",
+        );
+
+        let mut session = Session::builder()
+            .expect("Failed to create session builder")
+            .commit_from_file(&model_path)
+            .expect("Failed to load model");
+        let img = create_test_image(640, 360);
+        let provider = determine_provider(&session).expect("provider detection should succeed");
+        let bboxes = match provider {
+            Provider::YoloV3Like(provider) => provider
+                .run(&mut session, &img, 0.0, 0.7, 20)
+                .expect("Object-detection provider should run YOLOv3"),
+            _ => panic!("YOLOv3 should be recognized as a YOLOv3 provider"),
+        };
+
+        if bboxes.is_empty() {
+            println!("YOLOv3 returned no selected boxes for the synthetic wide test image");
+            return;
+        }
+
+        for bbox in bboxes {
+            assert!(
+                bbox.x1 >= 0.0
+                    && bbox.x1 <= img.width() as f32
+                    && bbox.x2 >= 0.0
+                    && bbox.x2 <= img.width() as f32
+                    && bbox.y1 >= 0.0
+                    && bbox.y1 <= img.height() as f32
+                    && bbox.y2 >= 0.0
+                    && bbox.y2 <= img.height() as f32
+                    && bbox.x2 >= bbox.x1
+                    && bbox.y2 >= bbox.y1,
+                "YOLOv3 returned out-of-bounds or inverted box: {:?}",
+                bbox
+            );
+        }
+    }
+
+    #[test]
     fn test_onnx_model_zoo_manifest_counts() {
         assert_eq!(ONNX_MODEL_ZOO_OBJECT_DETECTION_MODELS.len(), 25);
         assert_eq!(ONNX_MODEL_ZOO_SEGMENTATION_MODELS.len(), 8);

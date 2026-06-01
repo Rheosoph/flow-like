@@ -1,10 +1,10 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_types::{
     Ok, anyhow, async_trait,
     image::{ColorType, DynamicImage},
@@ -31,6 +31,7 @@ impl NodeLogic for ConvertImageNode {
             "Convert Image Color/Pixel Type (e.g. to Grayscale)",
             "Image/Transform",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         // inputs

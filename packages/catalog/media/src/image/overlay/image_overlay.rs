@@ -1,10 +1,10 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_types::{
     async_trait,
     image::{DynamicImage, GenericImageView, imageops::FilterType},
@@ -48,6 +48,7 @@ impl NodeLogic for ImageOverlayNode {
             "Overlay one image on top of another with configurable position, size, opacity and fit mode",
             "Image/Overlay",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         node.add_input_pin(

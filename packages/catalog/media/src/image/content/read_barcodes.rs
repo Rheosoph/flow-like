@@ -1,4 +1,3 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
@@ -6,6 +5,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_types::{
     anyhow, async_trait,
     json::json,
@@ -71,6 +71,7 @@ impl NodeLogic for ReadBarcodesNode {
             "Read/Decode QR Codes and Barcodes",
             "Image/Content",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/barcode.svg");
 
         // inputs

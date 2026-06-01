@@ -162,7 +162,8 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
             .inputs
             .first()
             .ok_or_else(|| anyhow!("RetinaNet model has no inputs"))?;
-        let (input_width, input_height) = fixed_input_size(input, 640, InputLayout::Nchw);
+        let static_input_size = static_input_size(input, InputLayout::Nchw);
+        let (input_width, input_height) = static_input_size.unwrap_or((0, 0));
         Ok(Provider::RetinaNetLike(detection::RetinaNetLike {
             input_name: input.name.clone(),
             output_names: session
@@ -172,6 +173,7 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
                 .collect(),
             input_width,
             input_height,
+            resize_input: static_input_size.is_some(),
         }))
     } else {
         tracing::info!(
@@ -228,20 +230,23 @@ enum InputLayout {
 
 #[cfg(feature = "execute")]
 fn fixed_input_size(input: &Input, fallback: u32, layout: InputLayout) -> (u32, u32) {
+    static_input_size(input, layout).unwrap_or((fallback, fallback))
+}
+
+#[cfg(feature = "execute")]
+fn static_input_size(input: &Input, layout: InputLayout) -> Option<(u32, u32)> {
     let Some(shape) = input_shape(input) else {
-        return (fallback, fallback);
+        return None;
     };
 
     match layout {
-        InputLayout::Nchw if shape.len() == 4 => (
-            positive_dim(shape[3]).unwrap_or(fallback),
-            positive_dim(shape[2]).unwrap_or(fallback),
-        ),
-        InputLayout::Nhwc if shape.len() == 4 => (
-            positive_dim(shape[2]).unwrap_or(fallback),
-            positive_dim(shape[1]).unwrap_or(fallback),
-        ),
-        _ => (fallback, fallback),
+        InputLayout::Nchw if shape.len() == 4 => {
+            Some((positive_dim(shape[3])?, positive_dim(shape[2])?))
+        }
+        InputLayout::Nhwc if shape.len() == 4 => {
+            Some((positive_dim(shape[2])?, positive_dim(shape[1])?))
+        }
+        _ => None,
     }
 }
 

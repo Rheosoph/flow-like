@@ -1,10 +1,10 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 #[cfg(feature = "execute")]
 use flow_like_types::image::{DynamicImage, ImageBuffer, Luma};
 use flow_like_types::{async_trait, json::json};
@@ -30,6 +30,7 @@ impl NodeLogic for WriteQrCodeNode {
             "Encode text as a QR code image",
             "Data/QR",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/barcode.svg");
 
         node.add_input_pin(

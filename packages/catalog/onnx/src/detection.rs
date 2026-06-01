@@ -121,7 +121,7 @@ impl ObjectDetection for DfineLike {
                     y1,
                     x2,
                     y2,
-                    class_name: None,
+                    class_name: coco_class_name(class_idx as i32),
                 }
             })
             .filter(|b| b.score > conf_thres)
@@ -284,7 +284,7 @@ impl ObjectDetection for BoxLabelsScoresLike {
                 y1: boxes[base + 1],
                 x2: boxes[base + 2],
                 y2: boxes[base + 3],
-                class_name: None,
+                class_name: coco_class_name_with_background(labels[i]),
             });
         }
 
@@ -316,6 +316,11 @@ impl ObjectDetection for BoxLabelsScoresLike {
             let scale_h = img.height() as f32 / self.input_height as f32;
             for bbox in &mut bboxes {
                 bbox.scale(scale_w, scale_h);
+            }
+        } else {
+            let ratio = detectron_resize_ratio(img);
+            for bbox in &mut bboxes {
+                bbox.scale(1.0 / ratio, 1.0 / ratio);
             }
         }
         Ok(bboxes)
@@ -381,7 +386,7 @@ impl ObjectDetection for SsdMobileNetLike {
                 y1: boxes[base],
                 x2: boxes[base + 3],
                 y2: boxes[base + 2],
-                class_name: None,
+                class_name: coco_category_id_class_name(classes[i]),
             });
         }
 
@@ -496,46 +501,18 @@ impl ObjectDetection for YoloV3Like {
             .as_slice()
             .ok_or_else(|| anyhow!("scores output is not contiguous"))?;
 
-        let mut bboxes = Vec::new();
-        for idx in indices.chunks_exact(3) {
-            let batch = idx[0].max(0) as usize;
-            let class_idx = idx[1].max(0) as usize;
-            let box_idx = idx[2].max(0) as usize;
-            if batch >= boxes_batches
-                || batch >= scores_batches
-                || class_idx >= classes_per_batch
-                || box_idx >= boxes_per_batch
-                || box_idx >= score_boxes
-            {
-                continue;
-            }
-
-            let score_idx =
-                batch * classes_per_batch * score_boxes + class_idx * score_boxes + box_idx;
-            let score = scores[score_idx];
-            if score <= conf_thres {
-                continue;
-            }
-
-            let box_base = (batch * boxes_per_batch + box_idx) * 4;
-            bboxes.push(BoundingBox {
-                class_idx: class_idx as i32,
-                score,
-                x1: boxes[box_base],
-                y1: boxes[box_base + 1],
-                x2: boxes[box_base + 2],
-                y2: boxes[box_base + 3],
-                class_name: None,
-            });
-        }
-
-        bboxes.sort_unstable_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        bboxes.truncate(max_detect);
-        Ok(bboxes)
+        yolo_v3_selected_boxes(
+            boxes,
+            boxes_batches,
+            boxes_per_batch,
+            scores,
+            scores_batches,
+            classes_per_batch,
+            score_boxes,
+            &indices,
+            conf_thres,
+            max_detect,
+        )
     }
 
     fn run(
@@ -634,7 +611,25 @@ impl ObjectDetection for YoloV2GridLike {
                         }
                     }
 
-                    let score = objectness * sigmoid(best_logit);
+                    let mut class_exp_sum = 0.0_f32;
+                    for class_idx in 0..self.num_classes {
+                        let logit = yolo_grid_value(
+                            output,
+                            base_channel + 5 + class_idx,
+                            gy,
+                            gx,
+                            grid_h,
+                            grid_w,
+                        );
+                        class_exp_sum += (logit - best_logit).exp();
+                    }
+                    let class_prob = if class_exp_sum > 0.0 {
+                        1.0 / class_exp_sum
+                    } else {
+                        0.0
+                    };
+
+                    let score = objectness * class_prob;
                     if score <= conf_thres {
                         continue;
                     }
@@ -654,7 +649,10 @@ impl ObjectDetection for YoloV2GridLike {
                         y1,
                         x2,
                         y2,
-                        class_name: None,
+                        class_name: class_name_for_contiguous_label(
+                            best_class as i32,
+                            self.num_classes,
+                        ),
                     });
                 }
             }
@@ -767,7 +765,7 @@ impl ObjectDetection for YoloV4Like {
                             y1,
                             x2,
                             y2,
-                            class_name: None,
+                            class_name: coco_class_name(best_class as i32),
                         });
                     }
                 }
@@ -807,6 +805,7 @@ pub struct RetinaNetLike {
     pub output_names: Vec<String>,
     pub input_width: u32,
     pub input_height: u32,
+    pub resize_input: bool,
 }
 
 #[cfg(feature = "execute")]
@@ -815,7 +814,8 @@ impl ObjectDetection for RetinaNetLike {
         &self,
         img: &DynamicImage,
     ) -> Result<Vec<(Cow<'_, str>, SessionInputValue<'_>)>, Error> {
-        let image = img_to_arr_nchw_imagenet(img, self.input_width, self.input_height)?;
+        let (input_width, input_height) = self.input_size_for_image(img);
+        let image = img_to_arr_nchw_imagenet(img, input_width, input_height)?;
         let image_data = Value::from_array(image)?;
         Ok(inputs![self.input_name.as_str() => image_data])
     }
@@ -826,6 +826,65 @@ impl ObjectDetection for RetinaNetLike {
         conf_thres: f32,
         iou_thres: f32,
         max_detect: usize,
+    ) -> Result<Vec<BoundingBox>, Error> {
+        self.make_results_for_input(
+            outputs,
+            conf_thres,
+            iou_thres,
+            max_detect,
+            self.input_width.max(1),
+            self.input_height.max(1),
+        )
+    }
+
+    fn run(
+        &self,
+        session: &mut Session,
+        img: &DynamicImage,
+        conf_thres: f32,
+        iou_thres: f32,
+        max_detect: usize,
+    ) -> Result<Vec<BoundingBox>, Error> {
+        let (input_width, input_height) = self.input_size_for_image(img);
+        let session_inputs = self.make_inputs(img)?;
+        let session_outputs = session.run(session_inputs)?;
+        let mut bboxes = self.make_results_for_input(
+            session_outputs,
+            conf_thres,
+            iou_thres,
+            max_detect,
+            input_width,
+            input_height,
+        )?;
+        if self.resize_input {
+            let scale_w = img.width() as f32 / input_width as f32;
+            let scale_h = img.height() as f32 / input_height as f32;
+            for bbox in &mut bboxes {
+                bbox.scale(scale_w, scale_h);
+            }
+        }
+        Ok(bboxes)
+    }
+}
+
+#[cfg(feature = "execute")]
+impl RetinaNetLike {
+    fn input_size_for_image(&self, img: &DynamicImage) -> (u32, u32) {
+        if self.resize_input {
+            (self.input_width, self.input_height)
+        } else {
+            (img.width(), img.height())
+        }
+    }
+
+    fn make_results_for_input(
+        &self,
+        outputs: SessionOutputs<'_>,
+        conf_thres: f32,
+        iou_thres: f32,
+        max_detect: usize,
+        input_width: u32,
+        _input_height: u32,
     ) -> Result<Vec<BoundingBox>, Error> {
         let mut bboxes = Vec::new();
         for cls_name in &self.output_names {
@@ -866,7 +925,7 @@ impl ObjectDetection for RetinaNetLike {
                 .as_slice()
                 .ok_or_else(|| anyhow!("RetinaNet box output is not contiguous"))?;
             let anchors = cls_shape[1] / 80;
-            let stride = self.input_width as f32 / grid_w as f32;
+            let stride = input_width as f32 / grid_w as f32;
             let anchor_dims = retinanet_anchors(stride);
 
             for gy in 0..grid_h {
@@ -908,7 +967,7 @@ impl ObjectDetection for RetinaNetLike {
                             y1,
                             x2,
                             y2,
-                            class_name: None,
+                            class_name: coco_class_name(best_class as i32),
                         });
                     }
                 }
@@ -917,25 +976,6 @@ impl ObjectDetection for RetinaNetLike {
 
         let mut bboxes = nms(&bboxes, iou_thres);
         bboxes.truncate(max_detect);
-        Ok(bboxes)
-    }
-
-    fn run(
-        &self,
-        session: &mut Session,
-        img: &DynamicImage,
-        conf_thres: f32,
-        iou_thres: f32,
-        max_detect: usize,
-    ) -> Result<Vec<BoundingBox>, Error> {
-        let session_inputs = self.make_inputs(img)?;
-        let session_outputs = session.run(session_inputs)?;
-        let mut bboxes = self.make_results(session_outputs, conf_thres, iou_thres, max_detect)?;
-        let scale_w = img.width() as f32 / self.input_width as f32;
-        let scale_h = img.height() as f32 / self.input_height as f32;
-        for bbox in &mut bboxes {
-            bbox.scale(scale_w, scale_h);
-        }
         Ok(bboxes)
     }
 }
@@ -992,10 +1032,16 @@ fn img_to_arr_nchw_imagenet(
 
 #[cfg(feature = "execute")]
 fn img_to_chw_bgr_detectron(img: &DynamicImage) -> Result<Array3<f32>, Error> {
-    let rgb = pad_rgb_to_multiple(img, 32);
-    let (width, height) = rgb.dimensions();
+    let ratio = detectron_resize_ratio(img);
+    let width = (img.width() as f32 * ratio).round().max(1.0) as u32;
+    let height = (img.height() as f32 * ratio).round().max(1.0) as u32;
+    let rgb = img
+        .resize_exact(width, height, FilterType::Triangle)
+        .into_rgb8();
+    let padded_w = width.div_ceil(32) * 32;
+    let padded_h = height.div_ceil(32) * 32;
     let mean = [102.9801, 115.9465, 122.7717];
-    let mut input = Array3::<f32>::zeros((3, height as usize, width as usize));
+    let mut input = Array3::<f32>::zeros((3, padded_h as usize, padded_w as usize));
     for y in 0..height {
         for x in 0..width {
             let pixel = rgb.get_pixel(x, y);
@@ -1005,6 +1051,17 @@ fn img_to_chw_bgr_detectron(img: &DynamicImage) -> Result<Array3<f32>, Error> {
         }
     }
     Ok(input)
+}
+
+#[cfg(feature = "execute")]
+fn detectron_resize_ratio(img: &DynamicImage) -> f32 {
+    let min_side = img.width().min(img.height()).max(1) as f32;
+    let max_side = img.width().max(img.height()).max(1) as f32;
+    let mut ratio = 800.0 / min_side;
+    if max_side * ratio > 1333.0 {
+        ratio = 1333.0 / max_side;
+    }
+    ratio
 }
 
 #[cfg(feature = "execute")]
@@ -1085,24 +1142,6 @@ fn letterbox_rgb(img: &DynamicImage, width: u32, height: u32) -> RgbImage {
 }
 
 #[cfg(feature = "execute")]
-fn pad_rgb_to_multiple(img: &DynamicImage, multiple: u32) -> RgbImage {
-    let rgb = img.to_rgb8();
-    let padded_w = img.width().div_ceil(multiple) * multiple;
-    let padded_h = img.height().div_ceil(multiple) * multiple;
-    if padded_w == img.width() && padded_h == img.height() {
-        return rgb;
-    }
-
-    let mut padded = RgbImage::from_pixel(padded_w, padded_h, Rgb([0, 0, 0]));
-    for y in 0..img.height() {
-        for x in 0..img.width() {
-            padded.put_pixel(x, y, *rgb.get_pixel(x, y));
-        }
-    }
-    padded
-}
-
-#[cfg(feature = "execute")]
 fn extract_i32_vec(tensor: &DynValue) -> Result<Vec<i32>, Error> {
     if let Ok(values) = tensor.try_extract_array::<i64>() {
         return Ok(values.iter().map(|value| *value as i32).collect());
@@ -1169,6 +1208,88 @@ fn yolo_grid_value(
     grid_w: usize,
 ) -> f32 {
     data[(channel * grid_h + y) * grid_w + x]
+}
+
+#[cfg(feature = "execute")]
+fn yolo_v3_selected_boxes(
+    boxes: &[f32],
+    boxes_batches: usize,
+    boxes_per_batch: usize,
+    scores: &[f32],
+    scores_batches: usize,
+    classes_per_batch: usize,
+    score_boxes: usize,
+    indices: &[i64],
+    conf_thres: f32,
+    max_detect: usize,
+) -> Result<Vec<BoundingBox>, Error> {
+    let expected_boxes = boxes_batches
+        .checked_mul(boxes_per_batch)
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| anyhow!("YOLOv3 boxes shape is too large"))?;
+    if boxes.len() < expected_boxes {
+        return Err(anyhow!("YOLOv3 boxes output is smaller than its shape"));
+    }
+
+    let expected_scores = scores_batches
+        .checked_mul(classes_per_batch)
+        .and_then(|value| value.checked_mul(score_boxes))
+        .ok_or_else(|| anyhow!("YOLOv3 scores shape is too large"))?;
+    if scores.len() < expected_scores {
+        return Err(anyhow!("YOLOv3 scores output is smaller than its shape"));
+    }
+
+    let mut bboxes = Vec::new();
+    for idx in indices.chunks_exact(3) {
+        if idx.iter().any(|value| *value < 0) {
+            continue;
+        }
+
+        let batch = idx[0] as usize;
+        let class_idx = idx[1] as usize;
+        let box_idx = idx[2] as usize;
+        if batch >= boxes_batches
+            || batch >= scores_batches
+            || class_idx >= classes_per_batch
+            || box_idx >= boxes_per_batch
+            || box_idx >= score_boxes
+        {
+            continue;
+        }
+
+        let score_idx = batch * classes_per_batch * score_boxes + class_idx * score_boxes + box_idx;
+        let score = scores[score_idx];
+        if !score.is_finite() || score <= conf_thres {
+            continue;
+        }
+
+        let box_base = (batch * boxes_per_batch + box_idx) * 4;
+        let y1 = boxes[box_base];
+        let x1 = boxes[box_base + 1];
+        let y2 = boxes[box_base + 2];
+        let x2 = boxes[box_base + 3];
+        if !x1.is_finite() || !y1.is_finite() || !x2.is_finite() || !y2.is_finite() {
+            continue;
+        }
+
+        bboxes.push(BoundingBox {
+            class_idx: class_idx as i32,
+            score,
+            x1,
+            y1,
+            x2,
+            y2,
+            class_name: coco_class_name(class_idx as i32),
+        });
+    }
+
+    bboxes.sort_unstable_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    bboxes.truncate(max_detect);
+    Ok(bboxes)
 }
 
 #[cfg(feature = "execute")]
@@ -1258,6 +1379,334 @@ fn unletterbox_boxes(
 }
 
 #[cfg(feature = "execute")]
+const COCO_80_CLASS_NAMES: [&str; 80] = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+];
+
+#[cfg(feature = "execute")]
+const VOC_20_CLASS_NAMES: [&str; 20] = [
+    "aeroplane",
+    "bicycle",
+    "bird",
+    "boat",
+    "bottle",
+    "bus",
+    "car",
+    "cat",
+    "chair",
+    "cow",
+    "diningtable",
+    "dog",
+    "horse",
+    "motorbike",
+    "person",
+    "pottedplant",
+    "sheep",
+    "sofa",
+    "train",
+    "tvmonitor",
+];
+
+#[cfg(feature = "execute")]
+fn class_name_from_labels(class_idx: i32, labels: &[&str]) -> Option<String> {
+    if class_idx < 0 {
+        return None;
+    }
+
+    labels.get(class_idx as usize).map(|name| (*name).into())
+}
+
+#[cfg(feature = "execute")]
+fn coco_class_name(class_idx: i32) -> Option<String> {
+    class_name_from_labels(class_idx, &COCO_80_CLASS_NAMES)
+}
+
+#[cfg(feature = "execute")]
+fn coco_class_name_with_background(class_idx: i32) -> Option<String> {
+    if class_idx <= 0 {
+        return None;
+    }
+
+    coco_class_name(class_idx - 1)
+}
+
+#[cfg(feature = "execute")]
+fn voc_class_name(class_idx: i32) -> Option<String> {
+    class_name_from_labels(class_idx, &VOC_20_CLASS_NAMES)
+}
+
+#[cfg(feature = "execute")]
+fn class_name_for_contiguous_label(class_idx: i32, num_classes: usize) -> Option<String> {
+    match num_classes {
+        20 => voc_class_name(class_idx),
+        80 => coco_class_name(class_idx),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "execute")]
+fn coco_category_id_class_name(class_idx: i32) -> Option<String> {
+    let zero_based_idx = match class_idx {
+        1 => 0,
+        2 => 1,
+        3 => 2,
+        4 => 3,
+        5 => 4,
+        6 => 5,
+        7 => 6,
+        8 => 7,
+        9 => 8,
+        10 => 9,
+        11 => 10,
+        13 => 11,
+        14 => 12,
+        15 => 13,
+        16 => 14,
+        17 => 15,
+        18 => 16,
+        19 => 17,
+        20 => 18,
+        21 => 19,
+        22 => 20,
+        23 => 21,
+        24 => 22,
+        25 => 23,
+        27 => 24,
+        28 => 25,
+        31 => 26,
+        32 => 27,
+        33 => 28,
+        34 => 29,
+        35 => 30,
+        36 => 31,
+        37 => 32,
+        38 => 33,
+        39 => 34,
+        40 => 35,
+        41 => 36,
+        42 => 37,
+        43 => 38,
+        44 => 39,
+        46 => 40,
+        47 => 41,
+        48 => 42,
+        49 => 43,
+        50 => 44,
+        51 => 45,
+        52 => 46,
+        53 => 47,
+        54 => 48,
+        55 => 49,
+        56 => 50,
+        57 => 51,
+        58 => 52,
+        59 => 53,
+        60 => 54,
+        61 => 55,
+        62 => 56,
+        63 => 57,
+        64 => 58,
+        65 => 59,
+        67 => 60,
+        70 => 61,
+        72 => 62,
+        73 => 63,
+        74 => 64,
+        75 => 65,
+        76 => 66,
+        77 => 67,
+        78 => 68,
+        79 => 69,
+        80 => 70,
+        81 => 71,
+        82 => 72,
+        84 => 73,
+        85 => 74,
+        86 => 75,
+        87 => 76,
+        88 => 77,
+        89 => 78,
+        90 => 79,
+        _ => return None,
+    };
+
+    coco_class_name(zero_based_idx)
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detection_class_name_maps_known_label_spaces() {
+        assert_eq!(coco_class_name(0).as_deref(), Some("person"));
+        assert_eq!(coco_class_name(16).as_deref(), Some("dog"));
+        assert_eq!(coco_class_name(80).as_deref(), None);
+
+        assert_eq!(
+            coco_class_name_with_background(1).as_deref(),
+            Some("person")
+        );
+        assert_eq!(
+            coco_class_name_with_background(18).as_deref(),
+            Some("horse")
+        );
+        assert_eq!(coco_class_name_with_background(0), None);
+
+        assert_eq!(voc_class_name(14).as_deref(), Some("person"));
+        assert_eq!(voc_class_name(20).as_deref(), None);
+
+        assert_eq!(
+            class_name_for_contiguous_label(0, 80).as_deref(),
+            Some("person")
+        );
+        assert_eq!(
+            class_name_for_contiguous_label(14, 20).as_deref(),
+            Some("person")
+        );
+        assert_eq!(class_name_for_contiguous_label(0, 3), None);
+
+        assert_eq!(coco_category_id_class_name(1).as_deref(), Some("person"));
+        assert_eq!(coco_category_id_class_name(18).as_deref(), Some("dog"));
+        assert_eq!(coco_category_id_class_name(12), None);
+    }
+
+    #[test]
+    fn yolo_v3_selected_boxes_convert_nms_yxyx_to_xyxy() {
+        let boxes = vec![10.0, 20.0, 30.0, 40.0];
+        let mut scores = vec![0.0; 80];
+        scores[0] = 0.9;
+        let indices = vec![0, 0, 0];
+
+        let bboxes =
+            yolo_v3_selected_boxes(&boxes, 1, 1, &scores, 1, 80, 1, &indices, 0.5, 10).unwrap();
+
+        assert_eq!(bboxes.len(), 1);
+        assert_eq!(bboxes[0].x1, 20.0);
+        assert_eq!(bboxes[0].y1, 10.0);
+        assert_eq!(bboxes[0].x2, 40.0);
+        assert_eq!(bboxes[0].y2, 30.0);
+        assert_eq!(bboxes[0].class_name.as_deref(), Some("person"));
+    }
+
+    #[test]
+    fn detectron_preprocessing_resizes_and_zero_pads_after_normalization() {
+        let img = DynamicImage::ImageRgb8(RgbImage::from_pixel(801, 800, Rgb([10, 20, 30])));
+
+        let input = img_to_chw_bgr_detectron(&img).unwrap();
+
+        assert_eq!(detectron_resize_ratio(&img), 1.0);
+        assert_eq!(input.shape(), &[3, 800, 832]);
+        assert!((input[[0, 0, 0]] - (30.0 - 102.9801)).abs() < 0.0001);
+        assert!((input[[1, 0, 0]] - (20.0 - 115.9465)).abs() < 0.0001);
+        assert!((input[[2, 0, 0]] - (10.0 - 122.7717)).abs() < 0.0001);
+        assert_eq!(input[[0, 0, 801]], 0.0);
+        assert_eq!(input[[1, 0, 801]], 0.0);
+        assert_eq!(input[[2, 0, 801]], 0.0);
+    }
+
+    #[test]
+    fn detectron_resize_ratio_caps_long_side() {
+        let img = DynamicImage::ImageRgb8(RgbImage::new(4000, 1000));
+
+        assert!((detectron_resize_ratio(&img) - (1333.0 / 4000.0)).abs() < 0.0001);
+    }
+
+    #[test]
+    fn retinanet_dynamic_input_uses_original_image_size() {
+        let provider = RetinaNetLike {
+            input_name: "input".into(),
+            output_names: Vec::new(),
+            input_width: 0,
+            input_height: 0,
+            resize_input: false,
+        };
+        let img = DynamicImage::ImageRgb8(RgbImage::new(641, 479));
+
+        assert_eq!(provider.input_size_for_image(&img), (641, 479));
+    }
+}
+
+#[cfg(feature = "execute")]
 fn bounding_box_from_array(arr: ArrayView1<f32>) -> BoundingBox {
     let bbox_xywh = arr.slice(s![..4]).to_vec();
     let confs = arr.slice(s![4..]).to_vec();
@@ -1279,7 +1728,7 @@ fn bounding_box_from_array(arr: ArrayView1<f32>) -> BoundingBox {
         y2,
         score: conf,
         class_idx: class_idx as i32,
-        class_name: None,
+        class_name: class_name_for_contiguous_label(class_idx as i32, confs.len()),
     }
 }
 
@@ -1311,7 +1760,7 @@ fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
                 y2: bbox.y2 + class_offset,
                 score: bbox.score,
                 class_idx: bbox.class_idx, // Keep class_idx the same
-                class_name: None,
+                class_name: bbox.class_name.clone(),
             };
             (shifted_bbox, i) // Keep track of the original index
         })
@@ -1446,6 +1895,13 @@ impl NodeLogic for ObjectDetectionNode {
                 let img_guard = img.lock().await;
                 let session = node_session.get_session(context).await?;
                 let mut session_guard = session.lock().await;
+                if matches!(session_guard.provider, Provider::Generic) {
+                    let provider = super::load::determine_provider(&session_guard.session)?;
+                    if !matches!(provider, Provider::Generic) {
+                        session_guard.provider = provider;
+                    }
+                }
+
                 // Copy provider params to avoid overlapping borrows
                 match &session_guard.provider {
                     Provider::DfineLike(m) => {
@@ -1534,8 +1990,9 @@ impl NodeLogic for ObjectDetectionNode {
                             max_detect,
                         )
                     }
-                    _ => Err(anyhow!(
-                        "Unknown/Incompatible ONNX-Model for Object Detection!"
+                    provider => Err(incompatible_object_detection_model_error(
+                        provider,
+                        &session_guard.session,
                     )),
                 }?
             };
@@ -1552,5 +2009,44 @@ impl NodeLogic for ObjectDetectionNode {
                 "ONNX execution requires the 'execute' feature. Rebuild with --features execute"
             ))
         }
+    }
+}
+
+#[cfg(feature = "execute")]
+fn incompatible_object_detection_model_error(provider: &Provider, session: &Session) -> Error {
+    let inputs = session
+        .inputs
+        .iter()
+        .map(|input| format!("{}:{:?}", input.name, input.input_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let outputs = session
+        .outputs
+        .iter()
+        .map(|output| format!("{}:{:?}", output.name, output.output_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    anyhow!(
+        "Incompatible ONNX model for Object Detection: detected provider {}; inputs [{}]; outputs [{}]",
+        provider_name(provider),
+        inputs,
+        outputs
+    )
+}
+
+#[cfg(feature = "execute")]
+fn provider_name(provider: &Provider) -> &'static str {
+    match provider {
+        Provider::DfineLike(_) => "DfineLike",
+        Provider::YoloLike(_) => "YoloLike",
+        Provider::BoxLabelsScoresLike(_) => "BoxLabelsScoresLike",
+        Provider::SsdMobileNetLike(_) => "SsdMobileNetLike",
+        Provider::YoloV2GridLike(_) => "YoloV2GridLike",
+        Provider::YoloV3Like(_) => "YoloV3Like",
+        Provider::YoloV4Like(_) => "YoloV4Like",
+        Provider::RetinaNetLike(_) => "RetinaNetLike",
+        Provider::TimmLike(_) => "TimmLike",
+        Provider::Generic => "Generic",
     }
 }

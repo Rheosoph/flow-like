@@ -47,6 +47,7 @@ impl NodeLogic for WriteImageNode {
             "Write image to path",
             "Image/Content",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         node.add_input_pin(

@@ -1,4 +1,4 @@
-use crate::image::{BoundingBox, NodeImage};
+use flow_like_catalog_core::{BoundingBox, NodeImage};
 
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -22,6 +22,7 @@ impl CropImageNode {
 impl NodeLogic for CropImageNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new("crop_image", "Crop Image", "Crop Image", "Image/Transform");
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         // inputs

@@ -1,10 +1,10 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_types::{Ok, async_trait, image::GenericImageView, json::json};
 
 #[crate::register_node]
@@ -26,6 +26,7 @@ impl NodeLogic for ImageDimsNode {
             "Get Image Dimensions",
             "Image/Metadata",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/dir.svg");
 
         // inputs
