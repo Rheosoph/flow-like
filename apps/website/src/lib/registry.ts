@@ -354,6 +354,14 @@ function escapeHtml(text: string): string {
 
 function safeUrl(url: unknown): string | null {
 	if (typeof url !== "string") return null;
+	if (
+		url.startsWith("/") ||
+		url.startsWith("./") ||
+		url.startsWith("../") ||
+		url.startsWith("#")
+	) {
+		return url;
+	}
 	try {
 		const parsed = new URL(url);
 		if (["http:", "https:", "mailto:"].includes(parsed.protocol)) {
@@ -386,7 +394,10 @@ function renderInlineMarkdown(text: string): string {
 		.replace(/__([^_]+)__/g, "<strong>$1</strong>")
 		.replace(/\*([^*]+)\*/g, "<em>$1</em>")
 		.replace(/_([^_]+)_/g, "<em>$1</em>")
-		.replace(/\u0000(\d+)\u0000/g, (_, index: string) => linkTokens[Number(index)] ?? "");
+		.replace(
+			/\u0000(\d+)\u0000/g,
+			(_, index: string) => linkTokens[Number(index)] ?? "",
+		);
 }
 
 function renderMarkdown(content: string): string {
@@ -412,7 +423,9 @@ function renderMarkdown(content: string): string {
 	for (const line of lines) {
 		if (line.trim().startsWith("```") || line.trim().startsWith("~~~")) {
 			if (codeFence) {
-				html.push(`<pre><code>${escapeHtml(codeFence.join("\n"))}</code></pre>`);
+				html.push(
+					`<pre><code>${escapeHtml(codeFence.join("\n"))}</code></pre>`,
+				);
 				codeFence = null;
 			} else {
 				flushParagraph();
@@ -438,7 +451,9 @@ function renderMarkdown(content: string): string {
 			flushParagraph();
 			flushList();
 			const level = heading[1].length;
-			html.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+			html.push(
+				`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`,
+			);
 			continue;
 		}
 

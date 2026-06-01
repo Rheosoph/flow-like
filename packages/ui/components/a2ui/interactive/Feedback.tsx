@@ -193,7 +193,8 @@ export function A2UIFeedback({
 		useResolved<string>(component.pageContextQueryParamAllowlist) ?? "";
 	const pageContextQueryParamDenylist =
 		useResolved<string>(component.pageContextQueryParamDenylist) ?? "";
-	const includePageHash = useResolved<boolean>(component.includePageHash) ?? false;
+	const includePageHash =
+		useResolved<boolean>(component.includePageHash) ?? false;
 	const successMessage =
 		useResolved<string>(component.successMessage) ?? "Thanks for the feedback.";
 	const feedbackStoragePageId = useMemo(
@@ -289,12 +290,19 @@ export function A2UIFeedback({
 			};
 
 			setStoredFeedback(nextStoredFeedback);
-			await pageLocalState.set(
-				appId,
-				feedbackStoragePageId,
-				feedbackStorageKey,
-				nextStoredFeedback,
-			);
+			try {
+				await pageLocalState.set(
+					appId,
+					feedbackStoragePageId,
+					feedbackStorageKey,
+					nextStoredFeedback,
+				);
+			} catch (storageError) {
+				console.warn(
+					"[A2UI Feedback] Failed to save feedback locally:",
+					storageError,
+				);
+			}
 			return true;
 		} catch (error) {
 			setSelectedRating(previousRating);

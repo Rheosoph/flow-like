@@ -1,7 +1,7 @@
 "use client";
 
-import * as LucideIcons from "lucide-react";
 import { Loader2 } from "lucide-react";
+import { DynamicIcon, type IconName } from "lucide-react/dynamic";
 import { useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
@@ -39,19 +39,21 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	return resolve(boundValue) as T;
 }
 
-function toPascalCase(str: string): string {
+function toKebabCase(str: string): string {
 	return str
-		.split(/[-_\s]+/)
-		.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-		.join("");
+		.replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+		.replace(/[\s_]+/g, "-")
+		.toLowerCase();
 }
 
 function LucideIcon({ name, className }: { name: string; className?: string }) {
-	const IconComp = (LucideIcons as Record<string, unknown>)[
-		toPascalCase(name)
-	] as React.ComponentType<{ className?: string }> | undefined;
-	if (!IconComp) return null;
-	return <IconComp className={className} />;
+	return (
+		<DynamicIcon
+			name={toKebabCase(name) as IconName}
+			className={className}
+			fallback={() => null}
+		/>
+	);
 }
 
 export function A2UIAppLink({
