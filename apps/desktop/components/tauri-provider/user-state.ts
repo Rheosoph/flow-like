@@ -362,8 +362,9 @@ export class UserState implements IUserState {
 		return profile.hub_profile;
 	}
 	async getProfiles(): Promise<IProfile[]> {
-		const profiles: ISettingsProfile[] = await invoke("get_profiles");
-		return profiles
+		const profiles =
+			await invoke<Record<string, ISettingsProfile>>("get_profiles");
+		return Object.values(profiles)
 			.map((p) => p.hub_profile)
 			.filter((p): p is IProfile => p !== undefined);
 	}
@@ -372,8 +373,9 @@ export class UserState implements IUserState {
 		return profile;
 	}
 	async getAllSettingsProfiles(): Promise<ISettingsProfile[]> {
-		const profiles: ISettingsProfile[] = await invoke("get_profiles");
-		return profiles;
+		const profiles =
+			await invoke<Record<string, ISettingsProfile>>("get_profiles");
+		return Object.values(profiles);
 	}
 
 	async updateUser(data: IUserUpdate, avatar?: File): Promise<void> {

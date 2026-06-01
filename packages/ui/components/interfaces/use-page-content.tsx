@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useSetQueryParams } from "../../lib/set-query-params";
@@ -17,6 +18,7 @@ import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
+import type { ISettingsProfile } from "../../types";
 import { LoadingScreen } from "../ui/loading-screen";
 import { Container } from "./container";
 import { Header } from "./header";
@@ -54,10 +56,13 @@ export function UsePageContent({
 	const backend = useBackend();
 	const searchParams = useSearchParams();
 	const router = useRouter();
+	const auth = useAuth();
+	const hasAccessToken = Boolean(auth.user?.access_token);
 
 	const appId = appIdProp ?? searchParams.get("id");
 	const routePath = routePathProp ?? searchParams.get("route") ?? "/";
 	const eventId = eventIdProp ?? searchParams.get("eventId");
+	const authCheckPending = Boolean(appId && !embedded && auth.isLoading);
 
 	const headerRef = useRef<IToolBarActions>(
 		null,
@@ -92,6 +97,83 @@ export function UsePageContent({
 		[],
 	);
 
+	const localProfiles = useInvoke(
+		backend.userState.getAllSettingsProfiles,
+		backend.userState,
+		[],
+		Boolean(appId && !embedded && !auth.isLoading && !hasAccessToken),
+	);
+
+	const remoteApp = useInvoke(
+		backend.appState.getApp,
+		backend.appState,
+		[appId ?? ""],
+		Boolean(appId && !embedded && hasAccessToken),
+	);
+
+	const storeHref = useMemo(
+		() => (appId ? `/store?id=${encodeURIComponent(appId)}` : "/store"),
+		[appId],
+	);
+
+	const appIsInAnyLocalProfile = useMemo(() => {
+		if (!appId) return false;
+		const profiles = Array.isArray(localProfiles.data)
+			? localProfiles.data
+			: Object.values(
+					(localProfiles.data ?? {}) as Record<string, ISettingsProfile>,
+				);
+
+		return profiles.some((profile) =>
+			(profile.hub_profile?.apps ?? []).some((app) => app.app_id === appId),
+		);
+	}, [appId, localProfiles.data]);
+
+	const needsUnauthenticatedLocalCheck = Boolean(
+		appId && !embedded && !auth.isLoading && !hasAccessToken,
+	);
+	const localProfileCheckPending =
+		needsUnauthenticatedLocalCheck &&
+		localProfiles.isFetching &&
+		!localProfiles.data &&
+		!localProfiles.isError;
+	const shouldRedirectUnauthenticatedToStore = Boolean(
+		needsUnauthenticatedLocalCheck &&
+			!localProfileCheckPending &&
+			!appIsInAnyLocalProfile,
+	);
+
+	const needsAuthenticatedRemoteCheck = Boolean(
+		appId && !embedded && hasAccessToken,
+	);
+	const authenticatedRemoteCheckPending =
+		needsAuthenticatedRemoteCheck &&
+		remoteApp.isFetching &&
+		!remoteApp.data &&
+		!remoteApp.isError;
+	const shouldRedirectAuthenticatedToStore = Boolean(
+		needsAuthenticatedRemoteCheck &&
+			!authenticatedRemoteCheckPending &&
+			!appIsInAnyLocalProfile &&
+			!remoteApp.data &&
+			remoteApp.isError,
+	);
+
+	const shouldRedirectFetchErrorToStore = Boolean(
+		appId && !embedded && (routes.isError || events.isError),
+	);
+
+	const redirectCheckPending = Boolean(
+		authCheckPending ||
+			localProfileCheckPending ||
+			authenticatedRemoteCheckPending,
+	);
+	const shouldRedirectToStore = Boolean(
+		shouldRedirectUnauthenticatedToStore ||
+			shouldRedirectAuthenticatedToStore ||
+			shouldRedirectFetchErrorToStore,
+	);
+
 	// --- Computed: usable event types ---
 
 	const usableEvents = useMemo(() => {
@@ -122,6 +204,14 @@ export function UsePageContent({
 		if (!eventId) return undefined;
 		return sortedEvents.find((e) => e.id === eventId);
 	}, [eventId, sortedEvents]);
+
+	const canUseEvent = useCallback(
+		(event: IEvent | null | undefined) =>
+			Boolean(
+				event && (event.default_page_id || usableEvents.has(event.event_type)),
+			),
+		[usableEvents],
+	);
 
 	const routeKey = appId ? `${appId}:${routePath}` : "";
 	const directEventKey = appId && eventId ? `${appId}:${eventId}` : "";
@@ -244,7 +334,35 @@ export function UsePageContent({
 	const isRoutePending = Boolean(appId && resolvedRouteKey !== routeKey);
 
 	useEffect(() => {
-		if (!appId || !eventId || routeMapping) {
+		if (
+			!appId ||
+			embedded ||
+			redirectCheckPending ||
+			!shouldRedirectToStore
+		) {
+			return;
+		}
+
+		router.replace(storeHref);
+	}, [
+		appId,
+		embedded,
+		redirectCheckPending,
+		shouldRedirectToStore,
+		router,
+		storeHref,
+	]);
+
+	const effectiveRouteEvent = useMemo(() => {
+		return canUseEvent(routeEvent) ? routeEvent : null;
+	}, [canUseEvent, routeEvent]);
+
+	const effectiveRouteMapping = useMemo(() => {
+		return effectiveRouteEvent ? routeMapping : null;
+	}, [effectiveRouteEvent, routeMapping]);
+
+	useEffect(() => {
+		if (!appId || !eventId || effectiveRouteMapping) {
 			setDirectEvent(null);
 			setResolvedDirectEventKey("");
 			return;
@@ -287,7 +405,7 @@ export function UsePageContent({
 	}, [
 		appId,
 		eventId,
-		routeMapping,
+		effectiveRouteMapping,
 		isRoutePending,
 		currentEvent,
 		backend.eventState,
@@ -310,7 +428,7 @@ export function UsePageContent({
 		!isRoutePending &&
 			appId &&
 			eventId &&
-			!routeMapping &&
+			!effectiveRouteMapping &&
 			!resolvedCurrentEvent &&
 			resolvedDirectEventKey !== directEventKey,
 	);
@@ -318,15 +436,15 @@ export function UsePageContent({
 	// --- Active event ---
 
 	const activeEvent = useMemo(() => {
-		if (routeEvent) return routeEvent;
+		if (effectiveRouteEvent) return effectiveRouteEvent;
 		return resolvedCurrentEvent;
-	}, [routeEvent, resolvedCurrentEvent]);
+	}, [effectiveRouteEvent, resolvedCurrentEvent]);
 
 	const pageEvent = useMemo(() => {
-		if (routeEvent?.default_page_id) return routeEvent;
+		if (effectiveRouteEvent?.default_page_id) return effectiveRouteEvent;
 		if (activeEvent?.default_page_id) return activeEvent;
 		return null;
-	}, [routeEvent, activeEvent]);
+	}, [effectiveRouteEvent, activeEvent]);
 	const pageEventId = pageEvent?.id ?? null;
 	const pageId = pageEvent?.default_page_id ?? null;
 	const pageBoardId = pageEvent?.board_id || undefined;
@@ -426,7 +544,7 @@ export function UsePageContent({
 	}, [
 		appId,
 		pageId,
-		pageEvent,
+		pageBoardId,
 		pageKey,
 		isRoutePending,
 		routeLoading,
@@ -437,40 +555,37 @@ export function UsePageContent({
 	// --- Route/event sync effects ---
 
 	useEffect(() => {
-		if (!routeMapping) return;
-		if (eventId && eventId !== routeMapping.eventId) {
+		if (!effectiveRouteMapping) return;
+		if (eventId && eventId !== effectiveRouteMapping.eventId) {
 			if (embedded) {
 				onNavigate?.({ eventId: null });
 				return;
 			}
 			setQueryParams("eventId", undefined);
 		}
-	}, [routeMapping, eventId, embedded, onNavigate, setQueryParams]);
+	}, [effectiveRouteMapping, eventId, embedded, onNavigate, setQueryParams]);
 
 	useEffect(() => {
 		if (!appId) return;
-		if (routeMapping) return;
+		if (effectiveRouteMapping) return;
 		if (routeLoading || isRoutePending || isDirectEventPending) return;
-		if ((routes.data?.length ?? 0) > 0 && routeEvent) return;
 
 		const queriesPending = routes.isFetching || events.isFetching;
 
 		if (sortedEvents.length === 0) {
 			if (!events.data || queriesPending) return;
 			if (embedded) return;
-			router.replace(`/store?id=${appId}`);
+			router.replace(storeHref);
 			return;
 		}
 
-		let rerouteEvent = sortedEvents.find(
-			(e) => usableEvents.has(e.event_type) || e.default_page_id,
-		);
+		let rerouteEvent = sortedEvents.find((e) => canUseEvent(e));
 
 		if (!rerouteEvent) {
 			if (queriesPending) return;
 			if (events.data) {
 				if (embedded) return;
-				router.replace(`/store?id=${appId}`);
+				router.replace(storeHref);
 			}
 			return;
 		}
@@ -478,10 +593,7 @@ export function UsePageContent({
 		const lastEventId = localStorage.getItem(`lastUsedEvent-${appId}`);
 		const lastEvent = sortedEvents.find((e) => e.id === lastEventId);
 
-		if (
-			lastEvent &&
-			(usableEvents.has(lastEvent.event_type) || lastEvent.default_page_id)
-		) {
+		if (canUseEvent(lastEvent)) {
 			rerouteEvent = lastEvent;
 		}
 
@@ -493,11 +605,7 @@ export function UsePageContent({
 			return;
 		}
 
-		if (
-			eventId &&
-			!usableEvents.has(resolvedCurrentEvent.event_type) &&
-			!resolvedCurrentEvent.default_page_id
-		) {
+		if (eventId && !canUseEvent(resolvedCurrentEvent)) {
 			switchEvent(rerouteEvent?.id ?? "");
 			return;
 		}
@@ -509,19 +617,18 @@ export function UsePageContent({
 		sortedEvents,
 		resolvedCurrentEvent,
 		switchEvent,
-		usableEvents,
+		canUseEvent,
 		events.data,
 		events.isFetching,
-		routeMapping,
+		effectiveRouteMapping,
 		routeLoading,
 		isRoutePending,
 		isDirectEventPending,
-		routes.data,
-			routes.isFetching,
-			router,
-			routeEvent,
-			embedded,
-		]);
+		routes.isFetching,
+		router,
+		embedded,
+		storeHref,
+	]);
 
 	// --- Route navigation ---
 
@@ -546,15 +653,30 @@ export function UsePageContent({
 	// --- Render logic ---
 
 	const shouldRenderHeader = useMemo(() => {
+		if (redirectCheckPending) return false;
+		if (shouldRedirectToStore) return false;
 		if (routeLoading || isRoutePending || isDirectEventPending) return false;
 		if (pageEvent?.default_page_id) return false;
 		return true;
-	}, [routeLoading, isRoutePending, isDirectEventPending, pageEvent]);
+	}, [
+		redirectCheckPending,
+		shouldRedirectToStore,
+		routeLoading,
+		isRoutePending,
+		isDirectEventPending,
+		pageEvent,
+	]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef and sidebarRef are stable refs
 	const inner = useMemo(() => {
 		if (!appId) return notFound ?? <NoDefaultInterface appId="" />;
-		if (routeLoading || isRoutePending || isDirectEventPending) {
+		if (
+			redirectCheckPending ||
+			shouldRedirectToStore ||
+			routeLoading ||
+			isRoutePending ||
+			isDirectEventPending
+		) {
 			return <LoadingScreen />;
 		}
 
@@ -581,18 +703,23 @@ export function UsePageContent({
 		}
 
 		// Route targets an event (board/node interface)
-		if (routeEvent && usableEvents.has(routeEvent.event_type)) {
-			const InterfaceComponent = usableEvents.get(routeEvent.event_type);
+		if (
+			effectiveRouteEvent &&
+			usableEvents.has(effectiveRouteEvent.event_type)
+		) {
+			const InterfaceComponent = usableEvents.get(
+				effectiveRouteEvent.event_type,
+			);
 			if (InterfaceComponent) {
 				return (
 					<div
-						key={routeEvent.id}
+						key={effectiveRouteEvent.id}
 						className="flex flex-col grow h-full w-full max-h-full overflow-hidden"
 					>
 						<InterfaceComponent
 							appId={appId}
-							event={routeEvent}
-							config={parseUint8ArrayToJson(routeEvent.config) ?? {}}
+							event={effectiveRouteEvent}
+							config={parseUint8ArrayToJson(effectiveRouteEvent.config) ?? {}}
 							toolbarRef={headerRef}
 							sidebarRef={sidebarRef}
 						/>
@@ -604,9 +731,7 @@ export function UsePageContent({
 		// No route config - fall back to event-based interface
 		if (!activeEvent) {
 			if (events.isFetching && !events.data) return <LoadingScreen />;
-			const hasUsableEvents = sortedEvents.some(
-				(e) => usableEvents.has(e.event_type) || e.default_page_id,
-			);
+			const hasUsableEvents = sortedEvents.some((e) => canUseEvent(e));
 			if (hasUsableEvents && !eventId) return <LoadingScreen />;
 			return (
 				<NoDefaultInterface appId={appId} eventId={eventId ?? undefined} />
@@ -642,15 +767,18 @@ export function UsePageContent({
 		pageLoading,
 		isPagePending,
 		pageEvent,
-		routeEvent,
+		effectiveRouteEvent,
 		sortedEvents,
 		activeEvent,
 		config,
 		eventId,
 		usableEvents,
+		canUseEvent,
 		events.isFetching,
 		events.data,
 		notFound,
+		redirectCheckPending,
+		shouldRedirectToStore,
 	]);
 
 	if (!appId) {
@@ -665,7 +793,7 @@ export function UsePageContent({
 						<Header
 							ref={headerRef}
 							routes={routes.data ?? []}
-							currentRoutePath={routeMapping?.path ?? routePath}
+							currentRoutePath={effectiveRouteMapping?.path ?? routePath}
 							onNavigateRoute={switchRoute}
 							usableEvents={new Set(usableEvents.keys())}
 							currentEvent={activeEvent}

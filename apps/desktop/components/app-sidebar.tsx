@@ -973,12 +973,13 @@ function NavMain({
 	const router = useRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
+	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const info = useInvoke(
 		backend.userState.getInfo,
 		backend.userState,
 		[],
-		Boolean(auth?.isAuthenticated),
-		[auth?.user?.profile?.sub, auth?.isAuthenticated],
+		hasAccessToken,
+		[auth?.user?.profile?.sub, hasAccessToken],
 	);
 
 	return (
@@ -1094,6 +1095,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
@@ -1105,8 +1107,8 @@ export function NavUser({
 		backend.userState.getInfo,
 		backend.userState,
 		[],
-		Boolean(auth?.isAuthenticated),
-		[auth?.user?.profile?.sub, auth?.isAuthenticated],
+		hasAccessToken,
+		[auth?.user?.profile?.sub, hasAccessToken],
 	);
 
 	const displayName: string = useMemo(() => {

@@ -5,6 +5,7 @@ import { useInvalidateInvoke } from "../../../hooks";
 import { useBackend } from "../../../state/backend-state";
 import type { IApp } from "../../../types";
 import { AllowForkingSwitcher } from "./allow-forking-switcher";
+import { ForkPermissionWarning } from "./fork-permission-warning";
 
 export interface AllowForkingCardProps {
 	localApp: IApp;
@@ -40,10 +41,17 @@ export function AllowForkingCard({
 	);
 
 	return (
-		<AllowForkingSwitcher
-			localApp={localApp}
-			canEdit={canEdit}
-			onAllowForkingChange={handleChange}
-		/>
+		<div className="space-y-0">
+			<AllowForkingSwitcher
+				localApp={localApp}
+				canEdit={canEdit}
+				onAllowForkingChange={handleChange}
+			/>
+			<ForkPermissionWarning
+				appId={localApp.id}
+				enabled={Boolean(localApp.allow_forking)}
+				canEdit={canEdit}
+			/>
+		</div>
 	);
 }
