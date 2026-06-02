@@ -923,6 +923,7 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					onAction={handleAction}
 					surfaceId={surface.id}
 					appId={actionContext?.appId}
+					eventId={actionContext?.eventId}
 					components={Object.fromEntries(allComponents)}
 				>
 					<div className={cn("min-h-full w-full", className)}>

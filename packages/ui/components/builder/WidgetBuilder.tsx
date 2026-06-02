@@ -158,6 +158,7 @@ export interface WidgetBuilderProps {
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
 		widgetActions?: { id: string; label: string; description?: string }[];
+		eventId?: string;
 	};
 	/** Current page ID for the page switcher */
 	currentPageId?: string;
@@ -1525,6 +1526,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				className="min-h-full w-full"
 				appId={actionContext?.appId}
 				boardId={actionContext?.boardId}
+				eventId={actionContext?.eventId}
 				isPreviewMode={true}
 			/>
 		</div>

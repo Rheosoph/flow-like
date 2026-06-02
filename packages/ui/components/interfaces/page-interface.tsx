@@ -264,7 +264,8 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						id: componentId,
 						component: updateValue.component as SurfaceComponent["component"],
 						style:
-							(updateValue.style as SurfaceComponent["style"]) ?? component.style,
+							(updateValue.style as SurfaceComponent["style"]) ??
+							component.style,
 					};
 					return {
 						...prevSurface,
@@ -1328,6 +1329,7 @@ function PageInterfaceInner({
 						className="w-full flex-1"
 						appId={appId}
 						boardId={page?.boardId || routeEvent?.board_id}
+						eventId={event?.id || routeEvent?.id}
 						onA2UIMessage={handleA2UIMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}

@@ -21,21 +21,24 @@ import {
 	PanelLeft,
 	Rows3,
 	Search,
+	Settings,
 	SlidersHorizontal,
 	Space,
 	Square,
 	Star,
 	Table2,
+	ThumbsUp,
 	ToggleLeft,
 	Type,
 	Upload,
 	Video,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks";
 import { cn } from "../../lib";
 import { useBackend } from "../../state/backend-state";
 import type { IUserWidgetInfo } from "../../state/backend-state/user-state";
+import { Badge } from "../ui/badge";
 import {
 	Collapsible,
 	CollapsibleContent,
@@ -58,6 +61,12 @@ interface ComponentDefinition {
 	icon: typeof Columns3;
 	category: string;
 	description?: string;
+}
+
+interface GroupedWidgetProject {
+	appId: string;
+	appName: string;
+	widgets: IUserWidgetInfo[];
 }
 
 const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
@@ -275,6 +284,20 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: MousePointer,
 		category: "Interactive",
 		description: "Clickable button",
+	},
+	{
+		type: "feedback",
+		label: "Feedback",
+		icon: ThumbsUp,
+		category: "Interactive",
+		description: "Icon, segmented, rating, or comment feedback",
+	},
+	{
+		type: "appLink",
+		label: "App Link",
+		icon: Settings,
+		category: "Interactive",
+		description: "Open app overview or configuration",
 	},
 	{
 		type: "textField",
@@ -521,6 +544,11 @@ export function ComponentPalette({
 	const [openCategories, setOpenCategories] = useState<Set<string>>(
 		new Set(["Layout", "Display", "Interactive"]),
 	);
+	const [openWidgetProjects, setOpenWidgetProjects] = useState<Set<string>>(
+		new Set(currentAppId ? [currentAppId] : []),
+	);
+	const [widgetProjectsInitialized, setWidgetProjectsInitialized] =
+		useState(false);
 	const [recentlyUsed, setRecentlyUsed] = useState<string[]>([]);
 	const [widgetsSectionOpen, setWidgetsSectionOpen] = useState(true);
 
@@ -531,6 +559,24 @@ export function ComponentPalette({
 		backend.userState,
 		[],
 	);
+
+	const { data: apps } = useInvoke(
+		backend.appState.getApps,
+		backend.appState,
+		[],
+	);
+
+	const appNameById = useMemo(() => {
+		const names = new Map<string, string>();
+		for (const [app, metadata] of apps ?? []) {
+			const appName =
+				typeof metadata?.name === "string" ? metadata.name.trim() : "";
+			if (app?.id && appName) {
+				names.set(app.id, appName);
+			}
+		}
+		return names;
+	}, [apps]);
 
 	const filteredComponents = useMemo(() => {
 		if (!searchQuery.trim()) return COMPONENT_DEFINITIONS;
@@ -546,20 +592,60 @@ export function ComponentPalette({
 
 	const filteredWidgets = useMemo(() => {
 		if (!widgets || !showWidgets) return [];
-		// Filter out invalid widgets first
-		const validWidgets = widgets.filter(
-			(w) => w?.appId && w?.widgetId && w?.metadata,
-		);
+		const validWidgets = widgets.flatMap((widget) => {
+			const name = getWidgetDisplayName(widget);
+			if (!name) return [];
+
+			return [
+				{
+					...widget,
+					metadata: {
+						...widget.metadata,
+						name,
+					},
+				},
+			];
+		});
 		if (!searchQuery.trim()) return validWidgets;
 		const query = searchQuery.toLowerCase();
 		return validWidgets.filter(
 			(w) =>
-				w.metadata.name?.toLowerCase().includes(query) ||
-				w.widgetId.toLowerCase().includes(query) ||
+				w.metadata.name.toLowerCase().includes(query) ||
 				w.metadata.description?.toLowerCase().includes(query) ||
 				w.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)),
 		);
 	}, [widgets, searchQuery, showWidgets]);
+
+	const groupedWidgets = useMemo<GroupedWidgetProject[]>(() => {
+		const groups = new Map<string, IUserWidgetInfo[]>();
+
+		for (const widget of filteredWidgets) {
+			const appWidgets = groups.get(widget.appId) ?? [];
+			appWidgets.push(widget);
+			groups.set(widget.appId, appWidgets);
+		}
+
+		return Array.from(groups.entries())
+			.map(([appId, projectWidgets]) => ({
+				appId,
+				appName: getProjectDisplayName(appId, appNameById, currentAppId),
+				widgets: projectWidgets.sort((a, b) =>
+					a.metadata.name.localeCompare(b.metadata.name),
+				),
+			}))
+			.sort((a, b) => {
+				if (a.appId === currentAppId) return -1;
+				if (b.appId === currentAppId) return 1;
+				return a.appName.localeCompare(b.appName);
+			});
+	}, [filteredWidgets, appNameById, currentAppId]);
+
+	useEffect(() => {
+		if (widgetProjectsInitialized || groupedWidgets.length === 0) return;
+
+		setOpenWidgetProjects(new Set(groupedWidgets.map((group) => group.appId)));
+		setWidgetProjectsInitialized(true);
+	}, [groupedWidgets, widgetProjectsInitialized]);
 
 	const groupedComponents = useMemo(() => {
 		const groups: Record<string, ComponentDefinition[]> = {};
@@ -578,6 +664,18 @@ export function ComponentPalette({
 				next.delete(category);
 			} else {
 				next.add(category);
+			}
+			return next;
+		});
+	}, []);
+
+	const setWidgetProjectOpen = useCallback((appId: string, open: boolean) => {
+		setOpenWidgetProjects((prev) => {
+			const next = new Set(prev);
+			if (open) {
+				next.add(appId);
+			} else {
+				next.delete(appId);
 			}
 			return next;
 		});
@@ -717,13 +815,48 @@ export function ComponentPalette({
 										{searchQuery ? "No widgets match" : "No widgets available"}
 									</div>
 								) : (
-									filteredWidgets.map((widget) => (
-										<WidgetItem
-											key={`${widget.appId}-${widget.widgetId}`}
-											widget={widget}
-											onDragStart={onWidgetDragStart}
-										/>
-									))
+									groupedWidgets.map((group) => {
+										const isOpen =
+											!!searchQuery.trim() ||
+											openWidgetProjects.has(group.appId);
+
+										return (
+											<Collapsible
+												key={group.appId}
+												open={isOpen}
+												onOpenChange={(open) =>
+													setWidgetProjectOpen(group.appId, open)
+												}
+											>
+												<CollapsibleTrigger className="flex w-full items-center justify-between rounded px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted">
+													<span className="truncate">{group.appName}</span>
+													<div className="flex items-center gap-2">
+														<Badge
+															variant="secondary"
+															className="h-5 text-[10px]"
+														>
+															{group.widgets.length}
+														</Badge>
+														<ChevronRight
+															className={cn(
+																"h-3.5 w-3.5 transition-transform duration-200",
+																isOpen && "rotate-90",
+															)}
+														/>
+													</div>
+												</CollapsibleTrigger>
+												<CollapsibleContent className="ml-2 border-l pt-1 pl-2 space-y-0.5">
+													{group.widgets.map((widget) => (
+														<WidgetItem
+															key={`${widget.appId}-${widget.widgetId}`}
+															widget={widget}
+															onDragStart={onWidgetDragStart}
+														/>
+													))}
+												</CollapsibleContent>
+											</Collapsible>
+										);
+									})
 								)}
 							</CollapsibleContent>
 						</Collapsible>
@@ -732,6 +865,26 @@ export function ComponentPalette({
 			</ScrollArea>
 		</div>
 	);
+}
+
+function getWidgetDisplayName(widget: IUserWidgetInfo): string | null {
+	if (!widget?.appId || !widget?.widgetId || !widget?.metadata) return null;
+
+	const name =
+		typeof widget.metadata.name === "string" ? widget.metadata.name.trim() : "";
+	if (!name || name === widget.widgetId) return null;
+
+	return name;
+}
+
+function getProjectDisplayName(
+	appId: string,
+	appNameById: Map<string, string>,
+	currentAppId?: string,
+): string {
+	const appName = appNameById.get(appId);
+	if (appName) return appName;
+	return appId === currentAppId ? "Current Project" : "Unnamed Project";
 }
 
 interface ComponentItemProps {
@@ -811,7 +964,7 @@ function WidgetItem({ widget, onDragStart }: WidgetItemProps) {
 			) : (
 				<Layers className="h-4 w-4 text-muted-foreground shrink-0" />
 			)}
-			<span className="truncate">{metadata.name ?? "Unnamed"}</span>
+			<span className="truncate">{metadata.name}</span>
 		</div>
 	);
 }

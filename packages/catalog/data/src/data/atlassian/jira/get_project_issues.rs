@@ -32,7 +32,7 @@ impl NodeLogic for GetProjectIssuesNode {
             "Data/Atlassian/Jira",
         );
         node.add_icon("/flow/icons/jira.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -125,7 +125,7 @@ impl NodeLogic for GetProjectIssuesNode {
         );
 
         node.add_output_pin(
-            "next_page_token",
+            "next_page_token_out",
             "Next Page Token",
             "Cloud pagination token for the next page",
             VariableType::String,
@@ -234,7 +234,7 @@ impl NodeLogic for GetProjectIssuesNode {
         context.set_pin_value("total", json!(total)).await?;
         context.set_pin_value("count", json!(count)).await?;
         context
-            .set_pin_value("next_page_token", json!(next_page_token))
+            .set_pin_value("next_page_token_out", json!(next_page_token))
             .await?;
         context.activate_exec_pin("exec_out").await?;
 

@@ -72,6 +72,14 @@ function isProtectedAppRoute(path: string, method: string): boolean {
 	if (segment === "fork" && parts[3] === "preview" && method === "GET") {
 		return false;
 	}
+	if (
+		segment === "fork" &&
+		parts[3] === "offline" &&
+		parts[4] === "begin" &&
+		method === "POST"
+	) {
+		return false;
+	}
 	if (segment === "meta") return method !== "GET";
 	return PROTECTED_APP_ROUTE_SEGMENTS.has(segment);
 }

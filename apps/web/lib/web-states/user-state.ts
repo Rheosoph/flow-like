@@ -1,4 +1,3 @@
-import { createId } from "@paralleldrive/cuid2";
 import type {
 	IMetadata,
 	IProfile,
@@ -23,6 +22,7 @@ import type {
 	IUserWidgetInfo,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { createId } from "@paralleldrive/cuid2";
 import { appsDB } from "../apps-db";
 import {
 	type WebBackendRef,
@@ -501,13 +501,15 @@ export class WebUserState implements IUserState {
 						typeof entry[1] === "string" &&
 						entry[1] !== "" &&
 						entry[2] !== null &&
-						typeof entry[2] === "object",
+						typeof entry[2] === "object" &&
+						typeof entry[2].name === "string" &&
+						entry[2].name.trim() !== "",
 				)
 				.map(([appId, widgetId, meta]) => ({
 					appId,
 					widgetId,
 					metadata: {
-						name: meta.name ?? "Unnamed Widget",
+						name: meta.name.trim(),
 						description: meta.description ?? "",
 						thumbnail: meta.thumbnail,
 						tags: meta.tags ?? [],

@@ -30,6 +30,7 @@ export interface A2UIRendererProps {
 	className?: string;
 	appId?: string;
 	boardId?: string;
+	eventId?: string;
 	isPreviewMode?: boolean;
 	openDialog?: (
 		route: string,
@@ -48,6 +49,7 @@ export function A2UIRenderer({
 	className,
 	appId,
 	boardId,
+	eventId,
 	isPreviewMode = false,
 	openDialog,
 	closeDialog,
@@ -144,6 +146,7 @@ export function A2UIRenderer({
 					surfaceId={surface.id}
 					appId={appId}
 					boardId={boardId}
+					eventId={eventId}
 					components={components}
 					isPreviewMode={isPreviewMode}
 					openDialog={openDialog}

@@ -12,6 +12,7 @@ export * from "./app-category";
 export * from "./llm/history";
 export * from "./llm/response";
 export * from "./platform";
+export * from "./page-context";
 export * from "./runtime-vars-utils";
 
 export * from "./bit/bit";

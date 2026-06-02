@@ -140,6 +140,7 @@ impl NodeLogic for FeatureExtractionNode {
             "Extract feature vectors from images using ONNX models",
             "AI/ML/ONNX",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
 

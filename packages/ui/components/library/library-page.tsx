@@ -91,11 +91,15 @@ export function LibraryPage({
 	const appHref = useCallback((appId: string) => `/use?id=${appId}`, []);
 
 	const handleSettingsClick = useCallback(
-		(appId: string) => {
+		() => {
 			queryClient.invalidateQueries();
-			router.push(`/library/config?id=${appId}`);
 		},
-		[queryClient, router],
+		[queryClient],
+	);
+
+	const appSettingsHref = useCallback(
+		(appId: string) => `/library/config?id=${appId}`,
+		[],
 	);
 
 	const profileAppMap = useMemo(() => {
@@ -445,6 +449,7 @@ export function LibraryPage({
 						query={searchQuery}
 						onAppClick={handleAppClick}
 						onSettingsClick={handleSettingsClick}
+						settingsHref={appSettingsHref}
 						visibilityMode={visibilityMode}
 						activeAppIds={activeAppIds}
 						onToggleVisibility={handleToggleVisibility}
@@ -458,6 +463,7 @@ export function LibraryPage({
 								items={pinnedItems}
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
+								settingsHref={appSettingsHref}
 								appHref={appHref}
 								isMobile={isMobile}
 							/>
@@ -468,6 +474,7 @@ export function LibraryPage({
 								items={favoriteItems}
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
+								settingsHref={appSettingsHref}
 								onReorder={handleFavoriteReorder}
 								appHref={appHref}
 								isMobile={isMobile}
@@ -488,6 +495,7 @@ export function LibraryPage({
 								items={recentItems}
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
+								settingsHref={appSettingsHref}
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
 								onToggleVisibility={handleToggleVisibility}
@@ -508,6 +516,7 @@ export function LibraryPage({
 								items={items}
 								onAppClick={handleAppClick}
 								onSettingsClick={handleSettingsClick}
+								settingsHref={appSettingsHref}
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
 								onToggleVisibility={handleToggleVisibility}

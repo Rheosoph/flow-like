@@ -453,6 +453,47 @@ export interface ButtonComponent extends ComponentBase {
 	tooltip?: BoundValue;
 }
 
+export interface FeedbackComponent extends ComponentBase {
+	type: "feedback";
+	mode?: BoundValue; // "icon" | "compact" | "segmented" | "rating" | "extended"
+	size?: BoundValue; // "sm" | "md" | "lg"
+	title?: BoundValue;
+	description?: BoundValue;
+	positiveLabel?: BoundValue;
+	negativeLabel?: BoundValue;
+	positiveRating?: BoundValue;
+	negativeRating?: BoundValue;
+	showComment?: BoundValue;
+	commentMode?: BoundValue; // "none" | "inline" | "modal"
+	commentLabel?: BoundValue;
+	commentPlaceholder?: BoundValue;
+	commentTitle?: BoundValue;
+	commentDescription?: BoundValue;
+	commentSubmitLabel?: BoundValue;
+	commentCancelLabel?: BoundValue;
+	feedbackId?: BoundValue;
+	includeState?: BoundValue;
+	pageContextMode?: BoundValue; // "none" | "path" | "query"
+	pageContextQueryParamAllowlist?: BoundValue; // comma-separated query param names
+	pageContextQueryParamDenylist?: BoundValue; // comma-separated query param names
+	includePageHash?: BoundValue;
+	successMessage?: BoundValue;
+	disabled?: BoundValue;
+}
+
+export interface AppLinkComponent extends ComponentBase {
+	type: "appLink";
+	target?: BoundValue; // "config" | "settings" | "overview"
+	label?: BoundValue;
+	variant?: BoundValue; // "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
+	size?: BoundValue; // "sm" | "md" | "lg" | "icon"
+	icon?: BoundValue;
+	iconPosition?: BoundValue; // "left" | "right"
+	appId?: BoundValue;
+	eventId?: BoundValue;
+	disabled?: BoundValue;
+}
+
 export interface TextFieldComponent extends ComponentBase {
 	type: "textField";
 	value: BoundValue;
@@ -1422,6 +1463,8 @@ export type A2UIComponent =
 	| TableRowComponent
 	| TableCellComponent
 	| ButtonComponent
+	| FeedbackComponent
+	| AppLinkComponent
 	| TextFieldComponent
 	| SelectComponent
 	| SliderComponent

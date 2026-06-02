@@ -200,6 +200,7 @@ impl NodeLogic for UnloadOnnxNode {
             "Release ONNX model from cache to free memory",
             "AI/ML/ONNX",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
 
@@ -287,6 +288,7 @@ impl NodeLogic for SessionInfoNode {
             "Get information about a loaded ONNX session",
             "AI/ML/ONNX",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
 

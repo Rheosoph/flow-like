@@ -1,0 +1,56 @@
+---
+import { comparisonLandingPages } from "../../data/comparison-landing-pages";
+
+const topPages = comparisonLandingPages;
+
+const accentClass = {
+	amber: "border-amber-500/30 bg-amber-500/10 text-amber-700",
+	blue: "border-blue-500/30 bg-blue-500/10 text-blue-700",
+	cyan: "border-cyan-500/30 bg-cyan-500/10 text-cyan-700",
+	emerald: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
+	fuchsia: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700",
+	rose: "border-rose-500/30 bg-rose-500/10 text-rose-700",
+	violet: "border-violet-500/30 bg-violet-500/10 text-violet-700",
+} as const;
+---
+
+<section id="competitor-pages" class="relative border-y border-border/50 bg-muted/20 py-20 lg:py-24">
+	<div class="mx-auto max-w-7xl px-6 lg:px-8">
+		<div class="mx-auto max-w-3xl text-center">
+			<p class="mb-4 text-[11px] font-medium uppercase tracking-[0.3em] text-primary">
+				Focused Comparisons
+			</p>
+			<h2 class="text-3xl font-bold tracking-tight sm:text-4xl lg:text-5xl">
+				Flow-Like vs major alternatives
+			</h2>
+			<p class="mt-4 text-base leading-7 text-muted-foreground sm:text-lg">
+				Each page turns the broad matrix into a fact-based landing page with a short visual summary, source links, prose analysis, and an objective recommendation.
+			</p>
+		</div>
+
+		<div class="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+			{topPages.map((page) => (
+				<a
+					href={`/compare/${page.slug}`}
+					class="group rounded-2xl border border-border bg-background p-5 transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-lg"
+				>
+					<div class="flex items-start justify-between gap-4">
+						<div>
+							<h3 class="text-lg font-semibold">Flow-Like vs {page.competitor}</h3>
+							<p class="mt-2 line-clamp-3 text-sm leading-6 text-muted-foreground">
+								{page.heroSummary}
+							</p>
+						</div>
+						<span class:list={["shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium", accentClass[page.accent]]}>
+							{page.category}
+						</span>
+					</div>
+					<div class="mt-5 flex items-center text-sm font-medium text-primary">
+						Read comparison
+						<span class="ml-2 transition group-hover:translate-x-1" aria-hidden="true">-&gt;</span>
+					</div>
+				</a>
+			))}
+		</div>
+	</div>
+</section>

@@ -44,11 +44,13 @@ export function SortableFavoriteCard({
 	item,
 	onAppClick,
 	onSettingsClick,
+	settingsHref,
 	appHref,
 }: Readonly<{
 	item: LibraryItem;
 	onAppClick: (id: string) => void;
-	onSettingsClick: (id: string) => void;
+	onSettingsClick: () => void;
+	settingsHref?: (id: string) => string;
 	appHref?: (id: string) => string;
 }>) {
 	const {
@@ -75,7 +77,8 @@ export function SortableFavoriteCard({
 				metadata={item}
 				variant="extended"
 				onClick={() => onAppClick(item.id)}
-				onSettingsClick={() => onSettingsClick(item.id)}
+				onSettingsClick={onSettingsClick}
+				settingsHref={settingsHref?.(item.id)}
 				href={appHref?.(item.id)}
 				className="w-full"
 			/>
@@ -89,6 +92,7 @@ export function Section({
 	items,
 	onAppClick,
 	onSettingsClick,
+	settingsHref,
 	visibilityMode,
 	activeAppIds,
 	onToggleVisibility,
@@ -102,7 +106,8 @@ export function Section({
 	icon?: React.ReactNode;
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: (id: string) => void;
+	onSettingsClick: () => void;
+	settingsHref?: (id: string) => string;
 	visibilityMode?: boolean;
 	activeAppIds?: Set<string>;
 	onToggleVisibility?: (id: string) => void;
@@ -177,7 +182,10 @@ export function Section({
 									variant="small"
 									onClick={() => handleClick(meta.id)}
 									onSettingsClick={
-										visibilityMode ? undefined : () => onSettingsClick(meta.id)
+										visibilityMode ? undefined : onSettingsClick
+									}
+									settingsHref={
+										visibilityMode ? undefined : settingsHref?.(meta.id)
 									}
 									href={!visibilityMode ? appHref?.(meta.id) : undefined}
 									className="w-full rounded-none border-0 shadow-none bg-transparent"
@@ -249,7 +257,10 @@ export function Section({
 								variant={variant}
 								onClick={() => handleClick(meta.id)}
 								onSettingsClick={
-									visibilityMode ? undefined : () => onSettingsClick(meta.id)
+									visibilityMode ? undefined : onSettingsClick
+								}
+								settingsHref={
+									visibilityMode ? undefined : settingsHref?.(meta.id)
 								}
 								href={!visibilityMode ? appHref?.(meta.id) : undefined}
 								className="w-full"
@@ -286,13 +297,15 @@ export function FavoritesSection({
 	items,
 	onAppClick,
 	onSettingsClick,
+	settingsHref,
 	onReorder,
 	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: (id: string) => void;
+	onSettingsClick: () => void;
+	settingsHref?: (id: string) => string;
 	onReorder: (orderedIds: string[]) => void;
 	appHref?: (id: string) => string;
 	isMobile?: boolean;
@@ -354,7 +367,8 @@ export function FavoritesSection({
 							metadata={item}
 							variant="small"
 							onClick={() => onAppClick(item.id)}
-							onSettingsClick={() => onSettingsClick(item.id)}
+							onSettingsClick={onSettingsClick}
+							settingsHref={settingsHref?.(item.id)}
 							className="w-full rounded-none border-0 shadow-none bg-transparent"
 						/>
 					))}
@@ -381,6 +395,7 @@ export function FavoritesSection({
 									item={item}
 									onAppClick={onAppClick}
 									onSettingsClick={onSettingsClick}
+									settingsHref={settingsHref}
 									appHref={appHref}
 								/>
 							))}
@@ -396,12 +411,14 @@ export function PinnedHero({
 	items,
 	onAppClick,
 	onSettingsClick,
+	settingsHref,
 	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: (id: string) => void;
+	onSettingsClick: () => void;
+	settingsHref?: (id: string) => string;
 	appHref?: (id: string) => string;
 	isMobile?: boolean;
 }>) {
@@ -432,7 +449,8 @@ export function PinnedHero({
 								metadata={meta}
 								variant="small"
 								onClick={() => onAppClick(meta.id)}
-								onSettingsClick={() => onSettingsClick(meta.id)}
+								onSettingsClick={onSettingsClick}
+								settingsHref={settingsHref?.(meta.id)}
 								className="w-full rounded-none border-0 shadow-none bg-transparent"
 							/>
 						</div>
@@ -457,7 +475,8 @@ export function PinnedHero({
 								metadata={meta}
 								variant="extended"
 								onClick={() => onAppClick(meta.id)}
-								onSettingsClick={() => onSettingsClick(meta.id)}
+								onSettingsClick={onSettingsClick}
+								settingsHref={settingsHref?.(meta.id)}
 								className="w-full"
 							/>
 						</div>
@@ -473,6 +492,7 @@ export function SearchResults({
 	query,
 	onAppClick,
 	onSettingsClick,
+	settingsHref,
 	visibilityMode,
 	activeAppIds,
 	onToggleVisibility,
@@ -482,7 +502,8 @@ export function SearchResults({
 	items: LibraryItem[];
 	query: string;
 	onAppClick: (id: string) => void;
-	onSettingsClick: (id: string) => void;
+	onSettingsClick: () => void;
+	settingsHref?: (id: string) => string;
 	visibilityMode?: boolean;
 	activeAppIds?: Set<string>;
 	onToggleVisibility?: (id: string) => void;
@@ -537,7 +558,10 @@ export function SearchResults({
 									variant="small"
 									onClick={() => handleClick(meta.id)}
 									onSettingsClick={
-										visibilityMode ? undefined : () => onSettingsClick(meta.id)
+										visibilityMode ? undefined : onSettingsClick
+									}
+									settingsHref={
+										visibilityMode ? undefined : settingsHref?.(meta.id)
 									}
 									className="w-full rounded-none border-0 shadow-none bg-transparent"
 								/>
@@ -571,7 +595,10 @@ export function SearchResults({
 									variant="extended"
 									onClick={() => handleClick(meta.id)}
 									onSettingsClick={
-										visibilityMode ? undefined : () => onSettingsClick(meta.id)
+										visibilityMode ? undefined : onSettingsClick
+									}
+									settingsHref={
+										visibilityMode ? undefined : settingsHref?.(meta.id)
 									}
 									className="w-full"
 								/>

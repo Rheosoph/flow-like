@@ -465,12 +465,16 @@ function NodeCategoryList({ grouped }: { grouped: Map<string, INode[]> }) {
 											</span>
 										</div>
 									</TooltipTrigger>
-									<TooltipContent side="bottom" className="max-w-xs">
+									<TooltipContent
+										side="bottom"
+										sideOffset={6}
+										className="max-w-xs border border-border bg-popover text-popover-foreground shadow-lg [&>svg]:bg-popover [&>svg]:fill-popover"
+									>
 										<p className="font-medium">
 											{node.friendly_name || node.name}
 										</p>
 										{node.description && (
-											<p className="mt-1 text-xs text-muted-foreground">
+											<p className="mt-1 text-xs text-popover-foreground/70">
 												{node.description}
 											</p>
 										)}

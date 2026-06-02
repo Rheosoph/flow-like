@@ -13,5 +13,6 @@ export * from "./sales";
 export * from "./endpoints/endpoints-page";
 export * from "./forking/allow-forking-card";
 export * from "./forking/allow-forking-switcher";
+export * from "./forking/fork-permission-warning";
 export * from "./forking/fork-app-card";
 export * from "./forking/fork-app-dialog";

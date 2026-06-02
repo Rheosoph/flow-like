@@ -12,6 +12,7 @@ use super::overview::{AnalyticsOverview, AnalyticsStats, AnalyticsStatsQuery};
 pub struct AnalyticsDashboardQuery {
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+    pub event_id: Option<String>,
     #[serde(default = "default_period")]
     pub period: String,
 }
@@ -54,14 +55,6 @@ pub async fn dashboard(
     Path(app_id): Path<String>,
     Query(query): Query<AnalyticsDashboardQuery>,
 ) -> Result<Json<AnalyticsDashboardResponse>, ApiError> {
-    let overview = super::overview::get_analytics_overview(
-        State(state.clone()),
-        Extension(user.clone()),
-        Path(app_id.clone()),
-    )
-    .await?
-    .0;
-
     let stats = super::overview::get_analytics_stats(
         State(state.clone()),
         Extension(user.clone()),
@@ -69,11 +62,13 @@ pub async fn dashboard(
         Query(AnalyticsStatsQuery {
             start_date: query.start_date,
             end_date: query.end_date,
+            event_id: query.event_id,
             period: query.period,
         }),
     )
     .await?
     .0;
+    let overview = stats.summary.clone();
 
     Ok(Json(AnalyticsDashboardResponse { overview, stats }))
 }

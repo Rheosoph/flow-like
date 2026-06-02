@@ -7,6 +7,7 @@ import { BlogFooter } from "../blog-footer";
 
 import CompareHero from "./CompareHero.astro";
 import CategoryOverview from "./CategoryOverview.astro";
+import CompetitorLandingLinks from "./CompetitorLandingLinks.astro";
 import CompareMatrix from "./CompareMatrix.astro";
 import CapabilityDeepDive from "./CapabilityDeepDive.astro";
 import CompareInsight from "./CompareInsight.astro";
@@ -74,6 +75,7 @@ const cover = "/og.png";
     <main class="pt-16">
       <CompareHero t={t} />
       <CategoryOverview t={t} />
+      {lang === "en" && <CompetitorLandingLinks />}
       <CompareMatrix t={t} />
       <CapabilityDeepDive t={t} />
       <CompareInsight t={t} />

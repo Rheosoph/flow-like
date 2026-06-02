@@ -43,6 +43,10 @@ const MCP_LEGACY_SESSION_QUERY_PARAM: &str = "sessionId";
 #[cfg(feature = "execute")]
 const MCP_EMPTY_STRING_HASH: &str = "16248035215404677707";
 
+#[cfg(feature = "execute")]
+const MCP_BROWSER_INSPECTOR_TEMPLATE: &str =
+    include_str!("../../../../../assets/mcp-inspector.html");
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct McpServerConfig {
     pub host: String,
@@ -1274,6 +1278,39 @@ fn parse_accept_types(accept: &str) -> (bool, bool) {
 }
 
 #[cfg(feature = "execute")]
+fn accepts_html(accept: &str) -> bool {
+    accept.split(',').any(|piece| {
+        let mime = piece
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        mime == "text/html" || mime == "application/xhtml+xml"
+    })
+}
+
+#[cfg(feature = "execute")]
+fn browser_inspector_response(
+    config: &McpServerConfig,
+    origin: Option<&str>,
+) -> super::http_runtime::HttpResponse {
+    let endpoint_path = super::http_runtime::normalize_path(&config.path);
+    let endpoint_path_json =
+        json::to_string(&endpoint_path).unwrap_or_else(|_| "\"/mcp\"".to_string());
+    let html = MCP_BROWSER_INSPECTOR_TEMPLATE
+        .replace("__ENDPOINT_PATH_JSON__", &endpoint_path_json)
+        .replace("Flow Like Remote Server", "Flow Like Local Server");
+    let mut response = super::http_runtime::HttpResponse::text(200, html);
+    response.headers.insert(
+        "content-type".to_string(),
+        "text/html; charset=utf-8".to_string(),
+    );
+    apply_cors_headers(&mut response, origin);
+    response
+}
+
+#[cfg(feature = "execute")]
 fn request_session_id(request: &super::http_runtime::HttpRequest) -> Option<String> {
     request
         .headers
@@ -1415,6 +1452,15 @@ async fn handle_connection(
     let session_id = request_session_id(&request);
     let is_legacy_session = !request.headers.contains_key("mcp-session-id")
         && request.query.contains_key(MCP_LEGACY_SESSION_QUERY_PARAM);
+
+    if request.method == "GET" {
+        let accept = request.headers.get("accept").cloned().unwrap_or_default();
+        if accepts_html(&accept) {
+            let response = browser_inspector_response(&config, origin_ref);
+            let _ = super::http_runtime::write_http_response(&mut *stream, response).await;
+            return;
+        }
+    }
 
     match request.method.as_str() {
         "POST" => {
@@ -2676,6 +2722,41 @@ mod tests {
         assert!(json && sse);
         let (json, sse) = parse_accept_types("text/html");
         assert!(!json && !sse);
+    }
+
+    #[test]
+    fn mcp_html_accept_parser_detects_browser_requests() {
+        assert!(accepts_html(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        ));
+        assert!(accepts_html("application/xhtml+xml"));
+        assert!(!accepts_html("*/*"));
+        assert!(!accepts_html("application/json, text/event-stream"));
+    }
+
+    #[test]
+    fn mcp_browser_inspector_response_targets_local_endpoint() {
+        let config = McpServerConfig {
+            path: "/debug/mcp".to_string(),
+            ..McpServerConfig::default()
+        };
+        let response = browser_inspector_response(&config, Some("http://localhost:3000"));
+        let html = String::from_utf8(response.body).unwrap();
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(
+            response.headers.get("content-type").map(String::as_str),
+            Some("text/html; charset=utf-8")
+        );
+        assert!(html.contains("Flow Like Local Server"));
+        assert!(html.contains("const endpointPath = \"/debug/mcp\";"));
+        assert_eq!(
+            response
+                .headers
+                .get("access-control-allow-origin")
+                .map(String::as_str),
+            Some("http://localhost:3000")
+        );
     }
 
     #[test]

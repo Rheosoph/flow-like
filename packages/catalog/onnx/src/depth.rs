@@ -124,6 +124,7 @@ impl NodeLogic for DepthEstimationNode {
             "Estimate depth from a single image using ONNX models. Download models from: MiDaS (https://github.com/isl-org/MiDaS/releases), DPT (https://huggingface.co/Intel/dpt-large/tree/main), Depth Anything (https://huggingface.co/depth-anything/Depth-Anything-V2-Small/tree/main)",
             "AI/ML/ONNX/Vision",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/depth.svg");
 

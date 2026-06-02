@@ -125,6 +125,55 @@ Example:
 }"#
         .to_string(),
 
+        "feedback" => r#"Feedback - Built-in thumbs up/down feedback control
+Properties:
+- type: "feedback" (required)
+- mode: "icon" | "compact" | "segmented" | "rating" | "extended"
+- size: "sm" | "md" | "lg"
+- title: BoundValue
+- positiveLabel / negativeLabel: BoundValue
+- showComment: BoundValue (boolean)
+- commentMode: "none" | "inline" | "modal" (use "modal" to keep compact/icon controls simple while collecting a comment)
+- commentTitle / commentDescription / commentSubmitLabel / commentCancelLabel: BoundValue
+- feedbackId: BoundValue (optional stable id)
+- includeState: BoundValue (boolean; include component/page state in feedback context)
+- pageContextMode: "none" | "path" | "query" (default "path"; "query" sends query params)
+- pageContextQueryParamAllowlist / pageContextQueryParamDenylist: BoundValue (comma-separated query param names)
+- includePageHash: BoundValue (boolean; default false)
+
+Example:
+{
+  "id": "page-feedback",
+  "component": {
+    "type": "feedback",
+    "mode": { "literalString": "segmented" },
+    "title": { "literalString": "Was this helpful?" },
+    "showComment": { "literalBool": true },
+    "commentMode": { "literalString": "modal" },
+    "pageContextMode": { "literalString": "path" }
+  }
+}"#
+        .to_string(),
+
+        "applink" | "app_link" => r#"AppLink - Built-in link button to app shell screens
+Properties:
+- type: "appLink" (required)
+- target: "config" | "settings" | "overview"
+- label: BoundValue (optional; defaults from target)
+- variant: "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
+- size: "sm" | "md" | "lg" | "icon"
+- icon: BoundValue (Lucide icon name)
+
+Example:
+{
+  "id": "settings-link",
+  "component": {
+    "type": "appLink",
+    "target": { "literalString": "settings" }
+  }
+}"#
+        .to_string(),
+
         "card" => r#"Card - Content container with optional header/footer
 Properties:
 - type: "card" (required)

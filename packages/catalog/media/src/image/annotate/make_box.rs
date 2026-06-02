@@ -1,4 +1,4 @@
-use crate::image::BoundingBox;
+use flow_like_catalog_core::BoundingBox;
 
 use flow_like::flow::{
     board::Board,
@@ -28,6 +28,7 @@ impl NodeLogic for MakeBoxNode {
             "Make Bounding Box",
             "Image/Annotate",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         // inputs

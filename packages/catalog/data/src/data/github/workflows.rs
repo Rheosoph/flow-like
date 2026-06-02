@@ -968,7 +968,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             "Data/GitHub/Workflows",
         );
         node.add_icon("/flow/icons/github.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -1111,7 +1111,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
             VariableType::String,
         );
         node.add_output_pin(
-            "head_sha",
+            "run_head_sha",
             "Commit SHA",
             "The commit SHA",
             VariableType::String,
@@ -1236,7 +1236,7 @@ impl NodeLogic for GetLatestWorkflowRunNode {
                         )
                         .await?;
                     context
-                        .set_pin_value("head_sha", json!(latest.head_sha.clone()))
+                        .set_pin_value("run_head_sha", json!(latest.head_sha.clone()))
                         .await?;
                     context
                         .set_pin_value("html_url", json!(latest.html_url.clone()))

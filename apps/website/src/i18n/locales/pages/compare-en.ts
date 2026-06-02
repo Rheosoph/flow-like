@@ -54,7 +54,7 @@ export const enCompare = {
 		"Governance, risk, and compliance suites for controls, evidence, and policy workflows. Strong audit systems, but disconnected from the operational workflows that produce the evidence.",
 	"compare.category.agent_runtimes": "Agent Runtimes",
 	"compare.category.agent_runtimes.desc":
-		"Python frameworks for orchestrating autonomous AI agents. Great for rapid prototyping—but ship file-based state with no concurrent-write safety, execute tools with zero sandboxing, and top out at single-process throughput.",
+		"Agent runtimes and AI workflow platforms for orchestrating autonomous agents. Great for rapid prototyping and company AI rollout, but often leave production-grade sandboxing, state safety, app delivery, and portability incomplete.",
 	"compare.category.llm_frameworks": "LLM App Frameworks",
 	"compare.category.llm_frameworks.desc":
 		"Code-first SDKs for building retrieval, embedding, and AI pipeline logic. Powerful building blocks, but require you to hand-stitch every UI, deployment, and governance concern yourself.",
@@ -107,6 +107,12 @@ export const enCompare = {
 	"compare.support.basic": "Basic",
 	"compare.support.unlimited": "Unlimited",
 	"compare.support.depends": "Depends",
+	"compare.note.open": "Why this rating",
+	"compare.note.close": "Close",
+	"compare.note.evidence": "Evidence",
+	"compare.note.caveat": "Caveat",
+	"compare.note.sources": "Sources",
+	"compare.note.checked": "Last checked",
 
 	// Per-category axes (X & Y differ per category to highlight what matters most)
 	"compare.matrix.plot.axis.extensibility": "Code & Extensibility",
@@ -404,6 +410,8 @@ export const enCompare = {
 		"LangChain's graph-based stateful agent framework. Good for building complex reasoning loops, but no tool sandboxing, checkpointing via SQLite/Postgres can race under concurrent writes, and it remains a code-only developer SDK with no visual tooling or deployment story.",
 	"compare.competitor.dify":
 		"Open-source LLM app builder with a visual canvas and self-host option. Closest in spirit to Flow-Like in this category, but limited to LLM-centric pipelines. The 'UI builder' is a configurable chatbot widget (theme, welcome message, feature toggles) — you cannot build custom forms, dashboards, or non-chat surfaces. No native distribution (desktop/mobile/offline), and a 15 MB file cap that blocks real-world document workflows.",
+	"compare.competitor.langdock":
+		"Enterprise AI adoption platform with agents, visual workflows, integrations, MCP support, mobile apps, and hosted or self-hosted deployment options. Strong for internal AI rollout, but still centered on Langdock-hosted assistants and workflows rather than shipping portable customer-facing apps, offline runtimes, or a local-first data layer.",
 	"compare.competitor.flowise":
 		"Drag-and-drop LLM chain builder built on Node.js. Visual and beginner-friendly, but no sandbox for code execution, SQLite-backed state doesn't survive concurrent load, no mobile/desktop packaging, and limited to LangChain-style chain topologies.",
 	"compare.competitor.pydantic_ai":

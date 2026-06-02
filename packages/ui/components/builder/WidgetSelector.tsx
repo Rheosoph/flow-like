@@ -9,7 +9,7 @@ import {
 	Loader2,
 	Search,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks";
 import { cn } from "../../lib";
 import { useBackend } from "../../state/backend-state";
@@ -52,6 +52,8 @@ export function WidgetSelector({
 	const [openApps, setOpenApps] = useState<Set<string>>(
 		new Set(currentAppId ? [currentAppId] : []),
 	);
+	const [widgetProjectsInitialized, setWidgetProjectsInitialized] =
+		useState(false);
 	const [selectedTab, setSelectedTab] = useState<"current" | "all">(
 		currentAppId ? "current" : "all",
 	);
@@ -66,23 +68,75 @@ export function WidgetSelector({
 		refetch,
 	} = useInvoke(backend.userState.getUserWidgets, backend.userState, []);
 
-	const groupedWidgets = useMemo<GroupedWidgets[]>(() => {
+	const { data: apps } = useInvoke(
+		backend.appState.getApps,
+		backend.appState,
+		[],
+	);
+
+	const appNameById = useMemo(() => {
+		const names = new Map<string, string>();
+		for (const [app, metadata] of apps ?? []) {
+			const appName =
+				typeof metadata?.name === "string" ? metadata.name.trim() : "";
+			if (app?.id && appName) {
+				names.set(app.id, appName);
+			}
+		}
+		return names;
+	}, [apps]);
+
+	const namedWidgets = useMemo<IUserWidgetInfo[]>(() => {
 		if (!widgets) return [];
+
+		return widgets.flatMap((widget) => {
+			const name = getWidgetDisplayName(widget);
+			if (!name) return [];
+
+			return [
+				{
+					...widget,
+					metadata: {
+						...widget.metadata,
+						name,
+					},
+				},
+			];
+		});
+	}, [widgets]);
+
+	const groupedWidgets = useMemo<GroupedWidgets[]>(() => {
+		if (!namedWidgets.length) return [];
 
 		const groups = new Map<string, IUserWidgetInfo[]>();
 
-		for (const widget of widgets) {
+		for (const widget of namedWidgets) {
 			const existing = groups.get(widget.appId) || [];
 			existing.push(widget);
 			groups.set(widget.appId, existing);
 		}
 
-		return Array.from(groups.entries()).map(([appId, appWidgets]) => ({
-			appId,
-			appName: appWidgets[0]?.metadata.name || appId,
-			widgets: appWidgets,
-		}));
-	}, [widgets]);
+		return Array.from(groups.entries())
+			.map(([appId, appWidgets]) => ({
+				appId,
+				appName: getProjectDisplayName(appId, appNameById, currentAppId),
+				widgets: appWidgets.sort((a, b) =>
+					a.metadata.name.localeCompare(b.metadata.name),
+				),
+			}))
+			.sort((a, b) => {
+				if (a.appId === currentAppId) return -1;
+				if (b.appId === currentAppId) return 1;
+				return a.appName.localeCompare(b.appName);
+			});
+	}, [namedWidgets, appNameById, currentAppId]);
+
+	useEffect(() => {
+		if (widgetProjectsInitialized || groupedWidgets.length === 0) return;
+
+		setOpenApps(new Set(groupedWidgets.map((group) => group.appId)));
+		setWidgetProjectsInitialized(true);
+	}, [groupedWidgets, widgetProjectsInitialized]);
 
 	const currentAppWidgets = useMemo(() => {
 		if (!currentAppId) return [];
@@ -97,13 +151,7 @@ export function WidgetSelector({
 	const filteredCurrentWidgets = useMemo(() => {
 		if (!searchQuery.trim()) return currentAppWidgets;
 		const query = searchQuery.toLowerCase();
-		return currentAppWidgets.filter(
-			(w) =>
-				w.metadata.name.toLowerCase().includes(query) ||
-				w.widgetId.toLowerCase().includes(query) ||
-				w.metadata.description?.toLowerCase().includes(query) ||
-				w.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)),
-		);
+		return currentAppWidgets.filter((w) => widgetMatchesSearch(w, query));
 	}, [currentAppWidgets, searchQuery]);
 
 	const filteredOtherWidgets = useMemo(() => {
@@ -112,24 +160,29 @@ export function WidgetSelector({
 		return otherAppsWidgets
 			.map((group) => ({
 				...group,
-				widgets: group.widgets.filter(
-					(w) =>
-						w.metadata.name.toLowerCase().includes(query) ||
-						w.widgetId.toLowerCase().includes(query) ||
-						w.metadata.description?.toLowerCase().includes(query) ||
-						w.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)),
-				),
+				widgets: group.widgets.filter((w) => widgetMatchesSearch(w, query)),
 			}))
 			.filter((group) => group.widgets.length > 0);
 	}, [otherAppsWidgets, searchQuery]);
 
-	const toggleApp = useCallback((appId: string) => {
+	const filteredGroupedWidgets = useMemo(() => {
+		if (!searchQuery.trim()) return groupedWidgets;
+		const query = searchQuery.toLowerCase();
+		return groupedWidgets
+			.map((group) => ({
+				...group,
+				widgets: group.widgets.filter((w) => widgetMatchesSearch(w, query)),
+			}))
+			.filter((group) => group.widgets.length > 0);
+	}, [groupedWidgets, searchQuery]);
+
+	const setAppOpen = useCallback((appId: string, open: boolean) => {
 		setOpenApps((prev) => {
 			const next = new Set(prev);
-			if (next.has(appId)) {
-				next.delete(appId);
-			} else {
+			if (open) {
 				next.add(appId);
+			} else {
+				next.delete(appId);
 			}
 			return next;
 		});
@@ -269,8 +322,8 @@ export function WidgetSelector({
 									filteredOtherWidgets.map((group) => (
 										<Collapsible
 											key={group.appId}
-											open={openApps.has(group.appId)}
-											onOpenChange={() => toggleApp(group.appId)}
+											open={!!searchQuery.trim() || openApps.has(group.appId)}
+											onOpenChange={(open) => setAppOpen(group.appId, open)}
 										>
 											<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
 												<span className="truncate">{group.appName}</span>
@@ -281,7 +334,9 @@ export function WidgetSelector({
 													<ChevronRight
 														className={cn(
 															"h-4 w-4 transition-transform duration-200",
-															openApps.has(group.appId) && "rotate-90",
+															(!!searchQuery.trim() ||
+																openApps.has(group.appId)) &&
+																"rotate-90",
 														)}
 													/>
 												</div>
@@ -321,58 +376,65 @@ export function WidgetSelector({
 			) : (
 				<ScrollArea className="flex-1 min-h-0">
 					<div className="p-2 space-y-1">
-						{groupedWidgets.length === 0 ? (
+						{filteredGroupedWidgets.length === 0 ? (
 							<div className="p-4 text-center text-sm text-muted-foreground">
-								No widgets available
+								{searchQuery
+									? "No widgets match your search"
+									: "No widgets available"}
 							</div>
 						) : (
-							groupedWidgets.map((group) => (
-								<Collapsible
-									key={group.appId}
-									open={openApps.has(group.appId)}
-									onOpenChange={() => toggleApp(group.appId)}
-								>
-									<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
-										<span className="truncate">{group.appName}</span>
-										<div className="flex items-center gap-2">
-											<Badge variant="secondary" className="text-xs">
-												{group.widgets.length}
-											</Badge>
-											<ChevronRight
-												className={cn(
-													"h-4 w-4 transition-transform duration-200",
-													openApps.has(group.appId) && "rotate-90",
-												)}
-											/>
-										</div>
-									</CollapsibleTrigger>
-									<CollapsibleContent className="pt-1 space-y-0.5 ml-2">
-										{viewMode === "list" ? (
-											group.widgets.map((widget) => (
-												<WidgetListItem
-													key={widget.widgetId}
-													widget={widget}
-													onSelect={handleSelectWidget}
-													onPreview={setPreviewWidget}
-													onDragStart={onDragStart}
+							filteredGroupedWidgets.map((group) => {
+								const isOpen =
+									!!searchQuery.trim() || openApps.has(group.appId);
+
+								return (
+									<Collapsible
+										key={group.appId}
+										open={isOpen}
+										onOpenChange={(open) => setAppOpen(group.appId, open)}
+									>
+										<CollapsibleTrigger className="flex w-full items-center justify-between p-2 text-sm font-medium text-muted-foreground hover:bg-muted rounded">
+											<span className="truncate">{group.appName}</span>
+											<div className="flex items-center gap-2">
+												<Badge variant="secondary" className="text-xs">
+													{group.widgets.length}
+												</Badge>
+												<ChevronRight
+													className={cn(
+														"h-4 w-4 transition-transform duration-200",
+														isOpen && "rotate-90",
+													)}
 												/>
-											))
-										) : (
-											<div className="grid grid-cols-2 gap-2">
-												{group.widgets.map((widget) => (
-													<WidgetGridItem
+											</div>
+										</CollapsibleTrigger>
+										<CollapsibleContent className="pt-1 space-y-0.5 ml-2">
+											{viewMode === "list" ? (
+												group.widgets.map((widget) => (
+													<WidgetListItem
 														key={widget.widgetId}
 														widget={widget}
 														onSelect={handleSelectWidget}
 														onPreview={setPreviewWidget}
 														onDragStart={onDragStart}
 													/>
-												))}
-											</div>
-										)}
-									</CollapsibleContent>
-								</Collapsible>
-							))
+												))
+											) : (
+												<div className="grid grid-cols-2 gap-2">
+													{group.widgets.map((widget) => (
+														<WidgetGridItem
+															key={widget.widgetId}
+															widget={widget}
+															onSelect={handleSelectWidget}
+															onPreview={setPreviewWidget}
+															onDragStart={onDragStart}
+														/>
+													))}
+												</div>
+											)}
+										</CollapsibleContent>
+									</Collapsible>
+								);
+							})
 						)}
 					</div>
 				</ScrollArea>
@@ -426,6 +488,35 @@ export function WidgetSelector({
 			</Dialog>
 		</div>
 	);
+}
+
+function getWidgetDisplayName(widget: IUserWidgetInfo): string | null {
+	if (!widget?.appId || !widget?.widgetId || !widget?.metadata) return null;
+
+	const name =
+		typeof widget.metadata.name === "string" ? widget.metadata.name.trim() : "";
+	if (!name || name === widget.widgetId) return null;
+
+	return name;
+}
+
+function widgetMatchesSearch(widget: IUserWidgetInfo, query: string): boolean {
+	return (
+		widget.metadata.name.toLowerCase().includes(query) ||
+		widget.metadata.description?.toLowerCase().includes(query) ||
+		widget.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)) ||
+		false
+	);
+}
+
+function getProjectDisplayName(
+	appId: string,
+	appNameById: Map<string, string>,
+	currentAppId?: string,
+): string {
+	const appName = appNameById.get(appId);
+	if (appName) return appName;
+	return appId === currentAppId ? "Current Project" : "Unnamed Project";
 }
 
 interface WidgetItemProps {

@@ -1,8 +1,8 @@
 use crate::{
     ensure_permission,
     entity::{
-        app_analytics_daily, embedding_usage_tracking, execution_usage_tracking, feedback,
-        llm_usage_tracking,
+        app_analytics_daily, embedding_usage_tracking, event, execution_usage_tracking, feedback,
+        llm_usage_tracking, membership,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -14,11 +14,19 @@ use axum::{
     extract::{Path, Query, State},
 };
 use chrono::{Duration, NaiveDate, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::sea_query::{Expr, SelectStatement, SimpleExpr};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait, Select,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use super::update_aggregations::ensure_aggregations_current;
+
+fn successful_execution_count(total_executions: i64, failed_executions: i64) -> i64 {
+    (total_executions - failed_executions).max(0)
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AnalyticsStatsQuery {
@@ -26,6 +34,8 @@ pub struct AnalyticsStatsQuery {
     pub start_date: Option<String>,
     /// End date (YYYY-MM-DD)
     pub end_date: Option<String>,
+    /// Optional event ID to scope event-capable metrics
+    pub event_id: Option<String>,
     /// Aggregation period: "day", "week", "month"
     #[serde(default = "default_period")]
     pub period: String,
@@ -35,7 +45,78 @@ fn default_period() -> String {
     "day".to_string()
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug)]
+struct AnalyticsEventFilter {
+    event_id: String,
+    board_id: Option<String>,
+    node_id: Option<String>,
+}
+
+fn normalize_event_id(event_id: Option<&str>) -> Option<String> {
+    event_id
+        .map(str::trim)
+        .filter(|event_id| !event_id.is_empty())
+        .filter(|event_id| !event_id.eq_ignore_ascii_case("all"))
+        .map(ToOwned::to_owned)
+}
+
+async fn load_analytics_event_filter(
+    state: &AppState,
+    app_id: &str,
+    event_id: Option<&str>,
+) -> Result<Option<AnalyticsEventFilter>, ApiError> {
+    let Some(event_id) = normalize_event_id(event_id) else {
+        return Ok(None);
+    };
+
+    let event = event::Entity::find_by_id(&event_id)
+        .filter(event::Column::AppId.eq(app_id))
+        .one(&state.db)
+        .await?;
+
+    Ok(Some(AnalyticsEventFilter {
+        event_id,
+        board_id: event.as_ref().and_then(|event| event.board_id.clone()),
+        node_id: event.as_ref().and_then(|event| event.node_id.clone()),
+    }))
+}
+
+fn filter_execution_query_by_event(
+    query: Select<execution_usage_tracking::Entity>,
+    event_filter: Option<&AnalyticsEventFilter>,
+) -> Select<execution_usage_tracking::Entity> {
+    let Some(event_filter) = event_filter else {
+        return query;
+    };
+
+    let mut condition =
+        Condition::any().add(execution_usage_tracking::Column::NodeId.eq(&event_filter.event_id));
+
+    if let Some(board_id) = event_filter.board_id.as_ref() {
+        if let Some(node_id) = event_filter.node_id.as_ref() {
+            condition = condition.add(
+                Condition::all()
+                    .add(execution_usage_tracking::Column::BoardId.eq(board_id))
+                    .add(execution_usage_tracking::Column::NodeId.eq(node_id)),
+            );
+        }
+    }
+
+    query.filter(condition)
+}
+
+fn filter_feedback_query_by_event(
+    query: Select<feedback::Entity>,
+    event_filter: Option<&AnalyticsEventFilter>,
+) -> Select<feedback::Entity> {
+    if let Some(event_filter) = event_filter {
+        query.filter(feedback::Column::EventId.eq(&event_filter.event_id))
+    } else {
+        query
+    }
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsOverview {
     /// Total executions (all time)
@@ -102,7 +183,8 @@ pub struct AnalyticsStats {
     tag = "analytics",
     description = "Get analytics overview for an app.",
     params(
-        ("app_id" = String, Path, description = "Application ID")
+        ("app_id" = String, Path, description = "Application ID"),
+        ("event_id" = Option<String>, Query, description = "Optional event ID filter")
     ),
     responses(
         (status = 200, description = "Analytics overview", body = AnalyticsOverview),
@@ -121,15 +203,31 @@ pub async fn get_analytics_overview(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
+    Query(query): Query<AnalyticsStatsQuery>,
 ) -> Result<Json<AnalyticsOverview>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadAnalytics);
-
-    // Auto-backfill any missing days through yesterday
-    ensure_aggregations_current(&state, &app_id).await?;
 
     let now = Utc::now().date_naive();
     let thirty_days_ago = now - Duration::days(29);
     let sixty_days_ago = now - Duration::days(59);
+    let event_filter =
+        load_analytics_event_filter(&state, &app_id, query.event_id.as_deref()).await?;
+
+    if let Some(event_filter) = event_filter.as_ref() {
+        return Ok(Json(
+            compute_overview_from_raw(
+                &state,
+                &app_id,
+                thirty_days_ago,
+                sixty_days_ago,
+                Some(event_filter),
+            )
+            .await?,
+        ));
+    }
+
+    // Auto-backfill any missing days through yesterday
+    ensure_aggregations_current(&state, &app_id).await?;
 
     let all_daily = app_analytics_daily::Entity::find()
         .filter(app_analytics_daily::Column::AppId.eq(&app_id))
@@ -137,26 +235,21 @@ pub async fn get_analytics_overview(
         .await?;
 
     // Compute today's live stats from raw tables
-    let today_stat = compute_today_live(&state, &app_id).await?;
+    let today_stat = compute_today_live(&state, &app_id, None).await?;
 
     if all_daily.is_empty() && today_stat.is_none() {
         return Ok(Json(
-            compute_overview_from_raw(&state, &app_id, thirty_days_ago, sixty_days_ago).await?,
+            compute_overview_from_raw(&state, &app_id, thirty_days_ago, sixty_days_ago, None)
+                .await?,
         ));
     }
 
     let total_executions: i64 = all_daily.iter().map(|d| d.total_executions).sum::<i64>()
         + today_stat.as_ref().map_or(0, |t| t.executions);
-    let successful_executions: i64 = all_daily
-        .iter()
-        .map(|d| d.successful_executions)
-        .sum::<i64>()
-        + today_stat
-            .as_ref()
-            .map_or(0, |t| t.executions - t.failed_executions);
     let failed_executions: i64 = all_daily.iter().map(|d| d.failed_executions).sum::<i64>()
         + today_stat.as_ref().map_or(0, |t| t.failed_executions);
-    let unique_users = count_unique_users(&state, &app_id, None, None).await?;
+    let successful_executions = successful_execution_count(total_executions, failed_executions);
+    let unique_users = count_unique_users(&state, &app_id, None, None, None).await?;
     let total_feedback: i64 = all_daily.iter().map(|d| d.feedback_count).sum::<i64>()
         + today_stat.as_ref().map_or(0, |t| t.feedback_count);
     let positive_feedback: i64 = all_daily.iter().map(|d| d.positive_feedback).sum::<i64>()
@@ -229,15 +322,21 @@ pub async fn get_analytics_overview(
         .sum::<i64>()
         + today_stat.as_ref().map_or(0, |t| t.executions);
     let period_unique_users =
-        count_unique_users(&state, &app_id, Some(thirty_days_ago), None).await?;
+        count_unique_users(&state, &app_id, Some(thirty_days_ago), None, None).await?;
 
     let prev_period: Vec<_> = all_daily
         .iter()
         .filter(|d| d.date >= sixty_days_ago && d.date < thirty_days_ago)
         .collect();
     let prev_executions: i64 = prev_period.iter().map(|d| d.total_executions).sum();
-    let prev_users =
-        count_unique_users(&state, &app_id, Some(sixty_days_ago), Some(thirty_days_ago)).await?;
+    let prev_users = count_unique_users(
+        &state,
+        &app_id,
+        Some(sixty_days_ago),
+        Some(thirty_days_ago),
+        None,
+    )
+    .await?;
 
     let executions_change_percent = compute_change_percent(period_executions, prev_executions);
     let users_change_percent = compute_change_percent(period_unique_users, prev_users);
@@ -271,6 +370,7 @@ pub async fn get_analytics_overview(
         ("app_id" = String, Path, description = "Application ID"),
         ("start_date" = Option<String>, Query, description = "Start date (YYYY-MM-DD)"),
         ("end_date" = Option<String>, Query, description = "End date (YYYY-MM-DD)"),
+        ("event_id" = Option<String>, Query, description = "Optional event ID filter"),
         ("period" = String, Query, description = "Aggregation period: day, week, month")
     ),
     responses(
@@ -294,9 +394,6 @@ pub async fn get_analytics_stats(
 ) -> Result<Json<AnalyticsStats>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ReadAnalytics);
 
-    // Auto-backfill any missing days through yesterday
-    ensure_aggregations_current(&state, &app_id).await?;
-
     let today = Utc::now().date_naive();
 
     let end_date = query
@@ -311,24 +408,41 @@ pub async fn get_analytics_stats(
         .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
         .unwrap_or_else(|| end_date - Duration::days(29));
 
-    let daily_aggregates = app_analytics_daily::Entity::find()
-        .filter(app_analytics_daily::Column::AppId.eq(&app_id))
-        .filter(app_analytics_daily::Column::Date.gte(start_date))
-        .filter(app_analytics_daily::Column::Date.lte(end_date))
-        .order_by_asc(app_analytics_daily::Column::Date)
-        .all(&state.db)
-        .await?;
+    let event_filter =
+        load_analytics_event_filter(&state, &app_id, query.event_id.as_deref()).await?;
+    let event_filter = event_filter.as_ref();
 
+    if event_filter.is_none() {
+        // Auto-backfill any missing days through yesterday
+        ensure_aggregations_current(&state, &app_id).await?;
+    }
+
+    let daily_aggregates = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        app_analytics_daily::Entity::find()
+            .filter(app_analytics_daily::Column::AppId.eq(&app_id))
+            .filter(app_analytics_daily::Column::Date.gte(start_date))
+            .filter(app_analytics_daily::Column::Date.lte(end_date))
+            .order_by_asc(app_analytics_daily::Column::Date)
+            .all(&state.db)
+            .await?
+    };
+
+    let computed_from_raw = event_filter.is_some() || daily_aggregates.is_empty();
     let mut daily_stats: Vec<DailyAnalyticsStat> = if daily_aggregates.is_empty() {
-        compute_daily_stats_from_raw(&state, &app_id, start_date, end_date).await?
+        compute_daily_stats_from_raw(&state, &app_id, start_date, end_date, event_filter).await?
     } else {
         daily_aggregates
             .into_iter()
             .map(|d| DailyAnalyticsStat {
                 date: d.date.format("%Y-%m-%d").to_string(),
                 executions: d.total_executions,
-                successful_executions: d.successful_executions,
                 failed_executions: d.failed_executions,
+                successful_executions: successful_execution_count(
+                    d.total_executions,
+                    d.failed_executions,
+                ),
                 unique_users: d.unique_users,
                 feedback_count: d.feedback_count,
                 avg_rating: d.avg_feedback_rating,
@@ -343,21 +457,38 @@ pub async fn get_analytics_stats(
     };
 
     // Append today's live data if the requested range includes today
-    if start_date <= today
+    if !computed_from_raw
+        && start_date <= today
         && end_date >= today
-        && let Some(live) = compute_today_live(&state, &app_id).await?
+        && let Some(live) = compute_today_live(&state, &app_id, None).await?
     {
         daily_stats.push(live.to_daily_stat());
     }
 
     let total_executions: i64 = daily_stats.iter().map(|d| d.executions).sum();
-    let successful_executions: i64 = daily_stats.iter().map(|d| d.successful_executions).sum();
     let failed_executions: i64 = daily_stats.iter().map(|d| d.failed_executions).sum();
+    let successful_executions = successful_execution_count(total_executions, failed_executions);
+    let unique_users_by_date = count_unique_users_by_date(
+        &state,
+        &app_id,
+        Some(start_date),
+        Some(end_date + Duration::days(1)),
+        event_filter,
+    )
+    .await?;
+    for stat in &mut daily_stats {
+        if let Ok(date) = NaiveDate::parse_from_str(&stat.date, "%Y-%m-%d") {
+            stat.successful_executions =
+                successful_execution_count(stat.executions, stat.failed_executions);
+            stat.unique_users = unique_users_by_date.get(&date).copied().unwrap_or(0);
+        }
+    }
     let unique_users = count_unique_users(
         &state,
         &app_id,
         Some(start_date),
         Some(end_date + Duration::days(1)),
+        event_filter,
     )
     .await?;
     let total_feedback: i64 = daily_stats.iter().map(|d| d.feedback_count).sum();
@@ -400,18 +531,36 @@ pub async fn get_analytics_stats(
     }))
 }
 
-async fn count_unique_users(
-    state: &AppState,
+#[derive(FromQueryResult)]
+struct ScalarCount {
+    cnt: i64,
+}
+
+#[derive(FromQueryResult)]
+struct DayCount {
+    day: String,
+    cnt: i64,
+}
+
+/// Base query selecting member executions for an app, optionally scoped by date
+/// range and event. Membership filtering is pushed into the database via a
+/// subquery so we never materialize execution user IDs in memory nor build a
+/// large `IN (...)` clause.
+fn member_executions_query(
     app_id: &str,
     start_date: Option<NaiveDate>,
     end_date_exclusive: Option<NaiveDate>,
-) -> Result<i64, ApiError> {
-    let mut query = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::AppId.eq(app_id))
-        .filter(execution_usage_tracking::Column::UserId.is_not_null())
-        .select_only()
-        .column(execution_usage_tracking::Column::UserId)
-        .distinct();
+    event_filter: Option<&AnalyticsEventFilter>,
+) -> Select<execution_usage_tracking::Entity> {
+    let mut query = filter_execution_query_by_event(
+        execution_usage_tracking::Entity::find()
+            .filter(execution_usage_tracking::Column::AppId.eq(app_id))
+            .filter(execution_usage_tracking::Column::UserId.is_not_null())
+            .filter(
+                execution_usage_tracking::Column::UserId.in_subquery(member_user_subquery(app_id)),
+            ),
+        event_filter,
+    );
 
     if let Some(start_date) = start_date {
         query = query.filter(
@@ -427,8 +576,86 @@ async fn count_unique_users(
         );
     }
 
-    let users: Vec<Option<String>> = query.into_tuple().all(&state.db).await?;
-    Ok(users.into_iter().flatten().count() as i64)
+    query
+}
+
+/// Database-specific expression truncating `createdAt` to a `YYYY-MM-DD` day
+/// bucket so the grouping happens in SQL rather than in application memory.
+fn day_bucket_expr(backend: DbBackend) -> SimpleExpr {
+    match backend {
+        DbBackend::Postgres => Expr::cust(r#"to_char("createdAt", 'YYYY-MM-DD')"#),
+        // SQLite (and the MySQL fallback path is unused in this project).
+        _ => Expr::cust("strftime('%Y-%m-%d', createdAt)"),
+    }
+}
+
+/// Count distinct app members that produced executions in the given window via a
+/// single `COUNT(DISTINCT userId)` query.
+async fn count_unique_users(
+    state: &AppState,
+    app_id: &str,
+    start_date: Option<NaiveDate>,
+    end_date_exclusive: Option<NaiveDate>,
+    event_filter: Option<&AnalyticsEventFilter>,
+) -> Result<i64, ApiError> {
+    let row = member_executions_query(app_id, start_date, end_date_exclusive, event_filter)
+        .select_only()
+        .expr_as(
+            Expr::col(execution_usage_tracking::Column::UserId).count_distinct(),
+            "cnt",
+        )
+        .into_model::<ScalarCount>()
+        .one(&state.db)
+        .await?;
+
+    Ok(row.map(|r| r.cnt).unwrap_or(0))
+}
+
+/// Count distinct app members that produced executions, grouped by day, in a
+/// single `GROUP BY day` query so we avoid both per-day N+1 queries and loading
+/// every execution row into memory.
+async fn count_unique_users_by_date(
+    state: &AppState,
+    app_id: &str,
+    start_date: Option<NaiveDate>,
+    end_date_exclusive: Option<NaiveDate>,
+    event_filter: Option<&AnalyticsEventFilter>,
+) -> Result<std::collections::HashMap<NaiveDate, i64>, ApiError> {
+    use std::collections::HashMap;
+
+    let day_expr = day_bucket_expr(state.db.get_database_backend());
+
+    let rows = member_executions_query(app_id, start_date, end_date_exclusive, event_filter)
+        .select_only()
+        .expr_as(day_expr.clone(), "day")
+        .expr_as(
+            Expr::col(execution_usage_tracking::Column::UserId).count_distinct(),
+            "cnt",
+        )
+        .group_by(day_expr)
+        .into_model::<DayCount>()
+        .all(&state.db)
+        .await?;
+
+    let mut per_day: HashMap<NaiveDate, i64> = HashMap::new();
+    for row in rows {
+        if let Ok(date) = NaiveDate::parse_from_str(&row.day, "%Y-%m-%d") {
+            per_day.insert(date, row.cnt);
+        }
+    }
+
+    Ok(per_day)
+}
+
+/// Subquery selecting the user IDs that are members of the given app. Used to
+/// push membership filtering into the database instead of building a large
+/// `IN (...)` clause from in-memory IDs.
+fn member_user_subquery(app_id: &str) -> SelectStatement {
+    membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app_id))
+        .select_only()
+        .column(membership::Column::UserId)
+        .into_query()
 }
 
 fn weighted_average_by_count(values: impl Iterator<Item = (f64, i64)>) -> Option<f64> {
@@ -484,14 +711,17 @@ async fn compute_overview_from_raw(
     app_id: &str,
     thirty_days_ago: NaiveDate,
     sixty_days_ago: NaiveDate,
+    event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<AnalyticsOverview, ApiError> {
     use crate::entity::sea_orm_active_enums::ExecutionStatus;
-    use std::collections::HashSet;
 
-    let executions = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::AppId.eq(app_id))
-        .all(&state.db)
-        .await?;
+    let executions = filter_execution_query_by_event(
+        execution_usage_tracking::Entity::find()
+            .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
+        event_filter,
+    )
+    .all(&state.db)
+    .await?;
 
     let total_executions = executions.len() as i64;
     let failed_executions = executions
@@ -500,16 +730,14 @@ async fn compute_overview_from_raw(
         .count() as i64;
     let successful_executions = total_executions - failed_executions;
 
-    let all_user_ids: HashSet<_> = executions
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .collect();
-    let unique_users = all_user_ids.len() as i64;
+    let unique_users = count_unique_users(state, app_id, None, None, event_filter).await?;
 
-    let feedbacks = feedback::Entity::find()
-        .filter(feedback::Column::AppId.eq(app_id))
-        .all(&state.db)
-        .await?;
+    let feedbacks = filter_feedback_query_by_event(
+        feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
+        event_filter,
+    )
+    .all(&state.db)
+    .await?;
 
     let total_feedback = feedbacks.len() as i64;
     let positive_feedback = feedbacks.iter().filter(|f| f.rating > 0).count() as i64;
@@ -520,18 +748,26 @@ async fn compute_overview_from_raw(
         Some(feedbacks.iter().map(|f| f.rating as f64).sum::<f64>() / feedbacks.len() as f64)
     };
 
-    let llm_records = llm_usage_tracking::Entity::find()
-        .filter(llm_usage_tracking::Column::AppId.eq(app_id))
-        .all(&state.db)
-        .await?;
+    let llm_records = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        llm_usage_tracking::Entity::find()
+            .filter(llm_usage_tracking::Column::AppId.eq(app_id))
+            .all(&state.db)
+            .await?
+    };
     let total_llm_cost: i64 = llm_records.iter().map(|r| r.price).sum();
     let (avg_latency_ms, _) =
         latency_stats_from_microseconds(executions.iter().map(|e| e.microseconds));
 
-    let embedding_records = embedding_usage_tracking::Entity::find()
-        .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
-        .all(&state.db)
-        .await?;
+    let embedding_records = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        embedding_usage_tracking::Entity::find()
+            .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
+            .all(&state.db)
+            .await?
+    };
     let total_embedding_cost: i64 = embedding_records.iter().map(|r| r.price).sum();
 
     let current_start = thirty_days_ago.and_hms_opt(0, 0, 0).unwrap();
@@ -540,11 +776,8 @@ async fn compute_overview_from_raw(
         .filter(|e| e.created_at >= current_start)
         .collect();
     let period_executions = period_execs.len() as i64;
-    let period_user_ids: HashSet<_> = period_execs
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .collect();
-    let period_unique_users = period_user_ids.len() as i64;
+    let period_unique_users =
+        count_unique_users(state, app_id, Some(thirty_days_ago), None, event_filter).await?;
 
     let prev_start = sixty_days_ago.and_hms_opt(0, 0, 0).unwrap();
     let prev_execs: Vec<_> = executions
@@ -552,11 +785,14 @@ async fn compute_overview_from_raw(
         .filter(|e| e.created_at >= prev_start && e.created_at < current_start)
         .collect();
     let prev_executions = prev_execs.len() as i64;
-    let prev_user_ids: HashSet<_> = prev_execs
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .collect();
-    let prev_users = prev_user_ids.len() as i64;
+    let prev_users = count_unique_users(
+        state,
+        app_id,
+        Some(sixty_days_ago),
+        Some(thirty_days_ago),
+        event_filter,
+    )
+    .await?;
 
     Ok(AnalyticsOverview {
         total_executions,
@@ -582,6 +818,7 @@ async fn compute_daily_stats_from_raw(
     app_id: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
+    event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<Vec<DailyAnalyticsStat>, ApiError> {
     use crate::entity::sea_orm_active_enums::ExecutionStatus;
     use std::collections::HashMap;
@@ -589,33 +826,46 @@ async fn compute_daily_stats_from_raw(
     let start_dt = start_date.and_hms_opt(0, 0, 0).unwrap();
     let end_dt = end_date.and_hms_opt(23, 59, 59).unwrap();
 
-    let executions = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::AppId.eq(app_id))
-        .filter(execution_usage_tracking::Column::CreatedAt.gte(start_dt))
-        .filter(execution_usage_tracking::Column::CreatedAt.lte(end_dt))
-        .all(&state.db)
-        .await?;
+    let executions = filter_execution_query_by_event(
+        execution_usage_tracking::Entity::find()
+            .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
+        event_filter,
+    )
+    .filter(execution_usage_tracking::Column::CreatedAt.gte(start_dt))
+    .filter(execution_usage_tracking::Column::CreatedAt.lte(end_dt))
+    .all(&state.db)
+    .await?;
 
-    let feedbacks = feedback::Entity::find()
-        .filter(feedback::Column::AppId.eq(app_id))
-        .filter(feedback::Column::CreatedAt.gte(start_dt))
-        .filter(feedback::Column::CreatedAt.lte(end_dt))
-        .all(&state.db)
-        .await?;
+    let feedbacks = filter_feedback_query_by_event(
+        feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
+        event_filter,
+    )
+    .filter(feedback::Column::CreatedAt.gte(start_dt))
+    .filter(feedback::Column::CreatedAt.lte(end_dt))
+    .all(&state.db)
+    .await?;
 
-    let llm_records = llm_usage_tracking::Entity::find()
-        .filter(llm_usage_tracking::Column::AppId.eq(app_id))
-        .filter(llm_usage_tracking::Column::CreatedAt.gte(start_dt))
-        .filter(llm_usage_tracking::Column::CreatedAt.lte(end_dt))
-        .all(&state.db)
-        .await?;
+    let llm_records = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        llm_usage_tracking::Entity::find()
+            .filter(llm_usage_tracking::Column::AppId.eq(app_id))
+            .filter(llm_usage_tracking::Column::CreatedAt.gte(start_dt))
+            .filter(llm_usage_tracking::Column::CreatedAt.lte(end_dt))
+            .all(&state.db)
+            .await?
+    };
 
-    let embedding_records = embedding_usage_tracking::Entity::find()
-        .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
-        .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_dt))
-        .filter(embedding_usage_tracking::Column::CreatedAt.lte(end_dt))
-        .all(&state.db)
-        .await?;
+    let embedding_records = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        embedding_usage_tracking::Entity::find()
+            .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
+            .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_dt))
+            .filter(embedding_usage_tracking::Column::CreatedAt.lte(end_dt))
+            .all(&state.db)
+            .await?
+    };
 
     let mut exec_by_day: HashMap<NaiveDate, Vec<&execution_usage_tracking::Model>> = HashMap::new();
     for e in &executions {
@@ -728,6 +978,7 @@ struct TodayLiveData {
 async fn compute_today_live(
     state: &AppState,
     app_id: &str,
+    event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<Option<TodayLiveData>, ApiError> {
     use crate::entity::sea_orm_active_enums::ExecutionStatus;
     use std::collections::HashSet;
@@ -735,29 +986,42 @@ async fn compute_today_live(
     let today = Utc::now().date_naive();
     let start_of_day = today.and_hms_opt(0, 0, 0).unwrap();
 
-    let executions = execution_usage_tracking::Entity::find()
-        .filter(execution_usage_tracking::Column::AppId.eq(app_id))
-        .filter(execution_usage_tracking::Column::CreatedAt.gte(start_of_day))
-        .all(&state.db)
-        .await?;
+    let executions = filter_execution_query_by_event(
+        execution_usage_tracking::Entity::find()
+            .filter(execution_usage_tracking::Column::AppId.eq(app_id)),
+        event_filter,
+    )
+    .filter(execution_usage_tracking::Column::CreatedAt.gte(start_of_day))
+    .all(&state.db)
+    .await?;
 
-    let feedbacks = feedback::Entity::find()
-        .filter(feedback::Column::AppId.eq(app_id))
-        .filter(feedback::Column::CreatedAt.gte(start_of_day))
-        .all(&state.db)
-        .await?;
+    let feedbacks = filter_feedback_query_by_event(
+        feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
+        event_filter,
+    )
+    .filter(feedback::Column::CreatedAt.gte(start_of_day))
+    .all(&state.db)
+    .await?;
 
-    let llm_records = llm_usage_tracking::Entity::find()
-        .filter(llm_usage_tracking::Column::AppId.eq(app_id))
-        .filter(llm_usage_tracking::Column::CreatedAt.gte(start_of_day))
-        .all(&state.db)
-        .await?;
+    let llm_records = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        llm_usage_tracking::Entity::find()
+            .filter(llm_usage_tracking::Column::AppId.eq(app_id))
+            .filter(llm_usage_tracking::Column::CreatedAt.gte(start_of_day))
+            .all(&state.db)
+            .await?
+    };
 
-    let embedding_records = embedding_usage_tracking::Entity::find()
-        .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
-        .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_of_day))
-        .all(&state.db)
-        .await?;
+    let embedding_records = if event_filter.is_some() {
+        Vec::new()
+    } else {
+        embedding_usage_tracking::Entity::find()
+            .filter(embedding_usage_tracking::Column::AppId.eq(app_id))
+            .filter(embedding_usage_tracking::Column::CreatedAt.gte(start_of_day))
+            .all(&state.db)
+            .await?
+    };
 
     if executions.is_empty()
         && feedbacks.is_empty()

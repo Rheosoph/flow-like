@@ -1,20 +1,25 @@
 "use client";
 
 import { ResponsiveBar } from "@nivo/bar";
+import type { BarDatum, BarTooltipProps } from "@nivo/bar";
 import { ResponsiveLine } from "@nivo/line";
+import type { PointTooltipProps } from "@nivo/line";
 import {
 	ActivityIcon,
 	AlertTriangleIcon,
 	BrainIcon,
 	CheckCircleIcon,
 	ClockIcon,
+	ExternalLinkIcon,
+	FilterIcon,
 	MessageSquareIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
 	TrendingUpIcon,
 	UsersIcon,
+	XIcon,
 } from "lucide-react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
 	type ComponentType,
 	useCallback,
@@ -25,6 +30,7 @@ import {
 import { toast } from "sonner";
 
 import { cn } from "../../../lib/utils";
+import type { IEvent } from "../../../lib";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	IAnalyticsOverview,
@@ -106,6 +112,11 @@ const nivoTheme = {
 	},
 };
 
+type AnalyticsLineSeries = {
+	id: string;
+	data: Array<{ x: string; y: number }>;
+};
+
 function parseDate(dateStr: string): Date {
 	const [year, month, day] = dateStr.split("-").map(Number);
 	return new Date(year, (month ?? 1) - 1, day ?? 1);
@@ -124,6 +135,68 @@ function formatDateTime(dateStr: string): string {
 		day: "numeric",
 		year: "numeric",
 	});
+}
+
+function compactIdentifier(value?: string | null): string | null {
+	const trimmed = value?.trim();
+	if (!trimmed) return null;
+	if (trimmed.length <= 18) return trimmed;
+	return `${trimmed.slice(0, 8)}...${trimmed.slice(-6)}`;
+}
+
+function formatFeedbackPageSource(
+	item: IFeedbackItem,
+	event?: IEvent,
+): string | null {
+	const path =
+		item.pagePath?.trim() ||
+		item.routePathname?.trim() ||
+		item.eventRoute?.trim() ||
+		getEventRoute(event) ||
+		null;
+	const search = item.pageSearch?.trim() || "";
+	const hash = item.pageHash?.trim() || "";
+
+	if (!path && !search && !hash) return null;
+	return `${path ?? ""}${search}${hash}`;
+}
+
+function getEventRoute(event?: IEvent): string | null {
+	const route = typeof event?.route === "string" ? event.route.trim() : "";
+	return route || null;
+}
+
+function getEventPageId(event?: IEvent): string | null {
+	const pageId =
+		typeof event?.default_page_id === "string"
+			? event.default_page_id.trim()
+			: "";
+	return pageId || null;
+}
+
+function formatFeedbackEventSource(
+	item: IFeedbackItem,
+	event?: IEvent,
+): string | null {
+	return (
+		item.eventName?.trim() ||
+		event?.name?.trim() ||
+		compactIdentifier(item.eventId)
+	);
+}
+
+function getAnalyticsEventHref(
+	appId: string | null | undefined,
+	eventId: string | null | undefined,
+): string | null {
+	const app = appId?.trim();
+	const event = eventId?.trim();
+	if (!app || !event) return null;
+
+	const params = new URLSearchParams();
+	params.set("id", app);
+	params.set("eventId", event);
+	return `/library/config/analytics?${params.toString()}`;
 }
 
 function formatLocalDate(date: Date): string {
@@ -183,14 +256,124 @@ function getTickValues(labels: string[]): string[] {
 }
 
 function getSuccessfulExecutions(day: IDailyAnalyticsStat): number {
-	return (
-		day.successfulExecutions ??
-		Math.max(day.executions - getFailedExecutions(day), 0)
-	);
+	return Math.max(day.executions - getFailedExecutions(day), 0);
 }
 
 function getFailedExecutions(day: IDailyAnalyticsStat): number {
 	return day.failedExecutions ?? 0;
+}
+
+function ChartTooltip({
+	color,
+	title,
+	subtitle,
+	value,
+}: {
+	color: string;
+	title: string;
+	subtitle: string;
+	value: string;
+}) {
+	return (
+		<div className="rounded-lg border border-border bg-popover px-3 py-2 text-popover-foreground shadow-xl">
+			<div className="flex items-center gap-2">
+				<span
+					className="h-2.5 w-2.5 rounded-sm"
+					style={{ backgroundColor: color }}
+				/>
+				<span className="text-sm font-semibold">{title}</span>
+			</div>
+			<div className="mt-1 flex items-center justify-between gap-5 text-xs">
+				<span className="text-muted-foreground">{subtitle}</span>
+				<span className="font-medium text-foreground">{value}</span>
+			</div>
+		</div>
+	);
+}
+
+function CountLineTooltip({ point }: PointTooltipProps<AnalyticsLineSeries>) {
+	return (
+		<ChartTooltip
+			color={point.seriesColor}
+			title={String(point.seriesId)}
+			subtitle={String(point.data.xFormatted)}
+			value={formatNumber(Number(point.data.y))}
+		/>
+	);
+}
+
+function LatencyLineTooltip({ point }: PointTooltipProps<AnalyticsLineSeries>) {
+	return (
+		<ChartTooltip
+			color={point.seriesColor}
+			title={String(point.seriesId)}
+			subtitle={String(point.data.xFormatted)}
+			value={formatLatency(Number(point.data.y))}
+		/>
+	);
+}
+
+const reliabilityTooltipLabels: Record<string, string> = {
+	successful: "Successful executions",
+	failed: "Failed executions",
+};
+
+const costTooltipLabels: Record<string, string> = {
+	llm: "LLM cost",
+	embeddings: "Embedding cost",
+};
+
+const feedbackTooltipLabels: Record<string, string> = {
+	positive: "Positive feedback",
+	negative: "Negative feedback",
+};
+
+function CountBarTooltip({
+	color,
+	id,
+	indexValue,
+	value,
+}: BarTooltipProps<BarDatum>) {
+	return (
+		<ChartTooltip
+			color={color}
+			title={reliabilityTooltipLabels[String(id)] ?? String(id)}
+			subtitle={String(indexValue)}
+			value={formatNumber(value)}
+		/>
+	);
+}
+
+function CostBarTooltip({
+	color,
+	id,
+	indexValue,
+	value,
+}: BarTooltipProps<BarDatum>) {
+	return (
+		<ChartTooltip
+			color={color}
+			title={costTooltipLabels[String(id)] ?? String(id)}
+			subtitle={String(indexValue)}
+			value={formatDollarAmount(value)}
+		/>
+	);
+}
+
+function FeedbackBarTooltip({
+	color,
+	id,
+	indexValue,
+	value,
+}: BarTooltipProps<BarDatum>) {
+	return (
+		<ChartTooltip
+			color={color}
+			title={feedbackTooltipLabels[String(id)] ?? String(id)}
+			subtitle={String(indexValue)}
+			value={formatNumber(value)}
+		/>
+	);
 }
 
 function EmptyChart({ label }: { label: string }) {
@@ -279,6 +462,7 @@ function ActivityTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				margin={{ top: 18, right: 24, bottom: 42, left: 46 }}
 				xScale={{ type: "point" }}
 				yScale={{ type: "linear", min: 0, max: "auto" }}
+				yFormat={(value) => formatNumber(Number(value))}
 				axisBottom={{
 					tickRotation: 0,
 					tickValues: getTickValues(labels),
@@ -295,6 +479,7 @@ function ActivityTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				pointBorderWidth={2}
 				pointBorderColor={{ from: "serieColor" }}
 				useMesh={true}
+				tooltip={CountLineTooltip}
 				legends={[
 					{
 						anchor: "top-right",
@@ -340,6 +525,8 @@ function ReliabilityChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				colors={[chartColors.success, chartColors.failure]}
 				enableLabel={false}
 				borderRadius={2}
+				valueFormat={(value) => formatNumber(Number(value))}
+				tooltip={CountBarTooltip}
 				axisBottom={{
 					tickRotation: 0,
 					tickValues: getTickValues(chartData.map((d) => d.date)),
@@ -401,6 +588,7 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				margin={{ top: 18, right: 24, bottom: 42, left: 56 }}
 				xScale={{ type: "point" }}
 				yScale={{ type: "linear", min: 0, max: "auto" }}
+				yFormat={(value) => formatLatency(Number(value))}
 				axisBottom={{
 					tickRotation: 0,
 					tickValues: getTickValues(data.map((d) => formatChartDate(d.date))),
@@ -416,6 +604,7 @@ function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				pointBorderWidth={2}
 				pointBorderColor={{ from: "serieColor" }}
 				useMesh={true}
+				tooltip={LatencyLineTooltip}
 				legends={[
 					{
 						anchor: "top-right",
@@ -462,6 +651,7 @@ function CostTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				enableLabel={false}
 				borderRadius={2}
 				valueFormat={(value) => formatDollarAmount(Number(value))}
+				tooltip={CostBarTooltip}
 				axisBottom={{
 					tickRotation: 0,
 					tickValues: getTickValues(chartData.map((d) => d.date)),
@@ -516,6 +706,8 @@ function FeedbackTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 				colors={[chartColors.positive, chartColors.negative]}
 				enableLabel={false}
 				borderRadius={2}
+				valueFormat={(value) => formatNumber(Number(value))}
+				tooltip={FeedbackBarTooltip}
 				axisBottom={{
 					tickRotation: 0,
 					tickValues: getTickValues(chartData.map((d) => d.date)),
@@ -565,8 +757,12 @@ function FeedbackBadge({ rating }: { rating: number }) {
 export function AnalyticsDashboard() {
 	const backend = useBackend();
 	const analyticsState = backend.analyticsState;
+	const eventState = backend.eventState;
+	const router = useRouter();
+	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("id");
+	const eventIdParam = searchParams.get("eventId")?.trim() || "all";
 
 	const [loading, setLoading] = useState(true);
 	const [overview, setOverview] = useState<IAnalyticsOverview | null>(null);
@@ -574,8 +770,10 @@ export function AnalyticsDashboard() {
 	const [feedbackItems, setFeedbackItems] = useState<IFeedbackItem[]>([]);
 	const [feedbackTotal, setFeedbackTotal] = useState(0);
 	const [feedbackPage, setFeedbackPage] = useState(0);
+	const [events, setEvents] = useState<IEvent[]>([]);
 
 	const [dateRange, setDateRange] = useState<"7d" | "30d" | "90d">("30d");
+	const [selectedEventId, setSelectedEventId] = useState(eventIdParam);
 	const [feedbackFilter, setFeedbackFilter] = useState<
 		"all" | "positive" | "negative"
 	>("all");
@@ -597,22 +795,33 @@ export function AnalyticsDashboard() {
 
 			const minRating = feedbackFilter === "positive" ? 1 : undefined;
 			const maxRating = feedbackFilter === "negative" ? -1 : undefined;
+			const eventFilter =
+				selectedEventId === "all" ? undefined : selectedEventId;
 
-			const [dashboardData, feedbackData] = await Promise.all([
-				analyticsState.getAnalyticsDashboard(appId, startDate, endDate),
+			const [dashboardData, feedbackData, eventsData] = await Promise.all([
+				analyticsState.getAnalyticsDashboard(
+					appId,
+					startDate,
+					endDate,
+					"day",
+					eventFilter,
+				),
 				analyticsState.listFeedback(
 					appId,
 					feedbackPage * FEEDBACK_LIMIT,
 					FEEDBACK_LIMIT,
 					minRating,
 					maxRating,
+					eventFilter,
 				),
+				eventState.getEvents(appId).catch(() => []),
 			]);
 
 			setOverview(dashboardData.stats.summary ?? dashboardData.overview);
 			setDailyStats(dashboardData.stats.dailyStats);
 			setFeedbackItems(feedbackData.items);
 			setFeedbackTotal(feedbackData.total);
+			setEvents(eventsData);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -622,11 +831,44 @@ export function AnalyticsDashboard() {
 		} finally {
 			setLoading(false);
 		}
-	}, [appId, dateRange, feedbackFilter, feedbackPage, analyticsState]);
+	}, [
+		appId,
+		dateRange,
+		feedbackFilter,
+		feedbackPage,
+		selectedEventId,
+		analyticsState,
+		eventState,
+	]);
 
 	useEffect(() => {
 		loadData();
 	}, [loadData]);
+
+	useEffect(() => {
+		setSelectedEventId(eventIdParam);
+		setFeedbackPage(0);
+	}, [eventIdParam]);
+
+	const updateEventFilter = useCallback(
+		(value: string) => {
+			setSelectedEventId(value);
+			setFeedbackPage(0);
+
+			const params = new URLSearchParams(searchParams.toString());
+			if (value === "all") {
+				params.delete("eventId");
+			} else {
+				params.set("eventId", value);
+			}
+
+			const query = params.toString();
+			router.replace(query ? `${pathname}?${query}` : pathname, {
+				scroll: false,
+			});
+		},
+		[pathname, router, searchParams],
+	);
 
 	const feedbackTotalPages = Math.ceil(feedbackTotal / FEEDBACK_LIMIT);
 	const dateRangeLabel =
@@ -635,10 +877,38 @@ export function AnalyticsDashboard() {
 			: dateRange === "30d"
 				? "Last 30 days"
 				: "Last 90 days";
+	const analyticsScopeCopy =
+		selectedEventId === "all"
+			? "Usage, reliability, cost, and feedback"
+			: "Usage, reliability, and feedback";
+	const eventOptions = useMemo(
+		() =>
+			[...events]
+				.filter((event) => event.id?.trim())
+				.sort((a, b) => a.name.localeCompare(b.name)),
+		[events],
+	);
+	const eventLookup = useMemo(
+		() => new Map(eventOptions.map((event) => [event.id, event])),
+		[eventOptions],
+	);
+	const selectedEvent =
+		selectedEventId === "all" ? undefined : eventLookup.get(selectedEventId);
+	const selectedEventLabel =
+		selectedEventId === "all"
+			? "all events"
+			: selectedEvent?.name ||
+				compactIdentifier(selectedEventId) ||
+				"selected event";
+	const selectedEventIsMissing =
+		selectedEventId !== "all" && !selectedEvent && selectedEventId.trim();
 
 	const totalExecutions = overview?.totalExecutions ?? 0;
-	const successfulExecutions = overview?.successfulExecutions ?? 0;
 	const failedExecutions = overview?.failedExecutions ?? 0;
+	const successfulExecutions =
+		totalExecutions > 0
+			? Math.max(totalExecutions - failedExecutions, 0)
+			: (overview?.successfulExecutions ?? 0);
 	const uniqueUsers = overview?.uniqueUsers ?? 0;
 	const successRate =
 		totalExecutions > 0 ? (successfulExecutions / totalExecutions) * 100 : null;
@@ -704,23 +974,57 @@ export function AnalyticsDashboard() {
 				<div className="space-y-1">
 					<h1 className="text-2xl font-semibold">Analytics</h1>
 					<p className="text-sm text-muted-foreground">
-						Usage, reliability, cost, and feedback for{" "}
-						{dateRangeLabel.toLowerCase()}
+						{analyticsScopeCopy} for {dateRangeLabel.toLowerCase()} across{" "}
+						{selectedEventLabel}
 					</p>
 				</div>
-				<Select
-					value={dateRange}
-					onValueChange={(value) => setDateRange(value as typeof dateRange)}
-				>
-					<SelectTrigger className="w-full bg-background/70 sm:w-40 dark:bg-background/30">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="7d">Last 7 days</SelectItem>
-						<SelectItem value="30d">Last 30 days</SelectItem>
-						<SelectItem value="90d">Last 90 days</SelectItem>
-					</SelectContent>
-				</Select>
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<Select
+						value={dateRange}
+						onValueChange={(value) => setDateRange(value as typeof dateRange)}
+					>
+						<SelectTrigger className="w-full bg-background/70 sm:w-40 dark:bg-background/30">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="7d">Last 7 days</SelectItem>
+							<SelectItem value="30d">Last 30 days</SelectItem>
+							<SelectItem value="90d">Last 90 days</SelectItem>
+						</SelectContent>
+					</Select>
+					<Select value={selectedEventId} onValueChange={updateEventFilter}>
+						<SelectTrigger className="w-full bg-background/70 sm:w-60 dark:bg-background/30">
+							<FilterIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+							<SelectValue placeholder="All events" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">All events</SelectItem>
+							{selectedEventIsMissing && (
+								<SelectItem value={selectedEventId}>
+									{compactIdentifier(selectedEventId) || "Selected event"}
+								</SelectItem>
+							)}
+							{eventOptions.map((event) => (
+								<SelectItem key={event.id} value={event.id}>
+									{event.name ||
+										compactIdentifier(event.id) ||
+										"Untitled event"}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					{selectedEventId !== "all" && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={() => updateEventFilter("all")}
+						>
+							<XIcon className="mr-1 h-3.5 w-3.5" />
+							Clear
+						</Button>
+					)}
+				</div>
 			</div>
 
 			<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -764,8 +1068,12 @@ export function AnalyticsDashboard() {
 				/>
 				<MetricCard
 					title="AI Spend"
-					value={formatCost(totalCost)}
-					detail={`${formatCost(costPerExecution)} per execution`}
+					value={selectedEventId === "all" ? formatCost(totalCost) : "N/A"}
+					detail={
+						selectedEventId === "all"
+							? `${formatCost(costPerExecution)} per execution`
+							: "Event-level cost is not tracked yet"
+					}
 					icon={BrainIcon}
 				/>
 			</div>
@@ -820,7 +1128,11 @@ export function AnalyticsDashboard() {
 						<div className="flex items-start justify-between gap-3">
 							<div>
 								<CardTitle>AI Cost</CardTitle>
-								<CardDescription>Daily LLM and embedding spend</CardDescription>
+								<CardDescription>
+									{selectedEventId === "all"
+										? "Daily LLM and embedding spend"
+										: "Event-level AI spend is not tracked yet"}
+								</CardDescription>
 							</div>
 							<div className="text-right text-xs text-muted-foreground">
 								<div>LLM {formatCost(overview?.totalLlmCost ?? 0)}</div>
@@ -831,7 +1143,11 @@ export function AnalyticsDashboard() {
 						</div>
 					</CardHeader>
 					<CardContent className="pt-0">
-						<CostTrendChart data={dailyStats} />
+						{selectedEventId === "all" ? (
+							<CostTrendChart data={dailyStats} />
+						) : (
+							<EmptyChart label="Event-level AI spend is not tracked yet" />
+						)}
 					</CardContent>
 				</Card>
 			</div>
@@ -843,7 +1159,7 @@ export function AnalyticsDashboard() {
 							<div>
 								<CardTitle>Feedback Signal</CardTitle>
 								<CardDescription>
-									Positive and negative responses
+									Positive and negative responses for {selectedEventLabel}
 								</CardDescription>
 							</div>
 							<Badge
@@ -875,7 +1191,7 @@ export function AnalyticsDashboard() {
 							<div>
 								<CardTitle>Recent Feedback</CardTitle>
 								<CardDescription>
-									{formatNumber(feedbackTotal)} entries
+									{formatNumber(feedbackTotal)} entries for {selectedEventLabel}
 								</CardDescription>
 							</div>
 							<Select
@@ -909,30 +1225,95 @@ export function AnalyticsDashboard() {
 										<TableHeader>
 											<TableRow>
 												<TableHead>Signal</TableHead>
+												<TableHead className="w-80">Source</TableHead>
 												<TableHead>Comment</TableHead>
 												<TableHead className="w-32">Date</TableHead>
 											</TableRow>
 										</TableHeader>
 										<TableBody>
-											{feedbackItems.map((item) => (
-												<TableRow key={item.id}>
-													<TableCell>
-														<FeedbackBadge rating={item.rating} />
-													</TableCell>
-													<TableCell className="max-w-md">
-														<p className="truncate">
-															{item.comment || (
-																<span className="text-muted-foreground italic">
-																	No comment
-																</span>
-															)}
-														</p>
-													</TableCell>
-													<TableCell className="whitespace-nowrap text-muted-foreground">
-														{formatDateTime(item.createdAt)}
-													</TableCell>
-												</TableRow>
-											))}
+											{feedbackItems.map((item) => {
+												const eventFromList = item.eventId
+													? eventLookup.get(item.eventId)
+													: undefined;
+												const pageSource = formatFeedbackPageSource(
+													item,
+													eventFromList,
+												);
+												const eventSource = formatFeedbackEventSource(
+													item,
+													eventFromList,
+												);
+												const eventHref = getAnalyticsEventHref(
+													appId,
+													item.eventId,
+												);
+												const eventTitle = [
+													item.eventName || eventFromList?.name,
+													item.eventId,
+													item.eventRoute || getEventRoute(eventFromList),
+													item.eventPageId || getEventPageId(eventFromList),
+												]
+													.filter(Boolean)
+													.join(" | ");
+
+												return (
+													<TableRow key={item.id}>
+														<TableCell>
+															<FeedbackBadge rating={item.rating} />
+														</TableCell>
+														<TableCell className="max-w-[20rem]">
+															<div className="min-w-0 space-y-1">
+																<div className="min-w-0 truncate text-sm font-medium">
+																	{eventSource && eventHref ? (
+																		<a
+																			href={eventHref}
+																			className="inline-flex max-w-full items-center gap-1 text-primary underline-offset-2 hover:underline"
+																			title={eventTitle || eventSource}
+																		>
+																			<span className="truncate">
+																				{eventSource}
+																			</span>
+																			<ExternalLinkIcon className="h-3 w-3 shrink-0" />
+																		</a>
+																	) : eventSource ? (
+																		<span title={eventTitle || eventSource}>
+																			{eventSource}
+																		</span>
+																	) : (
+																		<span className="text-muted-foreground italic">
+																			Unknown event
+																		</span>
+																	)}
+																</div>
+																{pageSource ? (
+																	<p
+																		className="truncate text-xs text-muted-foreground"
+																		title={pageSource}
+																	>
+																		{pageSource}
+																	</p>
+																) : (
+																	<p className="text-xs text-muted-foreground italic">
+																		No page context
+																	</p>
+																)}
+															</div>
+														</TableCell>
+														<TableCell className="max-w-sm">
+															<p className="truncate">
+																{item.comment || (
+																	<span className="text-muted-foreground italic">
+																		No comment
+																	</span>
+																)}
+															</p>
+														</TableCell>
+														<TableCell className="whitespace-nowrap text-muted-foreground">
+															{formatDateTime(item.createdAt)}
+														</TableCell>
+													</TableRow>
+												);
+											})}
 										</TableBody>
 									</Table>
 								</div>

@@ -46,6 +46,13 @@ export interface IFeedbackItem {
 	id: string;
 	userId: string | null;
 	eventId: string | null;
+	eventName: string | null;
+	eventRoute: string | null;
+	eventPageId: string | null;
+	pagePath: string | null;
+	pageSearch: string | null;
+	pageHash: string | null;
+	routePathname: string | null;
 	rating: number;
 	comment: string;
 	createdAt: string;
@@ -59,13 +66,17 @@ export interface IPaginatedFeedback {
 }
 
 export interface IAnalyticsState {
-	getAnalyticsOverview(appId: string): Promise<IAnalyticsOverview>;
+	getAnalyticsOverview(
+		appId: string,
+		eventId?: string,
+	): Promise<IAnalyticsOverview>;
 
 	getAnalyticsDashboard(
 		appId: string,
 		startDate?: string,
 		endDate?: string,
 		period?: "day" | "week" | "month",
+		eventId?: string,
 	): Promise<IAnalyticsDashboard>;
 
 	getAnalyticsStats(
@@ -73,6 +84,7 @@ export interface IAnalyticsState {
 		startDate?: string,
 		endDate?: string,
 		period?: "day" | "week" | "month",
+		eventId?: string,
 	): Promise<IAnalyticsStats>;
 
 	listFeedback(
@@ -81,5 +93,6 @@ export interface IAnalyticsState {
 		limit?: number,
 		minRating?: number,
 		maxRating?: number,
+		eventId?: string,
 	): Promise<IPaginatedFeedback>;
 }

@@ -1,9 +1,9 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_types::{
     Ok, async_trait,
     image::{DynamicImage, ImageDecoder, ImageReader},
@@ -30,6 +30,7 @@ impl NodeLogic for ReadImageFromUrlNode {
             "Read image from path",
             "Image/Content",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         node.add_input_pin(
