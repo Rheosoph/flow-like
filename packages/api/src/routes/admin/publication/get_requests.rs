@@ -10,10 +10,19 @@ use crate::{
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ColumnTrait, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
+
+#[derive(FromQueryResult)]
+struct AppGroupCount {
+    app_id: String,
+    cnt: i64,
+}
 
 #[derive(Clone, Serialize, Deserialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -160,25 +169,33 @@ pub async fn get_requests(
         .filter_map(|m| m.app_id.clone().map(|aid| (aid, m)))
         .collect();
 
-    // Board counts per app
-    let board_syncs = board_sync::Entity::find()
+    // Board counts per app (aggregated in SQL)
+    let board_counts: HashMap<String, u64> = board_sync::Entity::find()
         .filter(board_sync::Column::AppId.is_in(app_ids.clone()))
+        .select_only()
+        .column(board_sync::Column::AppId)
+        .column_as(Expr::col(board_sync::Column::Id).count(), "cnt")
+        .group_by(board_sync::Column::AppId)
+        .into_model::<AppGroupCount>()
         .all(&state.db)
-        .await?;
-    let mut board_counts: HashMap<String, u64> = HashMap::new();
-    for bs in &board_syncs {
-        *board_counts.entry(bs.app_id.clone()).or_default() += 1;
-    }
+        .await?
+        .into_iter()
+        .map(|r| (r.app_id, r.cnt.max(0) as u64))
+        .collect();
 
-    // Package counts per app
-    let app_packages = app_package::Entity::find()
+    // Package counts per app (aggregated in SQL)
+    let package_counts: HashMap<String, u64> = app_package::Entity::find()
         .filter(app_package::Column::AppId.is_in(app_ids.clone()))
+        .select_only()
+        .column(app_package::Column::AppId)
+        .column_as(Expr::col(app_package::Column::Id).count(), "cnt")
+        .group_by(app_package::Column::AppId)
+        .into_model::<AppGroupCount>()
         .all(&state.db)
-        .await?;
-    let mut package_counts: HashMap<String, u64> = HashMap::new();
-    for ap in &app_packages {
-        *package_counts.entry(ap.app_id.clone()).or_default() += 1;
-    }
+        .await?
+        .into_iter()
+        .map(|r| (r.app_id, r.cnt.max(0) as u64))
+        .collect();
 
     // Publication logs
     let logs = publication_log::Entity::find()

@@ -13,11 +13,12 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use chrono::{Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{Duration, NaiveDate, Utc};
+use sea_orm::sea_query::{Expr, SelectStatement, SimpleExpr};
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, Select,
+    ColumnTrait, Condition, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, QueryTrait, Select,
 };
-use sea_orm::sea_query::SelectStatement;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -530,6 +531,66 @@ pub async fn get_analytics_stats(
     }))
 }
 
+#[derive(FromQueryResult)]
+struct ScalarCount {
+    cnt: i64,
+}
+
+#[derive(FromQueryResult)]
+struct DayCount {
+    day: String,
+    cnt: i64,
+}
+
+/// Base query selecting member executions for an app, optionally scoped by date
+/// range and event. Membership filtering is pushed into the database via a
+/// subquery so we never materialize execution user IDs in memory nor build a
+/// large `IN (...)` clause.
+fn member_executions_query(
+    app_id: &str,
+    start_date: Option<NaiveDate>,
+    end_date_exclusive: Option<NaiveDate>,
+    event_filter: Option<&AnalyticsEventFilter>,
+) -> Select<execution_usage_tracking::Entity> {
+    let mut query = filter_execution_query_by_event(
+        execution_usage_tracking::Entity::find()
+            .filter(execution_usage_tracking::Column::AppId.eq(app_id))
+            .filter(execution_usage_tracking::Column::UserId.is_not_null())
+            .filter(
+                execution_usage_tracking::Column::UserId.in_subquery(member_user_subquery(app_id)),
+            ),
+        event_filter,
+    );
+
+    if let Some(start_date) = start_date {
+        query = query.filter(
+            execution_usage_tracking::Column::CreatedAt
+                .gte(start_date.and_hms_opt(0, 0, 0).unwrap()),
+        );
+    }
+
+    if let Some(end_date_exclusive) = end_date_exclusive {
+        query = query.filter(
+            execution_usage_tracking::Column::CreatedAt
+                .lt(end_date_exclusive.and_hms_opt(0, 0, 0).unwrap()),
+        );
+    }
+
+    query
+}
+
+/// Database-specific expression truncating `createdAt` to a `YYYY-MM-DD` day
+/// bucket so the grouping happens in SQL rather than in application memory.
+fn day_bucket_expr(backend: DbBackend) -> SimpleExpr {
+    match backend {
+        DbBackend::Postgres => Expr::cust(r#"to_char("createdAt", 'YYYY-MM-DD')"#),
+        // SQLite (and the MySQL fallback path is unused in this project).
+        _ => Expr::cust("strftime('%Y-%m-%d', createdAt)"),
+    }
+}
+
+/// Count distinct app members that produced executions in the given window via a
+/// single `COUNT(DISTINCT userId)` query.
 async fn count_unique_users(
     state: &AppState,
     app_id: &str,
@@ -537,43 +598,22 @@ async fn count_unique_users(
     end_date_exclusive: Option<NaiveDate>,
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<i64, ApiError> {
-    let mut query = filter_execution_query_by_event(
-        execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::AppId.eq(app_id))
-            .filter(execution_usage_tracking::Column::UserId.is_not_null())
-            .filter(execution_usage_tracking::Column::UserId.in_subquery(member_user_subquery(app_id))),
-        event_filter,
-    );
-
-    if let Some(start_date) = start_date {
-        query = query.filter(
-            execution_usage_tracking::Column::CreatedAt
-                .gte(start_date.and_hms_opt(0, 0, 0).unwrap()),
-        );
-    }
-
-    if let Some(end_date_exclusive) = end_date_exclusive {
-        query = query.filter(
-            execution_usage_tracking::Column::CreatedAt
-                .lt(end_date_exclusive.and_hms_opt(0, 0, 0).unwrap()),
-        );
-    }
-
-    let users: Vec<Option<String>> = query
+    let row = member_executions_query(app_id, start_date, end_date_exclusive, event_filter)
         .select_only()
-        .column(execution_usage_tracking::Column::UserId)
-        .distinct()
-        .into_tuple()
-        .all(&state.db)
+        .expr_as(
+            Expr::col(execution_usage_tracking::Column::UserId).count_distinct(),
+            "cnt",
+        )
+        .into_model::<ScalarCount>()
+        .one(&state.db)
         .await?;
 
-    Ok(users.into_iter().flatten().count() as i64)
+    Ok(row.map(|r| r.cnt).unwrap_or(0))
 }
 
 /// Count distinct app members that produced executions, grouped by day, in a
-/// single query. The membership filter is pushed into the database via a
-/// subquery so we never materialize the full set of execution user IDs in
-/// memory and avoid per-day N+1 queries.
+/// single `GROUP BY day` query so we avoid both per-day N+1 queries and loading
+/// every execution row into memory.
 async fn count_unique_users_by_date(
     state: &AppState,
     app_id: &str,
@@ -581,53 +621,30 @@ async fn count_unique_users_by_date(
     end_date_exclusive: Option<NaiveDate>,
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<std::collections::HashMap<NaiveDate, i64>, ApiError> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
-    let mut query = filter_execution_query_by_event(
-        execution_usage_tracking::Entity::find()
-            .filter(execution_usage_tracking::Column::AppId.eq(app_id))
-            .filter(execution_usage_tracking::Column::UserId.is_not_null())
-            .filter(execution_usage_tracking::Column::UserId.in_subquery(member_user_subquery(app_id))),
-        event_filter,
-    );
+    let day_expr = day_bucket_expr(state.db.get_database_backend());
 
-    if let Some(start_date) = start_date {
-        query = query.filter(
-            execution_usage_tracking::Column::CreatedAt
-                .gte(start_date.and_hms_opt(0, 0, 0).unwrap()),
-        );
-    }
-
-    if let Some(end_date_exclusive) = end_date_exclusive {
-        query = query.filter(
-            execution_usage_tracking::Column::CreatedAt
-                .lt(end_date_exclusive.and_hms_opt(0, 0, 0).unwrap()),
-        );
-    }
-
-    let rows: Vec<(Option<String>, NaiveDateTime)> = query
+    let rows = member_executions_query(app_id, start_date, end_date_exclusive, event_filter)
         .select_only()
-        .column(execution_usage_tracking::Column::UserId)
-        .column(execution_usage_tracking::Column::CreatedAt)
-        .distinct()
-        .into_tuple()
+        .expr_as(day_expr.clone(), "day")
+        .expr_as(
+            Expr::col(execution_usage_tracking::Column::UserId).count_distinct(),
+            "cnt",
+        )
+        .group_by(day_expr)
+        .into_model::<DayCount>()
         .all(&state.db)
         .await?;
 
-    let mut per_day: HashMap<NaiveDate, HashSet<String>> = HashMap::new();
-    for (user_id, created_at) in rows {
-        if let Some(user_id) = user_id {
-            per_day
-                .entry(created_at.date())
-                .or_default()
-                .insert(user_id);
+    let mut per_day: HashMap<NaiveDate, i64> = HashMap::new();
+    for row in rows {
+        if let Ok(date) = NaiveDate::parse_from_str(&row.day, "%Y-%m-%d") {
+            per_day.insert(date, row.cnt);
         }
     }
 
-    Ok(per_day
-        .into_iter()
-        .map(|(date, users)| (date, users.len() as i64))
-        .collect())
+    Ok(per_day)
 }
 
 /// Subquery selecting the user IDs that are members of the given app. Used to
@@ -639,36 +656,6 @@ fn member_user_subquery(app_id: &str) -> SelectStatement {
         .select_only()
         .column(membership::Column::UserId)
         .into_query()
-}
-
-async fn count_existing_app_members(
-    state: &AppState,
-    app_id: &str,
-    candidate_user_ids: std::collections::HashSet<String>,
-) -> Result<i64, ApiError> {
-    if candidate_user_ids.is_empty() {
-        return Ok(0);
-    }
-
-    let member_user_ids: Vec<String> = membership::Entity::find()
-        .filter(membership::Column::AppId.eq(app_id))
-        .filter(membership::Column::UserId.is_in(candidate_user_ids))
-        .select_only()
-        .column(membership::Column::UserId)
-        .distinct()
-        .into_tuple()
-        .all(&state.db)
-        .await?;
-
-    Ok(member_user_ids.len() as i64)
-}
-
-fn is_member_user_candidate(user_id: &str) -> bool {
-    let user_id = user_id.trim();
-    !user_id.is_empty()
-        && user_id != "local"
-        && !user_id.starts_with("sink:")
-        && !user_id.starts_with("inbound:")
 }
 
 fn weighted_average_by_count(values: impl Iterator<Item = (f64, i64)>) -> Option<f64> {
@@ -727,7 +714,6 @@ async fn compute_overview_from_raw(
     event_filter: Option<&AnalyticsEventFilter>,
 ) -> Result<AnalyticsOverview, ApiError> {
     use crate::entity::sea_orm_active_enums::ExecutionStatus;
-    use std::collections::HashSet;
 
     let executions = filter_execution_query_by_event(
         execution_usage_tracking::Entity::find()
@@ -744,13 +730,7 @@ async fn compute_overview_from_raw(
         .count() as i64;
     let successful_executions = total_executions - failed_executions;
 
-    let all_user_ids: HashSet<String> = executions
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .filter(|user_id| is_member_user_candidate(user_id))
-        .cloned()
-        .collect();
-    let unique_users = count_existing_app_members(state, app_id, all_user_ids).await?;
+    let unique_users = count_unique_users(state, app_id, None, None, event_filter).await?;
 
     let feedbacks = filter_feedback_query_by_event(
         feedback::Entity::find().filter(feedback::Column::AppId.eq(app_id)),
@@ -796,13 +776,8 @@ async fn compute_overview_from_raw(
         .filter(|e| e.created_at >= current_start)
         .collect();
     let period_executions = period_execs.len() as i64;
-    let period_user_ids: HashSet<String> = period_execs
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .filter(|user_id| is_member_user_candidate(user_id))
-        .cloned()
-        .collect();
-    let period_unique_users = count_existing_app_members(state, app_id, period_user_ids).await?;
+    let period_unique_users =
+        count_unique_users(state, app_id, Some(thirty_days_ago), None, event_filter).await?;
 
     let prev_start = sixty_days_ago.and_hms_opt(0, 0, 0).unwrap();
     let prev_execs: Vec<_> = executions
@@ -810,13 +785,14 @@ async fn compute_overview_from_raw(
         .filter(|e| e.created_at >= prev_start && e.created_at < current_start)
         .collect();
     let prev_executions = prev_execs.len() as i64;
-    let prev_user_ids: HashSet<String> = prev_execs
-        .iter()
-        .filter_map(|e| e.user_id.as_ref())
-        .filter(|user_id| is_member_user_candidate(user_id))
-        .cloned()
-        .collect();
-    let prev_users = count_existing_app_members(state, app_id, prev_user_ids).await?;
+    let prev_users = count_unique_users(
+        state,
+        app_id,
+        Some(sixty_days_ago),
+        Some(thirty_days_ago),
+        event_filter,
+    )
+    .await?;
 
     Ok(AnalyticsOverview {
         total_executions,
