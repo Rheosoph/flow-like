@@ -1,6 +1,6 @@
 use flow_like::flow::{
     node::{Node, NodeLogic},
-    pin::PinOptions,
+    pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_types::async_trait;
@@ -345,6 +345,7 @@ impl NodeLogic for CreateCaSignedCertificateNode {
             "Web/TLS",
         );
         node.add_icon("/flow/icons/shield.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -371,9 +372,9 @@ impl NodeLogic for CreateCaSignedCertificateNode {
             "subject_alt_names",
             "Subject Alt Names",
             "DNS names and IP addresses covered by this certificate",
-            VariableType::Struct,
+            VariableType::String,
         )
-        .set_schema::<Vec<String>>()
+        .set_value_type(ValueType::Array)
         .set_default_value(Some(flow_like_types::json::json!(["localhost"])));
         node.add_input_pin("usage", "Usage", "Certificate usage", VariableType::String)
             .set_options(
@@ -445,6 +446,7 @@ impl NodeLogic for CreateSelfSignedCertificateNode {
             "Web/TLS",
         );
         node.add_icon("/flow/icons/shield.svg");
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -456,9 +458,9 @@ impl NodeLogic for CreateSelfSignedCertificateNode {
             "subject_alt_names",
             "Subject Alt Names",
             "DNS names and IP addresses covered by this certificate",
-            VariableType::Struct,
+            VariableType::String,
         )
-        .set_schema::<Vec<String>>()
+        .set_value_type(ValueType::Array)
         .set_default_value(Some(flow_like_types::json::json!(["localhost"])));
 
         node.add_output_pin(

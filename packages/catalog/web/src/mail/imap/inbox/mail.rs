@@ -101,7 +101,7 @@ impl NodeLogic for EmailHeadersNode {
             "Email/Access",
         );
         node.add_icon("/flow/icons/mail.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("email", "Email", "Email struct", VariableType::Struct)
             .set_schema::<Email>()
@@ -110,13 +110,13 @@ impl NodeLogic for EmailHeadersNode {
         node.add_output_pin("from", "From", "Primary from address", VariableType::Struct)
             .set_schema::<Option<MailAddress>>();
         node.add_output_pin("sender", "Sender", "Sender addresses", VariableType::Struct)
-            .set_schema::<Vec<MailAddress>>()
+            .set_schema::<MailAddress>()
             .set_value_type(ValueType::Array);
         node.add_output_pin("to", "To", "To addresses", VariableType::Struct)
-            .set_schema::<Vec<MailAddress>>()
+            .set_schema::<MailAddress>()
             .set_value_type(ValueType::Array);
         node.add_output_pin("cc", "Cc", "Carbon copy addresses", VariableType::Struct)
-            .set_schema::<Vec<MailAddress>>()
+            .set_schema::<MailAddress>()
             .set_value_type(ValueType::Array);
         node.add_output_pin(
             "bcc",
@@ -124,7 +124,7 @@ impl NodeLogic for EmailHeadersNode {
             "Blind carbon copy addresses",
             VariableType::Struct,
         )
-        .set_schema::<Vec<MailAddress>>()
+        .set_schema::<MailAddress>()
         .set_value_type(ValueType::Array);
 
         node
@@ -211,7 +211,7 @@ impl NodeLogic for EmailAttachmentsNode {
             "Email/Access",
         );
         node.add_icon("/flow/icons/mail.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("email", "Email", "Email struct", VariableType::Struct)
             .set_schema::<Email>()
@@ -224,7 +224,7 @@ impl NodeLogic for EmailAttachmentsNode {
             VariableType::Struct,
         )
         .set_value_type(ValueType::Array)
-        .set_schema::<Vec<Attachment>>();
+        .set_schema::<Attachment>();
 
         node
     }
