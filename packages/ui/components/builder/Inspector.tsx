@@ -47,7 +47,14 @@ import { getDefaultProps } from "./componentDefaults";
 import { getComponentSchema } from "./componentSchema";
 
 // Component types that have asset properties
-const ASSET_COMPONENT_TYPES = new Set(["image", "sprite", "model3d", "video"]);
+const ASSET_COMPONENT_TYPES = new Set([
+	"image",
+	"sprite",
+	"model3d",
+	"video",
+	"boundingBoxOverlay",
+	"imageLabeler",
+]);
 // Property names that should use the asset picker
 const ASSET_PROPERTY_NAMES = new Set(["src", "poster", "fallback"]);
 
@@ -2758,7 +2765,13 @@ function PropertyField({
 
 	// Determine asset accept type based on component type
 	const getAssetAccept = (): "image" | "model" | "video" | "all" => {
-		if (componentType === "image" || componentType === "sprite") return "image";
+		if (
+			componentType === "image" ||
+			componentType === "sprite" ||
+			componentType === "boundingBoxOverlay" ||
+			componentType === "imageLabeler"
+		)
+			return "image";
 		if (componentType === "model3d") return "model";
 		if (componentType === "video") return "video";
 		return "all";

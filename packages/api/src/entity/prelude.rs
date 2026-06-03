@@ -2,6 +2,7 @@
 
 pub use super::app::Entity as App;
 pub use super::app_analytics_daily::Entity as AppAnalyticsDaily;
+pub use super::app_board_score::Entity as AppBoardScore;
 pub use super::app_discount::Entity as AppDiscount;
 pub use super::app_package::Entity as AppPackage;
 pub use super::app_purchase::Entity as AppPurchase;

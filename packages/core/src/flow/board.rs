@@ -35,7 +35,7 @@ pub enum BoardParent {
     App(Weak<Mutex<App>>),
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionStage {
     Dev,
     Int,
@@ -44,7 +44,7 @@ pub enum ExecutionStage {
     Prod,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug, PartialEq, Eq)]
 pub enum ExecutionMode {
     #[default]
     Hybrid,

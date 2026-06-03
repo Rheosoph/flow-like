@@ -62,6 +62,7 @@ pub mod update_geomap;
 pub mod update_hotspot;
 pub mod update_labeler;
 pub mod update_model3d;
+pub mod update_overlay;
 pub mod update_scene3d;
 pub mod update_schemas;
 pub mod update_sprite;

@@ -224,6 +224,7 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Overview", href: "/admin/governance" },
 			{ label: "Review Queue", href: "/admin/governance/requests" },
+			{ label: "Scores", href: "/admin/governance/scores" },
 		],
 	},
 	{

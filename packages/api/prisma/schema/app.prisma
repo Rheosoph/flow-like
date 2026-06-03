@@ -107,6 +107,7 @@ model App {
   executionMode  ExecutionMode            @default(ANY)
 
   syncs  BoardSync[]
+  boardScores AppBoardScore[]
   bits   String[]    @default([])
   events Event[]
   sinks  EventSink[]
@@ -304,6 +305,47 @@ model BoardSync {
   updatedAt DateTime @updatedAt
 
   @@unique([appId, boardId])
+}
+
+/// Persisted quality / governance scores for a single board, aggregated as the
+/// MIN across that board's nodes per category (0-10, higher = better). App-level
+/// scores are derived on read via aggregation over these rows.
+model AppBoardScore {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  boardId String
+
+  security    Int
+  privacy     Int
+  performance Int
+  governance  Int
+  reliability Int
+  cost        Int
+
+  /// Minimum across all six categories - single sortable "how bad" value.
+  worstScore Int
+
+  nodeCount       Int @default(0)
+  scoredNodeCount Int @default(0)
+
+  /// Nodes dragging scores down: [{ node, category, score }]
+  flaggedPatterns Json?
+
+  /// Cached lightweight board summary metadata (name, stage, counts, ...) used
+  /// to serve board summaries without reading every board from object storage.
+  summary Json?
+
+  computedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([appId, boardId])
+  @@index([appId])
+  @@index([worstScore])
+  @@index([governance])
+  @@index([security])
 }
 
 /// Event model - mirrors the Event structure stored in bucket for fast lookups

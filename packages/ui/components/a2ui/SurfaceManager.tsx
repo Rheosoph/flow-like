@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
 import type {
 	A2UIClientMessage,
@@ -677,6 +678,136 @@ export function useSurfaceManager() {
 								component: {
 									...componentData,
 									...props,
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						// --- Bounding box overlay (display) ---------------------------------
+						case "setOverlayBoxes": {
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "addOverlayBox": {
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							const existing = resolveBoxesField(componentData.boxes);
+							const added = normalizeBoxes([updateValue.box]);
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: [...existing, ...added] },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "clearOverlayBoxes": {
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: [] },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						// --- Image labeler (interactive) -----------------------------------
+						case "setLabelerBoxes": {
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "addLabelerBox": {
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							const existing = resolveBoxesField(componentData.boxes);
+							const added = normalizeBoxes([updateValue.box]);
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: [...existing, ...added] },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "removeLabelerBox": {
+							const boxId = updateValue.boxId as string;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							const remaining = resolveBoxesField(componentData.boxes).filter(
+								(box) => box.id !== boxId,
+							);
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: remaining },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "updateLabelerBoxLabel": {
+							const boxId = updateValue.boxId as string;
+							const label = updateValue.label as string;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							const updated = resolveBoxesField(componentData.boxes).map(
+								(box) => (box.id === boxId ? { ...box, label } : box),
+							);
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									boxes: { literalOptions: updated },
+								} as unknown as SurfaceComponent["component"],
+							};
+							break;
+						}
+						case "setLabelerImage": {
+							const src = updateValue.src as string;
+							const alt = updateValue.alt as string | undefined;
+							const componentData = component.component as unknown as Record<
+								string,
+								unknown
+							>;
+							updatedComponent = {
+								...component,
+								component: {
+									...componentData,
+									src: { literalString: src },
+									...(alt !== undefined ? { alt: { literalString: alt } } : {}),
 								} as unknown as SurfaceComponent["component"],
 							};
 							break;

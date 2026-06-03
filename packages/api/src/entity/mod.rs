@@ -4,6 +4,7 @@ pub mod prelude;
 
 pub mod app;
 pub mod app_analytics_daily;
+pub mod app_board_score;
 pub mod app_discount;
 pub mod app_package;
 pub mod app_purchase;

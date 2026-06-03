@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 pub mod bit;
 pub mod forks;
+pub mod governance;
 pub mod logs;
 pub mod models;
 pub mod packages;
@@ -104,6 +105,23 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/usage/apps/{app_id}/limits",
             get(usage::get_limits).put(usage::put_limits),
+        )
+        // Governance scores
+        .route(
+            "/governance/scores",
+            get(governance::list_scores::list_scores),
+        )
+        .route(
+            "/governance/scores/recompute",
+            post(governance::recompute::recompute_scores),
+        )
+        .route(
+            "/governance/scores/{app_id}",
+            get(governance::get_app_scores::get_app_scores),
+        )
+        .route(
+            "/governance/patterns",
+            get(governance::list_patterns::list_patterns),
         )
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))

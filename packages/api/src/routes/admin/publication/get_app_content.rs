@@ -4,7 +4,8 @@ use crate::{
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
     routes::app::{
-        board::summaries::{BoardScores, BoardSummary},
+        board::summaries::BoardSummary,
+        board::scoring::compute_board_score,
         events::db::{filter_event_list_execution, filter_event_secrets, get_events_for_app},
         page::get_pages::PageInfo,
     },
@@ -113,41 +114,7 @@ pub async fn get_app_content(
         };
         let board = board.lock().await;
 
-        let mut node_count = 0u32;
-        let mut connection_count = 0u32;
-        let mut min_scores: Option<BoardScores> = None;
-
-        for node in board.nodes.values() {
-            if node.name == "reroute" {
-                continue;
-            }
-            node_count += 1;
-            for pin in node.pins.values() {
-                connection_count += pin.connected_to.len() as u32;
-            }
-
-            if let Some(ref s) = node.scores {
-                min_scores = Some(match min_scores {
-                    None => BoardScores {
-                        security: s.security,
-                        privacy: s.privacy,
-                        performance: s.performance,
-                        governance: s.governance,
-                        reliability: s.reliability,
-                        cost: s.cost,
-                    },
-                    Some(prev) => BoardScores {
-                        security: prev.security.min(s.security),
-                        privacy: prev.privacy.min(s.privacy),
-                        performance: prev.performance.min(s.performance),
-                        governance: prev.governance.min(s.governance),
-                        reliability: prev.reliability.min(s.reliability),
-                        cost: prev.cost.min(s.cost),
-                    },
-                });
-            }
-        }
-        connection_count /= 2;
+        let computation = compute_board_score(&board);
 
         boards.push(BoardSummary {
             id: board.id.clone(),
@@ -157,12 +124,12 @@ pub async fn get_app_content(
             execution_mode: board.execution_mode.clone(),
             log_level: board.log_level,
             version: board.version,
-            node_count,
-            connection_count,
+            node_count: computation.node_count,
+            connection_count: computation.connection_count,
             variable_count: board.variables.len() as u32,
             layer_count: board.layers.len() as u32,
             comment_count: board.comments.len() as u32,
-            scores: min_scores,
+            scores: computation.scores,
             pages: pages_by_board.remove(&board.id).unwrap_or_default(),
         });
     }
