@@ -1,0 +1,27 @@
+{
+	"iconDefinitions": {
+		"_flow": { "iconPath": "./flow.svg" },
+		"_flow_d": { "iconPath": "./flow-d.svg" },
+		"_file": { "iconPath": "./default-file.svg" },
+		"_folder": { "iconPath": "./default-folder.svg" },
+		"_folder_open": { "iconPath": "./default-folder-open.svg" }
+	},
+	"file": "_file",
+	"folder": "_folder",
+	"folderExpanded": "_folder_open",
+	"languageIds": {
+		"flowscript": "_flow",
+		"flowscript-declaration": "_flow_d"
+	},
+	"fileExtensions": {
+		"flow": "_flow",
+		"flow.d": "_flow_d"
+	},
+	"fileNames": {},
+	"light": {
+		"file": "_file",
+		"folder": "_folder",
+		"folderExpanded": "_folder_open"
+	},
+	"hidesExplorerArrows": false
+}
