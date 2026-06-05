@@ -4,6 +4,7 @@
 //! interaction with flow graphs, supporting both explanation and modification.
 
 mod context;
+mod declarations;
 mod provider;
 mod search;
 mod tools;
@@ -19,12 +20,13 @@ pub use search::{
     search_result_hint_lines,
 };
 pub use tools::{
-    CatalogTool, EmitCommandsArgs, EmitCommandsTool, FilterCategoryArgs, FilterCategoryTool,
-    FindConnectableNodesArgs, FindConnectableNodesTool, GetNodeDetailsArgs, GetNodeDetailsTool,
+    CatalogTool, EditFlowScriptArgs, EditFlowScriptTool, EmitCommandsArgs, EmitCommandsTool,
+    FilterCategoryArgs, FilterCategoryTool, FindConnectableNodesArgs, FindConnectableNodesTool,
+    GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsArgs, GetNodeDetailsTool,
     GetUnconfiguredNodesTool, ListBoardNodesTool, QueryLogsArgs, QueryLogsTool, SearchArgs,
     SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs,
-    build_find_connectable_nodes_output, build_list_board_nodes_output,
-    build_unconfigured_nodes_output, get_tool_description,
+    board_has_no_nodes, build_find_connectable_nodes_output, build_list_board_nodes_output,
+    build_unconfigured_nodes_output, get_tool_description, render_edit_flowscript_result,
 };
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,
@@ -182,6 +184,16 @@ impl Copilot {
         let context = prepare_context(board, selected_node_ids)?;
         let context_json = flow_like_types::json::to_string_pretty(&context)?;
 
+        // Render the board as FlowScript (with stable `//@n:<id>` anchors) so the agent edits the
+        // text surface by default and reconcile can match identities on apply.
+        let flowscript = crate::flow::ast::board_to_flowscript(
+            board,
+            &crate::flow::ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+
         // Only include node type names (not full paths) for context efficiency
         let available_nodes = self.catalog_provider.get_all_nodes().await;
         let node_count = available_nodes.len();
@@ -191,12 +203,14 @@ impl Copilot {
         // Build a compact system prompt
         let system_prompt = Self::build_system_prompt(
             &context_json,
+            &flowscript,
             node_count,
             !self.templates.is_empty(),
             run_context.is_some(),
         );
 
         let graph_context = Arc::new(context.clone());
+        let board_for_tools = Arc::new(board.clone());
 
         let mut agent_builder = completion_client
             .agent(&model_name)
@@ -217,6 +231,13 @@ impl Copilot {
             })
             .tool(EmitCommandsTool)
             .tool(CatalogTool {
+                provider: self.catalog_provider.clone(),
+            })
+            .tool(GetDeclarationsTool {
+                provider: self.catalog_provider.clone(),
+            })
+            .tool(EditFlowScriptTool {
+                board: board_for_tools.clone(),
                 provider: self.catalog_provider.clone(),
             })
             .tool(SearchByPinTool {
@@ -329,13 +350,14 @@ impl Copilot {
         let mut all_commands: Vec<BoardCommand> = Vec::new();
         let max_iterations = 10u64;
         let max_discovery_rounds_before_emit = 4u64;
-        let force_emit_instruction = "You have enough context. Stop searching or planning. In your next response, call emit_commands with a concrete command batch. Use exact existing node IDs and exact case-sensitive pin names from the tool results. Batch AddNode commands first, ConnectPins commands second, and UpdateNodePin commands last. If emit_commands returns validation errors, fix the reported issues and call emit_commands again; do not answer in text instead.";
+        let force_emit_instruction = "You have enough context. Stop searching or planning. In your next response, call edit_flowscript with the full edited FlowScript document. Preserve all existing //@n anchors you keep. Write new workflow nodes as concrete unanchored FlowScript calls inside a function/event block using declarations from get_declarations, and let edit_flowscript translate the text into commands. Do not submit TODOs, function stubs, implementation-plan comments, lists of node names, or top-level node-call assignments. Use emit_commands only for layout-only MoveNode or non-FlowScript visual/modeling changes. If edit_flowscript returns validation errors, fix the FlowScript and call edit_flowscript again; do not answer in text instead.";
         let mut plan_step_counter = 0u32;
         let mut invalid_emit_attempts = 0u8;
         let mut discovery_rounds_without_emit = 0u64;
         let mut forced_emit_prompt_sent = false;
         let mut last_emit_validation: Option<String> = None;
         let mut successful_emit_message: Option<String> = None;
+        let mut last_flowscript_workspace: Option<String> = None;
         let mut current_prompt = prompt_message.clone();
 
         for iteration in 0..max_iterations {
@@ -559,9 +581,16 @@ impl Copilot {
                         let id = tool_call.id.clone();
                         let ctx = run_context.clone();
                         let graph_ctx = context.clone();
+                        let board_ctx = board_for_tools.clone();
                         async move {
                             let output = self
-                                .execute_tool(&name, arguments, ctx.as_ref(), &graph_ctx)
+                                .execute_tool(
+                                    &name,
+                                    arguments,
+                                    ctx.as_ref(),
+                                    &graph_ctx,
+                                    &board_ctx,
+                                )
                                 .await;
                             (id, name, output)
                         }
@@ -580,8 +609,23 @@ impl Copilot {
                         tool_output.len()
                     );
 
+                    if name == "edit_flowscript"
+                        && let Some(workspace) = Self::parse_flowscript_workspace(tool_output)
+                    {
+                        last_flowscript_workspace = Some(workspace);
+                        if let Some(ref callback) = on_token
+                            && let Some(payload) =
+                                Self::extract_tag_content(tool_output, "flowscript_workspace")
+                        {
+                            callback(format!(
+                                "<flowscript_workspace>{}</flowscript_workspace>",
+                                payload
+                            ));
+                        }
+                    }
+
                     // Parse commands from emit_commands tool output
-                    if name == "emit_commands" {
+                    if name == "emit_commands" || name == "edit_flowscript" {
                         emit_attempted_this_round = true;
                         let parsed = Self::parse_commands(tool_output);
                         println!("[Copilot] emit_commands parsed {} commands:", parsed.len());
@@ -766,7 +810,7 @@ impl Copilot {
             } else {
                 last_emit_validation
                     .as_deref()
-                    .map(Self::clean_validation_message)
+                    .map(|message| Self::clean_validation_message(&Self::clean_message(message)))
                     .unwrap_or_default()
             }
         } else {
@@ -782,6 +826,7 @@ impl Copilot {
             message: final_message,
             commands: all_commands,
             suggestions: vec![],
+            flowscript_workspace: last_flowscript_workspace,
         };
 
         if let Ok(json) = serde_json::to_string(&response) {
@@ -800,12 +845,14 @@ impl Copilot {
     /// Build a compact system prompt to reduce context size
     fn build_system_prompt(
         context_json: &str,
+        flowscript: &str,
         node_count: usize,
         has_templates: bool,
         has_run_context: bool,
     ) -> String {
         crate::copilot::prompts::board_system_prompt(
             context_json,
+            flowscript,
             node_count,
             has_templates,
             has_run_context,
@@ -819,6 +866,7 @@ impl Copilot {
         arguments: serde_json::Value,
         run_context: Option<&RunContext>,
         graph_context: &GraphContext,
+        board: &Board,
     ) -> String {
         match name {
             "think" => {
@@ -943,6 +991,26 @@ impl Copilot {
                     "[]".to_string()
                 }
             }
+            "get_declarations" => match serde_json::from_value::<GetDeclarationsArgs>(arguments) {
+                Ok(args) => self.catalog_provider.get_declarations(&args.query).await,
+                Err(e) => format!("Failed to parse declarations query: {}", e),
+            },
+            "edit_flowscript" => match serde_json::from_value::<EditFlowScriptArgs>(arguments) {
+                Ok(args) => {
+                    let catalog = self.catalog_provider.get_all_metadata().await;
+                    let result = crate::flow::ast::reconcile_text_with_catalog(
+                        board,
+                        &args.flowscript,
+                        &catalog,
+                    );
+                    render_edit_flowscript_result(
+                        &args.flowscript,
+                        &result,
+                        board_has_no_nodes(board),
+                    )
+                }
+                Err(e) => format!("Failed to parse FlowScript edit: {}", e),
+            },
             "search_by_pin" => {
                 if let Ok(args) = serde_json::from_value::<SearchByPinArgs>(arguments) {
                     let matches = self
@@ -1082,10 +1150,7 @@ impl Copilot {
     /// Parse commands from the agent's response
     fn parse_commands(response: &str) -> Vec<BoardCommand> {
         // Look for <commands>...</commands> tags
-        if let Some(start) = response.find("<commands>")
-            && let Some(end) = response.find("</commands>")
-        {
-            let json_str = &response[start + 10..end];
+        if let Some(json_str) = Self::extract_tag_content(response, "commands") {
             if let Ok(commands) = serde_json::from_str::<Vec<BoardCommand>>(json_str) {
                 return commands;
             }
@@ -1146,24 +1211,50 @@ impl Copilot {
 
     /// Clean the message by removing command tags
     fn clean_message(response: &str) -> String {
-        // Remove <commands>...</commands> block
         let mut result = response.to_string();
-        if let Some(start) = result.find("<commands>")
-            && let Some(end) = result.find("</commands>")
-        {
-            result = format!("{}{}", &result[..start], &result[end + 11..]);
-        }
+        Self::strip_tag_block(&mut result, "commands");
+        Self::strip_tag_block(&mut result, "flowscript_workspace");
         result.trim().to_string()
     }
 
     fn clean_validation_message(response: &str) -> String {
         let mut result = response.to_string();
-        if let Some(start) = result.find("<validation>")
-            && let Some(end) = result.find("</validation>")
-        {
-            result = format!("{}{}", &result[..start], &result[end + 13..]);
-        }
+        Self::strip_tag_block(&mut result, "validation");
         result.trim().to_string()
+    }
+
+    fn parse_flowscript_workspace(response: &str) -> Option<String> {
+        let payload = Self::extract_tag_content(response, "flowscript_workspace")?;
+        let value = serde_json::from_str::<serde_json::Value>(payload).ok()?;
+        if let Some(source) = value.as_str() {
+            return Some(source.to_string());
+        }
+        value
+            .get("source")
+            .and_then(|source| source.as_str())
+            .map(str::to_string)
+    }
+
+    fn extract_tag_content<'a>(response: &'a str, tag: &str) -> Option<&'a str> {
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        let start = response.find(&open)?;
+        let remainder = &response[start + open.len()..];
+        let end = remainder.find(&close)?;
+        Some(&remainder[..end])
+    }
+
+    fn strip_tag_block(result: &mut String, tag: &str) {
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        while let Some(start) = result.find(&open) {
+            let search_from = start + open.len();
+            let Some(relative_end) = result[search_from..].find(&close) else {
+                break;
+            };
+            let end = search_from + relative_end + close.len();
+            result.replace_range(start..end, "");
+        }
     }
 
     /// Get the model for the agent

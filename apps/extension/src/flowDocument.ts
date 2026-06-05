@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-export type FlowSymbolKind = "variable" | "function" | "event";
+export type FlowSymbolKind = "variable" | "function" | "event" | "interface";
 
 export interface FlowSymbol {
 	readonly name: string;
@@ -33,6 +33,20 @@ export interface FlowVariable {
 	readonly schemaText?: string;
 }
 
+export interface FlowInterfaceField {
+	readonly name: string;
+	readonly typeText: string;
+	readonly optional: boolean;
+	readonly range: vscode.Range;
+}
+
+export interface FlowInterface {
+	readonly name: string;
+	readonly range: vscode.Range;
+	readonly fullRange: vscode.Range;
+	readonly fields: FlowInterfaceField[];
+}
+
 export interface FlowDocumentModel {
 	readonly symbols: FlowSymbol[];
 	readonly calls: FlowCall[];
@@ -40,6 +54,8 @@ export interface FlowDocumentModel {
 	readonly localNames: Set<string>;
 	/** Every `const`/`let` declaration at any depth. */
 	readonly variables: FlowVariable[];
+	/** Top-level `interface Name { ... }` declarations. */
+	readonly interfaces: Map<string, FlowInterface>;
 }
 
 interface Tok {
@@ -53,6 +69,7 @@ const KEYWORDS = new Set([
 	"const",
 	"let",
 	"function",
+	"interface",
 	"if",
 	"else",
 	"for",
@@ -77,6 +94,7 @@ export function analyzeFlowDocument(
 	const calls: FlowCall[] = [];
 	const localNames = new Set<string>();
 	const variables: FlowVariable[] = [];
+	const interfaces = new Map<string, FlowInterface>();
 
 	for (let i = 0; i < idents.length; i++) {
 		const tok = idents[i];
@@ -113,6 +131,30 @@ export function analyzeFlowDocument(
 			continue;
 		}
 
+		if (tok.text === "interface") {
+			const name = idents[i + 1];
+			if (name && depth === 0) {
+				const fullRange = blockRange(document, text, tok.offset);
+				const range = tokRange(document, name);
+				const iface: FlowInterface = {
+					name: name.text,
+					range,
+					fullRange,
+					fields: parseInterfaceFields(document, fullRange),
+				};
+				interfaces.set(name.text, iface);
+				symbols.push({
+					name: name.text,
+					kind: "interface",
+					detail: "interface",
+					selectionRange: range,
+					fullRange,
+				});
+				localNames.add(name.text);
+			}
+			continue;
+		}
+
 		if (tok.text === "function") {
 			const name = idents[i + 1];
 			if (name) {
@@ -143,7 +185,41 @@ export function analyzeFlowDocument(
 		}
 	}
 
-	return { symbols, calls, localNames, variables };
+	return { symbols, calls, localNames, variables, interfaces };
+}
+
+function parseInterfaceFields(
+	document: vscode.TextDocument,
+	range: vscode.Range,
+): FlowInterfaceField[] {
+	const text = document.getText(range);
+	const open = text.indexOf("{");
+	const close = text.lastIndexOf("}");
+	if (open === -1 || close === -1 || close <= open) {
+		return [];
+	}
+
+	const baseOffset = document.offsetAt(range.start);
+	const body = text.slice(open + 1, close);
+	const fields: FlowInterfaceField[] = [];
+	const fieldRe =
+		/(^|[;\n,])\s*([A-Za-z_$][\w$]*)\s*(\?)?\s*:\s*([^=;,\n]+)(?:\s*=\s*(?:"(?:[^"\\]|\\.)*"|[^;,\n]+))?\s*(?=;|,|\n|$)/g;
+	let match: RegExpExecArray | null;
+	while ((match = fieldRe.exec(body))) {
+		const name = match[2];
+		const nameInMatch = match[0].indexOf(name);
+		const nameOffset = baseOffset + open + 1 + match.index + nameInMatch;
+		fields.push({
+			name,
+			typeText: match[4].trim(),
+			optional: match[3] === "?",
+			range: new vscode.Range(
+				document.positionAt(nameOffset),
+				document.positionAt(nameOffset + name.length),
+			),
+		});
+	}
+	return fields;
 }
 
 /** Extract the declared type and initializer call of a `const`/`let` from its line. */

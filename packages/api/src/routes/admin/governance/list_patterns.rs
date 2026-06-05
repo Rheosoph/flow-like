@@ -1,9 +1,6 @@
 use crate::{
-    entity::app_board_score,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::global_permission::GlobalPermission,
-    routes::app::board::scoring::FlaggedPattern,
+    entity::app_board_score, error::ApiError, middleware::jwt::AppUser,
+    permission::global_permission::GlobalPermission, routes::app::board::scoring::FlaggedPattern,
     state::AppState,
 };
 use axum::{Extension, Json, extract::State};
@@ -140,7 +137,11 @@ pub async fn list_patterns(
 
     let total = items.len() as u64;
     let offset = ((page - 1) * limit) as usize;
-    let paged: Vec<PatternItem> = items.into_iter().skip(offset).take(limit as usize).collect();
+    let paged: Vec<PatternItem> = items
+        .into_iter()
+        .skip(offset)
+        .take(limit as usize)
+        .collect();
     let has_more = (offset as u64) + (paged.len() as u64) < total;
 
     Ok(Json(ListPatternsResponse {

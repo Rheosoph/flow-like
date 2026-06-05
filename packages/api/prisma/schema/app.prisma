@@ -328,10 +328,11 @@ model AppBoardScore {
   /// Minimum across all six categories - single sortable "how bad" value.
   worstScore Int
 
-  nodeCount       Int @default(0)
-  scoredNodeCount Int @default(0)
+  nodeCount        Int @default(0)
+  scoredNodeCount  Int @default(0)
+  connectionCount  Int @default(0)
 
-  /// Nodes dragging scores down: [{ node, category, score }]
+  /// Nodes dragging scores down: [{ node, category, score, count? }]
   flaggedPatterns Json?
 
   /// Cached lightweight board summary metadata (name, stage, counts, ...) used

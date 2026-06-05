@@ -1656,6 +1656,222 @@ function UsageOverviewSection({
 	);
 }
 
+interface GovernanceScoresSummaryData {
+	criticalApps: number;
+	flaggedApps: number;
+	totalApps: number;
+	worstApps: Array<{
+		appId: string;
+		appName: string | null;
+		worstScore: number;
+		security: number;
+		privacy: number;
+	}>;
+}
+
+function GovernanceScoresSummary({
+	profile,
+}: {
+	profile: IProfile | undefined;
+}) {
+	const backend = useBackend();
+
+	const summary = useQuery<GovernanceScoresSummaryData>({
+		queryKey: ["admin", "governance", "scores", "summary"],
+		queryFn: async () => {
+			if (!profile) throw new Error("Profile not loaded");
+			return backend.apiState.get<GovernanceScoresSummaryData>(
+				profile,
+				"admin/governance/scores/summary",
+			);
+		},
+		enabled: !!profile,
+	});
+
+	const hasCriticalIssues = (summary.data?.criticalApps ?? 0) > 0;
+	const hasFlaggedIssues = (summary.data?.flaggedApps ?? 0) > 0;
+
+	return (
+		<Card
+			className={
+				hasCriticalIssues
+					? "border-red-500/50 bg-red-500/5"
+					: hasFlaggedIssues
+						? "border-yellow-500/50 bg-yellow-500/5"
+						: ""
+			}
+		>
+			<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div>
+					<CardTitle className="flex items-center gap-2 text-base">
+						<Shield
+							className={`h-4 w-4 ${
+								hasCriticalIssues
+									? "text-red-500"
+									: hasFlaggedIssues
+										? "text-yellow-500"
+										: "text-green-500"
+							}`}
+						/>
+						AI Inventory & Governance
+					</CardTitle>
+					<CardDescription>
+						Security and quality scores across published apps
+					</CardDescription>
+				</div>
+				<Button asChild variant="outline" size="sm">
+					<Link href="/admin/governance/scores">View Full Inventory</Link>
+				</Button>
+			</CardHeader>
+			<CardContent>
+				{summary.isLoading ? (
+					<Skeleton className="h-32 w-full" />
+				) : summary.error ? (
+					<div className="rounded-md border border-destructive/40 p-4 text-center text-sm text-destructive">
+						Failed to load governance scores. Please check the API logs.
+					</div>
+				) : summary.data ? (
+					<div className="space-y-4">
+						<div className="grid gap-3 sm:grid-cols-3">
+							<div className="rounded-lg border p-3">
+								<div className="text-xs text-muted-foreground">Total Apps</div>
+								<div className="text-2xl font-semibold">
+									{summary.data.totalApps ?? 0}
+								</div>
+							</div>
+							<div
+								className={`rounded-lg border p-3 ${
+									(summary.data.criticalApps ?? 0) > 0
+										? "border-red-500/50 bg-red-500/5"
+										: ""
+								}`}
+							>
+								<div className="text-xs text-muted-foreground">
+									Critical Issues
+								</div>
+								<div
+									className={`text-2xl font-semibold ${
+										(summary.data.criticalApps ?? 0) > 0
+											? "text-red-600 dark:text-red-400"
+											: ""
+									}`}
+								>
+									{summary.data.criticalApps ?? 0}
+								</div>
+								<div className="text-xs text-muted-foreground">Score ≤ 3</div>
+							</div>
+							<div
+								className={`rounded-lg border p-3 ${
+									(summary.data.flaggedApps ?? 0) > 0
+										? "border-yellow-500/50 bg-yellow-500/5"
+										: ""
+								}`}
+							>
+								<div className="text-xs text-muted-foreground">
+									Flagged Apps
+								</div>
+								<div
+									className={`text-2xl font-semibold ${
+										(summary.data.flaggedApps ?? 0) > 0
+											? "text-yellow-600 dark:text-yellow-400"
+											: ""
+									}`}
+								>
+									{summary.data.flaggedApps ?? 0}
+								</div>
+								<div className="text-xs text-muted-foreground">Score ≤ 6</div>
+							</div>
+						</div>
+
+						{summary.data.worstApps && summary.data.worstApps.length > 0 && (
+							<div className="space-y-2">
+								<div className="text-sm font-medium">
+									Apps Requiring Attention
+								</div>
+								{summary.data.worstApps.map((app) => (
+									<Link
+										key={app.appId}
+										href={`/admin/governance/scores?id=${encodeURIComponent(
+											app.appId,
+										)}`}
+										className="block"
+									>
+										<div className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm transition-colors hover:border-primary/40">
+											<div className="min-w-0">
+												<div className="truncate font-medium">
+													{app.appName ?? app.appId}
+												</div>
+												<div className="flex items-center gap-3 text-xs text-muted-foreground">
+													<span className="truncate">{app.appId}</span>
+												</div>
+											</div>
+											<div className="flex items-center gap-3">
+												<div className="text-right text-xs">
+													<div className="text-muted-foreground">
+														Security
+													</div>
+													<div
+														className={`font-semibold ${
+															app.security >= 7
+																? "text-green-600 dark:text-green-400"
+																: app.security >= 4
+																	? "text-yellow-600 dark:text-yellow-400"
+																	: "text-red-600 dark:text-red-400"
+														}`}
+													>
+														{app.security}
+													</div>
+												</div>
+												<div className="text-right text-xs">
+													<div className="text-muted-foreground">
+														Privacy
+													</div>
+													<div
+														className={`font-semibold ${
+															app.privacy >= 7
+																? "text-green-600 dark:text-green-400"
+																: app.privacy >= 4
+																	? "text-yellow-600 dark:text-yellow-400"
+																	: "text-red-600 dark:text-red-400"
+														}`}
+													>
+														{app.privacy}
+													</div>
+												</div>
+												<div className="text-right">
+													<div className="text-xs text-muted-foreground">
+														Worst
+													</div>
+													<div
+														className={`text-lg font-bold ${
+															app.worstScore >= 7
+																? "text-green-600 dark:text-green-400"
+																: app.worstScore >= 4
+																	? "text-yellow-600 dark:text-yellow-400"
+																	: "text-red-600 dark:text-red-400"
+														}`}
+													>
+														{app.worstScore}
+													</div>
+												</div>
+											</div>
+										</div>
+									</Link>
+								))}
+							</div>
+						)}
+					</div>
+				) : (
+					<div className="rounded-md border p-4 text-center text-sm text-muted-foreground">
+						No governance data available yet. Scores will appear after apps are
+						published and analyzed.
+					</div>
+				)}
+			</CardContent>
+		</Card>
+	);
+}
+
 export interface AdminDashboardPageProps {
 	infoEnabled?: boolean;
 	infoDependencyKey?: unknown[];
@@ -1855,6 +2071,10 @@ export function AdminDashboardPage({
 						profile={profile.data}
 						hasAdminAccess={hasAdminAccess}
 					/>
+
+					{hasAdminAccess && (
+						<GovernanceScoresSummary profile={profile.data} />
+					)}
 
 					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
 						<StatCard

@@ -53,6 +53,7 @@ serde_json.workspace = true
 image.workspace = true
 imageproc.workspace = true
 webp.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 
 tauri-plugin = "2.5.2"
 tauri-plugin-shell = "2.3.4"
@@ -90,6 +91,8 @@ sysinfo = "0.37.2"
 blake3.workspace = true
 tauri-plugin-flow-like-dexie-blob-offload.workspace = true
 copilot-sdk.workspace = true
+rmcp.workspace = true
+uuid.workspace = true
 once_cell = "1.21.3"
 tokio.workspace = true
 rayon = "1.11.0"

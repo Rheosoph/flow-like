@@ -11,11 +11,7 @@ pub struct SearchQueryAnalysis {
 
 pub fn analyze_search_query(query: &str) -> SearchQueryAnalysis {
     let normalized = query.trim().to_lowercase();
-    let tokens: Vec<String> = normalized
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .map(ToString::to_string)
-        .collect();
+    let tokens = tokenize_query_text(query);
 
     let mut expanded = BTreeSet::new();
     for token in &tokens {
@@ -34,11 +30,88 @@ pub fn analyze_search_query(query: &str) -> SearchQueryAnalysis {
     if normalized.contains("read email")
         || normalized.contains("check inbox")
         || normalized.contains("read inbox")
+        || normalized.contains("fetch email")
+        || normalized.contains("fetch mail")
+        || normalized.contains("past 2 days")
     {
         expanded.insert("imap".to_string());
         expanded.insert("inbox".to_string());
         expanded.insert("fetch".to_string());
         expanded.insert("list".to_string());
+        expanded.insert("mail".to_string());
+        expanded.insert("message".to_string());
+    }
+
+    if normalized.contains("open database")
+        || normalized.contains("local db")
+        || normalized.contains("local database")
+    {
+        expanded.insert("open".to_string());
+        expanded.insert("local".to_string());
+        expanded.insert("db".to_string());
+        expanded.insert("database".to_string());
+        expanded.insert("lance".to_string());
+        expanded.insert("lancedb".to_string());
+    }
+
+    if normalized.contains("store")
+        || normalized.contains("write")
+        || normalized.contains("persist")
+        || normalized.contains("put")
+        || (normalized.contains("vector") && normalized.contains("db"))
+        || normalized.contains("vector database")
+    {
+        expanded.insert("open".to_string());
+        expanded.insert("local".to_string());
+        expanded.insert("db".to_string());
+        expanded.insert("database".to_string());
+        expanded.insert("table".to_string());
+        expanded.insert("row".to_string());
+        expanded.insert("record".to_string());
+        expanded.insert("batch".to_string());
+        expanded.insert("insert".to_string());
+        expanded.insert("upsert".to_string());
+    }
+
+    if normalized.contains("datafusion sql") || normalized.contains("sql query") {
+        expanded.insert("datafusion".to_string());
+        expanded.insert("sql".to_string());
+        expanded.insert("query".to_string());
+        expanded.insert("session".to_string());
+        expanded.insert("table".to_string());
+    }
+
+    if normalized.contains("hybrid search") {
+        expanded.insert("hybrid".to_string());
+        expanded.insert("vector".to_string());
+        expanded.insert("full".to_string());
+        expanded.insert("text".to_string());
+        expanded.insert("fts".to_string());
+        expanded.insert("search".to_string());
+    }
+
+    if normalized.contains("build index")
+        || normalized.contains("create index")
+        || normalized.contains("vector index")
+        || normalized.contains("index build")
+        || normalized.contains("vector db")
+        || normalized.contains("vector database")
+    {
+        expanded.insert("build".to_string());
+        expanded.insert("create".to_string());
+        expanded.insert("index".to_string());
+        expanded.insert("vector".to_string());
+        expanded.insert("full".to_string());
+        expanded.insert("text".to_string());
+    }
+
+    if normalized.contains("sentiment") {
+        expanded.insert("classification".to_string());
+        expanded.insert("classify".to_string());
+        expanded.insert("label".to_string());
+        expanded.insert("positive".to_string());
+        expanded.insert("negative".to_string());
+        expanded.insert("embedding".to_string());
     }
 
     SearchQueryAnalysis {
@@ -46,6 +119,33 @@ pub fn analyze_search_query(query: &str) -> SearchQueryAnalysis {
         tokens,
         expanded_tokens: expanded.into_iter().collect(),
     }
+}
+
+pub fn tokenize_query_text(text: &str) -> Vec<String> {
+    let mut normalized = String::with_capacity(text.len());
+    let mut previous_was_lower_or_digit = false;
+
+    for ch in text.chars() {
+        if ch.is_ascii_uppercase() {
+            if previous_was_lower_or_digit {
+                normalized.push(' ');
+            }
+            normalized.push(ch.to_ascii_lowercase());
+            previous_was_lower_or_digit = false;
+        } else if ch.is_ascii_alphanumeric() {
+            normalized.push(ch.to_ascii_lowercase());
+            previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else {
+            normalized.push(' ');
+            previous_was_lower_or_digit = false;
+        }
+    }
+
+    normalized
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 pub fn enrich_node_metadata(mut metadata: NodeMetadata) -> NodeMetadata {
@@ -107,6 +207,8 @@ pub fn score_catalog_metadata(metadata: &NodeMetadata, query: &str) -> i32 {
     let friendly_lower = metadata.friendly_name.to_lowercase();
     let desc_lower = metadata.description.to_lowercase();
     let category = metadata.category.clone().unwrap_or_default().to_lowercase();
+    let symbol_tokens = tokenize_query_text(&metadata.name);
+    let friendly_tokens = tokenize_query_text(&metadata.friendly_name);
 
     let mut score = 0i32;
 
@@ -137,6 +239,13 @@ pub fn score_catalog_metadata(metadata: &NodeMetadata, query: &str) -> i32 {
         }
         if metadata.capability_tags.iter().any(|tag| tag == token) {
             score += 18;
+        }
+        let fuzzy_symbol_match = symbol_tokens
+            .iter()
+            .chain(friendly_tokens.iter())
+            .any(|candidate| candidate.len() > 3 && strsim::jaro_winkler(candidate, token) >= 0.9);
+        if fuzzy_symbol_match {
+            score += 16;
         }
     }
 
@@ -199,6 +308,21 @@ fn token_synonyms(token: &str) -> &'static [&'static str] {
         "gmail" => &["smtp", "imap", "google", "email"],
         "inbox" => &["imap", "mailbox", "email", "message"],
         "unread" => &["new", "unseen", "imap", "inbox"],
+        "db" => &["database", "lance", "lancedb", "local", "table"],
+        "database" => &["db", "lance", "lancedb", "local", "table"],
+        "lance" | "lancedb" => &["database", "db", "vector", "table"],
+        "sql" => &["datafusion", "query", "table"],
+        "datafusion" => &["sql", "query", "session", "table"],
+        "embed" | "embedding" => &["vector", "model", "document", "query"],
+        "vector" => &["embedding", "search", "index", "lancedb"],
+        "fts" => &["full", "text", "search", "index"],
+        "hybrid" => &["vector", "full", "text", "search", "rerank"],
+        "index" => &["build", "create", "optimize", "vector", "full", "text"],
+        "batch" => &["many", "bulk", "array", "insert", "upsert"],
+        "put" | "store" | "write" | "persist" => {
+            &["database", "insert", "upsert", "local", "table", "record"]
+        }
+        "row" | "record" => &["database", "insert", "table", "struct"],
         "notification" => &["email", "mail", "send"],
         "receipt" => &["email", "mail", "send"],
         "followup" | "follow-up" => &["email", "send", "notification"],

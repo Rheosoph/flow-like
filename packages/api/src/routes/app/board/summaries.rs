@@ -177,4 +177,3 @@ pub async fn board_summaries(
 
     Ok(Json(summaries))
 }
-

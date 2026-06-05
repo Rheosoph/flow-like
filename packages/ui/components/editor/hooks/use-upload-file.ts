@@ -104,8 +104,8 @@ export function useUploadFile({
 	};
 }
 
-export const { uploadFiles, useUploadThing } =
-	generateReactHelpers<OurFileRouter>();
+// biome-ignore lint/suspicious/noExplicitAny: Avoid binding to duplicate UploadThing transitive types across workspace installs.
+export const { uploadFiles, useUploadThing } = generateReactHelpers<any>();
 
 export function getErrorMessage(err: unknown) {
 	const unknownError = "Something went wrong, please try again later.";

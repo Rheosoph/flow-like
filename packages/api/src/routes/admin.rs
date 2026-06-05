@@ -112,6 +112,10 @@ pub fn routes() -> Router<AppState> {
             get(governance::list_scores::list_scores),
         )
         .route(
+            "/governance/scores/summary",
+            get(governance::get_scores_summary::get_scores_summary),
+        )
+        .route(
             "/governance/scores/recompute",
             post(governance::recompute::recompute_scores),
         )

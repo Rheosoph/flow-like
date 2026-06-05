@@ -1,5 +1,5 @@
 import type * as vscode from "vscode";
-import type { FlowVariable } from "./flowDocument";
+import type { FlowInterface, FlowVariable } from "./flowDocument";
 import type { NodeSignature, SignatureRegistry } from "./signatures";
 
 /** A resolved FlowScript type. Object shapes carry named members so member
@@ -21,17 +21,103 @@ export interface Accessor {
 	readonly name?: string;
 }
 
-/** Build a `Shape` from a TS-flavoured type string (`Struct`, `string[]`, …). */
-export function shapeFromTypeText(raw: string): Shape {
+/** Build a `Shape` from a TS-flavoured type string (`Struct`, `string[]`, `Map<string, T>`, …). */
+export function shapeFromTypeText(
+	raw: string,
+	interfaces?: ReadonlyMap<string, FlowInterface>,
+	seen: Set<string> = new Set(),
+): Shape {
 	const text = raw.trim();
+	const union = splitTopLevel(text, "|");
+	if (union.length > 1) {
+		return {
+			kind: "scalar",
+			text: union
+				.map((part) => shapeFromTypeText(part, interfaces, seen).text)
+				.join(" | "),
+		};
+	}
 	if (text.endsWith("[]")) {
 		return {
 			kind: "array",
 			text,
-			element: shapeFromTypeText(text.slice(0, -2)),
+			element: shapeFromTypeText(text.slice(0, -2), interfaces, seen),
 		};
 	}
+	const map = /^Map\s*<\s*string\s*,\s*(.+)\s*>$/.exec(text);
+	if (map) {
+		return {
+			kind: "object",
+			text,
+			fields: new Map(),
+			origin: `Map<string, ${shapeFromTypeText(map[1], interfaces, seen).text}>`,
+		};
+	}
+	const set = /^Set\s*<\s*(.+)\s*>$/.exec(text);
+	if (set) {
+		return {
+			kind: "array",
+			text,
+			element: shapeFromTypeText(set[1], interfaces, seen),
+		};
+	}
+	const iface = interfaces?.get(text);
+	if (interfaces && iface) {
+		return shapeFromInterface(iface, interfaces, seen);
+	}
 	return { kind: "scalar", text };
+}
+
+function shapeFromInterface(
+	iface: FlowInterface,
+	interfaces: ReadonlyMap<string, FlowInterface>,
+	seen: Set<string>,
+): Shape {
+	if (seen.has(iface.name)) {
+		return { kind: "scalar", text: iface.name };
+	}
+	const next = new Set(seen);
+	next.add(iface.name);
+	const fields = new Map<string, Shape>();
+	for (const field of iface.fields) {
+		fields.set(field.name, shapeFromTypeText(field.typeText, interfaces, next));
+	}
+	return {
+		kind: "object",
+		text: iface.name,
+		fields,
+		origin: `interface ${iface.name}`,
+	};
+}
+
+function splitTopLevel(text: string, separator: string): string[] {
+	const parts: string[] = [];
+	let depth = 0;
+	let inString = false;
+	let start = 0;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (inString) {
+			if (ch === "\\" && i + 1 < text.length) {
+				i++;
+			} else if (ch === "\"") {
+				inString = false;
+			}
+			continue;
+		}
+		if (ch === "\"") {
+			inString = true;
+		} else if (ch === "<" || ch === "(" || ch === "[") {
+			depth++;
+		} else if (ch === ">" || ch === ")" || ch === "]") {
+			depth--;
+		} else if (ch === separator && depth === 0) {
+			parts.push(text.slice(start, i).trim());
+			start = i + 1;
+		}
+	}
+	parts.push(text.slice(start).trim());
+	return parts.filter(Boolean);
 }
 
 interface JsonSchema {
@@ -271,6 +357,7 @@ function parseLiteral(text: string): unknown {
 export function variableShape(
 	variable: FlowVariable,
 	registry: SignatureRegistry,
+	interfaces?: ReadonlyMap<string, FlowInterface>,
 ): Shape | undefined {
 	if (variable.initCall) {
 		const sig = registry.get(variable.initCall);
@@ -289,6 +376,15 @@ export function variableShape(
 			return shape;
 		}
 	}
+	if (variable.typeText) {
+		const annotated = shapeFromTypeText(variable.typeText, interfaces);
+		if (
+			annotated.kind === "object" ||
+			(annotated.kind === "array" && annotated.element?.kind === "object")
+		) {
+			return annotated;
+		}
+	}
 	if (variable.initLiteral) {
 		const value = parseLiteral(variable.initLiteral);
 		if (value !== undefined) {
@@ -301,7 +397,7 @@ export function variableShape(
 		}
 	}
 	if (variable.typeText) {
-		return shapeFromTypeText(variable.typeText);
+		return shapeFromTypeText(variable.typeText, interfaces);
 	}
 	return undefined;
 }

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import {
+	type FlowInterface,
 	type FlowSymbol,
 	type FlowVariable,
 	analyzeFlowDocument,
@@ -89,20 +90,22 @@ function wordAt(
 function resolveVariableType(
 	variable: FlowVariable,
 	registry: SignatureRegistry,
+	interfaces?: ReadonlyMap<string, FlowInterface>,
 ): string | undefined {
 	if (variable.typeText) {
 		return variable.typeText;
 	}
-	const shape = variableShape(variable, registry);
+	const shape = variableShape(variable, registry, interfaces);
 	return shape?.text;
 }
 
 function variableHoverMarkdown(
 	variable: FlowVariable,
 	registry: SignatureRegistry,
+	interfaces?: ReadonlyMap<string, FlowInterface>,
 ): vscode.MarkdownString {
 	const md = new vscode.MarkdownString();
-	const type = resolveVariableType(variable, registry);
+	const type = resolveVariableType(variable, registry, interfaces);
 	md.appendCodeblock(
 		`${variable.keyword} ${variable.name}${type ? `: ${type}` : ""}`,
 		"flowscript",
@@ -110,7 +113,7 @@ function variableHoverMarkdown(
 	if (variable.initCall && registry.has(variable.initCall)) {
 		md.appendMarkdown(`\n\nReturned by \`${variable.initCall}\`.`);
 	}
-	const shape = variableShape(variable, registry);
+	const shape = variableShape(variable, registry, interfaces);
 	const objectShape =
 		shape?.kind === "object"
 			? shape
@@ -124,6 +127,23 @@ function variableHoverMarkdown(
 		md.appendMarkdown("\n\nFields:");
 		md.appendCodeblock(`{\n${fields}\n}`, "flowscript");
 	}
+	return md;
+}
+
+function interfaceHoverMarkdown(iface: FlowInterface): vscode.MarkdownString {
+	const md = new vscode.MarkdownString();
+	const fields = iface.fields
+		.map(
+			(field) =>
+				`  ${field.name}${field.optional ? "?" : ""}: ${field.typeText}`,
+		)
+		.join("\n");
+	md.appendCodeblock(
+		fields.length > 0
+			? `interface ${iface.name} {\n${fields}\n}`
+			: `interface ${iface.name} {}`,
+		"flowscript",
+	);
 	return md;
 }
 
@@ -147,7 +167,9 @@ export class FlowCompletionProvider implements vscode.CompletionItemProvider {
 				sym.name,
 				sym.kind === "variable"
 					? vscode.CompletionItemKind.Variable
-					: vscode.CompletionItemKind.Function,
+					: sym.kind === "interface"
+						? vscode.CompletionItemKind.Interface
+						: vscode.CompletionItemKind.Function,
 			);
 			item.detail = `(${sym.detail}) ${sym.name}`;
 			items.push(item);
@@ -234,7 +256,7 @@ export class FlowMemberCompletionProvider
 		if (!variable) {
 			return undefined;
 		}
-		const baseShape = variableShape(variable, this.registry);
+		const baseShape = variableShape(variable, this.registry, model.interfaces);
 		if (!baseShape) {
 			return undefined;
 		}
@@ -299,10 +321,14 @@ export class FlowHoverProvider implements vscode.HoverProvider {
 		if (member) {
 			return member;
 		}
+		const iface = model.interfaces.get(hit.word);
+		if (iface) {
+			return new vscode.Hover(interfaceHoverMarkdown(iface), hit.range);
+		}
 		const variable = findVariable(model.variables, hit.word, position);
 		if (variable) {
 			return new vscode.Hover(
-				variableHoverMarkdown(variable, this.registry),
+				variableHoverMarkdown(variable, this.registry, model.interfaces),
 				hit.range,
 			);
 		}
@@ -342,7 +368,7 @@ export class FlowHoverProvider implements vscode.HoverProvider {
 		if (!variable) {
 			return undefined;
 		}
-		const baseShape = variableShape(variable, this.registry);
+		const baseShape = variableShape(variable, this.registry, model.interfaces);
 		if (!baseShape) {
 			return undefined;
 		}
@@ -482,6 +508,8 @@ function toDocumentSymbol(sym: FlowSymbol): vscode.DocumentSymbol {
 	const kind =
 		sym.kind === "variable"
 			? vscode.SymbolKind.Variable
+			: sym.kind === "interface"
+				? vscode.SymbolKind.Interface
 			: sym.kind === "event"
 				? vscode.SymbolKind.Event
 				: vscode.SymbolKind.Function;

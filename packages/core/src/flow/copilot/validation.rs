@@ -545,6 +545,59 @@ pub async fn validate_emit_commands(
                     ));
                 }
             }
+            BoardCommand::UpdateVariable {
+                variable_id,
+                name,
+                data_type,
+                value_type,
+                summary,
+                ..
+            } => {
+                if !known_variables.contains(variable_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-variable",
+                        Some(index),
+                        format!("Cannot update unknown variable '{}'", variable_id),
+                    ));
+                }
+                if name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+                    errors.push(issue(
+                        "error",
+                        "missing-variable-name",
+                        Some(index),
+                        format!("UpdateVariable '{}' cannot set an empty name", variable_id),
+                    ));
+                }
+                if data_type
+                    .as_deref()
+                    .is_some_and(|data_type| data_type.trim().is_empty())
+                    || value_type
+                        .as_deref()
+                        .is_some_and(|value_type| value_type.trim().is_empty())
+                {
+                    errors.push(issue(
+                        "error",
+                        "missing-variable-type",
+                        Some(index),
+                        format!(
+                            "UpdateVariable '{}' cannot set an empty data_type or value_type",
+                            variable_id
+                        ),
+                    ));
+                }
+                if summary.as_deref().unwrap_or_default().trim().is_empty() {
+                    warnings.push(issue(
+                        "warning",
+                        "missing-summary",
+                        Some(index),
+                        format!(
+                            "UpdateVariable '{}' is missing a summary field",
+                            variable_id
+                        ),
+                    ));
+                }
+            }
             BoardCommand::RemoveVariable { variable_id, .. } => {
                 if !known_variables.contains(variable_id) {
                     errors.push(issue(

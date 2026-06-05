@@ -1,6 +1,5 @@
 "use client";
 
-import type { QueryClient } from "@tanstack/react-query";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -17,6 +16,7 @@ import {
 	type IHelperState,
 	type IPageState,
 	type IProfile,
+	type QueryClient,
 	type IRegistryState,
 	type IRoleState,
 	type ISalesState,

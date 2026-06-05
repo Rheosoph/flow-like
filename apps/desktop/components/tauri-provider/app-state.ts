@@ -374,6 +374,13 @@ export class AppState implements IAppState {
 		}
 
 		if (localApp) {
+			const isOffline =
+				localApp.visibility === IAppVisibility.Offline ||
+				(await this.backend.isOffline(appId));
+			if (isOffline) {
+				return localApp;
+			}
+
 			if (!this.backend.queryClient || !this.backend.profile) {
 				return localApp;
 			}

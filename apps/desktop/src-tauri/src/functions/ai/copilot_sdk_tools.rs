@@ -6,23 +6,50 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
+use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
 pub use copilot_sdk::ToolHandler;
 use copilot_sdk::{Tool, ToolResultObject};
-use flow_like::flow::copilot::{BoardCommand, GraphContext};
+use flow_like::flow::ast::reconcile_text_with_catalog;
+use flow_like::flow::board::Board;
+use flow_like::flow::copilot::{
+    BoardCommand, CatalogProvider, GraphContext, NodeMetadata, search_result_hint_lines,
+};
 use flow_like::flow::pin::PinType;
 use flow_like_catalog::get_catalog;
 use serde_json::{Value, json};
 
-/// Create all Copilot SDK tools for board context
-pub fn create_board_tools(graph_context: Option<Arc<GraphContext>>) -> Vec<(Tool, ToolHandler)> {
+/// Create all Copilot SDK tools for board context.
+///
+/// When a live `board` is supplied the FlowScript transpile surface is enabled: `get_declarations`
+/// (signature lookup) and `edit_flowscript` (apply edited FlowScript via reconcile) are registered
+/// in addition to the structural `emit_commands` path.
+pub fn create_board_tools(
+    graph_context: Option<Arc<GraphContext>>,
+    board: Option<Arc<Board>>,
+    catalog_provider: Option<Arc<dyn CatalogProvider>>,
+    side_effect_commands: Option<Arc<Mutex<Vec<BoardCommand>>>>,
+) -> Vec<(Tool, ToolHandler)> {
     let mut tools = vec![
-        create_catalog_search_tool(),
+        create_catalog_search_tool(catalog_provider.clone()),
         create_validate_commands_tool(graph_context.clone()),
         create_emit_commands_tool(graph_context.clone()),
     ];
+
+    if let Some(provider) = catalog_provider.clone() {
+        tools.push(create_get_declarations_tool(provider.clone()));
+    }
+
+    if let Some(board) = board {
+        tools.push(create_edit_flowscript_tool(
+            board,
+            catalog_provider,
+            side_effect_commands,
+        ));
+    }
 
     if let Some(ctx) = graph_context.clone() {
         tools.push(create_get_node_details_tool(ctx));
@@ -39,103 +66,502 @@ pub fn create_board_tools(graph_context: Option<Arc<GraphContext>>) -> Vec<(Tool
     tools
 }
 
-/// Catalog search tool - find nodes by functionality (fully synchronous)
-fn create_catalog_search_tool() -> (Tool, ToolHandler) {
+/// Create runtime tools that execute through the frontend bridge.
+///
+/// These tools need browser/app context such as the active backend state, storage provider,
+/// approval dialogs, and execution service. The Rust SDK tool blocks until the frontend replies.
+pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    vec![
+        create_internet_search_tool(),
+        create_database_tool(bridge.clone()),
+        create_storage_tool(bridge.clone()),
+        create_execute_event_tool(bridge.clone()),
+        create_ask_user_tool(bridge),
+    ]
+}
+
+fn frontend_tool_result(
+    bridge: &FrontendToolBridge,
+    tool_name: &'static str,
+    args: Value,
+    approval: FrontendToolApproval,
+) -> ToolResultObject {
+    frontend_tool_result_with_timeout(bridge, tool_name, args, approval, Duration::from_secs(120))
+}
+
+fn frontend_tool_result_with_timeout(
+    bridge: &FrontendToolBridge,
+    tool_name: &'static str,
+    args: Value,
+    approval: FrontendToolApproval,
+    timeout: Duration,
+) -> ToolResultObject {
+    ToolResultObject::text(
+        serde_json::to_string_pretty(&bridge.call_with_timeout(tool_name, args, approval, timeout))
+            .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
+    )
+}
+
+fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
+    args.get(snake)
+        .or_else(|| args.get(camel))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn database_operation_requires_approval(operation: &str) -> bool {
+    matches!(
+        operation,
+        "insert"
+            | "add_items"
+            | "delete"
+            | "remove_items"
+            | "update"
+            | "build_index"
+            | "drop_index"
+            | "optimize"
+            | "add_column"
+            | "drop_columns"
+            | "alter_column"
+    )
+}
+
+fn flowscript_validation_message(diagnostics: &[String]) -> &'static str {
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("labelled branch requires a call condition"))
+    {
+        return "FlowScript validation failed: labelled branch syntax (`if (...) { // label ... }`) requires the condition to be a catalog/control-node call. For ordinary boolean checks, remove the trailing branch labels/comments and use plain `if (condition) { ... } else { ... }`, or use exact control-node declarations from get_declarations.";
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("expected `Colon`, found `Assign`"))
+    {
+        return "FlowScript validation failed: object and call-argument fields use colon syntax, for example `{ host: \"imap.gmail.com\" }`, not assignment syntax like `{ host = \"imap.gmail.com\" }`.";
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("`const` binding requires a call expression"))
+    {
+        return "FlowScript validation failed: inside a function/event block, `const name = ...` must bind a catalog/node call. Use `let` for local literal aliases or pass literals/objects directly into node calls.";
+    }
+
+    "FlowScript validation failed. Fix the listed issues and call edit_flowscript again."
+}
+
+fn flowscript_summary(flowscript: &str) -> Value {
+    json!({
+        "lines": if flowscript.is_empty() { 0 } else { flowscript.lines().count() },
+        "chars": flowscript.chars().count(),
+    })
+}
+
+fn create_internet_search_tool() -> (Tool, ToolHandler) {
+    let tool = Tool::new("internet_search")
+        .description(
+            r#"Search the public web through Flow-Like's SearXNG instance at search.flow-like.com.
+
+Use this when current public information, documentation, examples, or external references would
+help build or debug the workflow. Prefer official docs and primary sources in your follow-up
+reasoning. Returns compact title/url/snippet/date results; fetch pages through workflow nodes only
+when the actual workflow needs fetching."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search query." },
+                "language": { "type": "string", "description": "SearXNG language code, default en-US." },
+                "page": { "type": "integer", "description": "1-based page number, default 1." },
+                "limit": { "type": "integer", "description": "Maximum results to return, default 8, max 20." }
+            },
+            "required": ["query"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&run_internet_search_tool(args))
+                .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
+        )
+    });
+
+    (tool, handler)
+}
+
+fn run_internet_search_tool(args: &Value) -> Value {
+    let query = arg_string(args, "query", "query");
+    if query.trim().is_empty() {
+        return json!({
+            "status": "error",
+            "tool": "internet_search",
+            "error": "internet_search requires a non-empty query."
+        });
+    }
+
+    let language = arg_string(args, "language", "language");
+    let language = if language.trim().is_empty() {
+        "en-US".to_string()
+    } else {
+        language
+    };
+    let page = args
+        .get("page")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .clamp(1, 100);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(8)
+        .clamp(1, 20) as usize;
+    let url = format!(
+        "https://search.flow-like.com/search?q={}&format=json&pageno={}&language={}",
+        urlencoding::encode(&query),
+        page,
+        urlencoding::encode(&language)
+    );
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent("FlowPilot/1.0")
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return json!({
+                "status": "error",
+                "tool": "internet_search",
+                "error": format!("Failed to create search client: {error}")
+            });
+        }
+    };
+
+    let response = match client.get(&url).send() {
+        Ok(response) => response,
+        Err(error) => {
+            return json!({
+                "status": "error",
+                "tool": "internet_search",
+                "query": query,
+                "error": format!("Search request failed: {error}")
+            });
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        return json!({
+            "status": "error",
+            "tool": "internet_search",
+            "query": query,
+            "http_status": status.as_u16(),
+            "error": format!("Search request failed with HTTP {status}")
+        });
+    }
+
+    let payload = match response.json::<Value>() {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json!({
+                "status": "error",
+                "tool": "internet_search",
+                "query": query,
+                "error": format!("Search response was not valid JSON: {error}")
+            });
+        }
+    };
+
+    let results = payload
+        .get("results")
+        .and_then(Value::as_array)
+        .map(|results| {
+            results
+                .iter()
+                .take(limit)
+                .map(compact_search_result)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    json!({
+        "status": "ok",
+        "query": query,
+        "page": page,
+        "results": results
+    })
+}
+
+fn compact_search_result(result: &Value) -> Value {
+    let object = result.as_object();
+    json!({
+        "title": object.and_then(|item| item.get("title")).cloned().unwrap_or(Value::Null),
+        "url": object.and_then(|item| item.get("url")).cloned().unwrap_or(Value::Null),
+        "content": object.and_then(|item| item.get("content")).cloned().unwrap_or(Value::Null),
+        "publishedDate": object.and_then(|item| item.get("publishedDate")).cloned().unwrap_or(Value::Null),
+        "engine": object.and_then(|item| item.get("engine")).cloned().unwrap_or(Value::Null),
+        "category": object.and_then(|item| item.get("category")).cloned().unwrap_or(Value::Null),
+        "score": object.and_then(|item| item.get("score")).cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn create_database_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("database_tool")
+        .description(
+            r#"Inspect or modify the app's built-in LanceDB/Open Database tables through the frontend backend state.
+
+Use this to understand existing local/user databases before generating DataFusion, Lance, vector,
+full-text, or hybrid search workflows.
+
+Read operations do not ask for approval. Mutating operations show an approval dialog with a
+"don't ask again this session" option.
+
+Operations:
+- list_tables: return project and user-scoped tables.
+- describe_table: schema, indices, row count, and sample rows.
+- query: SQL/filter/vector/FTS query via the existing database query API.
+- insert/add_items, delete/remove_items, update.
+- build_index, drop_index, optimize, add_column, drop_columns, alter_column."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": [
+                        "list_tables", "describe_table", "query",
+                        "insert", "add_items", "delete", "remove_items", "update",
+                        "build_index", "drop_index", "optimize",
+                        "add_column", "drop_columns", "alter_column"
+                    ]
+                },
+                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+                "table_name": { "type": "string", "description": "Table name for table operations." },
+                "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
+                "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
+                "offset": { "type": "integer" },
+                "limit": { "type": "integer" },
+                "items": { "type": "array", "items": { "type": "object" } },
+                "filter": { "type": "string", "description": "Delete/update filter expression." },
+                "updates": { "type": "object" },
+                "column": { "type": "string" },
+                "columns": { "type": "array", "items": { "type": "string" } },
+                "index_type": {
+                    "type": "string",
+                    "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
+                },
+                "index_name": { "type": "string" },
+                "optimize": { "type": "boolean" },
+                "keep_versions": { "type": "boolean" },
+                "nullable": { "type": "boolean" },
+                "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
+            },
+            "required": ["operation"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let operation = arg_string(args, "operation", "operation");
+        let approval = if database_operation_requires_approval(&operation) {
+            let table_name = arg_string(args, "table_name", "tableName");
+            FrontendToolApproval::mutating(
+                "Approve database change",
+                format!(
+                    "FlowPilot wants to run database operation '{}'{}.",
+                    operation,
+                    if table_name.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" on table '{table_name}'")
+                    }
+                ),
+                format!("database:{operation}"),
+            )
+        } else {
+            FrontendToolApproval::none()
+        };
+        frontend_tool_result(&bridge, "database_tool", args.clone(), approval)
+    });
+
+    (tool, handler)
+}
+
+fn create_storage_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("storage_tool")
+        .description(
+            r#"List, read, create, or delete app storage files through the frontend storage state.
+
+Read/list operations are silent. create_file and delete_files show an approval dialog with a
+"don't ask again this session" option. Use this when a workflow needs to reference existing files
+or create a small helper/config artifact in app/user storage."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "operation": { "type": "string", "enum": ["list_files", "read_file", "create_file", "delete_files"] },
+                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+                "prefix": { "type": "string", "description": "Folder/prefix to list." },
+                "path": { "type": "string", "description": "File path for read/create." },
+                "paths": { "type": "array", "items": { "type": "string" }, "description": "File paths/prefixes for deletion." },
+                "content": { "type": "string", "description": "Text content for create_file." },
+                "mime_type": { "type": "string", "description": "Content type for create_file, default text/plain." },
+                "user_scoped": { "type": "boolean", "description": "Use user storage instead of app storage." },
+                "max_chars": { "type": "integer", "description": "Maximum characters to return for read_file." }
+            },
+            "required": ["operation"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let operation = arg_string(args, "operation", "operation");
+        let approval = if matches!(operation.as_str(), "create_file" | "delete_files") {
+            FrontendToolApproval::mutating(
+                "Approve storage change",
+                format!("FlowPilot wants to run storage operation '{operation}'."),
+                format!("storage:{operation}"),
+            )
+        } else {
+            FrontendToolApproval::none()
+        };
+        frontend_tool_result(&bridge, "storage_tool", args.clone(), approval)
+    });
+
+    (tool, handler)
+}
+
+fn create_execute_event_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("execute_event")
+        .description(
+            r#"Execute a workflow event through the frontend execution service and return bounded logs.
+
+Use this after creating or updating an event-backed workflow to validate behavior with real runtime
+logs. This is side-effecting and always asks for approval unless the user selected "don't ask again
+this session"."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+                "event_id": { "type": "string" },
+                "payload": { "type": "object", "description": "Run payload. If omitted, {id:event_id,payload:{}} is used." },
+                "stream_state": { "type": "boolean", "description": "Stream state/log events, default true." },
+                "skip_consent_check": { "type": "boolean" }
+            },
+            "required": ["event_id"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let event_id = arg_string(args, "event_id", "eventId");
+        frontend_tool_result_with_timeout(
+            &bridge,
+            "execute_event",
+            args.clone(),
+            FrontendToolApproval::execute(
+                "Approve workflow execution",
+                format!("FlowPilot wants to execute event '{event_id}' and inspect the logs."),
+                "execute_event".to_string(),
+            ),
+            Duration::from_secs(600),
+        )
+    });
+
+    (tool, handler)
+}
+
+fn create_ask_user_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("ask_user")
+        .description(
+            r#"Ask the user for one targeted input when placeholders/defaults are not enough.
+
+Prefer defaults and placeholder variables. Use this only for genuinely blocking choices. Supports
+freeform, single_choice, and multiple_choice modes. Include a recommended default whenever
+possible."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "question": { "type": "string" },
+                "mode": { "type": "string", "enum": ["freeform", "single_choice", "multiple_choice"] },
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": { "type": "string" },
+                            "value": {},
+                            "description": { "type": "string" }
+                        },
+                        "required": ["label"]
+                    }
+                },
+                "default_value": { "description": "Recommended default value/choice." },
+                "placeholder": { "type": "string" }
+            },
+            "required": ["question"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result_with_timeout(
+            &bridge,
+            "ask_user",
+            args.clone(),
+            FrontendToolApproval::none(),
+            Duration::from_secs(600),
+        )
+    });
+
+    (tool, handler)
+}
+
+/// Catalog search tool - find nodes by functionality.
+fn create_catalog_search_tool(provider: Option<Arc<dyn CatalogProvider>>) -> (Tool, ToolHandler) {
     let tool = Tool::new("catalog_search")
         .description(
-            r#"Search the node catalog by functionality or name. Returns matching nodes with their node_type (needed for AddNode).
+            r#"Search the node catalog by functionality or name. Returns matching nodes with their node_type for legacy/manual AddNode commands.
 
-WHEN TO USE: Before adding any node - to get the exact node_type
-EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if""#,
+WHEN TO USE: Only for manual command JSON, layout/modeling operations, or debugging catalog metadata.
+FOR WORKFLOW EDITS: Prefer get_declarations, write FlowScript, then call edit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#,
         )
         .schema(json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Natural language search. Examples: 'http request', 'json parse', 'loop array'"
+                    "description": "Natural language catalog search for manual AddNode use. For FlowScript workflows, use get_declarations instead."
                 }
             },
             "required": ["query"]
         }));
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
+        let provider = provider.clone();
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or("")
-            .to_lowercase();
-        let query_tokens: Vec<&str> = query.split_whitespace().collect();
+            .to_string();
 
-        // Sync catalog search - no async needed
-        let catalog = get_catalog();
-        let mut scored_matches: Vec<(i32, String)> = Vec::new();
-
-        for logic in &catalog {
-            let node = logic.get_node();
-            let name_lower = node.name.to_lowercase();
-            let friendly_lower = node.friendly_name.to_lowercase();
-            let desc_lower = node.description.to_lowercase();
-            let category = name_lower.split("::").nth(1).unwrap_or("");
-
-            let mut score = 0i32;
-
-            if name_lower.contains(&query) {
-                score += 100;
-            }
-            if friendly_lower.contains(&query) {
-                score += 90;
-            }
-
-            for token in &query_tokens {
-                if name_lower.contains(token) {
-                    score += 30;
-                }
-                if friendly_lower.contains(token) {
-                    score += 25;
-                }
-                if category.contains(token) {
-                    score += 20;
-                }
-                if desc_lower.contains(token) {
-                    score += 10;
-                }
-            }
-
-            // Exact part match bonus
-            let name_parts: Vec<&str> = name_lower.split([':', '_']).collect();
-            for token in &query_tokens {
-                if name_parts.iter().any(|part| part == token) {
-                    score += 15;
-                }
-            }
-
-            if score > 0 {
-                // Compact format: node_type: friendly_name - truncated description
-                let desc_short = if node.description.chars().count() > 50 {
-                    format!(
-                        "{}...",
-                        node.description.chars().take(47).collect::<String>()
-                    )
-                } else {
-                    node.description.clone()
-                };
-                let compact = format!("{}: {} - {}", node.name, node.friendly_name, desc_short);
-                scored_matches.push((score, compact));
-            }
-        }
-
-        scored_matches.sort_by(|a, b| b.0.cmp(&a.0));
-        let results: Vec<String> = scored_matches
-            .into_iter()
-            .take(10)
-            .map(|(_, s)| s)
-            .collect();
+        let results: Vec<NodeMetadata> = if let Some(provider) = provider {
+            futures::executor::block_on(provider.search(&query))
+        } else {
+            Vec::new()
+        };
 
         if results.is_empty() {
             ToolResultObject::text("No nodes found matching your query. Try different keywords.")
         } else {
-            ToolResultObject::text(results.join("\n"))
+            let lines: Vec<String> = results
+                .iter()
+                .map(|meta| {
+                    let hints = search_result_hint_lines(meta);
+                    if hints.is_empty() {
+                        meta.to_compact()
+                    } else {
+                        format!("{} [{}]", meta.to_compact(), hints.join("; "))
+                    }
+                })
+                .collect();
+            ToolResultObject::text(lines.join("\n"))
         }
     });
 
@@ -337,8 +763,8 @@ and will not queue invalid commands.
 
 CRITICAL ORDER:
 1. AddNode commands FIRST (create nodes)
-2. ConnectPins commands (wire execution + data)
-3. UpdateNodePin commands LAST (set values)
+2. UpdateNodePin commands NEXT (set literals/configuration that may create dynamic pins)
+3. ConnectPins commands LAST (wire execution + data after all pins exist)
 
 COMMAND SCHEMAS:
 AddNode: {"command_type": "AddNode", "node_type": "category::subcategory::name", "ref_id": "$0", "position": {"x": 300, "y": 200}, "summary": "description"}
@@ -362,10 +788,10 @@ EXAMPLE - HTTP request with JSON parsing:
   "commands": [
     {"command_type": "AddNode", "node_type": "http::request::send_request", "ref_id": "$0", "position": {"x": 300, "y": 200}, "summary": "HTTP request"},
     {"command_type": "AddNode", "node_type": "data::json::parse", "ref_id": "$1", "position": {"x": 550, "y": 200}, "summary": "Parse JSON"},
-    {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "exec_out", "to_node": "$1", "to_pin": "exec_in", "summary": "Execution flow"},
-    {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "response_body", "to_node": "$1", "to_pin": "json_string", "summary": "Pass body"},
     {"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "url", "value": "https://api.example.com", "summary": "Set URL"},
-    {"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "method", "value": "GET", "summary": "Set method"}
+    {"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "method", "value": "GET", "summary": "Set method"},
+    {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "exec_out", "to_node": "$1", "to_pin": "exec_in", "summary": "Execution flow"},
+    {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "response_body", "to_node": "$1", "to_pin": "json_string", "summary": "Pass body"}
   ],
   "explanation": "HTTP GET request followed by JSON parsing"
 }"#,
@@ -487,6 +913,173 @@ EXAMPLE - HTTP request with JSON parsing:
     (tool, handler)
 }
 
+/// get_declarations tool - look up FlowScript `.flow.d` signatures by intent.
+fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, ToolHandler) {
+    let tool = Tool::new("get_declarations")
+        .description(
+            r#"Look up FlowScript node declarations (.flow.d) by intent.
+
+Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
+signatures for nodes matching your focused query, plus an `// impure` marker for side-effecting /
+control-flow nodes. Empty queries intentionally return guidance only, not the full catalog.
+
+Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
+typed arguments. Covers every package in the project's catalog."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Focused declaration search. Do not leave blank. Good examples: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                }
+            },
+            "required": ["query"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let provider = provider.clone();
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let declarations = futures::executor::block_on(provider.get_declarations(&query));
+        ToolResultObject::text(declarations)
+    });
+
+    (tool, handler)
+}
+
+/// edit_flowscript tool - apply an edited FlowScript document to the board via reconcile.
+///
+/// Always validates first: parse errors and reconcile diagnostics are reported back to the agent
+/// and NOTHING is queued. Only a clean parse that yields commands queues them (status "queued"),
+/// where the main chat loop turns them into a reviewable `<commands>` envelope.
+fn create_edit_flowscript_tool(
+    board: Arc<Board>,
+    provider: Option<Arc<dyn CatalogProvider>>,
+    side_effect_commands: Option<Arc<Mutex<Vec<BoardCommand>>>>,
+) -> (Tool, ToolHandler) {
+    let tool = Tool::new("edit_flowscript")
+        .description(
+            r#"Apply an edited FlowScript document to the board (PRIMARY way to modify a workflow).
+
+Submit the FULL edited FlowScript source (the same document shown in the system context).
+Reconcile compares it to the live board using the `//@n:<id>` anchor comments and catalog
+declarations, then produces minimal changes:
+- A changed literal argument on an anchored call → updates that node's pin value.
+- An anchored statement you removed → deletes that node.
+- A new unanchored FlowScript call → adds that node, configures literal args, and connects
+  resolvable FlowScript references/nested calls.
+
+VALIDATION: This tool validates before queueing. If it reports parse errors or diagnostics,
+nothing was queued — fix the FlowScript and resubmit. Only a clean parse queues commands.
+
+RULES:
+- PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
+- Do NOT invent anchors for brand-new nodes; write normal unanchored calls using declarations
+  from `get_declarations`.
+- FlowScript statement order maps to the normal execution path only when the previous node has one
+  execution output or an explicit continuation policy in the reconciler. Multi-output nodes are
+  not guessed by pin order; API Call/httpFetch continues from `exec_success`, never `exec_error`.
+  If no policy exists, validation reports a diagnostic instead of queueing an unsafe edge.
+- Existing multi-output execution graphs render back to FlowScript as labelled branch blocks, so
+  board -> FlowScript -> board preserves those branches rather than flattening them.
+- For loops, the body is the `exec_out` path and the next statement continues from `done` /
+  `exec_done`; make sure the loop's `array` input receives the array being iterated.
+- To reposition nodes on the canvas, use `emit_commands` with MoveNode."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "flowscript": {
+                    "type": "string",
+                    "description": "The full edited FlowScript source for the board, with anchors preserved."
+                }
+            },
+            "required": ["flowscript"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let flowscript = args
+            .get("flowscript")
+            .or_else(|| args.get("script"))
+            .or_else(|| args.get("source"))
+            .or_else(|| args.get("content"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if flowscript.trim().is_empty() {
+            let payload = json!({
+                "status": "validation_errors",
+                "errors": ["edit_flowscript requires a non-empty `flowscript` string. The submitted tool arguments did not contain usable FlowScript."],
+                "flowscript_workspace_summary": flowscript_summary(flowscript),
+                "message": "FlowScript validation failed. Call edit_flowscript again with the edited FlowScript in `flowscript`."
+            });
+            return ToolResultObject::text(
+                serde_json::to_string_pretty(&payload).unwrap_or_default(),
+            );
+        }
+
+        let catalog = provider
+            .clone()
+            .map(|provider| futures::executor::block_on(provider.get_all_metadata()))
+            .unwrap_or_default();
+
+        let result = reconcile_text_with_catalog(&board, flowscript, &catalog);
+        let has_parse_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.to_lowercase().contains("parse error"));
+
+        // Parse failure (or no derivable change with diagnostics) → report back, queue nothing.
+        if has_parse_error || (result.commands.is_empty() && !result.diagnostics.is_empty()) {
+            let message = flowscript_validation_message(&result.diagnostics);
+            let payload = json!({
+                "status": "validation_errors",
+                "errors": result.diagnostics,
+                "flowscript_workspace_summary": flowscript_summary(flowscript),
+                "message": message
+            });
+            return ToolResultObject::text(
+                serde_json::to_string_pretty(&payload).unwrap_or_default(),
+            );
+        }
+
+        // Clean parse but no changes derived → nothing to do.
+        if result.commands.is_empty() {
+            let payload = json!({
+                "status": "no_changes",
+                "flowscript_workspace_summary": flowscript_summary(flowscript),
+                "message": "No board changes were derived from the FlowScript. If this was meant to create nodes, use get_declarations for exact function names and submit concrete catalog calls inside a function/event block."
+            });
+            return ToolResultObject::text(
+                serde_json::to_string_pretty(&payload).unwrap_or_default(),
+            );
+        }
+
+        // Clean parse with derived commands → queue them for review.
+        let commands_value = serde_json::to_value(&result.commands).unwrap_or(json!([]));
+        if let Some(store) = &side_effect_commands
+            && let Ok(mut commands) = store.lock()
+        {
+            commands.extend(result.commands.clone());
+        }
+        let payload = json!({
+            "status": "queued",
+            "commands": commands_value,
+            "explanation": format!("Reconciled {} change(s) from edited FlowScript.", result.commands.len()),
+            "diagnostics": result.diagnostics,
+            "flowscript_workspace_summary": flowscript_summary(flowscript),
+        });
+        ToolResultObject::text(serde_json::to_string_pretty(&payload).unwrap_or_default())
+    });
+
+    (tool, handler)
+}
+
 fn validate_sdk_emit_commands(
     commands: &[BoardCommand],
     graph_context: Option<&GraphContext>,
@@ -504,6 +1097,7 @@ fn validate_sdk_emit_commands(
 
     let mut known_entities: HashMap<String, KnownPins> = HashMap::new();
     let mut known_layers: HashSet<String> = HashSet::new();
+    let mut known_variables: HashSet<String> = HashSet::new();
     let mut proposed_connections: HashSet<(String, String, String, String)> = HashSet::new();
     if let Some(ctx) = graph_context {
         for node in &ctx.nodes {
@@ -525,6 +1119,7 @@ fn validate_sdk_emit_commands(
                 },
             );
         }
+        known_variables.extend(ctx.variables.iter().map(|variable| variable.id.clone()));
         proposed_connections.extend(ctx.edges.iter().map(|edge| {
             (
                 edge.from_node_id.clone(),
@@ -802,6 +1397,35 @@ fn validate_sdk_emit_commands(
                     ));
                 }
             }
+            BoardCommand::UpdateVariable {
+                variable_id,
+                name,
+                data_type,
+                value_type,
+                ..
+            } => {
+                if graph_context.is_some() && !known_variables.contains(variable_id) {
+                    errors.push(format!(
+                        "Command {index}: variable '{variable_id}' is unknown"
+                    ));
+                }
+                if name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+                    errors.push(format!(
+                        "Command {index}: UpdateVariable cannot set an empty name"
+                    ));
+                }
+                if data_type
+                    .as_deref()
+                    .is_some_and(|data_type| data_type.trim().is_empty())
+                    || value_type
+                        .as_deref()
+                        .is_some_and(|value_type| value_type.trim().is_empty())
+                {
+                    errors.push(format!(
+                        "Command {index}: UpdateVariable cannot set an empty data_type or value_type"
+                    ));
+                }
+            }
             BoardCommand::AddComment {
                 content,
                 target_layer,
@@ -820,7 +1444,14 @@ fn validate_sdk_emit_commands(
                     ));
                 }
             }
-            BoardCommand::RemoveVariable { .. } | BoardCommand::RemoveComment { .. } => {}
+            BoardCommand::RemoveVariable { variable_id, .. } => {
+                if graph_context.is_some() && !known_variables.contains(variable_id) {
+                    errors.push(format!(
+                        "Command {index}: variable '{variable_id}' is unknown"
+                    ));
+                }
+            }
+            BoardCommand::RemoveComment { .. } => {}
         }
     }
 
@@ -2308,5 +2939,41 @@ fn get_component_schema_doc(component_type: &str) -> String {
         )
     } else {
         base_doc
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internet_search_requires_non_empty_query_without_network() {
+        let result = run_internet_search_tool(&json!({ "query": "   " }));
+
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("error"));
+        assert_eq!(
+            result.get("tool").and_then(Value::as_str),
+            Some("internet_search")
+        );
+    }
+
+    #[test]
+    fn compact_search_result_keeps_only_model_relevant_fields() {
+        let result = compact_search_result(&json!({
+            "title": "Flow Like",
+            "url": "https://flow-like.com",
+            "content": "Workflow automation",
+            "publishedDate": "2026-06-04",
+            "engine": "test",
+            "category": "general",
+            "score": 1.25,
+            "huge": "drop me"
+        }));
+
+        assert_eq!(
+            result.get("title").and_then(Value::as_str),
+            Some("Flow Like")
+        );
+        assert!(result.get("huge").is_none());
     }
 }

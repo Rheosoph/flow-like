@@ -12,6 +12,7 @@ const CONTROL_NAMES = new Set([
 	"const",
 	"let",
 	"function",
+	"interface",
 ]);
 
 export class FlowLinter {

@@ -127,6 +127,52 @@ impl CatalogPackage {
             CatalogPackage::Automation => flow_like_catalog_automation::get_catalog(),
         }
     }
+
+    /// Stable lowercase label for this package, used as a `.flow.d` filename stem and as the
+    /// `Signature.package` tag.
+    pub fn label(&self) -> &'static str {
+        match self {
+            CatalogPackage::Core => "core",
+            CatalogPackage::Std => "std",
+            CatalogPackage::Data => "data",
+            CatalogPackage::Web => "web",
+            CatalogPackage::Media => "media",
+            CatalogPackage::Ml => "ml",
+            CatalogPackage::Onnx => "onnx",
+            CatalogPackage::Llm => "llm",
+            CatalogPackage::Processing => "processing",
+            CatalogPackage::Geo => "geo",
+            CatalogPackage::Automation => "automation",
+        }
+    }
+}
+
+/// A catalog node paired with the label of the package it ships in.
+///
+/// Built-in nodes carry their [`CatalogPackage`] label; third-party nodes injected at runtime
+/// carry whatever label the caller assigns (defaulting to `custom`). This is the input for the
+/// per-package `.flow.d` generator so any project's catalog — built-ins plus injected packages —
+/// can be documented one package at a time.
+pub struct LabeledNode {
+    pub package: String,
+    pub node: Arc<dyn NodeLogic>,
+}
+
+/// Enumerate every built-in catalog node tagged with its source package label.
+///
+/// Later entries win on name collisions, mirroring [`CatalogBuilder::build`] override semantics.
+pub fn labeled_catalog() -> Vec<LabeledNode> {
+    let mut out: Vec<LabeledNode> = Vec::new();
+    for package in CatalogPackage::all() {
+        let label = package.label();
+        for node in package.get_nodes() {
+            out.push(LabeledNode {
+                package: label.to_string(),
+                node,
+            });
+        }
+    }
+    out
 }
 
 impl std::str::FromStr for CatalogPackage {

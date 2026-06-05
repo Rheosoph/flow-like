@@ -147,6 +147,40 @@ function deserializeNode(node: ISerializedNode): INode {
 	};
 }
 
+function isEditableClipboardTarget(
+	element: EventTarget | Element | null,
+): boolean {
+	if (!(element instanceof Element)) return false;
+	if (element instanceof HTMLElement && element.isContentEditable) {
+		return true;
+	}
+	if (
+		element instanceof HTMLInputElement ||
+		element instanceof HTMLTextAreaElement ||
+		element instanceof HTMLSelectElement
+	) {
+		return true;
+	}
+	return Boolean(
+		element.closest("[contenteditable='true'], [contenteditable='']"),
+	);
+}
+
+function hasSelectedPageText(): boolean {
+	const selection = window.getSelection?.();
+	return Boolean(selection && !selection.isCollapsed && selection.toString());
+}
+
+export function shouldIgnoreBoardClipboardEvent(
+	event?: ClipboardEvent,
+): boolean {
+	return (
+		isEditableClipboardTarget(event?.target ?? null) ||
+		isEditableClipboardTarget(document.activeElement) ||
+		hasSelectedPageText()
+	);
+}
+
 export function isValidConnection(
 	connection: any,
 	cache: Map<string, [IPin, INode | ILayer, boolean]>,
@@ -872,12 +906,7 @@ export function handleCopy(
 	event?: ClipboardEvent,
 	currentLayer?: string,
 ) {
-	const activeElement = document.activeElement;
-	if (
-		activeElement instanceof HTMLInputElement ||
-		activeElement instanceof HTMLTextAreaElement ||
-		(activeElement as any)?.isContentEditable
-	) {
+	if (shouldIgnoreBoardClipboardEvent(event)) {
 		return;
 	}
 
@@ -1002,12 +1031,7 @@ export async function handlePaste(
 	currentLayer?: string,
 	catalog?: INode[],
 ) {
-	const activeElement = document.activeElement;
-	if (
-		activeElement instanceof HTMLInputElement ||
-		activeElement instanceof HTMLTextAreaElement ||
-		(activeElement as any)?.isContentEditable
-	) {
+	if (shouldIgnoreBoardClipboardEvent(event)) {
 		return;
 	}
 

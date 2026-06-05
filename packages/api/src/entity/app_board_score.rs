@@ -24,6 +24,8 @@ pub struct Model {
     pub node_count: i32,
     #[sea_orm(column_name = "scoredNodeCount")]
     pub scored_node_count: i32,
+    #[sea_orm(column_name = "connectionCount")]
+    pub connection_count: i32,
     #[sea_orm(column_name = "flaggedPatterns", column_type = "Json", nullable)]
     pub flagged_patterns: Option<Json>,
     #[sea_orm(column_name = "summary", column_type = "Json", nullable)]

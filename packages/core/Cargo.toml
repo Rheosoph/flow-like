@@ -16,6 +16,7 @@ bench = false
 
 [dependencies]
 flow-like-types.workspace = true
+flow-like-ast.workspace = true
 flow-like-bits.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true

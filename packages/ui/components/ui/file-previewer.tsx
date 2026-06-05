@@ -89,6 +89,8 @@ export function FilePreviewer({
 }>) {
 	const [content, setContent] = useState<string>("");
 	const [pdfKey, setPdfKey] = useState(0);
+	const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
+	const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	const previewContent = useCallback(async () => {
@@ -104,6 +106,56 @@ export function FilePreviewer({
 			previewContent();
 		}
 	}, [filename, previewContent, url]);
+
+	useEffect(() => {
+		if (!isPdf(url, filename)) {
+			setPdfPreviewUrl("");
+			setPdfPreviewError(null);
+			return;
+		}
+
+		let cancelled = false;
+		let objectUrl: string | null = null;
+
+		setPdfPreviewUrl("");
+		setPdfPreviewError(null);
+
+		const loadPdf = async () => {
+			try {
+				const response = await fetch(url);
+				if (!response.ok) {
+					throw new Error("Failed to fetch PDF");
+				}
+
+				const blob = await response.blob();
+				const pdfBlob =
+					blob.type === "application/pdf"
+						? blob
+						: new Blob([blob], { type: "application/pdf" });
+				objectUrl = URL.createObjectURL(pdfBlob);
+
+				if (cancelled) {
+					URL.revokeObjectURL(objectUrl);
+					return;
+				}
+
+				setPdfPreviewUrl(objectUrl);
+			} catch (error) {
+				if (cancelled) return;
+				console.error("Failed to load PDF preview:", error);
+				setPdfPreviewError("Failed to load PDF preview");
+			}
+		};
+
+		void loadPdf();
+
+		return () => {
+			cancelled = true;
+			if (objectUrl) {
+				URL.revokeObjectURL(objectUrl);
+			}
+		};
+	}, [filename, url]);
 
 	useEffect(() => {
 		if (isPdf(url, filename) && containerRef.current) {
@@ -130,11 +182,22 @@ export function FilePreviewer({
 		const pageUrl = page
 			? `#page=${page}&#toolbar=1&#view=FitH`
 			: "#toolbar=1&#view=FitH";
+
+		if (pdfPreviewError) {
+			return <div className="text-red-500">{pdfPreviewError}</div>;
+		}
+
+		if (!pdfPreviewUrl) {
+			return (
+				<div className="text-muted-foreground">Loading PDF preview...</div>
+			);
+		}
+
 		return (
 			<div ref={containerRef} className="w-full h-full flex flex-col">
 				<iframe
 					key={pdfKey}
-					src={`${url}${pageUrl}`}
+					src={`${pdfPreviewUrl}${pageUrl}`}
 					className="w-full h-full border-0 max-h-full max-w-full"
 					title={`PDF Preview: ${rawFileName(url, filename)}`}
 				>

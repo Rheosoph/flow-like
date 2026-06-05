@@ -252,6 +252,7 @@ pub async fn persist_board_score_with<C: ConnectionTrait>(
             active.worst_score = Set(computation.worst_score as i32);
             active.node_count = Set(computation.node_count as i32);
             active.scored_node_count = Set(computation.scored_node_count as i32);
+            active.connection_count = Set(computation.connection_count as i32);
             active.flagged_patterns = Set(flagged_json);
             active.summary = Set(summary);
             active.computed_at = Set(now);
@@ -272,6 +273,7 @@ pub async fn persist_board_score_with<C: ConnectionTrait>(
                 worst_score: Set(computation.worst_score as i32),
                 node_count: Set(computation.node_count as i32),
                 scored_node_count: Set(computation.scored_node_count as i32),
+                connection_count: Set(computation.connection_count as i32),
                 flagged_patterns: Set(flagged_json),
                 summary: Set(summary),
                 computed_at: Set(now),

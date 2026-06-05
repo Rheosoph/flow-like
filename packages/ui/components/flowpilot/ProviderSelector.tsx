@@ -1,6 +1,11 @@
 "use client";
 
-import { GithubIcon, LayersIcon, ServerIcon } from "lucide-react";
+import {
+	Code2Icon,
+	GithubIcon,
+	LayersIcon,
+	ServerIcon,
+} from "lucide-react";
 import { memo, useCallback } from "react";
 
 import { isTauri } from "../../lib/platform";
@@ -15,7 +20,14 @@ import {
 } from "../ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-import type { AIProvider, CopilotAuthStatus, CopilotModel } from "./types";
+import {
+	type AIProvider,
+	type AgentBackendProvider,
+	type CopilotAuthStatus,
+	type CopilotModel,
+	isAgentBackendProvider,
+	normalizeAIProvider,
+} from "./types";
 
 interface ProviderSelectorProps {
 	provider: AIProvider;
@@ -24,7 +36,10 @@ interface ProviderSelectorProps {
 	copilotAuthStatus: CopilotAuthStatus | null;
 	copilotRunning: boolean;
 	copilotConnecting: boolean;
-	onStartCopilot: (serverUrl?: string) => Promise<void>;
+	onStartCopilot: (
+		backend?: AgentBackendProvider,
+		serverUrl?: string,
+	) => Promise<void>;
 	onStopCopilot: () => Promise<void>;
 	disabled?: boolean;
 	className?: string;
@@ -43,42 +58,73 @@ export const ProviderSelector = memo(function ProviderSelector({
 }: ProviderSelectorProps) {
 	const isTauriEnv = isTauri();
 	const copilotUnavailable = !isTauriEnv;
+	const normalizedProvider = normalizeAIProvider(provider);
 
 	const handleProviderChange = useCallback(
 		async (newProvider: AIProvider) => {
-			if (newProvider === "copilot" && !copilotRunning) {
-				if (copilotUnavailable) {
-					return;
-				}
+			const normalized = normalizeAIProvider(newProvider);
+			if (normalized === "claude-code") return;
 
+			onProviderChange(normalized);
+
+			if (isAgentBackendProvider(normalized)) {
+				if (copilotUnavailable) return;
+				if (copilotRunning && normalized === normalizedProvider) return;
 				try {
-					await onStartCopilot();
-					onProviderChange(newProvider);
+					await onStartCopilot(normalized);
 				} catch {
 					// Error will be handled by the hook
 				}
-			} else if (newProvider === "bits" && copilotRunning) {
-				// Optionally stop Copilot when switching away
-				// For now, keep it running in background
-				onProviderChange(newProvider);
-			} else {
-				onProviderChange(newProvider);
 			}
 		},
-		[copilotRunning, copilotUnavailable, onStartCopilot, onProviderChange],
+		[
+			copilotRunning,
+			copilotUnavailable,
+			normalizedProvider,
+			onStartCopilot,
+			onProviderChange,
+		],
 	);
 
+	const agentProviders: Array<{
+		id: AgentBackendProvider;
+		label: string;
+		icon: typeof GithubIcon;
+		tooltip: string;
+		disabled?: boolean;
+	}> = [
+		{
+			id: "github-copilot",
+			label: "Copilot",
+			icon: GithubIcon,
+			tooltip: "Use GitHub Copilot SDK (local)",
+		},
+		{
+			id: "codex",
+			label: "Codex",
+			icon: Code2Icon,
+			tooltip: "Use a tool-capable Codex backend adapter",
+		},
+	];
+
 	return (
-		<div className={cn("flex items-center gap-1.5", className)}>
+		<div
+			className={cn(
+				"flex min-w-0 flex-wrap items-center gap-1 rounded-xl border border-border/40 bg-background/40 p-1 shadow-inner shadow-black/5",
+				className,
+			)}
+		>
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
-						variant={provider === "bits" ? "secondary" : "ghost"}
+						variant="ghost"
 						size="sm"
 						className={cn(
-							"h-7 px-2 text-xs gap-1.5 rounded-lg transition-all",
-							provider === "bits" &&
-								"bg-accent border border-primary/20 shadow-sm",
+							"h-8 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-all",
+							normalizedProvider === "bits" &&
+								"bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 hover:text-primary-foreground",
+							normalizedProvider !== "bits" &&
+								"text-muted-foreground hover:bg-accent/70 hover:text-foreground",
 						)}
 						onClick={() => handleProviderChange("bits")}
 						disabled={disabled}
@@ -92,58 +138,79 @@ export const ProviderSelector = memo(function ProviderSelector({
 				</TooltipContent>
 			</Tooltip>
 
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						variant={provider === "copilot" ? "secondary" : "ghost"}
-						size="sm"
-						className={cn(
-							"h-7 px-2 text-xs gap-1.5 rounded-lg transition-all",
-							provider === "copilot" &&
-								"bg-accent border border-primary/20 shadow-sm",
-							copilotConnecting && "animate-pulse",
-						)}
-						onClick={() => handleProviderChange("copilot")}
-						disabled={disabled || copilotConnecting || copilotUnavailable}
-					>
-						<GithubIcon className="w-3.5 h-3.5" />
-						<span className="hidden sm:inline">Copilot</span>
-						{copilotRunning && provider === "copilot" && (
-							<span className="relative flex h-1.5 w-1.5">
-								<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-								<span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500" />
-							</span>
-						)}
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom" className="text-xs max-w-50">
-					{copilotRunning ? (
-						<div>
-							<div className="font-medium">GitHub Copilot Connected</div>
-							{copilotAuthStatus?.authenticated && copilotAuthStatus.login && (
-								<div className="text-muted-foreground mt-0.5">
-									Signed in as {copilotAuthStatus.login}
+			{agentProviders.map((option) => {
+				const Icon = option.icon;
+				const active = normalizedProvider === option.id;
+				const optionDisabled = Boolean(option.disabled);
+				return (
+					<Tooltip key={option.id}>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="sm"
+								className={cn(
+									"h-8 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-all",
+									active &&
+										"bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 hover:text-primary-foreground",
+									!active &&
+										"text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+									active && copilotConnecting && "animate-pulse",
+									optionDisabled &&
+										"cursor-not-allowed opacity-45 hover:bg-transparent hover:text-muted-foreground",
+								)}
+								onClick={() => handleProviderChange(option.id)}
+								aria-disabled={optionDisabled}
+								disabled={
+									disabled ||
+									copilotUnavailable ||
+									(active && copilotConnecting)
+								}
+							>
+								<Icon className="w-3.5 h-3.5" />
+								<span className="hidden sm:inline">{option.label}</span>
+								{copilotRunning && active && (
+									<span className="relative flex h-1.5 w-1.5">
+										<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+										<span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-500" />
+									</span>
+								)}
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" className="text-xs max-w-56">
+							{copilotRunning && active ? (
+								<div>
+									<div className="font-medium">{option.label} Connected</div>
+									{copilotAuthStatus?.authenticated && copilotAuthStatus.login && (
+										<div className="text-muted-foreground mt-0.5">
+											Signed in as {copilotAuthStatus.login}
+										</div>
+									)}
+									{copilotAuthStatus?.message && (
+										<div className="text-muted-foreground mt-0.5">
+											{copilotAuthStatus.message}
+										</div>
+									)}
 								</div>
+							) : copilotUnavailable ? (
+								"Agent SDK backends are currently desktop-only in FlowPilot"
+							) : optionDisabled ? (
+								option.tooltip
+							) : (
+								option.tooltip
 							)}
-						</div>
-					) : copilotUnavailable ? (
-						"GitHub Copilot is currently desktop-only in FlowPilot"
-					) : isTauriEnv ? (
-						"Use GitHub Copilot (local)"
-					) : (
-						"GitHub Copilot is unavailable in this environment"
-					)}
-				</TooltipContent>
-			</Tooltip>
+						</TooltipContent>
+					</Tooltip>
+				);
+			})}
 
 			{/* Disconnect button when Copilot is running */}
-			{copilotRunning && provider === "copilot" && (
+			{copilotRunning && isAgentBackendProvider(normalizedProvider) && (
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
 							variant="ghost"
 							size="icon"
-							className="h-6 w-6 text-muted-foreground hover:text-destructive"
+							className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground hover:text-destructive"
 							onClick={onStopCopilot}
 							disabled={disabled || copilotConnecting}
 						>
@@ -184,19 +251,25 @@ export const ModelSelector = memo(function ModelSelector({
 	disabled = false,
 	className,
 }: ModelSelectorProps) {
-	const models = provider === "copilot" ? copilotModels : bitsModels;
+	const normalizedProvider = normalizeAIProvider(provider);
+	const models =
+		normalizedProvider === "bits" ? bitsModels : copilotModels;
 
 	if (models.length === 0) {
 		return (
 			<div
 				className={cn(
-					"h-8 px-3 text-xs flex items-center text-muted-foreground rounded-lg border border-border/30 bg-background/60",
+					"flex h-8 min-w-0 items-center rounded-lg border border-border/30 bg-background/60 px-3 text-xs text-muted-foreground",
 					className,
 				)}
 			>
-				{provider === "copilot"
-					? "Loading Copilot models..."
-					: "No models available"}
+				<span className="truncate">
+					{normalizedProvider === "github-copilot"
+						? "Loading Copilot models..."
+						: normalizedProvider !== "bits"
+							? "Loading backend models..."
+							: "No models available"}
+				</span>
 			</div>
 		);
 	}
@@ -205,7 +278,7 @@ export const ModelSelector = memo(function ModelSelector({
 		<Select value={selectedModelId} onValueChange={onModelChange}>
 			<SelectTrigger
 				className={cn(
-					"h-8 text-xs bg-background/60 backdrop-blur-sm border-border/30 hover:border-primary/30 transition-all duration-200 rounded-lg focus:ring-2 focus:ring-primary/20",
+					"h-8 min-w-0 overflow-hidden rounded-lg border-border/30 bg-background/60 text-xs backdrop-blur-sm transition-all duration-200 hover:border-primary/30 focus:ring-2 focus:ring-primary/20",
 					className,
 				)}
 				disabled={disabled}
@@ -215,7 +288,7 @@ export const ModelSelector = memo(function ModelSelector({
 			<SelectContent className="rounded-lg z-150">
 				{models.map((model) => {
 					const displayName =
-						provider === "copilot"
+						normalizedProvider !== "bits"
 							? (model as CopilotModel).name || (model as CopilotModel).id
 							: (model as any).meta?.en?.name ||
 								(model as any).friendly_name ||
@@ -227,7 +300,7 @@ export const ModelSelector = memo(function ModelSelector({
 							value={model.id}
 							className="text-xs rounded-md"
 						>
-							{displayName}
+							<span className="block truncate">{displayName}</span>
 						</SelectItem>
 					);
 				})}

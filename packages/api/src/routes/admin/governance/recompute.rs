@@ -1,10 +1,7 @@
 use crate::{
-    entity::app,
-    error::ApiError,
-    middleware::jwt::AppUser,
+    entity::app, error::ApiError, middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
-    routes::app::board::scoring::persist_board_score,
-    state::AppState,
+    routes::app::board::scoring::persist_board_score, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::EntityTrait;

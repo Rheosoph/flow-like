@@ -264,6 +264,16 @@ const preserveBoardRuntimeFields = (
 	return remoteBoard;
 };
 
+const getAppPackageCatalogNodes = (
+	catalogNodes: INode[] | undefined,
+): INode[] | undefined => {
+	const packageNodes = catalogNodes?.filter((node) =>
+		Boolean(node.wasm?.package_id),
+	);
+
+	return packageNodes?.length ? packageNodes : undefined;
+};
+
 const cloneBoard = (board: IBoard): IBoard => structuredClone(board);
 
 const systemTimeToNumber = (time?: SystemTimeLike): number => {
@@ -1463,7 +1473,12 @@ export class BoardState implements IBoardState {
 			run.is_remote = false;
 		}
 
-		// Try to fetch remote runs if online
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline) {
+			return localRuns;
+		}
+
+		// Try to fetch remote runs for online apps.
 		let remoteRuns: ILogMetadata[] = [];
 		if (this.backend.profile && this.backend.auth) {
 			try {
@@ -1854,6 +1869,7 @@ export class BoardState implements IBoardState {
 	async copilot_chat(
 		scope: CopilotScope,
 		board: IBoard | null,
+		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
 		selectedComponentIds: string[],
@@ -1879,10 +1895,12 @@ export class BoardState implements IBoardState {
 		}
 
 		const actualToken = token ?? this.backend.auth?.user?.access_token;
+		const appPackageCatalogNodes = getAppPackageCatalogNodes(catalogNodes);
 
 		return await invoke("copilot_chat", {
 			scope,
 			board,
+			catalogNodes: appPackageCatalogNodes,
 			selectedNodeIds,
 			currentSurface,
 			selectedComponentIds,

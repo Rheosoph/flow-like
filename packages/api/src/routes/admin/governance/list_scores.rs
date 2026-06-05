@@ -7,9 +7,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use sea_orm::sea_query::Expr;
-use sea_orm::{
-    ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
-};
+use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
@@ -112,7 +110,10 @@ pub async fn list_scores(
     let aggregates: Vec<AppScoreAgg> = app_board_score::Entity::find()
         .select_only()
         .column(app_board_score::Column::AppId)
-        .column_as(Expr::col(app_board_score::Column::Security).min(), "security")
+        .column_as(
+            Expr::col(app_board_score::Column::Security).min(),
+            "security",
+        )
         .column_as(Expr::col(app_board_score::Column::Privacy).min(), "privacy")
         .column_as(
             Expr::col(app_board_score::Column::Performance).min(),
@@ -197,7 +198,10 @@ pub async fn list_scores(
 
     // Category / threshold filter.
     if let Some(threshold) = query.threshold {
-        let key = query.category.clone().unwrap_or_else(|| "worstScore".into());
+        let key = query
+            .category
+            .clone()
+            .unwrap_or_else(|| "worstScore".into());
         items.retain(|item| category_value(item, &key) <= threshold);
     }
 
@@ -217,7 +221,11 @@ pub async fn list_scores(
 
     let total = items.len() as u64;
     let offset = ((page - 1) * limit) as usize;
-    let paged: Vec<AppScoreItem> = items.into_iter().skip(offset).take(limit as usize).collect();
+    let paged: Vec<AppScoreItem> = items
+        .into_iter()
+        .skip(offset)
+        .take(limit as usize)
+        .collect();
     let has_more = (offset as u64) + (paged.len() as u64) < total;
 
     Ok(Json(ListAppScoresResponse {

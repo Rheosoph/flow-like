@@ -4,8 +4,8 @@ use crate::{
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
     routes::app::{
-        board::summaries::BoardSummary,
         board::scoring::compute_board_score,
+        board::summaries::BoardSummary,
         events::db::{filter_event_list_execution, filter_event_secrets, get_events_for_app},
         page::get_pages::PageInfo,
     },

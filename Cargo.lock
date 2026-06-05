@@ -7660,6 +7660,7 @@ dependencies = [
  "chrono",
  "dirs-next",
  "flate2",
+ "flow-like-ast",
  "flow-like-bits",
  "flow-like-model-provider",
  "flow-like-storage",
@@ -7765,6 +7766,14 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.23.1",
  "webp",
+]
+
+[[package]]
+name = "flow-like-ast"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -8254,6 +8263,8 @@ dependencies = [
  "pulldown-cmark 0.12.2",
  "rayon",
  "rdev",
+ "reqwest 0.12.28",
+ "rmcp",
  "rusqlite",
  "security-framework 3.7.0",
  "sentry",
@@ -8289,6 +8300,7 @@ dependencies = [
  "tracing-oslog",
  "tracing-subscriber",
  "urlencoding",
+ "uuid 1.23.1",
  "webp",
  "webview2-com",
  "window-vibrancy",

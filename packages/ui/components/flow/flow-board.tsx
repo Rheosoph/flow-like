@@ -140,6 +140,7 @@ import {
 	hexToRgba,
 	isValidConnection,
 	parseBoard,
+	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
 import { getErrorMessage } from "../../lib/error-message";
 import { toastError, toastSuccess } from "../../lib/messages";
@@ -719,9 +720,16 @@ export function FlowBoard({
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [searchMode, setSearchMode] = useState<"dialog" | "sidebar">("dialog");
 	const [copilotOpen, setCopilotOpen] = useState(false);
+	const [copilotWorkspaceVisible, setCopilotWorkspaceVisible] = useState(false);
 	const [copilotInitialPrompt, setCopilotInitialPrompt] = useState<
 		string | undefined
 	>();
+
+	useEffect(() => {
+		if (!copilotOpen) {
+			setCopilotWorkspaceVisible(false);
+		}
+	}, [copilotOpen]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 
 	const { toggleVars, toggleRunHistory, toggleLogs } = useFlowPanels({
@@ -1333,6 +1341,9 @@ export function FlowBoard({
 
 	const handlePasteCB = useCallback(
 		async (event: ClipboardEvent) => {
+			if (shouldIgnoreBoardClipboardEvent(event)) {
+				return;
+			}
 			if (typeof version !== "undefined") {
 				toastError("Cannot change old version", <XIcon />);
 				return;
@@ -1372,6 +1383,9 @@ export function FlowBoard({
 
 	const handleCopyCB = useCallback(
 		(event?: ClipboardEvent) => {
+			if (shouldIgnoreBoardClipboardEvent(event)) {
+				return;
+			}
 			if (!board.data) return;
 			const mp = mousePositionRef.current;
 			const currentCursorPosition = screenToFlowPosition({
@@ -1564,7 +1578,8 @@ export function FlowBoard({
 		}
 
 		for (const edge of edges.filter((currentEdge) => currentEdge.selected)) {
-			const functionReferenceNodeIds = getFunctionReferenceNodeIdsFromEdge(edge);
+			const functionReferenceNodeIds =
+				getFunctionReferenceNodeIdsFromEdge(edge);
 			if (functionReferenceNodeIds) {
 				if (
 					selectedNodeIds.has(functionReferenceNodeIds.refOutNodeId) ||
@@ -2671,9 +2686,18 @@ export function FlowBoard({
 			{/* Desktop FlowPilot floating panel */}
 			{copilotOpen && (
 				<div className="hidden md:block fixed inset-0 z-100 pointer-events-none">
-					<div className="absolute top-4 right-4 w-[420px] h-[calc(100%-2rem)] max-h-[700px] pointer-events-auto">
+					<div
+						className="absolute inset-y-0 right-0 pointer-events-auto transition-[width] duration-300 ease-out"
+						style={{
+							width: copilotWorkspaceVisible
+								? "min(1120px, calc(100vw - 1rem))"
+								: "min(500px, calc(100vw - 1rem))",
+						}}
+					>
 						<FlowCopilot
+							appId={appId}
 							board={board.data}
+							catalogNodes={catalog.data}
 							selectedNodeIds={Array.from(selected.current)}
 							onAcceptSuggestion={onAcceptSuggestion}
 							onFocusNode={focusNode}
@@ -2685,7 +2709,9 @@ export function FlowBoard({
 							onClose={() => {
 								setCopilotOpen(false);
 								setCopilotInitialPrompt(undefined);
+								setCopilotWorkspaceVisible(false);
 							}}
+							onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 							mode="panel"
 							initialPrompt={copilotInitialPrompt}
 						/>
@@ -3286,10 +3312,12 @@ export function FlowBoard({
 						if (!open) setCopilotInitialPrompt(undefined);
 					}}
 				>
-					<SheetContent side="bottom" className="h-[85dvh] w-full p-0">
+					<SheetContent side="bottom" className="h-[100dvh] w-full p-0">
 						<div className="h-full w-full">
 							<FlowCopilot
+								appId={appId}
 								board={board.data}
+								catalogNodes={catalog.data}
 								selectedNodeIds={Array.from(selected.current)}
 								onAcceptSuggestion={onAcceptSuggestion}
 								onFocusNode={focusNode}
@@ -3301,7 +3329,9 @@ export function FlowBoard({
 								onClose={() => {
 									setCopilotOpen(false);
 									setCopilotInitialPrompt(undefined);
+									setCopilotWorkspaceVisible(false);
 								}}
+								onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 								mode="panel"
 								initialPrompt={copilotInitialPrompt}
 							/>

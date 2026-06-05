@@ -90,6 +90,9 @@ export interface UnifiedCopilotResponse {
 	/** Root component ID for UI components */
 	root_component_id?: string;
 
+	/** Last FlowScript document submitted by the workflow agent */
+	flowscript_workspace?: string;
+
 	/** Suggested follow-up prompts */
 	suggestions: UnifiedSuggestion[];
 

@@ -51,6 +51,13 @@
 					}
 				},
 				{
+					"match": "\\b(interface)\\s+([A-Za-z_$][\\w$]*)",
+					"captures": {
+						"1": { "name": "storage.type.interface.flow" },
+						"2": { "name": "entity.name.type.interface.flow" }
+					}
+				},
+				{
 					"match": "\\b(function)\\s+([A-Za-z_$][\\w$]*)",
 					"captures": {
 						"1": { "name": "storage.type.function.flow" },
@@ -75,11 +82,23 @@
 				},
 				{
 					"name": "support.type.flow",
-					"match": "\\b(Struct|Map|Set)\\b"
+					"match": "\\b(Struct|Map|Set|any|null)\\b"
 				},
 				{
 					"name": "entity.name.type.flow",
 					"match": "(?<=:\\s)([A-Z][\\w$]*)"
+				},
+				{
+					"name": "entity.name.type.flow",
+					"match": "(?<=\\|\\s)([A-Z][\\w$]*)"
+				},
+				{
+					"name": "entity.name.type.flow",
+					"match": "(?<=<)([A-Z][\\w$]*)"
+				},
+				{
+					"name": "entity.name.type.flow",
+					"match": "(?<=,\\s)([A-Z][\\w$]*)"
 				}
 			]
 		},

@@ -1,6 +1,5 @@
 use super::element_utils::extract_element_id;
 use flow_like::a2ui::components::BoundingBoxOverlayProps;
-use flow_like_catalog_core::BoundingBox;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -8,6 +7,7 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
+use flow_like_catalog_core::BoundingBox;
 use flow_like_types::{Value, async_trait, json::json};
 
 /// Unified BoundingBoxOverlay update node.

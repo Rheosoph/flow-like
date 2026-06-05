@@ -1,5 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
-import type { IProfile } from "@flow-like/flow-like-ui";
+import type { IProfile, QueryClient } from "@flow-like/flow-like-ui";
 import type { AuthContextProps } from "react-oidc-context";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
@@ -112,7 +111,8 @@ function apiErrorMessage(status: number, body: string): string {
 	if (body) {
 		try {
 			const parsed = JSON.parse(body);
-			const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+			const message =
+				parsed?.error?.message ?? parsed?.message ?? parsed?.error;
 			if (typeof message === "string" && message.trim()) {
 				return message;
 			}

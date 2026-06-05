@@ -14,7 +14,9 @@ import { FlowPilot } from "../../flowpilot";
 import type { FlowCopilotProps } from "./types";
 
 export function FlowCopilotWrapper({
+	appId,
 	board,
+	catalogNodes,
 	selectedNodeIds,
 	onAcceptSuggestion,
 	onExecuteCommands,
@@ -23,6 +25,7 @@ export function FlowCopilotWrapper({
 	runContext,
 	initialPrompt,
 	onClose,
+	onWorkspaceVisibleChange,
 	mode,
 	embedded,
 	onGhostNodesChange,
@@ -32,7 +35,9 @@ export function FlowCopilotWrapper({
 		<FlowPilot
 			agentMode="board"
 			title="FlowPilot"
+			appId={appId}
 			board={board}
+			catalogNodes={catalogNodes}
 			selectedNodeIds={selectedNodeIds}
 			onAcceptSuggestion={onAcceptSuggestion}
 			onExecuteCommands={onExecuteCommands}
@@ -50,6 +55,7 @@ export function FlowCopilotWrapper({
 			}
 			initialPrompt={initialPrompt}
 			onClose={onClose}
+			onWorkspaceVisibleChange={onWorkspaceVisibleChange}
 		/>
 	);
 }

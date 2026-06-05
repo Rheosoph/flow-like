@@ -5,6 +5,7 @@ import type {
 	PlanStep,
 	Suggestion,
 } from "../../../lib/schema/flow/copilot";
+import type { INode } from "../../../lib/schema/flow/node";
 
 export type LoadingPhase =
 	| "initializing"
@@ -31,13 +32,16 @@ export interface CopilotMessage {
 }
 
 export interface FlowCopilotProps {
+	appId?: string;
 	board: IBoard | null | undefined;
+	catalogNodes?: INode[];
 	selectedNodeIds: string[];
 	onAcceptSuggestion: (suggestion: Suggestion) => void;
 	onExecuteCommands?: (commands: BoardCommand[]) => void;
 	onGhostNodesChange?: (suggestions: Suggestion[]) => void;
 	onClearRunContext?: () => void;
 	onClose?: () => void;
+	onWorkspaceVisibleChange?: (visible: boolean) => void;
 	mode?: Mode;
 	embedded?: boolean;
 	runContext?: ILogMetadata;
