@@ -61,7 +61,7 @@ pub async fn get_scores_summary(
     // Aggregate per-app worst scores in SQL.
     let aggregates: Vec<AppScoreAgg> = app_board_score::Entity::find()
         .select_only()
-        .column(app_board_score::Column::AppId)
+        .column_as(app_board_score::Column::AppId, "app_id")
         .column_as(
             Expr::col(app_board_score::Column::Security).min(),
             "security",

@@ -18,6 +18,9 @@ model PublicationRequest {
 
   status PublicationRequestStatus
 
+  /// Binds the submitted AI Act assessment to this review (record-keeping).
+  aiActAssessmentId String?
+
   logs PublicationLog[]
 
   createdAt DateTime @default(now())
@@ -26,6 +29,7 @@ model PublicationRequest {
   @@index([status])
   @@index([appId])
   @@index([approverId])
+  @@index([aiActAssessmentId])
 }
 
 model PublicationLog {

@@ -1,4 +1,5 @@
 import type { IProfile, QueryClient } from "@flow-like/flow-like-ui";
+import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { AuthContextProps } from "react-oidc-context";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
@@ -34,14 +35,11 @@ export interface WebBackendRef {
 }
 
 export function getApiBaseUrl(): string {
-	return process.env.NEXT_PUBLIC_API_URL || "https://api.flow-like.com";
+	return getApiOrigin();
 }
 
 export function constructApiUrl(path: string): string {
-	const baseUrl = getApiBaseUrl();
-	const cleanBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-	const cleanPath = path.replace(/^\/+/, "");
-	return `${cleanBase}/api/v1/${cleanPath}`;
+	return getApiUrl(null, path);
 }
 
 function jsonStringify(value: unknown): string {

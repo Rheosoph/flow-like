@@ -122,6 +122,9 @@ model App {
   salesDaily     AppSalesDaily[]
   analyticsDaily AppAnalyticsDaily[]
 
+  aiActAssessments       AiActAssessment[]
+  aiActModelObservations AiActModelObservation[]
+
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
   embeddingUsageTrackings EmbeddingUsageTracking[]

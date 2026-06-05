@@ -4,6 +4,66 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AiRiskCategory")]
+pub enum AiRiskCategory {
+    #[sea_orm(string_value = "PROHIBITED")]
+    Prohibited,
+    #[sea_orm(string_value = "HIGH")]
+    High,
+    #[sea_orm(string_value = "LIMITED")]
+    Limited,
+    #[sea_orm(string_value = "MINIMAL")]
+    Minimal,
+    #[sea_orm(string_value = "UNDETERMINED")]
+    Undetermined,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "AiActAssessmentStatus"
+)]
+pub enum AiActAssessmentStatus {
+    #[sea_orm(string_value = "DRAFT")]
+    Draft,
+    #[sea_orm(string_value = "SUBMITTED")]
+    Submitted,
+    #[sea_orm(string_value = "APPROVED")]
+    Approved,
+    #[sea_orm(string_value = "REJECTED")]
+    Rejected,
+    #[sea_orm(string_value = "BLOCKED")]
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AiGpaiPosture")]
+pub enum AiGpaiPosture {
+    #[sea_orm(string_value = "UNKNOWN")]
+    Unknown,
+    #[sea_orm(string_value = "HOSTED")]
+    Hosted,
+    #[sea_orm(string_value = "OPEN_LICENCE")]
+    OpenLicence,
+    #[sea_orm(string_value = "CLOSED")]
+    Closed,
+    #[sea_orm(string_value = "SYSTEMIC")]
+    Systemic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AiModelSource")]
+pub enum AiModelSource {
+    #[sea_orm(string_value = "MONITORED")]
+    Monitored,
+    #[sea_orm(string_value = "BOARD_SCAN")]
+    BoardScan,
+    #[sea_orm(string_value = "BOTH")]
+    Both,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AssetKind")]
 pub enum AssetKind {
     #[sea_orm(string_value = "IMAGE")]

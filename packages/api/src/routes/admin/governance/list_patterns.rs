@@ -79,8 +79,8 @@ pub async fn list_patterns(
 
     let rows: Vec<FlaggedRow> = app_board_score::Entity::find()
         .select_only()
-        .column(app_board_score::Column::AppId)
-        .column(app_board_score::Column::FlaggedPatterns)
+        .column_as(app_board_score::Column::AppId, "app_id")
+        .column_as(app_board_score::Column::FlaggedPatterns, "flagged_patterns")
         .filter(app_board_score::Column::FlaggedPatterns.is_not_null())
         .into_model::<FlaggedRow>()
         .all(&state.db)

@@ -110,7 +110,8 @@ impl Modify for SecurityAddon {
         (name = "solution", description = "Solution requests"),
         (name = "admin", description = "Admin operations"),
         (name = "tmp", description = "Temporary file operations"),
-        (name = "courses", description = "Flow-Like University: courses, lessons, challenges, leaderboard")
+        (name = "courses", description = "Flow-Like University: courses, lessons, challenges, leaderboard"),
+        (name = "ai-act", description = "EU AI Act conformity assessment and model governance")
     ),
     paths(
         // Health routes
@@ -177,6 +178,21 @@ impl Modify for SecurityAddon {
         crate::routes::admin::governance::recompute::recompute_scores,
         crate::routes::app::publication::get_publication::get_publication_requests,
         crate::routes::app::publication::upsert_publication::request_publication,
+        // EU AI Act routes
+        crate::routes::app::ai_act::get_questionnaire,
+        crate::routes::app::ai_act::classify_preview,
+        crate::routes::app::ai_act::get_assessment,
+        crate::routes::app::ai_act::put_assessment,
+        crate::routes::app::ai_act::suggest_assessment,
+        crate::routes::admin::ai_act::list_inventory,
+        crate::routes::admin::ai_act::get_inventory_detail,
+        crate::routes::admin::ai_act::put_inventory_assessment,
+        crate::routes::admin::ai_act::reconcile_models,
+        crate::routes::admin::ai_act::acknowledge_model,
+        crate::routes::admin::ai_act::list_models,
+        crate::routes::admin::ai_act::upsert_model,
+        crate::routes::admin::ai_act::assist,
+        crate::routes::admin::ai_act::export_inventory,
         crate::routes::app::internal::get_nodes::get_nodes,
         // Board routes
         crate::routes::app::board::get_board::get_board,
@@ -467,6 +483,22 @@ impl Modify for SecurityAddon {
         crate::routes::app::publication::get_publication::AppPublicationRequestItem,
         crate::routes::app::publication::upsert_publication::RequestPublicationBody,
         crate::routes::app::publication::upsert_publication::RequestPublicationResponse,
+        // EU AI Act
+        crate::routes::app::ai_act::QuestionnaireResponse,
+        crate::routes::app::ai_act::ClassifyBody,
+        crate::routes::app::ai_act::ClassifyResponse,
+        crate::routes::app::ai_act::AssessmentResponse,
+        crate::routes::app::ai_act::UpsertAssessmentBody,
+        crate::routes::app::ai_act::SuggestBody,
+        crate::routes::app::ai_act::SuggestResponse,
+        crate::routes::admin::ai_act::InventoryItem,
+        crate::routes::admin::ai_act::InventoryResponse,
+        crate::routes::admin::ai_act::ModelObservationItem,
+        crate::routes::admin::ai_act::InventoryDetailResponse,
+        crate::routes::admin::ai_act::ReconcileResponse,
+        crate::routes::admin::ai_act::RegistryItem,
+        crate::routes::admin::ai_act::UpsertModelBody,
+        crate::routes::admin::ai_act::AssistBody,
         // Widgets
         crate::routes::app::widget::get_widget::VersionQuery,
         crate::routes::app::widget::upsert_widget::WidgetUpsert,

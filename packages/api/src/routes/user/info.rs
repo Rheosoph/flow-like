@@ -7,7 +7,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::State};
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, EntityTrait};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DbBackend, EntityTrait, Statement};
 
 /// Sometimes when the user still has an old jwt, the user info is not updated correctly.
 /// In these cases, we want to update the value correctly.
@@ -35,6 +35,74 @@ async fn should_update(
     should_update
 }
 
+/// Older user rows can predate defaults on required columns. SeaORM decodes the
+/// generated `user::Model` strictly, so repair those rows before loading them.
+async fn repair_legacy_user_defaults(state: &AppState, sub: &str) -> Result<(), sea_orm::DbErr> {
+    let backend = state.db.get_database_backend();
+    let sql = match backend {
+        DbBackend::Postgres => {
+            r#"UPDATE "User"
+SET
+    "permission" = COALESCE("permission", 0),
+    "tutorialCompleted" = COALESCE("tutorialCompleted", FALSE),
+    "status" = COALESCE("status", 'ACTIVE'::"UserStatus"),
+    "tier" = COALESCE("tier", 'FREE'::"UserTier"),
+    "totalSize" = COALESCE("totalSize", 0),
+    "totalLLMPrice" = COALESCE("totalLLMPrice", 0),
+    "totalEmbeddingPrice" = COALESCE("totalEmbeddingPrice", 0),
+    "createdAt" = COALESCE("createdAt", NOW()),
+    "updatedAt" = COALESCE("updatedAt", NOW())
+WHERE "id" = $1
+  AND (
+      "permission" IS NULL
+      OR "tutorialCompleted" IS NULL
+      OR "status" IS NULL
+      OR "tier" IS NULL
+      OR "totalSize" IS NULL
+      OR "totalLLMPrice" IS NULL
+      OR "totalEmbeddingPrice" IS NULL
+      OR "createdAt" IS NULL
+      OR "updatedAt" IS NULL
+  )"#
+        }
+        _ => {
+            r#"UPDATE "User"
+SET
+    "permission" = COALESCE("permission", 0),
+    "tutorialCompleted" = COALESCE("tutorialCompleted", FALSE),
+    "status" = COALESCE("status", 'ACTIVE'),
+    "tier" = COALESCE("tier", 'FREE'),
+    "totalSize" = COALESCE("totalSize", 0),
+    "totalLLMPrice" = COALESCE("totalLLMPrice", 0),
+    "totalEmbeddingPrice" = COALESCE("totalEmbeddingPrice", 0),
+    "createdAt" = COALESCE("createdAt", CURRENT_TIMESTAMP),
+    "updatedAt" = COALESCE("updatedAt", CURRENT_TIMESTAMP)
+WHERE "id" = ?
+  AND (
+      "permission" IS NULL
+      OR "tutorialCompleted" IS NULL
+      OR "status" IS NULL
+      OR "tier" IS NULL
+      OR "totalSize" IS NULL
+      OR "totalLLMPrice" IS NULL
+      OR "totalEmbeddingPrice" IS NULL
+      OR "createdAt" IS NULL
+      OR "updatedAt" IS NULL
+  )"#
+        }
+    };
+
+    state
+        .db
+        .execute(Statement::from_sql_and_values(
+            backend,
+            sql,
+            vec![sub.into()],
+        ))
+        .await?;
+    Ok(())
+}
+
 #[utoipa::path(
     get,
     path = "/user/info",
@@ -57,6 +125,7 @@ pub async fn user_info(
     let email = user_info.email.clone();
     let username = user_info.username.clone();
     let preferred_username = user_info.preferred_username.clone();
+    repair_legacy_user_defaults(&state, &sub).await?;
     let user_info = user::Entity::find_by_id(&sub).one(&state.db).await?;
     if let Some(mut user_info) = user_info {
         let mut updated_user: Option<user::ActiveModel> = None;

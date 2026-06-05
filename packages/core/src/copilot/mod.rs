@@ -9,9 +9,13 @@
 //! (`Copilot` for board and `A2UICopilot` for frontend) to ensure consistent behavior
 //! and avoid code duplication.
 
+pub mod governance;
 pub mod prompts;
 mod types;
 mod unified;
 
+pub use governance::{
+    BoardDepiction, GovernanceCopilot, GovernanceSuggestion, SuggestedAnswer,
+};
 pub use types::*;
 pub use unified::UnifiedCopilot;

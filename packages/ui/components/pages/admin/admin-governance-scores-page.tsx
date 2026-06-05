@@ -9,6 +9,7 @@ import {
 	ShieldAlert,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { useBackend } from "../../../state/backend-state";
 import {
@@ -34,6 +35,9 @@ import {
 	TabsContent,
 	TabsList,
 	TabsTrigger,
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
 } from "../../ui";
 
 const SCORE_CATEGORIES = [
@@ -46,6 +50,24 @@ const SCORE_CATEGORIES = [
 ] as const;
 
 type ScoreCategory = (typeof SCORE_CATEGORIES)[number];
+
+const SCORE_CATEGORY_LABELS: Record<ScoreCategory, string> = {
+	security: "Security",
+	privacy: "Privacy",
+	performance: "Performance",
+	governance: "Governance",
+	reliability: "Reliability",
+	cost: "Cost",
+};
+
+const SCORE_CATEGORY_ABBR: Record<ScoreCategory, string> = {
+	security: "Sec",
+	privacy: "Priv",
+	performance: "Perf",
+	governance: "Gov",
+	reliability: "Rel",
+	cost: "Cost",
+};
 
 interface AppScoreItem {
 	appId: string;
@@ -151,8 +173,15 @@ function CategoryHeaderCells() {
 	return (
 		<>
 			{SCORE_CATEGORIES.map((category) => (
-				<TableHead key={category} className="text-center capitalize">
-					{category.slice(0, 4)}
+				<TableHead key={category} className="text-center">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span className="cursor-default">
+								{SCORE_CATEGORY_ABBR[category]}
+							</span>
+						</TooltipTrigger>
+						<TooltipContent>{SCORE_CATEGORY_LABELS[category]}</TooltipContent>
+					</Tooltip>
 				</TableHead>
 			))}
 		</>
@@ -172,6 +201,16 @@ function CategoryScoreCells({
 				</TableCell>
 			))}
 		</>
+	);
+}
+
+function PageShell({ children }: { children: ReactNode }) {
+	return (
+		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
+			<div className="flex-1 overflow-y-auto p-6">
+				<div className="mx-auto max-w-7xl space-y-6">{children}</div>
+			</div>
+		</main>
 	);
 }
 
@@ -212,7 +251,7 @@ export function AdminGovernanceScoresPage() {
 	}
 
 	return (
-		<div className="space-y-4">
+		<PageShell>
 			<div className="flex items-center justify-between gap-3">
 				<div>
 					<h2 className="text-lg font-semibold">Governance Scores</h2>
@@ -247,7 +286,7 @@ export function AdminGovernanceScoresPage() {
 					<PatternsTab />
 				</TabsContent>
 			</Tabs>
-		</div>
+		</PageShell>
 	);
 }
 
@@ -458,7 +497,7 @@ function AppScoreDetail({
 	});
 
 	return (
-		<div className="space-y-4">
+		<PageShell>
 			<Button variant="ghost" size="sm" onClick={onBack} className="-ml-2">
 				<ChevronLeft className="mr-1 h-4 w-4" />
 				Back to scores
@@ -554,7 +593,7 @@ function AppScoreDetail({
 					</CardContent>
 				</Card>
 			))}
-		</div>
+		</PageShell>
 	);
 }
 

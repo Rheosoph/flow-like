@@ -10,6 +10,7 @@ const ASSET_COMPONENT_TYPES = new Set([
 	"avatar",
 	"lottie",
 	"iframe",
+	"boundingBoxOverlay",
 	// Interactive components
 	"imageLabeler",
 	"imageHotspot",

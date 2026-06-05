@@ -1341,6 +1341,11 @@ export function FlowPilot({
 			runStorageTool,
 		],
 	);
+	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
+
+	useEffect(() => {
+		executeFrontendToolRequestRef.current = executeFrontendToolRequest;
+	}, [executeFrontendToolRequest]);
 
 	useEffect(() => {
 		if (!isTauriRuntime()) return;
@@ -1358,12 +1363,23 @@ export function FlowPilot({
 				const stop = await eventApi.listen<FrontendToolRequest>(
 					FLOWPILOT_FRONTEND_TOOL_EVENT,
 					async (event) => {
+						if (disposed) return;
 						const request = event.payload;
 						if (!request?.requestId || !request.toolName) return;
-						const response = await executeFrontendToolRequest(request);
-						await coreApi.invoke("flowpilot_frontend_tool_result", {
-							response,
-						});
+						const response = await executeFrontendToolRequestRef.current(request);
+						if (disposed) return;
+						try {
+							await coreApi.invoke("flowpilot_frontend_tool_result", {
+								response,
+							});
+						} catch (error) {
+							if (!disposed) {
+								console.warn(
+									"Failed to return FlowPilot frontend tool result:",
+									error,
+								);
+							}
+						}
 					},
 				);
 
@@ -1383,7 +1399,7 @@ export function FlowPilot({
 			disposed = true;
 			unlisten?.();
 		};
-	}, [executeFrontendToolRequest]);
+	}, []);
 
 	const resolveFrontendToolDialog = useCallback((value: unknown) => {
 		const resolver = frontendToolDialogResolverRef.current;

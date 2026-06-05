@@ -58,7 +58,6 @@ export function PathbufVariable({
 					if (!pathBuf) return;
 
 					if (!isFolder) {
-						console.dir(pathBuf);
 						const fileMetadata = await backend.helperState.getPathMeta(pathBuf);
 						if (!fileMetadata || fileMetadata.length === 0) return;
 						setFileOrFolder(fileMetadata[0].location);

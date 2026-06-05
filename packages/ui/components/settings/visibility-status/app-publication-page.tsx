@@ -12,6 +12,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useFeatures } from "../../../hooks/use-features";
 import {
 	Avatar,
 	AvatarFallback,
@@ -27,6 +28,7 @@ import {
 	Separator,
 	Skeleton,
 } from "../../ui";
+import { AppAiActWizard } from "./app-ai-act-wizard";
 import type {
 	AppPublicationLogItem,
 	AppPublicationRequestItem,
@@ -130,6 +132,10 @@ interface AppPublicationPageProps {
 	error?: string | null;
 	onBack?: () => void;
 	docsUrl?: string;
+	/** When provided and the platform has the AI Act feature on, the EU AI
+	 * Act conformity wizard is shown so the owner can complete the assessment
+	 * required before publishing. */
+	appId?: string | null;
 }
 
 export function AppPublicationPage({
@@ -138,7 +144,25 @@ export function AppPublicationPage({
 	error,
 	onBack,
 	docsUrl = "https://docs.flow-like.com/guides/Apps/visibility/",
+	appId,
 }: Readonly<AppPublicationPageProps>) {
+	const features = useFeatures();
+	const showWizard = !!appId && features.data?.ai_act === true;
+
+	const header = (
+		<div className="flex items-center gap-3">
+			{onBack && (
+				<Button variant="ghost" size="sm" onClick={onBack}>
+					<ArrowLeft className="h-4 w-4 mr-1" />
+					Back
+				</Button>
+			)}
+			<h2 className="text-lg font-semibold">Publication Review</h2>
+		</div>
+	);
+
+	const wizard = showWizard && appId ? <AppAiActWizard appId={appId} /> : null;
+
 	const activeRequests = requests.filter(
 		(r) => r.status === "pending" || r.status === "on_hold",
 	);
@@ -159,6 +183,8 @@ export function AppPublicationPage({
 	if (error) {
 		return (
 			<div className="w-full max-w-4xl mx-auto p-2 md:p-6 pt-0 space-y-6">
+				{header}
+				{wizard}
 				<Card className="border-destructive/30 bg-destructive/5">
 					<CardContent className="pt-6">
 						<p className="text-sm text-destructive">{error}</p>
@@ -171,15 +197,8 @@ export function AppPublicationPage({
 	if (requests.length === 0) {
 		return (
 			<div className="w-full max-w-4xl mx-auto p-2 md:p-6 pt-0 space-y-6">
-				<div className="flex items-center gap-3">
-					{onBack && (
-						<Button variant="ghost" size="sm" onClick={onBack}>
-							<ArrowLeft className="h-4 w-4 mr-1" />
-							Back
-						</Button>
-					)}
-					<h2 className="text-lg font-semibold">Publication Review</h2>
-				</div>
+				{header}
+				{wizard}
 				<Card>
 					<CardContent className="pt-6">
 						<div className="text-center py-8 space-y-3">
@@ -203,16 +222,8 @@ export function AppPublicationPage({
 
 	return (
 		<div className="w-full max-w-4xl mx-auto p-2 md:p-6 pt-0 space-y-6 flex flex-col flex-grow max-h-full min-h-0 overflow-auto md:overflow-visible">
-			<div className="flex items-center gap-3">
-				{onBack && (
-					<Button variant="ghost" size="sm" onClick={onBack}>
-						<ArrowLeft className="h-4 w-4 mr-1" />
-						Back
-					</Button>
-				)}
-				<h2 className="text-lg font-semibold">Publication Review</h2>
-			</div>
-
+			{header}
+			{wizard}
 			{/* Active Requests */}
 			{activeRequests.map((request) => {
 				const config = statusConfig(request.status);

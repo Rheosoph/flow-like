@@ -7,6 +7,7 @@ use models::{sync_models, upsert_model};
 
 use crate::state::AppState;
 
+pub mod ai_act;
 pub mod bit;
 pub mod forks;
 pub mod governance;
@@ -127,6 +128,8 @@ pub fn routes() -> Router<AppState> {
             "/governance/patterns",
             get(governance::list_patterns::list_patterns),
         )
+        // EU AI Act inventory
+        .nest("/ai-act", ai_act::routes())
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))
         // Fork orphan janitor

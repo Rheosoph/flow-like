@@ -14,6 +14,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 pub mod internal;
 
+pub mod ai_act;
 pub mod analytics;
 pub mod api;
 pub mod board;
@@ -85,6 +86,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/graph", graph::routes())
         .nest("/{app_id}/api", api::routes())
         .nest("/{app_id}/routes", route::routes())
+        .nest("/{app_id}/ai-act", ai_act::routes())
 }
 
 #[macro_export]

@@ -1,5 +1,6 @@
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { IProfile } from "@flow-like/flow-like-ui";
+import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -30,20 +31,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 ]);
 
 function constructUrl(profile: IProfile, path: string): string {
-	let baseUrl = profile.hub ?? "api.flow-like.com";
-	if (process.env.NEXT_PUBLIC_API_URL)
-		baseUrl = process.env.NEXT_PUBLIC_API_URL;
-	if (!baseUrl.endsWith("/")) {
-		baseUrl += "/";
-	}
-	const cleanPath = path.replace(/^\/+/, "");
-
-	if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
-		return `${baseUrl}api/v1/${cleanPath}`;
-	}
-
-	const protocol = profile.secure === false ? "http" : "https";
-	return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
+	return getApiUrl(profile, path);
 }
 
 function cleanApiPath(path: string): string {
@@ -477,7 +465,8 @@ function apiErrorMessage(response: Response, body: string): string {
 	if (body) {
 		try {
 			const parsed = JSON.parse(body);
-			const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+			const message =
+				parsed?.error?.message ?? parsed?.message ?? parsed?.error;
 			if (typeof message === "string" && message.trim()) {
 				return message;
 			}

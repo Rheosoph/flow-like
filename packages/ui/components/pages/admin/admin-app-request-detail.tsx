@@ -12,6 +12,7 @@ import {
 	MessageSquare,
 	Package,
 	PauseCircle,
+	ShieldAlert,
 	Star,
 	X,
 	XCircle,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { useFeatures } from "../../../hooks/use-features";
 import { useInvoke } from "../../../hooks/use-invoke";
 import type { IBoard } from "../../../lib";
 import { useBackend } from "../../../state/backend-state";
@@ -41,6 +43,7 @@ import {
 	Skeleton,
 	Textarea,
 } from "../../ui";
+import { AdminAiActAssessmentCard } from "./admin-ai-act-assessment-card";
 
 type RequestStatus = "pending" | "on_hold" | "accepted" | "rejected";
 
@@ -665,6 +668,7 @@ function DetailView({
 	previewBoard,
 	previewBoardLoading,
 	onClosePreview,
+	approveBlockedReason,
 }: {
 	req: AppPublicationRequest;
 	onBack: () => void;
@@ -676,6 +680,7 @@ function DetailView({
 	previewBoard?: IBoard;
 	previewBoardLoading: boolean;
 	onClosePreview: () => void;
+	approveBlockedReason?: string | null;
 }) {
 	const [reviewMessage, setReviewMessage] = useState("");
 	const isActionable = req.status === "pending" || req.status === "on_hold";
@@ -842,6 +847,10 @@ function DetailView({
 				)
 			)}
 
+			{/* EU AI Act conformity assessment (read-only, shown even when the
+			    owner has not submitted one yet) */}
+			<AdminAiActAssessmentCard appId={req.appId} />
+
 			{/* Review history */}
 			{req.logs.length > 0 && (
 				<Card>
@@ -867,6 +876,12 @@ function DetailView({
 							value={reviewMessage}
 							onChange={(e) => setReviewMessage(e.target.value)}
 						/>
+						{approveBlockedReason && (
+							<div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+								<ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+								<span>{approveBlockedReason}</span>
+							</div>
+						)}
 						<div className="flex items-center gap-2 justify-end">
 							<Button
 								size="sm"
@@ -889,7 +904,8 @@ function DetailView({
 							<Button
 								size="sm"
 								onClick={() => onReview("approve", reviewMessage)}
-								disabled={isPending}
+								disabled={isPending || !!approveBlockedReason}
+								title={approveBlockedReason ?? undefined}
 							>
 								<CheckCircle className="h-3 w-3 mr-1" />
 								Approve
@@ -997,6 +1013,41 @@ export function AdminAppRequestDetail({
 
 	const [previewBoardId, setPreviewBoardId] = useState<string | null>(null);
 
+	const features = useFeatures();
+	const aiActEnabled = features.data?.ai_act === true;
+
+	const aiActGate = useQuery<{
+		hasAssessment: boolean;
+		assessment?: { status?: string } | null;
+	}>({
+		queryKey: ["admin", "ai-act", "inventory", appId],
+		queryFn: async () => {
+			if (!profile.data || !appId) throw new Error("Not ready");
+			return backend.apiState.get(
+				profile.data,
+				`admin/ai-act/inventory/${encodeURIComponent(appId)}`,
+			);
+		},
+		enabled: !!profile.data && !!appId && aiActEnabled,
+	});
+
+	const approveBlockedReason = ((): string | null => {
+		if (!aiActEnabled) return null;
+		if (aiActGate.isLoading) return "Loading EU AI Act assessment status…";
+		const data = aiActGate.data;
+		if (!data || !data.hasAssessment) {
+			return "The app owner has not submitted an EU AI Act conformity assessment yet.";
+		}
+		const status = (data.assessment?.status ?? "").toUpperCase();
+		if (status === "BLOCKED") {
+			return "This app declares a prohibited AI practice and cannot be approved.";
+		}
+		if (status === "DRAFT") {
+			return "The EU AI Act assessment is still a draft and must be submitted by the owner.";
+		}
+		return null;
+	})();
+
 	const boardQuery = useQuery<IBoard>({
 		queryKey: ["admin", "publication", "board", appId, previewBoardId],
 		queryFn: async () => {
@@ -1083,6 +1134,7 @@ export function AdminAppRequestDetail({
 			previewBoard={boardQuery.data}
 			previewBoardLoading={boardQuery.isLoading && !!previewBoardId}
 			onClosePreview={handleClosePreview}
+			approveBlockedReason={approveBlockedReason}
 		/>
 	);
 }

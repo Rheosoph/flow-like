@@ -19,7 +19,9 @@ import {
 	Plus,
 	RefreshCw,
 	Save,
+	Scale,
 	Shield,
+	ShieldAlert,
 	UserCog,
 	Users,
 } from "lucide-react";
@@ -37,9 +39,9 @@ import {
 	XAxis,
 	YAxis,
 } from "recharts";
+import { useFeatures } from "../../../hooks/use-features";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { GlobalPermission } from "../../../lib/permission/global-permission";
-import type { IProfile } from "../../../types";
 import type { ISolutionListResponse } from "../../../lib/schema/solution/solution";
 import type {
 	IAdminAppUsage,
@@ -48,11 +50,12 @@ import type {
 	IAdminUsageInvocation,
 	IAdminUsageOverview,
 	IAppUsageLimits,
-	IUsageReconciliationResult,
 	IUsageLimitPeriod,
+	IUsageReconciliationResult,
 } from "../../../lib/schema/usage";
 import type { AdminEnsureWasmArtifactsResponse } from "../../../lib/schema/wasm";
 import { useBackend } from "../../../state/backend-state";
+import type { IProfile } from "../../../types";
 import {
 	Badge,
 	Button,
@@ -186,6 +189,8 @@ interface AdminSection {
 	actionLabel: string;
 	color: string;
 	links?: { label: string; href: string }[];
+	/** When set, the section is only shown if the named hub feature is on. */
+	feature?: string;
 }
 
 const ADMIN_SECTIONS: AdminSection[] = [
@@ -225,6 +230,21 @@ const ADMIN_SECTIONS: AdminSection[] = [
 			{ label: "Overview", href: "/admin/governance" },
 			{ label: "Review Queue", href: "/admin/governance/requests" },
 			{ label: "Scores", href: "/admin/governance/scores" },
+		],
+	},
+	{
+		title: "EU AI Act",
+		description:
+			"Conformity inventory, attached-model governance, and the GPAI model registry.",
+		icon: ShieldAlert,
+		href: "/admin/ai-act",
+		permission: GlobalPermission.ReadPublishing,
+		actionLabel: "Open Inventory",
+		color: "text-indigo-500",
+		feature: "ai_act",
+		links: [
+			{ label: "Inventory", href: "/admin/ai-act" },
+			{ label: "Model Registry", href: "/admin/ai-act?tab=registry" },
 		],
 	},
 	{
@@ -431,19 +451,27 @@ function dollarValue(microDollars: number) {
 }
 
 function truncateChartLabel(value: string, maxLength = 18) {
-	return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
+	return value.length > maxLength
+		? `${value.slice(0, maxLength - 3)}...`
+		: value;
 }
 
 function periodTitle(period: IUsageLimitPeriod) {
 	return period[0].toUpperCase() + period.slice(1);
 }
 
-function costInputValue(limits: IAppUsageLimits | null, period: IUsageLimitPeriod) {
+function costInputValue(
+	limits: IAppUsageLimits | null,
+	period: IUsageLimitPeriod,
+) {
 	const value = limits?.[period]?.costMicroDollars;
 	return value == null ? "" : String(value / 1_000_000);
 }
 
-function tokenInputValue(limits: IAppUsageLimits | null, period: IUsageLimitPeriod) {
+function tokenInputValue(
+	limits: IAppUsageLimits | null,
+	period: IUsageLimitPeriod,
+) {
 	const value = limits?.[period]?.tokenLimit;
 	return value == null ? "" : String(value);
 }
@@ -500,7 +528,12 @@ function UsageHealthSummary({
 		{
 			title: "Workload",
 			items: [
-				["AI", formatCount((totals?.llmInvocations ?? 0) + (totals?.embeddingInvocations ?? 0))],
+				[
+					"AI",
+					formatCount(
+						(totals?.llmInvocations ?? 0) + (totals?.embeddingInvocations ?? 0),
+					),
+				],
 				["Runs", formatCount(totals?.executions ?? 0)],
 				["Apps", formatCount(stats?.activeAppsMonthly ?? 0)],
 			],
@@ -518,7 +551,9 @@ function UsageHealthSummary({
 	return (
 		<Card>
 			<CardHeader>
-				<CardTitle className="text-base">{periodTitle(period)} Health</CardTitle>
+				<CardTitle className="text-base">
+					{periodTitle(period)} Health
+				</CardTitle>
 				<CardDescription>
 					Users, growth, workload, and spend in one operational view.
 				</CardDescription>
@@ -590,7 +625,10 @@ function ActivityTrendChart({
 					<EmptyChart label="No activity recorded for this period." />
 				) : (
 					<ChartContainer config={activityChartConfig} className="h-80 w-full">
-						<ComposedChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+						<ComposedChart
+							data={data}
+							margin={{ top: 12, right: 12, left: 0, bottom: 0 }}
+						>
 							<CartesianGrid strokeDasharray="3 3" vertical={false} />
 							<XAxis
 								dataKey="label"
@@ -665,7 +703,9 @@ function SpendTokenTrendChart({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base">Spend & Tokens</CardTitle>
-				<CardDescription>Remote model cost against token volume.</CardDescription>
+				<CardDescription>
+					Remote model cost against token volume.
+				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
@@ -674,7 +714,10 @@ function SpendTokenTrendChart({
 					<EmptyChart label="No remote model spend for this period." />
 				) : (
 					<ChartContainer config={spendChartConfig} className="h-72 w-full">
-						<ComposedChart data={data} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
+						<ComposedChart
+							data={data}
+							margin={{ top: 12, right: 8, left: 0, bottom: 0 }}
+						>
 							<CartesianGrid strokeDasharray="3 3" vertical={false} />
 							<XAxis
 								dataKey="label"
@@ -763,7 +806,10 @@ function SpendMixChart({
 					<EmptyChart label="No paid remote usage yet." />
 				) : (
 					<div className="grid gap-4 md:grid-cols-[1fr_auto] lg:grid-cols-1 xl:grid-cols-[1fr_auto]">
-						<ChartContainer config={spendMixChartConfig} className="h-56 w-full">
+						<ChartContainer
+							config={spendMixChartConfig}
+							className="h-56 w-full"
+						>
 							<PieChart>
 								<ChartTooltip
 									content={<ChartTooltipContent nameKey="key" hideLabel />}
@@ -777,10 +823,7 @@ function SpendMixChart({
 									paddingAngle={2}
 								>
 									{data.map((entry) => (
-										<Cell
-											key={entry.key}
-											fill={`var(--color-${entry.key})`}
-										/>
+										<Cell key={entry.key} fill={`var(--color-${entry.key})`} />
 									))}
 								</Pie>
 							</PieChart>
@@ -796,7 +839,9 @@ function SpendMixChart({
 											/>
 											<span>{item.name}</span>
 										</div>
-										<span className="font-medium">{formatCost(item.value)}</span>
+										<span className="font-medium">
+											{formatCost(item.value)}
+										</span>
 									</div>
 									<div className="text-xs text-muted-foreground">
 										{formatPercent((item.value / total) * 100)}
@@ -827,7 +872,9 @@ function PowerUsers({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base">Power Users</CardTitle>
-				<CardDescription>Highest activity across the last 30 days.</CardDescription>
+				<CardDescription>
+					Highest activity across the last 30 days.
+				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-2">
 				{loading && <Skeleton className="h-36 w-full" />}
@@ -842,7 +889,8 @@ function PowerUsers({
 							</div>
 							<div className="truncate text-xs text-muted-foreground">
 								{formatCount(user.aiInvocations)} AI,{" "}
-								{formatCount(user.executions)} runs, {user.activeDays} active days
+								{formatCount(user.executions)} runs, {user.activeDays} active
+								days
 							</div>
 						</div>
 						<div className="text-right">
@@ -886,7 +934,9 @@ function TopAppsActivityChart({
 	const data = useMemo(
 		() =>
 			(overview?.apps ?? []).slice(0, 8).map((app, index) => ({
-				name: truncateChartLabel(app.appName ?? app.appId ?? `App ${index + 1}`),
+				name: truncateChartLabel(
+					app.appName ?? app.appId ?? `App ${index + 1}`,
+				),
 				fullName: app.appName ?? app.appId ?? "Unknown app",
 				aiCalls: app.llmInvocations + app.embeddingInvocations,
 				executions: app.executions,
@@ -908,7 +958,10 @@ function TopAppsActivityChart({
 				) : !hasData ? (
 					<EmptyChart label="No app activity for this period." />
 				) : (
-					<ChartContainer config={appActivityChartConfig} className="h-72 w-full">
+					<ChartContainer
+						config={appActivityChartConfig}
+						className="h-72 w-full"
+					>
 						<BarChart
 							data={data}
 							layout="vertical"
@@ -979,7 +1032,9 @@ function TopModelsChart({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base">Remote Model Mix</CardTitle>
-				<CardDescription>Which remote models are carrying traffic.</CardDescription>
+				<CardDescription>
+					Which remote models are carrying traffic.
+				</CardDescription>
 			</CardHeader>
 			<CardContent>
 				{loading ? (
@@ -1023,7 +1078,10 @@ function TopModelsChart({
 						</ChartContainer>
 						<div className="grid gap-2 text-xs sm:grid-cols-2">
 							{data.slice(0, 4).map((model) => (
-								<div key={model.fullName} className="rounded-md border px-3 py-2">
+								<div
+									key={model.fullName}
+									className="rounded-md border px-3 py-2"
+								>
 									<div className="truncate font-medium">{model.fullName}</div>
 									<div className="text-muted-foreground">
 										{model.kind} - {formatCount(model.tokens)} tokens -{" "}
@@ -1083,7 +1141,9 @@ function LimitUtilization({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base">Limit Utilization</CardTitle>
-				<CardDescription>Apps closest to their {period} guardrails.</CardDescription>
+				<CardDescription>
+					Apps closest to their {period} guardrails.
+				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-3">
 				{loading && <Skeleton className="h-64 w-full" />}
@@ -1182,7 +1242,9 @@ function LimitEditor({
 	});
 
 	if (!app.appId) {
-		return <span className="text-xs text-muted-foreground">No app context</span>;
+		return (
+			<span className="text-xs text-muted-foreground">No app context</span>
+		);
 	}
 
 	return (
@@ -1386,14 +1448,15 @@ function UsageOperations({
 							</div>
 							<div className="text-right">
 								<div className="font-medium">
-									{formatCost(item.costMicroDollars || item.estimatedCostMicroDollars)}
+									{formatCost(
+										item.costMicroDollars || item.estimatedCostMicroDollars,
+									)}
 								</div>
 								<div className="text-xs text-muted-foreground">
 									{formatCount(
 										item.inputTokens +
 											item.outputTokens +
-											item.embeddingTokens ||
-											item.estimatedTokens,
+											item.embeddingTokens || item.estimatedTokens,
 									)}{" "}
 									tokens
 								</div>
@@ -1434,7 +1497,9 @@ function UsageOperations({
 							<Button
 								size="sm"
 								variant="outline"
-								disabled={Boolean(alert.acknowledgedAt) || acknowledge.isPending}
+								disabled={
+									Boolean(alert.acknowledgedAt) || acknowledge.isPending
+								}
 								onClick={() => acknowledge.mutate(alert.id)}
 							>
 								<CheckCircle className="mr-2 h-4 w-4" />
@@ -1567,15 +1632,21 @@ function UsageOverviewSection({
 								<div className="grid grid-cols-3 gap-2 text-xs">
 									<div>
 										<div className="text-muted-foreground">Cost</div>
-										<div className="font-medium">{formatCost(app.totalPrice)}</div>
+										<div className="font-medium">
+											{formatCost(app.totalPrice)}
+										</div>
 									</div>
 									<div>
 										<div className="text-muted-foreground">Tokens</div>
-										<div className="font-medium">{formatCount(app.totalTokens)}</div>
+										<div className="font-medium">
+											{formatCount(app.totalTokens)}
+										</div>
 									</div>
 									<div>
 										<div className="text-muted-foreground">Runs</div>
-										<div className="font-medium">{formatCount(app.executions)}</div>
+										<div className="font-medium">
+											{formatCount(app.executions)}
+										</div>
 									</div>
 								</div>
 								{profile && (
@@ -1607,14 +1678,19 @@ function UsageOverviewSection({
 							>
 								<div className="min-w-0">
 									<div className="truncate font-medium">
-										{user.displayName ?? user.email ?? user.userId ?? "Unknown user"}
+										{user.displayName ??
+											user.email ??
+											user.userId ??
+											"Unknown user"}
 									</div>
 									<div className="truncate text-xs text-muted-foreground">
 										{user.email ?? user.userId ?? "usage without user context"}
 									</div>
 								</div>
 								<div className="text-right">
-									<div className="font-medium">{formatCost(user.totalPrice)}</div>
+									<div className="font-medium">
+										{formatCost(user.totalPrice)}
+									</div>
 									<div className="text-xs text-muted-foreground">
 										{formatCount(user.totalTokens)} tokens
 									</div>
@@ -1669,6 +1745,129 @@ interface GovernanceScoresSummaryData {
 	}>;
 }
 
+interface AiActExportRow {
+	appId: string;
+	appName: string | null;
+	riskCategory: string;
+	status: string;
+	conformityScore: number | null;
+	conformityBand: string | null;
+	updatedAt: string;
+}
+
+function AiActConformityPreview({
+	profile,
+}: { profile: IProfile | undefined }) {
+	const backend = useBackend();
+	const features = useFeatures();
+	const aiActEnabled = features.data?.ai_act === true;
+
+	const inventory = useQuery<AiActExportRow[]>({
+		queryKey: ["admin", "ai-act", "dashboard", "export"],
+		queryFn: async () => {
+			if (!profile) throw new Error("Profile not loaded");
+			return backend.apiState.get<AiActExportRow[]>(
+				profile,
+				"admin/ai-act/inventory/export?format=json",
+			);
+		},
+		enabled: !!profile && aiActEnabled,
+	});
+
+	const stats = useMemo(() => {
+		const rows = inventory.data ?? [];
+		const prohibited = rows.filter(
+			(r) => r.riskCategory === "PROHIBITED",
+		).length;
+		const high = rows.filter((r) => r.riskCategory === "HIGH").length;
+		const limited = rows.filter((r) => r.riskCategory === "LIMITED").length;
+		const scored = rows.filter((r) => typeof r.conformityScore === "number");
+		const avgConformity =
+			scored.length > 0
+				? Math.round(
+						scored.reduce((sum, r) => sum + (r.conformityScore ?? 0), 0) /
+							scored.length,
+					)
+				: null;
+		return {
+			total: rows.length,
+			prohibited,
+			high,
+			limited,
+			avgConformity,
+		};
+	}, [inventory.data]);
+
+	if (!aiActEnabled) return null;
+
+	return (
+		<div className="space-y-2 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
+			<div className="flex items-center justify-between gap-2">
+				<div className="flex items-center gap-2 text-sm font-medium">
+					<Scale className="h-4 w-4 text-indigo-500" />
+					EU AI Act Conformity
+				</div>
+				<Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
+					<Link href="/admin/ai-act">Open Inventory</Link>
+				</Button>
+			</div>
+			{inventory.isLoading ? (
+				<Skeleton className="h-16 w-full" />
+			) : (
+				<div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+					<div className="rounded-md border bg-background p-2">
+						<div className="text-[11px] text-muted-foreground">Assessed</div>
+						<div className="text-lg font-semibold">{stats.total}</div>
+					</div>
+					<div
+						className={`rounded-md border bg-background p-2 ${
+							stats.prohibited > 0 ? "border-red-500/50" : ""
+						}`}
+					>
+						<div className="text-[11px] text-muted-foreground">Prohibited</div>
+						<div
+							className={`text-lg font-semibold ${
+								stats.prohibited > 0 ? "text-red-600 dark:text-red-400" : ""
+							}`}
+						>
+							{stats.prohibited}
+						</div>
+					</div>
+					<div
+						className={`rounded-md border bg-background p-2 ${
+							stats.high > 0 ? "border-amber-500/50" : ""
+						}`}
+					>
+						<div className="text-[11px] text-muted-foreground">High-risk</div>
+						<div
+							className={`text-lg font-semibold ${
+								stats.high > 0 ? "text-amber-600 dark:text-amber-400" : ""
+							}`}
+						>
+							{stats.high}
+						</div>
+					</div>
+					<div className="rounded-md border bg-background p-2">
+						<div className="text-[11px] text-muted-foreground">Limited</div>
+						<div className="text-lg font-semibold">{stats.limited}</div>
+					</div>
+					<div className="rounded-md border bg-background p-2">
+						<div className="text-[11px] text-muted-foreground">
+							Avg. conformity
+						</div>
+						<div className="text-lg font-semibold">
+							{stats.avgConformity ?? "—"}
+							{stats.avgConformity !== null && (
+								<span className="text-xs text-muted-foreground">%</span>
+							)}
+						</div>
+					</div>
+				</div>
+			)}
+		</div>
+	);
+}
+
 function GovernanceScoresSummary({
 	profile,
 }: {
@@ -1716,11 +1915,12 @@ function GovernanceScoresSummary({
 						AI Inventory & Governance
 					</CardTitle>
 					<CardDescription>
-						Security and quality scores across published apps
+						EU AI Act conformity together with security and quality scores
+						across published apps
 					</CardDescription>
 				</div>
 				<Button asChild variant="outline" size="sm">
-					<Link href="/admin/governance/scores">View Full Inventory</Link>
+					<Link href="/admin/ai-act">View Full Inventory</Link>
 				</Button>
 			</CardHeader>
 			<CardContent>
@@ -1732,6 +1932,8 @@ function GovernanceScoresSummary({
 					</div>
 				) : summary.data ? (
 					<div className="space-y-4">
+						<AiActConformityPreview profile={profile} />
+
 						<div className="grid gap-3 sm:grid-cols-3">
 							<div className="rounded-lg border p-3">
 								<div className="text-xs text-muted-foreground">Total Apps</div>
@@ -1791,9 +1993,7 @@ function GovernanceScoresSummary({
 								{summary.data.worstApps.map((app) => (
 									<Link
 										key={app.appId}
-										href={`/admin/governance/scores?id=${encodeURIComponent(
-											app.appId,
-										)}`}
+										href={`/admin/ai-act?id=${encodeURIComponent(app.appId)}`}
 										className="block"
 									>
 										<div className="grid grid-cols-[1fr_auto] gap-3 rounded-md border p-3 text-sm transition-colors hover:border-primary/40">
@@ -1807,9 +2007,7 @@ function GovernanceScoresSummary({
 											</div>
 											<div className="flex items-center gap-3">
 												<div className="text-right text-xs">
-													<div className="text-muted-foreground">
-														Security
-													</div>
+													<div className="text-muted-foreground">Security</div>
 													<div
 														className={`font-semibold ${
 															app.security >= 7
@@ -1823,9 +2021,7 @@ function GovernanceScoresSummary({
 													</div>
 												</div>
 												<div className="text-right text-xs">
-													<div className="text-muted-foreground">
-														Privacy
-													</div>
+													<div className="text-muted-foreground">Privacy</div>
 													<div
 														className={`font-semibold ${
 															app.privacy >= 7
@@ -1899,6 +2095,20 @@ export function AdminDashboardPage({
 	const perms = useMemo(
 		() => new GlobalPermission(info.data?.permission ?? 0),
 		[info.data?.permission],
+	);
+	const features = useFeatures().data;
+	const visibleSections = useMemo(
+		() =>
+			ADMIN_SECTIONS.filter(
+				(section) =>
+					!section.feature ||
+					Boolean(
+						(features as Record<string, boolean> | undefined)?.[
+							section.feature
+						],
+					),
+			),
+		[features],
 	);
 	const hasAdminAccess = perms.hasPermission(GlobalPermission.Admin);
 	const hasPackageAccess = perms.hasPermission(GlobalPermission.ManagePackages);
@@ -2072,9 +2282,7 @@ export function AdminDashboardPage({
 						hasAdminAccess={hasAdminAccess}
 					/>
 
-					{hasAdminAccess && (
-						<GovernanceScoresSummary profile={profile.data} />
-					)}
+					{hasAdminAccess && <GovernanceScoresSummary profile={profile.data} />}
 
 					<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
 						<StatCard
@@ -2158,7 +2366,7 @@ export function AdminDashboardPage({
 					<div>
 						<h2 className="mb-3 text-lg font-semibold">Manage</h2>
 						<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-							{ADMIN_SECTIONS.map((section) => (
+							{visibleSections.map((section) => (
 								<SectionCard
 									key={section.title}
 									section={section}

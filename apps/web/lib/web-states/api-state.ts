@@ -1,10 +1,7 @@
 import type { IApiState } from "@flow-like/flow-like-ui";
+import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { IProfile } from "@flow-like/flow-like-ui/types";
-import {
-	type WebBackendRef,
-	ensureProtectedAppRouteAuth,
-	getApiBaseUrl,
-} from "./api-utils";
+import { type WebBackendRef, ensureProtectedAppRouteAuth } from "./api-utils";
 
 export class WebApiState implements IApiState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -92,16 +89,7 @@ export class WebApiState implements IApiState {
 	}
 
 	private constructUrl(profile: IProfile, path: string): string {
-		let baseUrl = profile.hub ?? getApiBaseUrl();
-		if (!baseUrl.endsWith("/")) {
-			baseUrl += "/";
-		}
-		const cleanPath = path.replace(/^\/+/, "");
-		if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
-			return `${baseUrl}api/v1/${cleanPath}`;
-		}
-		const protocol = profile.secure === false ? "http" : "https";
-		return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
+		return getApiUrl(profile, path);
 	}
 
 	private getHeaders(): HeadersInit {

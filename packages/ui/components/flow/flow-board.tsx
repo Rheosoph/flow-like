@@ -956,7 +956,6 @@ export function FlowBoard({
 					true,
 					async (id: string) => {
 						if (added) return;
-						console.log("Run started", id);
 						runId = id;
 						added = true;
 						addRun(id, boardId, [node.id]);
@@ -1086,13 +1085,11 @@ export function FlowBoard({
 					true,
 					async (id: string) => {
 						if (added) return;
-						console.log("Remote run started", id);
 						runId = id;
 						added = true;
 						addRun(id, boardId, [node.id]);
 					},
 					(update) => {
-						console.dir(update);
 						const runUpdates = update
 							.filter((item) => item.event_type.startsWith("run:"))
 							.map((item) => item.payload);
@@ -1265,13 +1262,6 @@ export function FlowBoard({
 
 			// Only handle if this is for our board
 			if (eventAppId !== appId || eventBoardId !== boardId) return;
-
-			console.log(
-				"[FlowBoard] OAuth retry event received, re-executing node:",
-				nodeId,
-				"skipConsentCheck:",
-				skipConsentCheck,
-			);
 
 			// Find the node and re-execute
 			const node = nodes.find((n) => n.id === nodeId);
@@ -1706,7 +1696,7 @@ export function FlowBoard({
 			const getVarNode = catalog.data?.find(
 				(node) => node.name === `variable_${operation}`,
 			);
-			if (!getVarNode) return console.dir(catalog.data);
+			if (!getVarNode) return;
 
 			const varRefPin = Object.values(getVarNode.pins).find(
 				(pin) => pin.name === "var_ref",
