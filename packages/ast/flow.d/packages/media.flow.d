@@ -362,14 +362,15 @@ declare function switchOnBit({ bit: Struct }): Struct;
 // === Data/QR ===
 
 /**
- * Encode text as a QR code image
+ * Encode text as a barcode image
  * @param data — Text to encode
- * @param scale (optional) — Pixels per QR module
+ * @param format (optional) — Barcode Format
+ * @param scale (optional) — Pixels per barcode module
  * @param margin (optional) — Quiet zone in modules
- * @returns imageOut — QR code image
+ * @returns imageOut — Barcode image
  * @impure has side effects / drives control flow
  */
-declare function writeQrcode({ data: string, scale?: int, margin?: int }): Struct;
+declare function writeQrcode({ data: string, format?: string, scale?: int, margin?: int }): Struct;
 
 
 // === Document/DOCX ===
@@ -1049,11 +1050,11 @@ declare function makeBoxe({ definition?: string, classIdx?: int, score?: float, 
 /**
  * Read/Decode QR Codes and Barcodes
  * @param imageIn — Image object
- * @param filter (optional) — Filter for Certain Code Type
+ * @param options (optional) — Barcode decoding options
  * @returns results — Detected/Decoded Codes
  * @impure has side effects / drives control flow
  */
-declare function readBarcodes({ imageIn: Struct, filter?: bool }): Struct[];
+declare function readBarcodes({ imageIn: Struct, options?: Struct }): Struct[];
 
 /**
  * Read image from path
@@ -1219,4 +1220,3 @@ declare function resizeImage({ imageIn: Struct, useRef?: bool, mode?: string, fi
  * @impure has side effects / drives control flow
  */
 declare function imageWriteDataurl({ image: Struct, format?: string }): string;
-

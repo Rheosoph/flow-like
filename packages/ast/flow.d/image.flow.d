@@ -33,11 +33,11 @@ declare function makeBoxe({ definition?: string, classIdx?: int, score?: float, 
 /**
  * Read/Decode QR Codes and Barcodes
  * @param imageIn — Image object
- * @param filter (optional) — Filter for Certain Code Type
+ * @param options (optional) — Barcode decoding options
  * @returns results — Detected/Decoded Codes
  * @impure has side effects / drives control flow
  */
-declare function readBarcodes({ imageIn: Struct, filter?: bool }): Struct[];
+declare function readBarcodes({ imageIn: Struct, options?: Struct }): Struct[];
 
 /**
  * Read image from path
@@ -191,4 +191,3 @@ declare function cropImage({ imageIn: Struct, bbox: Struct, useRef?: bool }): St
  * @impure has side effects / drives control flow
  */
 declare function resizeImage({ imageIn: Struct, useRef?: bool, mode?: string, filter?: string, widthIn?: int, heightIn?: int }): { imageOut: Struct, widthOut: int, heightOut: int };
-

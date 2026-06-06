@@ -5384,14 +5384,15 @@ declare function dataGcpProvider({ authMode?: string, defaultProjectId?: string,
 // === Data/QR ===
 
 /**
- * Encode text as a QR code image
+ * Encode text as a barcode image
  * @param data — Text to encode
- * @param scale (optional) — Pixels per QR module
+ * @param format (optional) — Barcode Format
+ * @param scale (optional) — Pixels per barcode module
  * @param margin (optional) — Quiet zone in modules
- * @returns imageOut — QR code image
+ * @returns imageOut — Barcode image
  * @impure has side effects / drives control flow
  */
-declare function writeQrcode({ data: string, scale?: int, margin?: int }): Struct;
+declare function writeQrcode({ data: string, format?: string, scale?: int, margin?: int }): Struct;
 
 
 // === Data/TDMS ===
@@ -5403,4 +5404,3 @@ declare function writeQrcode({ data: string, scale?: int, margin?: int }): Struc
  * @impure has side effects / drives control flow
  */
 declare function tdmsMetadata({ tdmsPath: Struct }): Struct;
-

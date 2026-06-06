@@ -10,8 +10,8 @@ pub mod reconcile;
 
 use crate::{
     entity::{
-        ai_act_assessment, ai_act_model_observation, ai_act_model_registry, app_board_score, meta,
-        sea_orm_active_enums::AiGpaiPosture,
+        ai_act_assessment, ai_act_model_observation, ai_act_model_registry, app_board_score,
+        embedding_usage_tracking, llm_usage_tracking, meta, sea_orm_active_enums::AiGpaiPosture,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -859,10 +859,84 @@ pub struct RegistryItem {
     pub vetted: bool,
     pub note: Option<String>,
     pub updated_at: String,
+    /// True when this provider/model pair has been observed in a published app.
+    pub observed: bool,
+    /// True when this row exists in the editable platform registry.
+    pub registered: bool,
+    /// True when an observed model still needs an explicit GPAI rating/review.
+    pub needs_rating: bool,
+    /// Number of observation / usage records behind this model row.
+    pub observed_count: i64,
 }
 
-impl From<ai_act_model_registry::Model> for RegistryItem {
-    fn from(m: ai_act_model_registry::Model) -> Self {
+#[derive(Clone, Debug, sea_orm::FromQueryResult)]
+struct ObservedRegistryModel {
+    provider: Option<String>,
+    model_id: String,
+    observed_count: i64,
+    last_seen_at: Option<chrono::NaiveDateTime>,
+}
+
+fn normalise_registry_provider(provider: Option<&str>) -> String {
+    let provider = provider.unwrap_or("unknown").trim();
+    if provider.is_empty() {
+        "unknown".to_string()
+    } else {
+        provider.to_string()
+    }
+}
+
+fn registry_key(provider: Option<&str>, model_id: &str) -> (String, String) {
+    (
+        normalise_registry_provider(provider),
+        model_id.trim().to_string(),
+    )
+}
+
+fn observation_registry_condition(provider: &str, model_id: &str) -> sea_orm::Condition {
+    let provider = normalise_registry_provider(Some(provider));
+    let provider_condition = if provider == "unknown" {
+        sea_orm::Condition::any()
+            .add(ai_act_model_observation::Column::Provider.is_null())
+            .add(ai_act_model_observation::Column::Provider.eq("unknown"))
+    } else {
+        sea_orm::Condition::all().add(ai_act_model_observation::Column::Provider.eq(provider))
+    };
+
+    sea_orm::Condition::all()
+        .add(ai_act_model_observation::Column::ModelId.eq(model_id.trim().to_string()))
+        .add(ai_act_model_observation::Column::DynamicSelector.eq(false))
+        .add(provider_condition)
+}
+
+fn merge_observed_registry_model(
+    observed_by_key: &mut HashMap<(String, String), ObservedRegistryModel>,
+    mut model: ObservedRegistryModel,
+) {
+    model.model_id = model.model_id.trim().to_string();
+    if model.model_id.is_empty() {
+        return;
+    }
+    model.provider = Some(normalise_registry_provider(model.provider.as_deref()));
+    model.observed_count = model.observed_count.max(1);
+
+    let key = registry_key(model.provider.as_deref(), &model.model_id);
+    observed_by_key
+        .entry(key)
+        .and_modify(|existing| {
+            existing.observed_count += model.observed_count;
+            existing.last_seen_at = match (existing.last_seen_at, model.last_seen_at) {
+                (Some(current), Some(next)) => Some(current.max(next)),
+                (None, Some(next)) => Some(next),
+                (current, None) => current,
+            };
+        })
+        .or_insert(model);
+}
+
+impl RegistryItem {
+    fn from_registry(m: ai_act_model_registry::Model, observed: bool, observed_count: i64) -> Self {
+        let needs_rating = observed && (m.posture == AiGpaiPosture::Unknown || !m.vetted);
         RegistryItem {
             id: m.id,
             provider: m.provider,
@@ -874,7 +948,44 @@ impl From<ai_act_model_registry::Model> for RegistryItem {
             vetted: m.vetted,
             note: m.note,
             updated_at: m.updated_at.to_string(),
+            observed,
+            registered: true,
+            needs_rating,
+            observed_count,
         }
+    }
+
+    fn from_observed(m: ObservedRegistryModel) -> Self {
+        let provider = normalise_registry_provider(m.provider.as_deref());
+        let observed_count = m.observed_count.max(1);
+        let note = if observed_count == 1 {
+            "Observed in use; needs GPAI rating.".to_string()
+        } else {
+            format!("Observed in use across {observed_count} observations; needs GPAI rating.")
+        };
+
+        RegistryItem {
+            id: format!("observed/{}/{}", provider, m.model_id),
+            provider,
+            model_id: m.model_id,
+            posture: "UNKNOWN".to_string(),
+            hosted: false,
+            open_licence: false,
+            systemic_risk: false,
+            vetted: false,
+            note: Some(note),
+            updated_at: m.last_seen_at.map(|ts| ts.to_string()).unwrap_or_default(),
+            observed: true,
+            registered: false,
+            needs_rating: true,
+            observed_count,
+        }
+    }
+}
+
+impl From<ai_act_model_registry::Model> for RegistryItem {
+    fn from(m: ai_act_model_registry::Model) -> Self {
+        RegistryItem::from_registry(m, false, 0)
     }
 }
 
@@ -901,10 +1012,107 @@ pub async fn list_models(
 
     let records = ai_act_model_registry::Entity::find()
         .order_by_asc(ai_act_model_registry::Column::Provider)
+        .order_by_asc(ai_act_model_registry::Column::ModelId)
         .all(&state.db)
         .await?;
 
-    Ok(Json(records.into_iter().map(RegistryItem::from).collect()))
+    let observed_models = ai_act_model_observation::Entity::find()
+        .filter(ai_act_model_observation::Column::DynamicSelector.eq(false))
+        .select_only()
+        .column_as(ai_act_model_observation::Column::Provider, "provider")
+        .column_as(ai_act_model_observation::Column::ModelId, "model_id")
+        .column_as(
+            Expr::col(ai_act_model_observation::Column::AppId).count(),
+            "observed_count",
+        )
+        .column_as(
+            Expr::col(ai_act_model_observation::Column::LastSeenAt).max(),
+            "last_seen_at",
+        )
+        .group_by(ai_act_model_observation::Column::Provider)
+        .group_by(ai_act_model_observation::Column::ModelId)
+        .into_model::<ObservedRegistryModel>()
+        .all(&state.db)
+        .await?;
+
+    let observed_llm_models = llm_usage_tracking::Entity::find()
+        .select_only()
+        .column_as(llm_usage_tracking::Column::Provider, "provider")
+        .column_as(llm_usage_tracking::Column::ModelId, "model_id")
+        .column_as(
+            Expr::col(llm_usage_tracking::Column::Id).count(),
+            "observed_count",
+        )
+        .column_as(
+            Expr::col(llm_usage_tracking::Column::CreatedAt).max(),
+            "last_seen_at",
+        )
+        .group_by(llm_usage_tracking::Column::Provider)
+        .group_by(llm_usage_tracking::Column::ModelId)
+        .into_model::<ObservedRegistryModel>()
+        .all(&state.db)
+        .await?;
+
+    let observed_embedding_models = embedding_usage_tracking::Entity::find()
+        .select_only()
+        .column_as(embedding_usage_tracking::Column::Provider, "provider")
+        .column_as(embedding_usage_tracking::Column::ModelId, "model_id")
+        .column_as(
+            Expr::col(embedding_usage_tracking::Column::Id).count(),
+            "observed_count",
+        )
+        .column_as(
+            Expr::col(embedding_usage_tracking::Column::CreatedAt).max(),
+            "last_seen_at",
+        )
+        .group_by(embedding_usage_tracking::Column::Provider)
+        .group_by(embedding_usage_tracking::Column::ModelId)
+        .into_model::<ObservedRegistryModel>()
+        .all(&state.db)
+        .await?;
+
+    let mut observed_by_key: HashMap<(String, String), ObservedRegistryModel> = HashMap::new();
+    for model in observed_models
+        .into_iter()
+        .chain(observed_llm_models)
+        .chain(observed_embedding_models)
+    {
+        merge_observed_registry_model(&mut observed_by_key, model);
+    }
+
+    let mut registered_keys = HashSet::new();
+    let mut items = Vec::new();
+    for record in records {
+        let key = registry_key(Some(&record.provider), &record.model_id);
+        let observed_count = observed_by_key
+            .get(&key)
+            .map(|m| m.observed_count.max(1))
+            .unwrap_or(0);
+        let observed = observed_count > 0;
+        registered_keys.insert(key);
+        items.push(RegistryItem::from_registry(
+            record,
+            observed,
+            observed_count,
+        ));
+    }
+
+    for (key, observed) in observed_by_key {
+        if !registered_keys.contains(&key) {
+            items.push(RegistryItem::from_observed(observed));
+        }
+    }
+
+    items.sort_by(|a, b| {
+        b.needs_rating
+            .cmp(&a.needs_rating)
+            .then_with(|| a.registered.cmp(&b.registered))
+            .then_with(|| b.observed.cmp(&a.observed))
+            .then_with(|| a.provider.cmp(&b.provider))
+            .then_with(|| a.model_id.cmp(&b.model_id))
+    });
+
+    Ok(Json(items))
 }
 
 #[derive(Clone, Deserialize, Debug, ToSchema)]
@@ -960,16 +1168,22 @@ pub async fn upsert_model(
 
     let now = chrono::Utc::now().naive_utc();
     let posture = parse_posture(&body.posture);
+    let provider = normalise_registry_provider(Some(&body.provider));
+    let model_id = body.model_id.trim().to_string();
+
+    if model_id.is_empty() {
+        return Err(ApiError::bad_request("modelId is required"));
+    }
 
     let existing = ai_act_model_registry::Entity::find()
-        .filter(ai_act_model_registry::Column::Provider.eq(&body.provider))
-        .filter(ai_act_model_registry::Column::ModelId.eq(&body.model_id))
+        .filter(ai_act_model_registry::Column::Provider.eq(&provider))
+        .filter(ai_act_model_registry::Column::ModelId.eq(&model_id))
         .one(&state.db)
         .await?;
 
     let stored = if let Some(existing) = existing {
         let mut active: ai_act_model_registry::ActiveModel = existing.into();
-        active.posture = Set(posture);
+        active.posture = Set(posture.clone());
         active.hosted = Set(body.hosted);
         active.open_licence = Set(body.open_licence);
         active.systemic_risk = Set(body.systemic_risk);
@@ -980,9 +1194,9 @@ pub async fn upsert_model(
     } else {
         let active = ai_act_model_registry::ActiveModel {
             id: Set(flow_like_types::create_id()),
-            provider: Set(body.provider.clone()),
-            model_id: Set(body.model_id.clone()),
-            posture: Set(posture),
+            provider: Set(provider),
+            model_id: Set(model_id),
+            posture: Set(posture.clone()),
             hosted: Set(body.hosted),
             open_licence: Set(body.open_licence),
             systemic_risk: Set(body.systemic_risk),
@@ -994,7 +1208,29 @@ pub async fn upsert_model(
         active.insert(&state.db).await?
     };
 
-    Ok(Json(RegistryItem::from(stored)))
+    let matching_observations = ai_act_model_observation::Entity::find()
+        .filter(observation_registry_condition(
+            &stored.provider,
+            &stored.model_id,
+        ))
+        .all(&state.db)
+        .await?;
+    let observed_count = matching_observations.len() as i64;
+    for observation in matching_observations {
+        let mut active: ai_act_model_observation::ActiveModel = observation.into();
+        active.posture = Set(stored.posture.clone());
+        active.hosted = Set(stored.hosted);
+        active.open_licence = Set(stored.open_licence);
+        active.systemic_risk = Set(stored.systemic_risk);
+        active.vetted = Set(stored.vetted);
+        active.update(&state.db).await?;
+    }
+
+    Ok(Json(RegistryItem::from_registry(
+        stored,
+        observed_count > 0,
+        observed_count,
+    )))
 }
 
 // ---------------------------------------------------------------------------

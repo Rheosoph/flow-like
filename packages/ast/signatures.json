@@ -62671,13 +62671,13 @@
           "doc": "Image object"
         },
         {
-          "name": "filter",
+          "name": "options",
           "ty": {
-            "base": "bool",
+            "base": "Struct",
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Filter for Certain Code Type"
+          "doc": "Barcode decoding options"
         }
       ],
       "outputs": [
@@ -69919,7 +69919,7 @@
     {
       "node_type": "write_qrcode",
       "display": "writeQrcode",
-      "friendly": "Write QR Code",
+      "friendly": "Write Barcode",
       "category": "Data/QR",
       "inputs": [
         {
@@ -69932,13 +69932,22 @@
           "doc": "Text to encode"
         },
         {
+          "name": "format",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Barcode Format"
+        },
+        {
           "name": "scale",
           "ty": {
             "base": "int",
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Pixels per QR module"
+          "doc": "Pixels per barcode module"
         },
         {
           "name": "margin",
@@ -69958,11 +69967,11 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "QR code image"
+          "doc": "Barcode image"
         }
       ],
       "impure": true,
-      "doc": "Encode text as a QR code image"
+      "doc": "Encode text as a barcode image"
     },
     {
       "node_type": "write_string",
