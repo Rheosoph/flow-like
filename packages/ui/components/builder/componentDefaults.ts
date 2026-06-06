@@ -88,6 +88,7 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 	image: {
 		src: str("https://placehold.co/400x300"),
 		alt: str("Image"),
+		fallback: str(""),
 		fit: str("cover"),
 		loading: str("lazy"),
 	},
@@ -97,12 +98,13 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		loop: bool(false),
 		muted: bool(false),
 		controls: bool(true),
+		poster: str(""),
 	},
 	icon: { name: str("star"), size: num(24), strokeWidth: num(2) },
 	markdown: { content: str("**Hello** _world_"), allowHtml: bool(false) },
 	divider: { orientation: str("horizontal"), thickness: str("1px") },
 	badge: { content: str("Badge"), variant: str("default") },
-	avatar: { fallback: str("AB"), size: str("md") },
+	avatar: { src: str(""), fallback: str("AB"), size: str("md") },
 	progress: {
 		value: num(50),
 		max: num(100),
@@ -459,6 +461,7 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		variant: str("bar"),
 	},
 	miniMap: {
+		mapImage: str(""),
 		width: num(200),
 		height: num(200),
 		playerX: num(100),
@@ -490,7 +493,13 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 	filePreview: {
 		src: str(""),
 		filename: str("document"),
-		mimeType: str("application/pdf"),
+		mimeType: str(""),
+		fileType: str("unknown"),
+		showControls: bool(true),
+		fit: str("contain"),
+		fallbackText: str("Cannot preview this file"),
+		showDownload: bool(false),
+		loading: str("lazy"),
 	},
 	nivoChart: {
 		chartType: str("bar"),

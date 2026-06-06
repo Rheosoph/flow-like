@@ -95,10 +95,12 @@ export function A2UIFilePreview({
 	const showControls = useResolved<boolean>(component.showControls) ?? true;
 	const showDownload = useResolved<boolean>(component.showDownload) ?? false;
 	const fit = useResolved<string>(component.fit) ?? "contain";
+	const loading = useResolved<"lazy" | "eager">(component.loading);
 	const fallbackText =
 		useResolved<string>(component.fallbackText) ?? "Cannot preview this file";
 
 	const [content, setContent] = useState<string>("");
+	const [loadingText, setLoadingText] = useState(false);
 	const [error, setError] = useState(false);
 	const [pdfKey, setPdfKey] = useState(0);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -109,18 +111,27 @@ export function A2UIFilePreview({
 
 	const loadTextContent = useCallback(async () => {
 		if (!src) return;
+		setLoadingText(true);
+		setError(false);
+		setContent("");
 		try {
 			const response = await fetch(src);
 			if (!response.ok) throw new Error("Failed to fetch");
 			setContent(await response.text());
 		} catch {
 			setError(true);
+		} finally {
+			setLoadingText(false);
 		}
 	}, [src]);
 
 	useEffect(() => {
 		if (fileType === "code" || fileType === "text") {
 			loadTextContent();
+		} else {
+			setContent("");
+			setLoadingText(false);
+			setError(false);
 		}
 	}, [fileType, loadTextContent]);
 
@@ -169,6 +180,7 @@ export function A2UIFilePreview({
 					src={`${src}#toolbar=1&#view=FitH`}
 					className="w-full h-full border-0"
 					title={`PDF Preview: ${rawFileName(src, filename)}`}
+					loading={loading ?? "lazy"}
 				>
 					<p>
 						Your browser cannot display the PDF.{" "}
@@ -188,6 +200,7 @@ export function A2UIFilePreview({
 				alt={rawFileName(src, filename)}
 				className={cn("w-full h-full", fitClass, resolveStyle(style))}
 				style={resolveInlineStyle(style)}
+				loading={loading ?? "lazy"}
 				onError={() => setError(true)}
 			/>
 		);
@@ -198,6 +211,7 @@ export function A2UIFilePreview({
 			<video
 				src={src}
 				controls={showControls}
+				preload={loading === "eager" ? "auto" : "metadata"}
 				className={cn("w-full h-full", fitClass, resolveStyle(style))}
 				style={resolveInlineStyle(style)}
 			>
@@ -238,7 +252,7 @@ export function A2UIFilePreview({
 							{lang}
 						</div>
 					)}
-					<code>{content}</code>
+					<code>{loadingText ? "Loading..." : content}</code>
 				</pre>
 			</div>
 		);

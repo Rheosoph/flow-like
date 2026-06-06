@@ -1027,6 +1027,7 @@ export interface FilePreviewComponent extends ComponentBase {
 	fallbackText?: BoundValue;
 	height?: BoundValue;
 	showDownload?: BoundValue;
+	loading?: BoundValue; // "lazy" | "eager"
 }
 
 // NivoChart - Nivo chart library component

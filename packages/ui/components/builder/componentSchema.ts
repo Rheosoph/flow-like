@@ -158,6 +158,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		type: { type: "string", required: true },
 		src: { type: "boundValue", required: true },
 		alt: { type: "boundValue" },
+		fallback: { type: "boundValue" },
 		fit: {
 			type: "boundValue",
 			enum: ["cover", "contain", "fill", "none", "scale-down"],
@@ -301,8 +302,22 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	filePreview: {
 		type: { type: "string", required: true },
 		src: { type: "boundValue", required: true },
+		url: { type: "boundValue" },
 		filename: { type: "boundValue" },
 		mimeType: { type: "boundValue" },
+		fileType: {
+			type: "boundValue",
+			enum: ["pdf", "image", "video", "audio", "code", "text", "unknown"],
+		},
+		showControls: { type: "boundValue" },
+		fit: {
+			type: "boundValue",
+			enum: ["contain", "cover", "fill", "none", "scaleDown", "scale-down"],
+		},
+		fallbackText: { type: "boundValue" },
+		height: { type: "boundValue" },
+		showDownload: { type: "boundValue" },
+		loading: { type: "boundValue", enum: ["lazy", "eager"] },
 	},
 	boundingBoxOverlay: {
 		type: { type: "string", required: true },
@@ -719,6 +734,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	},
 	miniMap: {
 		type: { type: "string", required: true },
+		mapImage: { type: "boundValue" },
 		width: { type: "boundValue" },
 		height: { type: "boundValue" },
 		playerX: { type: "boundValue" },
