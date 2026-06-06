@@ -24,6 +24,13 @@ export interface PropSchema {
 
 export type ComponentSchema = Record<string, PropSchema>;
 
+const COMMON_COMPONENT_SCHEMA: ComponentSchema = {
+	hidden: {
+		type: "boundValue",
+		description: "Hide this component in the rendered UI",
+	},
+};
+
 // Registry of all valid component types and their allowed properties
 export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	// Layout
@@ -780,7 +787,8 @@ export function isValidComponentType(type: string): boolean {
  * Get the schema for a component type
  */
 export function getComponentSchema(type: string): ComponentSchema | undefined {
-	return COMPONENT_SCHEMAS[type];
+	const schema = COMPONENT_SCHEMAS[type];
+	return schema ? { ...COMMON_COMPONENT_SCHEMA, ...schema } : undefined;
 }
 
 /**
@@ -788,7 +796,14 @@ export function getComponentSchema(type: string): ComponentSchema | undefined {
  */
 export function getValidProperties(type: string): string[] {
 	const schema = COMPONENT_SCHEMAS[type];
-	return schema ? Object.keys(schema) : [];
+	return schema
+		? Array.from(
+				new Set([
+					...Object.keys(COMMON_COMPONENT_SCHEMA),
+					...Object.keys(schema),
+				]),
+			)
+		: [];
 }
 
 /**
@@ -796,5 +811,5 @@ export function getValidProperties(type: string): string[] {
  */
 export function isValidProperty(type: string, propName: string): boolean {
 	const schema = COMPONENT_SCHEMAS[type];
-	return schema ? propName in schema : false;
+	return schema ? propName in schema || propName in COMMON_COMPONENT_SCHEMA : false;
 }

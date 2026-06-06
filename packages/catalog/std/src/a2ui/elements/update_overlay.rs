@@ -134,35 +134,41 @@ impl NodeLogic for UpdateOverlay {
             .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok())
             .unwrap_or_else(|| "Set All".to_string());
 
-        for pin_name in ["boxes", "box"] {
-            if let Some(pin) = node.get_pin_by_name(pin_name).cloned() {
-                remove_pin(node, Some(pin));
-            }
-        }
+        let boxes_pin = node.get_pin_by_name("boxes").cloned();
+        let box_pin = node.get_pin_by_name("box").cloned();
 
         match operation.as_str() {
             "Set All" => {
-                node.add_input_pin(
-                    "boxes",
-                    "Boxes",
-                    "Array of detection bounding boxes",
-                    VariableType::Struct,
-                )
-                .set_value_type(ValueType::Array)
-                .set_schema::<BoundingBox>()
-                .set_options(PinOptions::new().set_enforce_schema(true).build());
+                remove_pin(node, box_pin);
+                if boxes_pin.is_none() {
+                    node.add_input_pin(
+                        "boxes",
+                        "Boxes",
+                        "Array of detection bounding boxes",
+                        VariableType::Struct,
+                    )
+                    .set_value_type(ValueType::Array)
+                    .set_schema::<BoundingBox>()
+                    .set_options(PinOptions::new().set_enforce_schema(true).build());
+                }
             }
             "Add" => {
-                node.add_input_pin(
-                    "box",
-                    "Box",
-                    "Detection bounding box to append",
-                    VariableType::Struct,
-                )
-                .set_schema::<BoundingBox>()
-                .set_options(PinOptions::new().set_enforce_schema(true).build());
+                remove_pin(node, boxes_pin);
+                if box_pin.is_none() {
+                    node.add_input_pin(
+                        "box",
+                        "Box",
+                        "Detection bounding box to append",
+                        VariableType::Struct,
+                    )
+                    .set_schema::<BoundingBox>()
+                    .set_options(PinOptions::new().set_enforce_schema(true).build());
+                }
             }
-            "Clear" => {}
+            "Clear" => {
+                remove_pin(node, boxes_pin);
+                remove_pin(node, box_pin);
+            }
             _ => {}
         }
     }

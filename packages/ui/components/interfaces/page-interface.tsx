@@ -33,6 +33,7 @@ import {
 	useRouteDialog,
 } from "../a2ui";
 import { applyMediaSourceUpdate } from "../a2ui/media-source";
+import { applyStyleUpdate } from "../a2ui/style-updates";
 import type {
 	A2UIServerMessage,
 	Surface,
@@ -322,15 +323,9 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 						break;
 					}
 					case "setStyle": {
-						const newStyle = updateValue.style as Partial<
-							SurfaceComponent["style"]
-						>;
 						updatedComponent = {
 							...component,
-							style: {
-								...component.style,
-								...newStyle,
-							},
+							style: applyStyleUpdate(component.style, updateValue.style),
 						};
 						break;
 					}
@@ -344,12 +339,11 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							...component,
 							component: {
 								...componentData,
-								hidden: !visible,
+								hidden: { literalBool: !visible },
 							} as unknown as SurfaceComponent["component"],
-							style: {
-								...component.style,
-								opacity: visible ? undefined : 0,
-							},
+							style: visible
+								? applyStyleUpdate(component.style, { opacity: null })
+								: component.style,
 						};
 						break;
 					}

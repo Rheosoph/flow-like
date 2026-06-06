@@ -5,11 +5,12 @@ import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
 import { cn } from "../../lib/utils";
 import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
-import { DataProvider, DataScopeProvider } from "./DataContext";
+import { DataProvider, DataScopeProvider, useData } from "./DataContext";
 import { type IWidgetRef, WidgetRefsProvider } from "./WidgetRefsContext";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
+	BoundValue,
 	DataEntry,
 	DataScope,
 	Surface,
@@ -20,6 +21,62 @@ const EMPTY_DATA_MODEL: DataEntry[] = [];
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
+}
+
+function resolveHidden(
+	hidden: SurfaceComponent["component"]["hidden"] | undefined,
+	resolve: (boundValue: BoundValue, defaultValue?: unknown) => unknown,
+): boolean {
+	if (hidden === undefined) return false;
+	const value = resolve(hidden as BoundValue, false);
+	return value === true || value === "true";
+}
+
+interface A2UIComponentNodeProps {
+	surfaceComponent: SurfaceComponent;
+	componentId: string;
+	surfaceId: string;
+	appId?: string;
+	boardId?: string;
+	handleAction: (message: A2UIClientMessage) => void;
+	renderScopedComponent: (
+		componentId: string,
+		dataScope?: DataScope,
+	) => React.ReactNode;
+}
+
+function A2UIComponentNode({
+	surfaceComponent,
+	componentId,
+	surfaceId,
+	appId,
+	boardId,
+	handleAction,
+	renderScopedComponent,
+}: A2UIComponentNodeProps) {
+	const { resolve } = useData();
+	const { component, style } = surfaceComponent;
+	if (!component || resolveHidden(component.hidden, resolve)) return null;
+
+	const Renderer = getComponentRenderer(component.type);
+	if (!Renderer) {
+		console.warn(`Unknown component type: ${component.type}`);
+		return null;
+	}
+
+	const props: ComponentProps = {
+		component,
+		componentId,
+		surfaceId,
+		appId,
+		boardId,
+		style: style ?? component.style,
+		onAction: handleAction,
+		renderChild: (childId, childScope) =>
+			renderScopedComponent(childId, childScope),
+	};
+
+	return <Renderer {...props} />;
 }
 
 export interface A2UIRendererProps {
@@ -93,27 +150,21 @@ export function A2UIRenderer({
 		(componentId: string, dataScope?: DataScope): React.ReactNode => {
 			const surfaceComponent = components[componentId];
 			if (!surfaceComponent?.component) return null;
+			const node = (
+				<A2UIComponentNode
+					key={componentId}
+					surfaceComponent={surfaceComponent}
+					componentId={componentId}
+					surfaceId={surface.id}
+					appId={appId}
+					boardId={boardId}
+					handleAction={handleAction}
+					renderScopedComponent={(childId, childScope) =>
+						renderScopedComponent(childId, childScope ?? dataScope)
+					}
+				/>
+			);
 
-			const { component, style } = surfaceComponent;
-			const Renderer = getComponentRenderer(component.type);
-			if (!Renderer) {
-				console.warn(`Unknown component type: ${component.type}`);
-				return null;
-			}
-
-			const props: ComponentProps = {
-				component,
-				componentId,
-				surfaceId: surface.id,
-				appId,
-				boardId,
-				style: style ?? component.style,
-				onAction: handleAction,
-				renderChild: (childId, childScope) =>
-					renderScopedComponent(childId, childScope ?? dataScope),
-			};
-
-			const node = <Renderer key={componentId} {...props} />;
 			return dataScope ? (
 				<DataScopeProvider scope={dataScope}>{node}</DataScopeProvider>
 			) : (

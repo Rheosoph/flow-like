@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
+import { applyStyleUpdate } from "./style-updates";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
@@ -208,15 +209,9 @@ export function useSurfaceManager() {
 							break;
 						}
 						case "setStyle": {
-							const newStyle = updateValue.style as Partial<
-								SurfaceComponent["style"]
-							>;
 							updatedComponent = {
 								...component,
-								style: {
-									...component.style,
-									...newStyle,
-								},
+								style: applyStyleUpdate(component.style, updateValue.style),
 							};
 							break;
 						}
@@ -230,12 +225,11 @@ export function useSurfaceManager() {
 								...component,
 								component: {
 									...componentData,
-									hidden: !visible,
+									hidden: { literalBool: !visible },
 								} as unknown as SurfaceComponent["component"],
-								style: {
-									...component.style,
-									opacity: visible ? undefined : 0,
-								},
+								style: visible
+									? applyStyleUpdate(component.style, { opacity: null })
+									: component.style,
 							};
 							break;
 						}

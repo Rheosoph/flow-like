@@ -383,8 +383,16 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 				/>
 			</div>
 
+			<PropertyField
+				name="hidden"
+				value={props.hidden ?? { literalBool: false }}
+				onChange={(newValue) => updateProperty("hidden", newValue)}
+				componentType={componentType}
+			/>
+
 			{/* Type-specific properties */}
 			{Object.entries(props).map(([key, value]) => {
+				if (key === "hidden") return null;
 				const assetAccept = getAssetAccept(componentType, key);
 				return (
 					<PropertyField

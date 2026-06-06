@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
+import { applyStyleUpdate } from "./style-updates";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 
 interface DialogState {
@@ -346,6 +347,27 @@ function RouteDialogRenderer({
 						...componentData,
 						text,
 					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (updateType === "setStyle") {
+				updatedComponent = {
+					...component,
+					style: applyStyleUpdate(component.style, updateValue.style),
+				};
+			} else if (updateType === "setVisibility") {
+				const visible = updateValue.visible as boolean;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						hidden: { literalBool: !visible },
+					} as unknown as SurfaceComponent["component"],
+					style: visible
+						? applyStyleUpdate(component.style, { opacity: null })
+						: component.style,
 				};
 			} else if (updateType === "setMediaSource") {
 				updatedComponent = applyMediaSourceUpdate(component, updateValue);

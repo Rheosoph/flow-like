@@ -14,8 +14,6 @@ pub mod prompts;
 mod types;
 mod unified;
 
-pub use governance::{
-    BoardDepiction, GovernanceCopilot, GovernanceSuggestion, SuggestedAnswer,
-};
+pub use governance::{BoardDepiction, GovernanceCopilot, GovernanceSuggestion, SuggestedAnswer};
 pub use types::*;
 pub use unified::UnifiedCopilot;

@@ -13,10 +13,7 @@ use std::sync::Arc;
 use flow_like_types::Result;
 use futures::StreamExt;
 use rig::{
-    OneOrMany,
-    completion::Completion,
-    message::UserContent,
-    streaming::StreamedAssistantContent,
+    OneOrMany, completion::Completion, message::UserContent, streaming::StreamedAssistantContent,
 };
 use serde::{Deserialize, Serialize};
 

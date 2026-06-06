@@ -231,17 +231,17 @@ pub async fn get_questionnaire(
         .unwrap_or_else(|| prefill_answers(&signals));
 
     let classification = classify(&answers, &signals);
-    let recommendations =
-        questionnaire::recommendations(&answers, &signals, &classification);
+    let recommendations = questionnaire::recommendations(&answers, &signals, &classification);
     let schema: QuestionnaireSchema = questionnaire_schema();
 
     // The responsible person is hard-linked to the app owner. Prefer the stored
     // contact when present, otherwise resolve it live so the field is never
     // empty and always matches the admin governance view.
-    let (responsible_name, responsible_email) = match existing
-        .as_ref()
-        .and_then(|a| a.responsible_name.clone().map(|n| (Some(n), a.responsible_email.clone())))
-    {
+    let (responsible_name, responsible_email) = match existing.as_ref().and_then(|a| {
+        a.responsible_name
+            .clone()
+            .map(|n| (Some(n), a.responsible_email.clone()))
+    }) {
         Some(pair) => pair,
         None => {
             let (_, name, email) = resolve_responsible_person(&state, &app_id, &sub).await;
@@ -254,8 +254,7 @@ pub async fn get_questionnaire(
         signals: serde_json::to_value(&signals).unwrap_or(Value::Null),
         answers,
         classification: serde_json::to_value(&classification).unwrap_or(Value::Null),
-        recommendations: serde_json::to_value(&recommendations)
-            .unwrap_or(Value::Array(Vec::new())),
+        recommendations: serde_json::to_value(&recommendations).unwrap_or(Value::Array(Vec::new())),
         responsible_name,
         responsible_email,
         has_assessment: existing.is_some(),
@@ -341,12 +340,10 @@ pub async fn classify_preview(
         .unwrap_or_default();
 
     let classification = classify(&body.answers, &signals);
-    let recommendations =
-        questionnaire::recommendations(&body.answers, &signals, &classification);
+    let recommendations = questionnaire::recommendations(&body.answers, &signals, &classification);
     Ok(Json(ClassifyResponse {
         classification: serde_json::to_value(&classification).unwrap_or(Value::Null),
-        recommendations: serde_json::to_value(&recommendations)
-            .unwrap_or(Value::Array(Vec::new())),
+        recommendations: serde_json::to_value(&recommendations).unwrap_or(Value::Array(Vec::new())),
     }))
 }
 

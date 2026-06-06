@@ -28,6 +28,7 @@ import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
 import { applyMediaSourceUpdate } from "../a2ui/media-source";
+import { applyStyleUpdate } from "../a2ui/style-updates";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -1145,15 +1146,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 						break;
 					}
 					case "setStyle": {
-						const newStyle = updateValue.style as Partial<
-							SurfaceComponent["style"]
-						>;
 						updatedComponent = {
 							...component,
-							style: {
-								...component.style,
-								...newStyle,
-							},
+							style: applyStyleUpdate(component.style, updateValue.style),
 						};
 						break;
 					}
@@ -1167,12 +1162,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 							...component,
 							component: {
 								...componentData,
-								hidden: !visible,
+								hidden: { literalBool: !visible },
 							} as unknown as SurfaceComponent["component"],
-							style: {
-								...component.style,
-								opacity: visible ? undefined : 0,
-							},
+							style: visible
+								? applyStyleUpdate(component.style, { opacity: null })
+								: component.style,
 						};
 						break;
 					}
