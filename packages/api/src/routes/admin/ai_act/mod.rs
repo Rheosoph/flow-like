@@ -10,7 +10,7 @@ pub mod reconcile;
 
 use crate::{
     entity::{
-        ai_act_assessment, ai_act_model_observation, ai_act_model_registry, meta,
+        ai_act_assessment, ai_act_model_observation, ai_act_model_registry, app_board_score, meta,
         sea_orm_active_enums::AiGpaiPosture,
     },
     error::ApiError,
@@ -26,10 +26,10 @@ use axum::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    QuerySelect, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 
 pub fn routes() -> Router<AppState> {
@@ -109,6 +109,15 @@ struct AppScoreAgg {
     governance: i32,
     worst_score: i32,
     board_count: i64,
+    updated_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ModelCounts {
+    model_count: i64,
+    unvetted_model_count: i64,
+    drift_count: i64,
+    updated_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Clone, Serialize, Debug, ToSchema)]
@@ -125,7 +134,7 @@ pub struct InventoryResponse {
 pub struct InventoryQuery {
     /// Filter by risk category (PROHIBITED/HIGH/LIMITED/MINIMAL/UNDETERMINED).
     pub risk: Option<String>,
-    /// Filter by status (DRAFT/SUBMITTED/APPROVED/REJECTED/BLOCKED).
+    /// Filter by status (UNASSESSED/DRAFT/SUBMITTED/APPROVED/REJECTED/BLOCKED).
     pub status: Option<String>,
     pub search: Option<String>,
     pub page: Option<u64>,
@@ -159,136 +168,7 @@ pub async fn list_inventory(
     let page = query.page.unwrap_or(1).max(1);
     let limit = query.limit.unwrap_or(25).clamp(1, 100);
 
-    // Load all assessments (the inventory is keyed by app assessment).
-    let mut finder = ai_act_assessment::Entity::find();
-    if let Some(risk) = &query.risk {
-        if let Some(entity_risk) = parse_risk(risk) {
-            finder = finder.filter(ai_act_assessment::Column::RiskCategory.eq(entity_risk));
-        }
-    }
-    if let Some(status) = &query.status {
-        if let Some(entity_status) = parse_status(status) {
-            finder = finder.filter(ai_act_assessment::Column::Status.eq(entity_status));
-        }
-    }
-
-    let assessments = finder.all(&state.db).await?;
-
-    // Resolve app names.
-    let app_ids: Vec<String> = assessments.iter().map(|a| a.app_id.clone()).collect();
-    let names = load_app_names(&state, &app_ids).await;
-
-    // Model counts per app.
-    let observations = if app_ids.is_empty() {
-        Vec::new()
-    } else {
-        ai_act_model_observation::Entity::find()
-            .filter(ai_act_model_observation::Column::AppId.is_in(app_ids.clone()))
-            .all(&state.db)
-            .await?
-    };
-    let mut model_counts: HashMap<String, (i64, i64, i64)> = HashMap::new();
-    for obs in &observations {
-        let entry = model_counts.entry(obs.app_id.clone()).or_insert((0, 0, 0));
-        entry.0 += 1;
-        if !obs.vetted {
-            entry.1 += 1;
-        }
-        if obs.drift_flagged {
-            entry.2 += 1;
-        }
-    }
-
-    // Aggregated board governance/quality scores per app (MIN per category =
-    // worst board) so the inventory surfaces security posture alongside
-    // conformity. Best-effort: never fail the listing on a scores query error.
-    let score_aggs: Vec<AppScoreAgg> = if app_ids.is_empty() {
-        Vec::new()
-    } else {
-        crate::entity::app_board_score::Entity::find()
-            .select_only()
-            .column_as(crate::entity::app_board_score::Column::AppId, "app_id")
-            .column_as(
-                sea_orm::sea_query::Expr::col(crate::entity::app_board_score::Column::Security)
-                    .min(),
-                "security",
-            )
-            .column_as(
-                sea_orm::sea_query::Expr::col(crate::entity::app_board_score::Column::Privacy)
-                    .min(),
-                "privacy",
-            )
-            .column_as(
-                sea_orm::sea_query::Expr::col(crate::entity::app_board_score::Column::Governance)
-                    .min(),
-                "governance",
-            )
-            .column_as(
-                sea_orm::sea_query::Expr::col(crate::entity::app_board_score::Column::WorstScore)
-                    .min(),
-                "worst_score",
-            )
-            .column_as(
-                sea_orm::sea_query::Expr::col(crate::entity::app_board_score::Column::BoardId)
-                    .count(),
-                "board_count",
-            )
-            .filter(crate::entity::app_board_score::Column::AppId.is_in(app_ids.clone()))
-            .group_by(crate::entity::app_board_score::Column::AppId)
-            .into_model::<AppScoreAgg>()
-            .all(&state.db)
-            .await
-            .unwrap_or_default()
-    };
-    let scores: HashMap<String, AppScoreAgg> = score_aggs
-        .into_iter()
-        .map(|agg| (agg.app_id.clone(), agg))
-        .collect();
-
-    let mut items: Vec<InventoryItem> = assessments
-        .into_iter()
-        .filter(|a| match &query.search {
-            Some(s) if !s.is_empty() => {
-                let name = names.get(&a.app_id).cloned().flatten().unwrap_or_default();
-                a.app_id.to_lowercase().contains(&s.to_lowercase())
-                    || name.to_lowercase().contains(&s.to_lowercase())
-            }
-            _ => true,
-        })
-        .map(|a| {
-            let (model_count, unvetted, drift) =
-                model_counts.get(&a.app_id).copied().unwrap_or((0, 0, 0));
-            let score = scores.get(&a.app_id);
-            InventoryItem {
-                app_name: names.get(&a.app_id).cloned().flatten(),
-                risk_category: format!("{:?}", a.risk_category).to_uppercase(),
-                status: format!("{:?}", a.status).to_uppercase(),
-                conformity_score: a.conformity_score,
-                conformity_band: a.conformity_band.clone(),
-                model_count,
-                unvetted_model_count: unvetted,
-                drift_count: drift,
-                worst_score: score.map(|s| s.worst_score),
-                security_score: score.map(|s| s.security),
-                privacy_score: score.map(|s| s.privacy),
-                governance_score: score.map(|s| s.governance),
-                board_count: score.map(|s| s.board_count).unwrap_or(0),
-                updated_at: a.updated_at.to_string(),
-                app_id: a.app_id,
-            }
-        })
-        .collect();
-
-    // Sort: high-risk first, then lowest conformity score first.
-    items.sort_by(|a, b| {
-        risk_rank(&a.risk_category)
-            .cmp(&risk_rank(&b.risk_category))
-            .then(
-                a.conformity_score
-                    .unwrap_or(101)
-                    .cmp(&b.conformity_score.unwrap_or(101)),
-            )
-    });
+    let items = load_inventory_items(&state, &query).await?;
 
     let total = items.len() as u64;
     let start = ((page - 1) * limit) as usize;
@@ -302,6 +182,172 @@ pub async fn list_inventory(
         limit,
         has_more,
     }))
+}
+
+async fn load_inventory_items(
+    state: &AppState,
+    query: &InventoryQuery,
+) -> Result<Vec<InventoryItem>, ApiError> {
+    let assessment_rows = ai_act_assessment::Entity::find()
+        .order_by_desc(ai_act_assessment::Column::Version)
+        .all(&state.db)
+        .await?;
+    let mut assessments: HashMap<String, ai_act_assessment::Model> = HashMap::new();
+    for assessment in assessment_rows {
+        assessments
+            .entry(assessment.app_id.clone())
+            .or_insert(assessment);
+    }
+
+    // Aggregated board governance/quality scores per app (MIN per category =
+    // worst board) so the inventory surfaces security posture even before an
+    // EU AI Act questionnaire has been completed.
+    let score_aggs: Vec<AppScoreAgg> = app_board_score::Entity::find()
+        .select_only()
+        .column_as(app_board_score::Column::AppId, "app_id")
+        .column_as(
+            Expr::col(app_board_score::Column::Security).min(),
+            "security",
+        )
+        .column_as(Expr::col(app_board_score::Column::Privacy).min(), "privacy")
+        .column_as(
+            Expr::col(app_board_score::Column::Governance).min(),
+            "governance",
+        )
+        .column_as(
+            Expr::col(app_board_score::Column::WorstScore).min(),
+            "worst_score",
+        )
+        .column_as(
+            Expr::col(app_board_score::Column::BoardId).count(),
+            "board_count",
+        )
+        .column_as(
+            Expr::col(app_board_score::Column::UpdatedAt).max(),
+            "updated_at",
+        )
+        .group_by(app_board_score::Column::AppId)
+        .into_model::<AppScoreAgg>()
+        .all(&state.db)
+        .await?;
+    let scores: HashMap<String, AppScoreAgg> = score_aggs
+        .into_iter()
+        .map(|agg| (agg.app_id.clone(), agg))
+        .collect();
+
+    let observations = ai_act_model_observation::Entity::find()
+        .all(&state.db)
+        .await?;
+    let mut model_counts: HashMap<String, ModelCounts> = HashMap::new();
+    for obs in &observations {
+        let entry = model_counts.entry(obs.app_id.clone()).or_default();
+        entry.model_count += 1;
+        if !obs.vetted {
+            entry.unvetted_model_count += 1;
+        }
+        if obs.drift_flagged {
+            entry.drift_count += 1;
+        }
+        entry.updated_at = Some(match entry.updated_at {
+            Some(current) => current.max(obs.last_seen_at),
+            None => obs.last_seen_at,
+        });
+    }
+
+    let mut app_ids: HashSet<String> = HashSet::new();
+    app_ids.extend(assessments.keys().cloned());
+    app_ids.extend(scores.keys().cloned());
+    app_ids.extend(model_counts.keys().cloned());
+    let app_ids: Vec<String> = app_ids.into_iter().collect();
+    let names = load_app_names(state, &app_ids).await;
+
+    let mut items: Vec<InventoryItem> = app_ids
+        .into_iter()
+        .map(|app_id| {
+            let assessment = assessments.get(&app_id);
+            let score = scores.get(&app_id);
+            let models = model_counts.get(&app_id).copied().unwrap_or_default();
+            let updated_at = assessment
+                .map(|a| a.updated_at.to_string())
+                .or_else(|| score.and_then(|s| s.updated_at).map(|ts| ts.to_string()))
+                .or_else(|| models.updated_at.map(|ts| ts.to_string()))
+                .unwrap_or_default();
+
+            InventoryItem {
+                app_name: names.get(&app_id).cloned().flatten(),
+                risk_category: assessment
+                    .map(|a| format!("{:?}", a.risk_category).to_uppercase())
+                    .unwrap_or_else(|| "UNDETERMINED".to_string()),
+                status: assessment
+                    .map(|a| format!("{:?}", a.status).to_uppercase())
+                    .unwrap_or_else(|| "UNASSESSED".to_string()),
+                conformity_score: assessment.and_then(|a| a.conformity_score),
+                conformity_band: assessment.and_then(|a| a.conformity_band.clone()),
+                model_count: models.model_count,
+                unvetted_model_count: models.unvetted_model_count,
+                drift_count: models.drift_count,
+                worst_score: score.map(|s| s.worst_score),
+                security_score: score.map(|s| s.security),
+                privacy_score: score.map(|s| s.privacy),
+                governance_score: score.map(|s| s.governance),
+                board_count: score.map(|s| s.board_count).unwrap_or(0),
+                updated_at,
+                app_id,
+            }
+        })
+        .collect();
+
+    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase()) {
+        if !search.is_empty() {
+            items.retain(|item| {
+                item.app_id.to_lowercase().contains(&search)
+                    || item
+                        .app_name
+                        .as_ref()
+                        .map(|name| name.to_lowercase().contains(&search))
+                        .unwrap_or(false)
+            });
+        }
+    }
+
+    if let Some(risk) = query.risk.as_deref() {
+        if parse_risk(risk).is_some() {
+            let risk = risk.to_uppercase();
+            items.retain(|item| item.risk_category == risk);
+        }
+    }
+
+    if let Some(status) = query.status.as_deref() {
+        let status = status.to_uppercase();
+        if status == "UNASSESSED" || parse_status(&status).is_some() {
+            items.retain(|item| item.status == status);
+        }
+    }
+
+    // Sort: high-risk first, then lowest conformity score, then lowest
+    // governance score so unassessed scored apps are still actionable.
+    items.sort_by(|a, b| {
+        risk_rank(&a.risk_category)
+            .cmp(&risk_rank(&b.risk_category))
+            .then(
+                a.conformity_score
+                    .unwrap_or(101)
+                    .cmp(&b.conformity_score.unwrap_or(101)),
+            )
+            .then(
+                a.worst_score
+                    .unwrap_or(11)
+                    .cmp(&b.worst_score.unwrap_or(11)),
+            )
+            .then_with(|| {
+                a.app_name
+                    .as_deref()
+                    .unwrap_or(a.app_id.as_str())
+                    .cmp(b.app_name.as_deref().unwrap_or(b.app_id.as_str()))
+            })
+    });
+
+    Ok(items)
 }
 
 async fn load_app_names(state: &AppState, app_ids: &[String]) -> HashMap<String, Option<String>> {
@@ -473,8 +519,11 @@ pub async fn get_inventory_detail(
         .map(|a| a.answers.clone())
         .unwrap_or_else(|| crate::routes::app::ai_act::prefill_answers(&signals));
     let classification = crate::routes::app::ai_act::questionnaire::classify(&answers, &signals);
-    let recommendations =
-        crate::routes::app::ai_act::questionnaire::recommendations(&answers, &signals, &classification);
+    let recommendations = crate::routes::app::ai_act::questionnaire::recommendations(
+        &answers,
+        &signals,
+        &classification,
+    );
     let schema = crate::routes::app::ai_act::questionnaire::questionnaire_schema();
 
     // Resolve the responsible person (defaulting to the app owner for legacy
@@ -698,7 +747,6 @@ pub async fn put_inventory_assessment(
         serde_json::to_value(&response).unwrap_or(serde_json::Value::Null),
     ))
 }
-
 
 #[derive(Clone, Serialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1030,27 +1078,21 @@ pub async fn export_inventory(
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
 
-    let assessments = ai_act_assessment::Entity::find().all(&state.db).await?;
-    let app_ids: Vec<String> = assessments.iter().map(|a| a.app_id.clone()).collect();
-    let names = load_app_names(&state, &app_ids).await;
+    let rows = load_inventory_items(
+        &state,
+        &InventoryQuery {
+            risk: None,
+            status: None,
+            search: None,
+            page: None,
+            limit: None,
+        },
+    )
+    .await?;
 
     let format = query.format.as_deref().unwrap_or("csv").to_lowercase();
 
     if format == "json" {
-        let rows: Vec<serde_json::Value> = assessments
-            .into_iter()
-            .map(|a| {
-                serde_json::json!({
-                    "appId": a.app_id,
-                    "appName": names.get(&a.app_id).cloned().flatten(),
-                    "riskCategory": format!("{:?}", a.risk_category).to_uppercase(),
-                    "status": format!("{:?}", a.status).to_uppercase(),
-                    "conformityScore": a.conformity_score,
-                    "conformityBand": a.conformity_band,
-                    "updatedAt": a.updated_at.to_string(),
-                })
-            })
-            .collect();
         let body = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
         return Ok((
             [
@@ -1066,22 +1108,31 @@ pub async fn export_inventory(
     }
 
     // CSV
-    let mut csv = String::from(
-        "appId,appName,riskCategory,status,conformityScore,conformityBand,updatedAt\n",
-    );
-    for a in assessments {
-        let name = names.get(&a.app_id).cloned().flatten().unwrap_or_default();
+    let mut csv = String::from(concat!(
+        "appId,appName,riskCategory,status,conformityScore,conformityBand,",
+        "securityScore,privacyScore,worstScore,modelCount,unvettedModelCount,driftCount,updatedAt\n"
+    ));
+    for row in rows {
+        let name = row.app_name.unwrap_or_default();
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{}\n",
-            csv_escape(&a.app_id),
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            csv_escape(&row.app_id),
             csv_escape(&name),
-            format!("{:?}", a.risk_category).to_uppercase(),
-            format!("{:?}", a.status).to_uppercase(),
-            a.conformity_score
+            row.risk_category,
+            row.status,
+            row.conformity_score
                 .map(|s| s.to_string())
                 .unwrap_or_default(),
-            a.conformity_band.clone().unwrap_or_default(),
-            a.updated_at,
+            row.conformity_band.unwrap_or_default(),
+            row.security_score
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
+            row.privacy_score.map(|s| s.to_string()).unwrap_or_default(),
+            row.worst_score.map(|s| s.to_string()).unwrap_or_default(),
+            row.model_count,
+            row.unvetted_model_count,
+            row.drift_count,
+            row.updated_at,
         ));
     }
 

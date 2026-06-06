@@ -422,6 +422,7 @@ const RISK_FILTER_OPTIONS: { value: string; label: string }[] = [
 
 const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
 	{ value: "all", label: "All statuses" },
+	{ value: "UNASSESSED", label: "Unassessed" },
 	{ value: "DRAFT", label: "Draft" },
 	{ value: "SUBMITTED", label: "Submitted" },
 	{ value: "APPROVED", label: "Approved" },
@@ -695,6 +696,9 @@ function InventoryStats() {
 
 	const summary = useMemo(() => {
 		const rows = stats.data ?? [];
+		const assessed = rows.filter(
+			(row) => row.status.toUpperCase() !== "UNASSESSED",
+		);
 		const byRisk: Record<RiskCategory, number> = {
 			PROHIBITED: 0,
 			HIGH: 0,
@@ -714,7 +718,7 @@ function InventoryStats() {
 			}
 		}
 		return {
-			total: rows.length,
+			total: assessed.length,
 			byRisk,
 			needsReview,
 			avgScore: scoreCount > 0 ? Math.round(scoreSum / scoreCount) : null,
@@ -854,6 +858,12 @@ function InventoryTab({
 				"status",
 				"conformityScore",
 				"conformityBand",
+				"securityScore",
+				"privacyScore",
+				"worstScore",
+				"modelCount",
+				"unvettedModelCount",
+				"driftCount",
 				"updatedAt",
 			];
 			const csv = [
@@ -1015,12 +1025,12 @@ function InventoryTab({
 											<p className="text-sm font-medium">
 												{hasFilters
 													? "No applications match your filters."
-													: "No conformity assessments yet."}
+													: "No inventory apps yet."}
 											</p>
 											<p className="text-xs text-muted-foreground">
 												{hasFilters
 													? "Try clearing the search or risk/status filters."
-													: "Assessments appear here once app owners complete the EU AI Act questionnaire."}
+													: "Apps appear here after they have governance scores, model observations, or EU AI Act assessments."}
 											</p>
 										</div>
 									</TableCell>

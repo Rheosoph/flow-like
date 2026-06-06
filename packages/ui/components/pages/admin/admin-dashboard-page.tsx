@@ -1776,6 +1776,9 @@ function AiActConformityPreview({
 
 	const stats = useMemo(() => {
 		const rows = inventory.data ?? [];
+		const assessed = rows.filter(
+			(r) => r.status.toUpperCase() !== "UNASSESSED",
+		);
 		const prohibited = rows.filter(
 			(r) => r.riskCategory === "PROHIBITED",
 		).length;
@@ -1790,7 +1793,7 @@ function AiActConformityPreview({
 					)
 				: null;
 		return {
-			total: rows.length,
+			total: assessed.length,
 			prohibited,
 			high,
 			limited,
