@@ -1,8 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
 	Button,
 	type IApp,
@@ -14,9 +11,13 @@ import {
 	useNetworkStatus,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { ImportIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { appsDB } from "./../../lib/apps-db";
 import ImportEncryptedDialog from "./components/ImportEncryptedDialog";
@@ -25,6 +26,7 @@ export default function DesktopLibraryPage() {
 	const isOnline = useNetworkStatus();
 	const queryClient = useQueryClient();
 	const router = useRouter();
+	const auth = useAuth();
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
 	const [encryptedImportPath, setEncryptedImportPath] = useState<string | null>(
 		null,
@@ -45,7 +47,7 @@ export default function DesktopLibraryPage() {
 		return /mac/.test(platform) && maxTouchPoints > 1;
 	}, []);
 
-	const normalizePickerPath = (input: string): string => {
+	const normalizePickerPath = useCallback((input: string): string => {
 		if (!input.startsWith("file://")) return input;
 		try {
 			const url = new URL(input);
@@ -60,21 +62,30 @@ export default function DesktopLibraryPage() {
 				? withoutScheme
 				: `/${withoutScheme}`;
 		}
-	};
+	}, []);
 
-	const resolveSelectedPath = (selected: unknown): string | null => {
-		if (!selected) return null;
-		if (typeof selected === "string") return selected;
-		if (Array.isArray(selected)) return resolveSelectedPath(selected[0]);
-		if (typeof selected === "object") {
-			const candidate = selected as { path?: unknown; uri?: unknown };
-			if (typeof candidate.path === "string")
-				return normalizePickerPath(candidate.path);
-			if (typeof candidate.uri === "string")
-				return normalizePickerPath(candidate.uri);
-		}
-		return null;
-	};
+	const resolveSelectedPath = useCallback(
+		(selected: unknown): string | null => {
+			const resolve = (value: unknown): string | null => {
+				if (!value) return null;
+				if (typeof value === "string") return value;
+				if (Array.isArray(value)) return resolve(value[0]);
+				if (typeof value === "object") {
+					const candidate = value as { path?: unknown; uri?: unknown };
+					if (typeof candidate.path === "string") {
+						return normalizePickerPath(candidate.path);
+					}
+					if (typeof candidate.uri === "string") {
+						return normalizePickerPath(candidate.uri);
+					}
+				}
+				return null;
+			};
+
+			return resolve(selected);
+		},
+		[normalizePickerPath],
+	);
 
 	const importApp = useCallback(async (path: string) => {
 		if (path.toLowerCase().endsWith(".enc.flow-app")) {
@@ -115,7 +126,7 @@ export default function DesktopLibraryPage() {
 			return;
 		}
 		await importApp(path);
-	}, [importApp, isMobileDevice]);
+	}, [importApp, isMobileDevice, resolveSelectedPath]);
 
 	useEffect(() => {
 		const unlistenPromise = listen<{ path: string }>(
@@ -178,6 +189,7 @@ export default function DesktopLibraryPage() {
 			onAppClick={handleAppClick}
 			extraToolbarActions={importButton}
 			extraMobileActions={[mobileImportButton]}
+			isAuthenticated={auth.isAuthenticated}
 			renderExtras={({ refetchApps }) => (
 				<ImportEncryptedDialog
 					open={importDialogOpen}

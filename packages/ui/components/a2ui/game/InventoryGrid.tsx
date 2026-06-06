@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "../../../lib/utils";
-import { useActions } from "../ActionHandler";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -20,10 +20,11 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 export function A2UIInventoryGrid({
 	component,
 	style,
+	componentId,
 }: ComponentProps<InventoryGridComponent>) {
 	const { resolve } = useData();
 	const itemsRaw = useResolved<InventoryItemDef[]>(component.items);
-	const { trigger } = useActions();
+	const triggerAction = useComponentActionTrigger(componentId);
 
 	const items = itemsRaw ?? [];
 	const columns = useResolved<number>(component.columns) ?? 4;
@@ -32,13 +33,10 @@ export function A2UIInventoryGrid({
 	const totalSlots = columns * rows;
 
 	const handleItemClick = (item: InventoryItemDef, index: number) => {
-		const action = component.actions?.find((a) => a.name === "onItemClick");
-		if (action) {
-			trigger(action, {
-				itemId: item.id,
-				itemIndex: index,
-			});
-		}
+		void triggerAction(component.actions, {
+			itemId: item.id,
+			itemIndex: index,
+		});
 	};
 
 	return (

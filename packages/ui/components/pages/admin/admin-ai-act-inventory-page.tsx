@@ -252,6 +252,10 @@ interface RegistryItem {
 	vetted: boolean;
 	note?: string | null;
 	updatedAt: string;
+	observed: boolean;
+	registered: boolean;
+	needsRating: boolean;
+	observedCount: number;
 }
 
 interface FlaggedPattern {
@@ -565,11 +569,17 @@ function PageShell({ children }: { children: ReactNode }) {
 export function AdminAiActInventoryPage({
 	initialAppId,
 	initialTab,
+	initialRegistryProvider,
+	initialRegistryModelId,
 	onAppChange,
+	onRegistryModelOpen,
 }: Readonly<{
 	initialAppId?: string | null;
 	initialTab?: string | null;
+	initialRegistryProvider?: string | null;
+	initialRegistryModelId?: string | null;
 	onAppChange?: (appId: string | null) => void;
+	onRegistryModelOpen?: (provider: string, modelId: string) => void;
 }>) {
 	const [selectedAppId, setSelectedAppId] = useState<string | null>(
 		initialAppId ?? null,
@@ -594,6 +604,7 @@ export function AdminAiActInventoryPage({
 					<InventoryDetail
 						appId={selectedAppId}
 						onBack={() => selectApp(null)}
+						onRegistryModelOpen={onRegistryModelOpen}
 					/>
 				</PageShell>
 			</TooltipProvider>
@@ -627,7 +638,10 @@ export function AdminAiActInventoryPage({
 						<InventoryTab onSelectApp={selectApp} />
 					</TabsContent>
 					<TabsContent value="registry" className="mt-4">
-						<RegistryTab />
+						<RegistryTab
+							initialProvider={initialRegistryProvider}
+							initialModelId={initialRegistryModelId}
+						/>
 					</TabsContent>
 				</Tabs>
 			</PageShell>
@@ -1162,9 +1176,11 @@ function InventoryTab({
 function InventoryDetail({
 	appId,
 	onBack,
+	onRegistryModelOpen,
 }: {
 	appId: string;
 	onBack: () => void;
+	onRegistryModelOpen?: (provider: string, modelId: string) => void;
 }) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
@@ -1311,6 +1327,7 @@ function InventoryDetail({
 					<AttachedModels
 						models={data.models}
 						onAcknowledge={(id) => acknowledge.mutate(id)}
+						onRegistryModelOpen={onRegistryModelOpen}
 						acknowledging={acknowledge.isPending}
 					/>
 					<EditAssessmentDialog
@@ -2245,10 +2262,12 @@ function QuestionnaireSummary({ data }: { data: InventoryDetailResponse }) {
 function AttachedModels({
 	models,
 	onAcknowledge,
+	onRegistryModelOpen,
 	acknowledging,
 }: {
 	models: ModelObservationItem[];
 	onAcknowledge: (id: string) => void;
+	onRegistryModelOpen?: (provider: string, modelId: string) => void;
 	acknowledging: boolean;
 }) {
 	const unvetted = models.filter((m) => !m.vetted).length;
@@ -2339,16 +2358,33 @@ function AttachedModels({
 									</div>
 								</TableCell>
 								<TableCell className="text-right">
-									{m.driftFlagged && (
-										<Button
-											variant="ghost"
-											size="sm"
-											disabled={acknowledging}
-											onClick={() => onAcknowledge(m.id)}
-										>
-											Acknowledge
-										</Button>
-									)}
+									<div className="flex justify-end gap-2">
+										{!m.dynamicSelector && (
+											<Button
+												variant={m.vetted ? "ghost" : "outline"}
+												size="sm"
+												disabled={!onRegistryModelOpen}
+												onClick={() =>
+													onRegistryModelOpen?.(
+														m.provider?.trim() || "unknown",
+														m.modelId,
+													)
+												}
+											>
+												{m.vetted ? "Registry" : "Rate"}
+											</Button>
+										)}
+										{m.driftFlagged && (
+											<Button
+												variant="ghost"
+												size="sm"
+												disabled={acknowledging}
+												onClick={() => onAcknowledge(m.id)}
+											>
+												Acknowledge
+											</Button>
+										)}
+									</div>
 								</TableCell>
 							</TableRow>
 						))}
@@ -2381,7 +2417,13 @@ const REGISTRY_TOGGLES = [
 	["vetted", "Vetted", "Reviewed and approved for use on the platform."],
 ] as const;
 
-function RegistryTab() {
+function RegistryTab({
+	initialProvider,
+	initialModelId,
+}: {
+	initialProvider?: string | null;
+	initialModelId?: string | null;
+}) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
 	const profile = useInvoke(
@@ -2391,10 +2433,15 @@ function RegistryTab() {
 	);
 
 	const [form, setForm] = useState({ ...EMPTY_REGISTRY_FORM });
-	const isEditing = useMemo(
-		() => form.provider.trim() !== "" && form.modelId.trim() !== "",
-		[form.provider, form.modelId],
-	);
+
+	useEffect(() => {
+		if (!initialProvider || !initialModelId) return;
+		setForm((current) => ({
+			...current,
+			provider: initialProvider,
+			modelId: initialModelId,
+		}));
+	}, [initialProvider, initialModelId]);
 
 	const models = useQuery<RegistryItem[]>({
 		queryKey: ["admin", "ai-act", "registry"],
@@ -2408,6 +2455,26 @@ function RegistryTab() {
 		enabled: !!profile.data,
 	});
 
+	const selectedModel = useMemo(() => {
+		const provider = form.provider.trim();
+		const modelId = form.modelId.trim();
+		if (!provider || !modelId) return undefined;
+		return models.data?.find(
+			(item) => item.provider === provider && item.modelId === modelId,
+		);
+	}, [form.provider, form.modelId, models.data]);
+
+	const formTitle = selectedModel?.registered
+		? "Update model"
+		: selectedModel?.observed
+			? "Rate observed model"
+			: "Add model";
+	const submitLabel = selectedModel?.registered
+		? "Save changes"
+		: selectedModel?.observed
+			? "Save rating"
+			: "Add model";
+
 	const upsert = useMutation({
 		mutationFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
@@ -2416,6 +2483,9 @@ function RegistryTab() {
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({
 				queryKey: ["admin", "ai-act", "registry"],
+			});
+			await queryClient.invalidateQueries({
+				queryKey: ["admin", "ai-act", "inventory"],
 			});
 			setForm({ ...EMPTY_REGISTRY_FORM });
 			toast.success("Registry entry saved.");
@@ -2452,7 +2522,7 @@ function RegistryTab() {
 				<CardHeader>
 					<CardTitle className="text-sm flex items-center gap-2">
 						<Plus className="h-4 w-4" />
-						{isEditing ? "Update model" : "Add model"}
+						{formTitle}
 					</CardTitle>
 				</CardHeader>
 				<CardContent className="space-y-4">
@@ -2544,7 +2614,7 @@ function RegistryTab() {
 							}
 							onClick={() => upsert.mutate()}
 						>
-							{isEditing ? "Save changes" : "Add model"}
+							{submitLabel}
 						</Button>
 					</div>
 				</CardContent>
@@ -2578,14 +2648,36 @@ function RegistryTab() {
 										colSpan={6}
 										className="py-8 text-center text-sm text-muted-foreground"
 									>
-										The registry is empty. Add models to set their GPAI posture.
+										No registered or observed models yet. Run reconcile from an
+										app inventory detail to scan its boards.
 									</TableCell>
 								</TableRow>
 							)}
 							{models.data?.map((item) => (
 								<TableRow key={item.id}>
 									<TableCell className="font-medium">{item.provider}</TableCell>
-									<TableCell>{item.modelId}</TableCell>
+									<TableCell>
+										<div className="space-y-1">
+											<div>{item.modelId}</div>
+											<div className="flex flex-wrap gap-1">
+												{item.needsRating && (
+													<Badge variant="outline" className="text-amber-600">
+														Needs rating
+													</Badge>
+												)}
+												{item.observed && (
+													<Badge variant="outline">
+														{item.observedCount > 1
+															? `${item.observedCount} observations`
+															: "Observed"}
+													</Badge>
+												)}
+												{!item.registered && (
+													<Badge variant="secondary">Unregistered</Badge>
+												)}
+											</div>
+										</div>
+									</TableCell>
 									<TableCell>
 										<Badge variant="secondary">
 											{POSTURE_LABEL[item.posture] ?? item.posture}
@@ -2607,7 +2699,7 @@ function RegistryTab() {
 											size="sm"
 											onClick={() => editEntry(item)}
 										>
-											Edit
+											{item.needsRating ? "Rate" : "Edit"}
 										</Button>
 									</TableCell>
 								</TableRow>

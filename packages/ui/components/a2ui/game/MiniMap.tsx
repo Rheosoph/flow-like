@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "../../../lib/utils";
-import { useActions } from "../ActionHandler";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -16,6 +16,7 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 export function A2UIMiniMap({
 	component,
 	style,
+	componentId,
 }: ComponentProps<MiniMapComponent>) {
 	const mapImage = useResolved<string>(component.mapImage);
 	const width = useResolved<string>(component.width) ?? "200px";
@@ -24,17 +25,14 @@ export function A2UIMiniMap({
 	const playerX = useResolved<number>(component.playerX);
 	const playerY = useResolved<number>(component.playerY);
 	const playerRotation = useResolved<number>(component.playerRotation) ?? 0;
-	const { trigger } = useActions();
+	const triggerAction = useComponentActionTrigger(componentId);
 
 	const handleMarkerClick = (marker: MapMarkerDef) => {
-		const action = component.actions?.find((a) => a.name === "onMarkerClick");
-		if (action) {
-			trigger(action, {
-				markerId: marker.id,
-				markerX: marker.x,
-				markerY: marker.y,
-			});
-		}
+		void triggerAction(component.actions, {
+			markerId: marker.id,
+			markerX: marker.x,
+			markerY: marker.y,
+		});
 	};
 
 	return (

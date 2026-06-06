@@ -225,13 +225,35 @@ const preserveSecretValues = (
 	return remoteBoard;
 };
 
+const comparableNodeWithoutRuntimeHash = (
+	node: INode,
+	localNode?: INode,
+): INode => {
+	const comparable = structuredClone(node);
+	comparable.hash = undefined;
+
+	if (comparable.wasm == null && localNode?.wasm != null) {
+		comparable.wasm = structuredClone(localNode.wasm);
+	}
+
+	return comparable;
+};
+
 const preserveNodeRuntimeFields = (
 	remoteNode: INode,
 	localNode?: INode,
 ): INode => {
 	if (!localNode) return remoteNode;
 
-	if (remoteNode.hash == null && localNode.hash != null) {
+	const nodesMatchIgnoringRuntimeHash = isEqual(
+		comparableNodeWithoutRuntimeHash(remoteNode, localNode),
+		comparableNodeWithoutRuntimeHash(localNode),
+	);
+
+	if (
+		localNode.hash != null &&
+		(remoteNode.hash == null || nodesMatchIgnoringRuntimeHash)
+	) {
 		remoteNode.hash = localNode.hash;
 	}
 

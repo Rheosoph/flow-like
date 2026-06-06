@@ -197,6 +197,7 @@ export function A2UIFeedback({
 		useResolved<boolean>(component.includePageHash) ?? false;
 	const successMessage =
 		useResolved<string>(component.successMessage) ?? "Thanks for the feedback.";
+	const configuredAction = component.actions?.[0];
 	const feedbackStoragePageId = useMemo(
 		() => getPageContextStorageId(pathname, search),
 		[pathname, search],
@@ -258,22 +259,24 @@ export function A2UIFeedback({
 		const previousRating = selectedRating;
 		setSelectedRating(rating);
 		try {
+			const feedbackContext = {
+				rating,
+				feedbackId,
+				comment: nextComment,
+				includeState,
+				pageContextMode,
+				pageContextQueryParamAllowlist,
+				pageContextQueryParamDenylist,
+				includePageHash,
+				successMessage,
+			};
 			await executeAction(
-				{
+				configuredAction ?? {
 					name: "submit_feedback",
-					context: {
-						rating,
-						feedbackId,
-						comment: nextComment,
-						includeState,
-						pageContextMode,
-						pageContextQueryParamAllowlist,
-						pageContextQueryParamDenylist,
-						includePageHash,
-						successMessage,
-					},
+					context: feedbackContext,
 				},
 				componentId,
+				configuredAction ? feedbackContext : {},
 			);
 
 			if (!appId || !eventId || !isPreviewMode) return true;

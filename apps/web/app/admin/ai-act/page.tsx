@@ -20,11 +20,25 @@ function AiActPage() {
 		[router, tab],
 	);
 
+	const handleRegistryModelOpen = useCallback(
+		(provider: string, modelId: string) => {
+			const next = new URLSearchParams();
+			next.set("tab", "registry");
+			next.set("provider", provider);
+			next.set("modelId", modelId);
+			router.replace(`/admin/ai-act?${next.toString()}`);
+		},
+		[router],
+	);
+
 	return (
 		<AdminAiActInventoryPage
 			initialAppId={params.get("id")}
 			initialTab={tab}
+			initialRegistryProvider={params.get("provider")}
+			initialRegistryModelId={params.get("modelId")}
 			onAppChange={handleAppChange}
+			onRegistryModelOpen={handleRegistryModelOpen}
 		/>
 	);
 }

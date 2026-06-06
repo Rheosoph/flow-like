@@ -10,6 +10,7 @@ import {
 	IVariableType,
 } from "../../../lib/schema/flow/pin";
 import useFlowControlState from "../../../state/flow-control-state";
+import type { FlowSelectorDataRef } from "../flow-selector-data";
 import { BitVariable } from "./variable-types/bit-select";
 import { BooleanVariable } from "./variable-types/boolean-variable";
 import { VariableDescription } from "./variable-types/default-text";
@@ -28,6 +29,8 @@ interface PinEditProps {
 	readonly changeDefaultValue: (value: any) => void;
 	readonly saveDefaultValue: (value: any) => Promise<void>;
 	readonly currentLayerId?: string;
+	readonly selectorDataRef?: FlowSelectorDataRef;
+	readonly selectorDataVersion?: number;
 }
 
 export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
@@ -39,6 +42,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	changeDefaultValue,
 	saveDefaultValue,
 	currentLayerId,
+	selectorDataRef,
 }: PinEditProps) {
 	const [cachedDefaultValue, setCachedDefaultValue] = useState(defaultValue);
 
@@ -104,6 +108,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				pin={pin}
 				value={cachedDefaultValue}
 				setValue={updateDefaultValue}
+				selectorDataRef={selectorDataRef}
 			/>
 		);
 	}
@@ -149,8 +154,8 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 			<ElementSelect
 				pin={pin}
 				value={cachedDefaultValue}
-				appId={appId}
 				setValue={updateDefaultValue}
+				selectorDataRef={selectorDataRef}
 			/>
 		);
 	}

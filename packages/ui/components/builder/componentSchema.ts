@@ -332,6 +332,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		boxes: { type: "boundValue" },
 		editable: { type: "boundValue" },
 		showLabels: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 
 	// Interactive
@@ -379,6 +380,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		includePageHash: { type: "boundValue" },
 		successMessage: { type: "boundValue" },
 		disabled: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 	appLink: {
 		type: { type: "string", required: true },
@@ -486,6 +488,20 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		showPreview: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
+	voiceInput: {
+		type: { type: "string", required: true },
+		value: { type: "boundValue" },
+		label: { type: "boundValue" },
+		helperText: { type: "boundValue" },
+		maxDuration: { type: "boundValue" },
+		autoStop: { type: "boundValue" },
+		silenceThreshold: { type: "boundValue" },
+		silenceDuration: { type: "boundValue" },
+		disabled: { type: "boundValue" },
+		error: { type: "boundValue" },
+		visualizer: { type: "boundValue", enum: ["waveform", "bars"] },
+		actions: { type: "actions" },
+	},
 	link: {
 		type: { type: "string", required: true },
 		label: { type: "boundValue", required: true },
@@ -546,6 +562,8 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		items: { type: "any" },
 		multiple: { type: "boundValue" },
 		collapsible: { type: "boundValue" },
+		defaultExpanded: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 	drawer: {
 		type: { type: "string", required: true },
@@ -568,10 +586,12 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	popover: {
 		type: { type: "string", required: true },
 		open: { type: "boundValue" },
+		contentComponentId: { type: "string" },
 		side: { type: "boundValue", enum: ["top", "right", "bottom", "left"] },
 		trigger: { type: "boundValue", enum: ["click", "hover"] },
 		closeOnClickOutside: { type: "boundValue" },
 		children: { type: "children" },
+		actions: { type: "actions" },
 	},
 
 	// Game
@@ -744,9 +764,11 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		mapImage: { type: "boundValue" },
 		width: { type: "boundValue" },
 		height: { type: "boundValue" },
+		markers: { type: "boundValue" },
 		playerX: { type: "boundValue" },
 		playerY: { type: "boundValue" },
 		playerRotation: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 	geoMap: {
 		type: { type: "string", required: true },
@@ -766,6 +788,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		clusterMarkers: { type: "boundValue" },
 		clusterRadius: { type: "boundValue" },
 		clusterMaxZoom: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 };
 

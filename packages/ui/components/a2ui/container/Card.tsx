@@ -10,6 +10,7 @@ import {
 	CardTitle,
 	Card as ShadCard,
 } from "../../ui/card";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -25,9 +26,11 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 export function A2UICard({
 	component,
 	style,
+	componentId,
 	renderChild,
 }: ComponentProps<CardComponent>) {
 	const { resolve } = useData();
+	const triggerAction = useComponentActionTrigger(componentId);
 	const title = useResolved<string>(component.title);
 	const description = useResolved<string>(component.description);
 	const footer = useResolved<string>(component.footer);
@@ -44,6 +47,13 @@ export function A2UICard({
 				clickable && "cursor-pointer",
 			)}
 			style={resolveInlineStyle(style)}
+			onClick={
+				clickable
+					? () => {
+							void triggerAction(component.actions);
+						}
+					: undefined
+			}
 		>
 			{(title || description) && (
 				<CardHeader>

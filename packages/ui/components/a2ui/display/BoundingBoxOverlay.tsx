@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
+import { useExecuteAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -28,10 +29,9 @@ const DEFAULT_COLORS = [
 export function A2UIBoundingBoxOverlay({
 	component,
 	style,
-	onAction,
-	surfaceId,
 	componentId,
 }: ComponentProps<BoundingBoxOverlayComponent>) {
+	const { executeAction } = useExecuteAction();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
@@ -134,22 +134,13 @@ export function A2UIBoundingBoxOverlay({
 
 	const handleBoxClick = useCallback(
 		(box: NormalizedBox) => {
-			if (!interactive || !onAction || !component.actions?.length) return;
-			const clickAction = component.actions.find(
-				(a) => a.name === "onBoxClick" || a.name === "onClick",
-			);
-			if (clickAction) {
-				onAction({
-					type: "userAction",
-					name: clickAction.name,
-					surfaceId,
-					sourceComponentId: componentId,
-					timestamp: Date.now(),
-					context: { box, ...clickAction.context },
-				});
+			if (!interactive) return;
+			const action = component.actions?.[0];
+			if (action) {
+				void executeAction(action, componentId, { box });
 			}
 		},
-		[interactive, onAction, component.actions, surfaceId, componentId],
+		[component.actions, componentId, executeAction, interactive],
 	);
 
 	const fitClass =

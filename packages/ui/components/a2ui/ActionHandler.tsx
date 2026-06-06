@@ -29,6 +29,34 @@ import type {
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
 
+const COMPACT_PAYLOAD_OMIT_KEYS = new Set(["dataUrl"]);
+
+export function compactWorkflowPayload(value: unknown): unknown {
+	if (value === null || value === undefined) return undefined;
+
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => compactWorkflowPayload(item))
+			.filter((item) => item !== undefined);
+	}
+
+	if (typeof value === "object") {
+		const compacted: Record<string, unknown> = {};
+		for (const [key, childValue] of Object.entries(
+			value as Record<string, unknown>,
+		)) {
+			if (COMPACT_PAYLOAD_OMIT_KEYS.has(key)) continue;
+			const nextValue = compactWorkflowPayload(childValue);
+			if (nextValue !== undefined) {
+				compacted[key] = nextValue;
+			}
+		}
+		return compacted;
+	}
+
+	return value;
+}
+
 function toBoundValue(value: unknown): Record<string, unknown> {
 	if (typeof value === "boolean") return { literalBool: value };
 	if (typeof value === "number") return { literalNumber: value };
@@ -304,7 +332,10 @@ export function ActionProvider({
 			// Store element values on change actions
 			if (message.name === "change" && message.sourceComponentId) {
 				const elementId = `${message.surfaceId}/${message.sourceComponentId}`;
-				const value = message.context?.value ?? message.context?.checked;
+				const context = message.context ?? {};
+				const value = Object.prototype.hasOwnProperty.call(context, "value")
+					? context.value
+					: context.checked;
 
 				console.log("[ActionHandler] Storing element value:", {
 					elementId,
@@ -706,6 +737,19 @@ export function useActions() {
 	return { trigger, isPreviewMode };
 }
 
+export function useComponentActionTrigger(componentId: string | undefined) {
+	const { executeAction } = useExecuteAction();
+
+	return useCallback(
+		(actions: Action[] | undefined, context: Record<string, unknown> = {}) => {
+			const action = actions?.[0];
+			if (!action) return Promise.resolve();
+			return executeAction(action, componentId, context);
+		},
+		[componentId, executeAction],
+	);
+}
+
 export function useExecuteAction() {
 	const router = useRouter();
 	const pathname = usePathname();
@@ -899,11 +943,16 @@ export function useExecuteAction() {
 	);
 
 	const executeAction = useCallback(
-		async (action: Action | undefined, triggeringComponentId?: string) => {
+		async (
+			action: Action | undefined,
+			triggeringComponentId?: string,
+			additionalContext: Record<string, unknown> = {},
+		) => {
 			// Only execute actions in preview mode
 			if (!isPreviewMode || !action) return;
 
-			const { name, context } = action;
+			const { name } = action;
+			const context = { ...(action.context ?? {}), ...additionalContext };
 
 			console.log("[ActionHandler] executeAction:", {
 				name,
@@ -1231,11 +1280,13 @@ export function useExecuteAction() {
 									});
 								}
 
-								const payload = {
+								const payload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
 										_input_values: inputValues,
+										_action_context: context,
+										_triggering_component_id: triggeringComponentId ?? "",
 										_route:
 											typeof window !== "undefined"
 												? window.location.pathname
@@ -1246,6 +1297,10 @@ export function useExecuteAction() {
 										_page_state: pageState || {},
 									},
 									version: boardVersion,
+								}) as {
+									id: string;
+									payload: Record<string, unknown>;
+									version?: [number, number, number];
 								};
 
 								// Use execution service if available (checks runtime variables)
@@ -1369,7 +1424,7 @@ export function useExecuteAction() {
 									}
 								}
 
-								const payload = {
+								const payload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
@@ -1378,7 +1433,7 @@ export function useExecuteAction() {
 										_action_id: actionId,
 										_action_context: context,
 									},
-								};
+								}) as { id: string; payload: Record<string, unknown> };
 
 								const execFn =
 									executionService?.executeBoard ??

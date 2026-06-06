@@ -7,6 +7,7 @@ import {
 	TabsList,
 	TabsTrigger,
 } from "../../ui/tabs";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -27,6 +28,7 @@ export function A2UITabs({
 	renderChild,
 }: ComponentProps<TabsComponent>) {
 	const { resolve, setByPath } = useData();
+	const triggerAction = useComponentActionTrigger(componentId);
 	const activeTab = useResolved<string>(component.value);
 
 	const handleChange = (newValue: string) => {
@@ -43,6 +45,7 @@ export function A2UITabs({
 				context: { value: newValue },
 			});
 		}
+		void triggerAction(component.actions, { value: newValue });
 	};
 
 	const defaultValue = activeTab ?? component.tabs?.[0]?.id ?? "";

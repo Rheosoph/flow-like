@@ -2,7 +2,7 @@
 
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
-import { useActions } from "../ActionHandler";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -21,23 +21,21 @@ function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 export function A2UIChoiceMenu({
 	component,
 	style,
+	componentId,
 }: ComponentProps<ChoiceMenuComponent>) {
 	const { resolve } = useData();
 	const choicesRaw = useResolved<ChoiceComponent[]>(component.choices);
 	const title = useResolved<string>(component.title);
 	const layout = useResolved<string>(component.layout) ?? "vertical";
-	const { trigger } = useActions();
+	const triggerAction = useComponentActionTrigger(componentId);
 
 	const choices = choicesRaw ?? [];
 
 	const handleChoiceClick = (choice: ChoiceComponent, index: number) => {
-		const action = component.actions?.find((a) => a.name === "onSelect");
-		if (action) {
-			trigger(action, {
-				choiceId: choice.id,
-				choiceIndex: index,
-			});
-		}
+		void triggerAction(component.actions, {
+			choiceId: choice.id,
+			choiceIndex: index,
+		});
 	};
 
 	const layoutClasses: Record<string, string> = {

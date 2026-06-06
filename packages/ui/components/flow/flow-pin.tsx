@@ -11,6 +11,7 @@ import { type IPin, IPinType, IValueType } from "../../lib/schema/flow/pin";
 import { useBackendStore } from "../../state/backend-state";
 import { useUndoRedo } from "./flow-history";
 import { PinEdit } from "./flow-pin/pin-edit";
+import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { typeToColor } from "./utils";
 
 /** A Handle that shows a small inner dot while keeping a larger hitbox. */
@@ -87,6 +88,8 @@ function FlowPinInnerComponent({
 	onPinRemove,
 	version,
 	currentLayerId,
+	selectorDataRef,
+	selectorDataVersion,
 }: Readonly<{
 	pin: IPin;
 	boardId: string;
@@ -96,6 +99,8 @@ function FlowPinInnerComponent({
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
 	currentLayerId?: string;
+	selectorDataRef?: FlowSelectorDataRef;
+	selectorDataVersion?: number;
 }>) {
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
@@ -303,6 +308,8 @@ function FlowPinInnerComponent({
 							await updateNode(value);
 						}}
 						currentLayerId={currentLayerId}
+						selectorDataRef={selectorDataRef}
+						selectorDataVersion={selectorDataVersion}
 					/>
 					{pin.dynamic && onPinRemove && (
 						<button
@@ -349,6 +356,14 @@ function pinPropsAreEqual(prevProps: any, nextProps: any) {
 		return false;
 	}
 
+	if (prevProps.selectorDataRef !== nextProps.selectorDataRef) {
+		return false;
+	}
+
+	if (prevProps.selectorDataVersion !== nextProps.selectorDataVersion) {
+		return false;
+	}
+
 	// Compare connection state (connected_to / depends_on) by length + contents
 	const prevConn = prevProps.pin.connected_to;
 	const nextConn = nextProps.pin.connected_to;
@@ -378,6 +393,8 @@ function FlowPin({
 	skipOffset,
 	version,
 	currentLayerId,
+	selectorDataRef,
+	selectorDataVersion,
 }: Readonly<{
 	pin: IPin;
 	boardId: string;
@@ -387,6 +404,8 @@ function FlowPin({
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
 	currentLayerId?: string;
+	selectorDataRef?: FlowSelectorDataRef;
+	selectorDataVersion?: number;
 }>) {
 	if (pin.dynamic) {
 		return (
@@ -400,6 +419,8 @@ function FlowPin({
 				onPinRemove={onPinRemove}
 				version={version}
 				currentLayerId={currentLayerId}
+				selectorDataRef={selectorDataRef}
+				selectorDataVersion={selectorDataVersion}
 			/>
 		);
 	}
@@ -414,6 +435,8 @@ function FlowPin({
 			skipOffset={skipOffset}
 			version={version}
 			currentLayerId={currentLayerId}
+			selectorDataRef={selectorDataRef}
+			selectorDataVersion={selectorDataVersion}
 		/>
 	);
 }

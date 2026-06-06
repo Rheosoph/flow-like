@@ -16,12 +16,15 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMiniSearch } from "react-minisearch";
+import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { formatAppCategory } from "../../lib/app-category";
+import { IBitTypes } from "../../lib/schema/hub/bit-search-query";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
+import { nowSystemTime } from "../../lib/time/now";
 import { useBackend } from "../../state/backend-state";
-import { useSpotlightStore } from "../../state/spotlight-state";
+import { CreateFlowDialog } from "../create-flow-dialog";
 import { Button } from "../ui/button";
 import { EmptyState } from "../ui/empty-state";
 import { Input } from "../ui/input";
@@ -43,6 +46,7 @@ export interface LibraryPageProps {
 	onAppClick?: (appId: string) => void;
 	extraToolbarActions?: React.ReactNode;
 	extraMobileActions?: React.ReactNode[];
+	isAuthenticated?: boolean;
 	renderExtras?: (helpers: {
 		refetchApps: () => Promise<void>;
 	}) => React.ReactNode;
@@ -52,6 +56,7 @@ export function LibraryPage({
 	onAppClick: onAppClickProp,
 	extraToolbarActions,
 	extraMobileActions,
+	isAuthenticated = true,
 	renderExtras,
 }: LibraryPageProps) {
 	const backend = useBackend();
@@ -62,9 +67,15 @@ export function LibraryPage({
 		[],
 	);
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
+	const bits = useInvoke(backend.bitState.searchBits, backend.bitState, [
+		{
+			bit_types: [IBitTypes.Embedding, IBitTypes.ImageEmbedding],
+		},
+	]);
 	const router = useRouter();
 	const [searchQuery, setSearchQuery] = useState("");
 	const [visibilityMode, setVisibilityMode] = useState(false);
+	const [createFlowOpen, setCreateFlowOpen] = useState(false);
 	const [sortMode, setSortMode] = useState<SortMode>(() => {
 		if (typeof window === "undefined") return "recent";
 		const stored = window.localStorage.getItem("library.sortMode");
@@ -90,12 +101,9 @@ export function LibraryPage({
 
 	const appHref = useCallback((appId: string) => `/use?id=${appId}`, []);
 
-	const handleSettingsClick = useCallback(
-		() => {
-			queryClient.invalidateQueries();
-		},
-		[queryClient],
-	);
+	const handleSettingsClick = useCallback(() => {
+		queryClient.invalidateQueries();
+	}, [queryClient]);
 
 	const appSettingsHref = useCallback(
 		(appId: string) => `/library/config?id=${appId}`,
@@ -265,6 +273,75 @@ export function LibraryPage({
 	const refetchApps = useCallback(async () => {
 		await apps.refetch();
 	}, [apps]);
+	const handleOpenCreateFlow = useCallback(() => {
+		setCreateFlowOpen(true);
+	}, []);
+	const handleCreateProject = useCallback(
+		async (projectName: string, isOnline: boolean) => {
+			const meta = {
+				name: projectName,
+				description: `Coding project: ${projectName}`,
+				tags: ["coding", "development"],
+				use_case: "Development",
+				created_at: nowSystemTime(),
+				updated_at: nowSystemTime(),
+				preview_media: [],
+			};
+
+			const profileBits = new Set(currentProfile.data?.hub_profile.bits ?? []);
+			const allBits = bits.data?.filter((bit) => profileBits.has(bit.id)) ?? [];
+
+			const app = await backend.appState.createApp(
+				meta,
+				allBits.map((bit) => bit.id),
+				isOnline,
+			);
+
+			if (currentProfile.data) {
+				await backend.userState.updateProfileApp(
+					currentProfile.data,
+					{
+						app_id: app.id,
+						favorite: false,
+						pinned: false,
+					},
+					"Upsert",
+				);
+			}
+
+			const boards = await backend.boardState.getBoards(app.id);
+			const firstBoard = boards?.[0];
+
+			queryClient.invalidateQueries();
+			await Promise.all([apps.refetch(), currentProfile.refetch()]);
+
+			if (firstBoard) {
+				router.push(`/flow?id=${firstBoard.id}&app=${app.id}`);
+			} else {
+				router.push(`/library/config?id=${app.id}`);
+			}
+		},
+		[
+			apps,
+			backend.appState,
+			backend.boardState,
+			backend.userState,
+			bits.data,
+			currentProfile,
+			queryClient,
+			router,
+		],
+	);
+	const createFlowDialog = (
+		<CreateFlowDialog
+			open={createFlowOpen}
+			onOpenChange={setCreateFlowOpen}
+			onCreateProject={handleCreateProject}
+			isAuthenticated={isAuthenticated}
+			defaultOnline={isAuthenticated}
+			toast={toast}
+		/>
+	);
 
 	if (isLoading) {
 		return (
@@ -291,10 +368,7 @@ export function LibraryPage({
 						action={[
 							{
 								label: "Create Your First App",
-								onClick: () => {
-									useSpotlightStore.getState().open();
-									useSpotlightStore.getState().setMode("quick-create");
-								},
+								onClick: handleOpenCreateFlow,
 							},
 						]}
 						icons={[Sparkles, LayoutGridIcon, FilesIcon]}
@@ -318,6 +392,7 @@ export function LibraryPage({
 				</div>
 
 				{renderExtras?.({ refetchApps })}
+				{createFlowDialog}
 			</main>
 		);
 	}
@@ -394,15 +469,12 @@ export function LibraryPage({
 									variant="ghost"
 									size="icon"
 									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-									onClick={() => {
-										useSpotlightStore.getState().open();
-										useSpotlightStore.getState().setMode("quick-create");
-									}}
+									onClick={handleOpenCreateFlow}
 								>
 									<Plus className="h-4 w-4" />
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent>Create a new app</TooltipContent>
+							<TooltipContent>Create Flow</TooltipContent>
 						</Tooltip>
 
 						<Tooltip>
@@ -529,6 +601,7 @@ export function LibraryPage({
 					</div>
 				)}
 			</div>
+			{createFlowDialog}
 		</main>
 	);
 }
