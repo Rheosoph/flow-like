@@ -110,6 +110,7 @@ pub struct ReadBarcodeOptions {
     #[serde(default)]
     pub pure_barcode: bool,
     #[serde(default = "default_preprocess")]
+    #[schemars(schema_with = "barcode_preprocess_schema")]
     pub preprocess: String,
     #[serde(default)]
     pub validation: BarcodeValidationOptions,
@@ -240,7 +241,14 @@ fn default_also_inverted() -> bool {
 }
 
 fn default_preprocess() -> String {
-    "Fallback".to_string()
+    "Aggressive".to_string()
+}
+
+fn barcode_preprocess_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": ["None", "Fallback", "Aggressive", "Industrial"]
+    })
 }
 
 fn default_local_contrast_tile_size() -> u32 {
@@ -367,6 +375,26 @@ fn parse_barcode_format(format: &str) -> flow_like_types::Result<BarcodeFormat> 
     Ok(barcode_format)
 }
 
+fn readable_barcode_formats() -> Vec<BarcodeFormat> {
+    READABLE_BARCODE_FORMATS
+        .iter()
+        .map(|format| BarcodeFormat::from(*format))
+        .filter(|format| *format != BarcodeFormat::UNSUPORTED_FORMAT)
+        .collect()
+}
+
+fn push_unique_format(formats: &mut Vec<BarcodeFormat>, format: BarcodeFormat) {
+    if !formats.contains(&format) {
+        formats.push(format);
+    }
+}
+
+fn hints_for_format(hints: &DecodeHints, format: BarcodeFormat) -> DecodeHints {
+    let mut hints = hints.clone();
+    hints.PossibleFormats = Some(HashSet::from([format]));
+    hints
+}
+
 fn parse_preprocess_mode(mode: &str) -> flow_like_types::Result<PreprocessMode> {
     match mode.trim().to_lowercase().as_str() {
         "none" => Ok(PreprocessMode::None),
@@ -464,6 +492,7 @@ fn decode_barcodes_in_luma(
     width: u32,
     height: u32,
     hints: &DecodeHints,
+    scan_formats: &[BarcodeFormat],
     preprocess_mode: PreprocessMode,
     polarity: BarcodePolarity,
     rotations: &[DecodeRotation],
@@ -483,6 +512,11 @@ fn decode_barcodes_in_luma(
     let mut first_error = None;
     let max_decode_attempts = preprocessing.max_decode_attempts.max(1);
     let mut decode_attempts = 0usize;
+    let scan_formats = if scan_formats.is_empty() {
+        readable_barcode_formats()
+    } else {
+        scan_formats.to_vec()
+    };
 
     for variant in variants {
         let mut scanner_attempts = 1;
@@ -496,31 +530,43 @@ fn decode_barcodes_in_luma(
             }
             decode_attempts += 1;
 
-            let decoded = if scanner_attempt == 0 {
-                decode_multiple_in_luma(&variant.luma, variant.width, variant.height, hints)
-            } else {
-                decode_multiple_in_luma_by_quadrant(
-                    &variant.luma,
-                    variant.width,
-                    variant.height,
-                    hints,
-                )
-            };
+            let mut found_in_attempt = false;
+            for format in &scan_formats {
+                let format_hints = hints_for_format(hints, *format);
+                let decoded = if scanner_attempt == 0 {
+                    decode_multiple_in_luma(
+                        &variant.luma,
+                        variant.width,
+                        variant.height,
+                        &format_hints,
+                    )
+                } else {
+                    decode_multiple_in_luma_by_quadrant(
+                        &variant.luma,
+                        variant.width,
+                        variant.height,
+                        &format_hints,
+                    )
+                };
 
-            match decoded {
-                Ok(results) => {
-                    for result in results {
-                        push_unique_barcode(&mut barcodes, Barcode::from_result(result, &variant));
+                match decoded {
+                    Ok(results) => {
+                        for result in results {
+                            let barcode = Barcode::from_result(result, &variant);
+                            let existing_count = barcodes.len();
+                            push_unique_barcode(&mut barcodes, barcode);
+                            found_in_attempt |= barcodes.len() != existing_count;
+                        }
                     }
-
-                    if !is_exhaustive_preprocess(preprocess_mode) {
-                        return Ok(barcodes);
+                    Err(NotFoundException(_)) => {}
+                    Err(e) => {
+                        first_error.get_or_insert_with(|| e.to_string());
                     }
                 }
-                Err(NotFoundException(_)) => {}
-                Err(e) => {
-                    first_error.get_or_insert_with(|| e.to_string());
-                }
+            }
+
+            if found_in_attempt && !is_exhaustive_preprocess(preprocess_mode) {
+                return Ok(barcodes);
             }
         }
     }
@@ -1261,7 +1307,7 @@ impl NodeLogic for ReadBarcodesNode {
             "Read/Decode QR Codes and Barcodes",
             "Image/Content",
         );
-        node.set_version(4);
+        node.set_version(5);
         node.add_icon("/flow/icons/barcode.svg");
 
         // inputs
@@ -1329,7 +1375,7 @@ impl NodeLogic for ReadBarcodesNode {
         };
 
         // detect + decode (bar)codes
-        let mut hints = DecodeHints {
+        let hints = DecodeHints {
             TryHarder: Some(options.try_harder),
             AlsoInverted: Some(match polarity {
                 BarcodePolarity::Auto => options.also_inverted,
@@ -1339,18 +1385,18 @@ impl NodeLogic for ReadBarcodesNode {
             ..DecodeHints::default()
         };
 
-        let mut possible_formats = HashSet::new();
+        let mut scan_formats = Vec::new();
         for format in &options.expected_formats {
-            possible_formats.insert(parse_barcode_format(format)?);
+            push_unique_format(&mut scan_formats, parse_barcode_format(format)?);
         }
 
-        if possible_formats.is_empty() && options.filter {
+        if scan_formats.is_empty() && options.filter {
             let bc_type = parse_barcode_format(&options.format)?;
-            possible_formats.insert(bc_type);
+            push_unique_format(&mut scan_formats, bc_type);
         }
 
-        if !possible_formats.is_empty() {
-            hints.PossibleFormats = Some(possible_formats);
+        if scan_formats.is_empty() {
+            scan_formats = readable_barcode_formats();
         }
 
         let mut results = decode_barcodes_in_luma(
@@ -1358,6 +1404,7 @@ impl NodeLogic for ReadBarcodesNode {
             w,
             h,
             &hints,
+            &scan_formats,
             preprocess_mode,
             polarity,
             &rotations,
@@ -1380,5 +1427,111 @@ impl NodeLogic for ReadBarcodesNode {
         context.set_pin_value("results", json!(results)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::{
+        image::{
+            DynamicImage, GenericImageView, GrayImage, ImageBuffer, Luma,
+            imageops::{FilterType, overlay},
+        },
+        rxing::{EncodeHints, MultiFormatWriter, Writer},
+    };
+
+    fn barcode_image(
+        text: &str,
+        format: BarcodeFormat,
+        scale: u32,
+        target_height: Option<u32>,
+    ) -> DynamicImage {
+        let hints = EncodeHints {
+            Margin: Some("8".to_string()),
+            ..EncodeHints::default()
+        };
+        let bit_matrix = MultiFormatWriter
+            .encode_with_hints(text, &format, 0, 0, &hints)
+            .unwrap();
+        let image: DynamicImage = bit_matrix.into();
+        let (width, height) = image.dimensions();
+        image.resize_exact(
+            width * scale,
+            target_height.unwrap_or(height * scale),
+            FilterType::Nearest,
+        )
+    }
+
+    fn paste_luma(canvas: &mut GrayImage, image: &DynamicImage, x: u32, y: u32) {
+        let luma = image.to_luma8();
+        overlay(canvas, &luma, i64::from(x), i64::from(y));
+    }
+
+    #[test]
+    fn decodes_mixed_formats_independently() {
+        let qr_text = "qr-result";
+        let code_128_text = "CODE128-123456";
+        let qr = barcode_image(qr_text, BarcodeFormat::QR_CODE, 6, None);
+        let code_128 = barcode_image(code_128_text, BarcodeFormat::CODE_128, 3, Some(96));
+        let mut canvas: GrayImage = ImageBuffer::from_pixel(900, 320, Luma([255]));
+        paste_luma(&mut canvas, &qr, 24, 24);
+        paste_luma(&mut canvas, &code_128, 320, 96);
+
+        let hints = DecodeHints {
+            TryHarder: Some(true),
+            AlsoInverted: Some(true),
+            PureBarcode: Some(false),
+            ..DecodeHints::default()
+        };
+        let preprocessing = BarcodePreprocessingOptions {
+            max_decode_attempts: 8,
+            max_variants: 1,
+            contrast_stretch: false,
+            local_contrast: false,
+            denoise: false,
+            otsu_threshold: false,
+            adaptive_threshold: false,
+            morphology: false,
+            upscale_factor: 1,
+            ..BarcodePreprocessingOptions::default()
+        };
+
+        let results = decode_barcodes_in_luma(
+            canvas.into_raw(),
+            900,
+            320,
+            &hints,
+            &[BarcodeFormat::QR_CODE, BarcodeFormat::CODE_128],
+            PreprocessMode::None,
+            BarcodePolarity::Auto,
+            &[DecodeRotation::Deg0],
+            &preprocessing,
+        )
+        .unwrap();
+
+        assert!(
+            results.iter().any(|barcode| barcode.text == qr_text),
+            "expected QR code in {results:?}",
+        );
+        assert!(
+            results.iter().any(|barcode| barcode.text == code_128_text),
+            "expected Code 128 barcode in {results:?}",
+        );
+    }
+
+    #[test]
+    fn read_options_schema_exposes_preprocess_as_string_enum() {
+        let schema = flow_like_types::json::to_value(schemars::schema_for!(ReadBarcodeOptions))
+            .expect("schema should serialize");
+        let preprocess_schema = schema
+            .pointer("/properties/preprocess")
+            .expect("preprocess schema should exist");
+
+        assert_eq!(preprocess_schema.get("type"), Some(&json!("string")));
+        assert_eq!(
+            preprocess_schema.get("enum"),
+            Some(&json!(["None", "Fallback", "Aggressive", "Industrial"]))
+        );
     }
 }

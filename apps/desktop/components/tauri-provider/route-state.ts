@@ -102,29 +102,37 @@ export class RouteState implements IAppRouteState {
 		});
 
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.canSync() || !this.backend.queryClient) {
+		if (isOffline || !this.canSync()) {
 			return local;
 		}
 
-		const promise = injectDataFunction(
-			async () => {
-				const remote = await fetcher<RemoteRouteMapping | null>(
-					this.backend.profile!,
-					`apps/${appId}/routes/by-path?path=${encodeURIComponent(path)}`,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-				return remote ? toRouteMapping(remote) : null;
-			},
-			this,
-			this.backend.queryClient,
-			this.getRouteByPath,
-			[appId, path],
-			[],
-			local,
-		);
+		try {
+			const remote = await fetcher<RemoteRouteMapping | null>(
+				this.backend.profile!,
+				`apps/${appId}/routes/by-path?path=${encodeURIComponent(path)}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			const mapped = remote ? toRouteMapping(remote) : null;
+			this.backend.queryClient?.setQueryData(
+				[this.getRouteByPath.name || "backendFn", appId, path],
+				mapped,
+			);
+			if (mapped) {
+				await invoke("set_app_route", {
+					appId,
+					path: mapped.path,
+					eventId: mapped.eventId,
+				}).catch(() => {});
+			}
+			return mapped;
+		} catch (error) {
+			console.warn(
+				"[RouteSync] Route fetch failed, falling back to local route:",
+				error,
+			);
+		}
 
-		this.backend.backgroundTaskHandler(promise);
 		return local;
 	}
 
@@ -134,29 +142,37 @@ export class RouteState implements IAppRouteState {
 		});
 
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.canSync() || !this.backend.queryClient) {
+		if (isOffline || !this.canSync()) {
 			return local;
 		}
 
-		const promise = injectDataFunction(
-			async () => {
-				const remote = await fetcher<RemoteRouteMapping | null>(
-					this.backend.profile!,
-					`apps/${appId}/routes/default`,
-					{ method: "GET" },
-					this.backend.auth,
-				);
-				return remote ? toRouteMapping(remote) : null;
-			},
-			this,
-			this.backend.queryClient,
-			this.getDefaultRoute,
-			[appId],
-			[],
-			local,
-		);
+		try {
+			const remote = await fetcher<RemoteRouteMapping | null>(
+				this.backend.profile!,
+				`apps/${appId}/routes/default`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			const mapped = remote ? toRouteMapping(remote) : null;
+			this.backend.queryClient?.setQueryData(
+				[this.getDefaultRoute.name || "backendFn", appId],
+				mapped,
+			);
+			if (mapped) {
+				await invoke("set_app_route", {
+					appId,
+					path: mapped.path,
+					eventId: mapped.eventId,
+				}).catch(() => {});
+			}
+			return mapped;
+		} catch (error) {
+			console.warn(
+				"[RouteSync] Default route fetch failed, falling back to local route:",
+				error,
+			);
+		}
 
-		this.backend.backgroundTaskHandler(promise);
 		return local;
 	}
 

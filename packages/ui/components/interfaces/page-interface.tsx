@@ -12,7 +12,6 @@ import {
 	useState,
 } from "react";
 import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
-import { cn } from "../../lib/utils";
 import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
@@ -22,6 +21,7 @@ import {
 	presignPageAssets,
 } from "../../lib/presign-assets";
 import type { IEvent } from "../../lib/schema/flow/event";
+import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
@@ -32,6 +32,7 @@ import {
 	RouteDialogProvider,
 	useRouteDialog,
 } from "../a2ui";
+import { normalizeBoxes, resolveBoxesField } from "../a2ui/bbox-utils";
 import { applyMediaSourceUpdate } from "../a2ui/media-source";
 import { applyStyleUpdate } from "../a2ui/style-updates";
 import type {
@@ -608,6 +609,106 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 							component: {
 								...componentData,
 								...props,
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "setOverlayBoxes":
+					case "setLabelerBoxes": {
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "addOverlayBox":
+					case "addLabelerBox": {
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const existing = resolveBoxesField(componentData.boxes);
+						const added = normalizeBoxes([updateValue.box]);
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								boxes: { literalOptions: [...existing, ...added] },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "clearOverlayBoxes": {
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								boxes: { literalOptions: [] },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "removeLabelerBox": {
+						const boxId = updateValue.boxId as string;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const remaining = resolveBoxesField(componentData.boxes).filter(
+							(box) => box.id !== boxId,
+						);
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								boxes: { literalOptions: remaining },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "updateLabelerBoxLabel": {
+						const boxId = updateValue.boxId as string;
+						const label = updateValue.label as string;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						const updated = resolveBoxesField(componentData.boxes).map((box) =>
+							box.id === boxId ? { ...box, label } : box,
+						);
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								boxes: { literalOptions: updated },
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
+					case "setLabelerImage": {
+						const src = updateValue.src as string;
+						const alt = updateValue.alt as string | undefined;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								src: { literalString: src },
+								...(alt !== undefined ? { alt: { literalString: alt } } : {}),
 							} as unknown as SurfaceComponent["component"],
 						};
 						break;
