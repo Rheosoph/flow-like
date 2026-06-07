@@ -16,9 +16,13 @@ use flow_like_types::{
         multi::{ByQuadrantReader, GenericMultipleBarcodeReader, MultipleBarcodeReader},
     },
 };
+use rayon::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{
+    collections::{HashSet, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+};
 
 const READABLE_BARCODE_FORMATS: &[&str] = &[
     "AZTEC",
@@ -45,6 +49,7 @@ const READABLE_BARCODE_FORMATS: &[&str] = &[
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreprocessMode {
     None,
+    Balanced,
     Fallback,
     Aggressive,
     Industrial,
@@ -70,6 +75,7 @@ struct DecodeVariant {
     luma: Vec<u8>,
     width: u32,
     height: u32,
+    hash: u64,
     point_scale: f32,
     x_offset: u32,
     y_offset: u32,
@@ -98,16 +104,22 @@ pub struct Barcode {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct ReadBarcodeOptions {
     #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub filter: bool,
     #[serde(default = "default_barcode_format")]
+    #[schemars(schema_with = "barcode_format_schema")]
     pub format: String,
     #[serde(default)]
+    #[schemars(schema_with = "barcode_formats_array_schema")]
     pub expected_formats: Vec<String>,
     #[serde(default = "default_try_harder")]
+    #[schemars(schema_with = "bool_false_schema")]
     pub try_harder: bool,
     #[serde(default = "default_also_inverted")]
+    #[schemars(schema_with = "bool_true_schema")]
     pub also_inverted: bool,
     #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub pure_barcode: bool,
     #[serde(default = "default_preprocess")]
     #[schemars(schema_with = "barcode_preprocess_schema")]
@@ -121,46 +133,69 @@ pub struct ReadBarcodeOptions {
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BarcodePreprocessingOptions {
     #[serde(default = "default_polarity")]
+    #[schemars(schema_with = "barcode_polarity_schema")]
     pub polarity: String,
     #[serde(default)]
     pub roi: Option<BarcodeRoi>,
     #[serde(default)]
+    #[schemars(schema_with = "barcode_rotations_schema")]
     pub rotations: Vec<u16>,
     #[serde(default = "default_true")]
+    #[schemars(schema_with = "bool_true_schema")]
     pub contrast_stretch: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub local_contrast: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub denoise: bool,
     #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub sharpen: bool,
     #[serde(default = "default_true")]
+    #[schemars(schema_with = "bool_true_schema")]
     pub otsu_threshold: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub adaptive_threshold: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
+    #[schemars(schema_with = "bool_false_schema")]
     pub morphology: bool,
     #[serde(default = "default_local_contrast_tile_size")]
+    #[schemars(schema_with = "local_contrast_tile_size_schema")]
     pub local_contrast_tile_size: u32,
     #[serde(default = "default_adaptive_threshold_window")]
+    #[schemars(schema_with = "adaptive_threshold_window_schema")]
     pub adaptive_threshold_window: u32,
     #[serde(default = "default_adaptive_threshold_bias")]
+    #[schemars(schema_with = "adaptive_threshold_bias_schema")]
     pub adaptive_threshold_bias: i16,
     #[serde(default = "default_upscale_factor")]
+    #[schemars(schema_with = "upscale_factor_schema")]
     pub upscale_factor: u32,
     #[serde(default = "default_max_upscale_pixels")]
+    #[schemars(schema_with = "max_upscale_pixels_schema")]
     pub max_upscale_pixels: u64,
     #[serde(default = "default_max_preprocess_variants")]
+    #[schemars(schema_with = "max_variants_schema")]
     pub max_variants: usize,
     #[serde(default = "default_max_decode_attempts")]
+    #[schemars(schema_with = "max_decode_attempts_schema")]
     pub max_decode_attempts: usize,
+    #[serde(default = "default_decode_threads")]
+    #[schemars(schema_with = "decode_threads_schema")]
+    pub decode_threads: usize,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BarcodeRoi {
+    #[schemars(schema_with = "roi_offset_schema")]
     pub x: u32,
+    #[schemars(schema_with = "roi_offset_schema")]
     pub y: u32,
+    #[schemars(schema_with = "roi_size_schema")]
     pub width: u32,
+    #[schemars(schema_with = "roi_size_schema")]
     pub height: u32,
 }
 
@@ -203,12 +238,12 @@ impl Default for BarcodePreprocessingOptions {
             roi: None,
             rotations: Vec::new(),
             contrast_stretch: true,
-            local_contrast: true,
-            denoise: true,
+            local_contrast: false,
+            denoise: false,
             sharpen: false,
             otsu_threshold: true,
-            adaptive_threshold: true,
-            morphology: true,
+            adaptive_threshold: false,
+            morphology: false,
             local_contrast_tile_size: default_local_contrast_tile_size(),
             adaptive_threshold_window: default_adaptive_threshold_window(),
             adaptive_threshold_bias: default_adaptive_threshold_bias(),
@@ -216,8 +251,60 @@ impl Default for BarcodePreprocessingOptions {
             max_upscale_pixels: default_max_upscale_pixels(),
             max_variants: default_max_preprocess_variants(),
             max_decode_attempts: default_max_decode_attempts(),
+            decode_threads: default_decode_threads(),
         }
     }
+}
+
+fn effective_preprocessing_options(
+    preprocess_mode: PreprocessMode,
+    preprocessing: &BarcodePreprocessingOptions,
+) -> BarcodePreprocessingOptions {
+    let mut effective = preprocessing.clone();
+
+    match preprocess_mode {
+        PreprocessMode::None => {
+            effective.contrast_stretch = false;
+            effective.local_contrast = false;
+            effective.denoise = false;
+            effective.sharpen = false;
+            effective.otsu_threshold = false;
+            effective.adaptive_threshold = false;
+            effective.morphology = false;
+            effective.upscale_factor = 1;
+            effective.max_variants = effective.max_variants.min(1);
+            effective.max_decode_attempts = effective.max_decode_attempts.min(1);
+        }
+        PreprocessMode::Balanced => {
+            effective.contrast_stretch = true;
+            effective.local_contrast = false;
+            effective.denoise = false;
+            effective.sharpen = false;
+            effective.otsu_threshold = true;
+            effective.adaptive_threshold = false;
+            effective.morphology = false;
+            effective.upscale_factor = effective.upscale_factor.min(1);
+            effective.max_variants = effective.max_variants.min(12);
+            effective.max_decode_attempts = effective.max_decode_attempts.min(24);
+        }
+        PreprocessMode::Fallback => {
+            effective.local_contrast = false;
+            effective.denoise = false;
+            effective.sharpen = false;
+            effective.adaptive_threshold = false;
+            effective.morphology = false;
+            effective.upscale_factor = effective.upscale_factor.min(1);
+            effective.max_variants = effective.max_variants.min(8);
+            effective.max_decode_attempts = effective.max_decode_attempts.min(8);
+        }
+        PreprocessMode::Aggressive => {
+            effective.max_variants = effective.max_variants.min(48);
+            effective.max_decode_attempts = effective.max_decode_attempts.min(96);
+        }
+        PreprocessMode::Industrial => {}
+    }
+
+    effective
 }
 
 fn default_barcode_format() -> String {
@@ -233,7 +320,7 @@ fn default_true() -> bool {
 }
 
 fn default_try_harder() -> bool {
-    true
+    false
 }
 
 fn default_also_inverted() -> bool {
@@ -241,13 +328,155 @@ fn default_also_inverted() -> bool {
 }
 
 fn default_preprocess() -> String {
-    "Aggressive".to_string()
+    "Balanced".to_string()
 }
 
 fn barcode_preprocess_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type": "string",
-        "enum": ["None", "Fallback", "Aggressive", "Industrial"]
+        "enum": ["None", "Balanced", "Fallback", "Aggressive", "Industrial"],
+        "default": "Balanced"
+    })
+}
+
+fn barcode_format_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": ["AZTEC", "CODABAR", "CODE_39", "CODE_93", "CODE_128", "DATA_MATRIX", "EAN_8", "EAN_13", "ITF", "MAXICODE", "PDF_417", "QR_CODE", "MICRO_QR_CODE", "RECTANGULAR_MICRO_QR_CODE", "RSS_14", "RSS_EXPANDED", "TELEPEN", "UPC_A", "UPC_E"],
+        "default": "QR_CODE"
+    })
+}
+
+fn barcode_formats_array_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "items": {
+            "type": "string",
+            "enum": ["AZTEC", "CODABAR", "CODE_39", "CODE_93", "CODE_128", "DATA_MATRIX", "EAN_8", "EAN_13", "ITF", "MAXICODE", "PDF_417", "QR_CODE", "MICRO_QR_CODE", "RECTANGULAR_MICRO_QR_CODE", "RSS_14", "RSS_EXPANDED", "TELEPEN", "UPC_A", "UPC_E"]
+        },
+        "uniqueItems": true,
+        "default": []
+    })
+}
+
+fn barcode_polarity_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "string",
+        "enum": ["Auto", "DarkOnLight", "LightOnDark"],
+        "default": "Auto"
+    })
+}
+
+fn barcode_rotations_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "items": {
+            "type": "integer",
+            "enum": [0, 90, 180, 270]
+        },
+        "uniqueItems": true,
+        "default": []
+    })
+}
+
+fn bool_true_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "boolean",
+        "default": true
+    })
+}
+
+fn bool_false_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "boolean",
+        "default": false
+    })
+}
+
+fn local_contrast_tile_size_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 8,
+        "maximum": 1024,
+        "default": 64
+    })
+}
+
+fn adaptive_threshold_window_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 3,
+        "maximum": 255,
+        "default": 31
+    })
+}
+
+fn adaptive_threshold_bias_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": -255,
+        "maximum": 255,
+        "default": 5
+    })
+}
+
+fn upscale_factor_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 4,
+        "default": 1
+    })
+}
+
+fn max_upscale_pixels_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 1000000,
+        "maximum": 100000000,
+        "default": 16000000
+    })
+}
+
+fn max_variants_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 128,
+        "default": 12
+    })
+}
+
+fn max_decode_attempts_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 256,
+        "default": 24
+    })
+}
+
+fn decode_threads_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 32,
+        "default": 4
+    })
+}
+
+fn roi_offset_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 0,
+        "default": 0
+    })
+}
+
+fn roi_size_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "integer",
+        "minimum": 1
     })
 }
 
@@ -264,7 +493,7 @@ fn default_adaptive_threshold_bias() -> i16 {
 }
 
 fn default_upscale_factor() -> u32 {
-    2
+    1
 }
 
 fn default_max_upscale_pixels() -> u64 {
@@ -272,11 +501,23 @@ fn default_max_upscale_pixels() -> u64 {
 }
 
 fn default_max_preprocess_variants() -> usize {
-    128
+    12
 }
 
 fn default_max_decode_attempts() -> usize {
-    256
+    24
+}
+
+fn default_decode_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|threads| threads.get().min(4))
+        .unwrap_or(4)
+}
+
+fn hash_luma(luma: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    luma.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Barcode {
@@ -305,6 +546,7 @@ impl From<RXingResult> for Barcode {
             luma: Vec::new(),
             width: 0,
             height: 0,
+            hash: 0,
             point_scale: 1.0,
             x_offset: 0,
             y_offset: 0,
@@ -318,10 +560,12 @@ impl From<RXingResult> for Barcode {
 
 impl DecodeVariant {
     fn with_luma(&self, luma: Vec<u8>, width: u32, height: u32, point_scale: f32) -> Self {
+        let hash = hash_luma(&luma);
         Self {
             luma,
             width,
             height,
+            hash,
             point_scale,
             x_offset: self.x_offset,
             y_offset: self.y_offset,
@@ -389,15 +633,16 @@ fn push_unique_format(formats: &mut Vec<BarcodeFormat>, format: BarcodeFormat) {
     }
 }
 
-fn hints_for_format(hints: &DecodeHints, format: BarcodeFormat) -> DecodeHints {
+fn hints_for_formats(hints: &DecodeHints, formats: &[BarcodeFormat]) -> DecodeHints {
     let mut hints = hints.clone();
-    hints.PossibleFormats = Some(HashSet::from([format]));
+    hints.PossibleFormats = Some(formats.iter().copied().collect::<HashSet<_>>());
     hints
 }
 
 fn parse_preprocess_mode(mode: &str) -> flow_like_types::Result<PreprocessMode> {
     match mode.trim().to_lowercase().as_str() {
         "none" => Ok(PreprocessMode::None),
+        "balanced" => Ok(PreprocessMode::Balanced),
         "fallback" => Ok(PreprocessMode::Fallback),
         "aggressive" => Ok(PreprocessMode::Aggressive),
         "industrial" => Ok(PreprocessMode::Industrial),
@@ -487,6 +732,56 @@ fn decode_multiple_in_luma_by_quadrant(
     )
 }
 
+#[derive(Clone, Copy)]
+enum ScannerMode {
+    Normal,
+    Quadrant,
+}
+
+struct DecodeAttemptResult {
+    barcodes: Vec<Barcode>,
+    error: Option<String>,
+}
+
+fn decode_variant_attempt(
+    variant: &DecodeVariant,
+    hints: &DecodeHints,
+    scanner_mode: ScannerMode,
+) -> DecodeAttemptResult {
+    let decoded = match scanner_mode {
+        ScannerMode::Normal => decode_multiple_in_luma(
+            &variant.luma,
+            variant.width,
+            variant.height,
+            hints,
+        ),
+        ScannerMode::Quadrant => decode_multiple_in_luma_by_quadrant(
+            &variant.luma,
+            variant.width,
+            variant.height,
+            hints,
+        ),
+    };
+
+    match decoded {
+        Ok(results) => DecodeAttemptResult {
+            barcodes: results
+                .into_iter()
+                .map(|result| Barcode::from_result(result, variant))
+                .collect(),
+            error: None,
+        },
+        Err(NotFoundException(_)) => DecodeAttemptResult {
+            barcodes: Vec::new(),
+            error: None,
+        },
+        Err(e) => DecodeAttemptResult {
+            barcodes: Vec::new(),
+            error: Some(e.to_string()),
+        },
+    }
+}
+
 fn decode_barcodes_in_luma(
     luma: Vec<u8>,
     width: u32,
@@ -507,67 +802,57 @@ fn decode_barcodes_in_luma(
         rotations,
         preprocessing,
     );
-    let use_quadrants = preprocess_mode != PreprocessMode::None;
-    let mut barcodes = Vec::new();
-    let mut first_error = None;
     let max_decode_attempts = preprocessing.max_decode_attempts.max(1);
-    let mut decode_attempts = 0usize;
     let scan_formats = if scan_formats.is_empty() {
         readable_barcode_formats()
     } else {
         scan_formats.to_vec()
     };
+    let format_hints = hints_for_formats(hints, &scan_formats);
 
-    for variant in variants {
-        let mut scanner_attempts = 1;
-        if use_quadrants {
-            scanner_attempts = 2;
+    let scanner_modes: Vec<ScannerMode> = if preprocess_mode != PreprocessMode::None {
+        vec![ScannerMode::Normal, ScannerMode::Quadrant]
+    } else {
+        vec![ScannerMode::Normal]
+    };
+
+    let attempts: Vec<(&DecodeVariant, ScannerMode)> = variants
+        .iter()
+        .flat_map(|variant| scanner_modes.iter().copied().map(move |mode| (variant, mode)))
+        .take(max_decode_attempts)
+        .collect();
+
+    let decode_threads = preprocessing.decode_threads.max(1);
+    let attempt_results = if decode_threads == 1 || attempts.len() <= 1 {
+        attempts
+            .iter()
+            .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
+            .collect::<Vec<_>>()
+    } else {
+        let thread_count = std::thread::available_parallelism()
+            .map(|threads| threads.get().min(decode_threads))
+            .unwrap_or(decode_threads);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(thread_count)
+            .build()
+            .map_err(|e| anyhow!("Failed to build barcode decode thread pool: {}", e))?;
+
+        pool.install(|| {
+            attempts
+                .par_iter()
+                .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    let mut barcodes = Vec::new();
+    let mut first_error = None;
+    for attempt_result in attempt_results {
+        if let Some(error) = attempt_result.error {
+            first_error.get_or_insert(error);
         }
-
-        for scanner_attempt in 0..scanner_attempts {
-            if decode_attempts >= max_decode_attempts {
-                return Ok(barcodes);
-            }
-            decode_attempts += 1;
-
-            let mut found_in_attempt = false;
-            for format in &scan_formats {
-                let format_hints = hints_for_format(hints, *format);
-                let decoded = if scanner_attempt == 0 {
-                    decode_multiple_in_luma(
-                        &variant.luma,
-                        variant.width,
-                        variant.height,
-                        &format_hints,
-                    )
-                } else {
-                    decode_multiple_in_luma_by_quadrant(
-                        &variant.luma,
-                        variant.width,
-                        variant.height,
-                        &format_hints,
-                    )
-                };
-
-                match decoded {
-                    Ok(results) => {
-                        for result in results {
-                            let barcode = Barcode::from_result(result, &variant);
-                            let existing_count = barcodes.len();
-                            push_unique_barcode(&mut barcodes, barcode);
-                            found_in_attempt |= barcodes.len() != existing_count;
-                        }
-                    }
-                    Err(NotFoundException(_)) => {}
-                    Err(e) => {
-                        first_error.get_or_insert_with(|| e.to_string());
-                    }
-                }
-            }
-
-            if found_in_attempt && !is_exhaustive_preprocess(preprocess_mode) {
-                return Ok(barcodes);
-            }
+        for barcode in attempt_result.barcodes {
+            push_unique_barcode(&mut barcodes, barcode);
         }
     }
 
@@ -583,8 +868,32 @@ fn decode_barcodes_in_luma(
 fn is_exhaustive_preprocess(preprocess_mode: PreprocessMode) -> bool {
     matches!(
         preprocess_mode,
-        PreprocessMode::Aggressive | PreprocessMode::Industrial
+        PreprocessMode::Balanced | PreprocessMode::Aggressive | PreprocessMode::Industrial
     )
+}
+
+fn append_processed_variants<F>(
+    variants: &mut Vec<DecodeVariant>,
+    source_count: usize,
+    max_variants: usize,
+    mut build_variant: F,
+) where
+    F: FnMut(&DecodeVariant) -> Option<DecodeVariant>,
+{
+    if variants.len() >= max_variants || source_count == 0 {
+        return;
+    }
+
+    let source_count = source_count.min(variants.len());
+    let generated: Vec<DecodeVariant> = variants[..source_count]
+        .iter()
+        .filter_map(|variant| build_variant(variant))
+        .take(max_variants.saturating_sub(variants.len()))
+        .collect();
+
+    for variant in generated {
+        push_decode_variant(variants, variant, max_variants);
+    }
 }
 
 fn build_decode_variants(
@@ -607,6 +916,7 @@ fn build_decode_variants(
         push_decode_variant(
             &mut variants,
             DecodeVariant {
+                hash: hash_luma(&rotated_luma),
                 luma: rotated_luma,
                 width: rotated_width,
                 height: rotated_height,
@@ -627,166 +937,140 @@ fn build_decode_variants(
 
     if preprocessing.contrast_stretch {
         let source_count = variants.len();
-        for variant in variants[..source_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    contrast_stretch_luma(&variant.luma),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
-        }
+        append_processed_variants(&mut variants, source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                contrast_stretch_luma(&variant.luma),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     if preprocessing.local_contrast {
         let source_count = variants.len();
-        for variant in variants[..source_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    local_contrast_stretch_luma(
-                        &variant.luma,
-                        variant.width,
-                        variant.height,
-                        preprocessing.local_contrast_tile_size,
-                    ),
+        append_processed_variants(&mut variants, source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                local_contrast_stretch_luma(
+                    &variant.luma,
                     variant.width,
                     variant.height,
-                    variant.point_scale,
+                    preprocessing.local_contrast_tile_size,
                 ),
-                max_variants,
-            );
-        }
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     let base_variant_count = variants.len();
     if preprocessing.denoise {
-        for variant in variants[..base_variant_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    median_filter_3x3_luma(&variant.luma, variant.width, variant.height),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
-        }
+        append_processed_variants(&mut variants, base_variant_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                median_filter_3x3_luma(&variant.luma, variant.width, variant.height),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     let enhanced_variant_count = variants.len();
     if preprocessing.sharpen || preprocess_mode == PreprocessMode::Industrial {
-        for variant in variants[..enhanced_variant_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    sharpen_luma(&variant.luma, variant.width, variant.height),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
-        }
+        append_processed_variants(&mut variants, enhanced_variant_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                sharpen_luma(&variant.luma, variant.width, variant.height),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     if polarity == BarcodePolarity::LightOnDark {
         let polarity_source_count = variants.len();
-        for variant in variants[..polarity_source_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    invert_luma(&variant.luma),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
-        }
+        append_processed_variants(&mut variants, polarity_source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                invert_luma(&variant.luma),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     let threshold_source_count = variants.len();
     if preprocessing.otsu_threshold {
-        for variant in variants[..threshold_source_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    otsu_threshold_luma(&variant.luma),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
-        }
+        append_processed_variants(&mut variants, threshold_source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                otsu_threshold_luma(&variant.luma),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     if preprocessing.adaptive_threshold {
-        for variant in variants[..threshold_source_count].to_vec() {
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    adaptive_threshold_luma(
-                        &variant.luma,
-                        variant.width,
-                        variant.height,
-                        preprocessing.adaptive_threshold_window,
-                        preprocessing.adaptive_threshold_bias,
-                    ),
+        append_processed_variants(&mut variants, threshold_source_count, max_variants, |variant| {
+            Some(variant.with_luma(
+                adaptive_threshold_luma(
+                    &variant.luma,
                     variant.width,
                     variant.height,
-                    variant.point_scale,
+                    preprocessing.adaptive_threshold_window,
+                    preprocessing.adaptive_threshold_bias,
                 ),
-                max_variants,
-            );
-        }
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ))
+        });
     }
 
     if preprocessing.morphology {
         let morphology_source_count = variants.len();
-        for variant in variants[..morphology_source_count].to_vec() {
+        let mut generated = Vec::new();
+        for variant in variants[..morphology_source_count].iter() {
+            if generated.len() >= max_variants.saturating_sub(variants.len()) {
+                break;
+            }
             if !is_binary_luma(&variant.luma) {
                 continue;
             }
 
             let opened = open_dark_binary_luma(&variant.luma, variant.width, variant.height);
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    opened.clone(),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
+            generated.push(variant.with_luma(
+                opened.clone(),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ));
 
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    close_dark_binary_luma(&variant.luma, variant.width, variant.height),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
+            if generated.len() >= max_variants.saturating_sub(variants.len()) {
+                break;
+            }
+            generated.push(variant.with_luma(
+                close_dark_binary_luma(&variant.luma, variant.width, variant.height),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ));
 
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    close_dark_binary_luma(&opened, variant.width, variant.height),
-                    variant.width,
-                    variant.height,
-                    variant.point_scale,
-                ),
-                max_variants,
-            );
+            if generated.len() >= max_variants.saturating_sub(variants.len()) {
+                break;
+            }
+            generated.push(variant.with_luma(
+                close_dark_binary_luma(&opened, variant.width, variant.height),
+                variant.width,
+                variant.height,
+                variant.point_scale,
+            ));
+        }
+
+        for variant in generated {
+            push_decode_variant(&mut variants, variant, max_variants);
         }
     }
 
@@ -799,25 +1083,21 @@ fn build_decode_variants(
             preprocessing.max_upscale_pixels,
         )
     {
-        let upscale_source_count = variants.len();
-        for variant in variants[..upscale_source_count].to_vec() {
+        let upscale_source_count = if preprocess_mode == PreprocessMode::Fallback {
+            variants.len().min(1)
+        } else {
+            variants.len()
+        };
+        append_processed_variants(&mut variants, upscale_source_count, max_variants, |variant| {
             let (upscaled, upscaled_width, upscaled_height) =
                 upscale_luma_nearest(&variant.luma, variant.width, variant.height, upscale_factor);
-            push_decode_variant(
-                &mut variants,
-                variant.with_luma(
-                    upscaled,
-                    upscaled_width,
-                    upscaled_height,
-                    variant.point_scale / upscale_factor as f32,
-                ),
-                max_variants,
-            );
-
-            if preprocess_mode == PreprocessMode::Fallback {
-                break;
-            }
-        }
+            Some(variant.with_luma(
+                upscaled,
+                upscaled_width,
+                upscaled_height,
+                variant.point_scale / upscale_factor as f32,
+            ))
+        });
     }
 
     variants
@@ -835,7 +1115,7 @@ fn push_decode_variant(
     if variants.iter().any(|existing| {
         existing.width == variant.width
             && existing.height == variant.height
-            && existing.luma == variant.luma
+            && existing.hash == variant.hash
     }) {
         return;
     }
@@ -1307,7 +1587,7 @@ impl NodeLogic for ReadBarcodesNode {
             "Read/Decode QR Codes and Barcodes",
             "Image/Content",
         );
-        node.set_version(5);
+        node.set_version(6);
         node.add_icon("/flow/icons/barcode.svg");
 
         // inputs
@@ -1358,20 +1638,18 @@ impl NodeLogic for ReadBarcodesNode {
         // fetch inputs
         let options: ReadBarcodeOptions = context.evaluate_pin("options").await?;
         let preprocess_mode = parse_preprocess_mode(&options.preprocess)?;
-        let polarity = parse_polarity(&options.preprocessing.polarity)?;
-        let rotations = effective_rotations(preprocess_mode, &options.preprocessing)?;
+        let preprocessing = effective_preprocessing_options(preprocess_mode, &options.preprocessing);
+        let polarity = parse_polarity(&preprocessing.polarity)?;
+        let rotations = effective_rotations(preprocess_mode, &preprocessing)?;
         let node_img: NodeImage = context.evaluate_pin("image_in").await?;
 
         // prepare image
         let img = node_img.get_image(context).await?;
         let (img_vec, w, h) = {
             let img_guard = img.lock().await;
-            let (w, h) = (img_guard.width(), img_guard.height());
-            let img_vec = img_guard
-                .clone()
-                .into_luma8() // decoding works best with grayscale images
-                .to_vec();
-            (img_vec, w, h)
+            let gray = img_guard.to_luma8(); // decoding works best with grayscale images
+            let (w, h) = gray.dimensions();
+            (gray.into_raw(), w, h)
         };
 
         // detect + decode (bar)codes
@@ -1408,7 +1686,7 @@ impl NodeLogic for ReadBarcodesNode {
             preprocess_mode,
             polarity,
             &rotations,
-            &options.preprocessing,
+            &preprocessing,
         )?;
         let decoded_count = results.len();
         results.retain(|barcode| barcode_matches_validation(barcode, &options.validation));
@@ -1521,17 +1799,55 @@ mod tests {
     }
 
     #[test]
-    fn read_options_schema_exposes_preprocess_as_string_enum() {
+    fn read_options_schema_exposes_defaults_enums_and_limits() {
         let schema = flow_like_types::json::to_value(schemars::schema_for!(ReadBarcodeOptions))
             .expect("schema should serialize");
+
         let preprocess_schema = schema
             .pointer("/properties/preprocess")
             .expect("preprocess schema should exist");
-
         assert_eq!(preprocess_schema.get("type"), Some(&json!("string")));
         assert_eq!(
             preprocess_schema.get("enum"),
-            Some(&json!(["None", "Fallback", "Aggressive", "Industrial"]))
+            Some(&json!(["None", "Balanced", "Fallback", "Aggressive", "Industrial"]))
         );
+        assert_eq!(preprocess_schema.get("default"), Some(&json!("Balanced")));
+
+        let format_schema = schema
+            .pointer("/properties/format")
+            .expect("format schema should exist");
+        assert_eq!(format_schema.get("default"), Some(&json!("QR_CODE")));
+        assert!(format_schema
+            .get("enum")
+            .and_then(|value| value.as_array())
+            .is_some_and(|formats| formats.contains(&json!("CODE_128"))));
+
+        let polarity_schema = schema
+            .pointer("/properties/preprocessing/properties/polarity")
+            .expect("polarity schema should exist");
+        assert_eq!(polarity_schema.get("default"), Some(&json!("Auto")));
+        assert_eq!(
+            polarity_schema.get("enum"),
+            Some(&json!(["Auto", "DarkOnLight", "LightOnDark"]))
+        );
+
+        let rotations_schema = schema
+            .pointer("/properties/preprocessing/properties/rotations/items/enum")
+            .expect("rotations enum should exist");
+        assert_eq!(rotations_schema, &json!([0, 90, 180, 270]));
+
+        let max_attempts_schema = schema
+            .pointer("/properties/preprocessing/properties/max_decode_attempts")
+            .expect("max_decode_attempts schema should exist");
+        assert_eq!(max_attempts_schema.get("default"), Some(&json!(24)));
+        assert_eq!(max_attempts_schema.get("minimum"), Some(&json!(1)));
+        assert_eq!(max_attempts_schema.get("maximum"), Some(&json!(256)));
+
+        let decode_threads_schema = schema
+            .pointer("/properties/preprocessing/properties/decode_threads")
+            .expect("decode_threads schema should exist");
+        assert_eq!(decode_threads_schema.get("default"), Some(&json!(4)));
+        assert_eq!(decode_threads_schema.get("minimum"), Some(&json!(1)));
+        assert_eq!(decode_threads_schema.get("maximum"), Some(&json!(32)));
     }
 }
