@@ -16,6 +16,7 @@ use flow_like_types::{
         multi::{ByQuadrantReader, GenericMultipleBarcodeReader, MultipleBarcodeReader},
     },
 };
+#[cfg(feature = "execute")]
 use rayon::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -829,6 +830,8 @@ fn decode_barcodes_in_luma(
             .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
             .collect::<Vec<_>>()
     } else {
+        #[cfg(feature = "execute")]
+        {
         let thread_count = std::thread::available_parallelism()
             .map(|threads| threads.get().min(decode_threads))
             .unwrap_or(decode_threads);
@@ -843,6 +846,15 @@ fn decode_barcodes_in_luma(
                 .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
                 .collect::<Vec<_>>()
         })
+            }
+
+            #[cfg(not(feature = "execute"))]
+            {
+                attempts
+                .iter()
+                .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
+                .collect::<Vec<_>>()
+            }
     };
 
     let mut barcodes = Vec::new();
