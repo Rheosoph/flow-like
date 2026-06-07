@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use flow_like::copilot::governance::{GovernanceCopilot, GovernanceSuggestion};
+use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
 
 use crate::{
@@ -30,11 +31,15 @@ async fn master_flow_like_state(state: &AppState) -> Result<Arc<FlowLikeState>, 
 
 /// Run the governance agent for an app and return its suggestion, the signals
 /// it was grounded on, and the resolved model name that produced it.
+///
+/// `profile` is the caller's profile used to resolve which model bits to use.
+/// When `None` the copilot falls back to the platform default model.
 pub async fn run_governance_agent(
     state: &AppState,
     sub: &str,
     app_id: &str,
     model_id: Option<String>,
+    profile: Option<Profile>,
 ) -> Result<(GovernanceSuggestion, Signals, String), ApiError> {
     let app = state.master_app(sub, app_id, state).await?;
 
@@ -63,7 +68,7 @@ pub async fn run_governance_agent(
     let context_json = serde_json::to_string(&context).unwrap_or_default();
 
     let flow_like_state = master_flow_like_state(state).await?;
-    let copilot = GovernanceCopilot::new(flow_like_state, None);
+    let copilot = GovernanceCopilot::new(flow_like_state, profile.map(Arc::new));
 
     let suggestion = copilot
         .assist(&depictions, &context_json, model_id, None)

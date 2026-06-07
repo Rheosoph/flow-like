@@ -1242,6 +1242,11 @@ pub async fn upsert_model(
 pub struct AssistBody {
     #[serde(default)]
     pub model_id: Option<String>,
+    /// Optional caller profile used to resolve which model bits to use.
+    /// When omitted the agent falls back to the platform default model.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub profile: Option<flow_like::profile::Profile>,
 }
 
 #[utoipa::path(
@@ -1271,7 +1276,7 @@ pub async fn assist(
 
     let sub = user.sub()?;
     let (suggestion, signals, model) =
-        crate::routes::ai::governance::run_governance_agent(&state, &sub, &app_id, body.model_id)
+        crate::routes::ai::governance::run_governance_agent(&state, &sub, &app_id, body.model_id, body.profile)
             .await?;
 
     Ok(Json(serde_json::json!({

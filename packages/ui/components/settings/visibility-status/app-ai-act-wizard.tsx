@@ -262,7 +262,7 @@ export function AppAiActWizard({
 			return backend.apiState.post<SuggestResponse>(
 				profile.data.hub_profile,
 				`apps/${appId}/ai-act/assessment/suggest`,
-				{},
+				{ profile: profile.data.hub_profile },
 			);
 		},
 		onSuccess: (res) => {

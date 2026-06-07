@@ -309,7 +309,7 @@ fn warn_struct_pins_without_schema() {
 /// `on_update()` must settle when the node settings and board are unchanged.
 /// Recreating identical pins on every pass changes generated pin IDs and keeps
 /// the board update loop dirty.
-#[flow_like_types::tokio::test]
+#[tokio::test]
 async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
     // Start with fixed regressions and grow this list as dynamic nodes are audited.
     const COVERED_NODES: &[&str] = &["a2ui_update_overlay"];

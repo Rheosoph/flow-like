@@ -1243,7 +1243,7 @@ function InventoryDetail({
 			if (!profile.data) throw new Error("Profile not loaded");
 			return backend.apiState.post<{
 				suggestion?: { purpose?: string; notes?: string };
-			}>(profile.data, `admin/ai-act/assist/${encodeURIComponent(appId)}`, {});
+			}>(profile.data, `admin/ai-act/assist/${encodeURIComponent(appId)}`, { profile: profile.data });
 		},
 		onSuccess: (res) => {
 			toast.success(

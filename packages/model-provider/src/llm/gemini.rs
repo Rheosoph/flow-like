@@ -10,6 +10,7 @@ use crate::{
 };
 use flow_like_types::json::to_value;
 use flow_like_types::{Cacheable, Result, anyhow, async_trait};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rig::completion::CompletionModel;
 use rig::message::DocumentSourceKind;
 use rig::message::{
@@ -199,7 +200,21 @@ fn media_type_from_url<T: MimeType>(url: &str) -> Option<T> {
     mime_type_from_url(url).and_then(|mime_type| T::from_mime_type(&mime_type))
 }
 
-fn transform_gemini_user_content(content: &RigUserContent) -> RigUserContent {
+/// Downloads an HTTPS URL and returns the bytes, or None if it fails / is not an HTTP/S URL.
+async fn fetch_url_bytes(url: &str) -> Option<Vec<u8>> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return None;
+    }
+    flow_like_types::reqwest::get(url)
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()
+        .map(|b| b.to_vec())
+}
+
+async fn transform_gemini_user_content(content: &RigUserContent) -> RigUserContent {
     match content {
         RigUserContent::Image(img) => {
             let mut data = img.data.clone();
@@ -209,8 +224,13 @@ fn transform_gemini_user_content(content: &RigUserContent) -> RigUserContent {
                 if let Some((mime_type, base64_data)) = parse_base64_data_url(url) {
                     data = DocumentSourceKind::Base64(base64_data.to_string());
                     media_type = media_type_from_mime::<ImageMediaType>(mime_type).or(media_type);
-                } else if let Some(detected) = media_type_from_url::<ImageMediaType>(url) {
-                    media_type = Some(detected);
+                } else {
+                    if let Some(detected) = media_type_from_url::<ImageMediaType>(url) {
+                        media_type = Some(detected);
+                    }
+                    if let Some(bytes) = fetch_url_bytes(url).await {
+                        data = DocumentSourceKind::Base64(BASE64.encode(&bytes));
+                    }
                 }
             }
 
@@ -229,8 +249,13 @@ fn transform_gemini_user_content(content: &RigUserContent) -> RigUserContent {
                 if let Some((mime_type, base64_data)) = parse_base64_data_url(url) {
                     data = DocumentSourceKind::Base64(base64_data.to_string());
                     media_type = media_type_from_mime::<AudioMediaType>(mime_type).or(media_type);
-                } else if media_type.is_none() {
-                    media_type = media_type_from_url::<AudioMediaType>(url);
+                } else {
+                    if media_type.is_none() {
+                        media_type = media_type_from_url::<AudioMediaType>(url);
+                    }
+                    if let Some(bytes) = fetch_url_bytes(url).await {
+                        data = DocumentSourceKind::Base64(BASE64.encode(&bytes));
+                    }
                 }
             }
 
@@ -248,8 +273,13 @@ fn transform_gemini_user_content(content: &RigUserContent) -> RigUserContent {
                 if let Some((mime_type, base64_data)) = parse_base64_data_url(url) {
                     data = DocumentSourceKind::Base64(base64_data.to_string());
                     media_type = media_type_from_mime::<VideoMediaType>(mime_type).or(media_type);
-                } else if media_type.is_none() {
-                    media_type = media_type_from_url::<VideoMediaType>(url);
+                } else {
+                    if media_type.is_none() {
+                        media_type = media_type_from_url::<VideoMediaType>(url);
+                    }
+                    if let Some(bytes) = fetch_url_bytes(url).await {
+                        data = DocumentSourceKind::Base64(BASE64.encode(&bytes));
+                    }
                 }
             }
 
@@ -268,8 +298,13 @@ fn transform_gemini_user_content(content: &RigUserContent) -> RigUserContent {
                     data = DocumentSourceKind::Base64(base64_data.to_string());
                     media_type =
                         media_type_from_mime::<DocumentMediaType>(mime_type).or(media_type);
-                } else if media_type.is_none() {
-                    media_type = media_type_from_url::<DocumentMediaType>(url);
+                } else {
+                    if media_type.is_none() {
+                        media_type = media_type_from_url::<DocumentMediaType>(url);
+                    }
+                    if let Some(bytes) = fetch_url_bytes(url).await {
+                        data = DocumentSourceKind::Base64(BASE64.encode(&bytes));
+                    }
                 }
             }
 
@@ -381,33 +416,35 @@ impl GeminiModel {
         })
     }
 
-    /// Transform RigMessages to convert data URLs to base64 for Gemini
-    fn transform_rig_messages(&self, prompt: &mut RigMessage, history: &mut Vec<RigMessage>) {
-        // Helper to transform a message
-        let transform_message = |msg: &mut RigMessage| {
-            if let RigMessage::User { content } = msg {
-                let transformed: Vec<RigUserContent> =
-                    content.iter().map(transform_gemini_user_content).collect();
-
-                *content = if transformed.len() == 1 {
-                    OneOrMany::one(transformed.into_iter().next().unwrap())
-                } else {
-                    OneOrMany::many(transformed).unwrap_or_else(|_| {
-                        OneOrMany::one(RigUserContent::Text(rig::message::Text {
-                            text: String::new(),
-                        }))
-                    })
-                };
-            }
-        };
-
-        // Transform prompt
-        transform_message(prompt);
-
-        // Transform history messages
+    /// Transform RigMessages to download HTTPS URLs and encode them as base64 for Gemini.
+    /// Gemini only accepts gs:// URIs or inline base64 — arbitrary HTTPS URLs are rejected.
+    async fn transform_rig_messages(
+        &self,
+        prompt: &mut RigMessage,
+        history: &mut Vec<RigMessage>,
+    ) {
+        transform_rig_message(prompt).await;
         for msg in history.iter_mut() {
-            transform_message(msg);
+            transform_rig_message(msg).await;
         }
+    }
+}
+
+async fn transform_rig_message(msg: &mut RigMessage) {
+    if let RigMessage::User { content } = msg {
+        let mut transformed = Vec::with_capacity(content.len());
+        for c in content.iter() {
+            transformed.push(transform_gemini_user_content(c).await);
+        }
+        *content = if transformed.len() == 1 {
+            OneOrMany::one(transformed.into_iter().next().unwrap())
+        } else {
+            OneOrMany::many(transformed).unwrap_or_else(|_| {
+                OneOrMany::one(RigUserContent::Text(rig::message::Text {
+                    text: String::new(),
+                }))
+            })
+        };
     }
 }
 
@@ -455,8 +492,9 @@ impl ModelLogic for GeminiModel {
             .extract_prompt_and_history()
             .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
 
-        // GEMINI-SPECIFIC: Transform data URLs to Base64
-        self.transform_rig_messages(&mut prompt, &mut chat_history);
+        // GEMINI-SPECIFIC: Download HTTPS URLs (e.g. signed S3) and encode as base64.
+        // Gemini only accepts gs:// URIs or inline base64 — arbitrary HTTPS URLs cause 400.
+        self.transform_rig_messages(&mut prompt, &mut chat_history).await;
 
         let mut builder = completion_handle
             .completion_request(prompt)
@@ -571,7 +609,7 @@ mod tests {
             additional_params: None,
         });
 
-        let transformed = transform_gemini_user_content(&content);
+        let transformed = futures::executor::block_on(transform_gemini_user_content(&content));
 
         let RigUserContent::Image(image) = transformed else {
             panic!("expected image content");

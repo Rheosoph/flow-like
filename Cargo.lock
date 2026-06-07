@@ -7808,6 +7808,7 @@ dependencies = [
  "flow-like-types",
  "mimalloc",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -8340,6 +8341,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
+ "base64 0.22.1",
  "dotenv",
  "fastembed",
  "flow-like-types",

@@ -181,7 +181,7 @@ export function AdminAiActAssessmentCard({
 			return backend.apiState.post<AssistResponse>(
 				profile.data,
 				`admin/ai-act/assist/${encodeURIComponent(appId)}`,
-				{},
+				{ profile: profile.data },
 			);
 		},
 		onSuccess: (res) => {
