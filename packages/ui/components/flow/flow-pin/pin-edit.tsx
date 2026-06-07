@@ -19,9 +19,11 @@ import { EnumVariable } from "./variable-types/enum-variable";
 import { FnVariable } from "./variable-types/fn-select";
 import { ProjectUserSelect } from "./variable-types/project-user-select";
 import { VarVariable } from "./variable-types/var-select";
+import { WidgetVariable } from "./variable-types/widget-select";
 
 interface PinEditProps {
 	readonly nodeId: string;
+	readonly nodeName?: string;
 	readonly pin: IPin;
 	readonly defaultValue: any;
 	readonly appId: string;
@@ -35,6 +37,7 @@ interface PinEditProps {
 
 export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	nodeId,
+	nodeName,
 	pin,
 	defaultValue,
 	appId,
@@ -70,6 +73,22 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	) {
 		return (
 			<ProjectUserSelect
+				pin={pin}
+				value={cachedDefaultValue}
+				appId={appId}
+				setValue={updateDefaultValue}
+			/>
+		);
+	}
+
+	if (
+		nodeName === "a2ui_instantiate_widget" &&
+		pin.name === "widget_selector" &&
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		return (
+			<WidgetVariable
 				pin={pin}
 				value={cachedDefaultValue}
 				appId={appId}

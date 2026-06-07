@@ -5,6 +5,8 @@
  * unknown variants.
  */
 
+import type { IAppCategory, IAppExecutionMode } from "./app";
+
 /** Where the caller wants the fork to land. */
 export type IForkPreviewTarget = "online" | "offline";
 
@@ -103,6 +105,16 @@ export interface IBeginOnlineForkResponse {
 
 export interface IFinalizeOnlineForkBody {
 	visibility?: "private" | "prototype";
+	app_settings?: IFinalizeOnlineForkAppSettings;
+}
+
+export interface IFinalizeOnlineForkAppSettings {
+	changelog?: null | string;
+	primary_category?: IAppCategory | null;
+	secondary_category?: IAppCategory | null;
+	price?: null | number;
+	version?: null | string;
+	execution_mode: IAppExecutionMode;
 }
 
 export interface IFinalizeOnlineForkResponse {

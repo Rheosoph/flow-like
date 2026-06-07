@@ -403,7 +403,7 @@ impl From<flow_like::app::App> for app::Model {
             changelog: app.changelog,
             default_role_id: None,
             owner_role_id: None,
-            price: 0,
+            price: app.price.unwrap_or(0) as i64,
             avg_rating: app.avg_rating,
             download_count: app.download_count as i64,
             interactions_count: app.interactions_count as i64,

@@ -1,4 +1,4 @@
-use flow_like::a2ui::widget::{ActionContextPayload, InputValuesPayload};
+use flow_like::a2ui::widget::{ActionContextPayload, InputValuesPayload, Widget};
 use flow_like::app::App;
 use flow_like::flow::{
     board::Board,
@@ -24,6 +24,13 @@ impl WidgetActionEvent {
     pub fn new() -> Self {
         Self
     }
+}
+
+fn find_widget_by_selector<'a>(widgets: &'a [Widget], selector: &str) -> Option<&'a Widget> {
+    widgets
+        .iter()
+        .find(|w| w.id == selector)
+        .or_else(|| widgets.iter().find(|w| w.name == selector))
 }
 
 #[async_trait]
@@ -165,13 +172,13 @@ impl NodeLogic for WidgetActionEvent {
         });
 
         if let Some(inst_node) = referencing_node {
-            // Read the selected widget name from the InstantiateWidget
+            // Read the selected widget ID/name from the InstantiateWidget
             let selected_widget = inst_node
                 .get_pin_by_name("widget_selector")
                 .and_then(|p| p.default_value.as_ref())
                 .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok());
 
-            if let Some(widget_name) = selected_widget {
+            if let Some(widget_selector) = selected_widget {
                 // Load the app's widgets to get available actions
                 if let Some(app_state) = &board.app_state {
                     let app_id = board.board_dir.filename().unwrap_or_default().to_string();
@@ -179,7 +186,7 @@ impl NodeLogic for WidgetActionEvent {
                         && let Ok(app) = App::load(app_id, app_state.clone()).await
                     {
                         let widgets = app.get_widgets().await.unwrap_or_default();
-                        if let Some(widget) = widgets.iter().find(|w| w.name == widget_name) {
+                        if let Some(widget) = find_widget_by_selector(&widgets, &widget_selector) {
                             let action_ids: Vec<String> =
                                 widget.actions.iter().map(|a| a.id.clone()).collect();
 
@@ -204,7 +211,7 @@ impl NodeLogic for WidgetActionEvent {
                             {
                                 node.error = Some(format!(
                                     "Action '{}' is not defined on widget '{}'",
-                                    action_id, widget_name
+                                    action_id, widget.name
                                 ));
                             }
 

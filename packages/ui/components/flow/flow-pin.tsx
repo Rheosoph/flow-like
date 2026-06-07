@@ -299,6 +299,7 @@ function FlowPinInnerComponent({
 				<div className={pinEditContainerClassName}>
 					<PinEdit
 						nodeId={node.id}
+						nodeName={node.name}
 						pin={pin}
 						appId={appId}
 						boardId={boardId}

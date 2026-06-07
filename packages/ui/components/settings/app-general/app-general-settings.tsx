@@ -18,7 +18,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatAppCategory } from "../../../lib/app-category";
 import type { IApp, IMetadata } from "../../../types";
-import { IAppCategory, IAppStatus, IAppVisibility } from "../../../types";
+import { IAppCategory, IAppStatus } from "../../../types";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
@@ -562,11 +562,11 @@ export function AppGeneralSettings({
 						Application Settings
 					</CardTitle>
 					<CardDescription>
-						Configure application behavior and visibility
+						Configure application behavior
 					</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
-					<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div className="space-y-2">
 							<Label htmlFor="status">Status</Label>
 							<Select
@@ -598,35 +598,6 @@ export function AppGeneralSettings({
 													}`}
 												/>
 												{status}
-											</div>
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-						<div className="space-y-2">
-							<Label htmlFor="visibility">Visibility</Label>
-							<Select
-								value={app?.visibility ?? IAppVisibility.Offline}
-								onValueChange={(value) => {
-									if (canEdit) {
-										onAppChange({
-											...app,
-											visibility: value as IAppVisibility,
-										});
-									}
-								}}
-								disabled={!canEdit}
-							>
-								<SelectTrigger>
-									<SelectValue placeholder="Select visibility" />
-								</SelectTrigger>
-								<SelectContent>
-									{Object.values(IAppVisibility).map((visibility) => (
-										<SelectItem key={visibility} value={visibility}>
-											<div className="flex items-center gap-2">
-												<EyeIcon className="w-4 h-4" />
-												{visibility}
 											</div>
 										</SelectItem>
 									))}
