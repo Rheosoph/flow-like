@@ -602,6 +602,7 @@ export class EventState implements IEventState {
 			(event.board_version as [number, number, number]) ?? undefined,
 			true,
 		);
+		await this.backend.boardState.ensureAppPackagesInstalledForExecution?.(appId);
 		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {

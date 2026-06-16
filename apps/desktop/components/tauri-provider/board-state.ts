@@ -493,7 +493,7 @@ export class BoardState implements IBoardState {
 		}
 	}
 
-	private async ensureRemoteAppPackagesInstalled(
+	async ensureRemoteAppPackagesInstalled(
 		packages: Array<{ packageId: string; version: string }>,
 		options: { forceReload?: boolean; throwOnError?: boolean } = {},
 	): Promise<void> {
@@ -538,6 +538,14 @@ export class BoardState implements IBoardState {
 				);
 			}
 		}
+	}
+
+	async ensureAppPackagesInstalledForExecution(appId: string): Promise<void> {
+		const remotePackages = await this.syncRemoteAppPackages(appId);
+		await this.ensureRemoteAppPackagesInstalled(remotePackages, {
+			forceReload: true,
+			throwOnError: true,
+		});
 	}
 
 	async getBoards(appId: string): Promise<IBoard[]> {
@@ -1186,10 +1194,7 @@ export class BoardState implements IBoardState {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
 		const board = await this.getBoard(appId, boardId, undefined, true);
-		const remotePackages = await this.syncRemoteAppPackages(appId);
-		await this.ensureRemoteAppPackagesInstalled(remotePackages, {
-			throwOnError: true,
-		});
+		await this.ensureAppPackagesInstalledForExecution(appId);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
 

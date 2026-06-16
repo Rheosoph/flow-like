@@ -323,7 +323,7 @@ pub struct DownloadRequest {
     pub package_id: String,
     #[serde(default)]
     pub version: Option<String>,
-    /// Client platform key (e.g. "ios-aarch64-wt43") to receive precompiled artifacts
+    /// Client platform key (e.g. "ios-pulley64-wt45") to receive precompiled artifacts
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_platform: Option<String>,
 }

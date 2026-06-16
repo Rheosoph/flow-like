@@ -190,6 +190,9 @@ async fn compile_inner(
                 if let Some(triple) = &ct {
                     wasm_config = wasm_config.with_target(triple);
                 }
+                if pk.starts_with("ios-") {
+                    wasm_config = wasm_config.with_ios_memory_layout();
+                }
                 let engine = WasmEngine::new(wasm_config).map_err(|e| {
                     CompilerError::Compilation(format!("Engine creation failed for {pk}: {e}"))
                 })?;

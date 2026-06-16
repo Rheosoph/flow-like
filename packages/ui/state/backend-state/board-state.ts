@@ -50,6 +50,7 @@ export interface IBoardState {
 	// [AppId, BoardId, BoardName]
 	getOpenBoards(): Promise<[string, string, string][]>;
 	getBoardSettings(): Promise<IConnectionMode>;
+	ensureAppPackagesInstalledForExecution?(appId: string): Promise<void>;
 
 	executeBoard(
 		appId: string,
