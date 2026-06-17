@@ -14,7 +14,8 @@ use std::collections::HashMap;
 
 use super::super::page::get_pages::PageInfo;
 use super::scoring::{
-    BoardScores, board_summary_meta, compute_board_score, persist_board_score_with,
+    BoardScores, BoardSummaryMeta, board_summary_meta, compute_board_score,
+    persist_board_score_with,
 };
 
 #[derive(Clone, Serialize)]
@@ -56,7 +57,7 @@ fn scores_from_row(row: &app_board_score::Model) -> Option<BoardScores> {
 /// Build a [`BoardSummary`] from a cached DB row. Returns `None` when the row
 /// predates the cached `summary` metadata so the caller can fall back to S3.
 fn summary_from_row(row: &app_board_score::Model, pages: Vec<PageInfo>) -> Option<BoardSummary> {
-    let meta = row.summary.clone()?;
+    let meta: BoardSummaryMeta = serde_json::from_value(row.summary.clone()?).ok()?;
 
     Some(BoardSummary {
         id: row.board_id.clone(),

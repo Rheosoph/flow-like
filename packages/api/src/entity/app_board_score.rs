@@ -26,10 +26,10 @@ pub struct Model {
     pub scored_node_count: i32,
     #[sea_orm(column_name = "connectionCount")]
     pub connection_count: i32,
-    #[sea_orm(column_name = "flaggedPatterns", column_type = "Json", nullable)]
+    #[sea_orm(column_name = "flaggedPatterns", column_type = "JsonBinary", nullable)]
     pub flagged_patterns: Option<Json>,
-    #[sea_orm(column_name = "summary", column_type = "Json", nullable)]
-    pub summary: Option<crate::routes::app::board::scoring::BoardSummaryMeta>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub summary: Option<Json>,
     #[sea_orm(column_name = "computedAt")]
     pub computed_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]

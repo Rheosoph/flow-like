@@ -17,12 +17,12 @@ pub struct Model {
     #[sea_orm(column_name = "appId", column_type = "Text")]
     pub app_id: String,
     pub status: PublicationRequestStatus,
-    #[sea_orm(column_name = "aiActAssessmentId", column_type = "Text", nullable)]
-    pub ai_act_assessment_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "aiActAssessmentId", column_type = "Text", nullable)]
+    pub ai_act_assessment_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

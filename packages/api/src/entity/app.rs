@@ -144,12 +144,6 @@ pub enum Relation {
     Widget,
 }
 
-impl Related<super::app_analytics_daily::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::AppAnalyticsDaily.def()
-    }
-}
-
 impl Related<super::ai_act_assessment::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::AiActAssessment.def()
@@ -159,6 +153,12 @@ impl Related<super::ai_act_assessment::Entity> for Entity {
 impl Related<super::ai_act_model_observation::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::AiActModelObservation.def()
+    }
+}
+
+impl Related<super::app_analytics_daily::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppAnalyticsDaily.def()
     }
 }
 

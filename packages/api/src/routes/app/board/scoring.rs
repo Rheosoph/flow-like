@@ -232,7 +232,10 @@ pub async fn persist_board_score_with<C: ConnectionTrait>(
     });
 
     let flagged_json = serde_json::to_value(&computation.flagged_patterns).ok();
-    let summary = Some(board_summary_meta(board, computation.connection_count));
+    let summary = Some(serde_json::to_value(board_summary_meta(
+        board,
+        computation.connection_count,
+    ))?);
 
     let existing = app_board_score::Entity::find()
         .filter(app_board_score::Column::AppId.eq(app_id))
