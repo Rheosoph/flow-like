@@ -130,16 +130,6 @@ pub async fn reconcile_app_models(
         .filter(ai_act_model_observation::Column::AppId.eq(app_id))
         .all(&state.db)
         .await?;
-    let existing_keys: std::collections::HashSet<String> = existing
-        .iter()
-        .map(|o| {
-            if o.dynamic_selector {
-                "::dynamic::".to_string()
-            } else {
-                model_key(o.provider.as_deref(), &o.model_id)
-            }
-        })
-        .collect();
     let existing_by_key: BTreeMap<String, ai_act_model_observation::Model> = existing
         .into_iter()
         .map(|o| {
@@ -162,7 +152,7 @@ pub async fn reconcile_app_models(
         };
 
         let posture = resolve_posture(state, disc.provider.as_deref(), &model_id).await;
-        let drift = !existing_keys.contains(&key);
+        let drift = !existing_by_key.contains_key(&key);
 
         if let Some(existing) = existing_by_key.get(&key) {
             let mut active: ai_act_model_observation::ActiveModel = existing.clone().into();

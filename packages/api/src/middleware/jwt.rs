@@ -18,7 +18,9 @@ use flow_like::hub::UserTier;
 use flow_like_types::Result;
 use flow_like_types::anyhow;
 use hyper::header::AUTHORIZATION;
-use sea_orm::{ColumnTrait, EntityTrait, JoinType, QueryFilter, QuerySelect, RelationTrait};
+use sea_orm::{
+    ColumnTrait, EntityTrait, JoinType, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+};
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 
@@ -498,6 +500,10 @@ impl AppUser {
         }
 
         if let AppUser::APIKey(api_key) = self {
+            if api_key.app_id != app_id {
+                return Err(ApiError::FORBIDDEN);
+            }
+
             let role_model = role::Entity::find()
                 .join(JoinType::InnerJoin, role::Relation::TechnicalUser.def())
                 .filter(
@@ -511,13 +517,17 @@ impl AppUser {
 
             let permissions = RolePermissions::from_bits(role_model.permissions)
                 .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
+            let effective_user_id = match api_key.creator_user_id.clone() {
+                Some(creator_user_id) => Some(creator_user_id),
+                None => resolve_legacy_api_key_creator_user_id(state, &api_key.app_id).await?,
+            };
 
             return Ok(AppPermissionResponse {
                 state: state.clone(),
                 permissions,
                 role: Arc::new(role_model),
                 sub: None,
-                effective_user_id: api_key.creator_user_id.clone(),
+                effective_user_id,
                 technical_user_id: Some(api_key.key_id.clone()),
                 identifier: api_key.key_id.clone(),
             });
@@ -601,6 +611,50 @@ fn hash_token(token: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(token.as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+async fn resolve_legacy_api_key_creator_user_id(
+    state: &AppState,
+    app_id: &str,
+) -> Result<Option<String>, AuthorizationError> {
+    let app = App::find_by_id(app_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::FORBIDDEN)?;
+
+    if let Some(owner_role_id) = app.owner_role_id {
+        let owner = membership::Entity::find()
+            .filter(
+                membership::Column::AppId
+                    .eq(app_id)
+                    .and(membership::Column::RoleId.eq(owner_role_id)),
+            )
+            .order_by_asc(membership::Column::CreatedAt)
+            .one(&state.db)
+            .await?;
+
+        if let Some(owner) = owner {
+            return Ok(Some(owner.user_id));
+        }
+    }
+
+    let members_with_roles = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app_id))
+        .order_by_asc(membership::Column::CreatedAt)
+        .find_also_related(role::Entity)
+        .all(&state.db)
+        .await?;
+
+    for (member, role) in members_with_roles {
+        if let Some(role) = role
+            && let Some(permissions) = RolePermissions::from_bits(role.permissions)
+            && permissions.contains(RolePermissions::Owner)
+        {
+            return Ok(Some(member.user_id));
+        }
+    }
+
+    Ok(None)
 }
 
 pub async fn jwt_middleware(
@@ -877,13 +931,18 @@ pub async fn jwt_middleware(
                 }
             }
 
+            let creator_user_id = match app.creator_user_id.clone() {
+                Some(creator_user_id) => Some(creator_user_id),
+                None => resolve_legacy_api_key_creator_user_id(&state, &app.app_id).await?,
+            };
+
             // Cache valid API key
             state.auth_cache.insert(
                 cache_key,
                 CachedAuth::ApiKey {
                     key_id: app.id.clone(),
                     app_id: app.app_id.clone(),
-                    creator_user_id: app.creator_user_id.clone(),
+                    creator_user_id: creator_user_id.clone(),
                 },
             );
 
@@ -891,7 +950,7 @@ pub async fn jwt_middleware(
                 key_id: app.id.clone(),
                 api_key: api_key_str.to_string(),
                 app_id: app.app_id.clone(),
-                creator_user_id: app.creator_user_id.clone(),
+                creator_user_id,
             });
             request.extensions_mut().insert::<AppUser>(app_user);
             return Ok(next.run(request).await);

@@ -1208,23 +1208,22 @@ pub async fn upsert_model(
         active.insert(&state.db).await?
     };
 
-    let matching_observations = ai_act_model_observation::Entity::find()
+    let mut update_model = <ai_act_model_observation::ActiveModel as Default>::default();
+    update_model.posture = Set(stored.posture.clone());
+    update_model.hosted = Set(stored.hosted);
+    update_model.open_licence = Set(stored.open_licence);
+    update_model.systemic_risk = Set(stored.systemic_risk);
+    update_model.vetted = Set(stored.vetted);
+
+    let update_res = ai_act_model_observation::Entity::update_many()
         .filter(observation_registry_condition(
             &stored.provider,
             &stored.model_id,
         ))
-        .all(&state.db)
+        .set(update_model)
+        .exec(&state.db)
         .await?;
-    let observed_count = matching_observations.len() as i64;
-    for observation in matching_observations {
-        let mut active: ai_act_model_observation::ActiveModel = observation.into();
-        active.posture = Set(stored.posture.clone());
-        active.hosted = Set(stored.hosted);
-        active.open_licence = Set(stored.open_licence);
-        active.systemic_risk = Set(stored.systemic_risk);
-        active.vetted = Set(stored.vetted);
-        active.update(&state.db).await?;
-    }
+    let observed_count = update_res.rows_affected as i64;
 
     Ok(Json(RegistryItem::from_registry(
         stored,
@@ -1395,9 +1394,9 @@ pub async fn export_inventory(
         .into_response())
 }
 
-/// Minimal CSV field escaping: quote fields containing commas, quotes or newlines.
+/// Minimal CSV field escaping: quote fields containing commas, quotes or line breaks.
 fn csv_escape(field: &str) -> String {
-    if field.contains(',') || field.contains('"') || field.contains('\n') {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
         format!("\"{}\"", field.replace('"', "\"\""))
     } else {
         field.to_string()

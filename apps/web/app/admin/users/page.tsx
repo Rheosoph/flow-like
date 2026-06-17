@@ -129,13 +129,15 @@ function formatBytes(bytes: number) {
 	return `${(bytes / k ** i).toFixed(1)} ${sizes[i]}`;
 }
 
+const microDollarFormatter = new Intl.NumberFormat(undefined, {
+	style: "currency",
+	currency: "USD",
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2,
+});
+
 function formatMicroDollars(microDollars: number) {
-	return new Intl.NumberFormat(undefined, {
-		style: "currency",
-		currency: "USD",
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	}).format(microDollars / 1_000_000);
+	return microDollarFormatter.format(microDollars / 1_000_000);
 }
 
 function PermissionDialog({

@@ -233,6 +233,10 @@ impl State {
             .await
             .expect("Failed to connect to database");
 
+        if let Err(error) = crate::db_backfills::run_startup_backfills(&db).await {
+            tracing::warn!("Failed to run startup database backfills: {error}");
+        }
+
         let stripe_client = if platform_config.features.premium {
             let stripe_key = secrets
                 .get_secret_string(&SecretRef::new("STRIPE_SECRET_KEY"))

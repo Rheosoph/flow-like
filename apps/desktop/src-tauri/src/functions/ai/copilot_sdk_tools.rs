@@ -6,7 +6,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::Duration,
 };
 
@@ -190,6 +190,14 @@ when the actual workflow needs fetching."#,
     (tool, handler)
 }
 
+static SEARCH_CLIENT: LazyLock<Result<reqwest::blocking::Client, reqwest::Error>> =
+    LazyLock::new(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .user_agent("FlowPilot/1.0")
+            .build()
+    });
+
 fn run_internet_search_tool(args: &Value) -> Value {
     let query = arg_string(args, "query", "query");
     if query.trim().is_empty() {
@@ -223,11 +231,7 @@ fn run_internet_search_tool(args: &Value) -> Value {
         urlencoding::encode(&language)
     );
 
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent("FlowPilot/1.0")
-        .build()
-    {
+    let client = match SEARCH_CLIENT.as_ref() {
         Ok(client) => client,
         Err(error) => {
             return json!({
