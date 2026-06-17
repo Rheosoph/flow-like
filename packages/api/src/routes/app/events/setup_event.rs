@@ -340,6 +340,7 @@ pub(crate) async fn run_event_setup(
         token: None,
         oauth_tokens: None,
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
         user_context: Some(user_context),
         profile,

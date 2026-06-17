@@ -322,6 +322,7 @@ pub async fn invoke_board(
         token: params.token,
         oauth_tokens: params.oauth_tokens,
         stream_state: params.stream_state,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::Sync),
         runtime_variables: params.runtime_variables,
         user_context: Some(permission.to_user_context()),
         profile,

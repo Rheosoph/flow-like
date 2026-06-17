@@ -4,7 +4,9 @@ use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
-use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
+use flow_like::flow::execution::{
+    ExecutionEnvironment, LogLevel, LogMeta, RunPayload, flush_run_cancelled,
+};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
 use flow_like::flow_like_storage::{Path, serde_arrow};
@@ -46,6 +48,20 @@ struct ExecutionOverrides {
     log_flush_interval: Option<Duration>,
     log_batch_size: Option<usize>,
     run_sub_override: Option<String>,
+}
+
+fn local_execution_environment() -> ExecutionEnvironment {
+    if let Ok(value) = std::env::var("FLOW_LIKE_EXECUTION_ENVIRONMENT")
+        && let Some(environment) = ExecutionEnvironment::parse(&value)
+    {
+        return environment;
+    }
+
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        ExecutionEnvironment::Mobile
+    } else {
+        ExecutionEnvironment::Desktop
+    }
 }
 
 async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {
@@ -285,6 +301,7 @@ async fn execute_internal(
     if let Some(run_sub_override) = overrides.run_sub_override {
         internal_run.set_execution_sub(run_sub_override).await;
     }
+    internal_run.set_execution_environment(local_execution_environment());
 
     // Set offline user context for desktop app (always admin/owner)
     internal_run.set_offline_user_context();

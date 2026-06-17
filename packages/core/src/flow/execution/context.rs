@@ -1,6 +1,6 @@
 use super::{
-    EventTrigger, InternalNode, LogLevel, Run, RunPayload, internal_pin::InternalPin,
-    log::LogMessage, trace::Trace,
+    EventTrigger, ExecutionEnvironment, ExecutionMode, InternalNode, LogLevel, Run, RunPayload,
+    internal_pin::InternalPin, log::LogMessage, trace::Trace,
 };
 use crate::models::llm::ModelUsageContext;
 use crate::{
@@ -187,6 +187,8 @@ pub struct ExecutionContext {
     last_log_spill: Instant,
     cancellation_token: Option<CancellationToken>,
     run_id: String,
+    execution_environment: ExecutionEnvironment,
+    execution_mode: ExecutionMode,
     state: NodeState,
     callback: InterComCallback,
 }
@@ -238,6 +240,8 @@ impl ExecutionContext {
         ExecutionContext {
             id,
             run_id,
+            execution_environment: ExecutionEnvironment::Local,
+            execution_mode: ExecutionMode::Sync,
             started_by: None,
             run: run.clone(),
             app_state: state.clone(),
@@ -272,6 +276,14 @@ impl ExecutionContext {
     }
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    pub fn execution_environment(&self) -> ExecutionEnvironment {
+        self.execution_environment
+    }
+
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
     }
 
     pub fn model_usage_context(&self) -> Option<ModelUsageContext> {
@@ -323,6 +335,8 @@ impl ExecutionContext {
         ExecutionContext {
             id,
             run_id: run_meta.run_id.clone(),
+            execution_environment: run_meta.environment,
+            execution_mode: run_meta.execution_mode,
             started_by: None,
             run: run.clone(),
             app_state: state.clone(),
@@ -486,6 +500,8 @@ impl ExecutionContext {
         context.user_context = self.user_context.clone();
         context.local_variables = self.local_variables.clone();
         context.log_flush_interval = self.log_flush_interval;
+        context.execution_environment = self.execution_environment;
+        context.execution_mode = self.execution_mode;
 
         context
     }

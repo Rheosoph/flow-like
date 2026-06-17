@@ -9,7 +9,7 @@ use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus};
 use flow_like::credentials::StoreType;
 use flow_like::flow::event::Event;
-use flow_like::flow::execution::{InternalRun, RunPayload};
+use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
@@ -341,6 +341,16 @@ async fn execute_inner(
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+
+    run.set_execution_environment(
+        std::env::var("FLOW_LIKE_EXECUTION_ENVIRONMENT")
+            .ok()
+            .and_then(|value| ExecutionEnvironment::parse(&value))
+            .unwrap_or(ExecutionEnvironment::Server),
+    );
+    if let Some(mode) = request.execution_mode {
+        run.set_execution_mode(mode);
+    }
 
     run.set_execution_sub(executor_subject.to_string()).await;
 

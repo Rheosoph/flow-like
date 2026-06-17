@@ -264,6 +264,9 @@ pub struct DispatchRequest {
     /// Whether to stream node state updates
     #[serde(default)]
     pub stream_state: bool,
+    /// Execution mode reported inside the flow runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<flow_like::flow::execution::ExecutionMode>,
     /// Runtime-configured variables to override board variables
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_variables:
@@ -1004,6 +1007,7 @@ fn build_executor_payload(job_id: &str, request: &DispatchRequest) -> serde_json
         token: request.token.clone(),
         oauth_tokens,
         stream_state: request.stream_state,
+        execution_mode: request.execution_mode.map(|mode| mode.as_str().to_string()),
         runtime_variables: request
             .runtime_variables
             .as_ref()

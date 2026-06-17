@@ -1616,6 +1616,7 @@ async fn dispatch_event_collect(
         token,
         oauth_tokens,
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
         user_context: None,
         profile: sink.as_ref().and_then(|sink| sink.profile_json.clone()),
