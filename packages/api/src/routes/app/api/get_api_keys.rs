@@ -56,6 +56,7 @@ pub async fn get_api_keys(
     Path(app_id): Path<String>,
 ) -> Result<Json<Vec<ApiKeyInfo>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
+    let lookup_config = state.platform_config.lookup.clone();
 
     let technical_users = technical_user::Entity::find()
         .filter(technical_user::Column::AppId.eq(&app_id))
@@ -104,19 +105,40 @@ pub async fn get_api_keys(
         .map(|tu| {
             let role = tu.role_id.as_ref().and_then(|id| roles.get(id));
             let creator = tu.creator_user_id.as_ref().and_then(|id| creators.get(id));
+            let creator_display_name = creator.and_then(|user| {
+                if lookup_config.name {
+                    if let Some(name) = user.name.clone() {
+                        return Some(name);
+                    }
+                }
+
+                if lookup_config.preferred_username {
+                    if let Some(preferred_username) = user.preferred_username.clone() {
+                        return Some(preferred_username);
+                    }
+                }
+
+                if lookup_config.username {
+                    if let Some(username) = user.username.clone() {
+                        return Some(username);
+                    }
+                }
+
+                None
+            });
+            let creator_email = if lookup_config.email {
+                creator.and_then(|user| user.email.clone())
+            } else {
+                None
+            };
             ApiKeyInfo {
                 id: tu.id,
                 name: tu.name,
                 description: tu.description,
                 creator_user_id: tu.creator_user_id,
                 creator_membership_id: tu.creator_membership_id,
-                creator_display_name: creator.and_then(|user| {
-                    user.name
-                        .clone()
-                        .or_else(|| user.preferred_username.clone())
-                        .or_else(|| user.username.clone())
-                }),
-                creator_email: creator.and_then(|user| user.email.clone()),
+                creator_display_name,
+                creator_email,
                 role_id: tu.role_id,
                 role_name: role.map(|r| r.name.clone()),
                 role_permissions: role.map(|r| r.permissions),
