@@ -18,6 +18,10 @@ pub struct Model {
     pub role_id: Option<String>,
     #[sea_orm(column_name = "appId", column_type = "Text")]
     pub app_id: String,
+    #[sea_orm(column_name = "creatorUserId", column_type = "Text", nullable)]
+    pub creator_user_id: Option<String>,
+    #[sea_orm(column_name = "creatorMembershipId", column_type = "Text", nullable)]
+    pub creator_membership_id: Option<String>,
     #[sea_orm(column_name = "validUntil")]
     pub valid_until: Option<DateTime>,
     #[sea_orm(column_name = "createdAt")]
@@ -44,6 +48,22 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     Role,
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::CreatorUserId",
+        to = "super::user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    User,
+    #[sea_orm(
+        belongs_to = "super::membership::Entity",
+        from = "Column::CreatorMembershipId",
+        to = "super::membership::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Membership,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -55,6 +75,18 @@ impl Related<super::app::Entity> for Entity {
 impl Related<super::role::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Role.def()
+    }
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
+    }
+}
+
+impl Related<super::membership::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Membership.def()
     }
 }
 

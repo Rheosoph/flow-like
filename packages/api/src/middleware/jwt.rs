@@ -140,6 +140,18 @@ pub struct ApiKey {
     pub key_id: String,
     pub api_key: String,
     pub app_id: String,
+    pub creator_user_id: Option<String>,
+}
+
+impl ApiKey {
+    pub fn masked_key(&self) -> String {
+        if self.api_key.len() <= 4 {
+            "****".to_string()
+        } else {
+            let visible_part = &self.api_key[self.api_key.len() - 4..];
+            format!("****{}", visible_part)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +159,7 @@ pub struct ExecutorUser {
     pub sub: String,
     pub app_id: String,
     pub run_id: String,
+    pub technical_user_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +176,8 @@ pub struct AppPermissionResponse {
     pub permissions: RolePermissions,
     pub role: Arc<role::Model>,
     pub sub: Option<String>,
+    pub effective_user_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub identifier: String,
 }
 
@@ -173,6 +188,16 @@ impl AppPermissionResponse {
 
     pub fn sub(&self) -> Result<String> {
         self.sub.clone().ok_or_else(|| anyhow!("No sub available"))
+    }
+
+    pub fn effective_user_id(&self) -> Result<String> {
+        self.effective_user_id
+            .clone()
+            .ok_or_else(|| anyhow!("No effective user available"))
+    }
+
+    pub fn technical_user_id(&self) -> Option<&str> {
+        self.technical_user_id.as_deref()
     }
 
     /// Either returns the sub if available or in case of API keys it returns the key ID.
@@ -242,9 +267,50 @@ impl AppUser {
         }
     }
 
+    pub fn entity(&self) -> Result<AppUser, AuthorizationError> {
+        match self {
+            AppUser::OpenID(user) => Ok(AppUser::OpenID(user.clone())),
+            AppUser::PAT(user) => Ok(AppUser::PAT(user.clone())),
+            AppUser::APIKey(api_key) => Ok(AppUser::APIKey(api_key.clone())),
+            AppUser::Executor(executor) => Ok(AppUser::Executor(executor.clone())),
+            AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
+        }
+    }
+
+    pub fn app_id(&self) -> Result<String, AuthorizationError> {
+        match self {
+            AppUser::Executor(user) => Ok(user.app_id.clone()),
+            AppUser::APIKey(api_key) => Ok(api_key.app_id.clone()),
+            _ => Err(ApiError::forbidden(
+                "Only Executor and APIKey users have an app_id in this context",
+            )),
+        }
+    }
+
+    pub fn technical_user_id(&self) -> Option<&str> {
+        match self {
+            AppUser::APIKey(api_key) => Some(api_key.key_id.as_str()),
+            AppUser::Executor(executor) => executor.technical_user_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn effective_user_id(&self) -> Result<String, AuthorizationError> {
+        match self {
+            AppUser::OpenID(user) => Ok(user.sub.clone()),
+            AppUser::PAT(user) => Ok(user.sub.clone()),
+            AppUser::Executor(user) => Ok(user.sub.clone()),
+            AppUser::APIKey(api_key) => api_key
+                .creator_user_id
+                .clone()
+                .ok_or_else(|| ApiError::forbidden("API key is not linked to a creator user")),
+            AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
+        }
+    }
+
     // Adds the exact method of access (OpenID, PAT, API Key) to the audit log for better traceability
     pub async fn audit_id(&self) -> Result<String, AuthorizationError> {
-        let sub = self.executor_scoped_sub()?;
+        let sub = self.effective_user_id()?;
         let method = match self {
             AppUser::OpenID(_) => "openid",
             AppUser::PAT(_) => "pat",
@@ -271,7 +337,7 @@ impl AppUser {
         &self,
         state: &AppState,
     ) -> Result<Option<String>, AuthorizationError> {
-        let sub = self.executor_scoped_sub()?;
+        let sub = self.effective_user_id()?;
         let user = user::Entity::find_by_id(&sub)
             .one(&state.db)
             .await?
@@ -280,7 +346,7 @@ impl AppUser {
     }
 
     pub async fn tier(&self, state: &AppState) -> Result<UserTier, AuthorizationError> {
-        let sub = self.executor_scoped_sub()?;
+        let sub = self.effective_user_id()?;
         let user = user::Entity::find_by_id(&sub)
             .one(&state.db)
             .await?
@@ -395,6 +461,8 @@ impl AppUser {
                     permissions,
                     role: role_model.clone(),
                     sub: Some(sub.clone()),
+                    effective_user_id: Some(sub.clone()),
+                    technical_user_id: None,
                     identifier: sub,
                 });
             }
@@ -423,6 +491,8 @@ impl AppUser {
                 permissions,
                 role: Arc::new(role_model),
                 sub: Some(sub.clone()),
+                effective_user_id: Some(sub.clone()),
+                technical_user_id: None,
                 identifier: sub,
             });
         }
@@ -433,7 +503,7 @@ impl AppUser {
                 .filter(
                     technical_user::Column::AppId
                         .eq(&api_key.app_id)
-                        .and(technical_user::Column::Key.eq(&api_key.api_key)),
+                        .and(technical_user::Column::Id.eq(&api_key.key_id)),
                 )
                 .one(&state.db)
                 .await?
@@ -447,6 +517,8 @@ impl AppUser {
                 permissions,
                 role: Arc::new(role_model),
                 sub: None,
+                effective_user_id: api_key.creator_user_id.clone(),
+                technical_user_id: Some(api_key.key_id.clone()),
                 identifier: api_key.key_id.clone(),
             });
         }
@@ -480,6 +552,8 @@ impl AppUser {
                     permissions,
                     role: role_model.clone(),
                     sub: Some(executor.sub.clone()),
+                    effective_user_id: Some(executor.sub.clone()),
+                    technical_user_id: executor.technical_user_id.clone(),
                     identifier: executor.sub.clone(),
                 });
             }
@@ -513,6 +587,8 @@ impl AppUser {
                 permissions,
                 role: Arc::new(role_model),
                 sub: Some(executor.sub.clone()),
+                effective_user_id: Some(executor.sub.clone()),
+                technical_user_id: executor.technical_user_id.clone(),
                 identifier: executor.sub.clone(),
             });
         }
@@ -565,11 +641,13 @@ pub async fn jwt_middleware(
                     sub,
                     app_id,
                     run_id,
+                    technical_user_id,
                 } => {
                     let user = AppUser::Executor(ExecutorUser {
                         sub,
                         app_id,
                         run_id,
+                        technical_user_id,
                     });
                     request.extensions_mut().insert::<AppUser>(user);
                     return Ok(next.run(request).await);
@@ -607,12 +685,14 @@ pub async fn jwt_middleware(
                     sub: claims.sub.clone(),
                     app_id: claims.app_id.clone(),
                     run_id: claims.run_id.clone(),
+                    technical_user_id: claims.technical_user_id.clone(),
                 },
             );
             let user = AppUser::Executor(ExecutorUser {
                 sub: claims.sub,
                 app_id: claims.app_id,
                 run_id: claims.run_id,
+                technical_user_id: claims.technical_user_id,
             });
             request.extensions_mut().insert::<AppUser>(user);
             return Ok(next.run(request).await);
@@ -718,11 +798,16 @@ pub async fn jwt_middleware(
         // Check cache first
         if let Some(cached) = state.auth_cache.get(&cache_key) {
             match cached {
-                CachedAuth::ApiKey { key_id, app_id } => {
+                CachedAuth::ApiKey {
+                    key_id,
+                    app_id,
+                    creator_user_id,
+                } => {
                     let app_user = AppUser::APIKey(ApiKey {
                         key_id,
                         api_key: api_key_str.to_string(),
                         app_id,
+                        creator_user_id,
                     });
                     request.extensions_mut().insert::<AppUser>(app_user);
                     return Ok(next.run(request).await);
@@ -757,7 +842,7 @@ pub async fn jwt_middleware(
             return Ok(next.run(request).await);
         }
 
-        let _app_id_from_key = parts[0];
+        let app_id_from_key = parts[0];
         let key_id = parts[1];
         let key_secret = parts[2];
 
@@ -776,6 +861,14 @@ pub async fn jwt_middleware(
             .await?;
 
         if let Some(app) = db_app {
+            if app.app_id != app_id_from_key {
+                state.auth_cache.insert(cache_key, CachedAuth::Invalid);
+                request
+                    .extensions_mut()
+                    .insert::<AppUser>(AppUser::Unauthorized);
+                return Ok(next.run(request).await);
+            }
+
             if let Some(valid_until) = app.valid_until {
                 let now = chrono::Utc::now().naive_utc();
                 if valid_until < now {
@@ -790,6 +883,7 @@ pub async fn jwt_middleware(
                 CachedAuth::ApiKey {
                     key_id: app.id.clone(),
                     app_id: app.app_id.clone(),
+                    creator_user_id: app.creator_user_id.clone(),
                 },
             );
 
@@ -797,6 +891,7 @@ pub async fn jwt_middleware(
                 key_id: app.id.clone(),
                 api_key: api_key_str.to_string(),
                 app_id: app.app_id.clone(),
+                creator_user_id: app.creator_user_id.clone(),
             });
             request.extensions_mut().insert::<AppUser>(app_user);
             return Ok(next.run(request).await);

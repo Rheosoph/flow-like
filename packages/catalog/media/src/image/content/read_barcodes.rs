@@ -750,18 +750,12 @@ fn decode_variant_attempt(
     scanner_mode: ScannerMode,
 ) -> DecodeAttemptResult {
     let decoded = match scanner_mode {
-        ScannerMode::Normal => decode_multiple_in_luma(
-            &variant.luma,
-            variant.width,
-            variant.height,
-            hints,
-        ),
-        ScannerMode::Quadrant => decode_multiple_in_luma_by_quadrant(
-            &variant.luma,
-            variant.width,
-            variant.height,
-            hints,
-        ),
+        ScannerMode::Normal => {
+            decode_multiple_in_luma(&variant.luma, variant.width, variant.height, hints)
+        }
+        ScannerMode::Quadrant => {
+            decode_multiple_in_luma_by_quadrant(&variant.luma, variant.width, variant.height, hints)
+        }
     };
 
     match decoded {
@@ -819,7 +813,12 @@ fn decode_barcodes_in_luma(
 
     let attempts: Vec<(&DecodeVariant, ScannerMode)> = variants
         .iter()
-        .flat_map(|variant| scanner_modes.iter().copied().map(move |mode| (variant, mode)))
+        .flat_map(|variant| {
+            scanner_modes
+                .iter()
+                .copied()
+                .map(move |mode| (variant, mode))
+        })
         .take(max_decode_attempts)
         .collect();
 
@@ -832,29 +831,29 @@ fn decode_barcodes_in_luma(
     } else {
         #[cfg(feature = "execute")]
         {
-        let thread_count = std::thread::available_parallelism()
-            .map(|threads| threads.get().min(decode_threads))
-            .unwrap_or(decode_threads);
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(thread_count)
-            .build()
-            .map_err(|e| anyhow!("Failed to build barcode decode thread pool: {}", e))?;
+            let thread_count = std::thread::available_parallelism()
+                .map(|threads| threads.get().min(decode_threads))
+                .unwrap_or(decode_threads);
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(thread_count)
+                .build()
+                .map_err(|e| anyhow!("Failed to build barcode decode thread pool: {}", e))?;
 
-        pool.install(|| {
-            attempts
-                .par_iter()
-                .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
-                .collect::<Vec<_>>()
-        })
-            }
-
-            #[cfg(not(feature = "execute"))]
-            {
+            pool.install(|| {
                 attempts
+                    .par_iter()
+                    .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
+                    .collect::<Vec<_>>()
+            })
+        }
+
+        #[cfg(not(feature = "execute"))]
+        {
+            attempts
                 .iter()
                 .map(|(variant, mode)| decode_variant_attempt(variant, &format_hints, *mode))
                 .collect::<Vec<_>>()
-            }
+        }
     };
 
     let mut barcodes = Vec::new();
@@ -990,55 +989,75 @@ fn build_decode_variants(
 
     let enhanced_variant_count = variants.len();
     if preprocessing.sharpen || preprocess_mode == PreprocessMode::Industrial {
-        append_processed_variants(&mut variants, enhanced_variant_count, max_variants, |variant| {
-            Some(variant.with_luma(
-                sharpen_luma(&variant.luma, variant.width, variant.height),
-                variant.width,
-                variant.height,
-                variant.point_scale,
-            ))
-        });
+        append_processed_variants(
+            &mut variants,
+            enhanced_variant_count,
+            max_variants,
+            |variant| {
+                Some(variant.with_luma(
+                    sharpen_luma(&variant.luma, variant.width, variant.height),
+                    variant.width,
+                    variant.height,
+                    variant.point_scale,
+                ))
+            },
+        );
     }
 
     if polarity == BarcodePolarity::LightOnDark {
         let polarity_source_count = variants.len();
-        append_processed_variants(&mut variants, polarity_source_count, max_variants, |variant| {
-            Some(variant.with_luma(
-                invert_luma(&variant.luma),
-                variant.width,
-                variant.height,
-                variant.point_scale,
-            ))
-        });
+        append_processed_variants(
+            &mut variants,
+            polarity_source_count,
+            max_variants,
+            |variant| {
+                Some(variant.with_luma(
+                    invert_luma(&variant.luma),
+                    variant.width,
+                    variant.height,
+                    variant.point_scale,
+                ))
+            },
+        );
     }
 
     let threshold_source_count = variants.len();
     if preprocessing.otsu_threshold {
-        append_processed_variants(&mut variants, threshold_source_count, max_variants, |variant| {
-            Some(variant.with_luma(
-                otsu_threshold_luma(&variant.luma),
-                variant.width,
-                variant.height,
-                variant.point_scale,
-            ))
-        });
+        append_processed_variants(
+            &mut variants,
+            threshold_source_count,
+            max_variants,
+            |variant| {
+                Some(variant.with_luma(
+                    otsu_threshold_luma(&variant.luma),
+                    variant.width,
+                    variant.height,
+                    variant.point_scale,
+                ))
+            },
+        );
     }
 
     if preprocessing.adaptive_threshold {
-        append_processed_variants(&mut variants, threshold_source_count, max_variants, |variant| {
-            Some(variant.with_luma(
-                adaptive_threshold_luma(
-                    &variant.luma,
+        append_processed_variants(
+            &mut variants,
+            threshold_source_count,
+            max_variants,
+            |variant| {
+                Some(variant.with_luma(
+                    adaptive_threshold_luma(
+                        &variant.luma,
+                        variant.width,
+                        variant.height,
+                        preprocessing.adaptive_threshold_window,
+                        preprocessing.adaptive_threshold_bias,
+                    ),
                     variant.width,
                     variant.height,
-                    preprocessing.adaptive_threshold_window,
-                    preprocessing.adaptive_threshold_bias,
-                ),
-                variant.width,
-                variant.height,
-                variant.point_scale,
-            ))
-        });
+                    variant.point_scale,
+                ))
+            },
+        );
     }
 
     if preprocessing.morphology {
@@ -1100,16 +1119,25 @@ fn build_decode_variants(
         } else {
             variants.len()
         };
-        append_processed_variants(&mut variants, upscale_source_count, max_variants, |variant| {
-            let (upscaled, upscaled_width, upscaled_height) =
-                upscale_luma_nearest(&variant.luma, variant.width, variant.height, upscale_factor);
-            Some(variant.with_luma(
-                upscaled,
-                upscaled_width,
-                upscaled_height,
-                variant.point_scale / upscale_factor as f32,
-            ))
-        });
+        append_processed_variants(
+            &mut variants,
+            upscale_source_count,
+            max_variants,
+            |variant| {
+                let (upscaled, upscaled_width, upscaled_height) = upscale_luma_nearest(
+                    &variant.luma,
+                    variant.width,
+                    variant.height,
+                    upscale_factor,
+                );
+                Some(variant.with_luma(
+                    upscaled,
+                    upscaled_width,
+                    upscaled_height,
+                    variant.point_scale / upscale_factor as f32,
+                ))
+            },
+        );
     }
 
     variants
@@ -1650,7 +1678,8 @@ impl NodeLogic for ReadBarcodesNode {
         // fetch inputs
         let options: ReadBarcodeOptions = context.evaluate_pin("options").await?;
         let preprocess_mode = parse_preprocess_mode(&options.preprocess)?;
-        let preprocessing = effective_preprocessing_options(preprocess_mode, &options.preprocessing);
+        let preprocessing =
+            effective_preprocessing_options(preprocess_mode, &options.preprocessing);
         let polarity = parse_polarity(&preprocessing.polarity)?;
         let rotations = effective_rotations(preprocess_mode, &preprocessing)?;
         let node_img: NodeImage = context.evaluate_pin("image_in").await?;
@@ -1821,7 +1850,13 @@ mod tests {
         assert_eq!(preprocess_schema.get("type"), Some(&json!("string")));
         assert_eq!(
             preprocess_schema.get("enum"),
-            Some(&json!(["None", "Balanced", "Fallback", "Aggressive", "Industrial"]))
+            Some(&json!([
+                "None",
+                "Balanced",
+                "Fallback",
+                "Aggressive",
+                "Industrial"
+            ]))
         );
         assert_eq!(preprocess_schema.get("default"), Some(&json!("Balanced")));
 
@@ -1829,10 +1864,12 @@ mod tests {
             .pointer("/properties/format")
             .expect("format schema should exist");
         assert_eq!(format_schema.get("default"), Some(&json!("QR_CODE")));
-        assert!(format_schema
-            .get("enum")
-            .and_then(|value| value.as_array())
-            .is_some_and(|formats| formats.contains(&json!("CODE_128"))));
+        assert!(
+            format_schema
+                .get("enum")
+                .and_then(|value| value.as_array())
+                .is_some_and(|formats| formats.contains(&json!("CODE_128")))
+        );
 
         let polarity_schema = schema
             .pointer("/properties/preprocessing/properties/polarity")

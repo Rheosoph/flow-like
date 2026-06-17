@@ -20,6 +20,10 @@ export class ApiKeyState implements IApiKeyState {
 				id: string;
 				name: string;
 				description?: string;
+				creator_user_id?: string;
+				creator_membership_id?: string;
+				creator_display_name?: string;
+				creator_email?: string;
 				role_id?: string;
 				role_name?: string;
 				role_permissions?: number;

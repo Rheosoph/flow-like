@@ -5,8 +5,8 @@
 use crate::abi::{exports, WasmAbi, WasmExecutionInput, WasmExecutionResult, WasmNodeDefinition};
 use crate::engine::WasmEngine;
 use crate::error::{WasmError, WasmResult};
-use crate::host_functions::HostState;
 use crate::host_functions::linker::{register_host_functions, StoreData};
+use crate::host_functions::HostState;
 use crate::limits::WasmSecurityConfig;
 use crate::memory::{WasmAllocator, WasmMemory};
 use crate::module::WasmModule;

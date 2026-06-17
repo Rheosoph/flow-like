@@ -8,9 +8,9 @@ use crate::{
     provider::{ModelProvider, ModelProviderConfiguration},
     response::Response,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flow_like_types::json::to_value;
 use flow_like_types::{Cacheable, Result, anyhow, async_trait};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rig::completion::CompletionModel;
 use rig::message::DocumentSourceKind;
 use rig::message::{
@@ -418,11 +418,7 @@ impl GeminiModel {
 
     /// Transform RigMessages to download HTTPS URLs and encode them as base64 for Gemini.
     /// Gemini only accepts gs:// URIs or inline base64 — arbitrary HTTPS URLs are rejected.
-    async fn transform_rig_messages(
-        &self,
-        prompt: &mut RigMessage,
-        history: &mut Vec<RigMessage>,
-    ) {
+    async fn transform_rig_messages(&self, prompt: &mut RigMessage, history: &mut Vec<RigMessage>) {
         transform_rig_message(prompt).await;
         for msg in history.iter_mut() {
             transform_rig_message(msg).await;
@@ -494,7 +490,8 @@ impl ModelLogic for GeminiModel {
 
         // GEMINI-SPECIFIC: Download HTTPS URLs (e.g. signed S3) and encode as base64.
         // Gemini only accepts gs:// URIs or inline base64 — arbitrary HTTPS URLs cause 400.
-        self.transform_rig_messages(&mut prompt, &mut chat_history).await;
+        self.transform_rig_messages(&mut prompt, &mut chat_history)
+            .await;
 
         let mut builder = completion_handle
             .completion_request(prompt)

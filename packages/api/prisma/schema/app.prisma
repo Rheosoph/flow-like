@@ -143,6 +143,7 @@ model AppUsageLimit {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
   /// Empty string means app-wide. A user id means per-user limit within the app.
+  /// Technical-user scoped limits use the technical user's id in the same column.
   userId String @default("")
 
   /// Valid values are weekly, monthly, yearly.
@@ -174,11 +175,23 @@ model TechnicalUser {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
+  creatorUser   User?   @relation("TechnicalUserCreator", fields: [creatorUserId], references: [id], onDelete: Cascade)
+  creatorUserId String?
+  creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
+  creatorMembershipId String?
+
+  llmUsage                    LLMUsageTracking[]
+  embeddingUsage              EmbeddingUsageTracking[]
+  executionUsage              ExecutionUsageTracking[]
+  executionRuns               ExecutionRun[]
+
   validUntil DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
   @@index([appId])
+  @@index([creatorUserId])
+  @@index([creatorMembershipId])
 }
 
 model Feedback {

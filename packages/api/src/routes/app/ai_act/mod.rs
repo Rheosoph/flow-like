@@ -612,9 +612,14 @@ pub async fn suggest_assessment(
     let permission = crate::ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
     let sub = permission.sub()?;
 
-    let (suggestion, signals, model) =
-        crate::routes::ai::governance::run_governance_agent(&state, &sub, &app_id, body.model_id, body.profile)
-            .await?;
+    let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
+        &state,
+        &sub,
+        &app_id,
+        body.model_id,
+        body.profile,
+    )
+    .await?;
 
     Ok(Json(SuggestResponse {
         suggestion: serde_json::to_value(&suggestion).unwrap_or(Value::Null),

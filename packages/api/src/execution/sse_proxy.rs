@@ -283,6 +283,7 @@ pub async fn update_run_on_completion(
             .or_else(|| existing.event_id.clone())
             .unwrap_or_default();
         let tracking_user_id = existing.user_id.clone();
+        let tracking_technical_user_id = existing.technical_user_id.clone();
         let tracking_app_id = existing.app_id.clone();
         let tracking_started_at = started_at.unwrap_or(created_at);
         let tracking_duration_us = (now - tracking_started_at).num_microseconds().unwrap_or(0);
@@ -310,6 +311,7 @@ pub async fn update_run_on_completion(
             tracking_duration_us,
             tracking_status,
             tracking_user_id.as_deref(),
+            tracking_technical_user_id.as_deref(),
             &tracking_app_id,
             now,
         )
@@ -327,6 +329,7 @@ async fn track_execution_usage_from_run(
     microseconds: i64,
     status: ExecutionStatus,
     user_id: Option<&str>,
+    technical_user_id: Option<&str>,
     app_id: &str,
     now: chrono::NaiveDateTime,
 ) -> Result<(), sea_orm::DbErr> {
@@ -348,6 +351,7 @@ async fn track_execution_usage_from_run(
         microseconds: Set(microseconds.max(0)),
         status: Set(status),
         user_id: Set(user_id.map(ToOwned::to_owned)),
+        technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(Some(app_id.to_string())),
         created_at: Set(now),
         updated_at: Set(now),

@@ -42,7 +42,8 @@
 		"enabled": true,
 		"log_ip": false,
 		"ip_retention_days": null,
-		"require_signing": true
+		"require_signing": true,
+		"log_executions": false
 	},
 	"forking": {
 		"enabled": true,

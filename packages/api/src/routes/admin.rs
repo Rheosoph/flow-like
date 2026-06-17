@@ -107,6 +107,10 @@ pub fn routes() -> Router<AppState> {
             "/usage/apps/{app_id}/limits",
             get(usage::get_limits).put(usage::put_limits),
         )
+        .route(
+            "/usage/apps/{app_id}/technical-users/{technical_user_id}/limits",
+            get(usage::get_technical_user_limits).put(usage::put_technical_user_limits),
+        )
         // Governance scores
         .route(
             "/governance/scores",

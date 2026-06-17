@@ -48,6 +48,7 @@ pub struct LlmUsageRecord {
     pub token_out: i64,
     pub latency: Option<f64>,
     pub app_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub price: i64,
     pub created_at: String,
 }
@@ -101,6 +102,7 @@ pub async fn get_llm_history(
             token_out: r.token_out,
             latency: r.latency,
             app_id: r.app_id,
+            technical_user_id: r.technical_user_id,
             price: r.price,
             created_at: r.created_at.and_utc().to_rfc3339(),
         })
@@ -125,6 +127,7 @@ pub struct EmbeddingUsageRecord {
     pub token_count: i64,
     pub latency: Option<f64>,
     pub app_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub price: i64,
     pub created_at: String,
 }
@@ -177,6 +180,7 @@ pub async fn get_embedding_history(
             token_count: r.token_count,
             latency: r.latency,
             app_id: r.app_id,
+            technical_user_id: r.technical_user_id,
             price: r.price,
             created_at: r.created_at.and_utc().to_rfc3339(),
         })
@@ -202,6 +206,7 @@ pub struct ExecutionUsageRecord {
     pub microseconds: i64,
     pub status: String,
     pub app_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub created_at: String,
 }
 
@@ -254,6 +259,7 @@ pub async fn get_execution_history(
             microseconds: r.microseconds,
             status: format!("{:?}", r.status),
             app_id: r.app_id,
+            technical_user_id: r.technical_user_id,
             created_at: r.created_at.and_utc().to_rfc3339(),
         })
         .collect();

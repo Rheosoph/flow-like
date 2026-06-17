@@ -21,6 +21,8 @@ pub struct Model {
     pub status: ExecutionStatus,
     #[sea_orm(column_name = "userId", column_type = "Text", nullable)]
     pub user_id: Option<String>,
+    #[sea_orm(column_name = "technicalUserId", column_type = "Text", nullable)]
+    pub technical_user_id: Option<String>,
     #[sea_orm(column_name = "appId", column_type = "Text", nullable)]
     pub app_id: Option<String>,
     #[sea_orm(column_name = "createdAt")]
@@ -47,6 +49,14 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     User,
+    #[sea_orm(
+        belongs_to = "super::technical_user::Entity",
+        from = "Column::TechnicalUserId",
+        to = "super::technical_user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    TechnicalUser,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -58,6 +68,12 @@ impl Related<super::app::Entity> for Entity {
 impl Related<super::user::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::User.def()
+    }
+}
+
+impl Related<super::technical_user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::TechnicalUser.def()
     }
 }
 

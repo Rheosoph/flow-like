@@ -46,6 +46,7 @@ import type { ISolutionListResponse } from "../../../lib/schema/solution/solutio
 import type {
 	IAdminAppUsage,
 	IAdminPaginated,
+	IAdminTechnicalUserUsage,
 	IAdminUsageAlert,
 	IAdminUsageInvocation,
 	IAdminUsageOverview,
@@ -76,6 +77,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Skeleton,
+	UserProfileLink,
 } from "../../ui";
 import { DashboardChainWidget, DashboardErrorWidget } from "./logs";
 
@@ -856,6 +858,156 @@ function SpendMixChart({
 	);
 }
 
+function TechnicalUsers({
+	overview,
+	loading,
+	profile,
+	period,
+}: {
+	overview: IAdminUsageOverview | undefined;
+	loading: boolean;
+	profile: IProfile | undefined;
+	period: IUsageLimitPeriod;
+}) {
+	return (
+		<Card>
+			<CardHeader>
+				<CardTitle className="text-base">Technical Users</CardTitle>
+				<CardDescription>API keys with the highest tracked usage.</CardDescription>
+			</CardHeader>
+			<CardContent className="space-y-2">
+				{loading && <Skeleton className="h-36 w-full" />}
+				{overview?.technicalUsers.map((technicalUser) => {
+					return (
+						<div
+							key={technicalUser.technicalUserId}
+							className="space-y-3 rounded-md border p-3 text-sm"
+						>
+							<div className="grid grid-cols-[1fr_auto] gap-3">
+								<div className="min-w-0">
+									<div className="truncate font-medium">
+										{technicalUser.name ?? technicalUser.technicalUserId}
+									</div>
+									<div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+										<UserProfileLink
+											userId={technicalUser.creatorUserId}
+											name={technicalUser.creatorDisplayName}
+											email={technicalUser.creatorEmail}
+											fallbackLabel="Unknown owner"
+											className="min-w-0"
+											muted
+										/>
+										{(technicalUser.appName || technicalUser.appId) && (
+											<>
+												<span className="shrink-0">-</span>
+												<span className="truncate">
+													{technicalUser.appName ?? technicalUser.appId}
+												</span>
+											</>
+										)}
+									</div>
+								</div>
+								<div className="text-right">
+									<div className="font-medium">
+										{formatCost(technicalUser.totalPrice)}
+									</div>
+									<div className="text-xs text-muted-foreground">
+										{formatCount(technicalUser.totalTokens)} tokens
+									</div>
+								</div>
+							</div>
+							{profile && technicalUser.appId && (
+								<TechnicalUserLimitEditor
+									technicalUser={technicalUser}
+									period={period}
+									profile={profile}
+								/>
+							)}
+						</div>
+					);
+				})}
+				{overview && overview.technicalUsers.length === 0 && (
+					<div className="rounded-md border p-4 text-sm text-muted-foreground">
+						No API-key usage for this period.
+					</div>
+				)}
+			</CardContent>
+		</Card>
+	);
+}
+
+function TechnicalUserLimitEditor({
+	technicalUser,
+	period,
+	profile,
+}: {
+	technicalUser: IAdminTechnicalUserUsage;
+	period: IUsageLimitPeriod;
+	profile: IProfile;
+}) {
+	const backend = useBackend();
+	const queryClient = useQueryClient();
+	const [cost, setCost] = useState(costInputValue(technicalUser.limits, period));
+	const [tokens, setTokens] = useState(
+		tokenInputValue(technicalUser.limits, period),
+	);
+
+	useEffect(() => {
+		setCost(costInputValue(technicalUser.limits, period));
+		setTokens(tokenInputValue(technicalUser.limits, period));
+	}, [technicalUser.limits, period]);
+
+	const mutation = useMutation({
+		mutationFn: async () => {
+			if (!technicalUser.appId) throw new Error("Missing app id");
+			const next = technicalUser.limits ?? emptyLimits();
+			return backend.apiState.put<IAppUsageLimits>(
+				profile,
+				`admin/usage/apps/${technicalUser.appId}/technical-users/${technicalUser.technicalUserId}/limits`,
+				{
+					...next,
+					[period]: {
+						...next[period],
+						costMicroDollars: cost.trim() ? toMicroDollars(cost) : null,
+						tokenLimit: tokens.trim() ? toTokenLimit(tokens) : null,
+					},
+				},
+			);
+		},
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["admin", "usage"] });
+		},
+	});
+
+	return (
+		<div className="grid gap-2 border-t pt-3 sm:grid-cols-[1fr_1fr_auto]">
+			<Input
+				inputMode="decimal"
+				placeholder="$ limit"
+				value={cost}
+				onChange={(event) => setCost(event.target.value)}
+				className="h-8"
+			/>
+			<Input
+				inputMode="numeric"
+				placeholder="Token limit"
+				value={tokens}
+				onChange={(event) => setTokens(event.target.value)}
+				className="h-8"
+			/>
+			<Button
+				size="icon"
+				variant="outline"
+				disabled={mutation.isPending}
+				onClick={() => mutation.mutate()}
+				aria-label="Save technical user usage limit"
+			>
+				<Save className="h-4 w-4" />
+			</Button>
+		</div>
+	);
+}
+
 function PowerUsers({
 	overview,
 	loading,
@@ -1444,6 +1596,9 @@ function UsageOperations({
 								<div className="truncate text-xs text-muted-foreground">
 									{item.provider ?? "provider"} - {item.status} -{" "}
 									{item.appId ?? "no app"}
+									{item.technicalUserId
+										? ` - key ${item.technicalUserId}`
+										: ""}
 								</div>
 							</div>
 							<div className="text-right">
@@ -1595,13 +1750,19 @@ function UsageOverviewSection({
 				<TopModelsChart overview={overview.data} loading={overview.isLoading} />
 			</div>
 
-			<div className="grid gap-4 lg:grid-cols-2">
+			<div className="grid gap-4 xl:grid-cols-3">
 				<LimitUtilization
 					overview={overview.data}
 					loading={overview.isLoading}
 					period={period}
 				/>
 				<PowerUsers overview={overview.data} loading={overview.isLoading} />
+				<TechnicalUsers
+					overview={overview.data}
+					loading={overview.isLoading}
+					profile={profile}
+					period={period}
+				/>
 			</div>
 
 			{profile && <UsageOperations profile={profile} period={period} />}

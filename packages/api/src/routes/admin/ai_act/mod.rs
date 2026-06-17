@@ -1275,9 +1275,14 @@ pub async fn assist(
         .await?;
 
     let sub = user.sub()?;
-    let (suggestion, signals, model) =
-        crate::routes::ai::governance::run_governance_agent(&state, &sub, &app_id, body.model_id, body.profile)
-            .await?;
+    let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
+        &state,
+        &sub,
+        &app_id,
+        body.model_id,
+        body.profile,
+    )
+    .await?;
 
     Ok(Json(serde_json::json!({
         "suggestion": suggestion,

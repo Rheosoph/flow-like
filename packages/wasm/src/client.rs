@@ -8,7 +8,7 @@ use crate::{
         RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
     },
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use std::{
     collections::HashMap,
