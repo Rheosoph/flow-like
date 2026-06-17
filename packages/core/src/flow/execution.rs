@@ -148,6 +148,8 @@ impl Default for ExecutionEnvironment {
 }
 
 impl ExecutionEnvironment {
+    pub const ENV_VAR: &'static str = "FLOW_LIKE_EXECUTION_ENVIRONMENT";
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
@@ -173,6 +175,31 @@ impl ExecutionEnvironment {
 
     pub fn is_local(self) -> bool {
         !matches!(self, Self::Server)
+    }
+
+    pub fn from_env() -> Option<Self> {
+        match std::env::var(Self::ENV_VAR) {
+            Ok(value) => match Self::parse(&value) {
+                Some(environment) => Some(environment),
+                None => {
+                    tracing::warn!(
+                        env_var = Self::ENV_VAR,
+                        value = %value,
+                        "Ignoring invalid execution environment override"
+                    );
+                    None
+                }
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(err) => {
+                tracing::warn!(
+                    env_var = Self::ENV_VAR,
+                    error = %err,
+                    "Unable to read execution environment override"
+                );
+                None
+            }
+        }
     }
 }
 

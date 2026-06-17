@@ -4,9 +4,7 @@ use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::{
     DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD, DEFAULT_RUN_LOG_FLUSH_INTERVAL, InternalRun,
 };
-use flow_like::flow::execution::{
-    ExecutionEnvironment, LogLevel, LogMeta, RunPayload, flush_run_cancelled,
-};
+use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancelled};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
 use flow_like::flow_like_storage::{Path, serde_arrow};
@@ -22,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::utils::UiEmitTarget;
+use crate::utils::{UiEmitTarget, local_execution_environment};
 use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
@@ -48,20 +46,6 @@ struct ExecutionOverrides {
     log_flush_interval: Option<Duration>,
     log_batch_size: Option<usize>,
     run_sub_override: Option<String>,
-}
-
-fn local_execution_environment() -> ExecutionEnvironment {
-    if let Ok(value) = std::env::var("FLOW_LIKE_EXECUTION_ENVIRONMENT")
-        && let Some(environment) = ExecutionEnvironment::parse(&value)
-    {
-        return environment;
-    }
-
-    if cfg!(any(target_os = "android", target_os = "ios")) {
-        ExecutionEnvironment::Mobile
-    } else {
-        ExecutionEnvironment::Desktop
-    }
 }
 
 async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {

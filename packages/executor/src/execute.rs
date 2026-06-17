@@ -484,10 +484,7 @@ pub async fn execute(
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
 
     run.set_execution_environment(
-        std::env::var("FLOW_LIKE_EXECUTION_ENVIRONMENT")
-            .ok()
-            .and_then(|value| ExecutionEnvironment::parse(&value))
-            .unwrap_or(ExecutionEnvironment::Server),
+        ExecutionEnvironment::from_env().unwrap_or(ExecutionEnvironment::Server),
     );
     if let Some(mode) = request.execution_mode {
         run.set_execution_mode(mode);

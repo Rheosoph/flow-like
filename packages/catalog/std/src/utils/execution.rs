@@ -289,12 +289,15 @@ impl NodeLogic for GetExecutionEnvironmentNode {
             .set_pin_value("run_id", json!(details.run_id))
             .await?;
         context
-            .set_pin_value("app_id", json!(details.app_id.clone().unwrap_or_default()))
+            .set_pin_value(
+                "app_id",
+                json!(details.app_id.as_deref().unwrap_or_default()),
+            )
             .await?;
         context
             .set_pin_value(
                 "user_id",
-                json!(details.user_id.clone().unwrap_or_default()),
+                json!(details.user_id.as_deref().unwrap_or_default()),
             )
             .await?;
         context.set_pin_value("details", json!(details)).await?;
@@ -474,7 +477,7 @@ impl NodeLogic for GetAppIdNode {
         let app_id = context
             .execution_cache
             .as_ref()
-            .map(|cache| cache.app_id.clone())
+            .map(|cache| cache.app_id.as_str())
             .unwrap_or_default();
         context.set_pin_value("app_id", json!(app_id)).await?;
         Ok(())

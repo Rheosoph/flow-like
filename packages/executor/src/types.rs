@@ -117,7 +117,7 @@ pub enum EventType {
 }
 
 impl TryFrom<DispatchPayload> for ExecutionRequest {
-    type Error = serde_json::Error;
+    type Error = flow_like_types::Error;
 
     fn try_from(p: DispatchPayload) -> Result<Self, Self::Error> {
         let credentials: SharedCredentials = serde_json::from_value(p.credentials)?;
@@ -126,7 +126,15 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             .map(serde_json::from_value)
             .transpose()?;
         let user_context = p.user_context.map(serde_json::from_value).transpose()?;
-        let execution_mode = p.execution_mode.as_deref().and_then(ExecutionMode::parse);
+        let execution_mode = match p.execution_mode.as_deref() {
+            Some(value) => Some(ExecutionMode::parse(value).ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "Invalid execution_mode '{}'. Expected one of: sync, async, event, scheduled",
+                    value
+                )
+            })?),
+            None => None,
+        };
 
         Ok(Self {
             credentials,

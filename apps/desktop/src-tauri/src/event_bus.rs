@@ -1,6 +1,9 @@
-use crate::{state::TauriSettingsState, utils::UiEmitTarget};
+use crate::{
+    state::TauriSettingsState,
+    utils::{UiEmitTarget, local_execution_environment},
+};
 use flow_like::app::App;
-use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, LogMeta};
+use flow_like::flow::execution::{InternalRun, LogMeta};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::Path;
 use flow_like::hub::Hub;
@@ -16,20 +19,6 @@ use tauri::{AppHandle, Manager};
 
 // Maximum number of events to queue. 100,000 should be plenty for local handling.
 const MAX_QUEUE_SIZE: usize = 100_000;
-
-fn local_execution_environment() -> ExecutionEnvironment {
-    if let Ok(value) = std::env::var("FLOW_LIKE_EXECUTION_ENVIRONMENT")
-        && let Some(environment) = ExecutionEnvironment::parse(&value)
-    {
-        return environment;
-    }
-
-    if cfg!(any(target_os = "android", target_os = "ios")) {
-        ExecutionEnvironment::Mobile
-    } else {
-        ExecutionEnvironment::Desktop
-    }
-}
 
 /// Update the last_node_update timestamp for a run when we see run events
 fn touch_run_last_update(app_handle: &AppHandle, events: &[InterComEvent]) {
