@@ -1,3 +1,4 @@
+use flow_like::flow::execution::ExecutionEnvironment;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -7,6 +8,16 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 
 static LAST_EMIT: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+
+pub fn local_execution_environment() -> ExecutionEnvironment {
+    ExecutionEnvironment::from_env().unwrap_or_else(|| {
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            ExecutionEnvironment::Mobile
+        } else {
+            ExecutionEnvironment::Desktop
+        }
+    })
+}
 
 #[derive(Clone, Debug)]
 pub enum UiEmitTarget {

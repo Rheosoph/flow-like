@@ -268,6 +268,9 @@ pub async fn invoke_event_async(
         token: params.token,
         oauth_tokens: params.oauth_tokens,
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: params.runtime_variables,
         user_context: Some(permission.to_user_context()),
         profile,

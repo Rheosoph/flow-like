@@ -1,4 +1,7 @@
-use crate::{state::TauriSettingsState, utils::UiEmitTarget};
+use crate::{
+    state::TauriSettingsState,
+    utils::{UiEmitTarget, local_execution_environment},
+};
 use flow_like::app::App;
 use flow_like::flow::execution::{InternalRun, LogMeta};
 use flow_like::flow::oauth::OAuthToken;
@@ -146,6 +149,8 @@ impl EventBusEvent {
             self.oauth_tokens.clone(),
         )
         .await?;
+
+        internal_run.set_execution_environment(local_execution_environment());
 
         let run_id = internal_run.run.lock().await.id.clone();
 

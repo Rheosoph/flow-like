@@ -728,6 +728,9 @@ pub async fn trigger_event(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (refreshed if needed)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // Sink triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -1021,6 +1024,9 @@ pub async fn trigger_http(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (if configured)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // HTTP sink triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -1414,6 +1420,9 @@ pub async fn trigger_telegram(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (if configured)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // Telegram webhook triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -1742,6 +1751,9 @@ pub async fn trigger_discord(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (if configured)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // Discord webhook triggers don't have user context
         profile: sink.profile_json.clone(),

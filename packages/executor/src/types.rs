@@ -1,5 +1,5 @@
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow::execution::UserExecutionContext;
+use flow_like::flow::execution::{ExecutionMode, UserExecutionContext};
 use flow_like::flow::variable::Variable;
 use flow_like_types::OAuthTokenInput;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,9 @@ pub struct ExecutionRequest {
     /// Whether to stream node state updates (true for interactive boards, false for events/background)
     #[serde(default)]
     pub stream_state: bool,
+    /// Execution mode hint from the API dispatch path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<ExecutionMode>,
     /// Runtime-configured variables to override board variables
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_variables: Option<HashMap<String, Variable>>,
@@ -114,7 +117,7 @@ pub enum EventType {
 }
 
 impl TryFrom<DispatchPayload> for ExecutionRequest {
-    type Error = serde_json::Error;
+    type Error = flow_like_types::Error;
 
     fn try_from(p: DispatchPayload) -> Result<Self, Self::Error> {
         let credentials: SharedCredentials = serde_json::from_value(p.credentials)?;
@@ -123,6 +126,15 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             .map(serde_json::from_value)
             .transpose()?;
         let user_context = p.user_context.map(serde_json::from_value).transpose()?;
+        let execution_mode = match p.execution_mode.as_deref() {
+            Some(value) => Some(ExecutionMode::parse(value).ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "Invalid execution_mode '{}'. Expected one of: sync, async, event, scheduled",
+                    value
+                )
+            })?),
+            None => None,
+        };
 
         Ok(Self {
             credentials,
@@ -136,6 +148,7 @@ impl TryFrom<DispatchPayload> for ExecutionRequest {
             token: p.token,
             oauth_tokens: p.oauth_tokens,
             stream_state: p.stream_state,
+            execution_mode,
             runtime_variables,
             user_context,
             profile: p.profile,

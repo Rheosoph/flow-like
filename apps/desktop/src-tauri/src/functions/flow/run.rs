@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::utils::UiEmitTarget;
+use crate::utils::{UiEmitTarget, local_execution_environment};
 use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
@@ -285,6 +285,7 @@ async fn execute_internal(
     if let Some(run_sub_override) = overrides.run_sub_override {
         internal_run.set_execution_sub(run_sub_override).await;
     }
+    internal_run.set_execution_environment(local_execution_environment());
 
     // Set offline user context for desktop app (always admin/owner)
     internal_run.set_offline_user_context();
