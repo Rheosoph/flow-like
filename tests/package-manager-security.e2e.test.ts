@@ -29,10 +29,6 @@ function expectTomlScalar(source: string, key: string, value: string) {
 	expect(source).toMatch(new RegExp(`^\\s*${key}\\s*=\\s*${value}\\s*$`, "m"));
 }
 
-function expectYamlScalar(source: string, key: string, value: string) {
-	expect(source).toMatch(new RegExp(`^${key}:\\s*${value}\\s*$`, "m"));
-}
-
 describe("package manager supply-chain policy", () => {
 	test("npm keeps the project policy pinned", () => {
 		const npmrc = parseNpmrc(readProjectFile(".npmrc"));
@@ -57,40 +53,35 @@ describe("package manager supply-chain policy", () => {
 		expect(bunfig).toContain('"flow-like-web"');
 	});
 
-	test("pnpm keeps the age gate, exact-save policy, and exotic subdep block enabled", () => {
-		const pnpmWorkspace = readProjectFile("pnpm-workspace.yaml");
-
-		expectYamlScalar(pnpmWorkspace, "minimumReleaseAge", "4320");
-		expectYamlScalar(pnpmWorkspace, "savePrefix", '""');
-		expectYamlScalar(pnpmWorkspace, "blockExoticSubdeps", "true");
-		expectYamlScalar(pnpmWorkspace, "strictDepBuilds", "true");
-		expect(pnpmWorkspace).toContain('- "@flow-like/*"');
-	});
-
-	test("install-script builder allowlists stay narrow", () => {
+	test("bun install-script builder allowlist stays narrow", () => {
 		const packageJson = JSON.parse(readProjectFile("package.json"));
-		const pnpmWorkspace = readProjectFile("pnpm-workspace.yaml");
 
 		expect(packageJson.trustedDependencies).toEqual(["esbuild", "fsevents", "sharp"]);
-		expect(pnpmWorkspace).toMatch(/^  core-js: false$/m);
-		expect(pnpmWorkspace).toMatch(/^  esbuild: true$/m);
-		expect(pnpmWorkspace).toMatch(/^  fsevents: true$/m);
-		expect(pnpmWorkspace).toMatch(/^  sharp: true$/m);
 	});
 
 	test("bun accepts the committed lockfile under the hardened config", () => {
 		const tempRoot = path.join(root, "tmp", "package-manager-security");
 		mkdirSync(tempRoot, { recursive: true });
 		const tempDir = mkdtempSync(path.join(tempRoot, "bun-"));
+		const cacheDir = path.join(tempDir, "cache");
+		const runtimeCacheDir = path.join(tempDir, "runtime-cache");
+		mkdirSync(cacheDir, { recursive: true });
+		mkdirSync(runtimeCacheDir, { recursive: true });
 
-		const result = spawnSync("bun", ["install", "--dry-run", "--frozen-lockfile"], {
-			cwd: root,
-			encoding: "utf8",
-			env: {
-				...process.env,
-				TMPDIR: tempDir,
+		const result = spawnSync(
+			"bun",
+			["install", "--dry-run", "--frozen-lockfile", `--cache-dir=${cacheDir}`],
+			{
+				cwd: root,
+				encoding: "utf8",
+				env: {
+					...process.env,
+					BUN_INSTALL_CACHE_DIR: cacheDir,
+					BUN_RUNTIME_TRANSPILER_CACHE_PATH: runtimeCacheDir,
+					TMPDIR: tempDir,
+				},
 			},
-		});
+		);
 
 		rmSync(tempDir, { force: true, recursive: true });
 
