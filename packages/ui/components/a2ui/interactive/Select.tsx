@@ -9,7 +9,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
-import { useOnAction } from "../ActionHandler";
+import { useComponentActionTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -42,6 +42,7 @@ export function A2UISelect({
 	surfaceId,
 }: ComponentProps<SelectComponent>) {
 	const onAction = useOnAction();
+	const triggerAction = useComponentActionTrigger(componentId);
 	const value = useResolved<string>(component.value);
 	const options =
 		useResolved<Array<{ value: string; label: string }>>(component.options) ??
@@ -69,6 +70,7 @@ export function A2UISelect({
 				context: { value: newValue },
 			});
 		}
+		void triggerAction(component.actions, { value: newValue });
 	};
 
 	return (

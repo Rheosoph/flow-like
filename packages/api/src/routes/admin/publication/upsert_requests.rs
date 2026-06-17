@@ -17,6 +17,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -94,6 +95,37 @@ pub async fn upsert_request(
         }
     };
 
+    // When the EU AI Act feature is enabled, a publication request may not be
+    // approved until the app owner has submitted a conformity assessment. Draft,
+    // blocked or missing assessments block approval (reject/hold remain allowed).
+    if new_status == PublicationRequestStatus::Accepted && state.platform_config.features.ai_act {
+        use crate::entity::{ai_act_assessment, sea_orm_active_enums::AiActAssessmentStatus};
+        let assessment = ai_act_assessment::Entity::find()
+            .filter(ai_act_assessment::Column::AppId.eq(&request.app_id))
+            .order_by_desc(ai_act_assessment::Column::Version)
+            .one(&state.db)
+            .await?;
+
+        match assessment {
+            None => {
+                return Err(ApiError::bad_request(
+                    "Approval blocked: the app owner has not submitted an EU AI Act conformity assessment.".to_string(),
+                ));
+            }
+            Some(a) if a.status == AiActAssessmentStatus::Blocked => {
+                return Err(ApiError::bad_request(
+                    "Approval blocked: this app declares a prohibited AI practice and cannot be published.".to_string(),
+                ));
+            }
+            Some(a) if a.status == AiActAssessmentStatus::Draft => {
+                return Err(ApiError::bad_request(
+                    "Approval blocked: the EU AI Act conformity assessment is still a draft and must be submitted by the owner.".to_string(),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+
     let mut active: publication_request::ActiveModel = request.clone().into_active_model();
     active.status = Set(new_status.clone());
     active.approver_id = Set(approver_id.clone());
@@ -108,6 +140,30 @@ pub async fn upsert_request(
             ..Default::default()
         };
         app_update.update(&state.db).await?;
+    }
+
+    // Resolve a bound EU AI Act assessment alongside the publication decision.
+    if let Some(assessment_id) = &request.ai_act_assessment_id {
+        use crate::entity::{ai_act_assessment, sea_orm_active_enums::AiActAssessmentStatus};
+        if let Some(assessment) = ai_act_assessment::Entity::find_by_id(assessment_id)
+            .one(&state.db)
+            .await?
+        {
+            let next_status = match new_status {
+                PublicationRequestStatus::Accepted => Some(AiActAssessmentStatus::Approved),
+                PublicationRequestStatus::Rejected => Some(AiActAssessmentStatus::Rejected),
+                _ => None,
+            };
+            if let Some(next_status) = next_status {
+                let mut active: ai_act_assessment::ActiveModel = assessment.into();
+                active.status = Set(next_status);
+                active.reviewed_by_id = Set(approver_id.clone());
+                active.reviewed_at = Set(Some(now));
+                active.review_note = Set(body.message.clone());
+                active.updated_at = Set(now);
+                active.update(&state.db).await?;
+            }
+        }
     }
 
     let reviewer_message = body.message.clone();

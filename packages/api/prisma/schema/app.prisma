@@ -107,6 +107,7 @@ model App {
   executionMode  ExecutionMode            @default(ANY)
 
   syncs  BoardSync[]
+  boardScores AppBoardScore[]
   bits   String[]    @default([])
   events Event[]
   sinks  EventSink[]
@@ -120,6 +121,9 @@ model App {
   discounts  AppDiscount[]
   salesDaily     AppSalesDaily[]
   analyticsDaily AppAnalyticsDaily[]
+
+  aiActAssessments       AiActAssessment[]
+  aiActModelObservations AiActModelObservation[]
 
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
@@ -139,6 +143,7 @@ model AppUsageLimit {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
   /// Empty string means app-wide. A user id means per-user limit within the app.
+  /// Technical-user scoped limits use the technical user's id in the same column.
   userId String @default("")
 
   /// Valid values are weekly, monthly, yearly.
@@ -170,11 +175,23 @@ model TechnicalUser {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
+  creatorUser   User?   @relation("TechnicalUserCreator", fields: [creatorUserId], references: [id], onDelete: Cascade)
+  creatorUserId String?
+  creatorMembership   Membership? @relation("TechnicalUserCreatorMembership", fields: [creatorMembershipId], references: [id], onDelete: Cascade)
+  creatorMembershipId String?
+
+  llmUsage                    LLMUsageTracking[]
+  embeddingUsage              EmbeddingUsageTracking[]
+  executionUsage              ExecutionUsageTracking[]
+  executionRuns               ExecutionRun[]
+
   validUntil DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
   @@index([appId])
+  @@index([creatorUserId])
+  @@index([creatorMembershipId])
 }
 
 model Feedback {
@@ -304,6 +321,48 @@ model BoardSync {
   updatedAt DateTime @updatedAt
 
   @@unique([appId, boardId])
+}
+
+/// Persisted quality / governance scores for a single board, aggregated as the
+/// MIN across that board's nodes per category (0-10, higher = better). App-level
+/// scores are derived on read via aggregation over these rows.
+model AppBoardScore {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  boardId String
+
+  security    Int
+  privacy     Int
+  performance Int
+  governance  Int
+  reliability Int
+  cost        Int
+
+  /// Minimum across all six categories - single sortable "how bad" value.
+  worstScore Int
+
+  nodeCount        Int @default(0)
+  scoredNodeCount  Int @default(0)
+  connectionCount  Int @default(0)
+
+  /// Nodes dragging scores down: [{ node, category, score, count? }]
+  flaggedPatterns Json?
+
+  /// Cached lightweight board summary metadata (name, stage, counts, ...) used
+  /// to serve board summaries without reading every board from object storage.
+  summary Json?
+
+  computedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([appId, boardId])
+  @@index([appId])
+  @@index([worstScore])
+  @@index([governance])
+  @@index([security])
 }
 
 /// Event model - mirrors the Event structure stored in bucket for fast lookups

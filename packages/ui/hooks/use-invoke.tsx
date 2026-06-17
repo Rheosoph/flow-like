@@ -43,12 +43,6 @@ export function useInvoke<T, Args extends any[]>(
 		].filter((arg) => typeof arg !== "undefined"),
 		queryFn: async () => {
 			try {
-				console.log(
-					"Invoking backend function:",
-					[backendFn.name || "backendFn", ...args, ...additionalDeps].filter(
-						(arg) => typeof arg !== "undefined",
-					),
-				);
 				const boundFn = backendFn.bind(backendContext ?? backend);
 				const response = await boundFn(...args);
 				return response; // No need to cast if types are correctly inferred/set
@@ -198,7 +192,6 @@ export function useInvalidateInfiniteInvoke() {
 			pageSize,
 			...additionalDeps,
 		].filter((arg) => typeof arg !== "undefined");
-		console.log("Invalidating infinite queries with prefix:", queryKeyPrefix);
 		return queryClient.invalidateQueries({
 			queryKey: queryKeyPrefix,
 		});
@@ -237,7 +230,6 @@ export function useInvalidateInvoke() {
 			...args,
 			...additionalDeps,
 		].filter((arg) => typeof arg !== "undefined");
-		console.log("Invalidating queries with prefix:", queryKeyPrefix);
 		return queryClient.invalidateQueries({
 			queryKey: queryKeyPrefix,
 		});
@@ -295,7 +287,6 @@ export async function injectDataFunction<T, Args extends any[]>(
 		if (!isEqual(result, oldData)) {
 			queryClient?.setQueryData(queryKey, result);
 		}
-		console.log("Injected data into query cache:", queryKey, result);
 
 		return {
 			data: result,

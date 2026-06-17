@@ -10,6 +10,7 @@ export {
 export {
 	ActionProvider,
 	useActions,
+	useComponentActionTrigger,
 	useExecuteAction,
 	useIsComponentTriggering,
 	useMarkComponentTriggering,

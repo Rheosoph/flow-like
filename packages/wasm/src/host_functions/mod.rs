@@ -15,6 +15,7 @@ pub mod streaming;
 pub mod variables;
 pub mod websocket;
 
+use crate::host_functions::storage::StorageFlowPath;
 use crate::limits::WasmCapabilities;
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::object_store::path::Path;
@@ -30,6 +31,10 @@ pub use websocket::WsConnection;
 pub struct StorageContext {
     pub stores: flow_like::state::FlowLikeStores,
     pub store_cache: RwLock<HashMap<String, FlowLikeStore>>,
+    /// Online desktop runs provide a credential-backed content store. Native
+    /// FlowPath nodes use this as the primary store and keep the configured app
+    /// store as a cache layer; WASM storage must mirror that behavior.
+    pub credentials_store: Option<FlowLikeStore>,
     pub app_id: String,
     pub board_dir: Path,
     pub board_id: String,
@@ -54,7 +59,7 @@ impl StorageContext {
         }
 
         // Foreign store_ref from native catalog nodes (e.g. "dirs__upload_..." without
-        // "wasm_" prefix). Try to match the pattern and auto-register the backing store.
+        // "wasm_" prefix). Match the pattern and auto-register the equivalent store.
         let store = self.resolve_foreign_store(store_ref)?;
         self.register_store(store_ref, store.clone());
         Some(store)
@@ -63,31 +68,26 @@ impl StorageContext {
     fn resolve_foreign_store(&self, store_ref: &str) -> Option<FlowLikeStore> {
         let key = store_ref.strip_prefix("wasm_").unwrap_or(store_ref);
 
-        if key.starts_with("dirs__upload_") || key.starts_with("dirs__storage_") {
-            let store = self.stores.app_storage_store.clone();
+        if let Some(dir_type) = Self::dir_type_from_store_ref(key, "cache_dirs__") {
+            let store = self.backing_store_for_dir(dir_type);
             if store.is_none() {
                 tracing::warn!(
-                    "[wasm] resolve_foreign_store: app_storage_store is None for {store_ref}"
+                    "[wasm] resolve_foreign_store: backing store is None for {store_ref}"
                 );
             }
             return store;
         }
-        if key.starts_with("dirs__cache_") {
-            let store = self.stores.temporary_store.clone();
+
+        if let Some(dir_type) = Self::dir_type_from_store_ref(key, "dirs__") {
+            let store = self.primary_store_for_dir(dir_type);
             if store.is_none() {
                 tracing::warn!(
-                    "[wasm] resolve_foreign_store: temporary_store is None for {store_ref}"
+                    "[wasm] resolve_foreign_store: primary store is None for {store_ref}"
                 );
             }
             return store;
         }
-        if key.starts_with("dirs__user_") {
-            let store = self.stores.user_store.clone();
-            if store.is_none() {
-                tracing::warn!("[wasm] resolve_foreign_store: user_store is None for {store_ref}");
-            }
-            return store;
-        }
+
         tracing::warn!("[wasm] resolve_foreign_store: no pattern matched for {store_ref}");
         None
     }
@@ -96,6 +96,56 @@ impl StorageContext {
         self.store_cache
             .write()
             .insert(store_ref.to_string(), store);
+    }
+
+    pub fn dir_flow_path(&self, dir_type: &str, dir: Path) -> Option<StorageFlowPath> {
+        let store_ref = format!("dirs__{dir_type}_{}", dir.as_ref());
+        let primary_store = self.primary_store_for_dir(dir_type)?;
+        self.register_store(&store_ref, primary_store);
+
+        let cache_store_ref = self.cache_store_for_dir(dir_type).map(|cache_store| {
+            let cache_store_ref = format!("cache_dirs__{dir_type}_{}", dir.as_ref());
+            self.register_store(&cache_store_ref, cache_store);
+            cache_store_ref
+        });
+
+        Some(StorageFlowPath {
+            path: dir.as_ref().to_string(),
+            store_ref,
+            cache_store_ref,
+        })
+    }
+
+    fn dir_type_from_store_ref(key: &str, prefix: &str) -> Option<&'static str> {
+        for dir_type in ["upload", "storage", "cache", "user"] {
+            let marker = format!("{prefix}{dir_type}_");
+            if key.starts_with(&marker) {
+                return Some(dir_type);
+            }
+        }
+        None
+    }
+
+    fn backing_store_for_dir(&self, dir_type: &str) -> Option<FlowLikeStore> {
+        match dir_type {
+            "upload" | "storage" => self.stores.app_storage_store.clone(),
+            "cache" => self.stores.temporary_store.clone(),
+            "user" => self.stores.user_store.clone(),
+            _ => None,
+        }
+    }
+
+    fn primary_store_for_dir(&self, dir_type: &str) -> Option<FlowLikeStore> {
+        self.credentials_store
+            .clone()
+            .or_else(|| self.backing_store_for_dir(dir_type))
+    }
+
+    fn cache_store_for_dir(&self, dir_type: &str) -> Option<FlowLikeStore> {
+        if self.credentials_store.is_some() {
+            return self.backing_store_for_dir(dir_type);
+        }
+        None
     }
 
     pub fn get_storage_dir(&self, node: bool) -> Path {

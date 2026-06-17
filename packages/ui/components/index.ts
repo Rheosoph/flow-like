@@ -1,6 +1,7 @@
 "use client";
 
 export * from "./flow/index";
+export * from "./create-flow-dialog";
 export * from "./index/dark-mode-toggle";
 export * from "./theme-provider";
 export * from "./ui/index";

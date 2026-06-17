@@ -112,6 +112,18 @@ pub async fn report_run(
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to update run: {}", e)))?;
     } else {
+        let execution_audit = crate::audit::ExecutionAudit {
+            run_id: body.run_id.clone(),
+            app_id: app_id.clone(),
+            board_id: board_id.clone(),
+            event_id: body.event_id.clone(),
+            node_id: Some(body.node_id.clone()),
+            version: body.version.clone(),
+            mode: RunMode::Local,
+            status: run_status.clone(),
+            input_payload_len: 0,
+            technical_user_id: None,
+        };
         let run = execution_run::ActiveModel {
             id: Set(body.run_id.clone()),
             board_id: Set(board_id.clone()),
@@ -131,6 +143,7 @@ pub async fn report_run(
             completed_at: Set(to_datetime(body.end)),
             expires_at: Set(Some(expires_at)),
             user_id: Set(Some(sub)),
+            technical_user_id: Set(None),
             app_id: Set(app_id.clone()),
             created_at: Set(now),
             updated_at: Set(now),
@@ -138,6 +151,7 @@ pub async fn report_run(
         run.insert(&state.db)
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to create run: {}", e)))?;
+        crate::audit::record_execution_start(&state, &user, execution_audit).await;
     }
 
     Ok(Json(ReportRunResponse {

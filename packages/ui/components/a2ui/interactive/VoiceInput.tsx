@@ -6,7 +6,11 @@ import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
-import { useOnAction } from "../ActionHandler";
+import {
+	useComponentActionTrigger,
+	useIsComponentTriggering,
+	useOnAction,
+} from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -20,6 +24,11 @@ interface VoiceData {
 	backendUrl?: string;
 	uploading?: boolean;
 	uploadError?: string;
+}
+
+function toStoredVoice(voice: VoiceData): VoiceData {
+	const { uploading: _uploading, uploadError: _uploadError, ...stored } = voice;
+	return stored;
 }
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -219,6 +228,8 @@ export function A2UIVoiceInput({
 	surfaceId,
 }: ComponentProps<VoiceInputComponent>) {
 	const onAction = useOnAction();
+	const triggerAction = useComponentActionTrigger(componentId);
+	const isTriggering = useIsComponentTriggering(componentId);
 	const backend = useBackend();
 	const { setByPath } = useData();
 
@@ -421,7 +432,16 @@ export function A2UIVoiceInput({
 						surfaceId,
 						sourceComponentId: componentId,
 						timestamp: Date.now(),
-						context: { value: backendUrl, duration: finalDuration },
+						context: {
+							value: toStoredVoice(uploaded),
+							signedUrls: backendUrl,
+							duration: finalDuration,
+						},
+					});
+
+					await triggerAction(component.actions, {
+						signedUrls: backendUrl,
+						duration: finalDuration,
 					});
 				} catch (err) {
 					const errored: VoiceData = {
@@ -440,11 +460,13 @@ export function A2UIVoiceInput({
 	}, [
 		recordingTime,
 		backend.helperState,
+		component.actions,
 		component.value,
 		componentId,
 		onAction,
 		setByPath,
 		surfaceId,
+		triggerAction,
 	]);
 
 	const clearRecording = useCallback(() => {
@@ -553,7 +575,7 @@ export function A2UIVoiceInput({
 										{formatFileSize(display.size)}
 									</p>
 								</div>
-								{display.uploading ? (
+								{display.uploading || isTriggering ? (
 									<Loader2 className="w-5 h-5 animate-spin text-primary" />
 								) : display.uploadError ? (
 									<span className="text-xs text-destructive">

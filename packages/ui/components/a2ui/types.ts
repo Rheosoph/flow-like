@@ -209,6 +209,7 @@ export interface ComponentBase {
 	style?: Style;
 	children?: Children;
 	actions?: Action[];
+	hidden?: BoundValue | boolean;
 }
 
 // Layout components
@@ -1027,6 +1028,7 @@ export interface FilePreviewComponent extends ComponentBase {
 	fallbackText?: BoundValue;
 	height?: BoundValue;
 	showDownload?: BoundValue;
+	loading?: BoundValue; // "lazy" | "eager"
 }
 
 // NivoChart - Nivo chart library component
@@ -1417,7 +1419,7 @@ export interface GeoMapComponent extends ComponentBase {
 
 // Widget Instance Component - references a widget definition stored in page.widgetRefs
 // The widget definition is looked up by instanceId from the page's widgetRefs
-export interface WidgetInstanceComponent {
+export interface WidgetInstanceComponent extends ComponentBase {
 	type: "widgetInstance";
 	/** The instance ID - used to look up the widget definition from page.widgetRefs */
 	instanceId: string;

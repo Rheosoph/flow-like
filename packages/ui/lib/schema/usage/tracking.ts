@@ -7,6 +7,7 @@ export interface ILlmUsageRecord {
 	token_out: number;
 	latency: number | null;
 	app_id: string | null;
+	technical_user_id: string | null;
 	price: number;
 	created_at: string;
 }
@@ -19,6 +20,7 @@ export interface IEmbeddingUsageRecord {
 	token_count: number;
 	latency: number | null;
 	app_id: string | null;
+	technical_user_id: string | null;
 	price: number;
 	created_at: string;
 }
@@ -32,6 +34,7 @@ export interface IExecutionUsageRecord {
 	microseconds: number;
 	status: string;
 	app_id: string | null;
+	technical_user_id: string | null;
 	created_at: string;
 }
 
@@ -114,6 +117,29 @@ export interface IAdminAppUsage {
 	limits: IAppUsageLimits | null;
 }
 
+export interface IAdminTechnicalUserUsage {
+	technicalUserId: string;
+	name: string | null;
+	appId: string | null;
+	appName: string | null;
+	creatorUserId: string | null;
+	creatorMembershipId: string | null;
+	creatorDisplayName: string | null;
+	creatorEmail: string | null;
+	limits: IAppUsageLimits | null;
+	llmPrice: number;
+	embeddingPrice: number;
+	totalPrice: number;
+	llmTokens: number;
+	embeddingTokens: number;
+	totalTokens: number;
+	llmInvocations: number;
+	embeddingInvocations: number;
+	executions: number;
+	executionMicroseconds: number;
+	averageExecutionMs: number | null;
+}
+
 export interface IAdminModelUsage {
 	kind: "llm" | "embedding";
 	modelId: string;
@@ -175,6 +201,7 @@ export interface IAdminUsageOverview {
 	trend: IAdminUsageTrendPoint[];
 	powerUsers: IAdminPowerUser[];
 	users: IAdminUserUsage[];
+	technicalUsers: IAdminTechnicalUserUsage[];
 	apps: IAdminAppUsage[];
 	models: IAdminModelUsage[];
 }
@@ -191,6 +218,7 @@ export interface IAdminUsageInvocation {
 	kind: string;
 	status: string;
 	userId: string | null;
+	technicalUserId: string | null;
 	appId: string | null;
 	provider: string | null;
 	endpoint: string | null;

@@ -50,6 +50,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "technicalUserId", column_type = "Text", nullable)]
+    pub technical_user_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

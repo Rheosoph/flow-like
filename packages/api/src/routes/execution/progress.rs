@@ -202,6 +202,7 @@ pub async fn report_progress(
             duration_us,
             exec_status,
             user_id.as_deref(),
+            claims.technical_user_id.as_deref(),
             &claims.app_id,
         )
         .await
@@ -505,6 +506,7 @@ async fn track_execution_usage(
     microseconds: i64,
     status: ExecutionStatus,
     user_id: Option<&str>,
+    technical_user_id: Option<&str>,
     app_id: &str,
 ) -> Result<(), flow_like_types::Error> {
     let existing = execution_usage_tracking::Entity::find()
@@ -526,6 +528,7 @@ async fn track_execution_usage(
         microseconds: Set(microseconds),
         status: Set(status),
         user_id: Set(user_id.map(ToOwned::to_owned)),
+        technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(Some(app_id.to_string())),
         created_at: Set(now),
         updated_at: Set(now),

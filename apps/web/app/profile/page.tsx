@@ -9,8 +9,6 @@ import {
 	AvatarImage,
 	Badge,
 	Button,
-	Card,
-	CardContent,
 	type IApp,
 	type IMetadata,
 	Skeleton,
@@ -23,63 +21,178 @@ import type { IUserLookup } from "@flow-like/flow-like-ui/state/backend-state/ty
 import { motion } from "framer-motion";
 import {
 	AlertCircle,
-	Calendar,
+	BadgeCheck,
+	CalendarDays,
+	CircleUserRound,
 	Loader2,
+	type LucideIcon,
 	Mail,
 	Package,
-	Sparkles,
-	User,
+	PanelsTopLeft,
+	UserRound,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
+
+const fadeIn = {
+	hidden: { opacity: 0, y: 12 },
+	visible: { opacity: 1, y: 0 },
+};
+
+const APP_SKELETON_IDS = [
+	"app-skeleton-one",
+	"app-skeleton-two",
+	"app-skeleton-three",
+	"app-skeleton-four",
+	"app-skeleton-five",
+	"app-skeleton-six",
+];
+
+function getInitials(label: string) {
+	const parts = label.trim().split(/\s+/).filter(Boolean);
+	if (parts.length === 0) return "??";
+	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+	return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`
+		.toUpperCase()
+		.slice(0, 2);
+}
+
+function formatDate(value: string) {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return "Unknown";
+	return date.toLocaleDateString("en-US", {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	});
+}
 
 const ProfileSkeleton = () => (
-	<div className="bg-gradient-to-br from-background via-background/50 to-primary/5 flex-1 min-h-0 overflow-auto">
-		<div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-			<motion.div
-				initial={{ opacity: 0, y: 20 }}
-				animate={{ opacity: 1, y: 0 }}
-				className="max-w-4xl mx-auto"
-			>
-				<div className="relative">
-					<div className="absolute inset-0 bg-gradient-to-r from-primary/20 via-tertiary/20 to-tertiary/20 rounded-3xl blur-3xl opacity-30 animate-pulse" />
-					<Card className="relative backdrop-blur-xl bg-background/80 border-0 shadow-2xl rounded-3xl overflow-hidden">
-						<CardContent className="p-6 sm:p-8 lg:p-12">
-							<div className="flex flex-col md:flex-row items-center gap-4 sm:gap-6 lg:gap-8">
-								<Skeleton className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-full" />
-								<div className="flex-1 space-y-4 text-center md:text-left">
-									<Skeleton className="h-8 w-64 mx-auto md:mx-0" />
-									<Skeleton className="h-6 w-48 mx-auto md:mx-0" />
-									<div className="flex flex-wrap gap-2 justify-center md:justify-start">
-										<Skeleton className="h-6 w-20" />
-										<Skeleton className="h-6 w-24" />
-									</div>
-								</div>
-							</div>
-						</CardContent>
-					</Card>
+	<main className="flex-1 min-h-0 overflow-auto bg-background">
+		<section className="border-b bg-muted/25">
+			<div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+				<div className="grid gap-y-4 sm:grid-cols-[96px_minmax(0,1fr)] sm:gap-x-5">
+					<Skeleton className="h-4 w-24 sm:col-start-2" />
+					<Skeleton className="h-24 w-24 rounded-lg sm:row-start-2" />
+					<div className="min-w-0 space-y-3 sm:col-start-2">
+						<Skeleton className="h-8 w-64 max-w-full" />
+						<Skeleton className="h-5 w-40 max-w-full" />
+						<div className="flex flex-wrap gap-2">
+							<Skeleton className="h-7 w-32" />
+							<Skeleton className="h-7 w-28" />
+						</div>
+						<div className="grid gap-2 pt-1 sm:grid-cols-3">
+							<Skeleton className="h-12 w-full" />
+							<Skeleton className="h-12 w-full" />
+							<Skeleton className="h-12 w-full" />
+						</div>
+					</div>
 				</div>
-			</motion.div>
+			</div>
+		</section>
+		<div className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+			<div className="space-y-6 sm:pl-[116px]">
+				<Skeleton className="h-20 w-full" />
+				<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+					{APP_SKELETON_IDS.map((id) => (
+						<div key={id} className="space-y-3">
+							<Skeleton className="h-44 w-full rounded-lg" />
+							<Skeleton className="h-4 w-3/4" />
+							<Skeleton className="h-4 w-1/2" />
+						</div>
+					))}
+				</div>
+			</div>
 		</div>
-	</div>
+	</main>
 );
 
 const ProfileError = ({ error }: { error: string }) => (
-	<div className="bg-gradient-to-br from-background via-background/50 to-destructive/5 flex items-center justify-center flex-1 min-h-0 overflow-auto">
+	<main className="flex flex-1 min-h-0 items-center justify-center overflow-auto bg-background p-4">
 		<motion.div
-			initial={{ opacity: 0, scale: 0.95 }}
-			animate={{ opacity: 1, scale: 1 }}
-			className="max-w-md mx-auto px-4"
+			initial={{ opacity: 0, y: 8 }}
+			animate={{ opacity: 1, y: 0 }}
+			className="w-full max-w-md"
 		>
-			<Alert className="border-destructive/20 bg-destructive/5">
+			<Alert className="border-destructive/30 bg-destructive/5">
 				<AlertCircle className="h-4 w-4" />
-				<AlertDescription className="text-center">
+				<AlertDescription>
 					{error || "Failed to load user profile"}
 				</AlertDescription>
 			</Alert>
 		</motion.div>
-	</div>
+	</main>
 );
+
+function ProfileFact({
+	icon: Icon,
+	label,
+	value,
+}: {
+	icon: LucideIcon;
+	label: string;
+	value: string;
+}) {
+	return (
+		<div className="min-w-0 rounded-md border bg-background/70 px-3 py-2">
+			<div className="flex items-center gap-2 text-xs font-medium uppercase text-muted-foreground">
+				<Icon className="h-3.5 w-3.5 shrink-0" />
+				<span className="truncate">{label}</span>
+			</div>
+			<div className="mt-1 truncate text-sm font-semibold">{value}</div>
+		</div>
+	);
+}
+
+function TextSection({
+	icon: Icon,
+	title,
+	children,
+}: {
+	icon: LucideIcon;
+	title: string;
+	children: ReactNode;
+}) {
+	return (
+		<section className="border-b pb-5">
+			<div className="mb-3 flex items-center gap-2">
+				<Icon className="h-4 w-4 text-muted-foreground" />
+				<h2 className="text-sm font-semibold uppercase text-muted-foreground">
+					{title}
+				</h2>
+			</div>
+			<div className="max-w-4xl text-sm leading-6 text-foreground/85">
+				{children}
+			</div>
+		</section>
+	);
+}
+
+function EmptyAppsState({ displayName }: { displayName: string }) {
+	return (
+		<div className="rounded-lg border border-dashed p-8 text-center sm:p-12">
+			<Package className="mx-auto h-10 w-10 text-muted-foreground" />
+			<h3 className="mt-4 text-base font-semibold">No published apps yet</h3>
+			<p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+				{displayName} has not published any apps to the store.
+			</p>
+		</div>
+	);
+}
+
+function AppsLoadingGrid() {
+	return (
+		<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+			{APP_SKELETON_IDS.map((id) => (
+				<div key={id} className="space-y-3">
+					<Skeleton className="h-44 w-full rounded-lg" />
+					<Skeleton className="h-4 w-3/4" />
+					<Skeleton className="h-4 w-1/2" />
+				</div>
+			))}
+		</div>
+	);
+}
 
 const ProfileContent = ({
 	user,
@@ -100,237 +213,181 @@ const ProfileContent = ({
 }) => {
 	const router = useRouter();
 	const displayName =
-		user.name || user.preferred_username || user.username || "Unknown User";
+		user.name || user.preferred_username || user.username || "Unknown user";
 	const username = user.preferred_username || user.username;
-	const initials = displayName
-		.split(" ")
-		.map((n) => n[0])
-		.join("")
-		.toUpperCase()
-		.slice(0, 2);
-	const joinDate = new Date(user.created_at).toLocaleDateString("en-US", {
-		year: "numeric",
-		month: "long",
-		day: "numeric",
-	});
-
-	const containerVariants = {
-		hidden: { opacity: 0 },
-		visible: {
-			opacity: 1,
-			transition: {
-				staggerChildren: 0.1,
-				delayChildren: 0.2,
-			},
-		},
-	};
-
-	const itemVariants = {
-		hidden: { opacity: 0, y: 20 },
-		visible: { opacity: 1, y: 0 },
-	};
+	const initials = getInitials(displayName);
+	const joinDate = formatDate(user.created_at);
+	const hasDescription = Boolean(user.description?.trim());
+	const hasAdditionalInfo = Boolean(user.additional_info?.trim());
+	const appCountLabel = isAppsLoading
+		? "Loading"
+		: `${apps.length} ${apps.length === 1 ? "app" : "apps"}`;
 
 	return (
-		<div className="relative overflow-auto flex-1 min-h-0">
-			<div className="container mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 relative z-10">
+		<main className="flex-1 min-h-0 overflow-auto bg-background">
+			<section className="border-b bg-muted/25">
 				<motion.div
-					variants={containerVariants}
+					variants={fadeIn}
 					initial="hidden"
 					animate="visible"
-					className="max-w-4xl mx-auto"
+					transition={{ duration: 0.25 }}
+					className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8"
 				>
-					{/* Main Profile Card */}
-					<motion.div variants={itemVariants} className="relative mb-8">
-						<Card className="relative backdrop-blur-xl bg-background/80 border-0 shadow-2xl rounded-3xl overflow-hidden">
-							<CardContent className="p-6 sm:p-8 lg:p-12">
-								<div className="flex flex-col lg:flex-row items-center gap-4 sm:gap-6 lg:gap-8">
-									<motion.div
-										whileHover={{ scale: 1.05 }}
-										transition={{ type: "spring", stiffness: 300 }}
-										className="relative"
-									>
-										<div className="absolute inset-0 bg-gradient-to-r from-primary to-tertiary rounded-full blur-lg opacity-50 animate-pulse" />
-										<Avatar className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 relative z-10 border-2 md:border-4 border-background shadow-xl">
-											<AvatarImage src={user.avatar_url} alt={displayName} />
-											<AvatarFallback className="text-2xl font-bold bg-gradient-to-br from-primary to-tertiary text-white">
-												{initials}
-											</AvatarFallback>
-										</Avatar>
-										<motion.div
-											animate={{ rotate: 360 }}
-											transition={{
-												duration: 20,
-												repeat: Number.POSITIVE_INFINITY,
-												ease: "linear",
-											}}
-											className="absolute -inset-2 border-2 border-dashed border-primary/30 rounded-full hidden sm:block"
-										/>
-									</motion.div>
+					<div className="grid gap-y-4 sm:grid-cols-[96px_minmax(0,1fr)] sm:gap-x-5">
+						<div className="inline-flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground sm:col-start-2">
+							<CircleUserRound className="h-3.5 w-3.5" />
+							Public profile
+						</div>
 
-									<div className="flex-1 text-center lg:text-left space-y-4">
-										<motion.div variants={itemVariants} className="space-y-2">
-											<h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold bg-gradient-to-r from-primary via-tertiary to-tertiary bg-clip-text text-transparent leading-tight break-words">
-												{displayName}
-											</h1>
-											{username && (
-												<p className="text-base sm:text-lg md:text-xl text-muted-foreground break-words">
-													@{username}
-												</p>
-											)}
-										</motion.div>
+						<Avatar className="h-24 w-24 shrink-0 rounded-lg border bg-card shadow-sm sm:row-start-2">
+							<AvatarImage src={user.avatar_url} alt={displayName} />
+							<AvatarFallback className="rounded-lg text-2xl font-semibold">
+								{initials}
+							</AvatarFallback>
+						</Avatar>
 
-										<motion.div
-											variants={itemVariants}
-											className="flex flex-wrap gap-3 justify-center lg:justify-start"
-										>
-											{user.email && (
-												<Badge
-													variant="secondary"
-													className="px-4 py-2 bg-primary/10 hover:bg-primary/20 transition-colors"
-												>
-													<Mail className="w-4 h-4 mr-2" />
-													Contact Available
-												</Badge>
-											)}
-											<Badge
-												variant="outline"
-												className="px-4 py-2 border-primary/30 hover:bg-primary/5 transition-colors"
-											>
-												<Calendar className="w-4 h-4 mr-2" />
-												Joined {joinDate}
-											</Badge>
-											<Badge className="px-4 py-2 bg-gradient-to-r from-primary to-tertiary hover:opacity-90 transition-opacity">
-												<Sparkles className="w-4 h-4 mr-2" />
-												Flow-Like User
-											</Badge>
-										</motion.div>
-									</div>
-								</div>
-							</CardContent>
-						</Card>
-					</motion.div>
-
-					{/* Description Section */}
-					{user.description && (
-						<motion.div variants={itemVariants} className="relative mb-8">
-							<div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-tertiary/10 to-tertiary/10 rounded-2xl blur-2xl opacity-50" />
-							<Card className="relative backdrop-blur-xl bg-background/60 border-0 shadow-xl rounded-2xl">
-								<CardContent className="p-4 sm:p-6 lg:p-8">
-									<h2 className="text-xl sm:text-2xl font-semibold mb-4 flex items-center gap-2">
-										<User className="w-6 h-6 text-primary" />
-										About
-									</h2>
-									<p className="text-base sm:text-lg leading-relaxed text-muted-foreground">
-										{user.description}
+						<div className="min-w-0 space-y-3 sm:col-start-2">
+							<div className="space-y-1.5">
+								<h1 className="break-words text-3xl font-semibold tracking-tight sm:text-4xl">
+									{displayName}
+								</h1>
+								{username && (
+									<p className="break-words text-base text-muted-foreground">
+										@{username}
 									</p>
-								</CardContent>
-							</Card>
-						</motion.div>
-					)}
-
-					{/* Additional Info Section */}
-					{user.additional_info && (
-						<motion.div variants={itemVariants} className="relative mb-8">
-							<div className="absolute inset-0 bg-gradient-to-r from-green-500/10 via-tertiary/10 to-tertiary/10 rounded-2xl blur-2xl opacity-50" />
-							<Card className="relative backdrop-blur-xl bg-background/60 border-0 shadow-xl rounded-2xl">
-								<CardContent className="p-4 sm:p-6 lg:p-8">
-									<h2 className="text-xl sm:text-2xl font-semibold mb-4 flex items-center gap-2">
-										<Sparkles className="w-6 h-6 text-primary" />
-										Additional Information
-									</h2>
-									<p className="text-base sm:text-lg leading-relaxed text-muted-foreground">
-										{user.additional_info}
-									</p>
-								</CardContent>
-							</Card>
-						</motion.div>
-					)}
-
-					{/* Apps Section */}
-					<motion.div variants={itemVariants} className="relative">
-						<div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 via-tertiary/10 to-tertiary/10 rounded-2xl blur-2xl opacity-50" />
-						<Card className="relative backdrop-blur-xl bg-background/60 border-0 shadow-xl rounded-2xl">
-							<CardContent className="p-4 sm:p-6 lg:p-8">
-								<h2 className="text-xl sm:text-2xl font-semibold mb-6 flex items-center gap-2">
-									<Package className="w-6 h-6 text-primary" />
-									Published Apps
-									{apps.length > 0 && (
-										<Badge variant="secondary" className="ml-2">
-											{apps.length}
-										</Badge>
-									)}
-								</h2>
-
-								{appsError && (
-									<Alert className="mb-6 border-destructive/20 bg-destructive/5">
-										<AlertCircle className="h-4 w-4" />
-										<AlertDescription>
-											Failed to load apps: {appsError.message}
-										</AlertDescription>
-									</Alert>
 								)}
+							</div>
 
-								{isAppsLoading ? (
-									<div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-										{[...Array(6)].map((_, i) => (
-											<div key={i} className="space-y-3">
-												<Skeleton className="h-40 sm:h-48 w-full rounded-lg" />
-												<Skeleton className="h-4 w-3/4" />
-												<Skeleton className="h-4 w-1/2" />
-											</div>
-										))}
-									</div>
-								) : apps.length === 0 ? (
-									<div className="text-center py-12">
-										<Package className="w-16 h-16 mx-auto text-muted-foreground/50 mb-4" />
-										<p className="text-lg text-muted-foreground">
-											{displayName} hasn&apos;t published any apps yet.
-										</p>
-									</div>
-								) : (
-									<>
-										<div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-											{apps.map(([app, metadata]) => (
-												<AppCard
-													key={app.id}
-													app={app}
-													variant="extended"
-													metadata={metadata}
-													className="w-full"
-													onClick={() => router.push(`/store?id=${app.id}`)}
-													href={`/store?id=${app.id}`}
-												/>
-											))}
-										</div>
-
-										{hasNextPage && (
-											<div className="flex justify-center mt-8">
-												<Button
-													onClick={fetchNextPage}
-													disabled={isFetchingNextPage}
-													variant="outline"
-													size="lg"
-													className="px-8"
-												>
-													{isFetchingNextPage ? (
-														<>
-															<Loader2 className="w-4 h-4 mr-2 animate-spin" />
-															Loading more...
-														</>
-													) : (
-														"Load More Apps"
-													)}
-												</Button>
-											</div>
-										)}
-									</>
+							<div className="flex flex-wrap gap-2">
+								<Badge variant="secondary">
+									<BadgeCheck />
+									Flow-Like user
+								</Badge>
+								{user.email && (
+									<Badge variant="outline">
+										<Mail />
+										Contact available
+									</Badge>
 								)}
-							</CardContent>
-						</Card>
-					</motion.div>
+							</div>
+
+							<div className="grid gap-2 pt-1 sm:grid-cols-3 lg:max-w-2xl">
+								<ProfileFact
+									icon={Package}
+									label="Published"
+									value={appCountLabel}
+								/>
+								<ProfileFact
+									icon={CalendarDays}
+									label="Joined"
+									value={joinDate}
+								/>
+								<ProfileFact
+									icon={Mail}
+									label="Contact"
+									value={user.email ? "Available" : "Not listed"}
+								/>
+							</div>
+						</div>
+					</div>
 				</motion.div>
-			</div>
-		</div>
+			</section>
+
+			<motion.div
+				variants={fadeIn}
+				initial="hidden"
+				animate="visible"
+				transition={{ duration: 0.25, delay: 0.05 }}
+				className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6 lg:px-8"
+			>
+				<div className="min-w-0 space-y-5 sm:pl-[116px]">
+					{hasDescription && (
+						<TextSection icon={UserRound} title="About">
+							<p>{user.description}</p>
+						</TextSection>
+					)}
+
+					{hasAdditionalInfo && (
+						<TextSection icon={PanelsTopLeft} title="Additional information">
+							<p>{user.additional_info}</p>
+						</TextSection>
+					)}
+
+					{!hasDescription && !hasAdditionalInfo && (
+						<TextSection icon={UserRound} title="About">
+							<p className="text-muted-foreground">
+								This user has not added profile details yet.
+							</p>
+						</TextSection>
+					)}
+
+					<section className="space-y-5">
+						<div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+							<div>
+								<div className="flex items-center gap-2">
+									<Package className="h-5 w-5 text-muted-foreground" />
+									<h2 className="text-xl font-semibold tracking-tight">
+										Published apps
+									</h2>
+								</div>
+								<p className="mt-1 text-sm text-muted-foreground">
+									Public apps shared by {displayName}.
+								</p>
+							</div>
+							<Badge variant="secondary">{appCountLabel}</Badge>
+						</div>
+
+						{appsError && (
+							<Alert className="border-destructive/30 bg-destructive/5">
+								<AlertCircle className="h-4 w-4" />
+								<AlertDescription>
+									Failed to load apps: {appsError.message}
+								</AlertDescription>
+							</Alert>
+						)}
+
+						{isAppsLoading ? (
+							<AppsLoadingGrid />
+						) : apps.length === 0 ? (
+							<EmptyAppsState displayName={displayName} />
+						) : (
+							<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+								{apps.map(([app, metadata]) => (
+									<AppCard
+										key={app.id}
+										app={app}
+										variant="extended"
+										metadata={metadata}
+										className="w-full"
+										onClick={() => router.push(`/store?id=${app.id}`)}
+										href={`/store?id=${app.id}`}
+									/>
+								))}
+							</div>
+						)}
+
+						{hasNextPage && (
+							<div className="flex justify-center pt-2">
+								<Button
+									onClick={() => fetchNextPage()}
+									disabled={isFetchingNextPage}
+									variant="outline"
+								>
+									{isFetchingNextPage ? (
+										<>
+											<Loader2 className="h-4 w-4 animate-spin" />
+											Loading more
+										</>
+									) : (
+										"Load more apps"
+									)}
+								</Button>
+							</div>
+						)}
+					</section>
+				</div>
+			</motion.div>
+		</main>
 	);
 };
 

@@ -455,8 +455,8 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                 }
                 Ok((storage_dir_json(
                     &store.data().host_state,
-                    node_scoped,
                     "storage",
+                    |ctx| ctx.get_storage_dir(node_scoped),
                 ),))
             },
         )
@@ -473,23 +473,11 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                 {
                     return Ok((None::<String>,));
                 }
-                let ctx = match &store.data().host_state.storage_context {
-                    Some(c) => c,
-                    None => return Ok((None::<String>,)),
-                };
-                let dir = ctx.get_upload_dir();
-                let store_hash = format!("wasm_dirs__upload_{}", dir.as_ref());
-                if ctx.resolve_store(&store_hash).is_none() {
-                    if let Some(s) = ctx.stores.app_storage_store.clone() {
-                        ctx.register_store(&store_hash, s);
-                    }
-                }
-                let json = serde_json::json!({
-                    "path": dir.as_ref(),
-                    "store_ref": store_hash,
-                    "cache_store_ref": null
-                });
-                Ok((Some(json.to_string()),))
+                Ok((storage_dir_json(
+                    &store.data().host_state,
+                    "upload",
+                    |ctx| ctx.get_upload_dir(),
+                ),))
             },
         )
         .map_err(map_err)?;
@@ -506,23 +494,9 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                 {
                     return Ok((None::<String>,));
                 }
-                let ctx = match &store.data().host_state.storage_context {
-                    Some(c) => c,
-                    None => return Ok((None::<String>,)),
-                };
-                let dir = ctx.get_cache_dir(node_scoped, user_scoped);
-                let store_hash = format!("wasm_dirs__cache_{}", dir.as_ref());
-                if ctx.resolve_store(&store_hash).is_none() {
-                    if let Some(s) = ctx.stores.temporary_store.clone() {
-                        ctx.register_store(&store_hash, s);
-                    }
-                }
-                let json = serde_json::json!({
-                    "path": dir.as_ref(),
-                    "store_ref": store_hash,
-                    "cache_store_ref": null
-                });
-                Ok((Some(json.to_string()),))
+                Ok((storage_dir_json(&store.data().host_state, "cache", |ctx| {
+                    ctx.get_cache_dir(node_scoped, user_scoped)
+                }),))
             },
         )
         .map_err(map_err)?;
@@ -538,23 +512,9 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                 {
                     return Ok((None::<String>,));
                 }
-                let ctx = match &store.data().host_state.storage_context {
-                    Some(c) => c,
-                    None => return Ok((None::<String>,)),
-                };
-                let dir = ctx.get_user_dir(node_scoped);
-                let store_hash = format!("wasm_dirs__user_{}", dir.as_ref());
-                if ctx.resolve_store(&store_hash).is_none() {
-                    if let Some(s) = ctx.stores.user_store.clone() {
-                        ctx.register_store(&store_hash, s);
-                    }
-                }
-                let json = serde_json::json!({
-                    "path": dir.as_ref(),
-                    "store_ref": store_hash,
-                    "cache_store_ref": null
-                });
-                Ok((Some(json.to_string()),))
+                Ok((storage_dir_json(&store.data().host_state, "user", |ctx| {
+                    ctx.get_user_dir(node_scoped)
+                }),))
             },
         )
         .map_err(map_err)?;
@@ -634,32 +594,13 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             return Ok((false,));
                         }
                     };
-                    let obj_store = match ctx.resolve_store(&flow_path.store_ref) {
-                        Some(s) => s,
-                        None => {
-                            tracing::warn!(
-                                "[wasm write-file] rejected: unresolved store_ref={}",
-                                flow_path.store_ref
-                            );
-                            return Ok((false,));
-                        }
-                    };
-                    let path =
-                        flow_like_storage::object_store::path::Path::from(flow_path.path.clone());
-                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
-                        flow_like_types::Bytes::from(data),
-                    );
-                    match obj_store.as_generic().put(&path, payload).await {
-                        Ok(_) => Ok((true,)),
-                        Err(e) => {
-                            tracing::warn!(
-                                "[wasm write-file] put failed for path={} store_ref={}: {e}",
-                                flow_path.path,
-                                flow_path.store_ref
-                            );
-                            Ok((false,))
-                        }
-                    }
+                    Ok((crate::host_functions::storage::put_flow_path(
+                        ctx,
+                        &flow_path,
+                        data,
+                        "wasm write-file",
+                    )
+                    .await,))
                 })
             },
         )
@@ -756,33 +697,13 @@ fn register_storage(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             return Ok((false,));
                         }
                     };
-                    let obj_store = match ctx.resolve_store(&pw.flow_path.store_ref) {
-                        Some(s) => s,
-                        None => {
-                            tracing::warn!(
-                                "[wasm write-file-finish] rejected: unresolved store_ref={}",
-                                pw.flow_path.store_ref
-                            );
-                            return Ok((false,));
-                        }
-                    };
-                    let path = flow_like_storage::object_store::path::Path::from(
-                        pw.flow_path.path.clone(),
-                    );
-                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
-                        flow_like_types::Bytes::from(pw.buffer),
-                    );
-                    match obj_store.as_generic().put(&path, payload).await {
-                        Ok(_) => Ok((true,)),
-                        Err(e) => {
-                            tracing::warn!(
-                                "[wasm write-file-finish] put failed for path={} store_ref={}: {e}",
-                                pw.flow_path.path,
-                                pw.flow_path.store_ref
-                            );
-                            Ok((false,))
-                        }
-                    }
+                    Ok((crate::host_functions::storage::put_flow_path(
+                        ctx,
+                        &pw.flow_path,
+                        pw.buffer,
+                        "wasm write-file-finish",
+                    )
+                    .await,))
                 })
             },
         )
@@ -1814,20 +1735,17 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
 }
 
 /// Helper for storage-dir: builds FlowPath JSON, registers the store.
-fn storage_dir_json(host: &HostState, node_scoped: bool, dir_type: &str) -> Option<String> {
+fn storage_dir_json(
+    host: &HostState,
+    dir_type: &str,
+    dir_getter: impl FnOnce(
+        &crate::host_functions::StorageContext,
+    ) -> flow_like_storage::object_store::path::Path,
+) -> Option<String> {
     let ctx = host.storage_context.as_ref()?;
-    let dir = ctx.get_storage_dir(node_scoped);
-    let store_hash = format!("wasm_dirs__{dir_type}_{}", dir.as_ref());
-    if ctx.resolve_store(&store_hash).is_none() {
-        let store = ctx.stores.app_storage_store.clone()?;
-        ctx.register_store(&store_hash, store);
-    }
-    let json = serde_json::json!({
-        "path": dir.as_ref(),
-        "store_ref": store_hash,
-        "cache_store_ref": null
-    });
-    Some(json.to_string())
+    let dir = dir_getter(ctx);
+    let flow_path = ctx.dir_flow_path(dir_type, dir)?;
+    serde_json::to_string(&flow_path).ok()
 }
 
 use crate::host_functions::storage::StorageFlowPath;

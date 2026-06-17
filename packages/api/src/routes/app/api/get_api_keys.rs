@@ -1,6 +1,6 @@
 use crate::{
     ensure_permission,
-    entity::{role, technical_user},
+    entity::{role, technical_user, user as user_entity},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -19,6 +19,10 @@ pub struct ApiKeyInfo {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub creator_user_id: Option<String>,
+    pub creator_membership_id: Option<String>,
+    pub creator_display_name: Option<String>,
+    pub creator_email: Option<String>,
     pub role_id: Option<String>,
     pub role_name: Option<String>,
     pub role_permissions: Option<i64>,
@@ -52,6 +56,7 @@ pub async fn get_api_keys(
     Path(app_id): Path<String>,
 ) -> Result<Json<Vec<ApiKeyInfo>>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
+    let lookup_config = state.platform_config.lookup.clone();
 
     let technical_users = technical_user::Entity::find()
         .filter(technical_user::Column::AppId.eq(&app_id))
@@ -77,14 +82,63 @@ pub async fn get_api_keys(
         std::collections::HashMap::new()
     };
 
+    let creator_user_ids: Vec<String> = technical_users
+        .iter()
+        .filter_map(|tu| tu.creator_user_id.clone())
+        .collect();
+
+    let creators: std::collections::HashMap<String, user_entity::Model> =
+        if !creator_user_ids.is_empty() {
+            user_entity::Entity::find()
+                .filter(user_entity::Column::Id.is_in(creator_user_ids))
+                .all(&state.db)
+                .await?
+                .into_iter()
+                .map(|u| (u.id.clone(), u))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
     let api_keys = technical_users
         .into_iter()
         .map(|tu| {
             let role = tu.role_id.as_ref().and_then(|id| roles.get(id));
+            let creator = tu.creator_user_id.as_ref().and_then(|id| creators.get(id));
+            let creator_display_name = creator.and_then(|user| {
+                if lookup_config.name {
+                    if let Some(name) = user.name.clone() {
+                        return Some(name);
+                    }
+                }
+
+                if lookup_config.preferred_username {
+                    if let Some(preferred_username) = user.preferred_username.clone() {
+                        return Some(preferred_username);
+                    }
+                }
+
+                if lookup_config.username {
+                    if let Some(username) = user.username.clone() {
+                        return Some(username);
+                    }
+                }
+
+                None
+            });
+            let creator_email = if lookup_config.email {
+                creator.and_then(|user| user.email.clone())
+            } else {
+                None
+            };
             ApiKeyInfo {
                 id: tu.id,
                 name: tu.name,
                 description: tu.description,
+                creator_user_id: tu.creator_user_id,
+                creator_membership_id: tu.creator_membership_id,
+                creator_display_name,
+                creator_email,
                 role_id: tu.role_id,
                 role_name: role.map(|r| r.name.clone()),
                 role_permissions: role.map(|r| r.permissions),

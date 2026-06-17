@@ -2,6 +2,11 @@
 
 import * as React from "react";
 import * as RechartsPrimitive from "recharts";
+import type {
+	NameType,
+	Payload as RechartsPayload,
+	ValueType,
+} from "recharts/types/component/DefaultTooltipContent";
 import { cn } from "../../lib";
 
 // Format: { THEME_NAME: CSS_SELECTOR }
@@ -113,17 +118,18 @@ ${colorConfig
 	);
 };
 
-type Payload = {
-	dataKey: string;
-	name: string;
-	value: string;
-	payload: {
-		fill: string;
-	}[];
-	color: string;
-}[];
-
 const ChartTooltip = RechartsPrimitive.Tooltip;
+
+type ChartTooltipPayload = ReadonlyArray<RechartsPayload<ValueType, NameType>>;
+
+function getPayloadFill(payload: unknown): string | undefined {
+	return payload &&
+		typeof payload === "object" &&
+		"fill" in payload &&
+		typeof payload.fill === "string"
+		? payload.fill
+		: undefined;
+}
 
 function ChartTooltipContent({
 	active,
@@ -146,7 +152,7 @@ function ChartTooltipContent({
 		indicator?: "line" | "dot" | "dashed";
 		nameKey?: string;
 		labelKey?: string;
-		payload?: Payload;
+		payload?: ChartTooltipPayload;
 		label?: string;
 	}) {
 	const { config } = useChart();
@@ -205,18 +211,19 @@ function ChartTooltipContent({
 				{payload.map((item, index) => {
 					const key = `${nameKey || item.name || item.dataKey || "value"}`;
 					const itemConfig = getPayloadConfigFromPayload(config, item, key);
-					const indicatorColor = color || item.payload.fill || item.color;
+					const indicatorColor =
+						color || getPayloadFill(item.payload) || item.color;
 
 					return (
 						<div
-							key={item.dataKey}
+							key={key}
 							className={cn(
 								"[&>svg]:text-muted-foreground flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5",
 								indicator === "dot" && "items-center",
 							)}
 						>
 							{formatter && item?.value !== undefined && item.name ? (
-								formatter(item.value, item.name, item, index, item.payload)
+								formatter(item.value, item.name, item, index, payload)
 							) : (
 								<>
 									{itemConfig?.icon ? (

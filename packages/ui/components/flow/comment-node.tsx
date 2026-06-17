@@ -54,10 +54,6 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 		if (node) {
 			const comment = node.data.comment as IComment;
 			try {
-				console.dir({
-					...comment,
-					is_locked: next,
-				});
 				await props.data.onUpsert({
 					...comment,
 					is_locked: next,

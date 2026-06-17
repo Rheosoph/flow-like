@@ -42,6 +42,12 @@ pub async fn delete_board(
     app.delete_board(&board_id).await?;
     app.save().await?;
 
+    if let Err(err) =
+        crate::routes::app::board::scoring::delete_board_score(&state.db, &app_id, &board_id).await
+    {
+        tracing::warn!("failed to delete board score for {app_id}/{board_id}: {err:?}");
+    }
+
     audit_branch!(
         state,
         user,

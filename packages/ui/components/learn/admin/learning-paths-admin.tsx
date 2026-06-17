@@ -2,7 +2,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, Plus, Route, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import type { CourseListItem, LearningPath } from "../../../lib/learn/types";
 import type { IProfile } from "../../../types";
@@ -19,6 +18,8 @@ import { Input } from "../../ui/input";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
 
+export type LearningPathsAdminAuth = unknown;
+
 /**
  * Minimal contract the admin section needs from a `learnApi` instance.
  * Both `apps/desktop/lib/learn-api.ts` and `apps/web/lib/learn-api.ts`
@@ -28,12 +29,12 @@ import { Textarea } from "../../ui/textarea";
 export interface LearningPathsAdminApi {
 	listLearningPaths(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: LearningPathsAdminAuth,
 		opts?: { language?: string; includeUnpublished?: boolean },
 	): Promise<LearningPath[]>;
 	upsertLearningPath(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: LearningPathsAdminAuth,
 		pathId: string,
 		body: {
 			title: string;
@@ -45,19 +46,19 @@ export interface LearningPathsAdminApi {
 	): Promise<LearningPath>;
 	deleteLearningPath(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: LearningPathsAdminAuth,
 		pathId: string,
 	): Promise<void>;
 	upsertLearningPathStep(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: LearningPathsAdminAuth,
 		pathId: string,
 		courseId: string,
 		body: { position: number },
 	): Promise<void>;
 	deleteLearningPathStep(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: LearningPathsAdminAuth,
 		pathId: string,
 		courseId: string,
 	): Promise<void>;
@@ -66,7 +67,7 @@ export interface LearningPathsAdminApi {
 export interface LearningPathsAdminProps {
 	readonly api: LearningPathsAdminApi;
 	readonly profile: IProfile | null;
-	readonly auth: AuthContextProps;
+	readonly auth: LearningPathsAdminAuth;
 	readonly courses: ReadonlyArray<CourseListItem>;
 	readonly canManage: boolean;
 }
@@ -211,7 +212,7 @@ export function LearningPathsAdmin({
 interface LearningPathRowProps {
 	readonly api: LearningPathsAdminApi;
 	readonly profile: IProfile | null;
-	readonly auth: AuthContextProps;
+	readonly auth: LearningPathsAdminAuth;
 	readonly path: LearningPath;
 	readonly courses: ReadonlyArray<CourseListItem>;
 	readonly canManage: boolean;

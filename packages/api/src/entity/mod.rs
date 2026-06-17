@@ -2,8 +2,12 @@
 
 pub mod prelude;
 
+pub mod ai_act_assessment;
+pub mod ai_act_model_observation;
+pub mod ai_act_model_registry;
 pub mod app;
 pub mod app_analytics_daily;
+pub mod app_board_score;
 pub mod app_discount;
 pub mod app_package;
 pub mod app_purchase;

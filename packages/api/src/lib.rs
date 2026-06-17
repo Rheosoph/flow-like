@@ -28,6 +28,7 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod credentials;
+mod db_backfills;
 pub mod error;
 pub mod mail;
 pub mod permission;

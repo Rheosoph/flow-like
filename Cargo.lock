@@ -7660,6 +7660,7 @@ dependencies = [
  "chrono",
  "dirs-next",
  "flate2",
+ "flow-like-ast",
  "flow-like-bits",
  "flow-like-model-provider",
  "flow-like-storage",
@@ -7768,6 +7769,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-ast"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flow-like-bits"
 version = "0.1.0"
 dependencies = [
@@ -7799,6 +7808,7 @@ dependencies = [
  "flow-like-types",
  "mimalloc",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -8009,7 +8019,6 @@ dependencies = [
  "lopdf 0.39.0",
  "nalgebra 0.34.2",
  "pulldown-cmark 0.13.3",
- "qrcode",
  "quick-xml 0.39.2",
  "rayon",
  "schemars 1.2.1",
@@ -8254,6 +8263,8 @@ dependencies = [
  "pulldown-cmark 0.12.2",
  "rayon",
  "rdev",
+ "reqwest 0.12.28",
+ "rmcp",
  "rusqlite",
  "security-framework 3.7.0",
  "sentry",
@@ -8289,6 +8300,7 @@ dependencies = [
  "tracing-oslog",
  "tracing-subscriber",
  "urlencoding",
+ "uuid 1.23.1",
  "webp",
  "webview2-com",
  "window-vibrancy",
@@ -8329,6 +8341,7 @@ version = "0.1.0"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
+ "base64 0.22.1",
  "dotenv",
  "fastembed",
  "flow-like-types",
@@ -18475,15 +18488,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
-]
-
-[[package]]
-name = "qrcode"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
-dependencies = [
- "image",
 ]
 
 [[package]]

@@ -141,7 +141,9 @@ export function NotificationsPageScreen() {
 		!notificationsQuery.data && notificationsQuery.isLoading;
 	const isSummaryLoading =
 		invitations.length + notifications.length === 0 &&
-		(auth.isLoading || isInvitationsBootLoading || isNotificationsBootLoading);
+		(Boolean(auth?.isLoading) ||
+			isInvitationsBootLoading ||
+			isNotificationsBootLoading);
 	const isRefreshing =
 		!isSummaryLoading &&
 		(notificationsQuery.isFetching || invitationsQuery.isFetching);

@@ -1,14 +1,10 @@
 "use client";
-import type { UseQueryResult } from "@flow-like/flow-like-ui";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import type { ISystemInfo } from "@flow-like/flow-like-ui/types";
 import { useTauriInvoke } from "../../../components/useInvoke";
 
 export default function SettingsPage() {
-	const systemInfo: UseQueryResult<ISystemInfo> = useTauriInvoke(
-		"get_system_info",
-		{},
-	);
+	const systemInfo = useTauriInvoke<ISystemInfo>("get_system_info", {});
 
 	return (
 		<main className="justify-start flex flex-col items-center w-full pr-4 flex-1 min-h-0">

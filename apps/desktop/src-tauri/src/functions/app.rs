@@ -282,9 +282,52 @@ pub async fn delete_app_board(
 #[tauri::command(async)]
 pub async fn update_app(app_handle: AppHandle, app: App) -> Result<(), TauriFunctionError> {
     let mut app = app;
-    app.app_state = Some(TauriFlowLikeState::construct(&app_handle).await?);
+    let state = TauriFlowLikeState::construct(&app_handle).await?;
+    let existing = App::load(app.id.clone(), state.clone()).await.ok();
+    app.app_state = Some(state);
+
+    if let Some(existing) = existing {
+        preserve_local_manifest_fields(&mut app, existing);
+    }
+
     app.save().await?;
     Ok(())
+}
+
+fn preserve_local_manifest_fields(app: &mut App, existing: App) {
+    if app.authors.is_empty() && !existing.authors.is_empty() {
+        app.authors = existing.authors;
+    }
+    if app.bits.is_empty() && !existing.bits.is_empty() {
+        app.bits = existing.bits;
+    }
+    if app.boards.is_empty() && !existing.boards.is_empty() {
+        app.boards = existing.boards;
+    }
+    if app.events.is_empty() && !existing.events.is_empty() {
+        app.events = existing.events;
+    }
+    if app.templates.is_empty() && !existing.templates.is_empty() {
+        app.templates = existing.templates;
+    }
+    if app.frontend.is_none() && existing.frontend.is_some() {
+        app.frontend = existing.frontend;
+    }
+    if app.widget_ids.is_empty() && !existing.widget_ids.is_empty() {
+        app.widget_ids = existing.widget_ids;
+    }
+    if app.page_ids.is_empty() && !existing.page_ids.is_empty() {
+        app.page_ids = existing.page_ids;
+    }
+    if app.packages.is_empty() && !existing.packages.is_empty() {
+        app.packages = existing.packages;
+    }
+    if app.forked_from.is_none() && existing.forked_from.is_some() {
+        app.forked_from = existing.forked_from;
+    }
+    if app.forked_at.is_none() && existing.forked_at.is_some() {
+        app.forked_at = existing.forked_at;
+    }
 }
 
 #[tauri::command(async)]

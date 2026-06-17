@@ -241,6 +241,8 @@ pub struct AuditConfig {
     /// If true, the server will refuse to start without signing keys configured
     #[serde(default)]
     pub require_signing: bool,
+    #[serde(default)]
+    pub log_executions: bool,
 }
 
 fn default_true() -> bool {
@@ -254,6 +256,7 @@ impl Default for AuditConfig {
             log_ip: false,
             ip_retention_days: None,
             require_signing: false,
+            log_executions: false,
         }
     }
 }

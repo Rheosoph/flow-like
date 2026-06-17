@@ -35,7 +35,7 @@ pub enum BoardParent {
     App(Weak<Mutex<App>>),
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionStage {
     Dev,
     Int,
@@ -44,7 +44,7 @@ pub enum ExecutionStage {
     Prod,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug, PartialEq, Eq)]
 pub enum ExecutionMode {
     #[default]
     Hybrid,
@@ -518,8 +518,10 @@ impl Board {
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<GenericCommand> {
         let mut command = command;
-        let cmd_json = serde_json::to_string(&command).unwrap_or_default();
-        println!("[Board] execute_command: {}", cmd_json);
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let cmd_json = serde_json::to_string(&command).unwrap_or_default();
+            tracing::debug!(command = %cmd_json, "Executing board command");
+        }
         command.validate(self, state.clone()).await?;
         if let Err(e) = command.execute(self, state.clone()).await {
             let mut recovery_errors = Vec::new();
@@ -528,7 +530,7 @@ impl Board {
                     "failed to rollback current command after execute error: {rollback_error}"
                 ));
             }
-            println!("[Board] execute_command ❌ ERROR: {:?}", e);
+            tracing::error!(error = ?e, "Board command execution failed");
             let primary_error = e.to_string();
             let error = if recovery_errors.is_empty() {
                 e
@@ -540,7 +542,7 @@ impl Board {
             };
             return Err(error);
         }
-        println!("[Board] execute_command ✓ Success");
+        tracing::debug!("Board command executed successfully");
         self.node_updates(state).await;
         self.cleanup();
         self.mark_changed();

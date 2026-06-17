@@ -45,7 +45,22 @@ pub fn with_current_wasmtime_version(existing: Option<Vec<String>>) -> Vec<Strin
 
 /// Build a platform key from OS and architecture strings.
 fn platform_key_for(os: &str, arch: &str) -> String {
+    let arch = if os == "ios" && arch == "aarch64" {
+        "pulley64"
+    } else {
+        arch
+    };
     format!("{}-{}-wt{}", os, arch, WASMTIME_MAJOR_VERSION)
+}
+
+/// Normalize legacy client platform keys to the executable platform we can
+/// safely serve. iOS native arm64 `.cwasm` artifacts are not safe to execute
+/// in App Store/TestFlight builds; Pulley is the iOS execution target.
+pub fn normalize_target_platform_key(target_platform: &str) -> String {
+    if let Some(version) = target_platform.strip_prefix("ios-aarch64-wt") {
+        return format!("ios-pulley64-wt{}", version);
+    }
+    target_platform.to_string()
 }
 
 /// Platform key for the current host process.
@@ -57,6 +72,16 @@ pub fn host_platform_key() -> String {
 /// Returns `None` when the requested platform matches the current host
 /// (no cross-compilation needed).
 fn target_triple_for(os: &str, arch: &str) -> Option<&'static str> {
+    if os == "ios" {
+        // iOS AOT artifacts must be Pulley bytecode. Native arm64 `.cwasm`
+        // artifacts still contain executable machine code that iOS can reject
+        // at runtime because it is not part of the app's signed code pages.
+        return match arch {
+            "aarch64" | "pulley64" => Some("pulley64"),
+            _ => None,
+        };
+    }
+
     let host_os = std::env::consts::OS;
     let host_arch = std::env::consts::ARCH;
     if os == host_os && arch == host_arch {
@@ -69,7 +94,6 @@ fn target_triple_for(os: &str, arch: &str) -> Option<&'static str> {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
         ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
         ("windows", "aarch64") => Some("aarch64-pc-windows-msvc"),
-        ("ios", "aarch64") => Some("aarch64-apple-ios"),
         ("android", "aarch64") => Some("aarch64-linux-android"),
         ("android", "x86_64") => Some("x86_64-linux-android"),
         _ => None,
@@ -85,15 +109,30 @@ pub struct TargetSpec {
     pub cross_triple: Option<String>,
 }
 
+fn ios_pulley_target() -> TargetSpec {
+    TargetSpec {
+        platform_key: platform_key_for("ios", "pulley64"),
+        cross_triple: Some("pulley64".to_string()),
+    }
+}
+
+fn ensure_ios_pulley_target(mut targets: Vec<TargetSpec>) -> Vec<TargetSpec> {
+    let ios_key = platform_key_for("ios", "pulley64");
+    if !targets.iter().any(|target| target.platform_key == ios_key) {
+        targets.push(ios_pulley_target());
+    }
+    targets
+}
+
 /// Read the list of platforms to compile for from `WASM_COMPILATION_TARGETS`.
 ///
 /// Format: comma-separated `os-arch` pairs, e.g. `linux-x86_64,linux-aarch64`.
-/// Falls back to the host platform when the variable is unset.
+/// Falls back to host + iOS Pulley when the variable is unset.
 ///
 /// Used for **inline** compilation only. For external dispatch, use
 /// [`all_known_targets`] so the worker can compile whichever subset it supports.
 pub fn compilation_targets() -> Vec<TargetSpec> {
-    if let Ok(val) = std::env::var("WASM_COMPILATION_TARGETS") {
+    let mut targets = if let Ok(val) = std::env::var("WASM_COMPILATION_TARGETS") {
         val.split(',')
             .filter_map(|entry| {
                 let entry = entry.trim();
@@ -109,7 +148,16 @@ pub fn compilation_targets() -> Vec<TargetSpec> {
             platform_key: host_platform_key(),
             cross_triple: None,
         }]
+    };
+
+    if targets.is_empty() {
+        targets.push(TargetSpec {
+            platform_key: host_platform_key(),
+            cross_triple: None,
+        });
     }
+
+    ensure_ios_pulley_target(targets)
 }
 
 /// The platform key the executor expects.
@@ -132,7 +180,7 @@ const ALL_KNOWN_PLATFORMS: &[(&str, &str)] = &[
     ("macos", "aarch64"),
     ("windows", "x86_64"),
     ("windows", "aarch64"),
-    ("ios", "aarch64"),
+    ("ios", "pulley64"),
     ("android", "aarch64"),
     ("android", "x86_64"),
 ];
@@ -424,7 +472,7 @@ impl ServerRegistry {
     /// and store artifacts + checksums in the bucket.
     ///
     /// Set `WASM_COMPILATION_TARGETS=linux-x86_64,linux-aarch64` to cross-compile.
-    /// Defaults to host-only when the variable is unset.
+    /// Defaults to host + iOS Pulley when the variable is unset.
     pub async fn compile_and_store_artifact(
         &self,
         package_id: &str,
@@ -438,6 +486,9 @@ impl ServerRegistry {
             let mut config = flow_like_wasm::engine::WasmConfig::default().without_cache();
             if let Some(triple) = &target.cross_triple {
                 config = config.with_target(triple);
+            }
+            if target.platform_key.starts_with("ios-") {
+                config = config.with_ios_memory_layout();
             }
             let engine = flow_like_wasm::engine::WasmEngine::new(config)?;
             let serialized = engine.precompile(wasm_bytes)?;
@@ -634,6 +685,7 @@ impl ServerRegistry {
         version: &str,
         target_platform: &str,
     ) -> flow_like_types::Result<(String, String)> {
+        let target_platform = normalize_target_platform_key(target_platform);
         let base = Path::from(WASM_COMPILED_PATH)
             .child(package_id)
             .child(version);

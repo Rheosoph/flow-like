@@ -22,6 +22,7 @@ export interface IFlowPilotMessage {
 	contextNodeIds?: string[];
 	appliedComponents?: SurfaceComponent[];
 	executedCommands?: BoardCommand[];
+	flowscriptWorkspace?: string;
 	createdAt: string;
 }
 
@@ -174,7 +175,10 @@ export async function updateMessage(
 	updates: Partial<
 		Pick<
 			IFlowPilotMessage,
-			"content" | "appliedComponents" | "executedCommands"
+			| "content"
+			| "appliedComponents"
+			| "executedCommands"
+			| "flowscriptWorkspace"
 		>
 	>,
 ): Promise<void> {

@@ -73,6 +73,7 @@ import {
 import { DynamicImage } from "../ui";
 import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
+import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
 import { FlowPinAction } from "./flow-node/flow-node-pin-action";
@@ -128,6 +129,8 @@ export type FlowNode = Node<
 		functionLayerId?: string;
 		currentLayerId?: string;
 		remoteExecuting?: boolean;
+		selectorDataRef?: FlowSelectorDataRef;
+		selectorDataVersion?: number;
 	},
 	"node"
 >;
@@ -511,6 +514,8 @@ const FlowNodeInner = memo(
 								skipOffset={isReroute}
 								version={props.data.version}
 								currentLayerId={props.data.currentLayerId}
+								selectorDataRef={props.data.selectorDataRef}
+								selectorDataVersion={props.data.selectorDataVersion}
 							/>
 						);
 					}),
@@ -521,6 +526,7 @@ const FlowNodeInner = memo(
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.selectorDataVersion,
 			],
 		);
 
@@ -545,6 +551,8 @@ const FlowNodeInner = memo(
 							skipOffset={isReroute}
 							version={props.data.version}
 							currentLayerId={props.data.currentLayerId}
+							selectorDataRef={props.data.selectorDataRef}
+							selectorDataVersion={props.data.selectorDataVersion}
 						/>
 					);
 				}),
@@ -555,6 +563,7 @@ const FlowNodeInner = memo(
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.selectorDataVersion,
 			],
 		);
 
@@ -986,7 +995,8 @@ const FlowNodeInner = memo(
 		prev.props.selected === next.props.selected &&
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
-		prev.props.data.remoteExecuting === next.props.data.remoteExecuting,
+		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
+		prev.props.data.selectorDataVersion === next.props.data.selectorDataVersion,
 );
 
 function FlowNode(props: NodeProps<FlowNode>) {
@@ -1424,7 +1434,8 @@ function flowNodeAreEqual(
 		prev.data.isUnavailable === next.data.isUnavailable &&
 		prev.data.remoteSelections === next.data.remoteSelections &&
 		prev.data.peerUsers === next.data.peerUsers &&
-		prev.data.remoteExecuting === next.data.remoteExecuting
+		prev.data.remoteExecuting === next.data.remoteExecuting &&
+		prev.data.selectorDataVersion === next.data.selectorDataVersion
 	);
 }
 

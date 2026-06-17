@@ -355,6 +355,9 @@ fn run_to_item(r: &ExecutionRunRecord) -> HashMap<String, AttributeValue> {
     if let Some(u) = &r.user_id {
         item.insert("userId".into(), AttributeValue::S(u.clone()));
     }
+    if let Some(u) = &r.technical_user_id {
+        item.insert("technicalUserId".into(), AttributeValue::S(u.clone()));
+    }
 
     item
 }
@@ -428,6 +431,7 @@ fn item_to_run(
         completed_at: get_opt_n("completedAt"),
         expires_at: get_opt_n("expiresAt"),
         user_id: get_opt_s("userId"),
+        technical_user_id: get_opt_s("technicalUserId"),
         app_id: get_s("appId")?,
         created_at: get_n("createdAt")?,
         updated_at: get_n("updatedAt")?,
@@ -549,6 +553,7 @@ impl ExecutionStateStore for DynamoDbStateStore {
             completed_at: None,
             expires_at: Some(expires_at),
             user_id: input.user_id,
+            technical_user_id: input.technical_user_id,
             app_id: input.app_id,
             created_at: now,
             updated_at: now,

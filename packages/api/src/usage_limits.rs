@@ -106,9 +106,17 @@ pub async fn get_app_usage_limits(
     db: &DatabaseConnection,
     app_id: &str,
 ) -> Result<AppUsageLimits, sea_orm::DbErr> {
+    get_app_usage_limits_for_scope(db, app_id, "").await
+}
+
+pub async fn get_app_usage_limits_for_scope(
+    db: &DatabaseConnection,
+    app_id: &str,
+    scoped_user_id: &str,
+) -> Result<AppUsageLimits, sea_orm::DbErr> {
     let rows = app_usage_limit::Entity::find()
         .filter(app_usage_limit::Column::AppId.eq(app_id))
-        .filter(app_usage_limit::Column::UserId.eq(""))
+        .filter(app_usage_limit::Column::UserId.eq(scoped_user_id))
         .all(db)
         .await?;
     Ok(AppUsageLimits::from_rows(rows))
@@ -119,13 +127,22 @@ pub async fn set_app_usage_limits(
     app_id: &str,
     limits: AppUsageLimits,
 ) -> Result<AppUsageLimits, sea_orm::DbErr> {
+    set_app_usage_limits_for_scope(db, app_id, "", limits).await
+}
+
+pub async fn set_app_usage_limits_for_scope(
+    db: &DatabaseConnection,
+    app_id: &str,
+    scoped_user_id: &str,
+    limits: AppUsageLimits,
+) -> Result<AppUsageLimits, sea_orm::DbErr> {
     let now = Utc::now().naive_utc();
 
     for (period, window) in limits.iter() {
         if window.cost_micro_dollars.is_none() && window.token_limit.is_none() {
             app_usage_limit::Entity::delete_many()
                 .filter(app_usage_limit::Column::AppId.eq(app_id))
-                .filter(app_usage_limit::Column::UserId.eq(""))
+                .filter(app_usage_limit::Column::UserId.eq(scoped_user_id))
                 .filter(app_usage_limit::Column::Period.eq(period))
                 .exec(db)
                 .await?;
@@ -134,7 +151,7 @@ pub async fn set_app_usage_limits(
 
         let existing = app_usage_limit::Entity::find()
             .filter(app_usage_limit::Column::AppId.eq(app_id))
-            .filter(app_usage_limit::Column::UserId.eq(""))
+            .filter(app_usage_limit::Column::UserId.eq(scoped_user_id))
             .filter(app_usage_limit::Column::Period.eq(period))
             .one(db)
             .await?;
@@ -154,7 +171,7 @@ pub async fn set_app_usage_limits(
             app_usage_limit::ActiveModel {
                 id: Set(create_id()),
                 app_id: Set(app_id.to_string()),
-                user_id: Set(String::new()),
+                user_id: Set(scoped_user_id.to_string()),
                 period: Set(period.to_string()),
                 cost_micro_dollars: Set(window.cost_micro_dollars),
                 token_limit: Set(window.token_limit),
@@ -169,7 +186,7 @@ pub async fn set_app_usage_limits(
         }
     }
 
-    get_app_usage_limits(db, app_id).await
+    get_app_usage_limits_for_scope(db, app_id, scoped_user_id).await
 }
 
 pub async fn enforce_app_usage_limits(
@@ -178,13 +195,14 @@ pub async fn enforce_app_usage_limits(
     token_delta: Option<i64>,
     cost_delta: Option<i64>,
 ) -> Result<(), ApiError> {
-    enforce_app_usage_limits_for_user(state, app_id, None, token_delta, cost_delta).await
+    enforce_app_usage_limits_for_user(state, app_id, None, None, token_delta, cost_delta).await
 }
 
 pub async fn enforce_app_usage_limits_for_user(
     state: &AppState,
     app_id: Option<&str>,
     user_id: Option<&str>,
+    technical_user_id: Option<&str>,
     token_delta: Option<i64>,
     cost_delta: Option<i64>,
 ) -> Result<(), ApiError> {
@@ -198,6 +216,9 @@ pub async fn enforce_app_usage_limits_for_user(
         .filter(
             Condition::any()
                 .add(app_usage_limit::Column::UserId.eq(""))
+                .add_option(
+                    technical_user_id.map(|user_id| app_usage_limit::Column::UserId.eq(user_id)),
+                )
                 .add_option(user_id.map(|user_id| app_usage_limit::Column::UserId.eq(user_id))),
         )
         .all(&state.db)
@@ -345,48 +366,54 @@ async fn usage_total_row(
 COALESCE(SUM("tokenIn" + "tokenOut"), 0)::BIGINT AS tokens,
 COUNT(*)::BIGINT AS invocations
 FROM "LLMUsageTracking"
-WHERE "createdAt" >= $1 AND "appId" = $2 AND ($3 = '' OR "userId" = $3)"#
+WHERE "createdAt" >= $1 AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)"#
         }
         (DbBackend::Postgres, UsageTotalTable::Embedding) => {
             r#"SELECT COALESCE(SUM("price"), 0)::BIGINT AS cost_micro_dollars,
 COALESCE(SUM("tokenCount"), 0)::BIGINT AS tokens,
 COUNT(*)::BIGINT AS invocations
 FROM "EmbeddingUsageTracking"
-WHERE "createdAt" >= $1 AND "appId" = $2 AND ($3 = '' OR "userId" = $3)"#
+WHERE "createdAt" >= $1 AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)"#
         }
         (DbBackend::Postgres, UsageTotalTable::Pending) => {
             r#"SELECT COALESCE(SUM("estimatedCostMicroDollars"), 0)::BIGINT AS cost_micro_dollars,
 COALESCE(SUM("estimatedTokens"), 0)::BIGINT AS tokens,
 COUNT(*)::BIGINT AS invocations
 FROM "UsageInvocation"
-WHERE "startedAt" >= $1 AND "status" = 'pending' AND "appId" = $2 AND ($3 = '' OR "userId" = $3)"#
+WHERE "startedAt" >= $1 AND "status" = 'pending' AND "appId" = $2 AND ($3 = '' OR "userId" = $3 OR "technicalUserId" = $3)"#
         }
         (_, UsageTotalTable::Llm) => {
             r#"SELECT COALESCE(SUM("price"), 0) AS cost_micro_dollars,
 COALESCE(SUM("tokenIn" + "tokenOut"), 0) AS tokens,
 COUNT(*) AS invocations
 FROM "LLMUsageTracking"
-WHERE "createdAt" >= ? AND "appId" = ? AND (? = '' OR "userId" = ?)"#
+WHERE "createdAt" >= ? AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)"#
         }
         (_, UsageTotalTable::Embedding) => {
             r#"SELECT COALESCE(SUM("price"), 0) AS cost_micro_dollars,
 COALESCE(SUM("tokenCount"), 0) AS tokens,
 COUNT(*) AS invocations
 FROM "EmbeddingUsageTracking"
-WHERE "createdAt" >= ? AND "appId" = ? AND (? = '' OR "userId" = ?)"#
+WHERE "createdAt" >= ? AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)"#
         }
         (_, UsageTotalTable::Pending) => {
             r#"SELECT COALESCE(SUM("estimatedCostMicroDollars"), 0) AS cost_micro_dollars,
 COALESCE(SUM("estimatedTokens"), 0) AS tokens,
 COUNT(*) AS invocations
 FROM "UsageInvocation"
-WHERE "startedAt" >= ? AND "status" = 'pending' AND "appId" = ? AND (? = '' OR "userId" = ?)"#
+WHERE "startedAt" >= ? AND "status" = 'pending' AND "appId" = ? AND (? = '' OR "userId" = ? OR "technicalUserId" = ?)"#
         }
     };
 
     let values = match backend {
         DbBackend::Postgres => vec![start.into(), app_id.into(), user_id.into()],
-        _ => vec![start.into(), app_id.into(), user_id.into(), user_id.into()],
+        _ => vec![
+            start.into(),
+            app_id.into(),
+            user_id.into(),
+            user_id.into(),
+            user_id.into(),
+        ],
     };
     let stmt = Statement::from_sql_and_values(backend, sql, values);
     let row = UsageSqlRow::find_by_statement(stmt).one(db).await?;

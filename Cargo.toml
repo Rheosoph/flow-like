@@ -22,6 +22,7 @@ members = [
     "apps/backend/docker-compose/runtime",
     "apps/backend/docker-compose/sink-services",
     "packages/core",
+    "packages/ast",
     "packages/model-provider",
     "packages/bits",
     "packages/types",
@@ -53,6 +54,7 @@ members = [
 
 [workspace.dependencies]
 flow-like = { path = "packages/core" }
+flow-like-ast = { path = "packages/ast" }
 flow-like-types = { path = "packages/types" }
 flow-like-api = { path = "packages/api", default-features = false }
 flow-like-model-provider = { path = "packages/model-provider" }

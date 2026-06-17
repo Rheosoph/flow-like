@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
+import { useExecuteAction, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { normalizeBoxes } from "../bbox-utils";
 import type { BoundValue, ImageLabelerComponent, LabelBox } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -34,21 +36,37 @@ const LABEL_COLORS = [
 export function A2UIImageLabeler({
 	component,
 	style,
-	onAction,
 	surfaceId,
 	componentId,
 }: ComponentProps<ImageLabelerComponent>) {
+	const onAction = useOnAction();
+	const { executeAction } = useExecuteAction();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 
 	const src = useResolved<string>(component.src);
 	const alt = useResolved<string>(component.alt) ?? "Image to label";
-	const initialBoxes = useResolved<LabelBox[]>(component.boxes) ?? [];
+	const rawBoxes = useResolved<unknown>(component.boxes);
 	const labels = useResolved<string[]>(component.labels) ?? [];
 	const disabled = useResolved<boolean>(component.disabled) ?? false;
 	const showLabels = useResolved<boolean>(component.showLabels) ?? true;
 	const minBoxSize = useResolved<number>(component.minBoxSize) ?? 10;
+
+	// Accept boxes in any workflow format (detection output, corner coords, …)
+	// and coerce them into the editable LabelBox shape.
+	const initialBoxes = useMemo<LabelBox[]>(
+		() =>
+			normalizeBoxes(rawBoxes).map((box) => ({
+				id: box.id,
+				x: box.x,
+				y: box.y,
+				width: box.width,
+				height: box.height,
+				label: box.label ?? "",
+			})),
+		[rawBoxes],
+	);
 
 	const [boxes, setBoxes] = useState<LabelBox[]>(initialBoxes);
 	const [selectedBoxId, setSelectedBoxId] = useState<string | null>(null);
@@ -129,6 +147,30 @@ export function A2UIImageLabeler({
 		[isDrawing, disabled, getMousePos, drawingBox],
 	);
 
+	// Persist the current boxes as this component's element value so workflow /
+	// widget action events can read them back (mirrors the input "change" pattern).
+	const fireBoxesChange = useCallback(
+		(updatedBoxes: LabelBox[]) => {
+			onAction?.({
+				type: "userAction",
+				name: "change",
+				surfaceId,
+				sourceComponentId: componentId,
+				timestamp: Date.now(),
+				context: { value: updatedBoxes },
+			});
+
+			const action = component.actions?.[0];
+			if (action) {
+				void executeAction(action, componentId, {
+					value: updatedBoxes,
+					boxes: updatedBoxes,
+				});
+			}
+		},
+		[component.actions, componentId, executeAction, onAction, surfaceId],
+	);
+
 	const handleMouseUp = useCallback(() => {
 		if (!isDrawing || !drawingBox) {
 			setIsDrawing(false);
@@ -159,27 +201,7 @@ export function A2UIImageLabeler({
 			const updatedBoxes = [...boxes, newBox];
 			setBoxes(updatedBoxes);
 			setSelectedBoxId(newBox.id);
-
-			// Fire action
-			if (onAction && component.actions?.length) {
-				const boxCreatedAction = component.actions.find(
-					(a) => a.name === "onBoxCreated" || a.name === "onChange",
-				);
-				if (boxCreatedAction) {
-					onAction({
-						type: "userAction",
-						name: boxCreatedAction.name,
-						surfaceId,
-						sourceComponentId: componentId,
-						timestamp: Date.now(),
-						context: {
-							box: newBox,
-							boxes: updatedBoxes,
-							...boxCreatedAction.context,
-						},
-					});
-				}
-			}
+			fireBoxesChange(updatedBoxes);
 		}
 
 		setIsDrawing(false);
@@ -191,10 +213,7 @@ export function A2UIImageLabeler({
 		currentLabel,
 		labels,
 		boxes,
-		onAction,
-		component.actions,
-		surfaceId,
-		componentId,
+		fireBoxesChange,
 	]);
 
 	const handleDeleteSelected = useCallback(() => {
@@ -202,28 +221,8 @@ export function A2UIImageLabeler({
 		const updatedBoxes = boxes.filter((b) => b.id !== selectedBoxId);
 		setBoxes(updatedBoxes);
 		setSelectedBoxId(null);
-
-		if (onAction && component.actions?.length) {
-			const changeAction = component.actions.find((a) => a.name === "onChange");
-			if (changeAction) {
-				onAction({
-					type: "userAction",
-					name: changeAction.name,
-					surfaceId,
-					sourceComponentId: componentId,
-					timestamp: Date.now(),
-					context: { boxes: updatedBoxes, ...changeAction.context },
-				});
-			}
-		}
-	}, [
-		selectedBoxId,
-		boxes,
-		onAction,
-		component.actions,
-		surfaceId,
-		componentId,
-	]);
+		fireBoxesChange(updatedBoxes);
+	}, [selectedBoxId, boxes, fireBoxesChange]);
 
 	const handleLabelChange = useCallback(
 		(label: string) => {
@@ -234,24 +233,9 @@ export function A2UIImageLabeler({
 				b.id === selectedBoxId ? { ...b, label } : b,
 			);
 			setBoxes(updatedBoxes);
-
-			if (onAction && component.actions?.length) {
-				const changeAction = component.actions.find(
-					(a) => a.name === "onChange",
-				);
-				if (changeAction) {
-					onAction({
-						type: "userAction",
-						name: changeAction.name,
-						surfaceId,
-						sourceComponentId: componentId,
-						timestamp: Date.now(),
-						context: { boxes: updatedBoxes, ...changeAction.context },
-					});
-				}
-			}
+			fireBoxesChange(updatedBoxes);
 		},
-		[selectedBoxId, boxes, onAction, component.actions, surfaceId, componentId],
+		[selectedBoxId, boxes, fireBoxesChange],
 	);
 
 	// Draw canvas

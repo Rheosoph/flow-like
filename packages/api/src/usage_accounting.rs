@@ -22,6 +22,7 @@ pub const STATUS_UNKNOWN_USAGE: &str = "unknown_usage";
 pub struct UsageInvocationStart<'a> {
     pub kind: &'a str,
     pub user_id: Option<&'a str>,
+    pub technical_user_id: Option<&'a str>,
     pub app_id: Option<&'a str>,
     pub provider: Option<&'a str>,
     pub endpoint: Option<&'a str>,
@@ -66,6 +67,7 @@ pub async fn start_usage_invocation(
         state,
         Some(app_id),
         start.user_id,
+        start.technical_user_id,
         Some(start.estimated_tokens.max(0)),
         Some(start.estimated_cost_micro_dollars.max(0)),
     )
@@ -78,6 +80,7 @@ pub async fn start_usage_invocation(
         kind: Set(start.kind.to_string()),
         status: Set(STATUS_PENDING.to_string()),
         user_id: Set(start.user_id.map(ToOwned::to_owned)),
+        technical_user_id: Set(start.technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(Some(app_id.to_string())),
         provider: Set(start.provider.map(ToOwned::to_owned)),
         endpoint: Set(start.endpoint.map(ToOwned::to_owned)),

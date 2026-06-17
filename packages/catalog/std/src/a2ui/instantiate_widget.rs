@@ -76,6 +76,13 @@ async fn load_app_widgets(board: &Board) -> Vec<Widget> {
     app.get_widgets().await.unwrap_or_default()
 }
 
+fn find_widget_by_selector<'a>(widgets: &'a [Widget], selector: &str) -> Option<&'a Widget> {
+    widgets
+        .iter()
+        .find(|w| w.id == selector)
+        .or_else(|| widgets.iter().find(|w| w.name == selector))
+}
+
 /// Extract unique data paths referenced by component BoundValues (e.g. {"path": "/inputs/title"})
 fn collect_bound_paths(widget: &Widget) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
@@ -317,8 +324,8 @@ impl NodeLogic for InstantiateWidget {
             .and_then(|pin| pin.default_value.clone())
             .and_then(|bytes| flow_like_types::json::from_slice::<String>(&bytes).ok());
 
-        if let Some(ref name) = selected {
-            if let Some(widget) = widgets.iter().find(|w| &w.name == name) {
+        if let Some(ref selector) = selected {
+            if let Some(widget) = find_widget_by_selector(&widgets, selector) {
                 let expected = expected_dynamic_pin_names(widget);
                 remove_stale_dynamic_pins(node, &expected);
                 node.friendly_name = format!("Instantiate {}", widget.name);
@@ -335,7 +342,7 @@ impl NodeLogic for InstantiateWidget {
             // Collect valid action IDs from the selected widget
             let valid_actions: BTreeSet<String> = selected
                 .as_ref()
-                .and_then(|name| widgets.iter().find(|w| &w.name == name))
+                .and_then(|selector| find_widget_by_selector(&widgets, selector))
                 .map(|w| w.actions.iter().map(|a| a.id.clone()).collect())
                 .unwrap_or_default();
 
@@ -393,7 +400,7 @@ impl NodeLogic for InstantiateWidget {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let widget_name: String = context.evaluate_pin("widget_selector").await?;
+        let widget_selector: String = context.evaluate_pin("widget_selector").await?;
         let instance_id: String = context.evaluate_pin("instance_id").await?;
 
         let app_id = context
@@ -404,10 +411,8 @@ impl NodeLogic for InstantiateWidget {
 
         let app = App::load(app_id.clone(), context.app_state.clone()).await?;
         let widgets = app.get_widgets().await.unwrap_or_default();
-        let widget = widgets
-            .iter()
-            .find(|w| w.name == widget_name)
-            .ok_or_else(|| flow_like_types::anyhow!("Widget '{}' not found", widget_name))?;
+        let widget = find_widget_by_selector(&widgets, &widget_selector)
+            .ok_or_else(|| flow_like_types::anyhow!("Widget '{}' not found", widget_selector))?;
         let widget_id = widget.id.clone();
 
         // Collect bound path values from component path bindings

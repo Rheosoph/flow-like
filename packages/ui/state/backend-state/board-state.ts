@@ -50,6 +50,7 @@ export interface IBoardState {
 	// [AppId, BoardId, BoardName]
 	getOpenBoards(): Promise<[string, string, string][]>;
 	getBoardSettings(): Promise<IConnectionMode>;
+	ensureAppPackagesInstalledForExecution?(appId: string): Promise<void>;
 
 	executeBoard(
 		appId: string,
@@ -135,6 +136,7 @@ export interface IBoardState {
 	copilot_chat(
 		scope: CopilotScope,
 		board: IBoard | null,
+		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
 		selectedComponentIds: string[],

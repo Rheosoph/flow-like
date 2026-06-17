@@ -155,6 +155,7 @@ export class EmptyBoardState implements IBoardState {
 	copilot_chat(
 		scope: CopilotScope,
 		board: IBoard | null,
+		catalogNodes: INode[] | undefined,
 		selectedNodeIds: string[],
 		currentSurface: SurfaceComponent[] | null,
 		selectedComponentIds: string[],

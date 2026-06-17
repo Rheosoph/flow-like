@@ -3,7 +3,6 @@
 import { FolderOpen, ImageIcon, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { type IStorageItem, useBackend, useInvoke } from "../..";
-import { isAssetFile } from "../../lib/presign-assets";
 import {
 	Button,
 	Dialog,
@@ -18,14 +17,58 @@ export interface AssetPickerProps {
 	appId: string;
 	value?: string;
 	onChange: (value: string) => void;
-	accept?: "image" | "model" | "video" | "all";
+	accept?:
+		| "image"
+		| "model"
+		| "video"
+		| "audio"
+		| "document"
+		| "animation"
+		| "environment"
+		| "all";
 	placeholder?: string;
 }
 
 const ASSET_EXTENSIONS: Record<string, string[]> = {
-	image: ["jpg", "jpeg", "png", "gif", "webp", "svg", "ico", "bmp"],
+	image: ["jpg", "jpeg", "png", "gif", "webp", "svg", "ico", "bmp", "avif"],
 	model: ["glb", "gltf", "obj", "fbx", "usdz", "usd", "3ds", "dae"],
-	video: ["mp4", "webm", "ogg", "mov"],
+	video: ["mp4", "webm", "ogg", "ogv", "mov", "mkv", "avi"],
+	audio: [
+		"mp3",
+		"wav",
+		"ogg",
+		"oga",
+		"opus",
+		"flac",
+		"aac",
+		"m4a",
+		"aif",
+		"aiff",
+	],
+	document: [
+		"pdf",
+		"txt",
+		"csv",
+		"md",
+		"mdx",
+		"log",
+		"json",
+		"xml",
+		"css",
+		"js",
+		"jsx",
+		"ts",
+		"tsx",
+		"py",
+		"rs",
+		"html",
+		"yml",
+		"yaml",
+		"toml",
+		"sql",
+	],
+	animation: ["json", "lottie"],
+	environment: ["hdr", "exr"],
 };
 
 function getExtension(path: string): string {
@@ -33,7 +76,7 @@ function getExtension(path: string): string {
 }
 
 function matchesAccept(path: string, accept: string): boolean {
-	if (accept === "all") return isAssetFile(path);
+	if (accept === "all") return true;
 	const ext = getExtension(path);
 	const extensions = ASSET_EXTENSIONS[accept];
 	return extensions?.includes(ext) ?? false;

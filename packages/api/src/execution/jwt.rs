@@ -21,6 +21,9 @@ pub type ExecutionJwtError = BackendJwtError;
 pub struct ExecutionClaims {
     /// Subject - the user ID who initiated the execution
     pub sub: String,
+    /// Optional technical user/API key that initiated the execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub technical_user_id: Option<String>,
     /// The run ID (unique per execution)
     pub run_id: String,
     /// The application ID
@@ -53,6 +56,7 @@ pub struct ExecutionClaims {
 #[derive(Debug, Clone)]
 pub struct ExecutionJwtParams {
     pub user_id: String,
+    pub technical_user_id: Option<String>,
     pub run_id: String,
     pub app_id: String,
     pub board_id: String,
@@ -75,6 +79,7 @@ pub fn sign(params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
 
     let claims = ExecutionClaims {
         sub: params.user_id,
+        technical_user_id: params.technical_user_id,
         run_id: params.run_id,
         app_id: params.app_id,
         board_id: params.board_id,
@@ -137,6 +142,7 @@ mod tests {
 
         let params = ExecutionJwtParams {
             user_id: "user123".to_string(),
+            technical_user_id: None,
             run_id: "run456".to_string(),
             app_id: "app789".to_string(),
             board_id: "board012".to_string(),

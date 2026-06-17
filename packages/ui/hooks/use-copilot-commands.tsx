@@ -51,15 +51,15 @@ export function useCopilotCommands({
 }: UseCopilotCommandsProps) {
 	const handleExecuteCommands = useCallback(
 		async (commands: BoardCommand[]) => {
-			const boardNodes = board.data?.nodes ?? {};
-			const boardLayers = board.data?.layers ?? {};
+			let latestBoardNodes = board.data?.nodes ?? {};
+			let latestBoardLayers = board.data?.layers ?? {};
 
 			// ===== MAPPING TABLES =====
 			const nodeReferenceMap = new Map<string, INode>();
 			const pinIdMap = new Map<string, Map<string, string>>();
 
 			// ===== POSITION CALCULATION =====
-			const existingNodes = Object.values(boardNodes);
+			const existingNodes = Object.values(latestBoardNodes);
 			let baseX = 100;
 			let baseY = 100;
 
@@ -85,11 +85,11 @@ export function useCopilotCommands({
 			// ===== HELPER FUNCTIONS =====
 			const resolveNode = (ref: string): INode | undefined => {
 				// Check regular nodes first
-				if (boardNodes[ref]) return boardNodes[ref];
+				if (latestBoardNodes[ref]) return latestBoardNodes[ref];
 				// Check reference map (newly created nodes/layers)
 				if (nodeReferenceMap.has(ref)) return nodeReferenceMap.get(ref);
 				// Check existing layers (placeholders) - they can be connected to like nodes
-				if (boardLayers[ref]) return layerAsNode(boardLayers[ref]);
+				if (latestBoardLayers[ref]) return layerAsNode(latestBoardLayers[ref]);
 				return undefined;
 			};
 
@@ -140,13 +140,43 @@ export function useCopilotCommands({
 				return pinMap;
 			};
 
+			const refreshBoardSnapshot = async () => {
+				const freshBoard = await board.refetch();
+				latestBoardNodes = freshBoard.data?.nodes ?? latestBoardNodes;
+				latestBoardLayers = freshBoard.data?.layers ?? latestBoardLayers;
+
+				for (const [nodeId, node] of Object.entries(latestBoardNodes)) {
+					buildPinMapping(nodeId, node);
+				}
+
+				for (const [layerId, layer] of Object.entries(latestBoardLayers)) {
+					buildPinMapping(layerId, layerAsNode(layer));
+				}
+
+				for (const [ref, node] of Array.from(nodeReferenceMap.entries())) {
+					const freshNode = latestBoardNodes[node.id];
+					if (freshNode) {
+						nodeReferenceMap.set(ref, freshNode);
+						buildPinMapping(ref, freshNode);
+						continue;
+					}
+
+					const freshLayer = latestBoardLayers[node.id];
+					if (freshLayer) {
+						const layerNode = layerAsNode(freshLayer);
+						nodeReferenceMap.set(ref, layerNode);
+						buildPinMapping(ref, layerNode);
+					}
+				}
+			};
+
 			// Build pin mappings for existing board nodes
-			for (const [nodeId, node] of Object.entries(boardNodes)) {
+			for (const [nodeId, node] of Object.entries(latestBoardNodes)) {
 				buildPinMapping(nodeId, node);
 			}
 
 			// Build pin mappings for existing layers (placeholders) so they can be connected to
-			for (const [layerId, layer] of Object.entries(boardLayers)) {
+			for (const [layerId, layer] of Object.entries(latestBoardLayers)) {
 				buildPinMapping(layerId, layerAsNode(layer));
 			}
 
@@ -343,7 +373,169 @@ export function useCopilotCommands({
 			const delay = (ms: number) =>
 				new Promise((resolve) => setTimeout(resolve, ms));
 
-			// ===== SECOND PASS: CONNECTIONS & UPDATES =====
+			type CreateVariableCommand = Extract<
+				BoardCommand,
+				{ command_type: "CreateVariable" }
+			>;
+			type UpdateNodePinCommand = Extract<
+				BoardCommand,
+				{ command_type: "UpdateNodePin" }
+			>;
+
+			const applyCreateVariable = async (cmd: CreateVariableCommand) => {
+				const variableId = cmd.variable_id || createId();
+				const targetLayer = cmd.target_layer ?? null;
+				const variable: IVariable = {
+					id: variableId,
+					name: cmd.name,
+					data_type: (cmd.data_type as IVariableType) || IVariableType.String,
+					value_type: (cmd.value_type as IValueType) || IValueType.Normal,
+					default_value:
+						"default_value" in cmd
+							? Array.from(convertJsonToUint8Array(cmd.default_value) || [])
+							: null,
+					description: cmd.description || null,
+					category: cmd.category || null,
+					schema: cmd.schema || null,
+					editable: cmd.editable ?? true,
+					exposed: cmd.exposed ?? false,
+					secret: cmd.secret ?? false,
+					runtime_configured: cmd.runtime_configured ?? false,
+				};
+
+				console.log(`[CreateVariable] ${cmd.name} (${cmd.data_type})`);
+				await executeCommand(
+					upsertVariableCommand({ variable, layer_id: targetLayer }),
+				);
+			};
+
+			const applyUpdateNodePin = async (cmd: UpdateNodePinCommand) => {
+				await refreshBoardSnapshot();
+
+				const nodeId = nodeReferenceMap.get(cmd.node_id)?.id ?? cmd.node_id;
+				const node = latestBoardNodes[nodeId] ?? resolveNode(cmd.node_id);
+
+				if (!node) {
+					console.error(
+						`[UpdateNodePin] ❌ FAILED - Node not found: ${cmd.node_id}`,
+						{
+							command: cmd,
+							availableNodeRefs: Array.from(nodeReferenceMap.keys()),
+							boardNodeIds: Object.keys(latestBoardNodes),
+						},
+					);
+					toastError(
+						`Pin update failed: Node "${cmd.node_id}" not found`,
+						<XIcon />,
+					);
+					return;
+				}
+
+				const pinId = resolvePinId(cmd.node_id, cmd.pin_id);
+				const pin = pinId ? node.pins[pinId] : undefined;
+
+				if (!pin || !pinId) {
+					console.error(
+						`[UpdateNodePin] ❌ FAILED - Pin not found: ${cmd.pin_id} in ${node.friendly_name}`,
+						{
+							command: cmd,
+							pin_requested: cmd.pin_id,
+							pinId_resolved: pinId,
+							availablePins: Object.values(node.pins).map((p) => ({
+								name: p.name,
+								id: p.id,
+								type: p.pin_type,
+							})),
+						},
+					);
+					toastError(
+						`Pin update failed: Pin "${cmd.pin_id}" not found in "${node.friendly_name}"`,
+						<XIcon />,
+					);
+					return;
+				}
+
+				let encodedValue: number[] | null = null;
+				if (cmd.value !== null && cmd.value !== undefined) {
+					let valueToEncode = cmd.value;
+					if (typeof cmd.value === "string") {
+						if (cmd.value.startsWith('"') && cmd.value.endsWith('"')) {
+							valueToEncode = cmd.value.slice(1, -1);
+						}
+					}
+					const encoded = convertJsonToUint8Array(valueToEncode);
+					if (encoded) {
+						encodedValue = encoded;
+					} else {
+						console.error(
+							`[UpdateNodePin] ❌ FAILED - Could not encode value:`,
+							cmd.value,
+						);
+						toastError(`Pin update failed: Could not encode value`, <XIcon />);
+						return;
+					}
+				}
+
+				console.log(
+					`[UpdateNodePin] ✓ Setting: ${node.friendly_name}.${cmd.pin_id} = ${JSON.stringify(cmd.value)}`,
+					{ encodedValue, originalValue: cmd.value, pinId },
+				);
+
+				const updatedNode: INode = {
+					...node,
+					pins: {
+						...node.pins,
+						[pinId]: {
+							...pin,
+							default_value: encodedValue,
+						},
+					},
+				};
+
+				try {
+					const result = await executeCommand(
+						updateNodeCommand({
+							node: updatedNode,
+							old_node: node,
+						}),
+					);
+					if (result) {
+						console.log(`[UpdateNodePin] ✓ SUCCESS:`, result);
+						await refreshBoardSnapshot();
+					} else {
+						console.error(
+							`[UpdateNodePin] ❌ FAILED - executeCommand returned undefined/null`,
+						);
+						toastError(
+							`Pin update failed: Command not executed (check version)`,
+							<XIcon />,
+						);
+					}
+				} catch (err) {
+					console.error(`[UpdateNodePin] ❌ FAILED - Exception:`, err);
+					toastError(`Pin update failed: ${err}`, <XIcon />);
+				}
+			};
+
+			await refreshBoardSnapshot();
+
+			for (const cmd of commands) {
+				if (cmd.command_type === "CreateVariable") {
+					await delay(50);
+					await applyCreateVariable(cmd);
+				}
+			}
+
+			for (const cmd of commands) {
+				if (cmd.command_type === "UpdateNodePin") {
+					await delay(50);
+					await applyUpdateNodePin(cmd);
+				}
+			}
+
+			await refreshBoardSnapshot();
+
+			// ===== SECOND PASS: CONNECTIONS & REMAINING COMMANDS =====
 			for (const cmd of commands) {
 				await delay(50);
 
@@ -353,6 +545,10 @@ export function useCopilotCommands({
 
 					case "AddPlaceholder":
 						// Already handled in first pass
+						break;
+
+					case "CreateVariable":
+						// Applied before node configuration so variable get/set nodes can be wired safely.
 						break;
 
 					case "RemoveNode": {
@@ -379,7 +575,7 @@ export function useCopilotCommands({
 								{
 									command: cmd,
 									availableNodeRefs: Array.from(nodeReferenceMap.keys()),
-									boardNodeIds: Object.keys(boardNodes),
+									boardNodeIds: Object.keys(latestBoardNodes),
 								},
 							);
 							toastError(
@@ -482,114 +678,7 @@ export function useCopilotCommands({
 					}
 
 					case "UpdateNodePin": {
-						const freshBoard = await board.refetch();
-						const freshNodes = freshBoard.data?.nodes ?? {};
-
-						const nodeId = nodeReferenceMap.get(cmd.node_id)?.id ?? cmd.node_id;
-						const node = freshNodes[nodeId] ?? resolveNode(cmd.node_id);
-
-						if (!node) {
-							console.error(
-								`[UpdateNodePin] ❌ FAILED - Node not found: ${cmd.node_id}`,
-								{
-									command: cmd,
-									availableNodeRefs: Array.from(nodeReferenceMap.keys()),
-									boardNodeIds: Object.keys(freshNodes),
-								},
-							);
-							toastError(
-								`Pin update failed: Node "${cmd.node_id}" not found`,
-								<XIcon />,
-							);
-							break;
-						}
-
-						const pinId = resolvePinId(cmd.node_id, cmd.pin_id);
-						const pin = pinId ? node.pins[pinId] : undefined;
-
-						if (!pin || !pinId) {
-							console.error(
-								`[UpdateNodePin] ❌ FAILED - Pin not found: ${cmd.pin_id} in ${node.friendly_name}`,
-								{
-									command: cmd,
-									pin_requested: cmd.pin_id,
-									pinId_resolved: pinId,
-									availablePins: Object.values(node.pins).map((p) => ({
-										name: p.name,
-										id: p.id,
-										type: p.pin_type,
-									})),
-								},
-							);
-							toastError(
-								`Pin update failed: Pin "${cmd.pin_id}" not found in "${node.friendly_name}"`,
-								<XIcon />,
-							);
-							break;
-						}
-
-						let encodedValue: number[] | null = null;
-						if (cmd.value !== null && cmd.value !== undefined) {
-							let valueToEncode = cmd.value;
-							if (typeof cmd.value === "string") {
-								if (cmd.value.startsWith('"') && cmd.value.endsWith('"')) {
-									valueToEncode = cmd.value.slice(1, -1);
-								}
-							}
-							const encoded = convertJsonToUint8Array(valueToEncode);
-							if (encoded) {
-								encodedValue = encoded;
-							} else {
-								console.error(
-									`[UpdateNodePin] ❌ FAILED - Could not encode value:`,
-									cmd.value,
-								);
-								toastError(
-									`Pin update failed: Could not encode value`,
-									<XIcon />,
-								);
-								break;
-							}
-						}
-
-						console.log(
-							`[UpdateNodePin] ✓ Setting: ${node.friendly_name}.${cmd.pin_id} = ${JSON.stringify(cmd.value)}`,
-							{ encodedValue, originalValue: cmd.value, pinId },
-						);
-
-						const updatedNode: INode = {
-							...node,
-							pins: {
-								...node.pins,
-								[pinId]: {
-									...pin,
-									default_value: encodedValue,
-								},
-							},
-						};
-
-						try {
-							const result = await executeCommand(
-								updateNodeCommand({
-									node: updatedNode,
-									old_node: node,
-								}),
-							);
-							if (result) {
-								console.log(`[UpdateNodePin] ✓ SUCCESS:`, result);
-							} else {
-								console.error(
-									`[UpdateNodePin] ❌ FAILED - executeCommand returned undefined/null`,
-								);
-								toastError(
-									`Pin update failed: Command not executed (check version)`,
-									<XIcon />,
-								);
-							}
-						} catch (err) {
-							console.error(`[UpdateNodePin] ❌ FAILED - Exception:`, err);
-							toastError(`Pin update failed: ${err}`, <XIcon />);
-						}
+						// Applied before connections so dynamic/configured pins exist.
 						break;
 					}
 
@@ -609,28 +698,6 @@ export function useCopilotCommands({
 						break;
 					}
 
-					case "CreateVariable": {
-						const variableId = createId();
-						const variable: IVariable = {
-							id: variableId,
-							name: cmd.name,
-							data_type:
-								(cmd.data_type as IVariableType) || IVariableType.String,
-							value_type: (cmd.value_type as IValueType) || IValueType.Normal,
-							default_value: cmd.default_value
-								? Array.from(convertJsonToUint8Array(cmd.default_value) || [])
-								: null,
-							description: cmd.description || null,
-							editable: true,
-							exposed: false,
-							secret: false,
-						};
-
-						console.log(`[CreateVariable] ${cmd.name} (${cmd.data_type})`);
-						await executeCommand(upsertVariableCommand({ variable }));
-						break;
-					}
-
 					case "UpdateVariable": {
 						const existingVariable = board.data?.variables?.[cmd.variable_id];
 						if (!existingVariable) {
@@ -643,9 +710,40 @@ export function useCopilotCommands({
 
 						const updatedVariable: IVariable = {
 							...existingVariable,
-							default_value: cmd.value
-								? Array.from(convertJsonToUint8Array(cmd.value) || [])
-								: existingVariable.default_value,
+							name: cmd.name ?? existingVariable.name,
+							data_type:
+								(cmd.data_type as IVariableType | undefined) ??
+								existingVariable.data_type,
+							value_type:
+								(cmd.value_type as IValueType | undefined) ??
+								existingVariable.value_type,
+							default_value: cmd.clear_default_value
+								? null
+								: "default_value" in cmd
+									? Array.from(convertJsonToUint8Array(cmd.default_value) || [])
+									: "value" in cmd
+										? Array.from(convertJsonToUint8Array(cmd.value) || [])
+										: existingVariable.default_value,
+							description: cmd.clear_description
+								? null
+								: "description" in cmd
+									? (cmd.description ?? null)
+									: existingVariable.description,
+							category: cmd.clear_category
+								? null
+								: "category" in cmd
+									? (cmd.category ?? null)
+									: existingVariable.category,
+							schema: cmd.clear_schema
+								? null
+								: "schema" in cmd
+									? (cmd.schema ?? null)
+									: existingVariable.schema,
+							exposed: cmd.exposed ?? existingVariable.exposed,
+							secret: cmd.secret ?? existingVariable.secret,
+							editable: cmd.editable ?? existingVariable.editable,
+							runtime_configured:
+								cmd.runtime_configured ?? existingVariable.runtime_configured,
 						};
 
 						console.log(

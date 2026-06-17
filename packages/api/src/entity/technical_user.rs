@@ -24,6 +24,10 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "creatorMembershipId", column_type = "Text", nullable)]
+    pub creator_membership_id: Option<String>,
+    #[sea_orm(column_name = "creatorUserId", column_type = "Text", nullable)]
+    pub creator_user_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -36,6 +40,22 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     App,
+    #[sea_orm(has_many = "super::embedding_usage_tracking::Entity")]
+    EmbeddingUsageTracking,
+    #[sea_orm(has_many = "super::execution_run::Entity")]
+    ExecutionRun,
+    #[sea_orm(has_many = "super::execution_usage_tracking::Entity")]
+    ExecutionUsageTracking,
+    #[sea_orm(has_many = "super::llm_usage_tracking::Entity")]
+    LlmUsageTracking,
+    #[sea_orm(
+        belongs_to = "super::membership::Entity",
+        from = "Column::CreatorMembershipId",
+        to = "super::membership::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Membership,
     #[sea_orm(
         belongs_to = "super::role::Entity",
         from = "Column::RoleId",
@@ -44,6 +64,14 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     Role,
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::CreatorUserId",
+        to = "super::user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    User,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -52,9 +80,45 @@ impl Related<super::app::Entity> for Entity {
     }
 }
 
+impl Related<super::embedding_usage_tracking::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::EmbeddingUsageTracking.def()
+    }
+}
+
+impl Related<super::execution_run::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::ExecutionRun.def()
+    }
+}
+
+impl Related<super::execution_usage_tracking::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::ExecutionUsageTracking.def()
+    }
+}
+
+impl Related<super::llm_usage_tracking::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::LlmUsageTracking.def()
+    }
+}
+
+impl Related<super::membership::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Membership.def()
+    }
+}
+
 impl Related<super::role::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Role.def()
+    }
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
     }
 }
 

@@ -9,21 +9,82 @@
 //! - **Soft checks** — report violations as warnings and enforce a ceiling
 //!   so the count can only go *down* over time.
 
-use flow_like::flow::{pin::PinType, variable::VariableType};
+use flow_like::flow::{
+    board::{Board, ExecutionMode, ExecutionStage},
+    execution::LogLevel,
+    node::{Node, NodeLogic},
+    pin::PinType,
+    variable::VariableType,
+};
 use flow_like_catalog::CatalogBuilder;
-use std::collections::HashSet;
+use flow_like_storage::object_store::path::Path;
+use flow_like_types::json::json;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::SystemTime,
+};
 
-/// Collect all nodes once — shared by every test.
-fn all_nodes() -> Vec<(String, flow_like::flow::node::Node)> {
+/// Collect all node logic objects once — shared by tests that need `on_update()`.
+fn all_logic_nodes() -> Vec<(String, Arc<dyn NodeLogic>)> {
     CatalogBuilder::new()
         .build()
         .into_iter()
         .map(|logic| {
+            let name = logic.get_node().name.clone();
+            (name, logic)
+        })
+        .collect()
+}
+
+fn selected_logic_nodes(names: &[&str]) -> Vec<(String, Arc<dyn NodeLogic>)> {
+    CatalogBuilder::new()
+        .only_nodes(names)
+        .build()
+        .into_iter()
+        .map(|logic| {
+            let name = logic.get_node().name.clone();
+            (name, logic)
+        })
+        .collect()
+}
+
+/// Collect all nodes once — shared by every test.
+fn all_nodes() -> Vec<(String, Node)> {
+    all_logic_nodes()
+        .into_iter()
+        .map(|(_, logic)| {
             let node = logic.get_node();
             let name = node.name.clone();
             (name, node)
         })
         .collect()
+}
+
+fn empty_board() -> Board {
+    Board {
+        id: "lint-board".to_string(),
+        name: "Lint Board".to_string(),
+        description: String::new(),
+        nodes: HashMap::new(),
+        variables: HashMap::new(),
+        comments: HashMap::new(),
+        viewport: (0.0, 0.0, 0.0),
+        version: (0, 0, 1),
+        stage: ExecutionStage::Dev,
+        log_level: LogLevel::Info,
+        execution_mode: ExecutionMode::Hybrid,
+        refs: HashMap::new(),
+        layers: HashMap::new(),
+        page_ids: Vec::new(),
+        hash: None,
+        created_at: SystemTime::UNIX_EPOCH,
+        updated_at: SystemTime::UNIX_EPOCH,
+        parent: None,
+        board_dir: Path::default(),
+        logic_nodes: HashMap::new(),
+        app_state: None,
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -243,6 +304,67 @@ fn warn_struct_pins_without_schema() {
     });
 
     assert_ceiling("struct_without_schema", &violations, 111);
+}
+
+/// `on_update()` must settle when the node settings and board are unchanged.
+/// Recreating identical pins on every pass changes generated pin IDs and keeps
+/// the board update loop dirty.
+#[tokio::test]
+async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
+    // Start with fixed regressions and grow this list as dynamic nodes are audited.
+    const COVERED_NODES: &[&str] = &["a2ui_update_overlay"];
+    const DEFAULT_SETTINGS: &[Option<&str>] = &[None];
+    const OVERLAY_SETTINGS: &[Option<&str>] = &[Some("Set All"), Some("Add"), Some("Clear")];
+
+    let board = empty_board();
+    let logic_nodes = selected_logic_nodes(COVERED_NODES);
+    let found_names = logic_nodes
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<HashSet<_>>();
+    let expected_names = COVERED_NODES.iter().copied().collect::<HashSet<_>>();
+
+    assert_eq!(
+        found_names, expected_names,
+        "on_update hash-stability lint did not load the expected nodes"
+    );
+
+    let mut violations = Vec::new();
+
+    for (name, logic) in logic_nodes {
+        let settings = match name.as_str() {
+            "a2ui_update_overlay" => OVERLAY_SETTINGS,
+            _ => DEFAULT_SETTINGS,
+        };
+
+        for operation in settings {
+            let mut node = logic.get_node();
+            if let Some(operation) = operation {
+                node.get_pin_mut_by_name("operation")
+                    .expect("covered on_update node has an operation pin")
+                    .set_default_value(Some(json!(operation)));
+            }
+
+            logic.on_update(&mut node, &board).await;
+            node.hash();
+            let first_hash = node.hash;
+
+            logic.on_update(&mut node, &board).await;
+            node.hash();
+            let second_hash = node.hash;
+
+            if first_hash != second_hash {
+                violations.push(LintViolation {
+                    node: name.clone(),
+                    message: format!(
+                        "Hash changed across identical on_update runs with operation {operation:?} ({first_hash:?} -> {second_hash:?})"
+                    ),
+                });
+            }
+        }
+    }
+
+    assert_ceiling("unstable_on_update_hash", &violations, 0);
 }
 
 // ── Info-level checks (report only, no ceiling) ───────────────────────

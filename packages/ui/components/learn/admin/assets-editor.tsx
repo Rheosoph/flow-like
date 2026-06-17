@@ -13,7 +13,6 @@ import {
 	Video,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import type {
 	CourseAsset,
@@ -33,6 +32,8 @@ import {
 } from "../../ui/card";
 import { Input } from "../../ui/input";
 
+export type AssetsEditorAuth = unknown;
+
 /**
  * Minimal contract the assets section needs from a `learnApi` instance.
  * Both `apps/desktop/lib/learn-api.ts` and `apps/web/lib/learn-api.ts`
@@ -42,33 +43,33 @@ import { Input } from "../../ui/input";
 export interface AssetsEditorApi {
 	listCourseAssets(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: AssetsEditorAuth,
 		courseId: string,
 		opts?: { kind?: CourseAssetKind },
 	): Promise<CourseAsset[]>;
 	uploadCourseAsset(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: AssetsEditorAuth,
 		courseId: string,
 		body: CreateCourseAssetBody,
 		file: File,
 	): Promise<CourseAsset>;
 	renameCourseAsset(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: AssetsEditorAuth,
 		courseId: string,
 		assetId: string,
 		name: string,
 	): Promise<CourseAsset>;
 	deleteCourseAsset(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: AssetsEditorAuth,
 		courseId: string,
 		assetId: string,
 	): Promise<void>;
 	optimizeCourseAsset(
 		profile: IProfile,
-		auth: AuthContextProps,
+		auth: AssetsEditorAuth,
 		courseId: string,
 		assetId: string,
 	): Promise<OptimizeCourseAssetResponse>;
@@ -77,7 +78,7 @@ export interface AssetsEditorApi {
 export interface AssetsEditorProps {
 	readonly api: AssetsEditorApi;
 	readonly profile: IProfile | null;
-	readonly auth: AuthContextProps;
+	readonly auth: AssetsEditorAuth;
 	readonly courseId: string;
 }
 

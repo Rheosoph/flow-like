@@ -7,8 +7,10 @@ use models::{sync_models, upsert_model};
 
 use crate::state::AppState;
 
+pub mod ai_act;
 pub mod bit;
 pub mod forks;
+pub mod governance;
 pub mod logs;
 pub mod models;
 pub mod packages;
@@ -105,6 +107,33 @@ pub fn routes() -> Router<AppState> {
             "/usage/apps/{app_id}/limits",
             get(usage::get_limits).put(usage::put_limits),
         )
+        .route(
+            "/usage/apps/{app_id}/technical-users/{technical_user_id}/limits",
+            get(usage::get_technical_user_limits).put(usage::put_technical_user_limits),
+        )
+        // Governance scores
+        .route(
+            "/governance/scores",
+            get(governance::list_scores::list_scores),
+        )
+        .route(
+            "/governance/scores/summary",
+            get(governance::get_scores_summary::get_scores_summary),
+        )
+        .route(
+            "/governance/scores/recompute",
+            post(governance::recompute::recompute_scores),
+        )
+        .route(
+            "/governance/scores/{app_id}",
+            get(governance::get_app_scores::get_app_scores),
+        )
+        .route(
+            "/governance/patterns",
+            get(governance::list_patterns::list_patterns),
+        )
+        // EU AI Act inventory
+        .nest("/ai-act", ai_act::routes())
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))
         // Fork orphan janitor

@@ -13,7 +13,9 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -94,7 +96,46 @@ pub async fn request_publication(
             "A pending publication request already exists for this app".to_string(),
         ));
     }
+    // EU AI Act gate: when the feature is on and the target visibility makes the
+    // app publicly reachable, require a submitted, non-blocked assessment and
+    // bind it to this request for review. See todo/EU-AI.md §9.
+    let mut bound_assessment_id: Option<String> = None;
+    let is_public_target = matches!(
+        target_visibility,
+        Visibility::Public | Visibility::PublicRequestAccess
+    );
+    if state.platform_config.features.ai_act && is_public_target {
+        use crate::entity::{ai_act_assessment, sea_orm_active_enums::AiActAssessmentStatus};
+        let assessment = ai_act_assessment::Entity::find()
+            .filter(ai_act_assessment::Column::AppId.eq(&app_id))
+            .order_by_desc(ai_act_assessment::Column::Version)
+            .one(&state.db)
+            .await?;
 
+        match assessment {
+            None => {
+                return Err(ApiError::bad_request(
+                    "An EU AI Act assessment must be completed before publishing this app."
+                        .to_string(),
+                ));
+            }
+            Some(a) if a.status == AiActAssessmentStatus::Blocked => {
+                return Err(ApiError::bad_request(
+                    "This app declares a prohibited AI practice and cannot be published."
+                        .to_string(),
+                ));
+            }
+            Some(a) if a.status == AiActAssessmentStatus::Draft => {
+                return Err(ApiError::bad_request(
+                    "The EU AI Act assessment must be submitted before publishing this app."
+                        .to_string(),
+                ));
+            }
+            Some(a) => {
+                bound_assessment_id = Some(a.id);
+            }
+        }
+    }
     let now = chrono::Utc::now().naive_utc();
     let request_id = create_id();
     let author_id = user.sub().ok();
@@ -105,6 +146,7 @@ pub async fn request_publication(
         target_visibility: Set(target_visibility.clone()),
         status: Set(PublicationRequestStatus::Pending),
         approver_id: Set(None),
+        ai_act_assessment_id: Set(bound_assessment_id),
         created_at: Set(now),
         updated_at: Set(now),
     };

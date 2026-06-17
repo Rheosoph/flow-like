@@ -1,13 +1,24 @@
 "use client";
 
 import { ChevronDown, Plus, Trash2 } from "lucide-react";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import {
+	type CSSProperties,
+	type ReactNode,
+	useCallback,
+	useMemo,
+	useState,
+} from "react";
 import { cn } from "../../lib";
 import {
 	NIVO_CHART_DEFAULTS,
 	NIVO_SAMPLE_DATA,
 } from "../a2ui/display/nivo-data";
 import { getModel3DView } from "../a2ui/game/model3d-view-registry";
+import {
+	inferFileName,
+	inferFileType,
+	inferMimeTypeFromSource,
+} from "../a2ui/media-source";
 import type {
 	BoundValue,
 	ChartAxis,
@@ -41,15 +52,56 @@ import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
-import { AssetPicker } from "./AssetPicker";
+import { AssetPicker, type AssetPickerProps } from "./AssetPicker";
 import { useBuilder } from "./BuilderContext";
 import { getDefaultProps } from "./componentDefaults";
 import { getComponentSchema } from "./componentSchema";
 
-// Component types that have asset properties
-const ASSET_COMPONENT_TYPES = new Set(["image", "sprite", "model3d", "video"]);
-// Property names that should use the asset picker
-const ASSET_PROPERTY_NAMES = new Set(["src", "poster", "fallback"]);
+type AssetAccept = NonNullable<AssetPickerProps["accept"]>;
+
+const FIXED_FIELD_SIZING_STYLE = { fieldSizing: "fixed" } as CSSProperties;
+const INSPECTOR_FIELD_CLASS = "space-y-2 min-w-0 max-w-full";
+
+// Component/property pairs that should use the asset picker.
+const ASSET_FIELDS_BY_COMPONENT: Record<
+	string,
+	Partial<Record<string, AssetAccept>>
+> = {
+	image: { src: "image", fallback: "image" },
+	video: { src: "video", poster: "image" },
+	filePreview: { src: "all", url: "all" },
+	avatar: { src: "image" },
+	lottie: { src: "animation" },
+	iframe: { src: "all" },
+	boundingBoxOverlay: { src: "image" },
+	imageLabeler: { src: "image" },
+	imageHotspot: { src: "image" },
+	sprite: { src: "image" },
+	model3d: { src: "model", hdriUrl: "environment" },
+	scene3d: { environmentMap: "environment" },
+	characterPortrait: { image: "image" },
+	miniMap: { mapImage: "image" },
+};
+
+function getAssetAccept(
+	componentType: string | undefined,
+	propertyName: string,
+): AssetAccept | undefined {
+	if (!componentType) return undefined;
+	return ASSET_FIELDS_BY_COMPONENT[componentType]?.[propertyName];
+}
+
+function literalString(value: string): BoundValue {
+	return { literalString: value };
+}
+
+function getLiteralAssetPath(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	if (typeof value === "object" && value !== null && "literalString" in value) {
+		return String(value.literalString);
+	}
+	return undefined;
+}
 
 export interface InspectorProps {
 	className?: string;
@@ -156,8 +208,14 @@ export function Inspector({ className }: InspectorProps) {
 					</TabsTrigger>
 				</TabsList>
 
-				<ScrollArea className="flex-1 min-h-0">
-					<TabsContent value="properties" className="m-0 p-4">
+				<ScrollArea
+					className="flex-1 min-h-0 min-w-0 max-w-full overflow-hidden"
+					viewportClassName="min-w-0 max-w-full overflow-x-hidden"
+				>
+					<TabsContent
+						value="properties"
+						className="m-0 min-w-0 max-w-full p-4"
+					>
 						{singleSelected && (
 							<PropertyEditor
 								component={singleSelected}
@@ -168,7 +226,7 @@ export function Inspector({ className }: InspectorProps) {
 						)}
 					</TabsContent>
 
-					<TabsContent value="style" className="m-0 p-4">
+					<TabsContent value="style" className="m-0 min-w-0 max-w-full p-4">
 						{singleSelected && (
 							<StyleEditor
 								component={singleSelected}
@@ -179,11 +237,11 @@ export function Inspector({ className }: InspectorProps) {
 						)}
 					</TabsContent>
 
-					<TabsContent value="canvas" className="m-0 p-4">
+					<TabsContent value="canvas" className="m-0 min-w-0 max-w-full p-4">
 						<CanvasSettingsEditor />
 					</TabsContent>
 
-					<TabsContent value="actions" className="m-0 p-4">
+					<TabsContent value="actions" className="m-0 min-w-0 max-w-full p-4">
 						{singleSelected && (
 							<ActionsEditor
 								component={singleSelected}
@@ -226,6 +284,43 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 			});
 		},
 		[component.component, onUpdate],
+	);
+
+	const updateProperty = useCallback(
+		(key: string, value: unknown) => {
+			const literalAssetPath = getLiteralAssetPath(value);
+
+			if (
+				componentType === "filePreview" &&
+				(key === "src" || key === "url") &&
+				literalAssetPath !== undefined
+			) {
+				const fileType = inferFileType(undefined, undefined, literalAssetPath);
+				const metadata: Record<string, unknown> = {
+					[key]: value,
+					filename: literalString(inferFileName(literalAssetPath)),
+					mimeType: literalString(inferMimeTypeFromSource(literalAssetPath)),
+					fileType: literalString(fileType),
+				};
+
+				if (key === "src") {
+					metadata.url = value;
+				} else {
+					metadata.src = value;
+				}
+
+				onUpdate({
+					component: {
+						...component.component,
+						...metadata,
+					} as SurfaceComponent["component"],
+				});
+				return;
+			}
+
+			updateProp(key, value);
+		},
+		[component.component, componentType, onUpdate, updateProp],
 	);
 
 	// Special editor for PlotlyChart
@@ -275,14 +370,11 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 		);
 	}
 
-	// Check if this is an asset component type
-	const isAssetComponent = ASSET_COMPONENT_TYPES.has(componentType ?? "");
-
 	// Render different editors based on component type
 	return (
-		<div className="space-y-4">
+		<div className="min-w-0 max-w-full space-y-4">
 			{/* Common ID field */}
-			<div className="space-y-2">
+			<div className={INSPECTOR_FIELD_CLASS}>
 				<Label className="text-xs">Component ID</Label>
 				<Input
 					value={component.id}
@@ -291,18 +383,30 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 				/>
 			</div>
 
+			<PropertyField
+				name="hidden"
+				value={props.hidden ?? { literalBool: false }}
+				onChange={(newValue) => updateProperty("hidden", newValue)}
+				componentType={componentType}
+			/>
+
 			{/* Type-specific properties */}
-			{Object.entries(props).map(([key, value]) => (
-				<PropertyField
-					key={key}
-					name={key}
-					value={value}
-					onChange={(newValue) => updateProp(key, newValue)}
-					isAssetProperty={isAssetComponent && ASSET_PROPERTY_NAMES.has(key)}
-					componentType={componentType}
-					enumOptions={schema?.[key]?.enum}
-				/>
-			))}
+			{Object.entries(props).map(([key, value]) => {
+				if (key === "hidden") return null;
+				const assetAccept = getAssetAccept(componentType, key);
+				return (
+					<PropertyField
+						key={key}
+						name={key}
+						value={value}
+						onChange={(newValue) => updateProperty(key, newValue)}
+						isAssetProperty={Boolean(assetAccept)}
+						assetAccept={assetAccept}
+						componentType={componentType}
+						enumOptions={schema?.[key]?.enum}
+					/>
+				);
+			})}
 		</div>
 	);
 }
@@ -2741,6 +2845,7 @@ interface PropertyFieldProps {
 	value: unknown;
 	onChange: (value: unknown) => void;
 	isAssetProperty?: boolean;
+	assetAccept?: AssetAccept;
 	componentType?: string;
 	enumOptions?: string[];
 }
@@ -2750,19 +2855,12 @@ function PropertyField({
 	value,
 	onChange,
 	isAssetProperty,
+	assetAccept = "all",
 	componentType,
 	enumOptions,
 }: PropertyFieldProps) {
 	const { actionContext } = useBuilder();
 	const appId = actionContext?.appId;
-
-	// Determine asset accept type based on component type
-	const getAssetAccept = (): "image" | "model" | "video" | "all" => {
-		if (componentType === "image" || componentType === "sprite") return "image";
-		if (componentType === "model3d") return "model";
-		if (componentType === "video") return "video";
-		return "all";
-	};
 
 	// Skip rendering complex objects for now
 	if (typeof value === "object" && value !== null) {
@@ -2781,7 +2879,7 @@ function PropertyField({
 					onChange={onChange}
 					isAssetProperty={isAssetProperty}
 					appId={appId}
-					assetAccept={getAssetAccept()}
+					assetAccept={assetAccept}
 					componentType={componentType}
 					enumOptions={enumOptions}
 				/>
@@ -2794,7 +2892,7 @@ function PropertyField({
 		// Use AssetPicker for asset properties when appId is available
 		if (isAssetProperty && appId) {
 			return (
-				<div className="space-y-2">
+				<div className={INSPECTOR_FIELD_CLASS}>
 					<Label className="text-xs capitalize">
 						{name.replace(/([A-Z])/g, " $1")}
 					</Label>
@@ -2802,14 +2900,14 @@ function PropertyField({
 						appId={appId}
 						value={value}
 						onChange={(newValue) => onChange(newValue)}
-						accept={getAssetAccept()}
+						accept={assetAccept}
 						placeholder={`Select ${name}...`}
 					/>
 				</div>
 			);
 		}
 		return (
-			<div className="space-y-2">
+			<div className={INSPECTOR_FIELD_CLASS}>
 				<Label className="text-xs capitalize">
 					{name.replace(/([A-Z])/g, " $1")}
 				</Label>
@@ -2824,7 +2922,7 @@ function PropertyField({
 
 	if (typeof value === "number") {
 		return (
-			<div className="space-y-2">
+			<div className={INSPECTOR_FIELD_CLASS}>
 				<Label className="text-xs capitalize">
 					{name.replace(/([A-Z])/g, " $1")}
 				</Label>
@@ -2892,7 +2990,7 @@ function OptionsEditor({
 	);
 
 	return (
-		<div className="space-y-2">
+		<div className={INSPECTOR_FIELD_CLASS}>
 			<div className="flex items-center justify-between">
 				<Label className="text-xs capitalize">
 					{name.replace(/([A-Z])/g, " $1")}
@@ -2910,7 +3008,7 @@ function OptionsEditor({
 					</SelectContent>
 				</Select>
 			</div>
-			<div className="space-y-1.5 rounded border p-2">
+			<div className="min-w-0 max-w-full space-y-1.5 rounded border p-2">
 				{options.map((opt, idx) => (
 					<div key={idx} className="flex items-center gap-1">
 						<Input
@@ -2994,7 +3092,7 @@ interface BoundValueEditorProps {
 	onChange: (value: BoundValue) => void;
 	isAssetProperty?: boolean;
 	appId?: string;
-	assetAccept?: "image" | "model" | "video" | "all";
+	assetAccept?: AssetAccept;
 	componentType?: string;
 	enumOptions?: string[];
 	label?: string;
@@ -3134,7 +3232,7 @@ function BoundValueEditor({
 	// When switching to binding mode from options
 	if (originalType === "options" && mode === "binding") {
 		return (
-			<div className="space-y-2">
+			<div className={INSPECTOR_FIELD_CLASS}>
 				<div className="flex items-center justify-between">
 					<Label className="text-xs capitalize">
 						{(label ?? name).replace(/([A-Z])/g, " $1")}
@@ -3163,8 +3261,8 @@ function BoundValueEditor({
 	}
 
 	return (
-		<div className="space-y-2">
-			<div className="flex items-center justify-between">
+		<div className={INSPECTOR_FIELD_CLASS}>
+			<div className="flex min-w-0 items-center justify-between gap-2">
 				<Label className="text-xs capitalize">
 					{(label ?? name).replace(/([A-Z])/g, " $1")}
 				</Label>
@@ -3199,7 +3297,9 @@ function BoundValueEditor({
 					value={String(currentValue)}
 					onChange={(e) => handleLiteralChange(e.target.value)}
 					placeholder="[0, 0, 0]"
-					className="min-h-20 text-xs"
+					wrap="soft"
+					style={FIXED_FIELD_SIZING_STYLE}
+					className="min-h-20 max-h-56 min-w-0 max-w-full resize-y overflow-auto whitespace-pre-wrap break-all font-mono text-xs"
 				/>
 			) : mode === "literal" && enumOptions && enumOptions.length > 0 ? (
 				<Select

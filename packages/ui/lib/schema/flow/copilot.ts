@@ -105,17 +105,40 @@ export type BoardCommand =
 	  }
 	| {
 			command_type: "CreateVariable";
+			variable_id?: string;
 			name: string;
 			data_type: string;
 			value_type?: string;
 			default_value?: unknown;
 			description?: string;
+			category?: string;
+			schema?: string;
+			exposed?: boolean;
+			secret?: boolean;
+			editable?: boolean;
+			runtime_configured?: boolean;
+			target_layer?: string;
 			summary?: string;
 	  }
 	| {
 			command_type: "UpdateVariable";
 			variable_id: string;
-			value: unknown;
+			name?: string;
+			data_type?: string;
+			value_type?: string;
+			default_value?: unknown;
+			clear_default_value?: boolean;
+			description?: string;
+			clear_description?: boolean;
+			category?: string;
+			clear_category?: boolean;
+			schema?: string;
+			clear_schema?: boolean;
+			exposed?: boolean;
+			secret?: boolean;
+			editable?: boolean;
+			runtime_configured?: boolean;
+			value?: unknown;
 			summary?: string;
 	  }
 	| { command_type: "DeleteVariable"; variable_id: string; summary?: string }
@@ -166,6 +189,7 @@ export interface CopilotResponse {
 	message: string;
 	commands: BoardCommand[];
 	suggestions: Suggestion[];
+	flowscript_workspace?: string;
 }
 
 export interface PlanStep {

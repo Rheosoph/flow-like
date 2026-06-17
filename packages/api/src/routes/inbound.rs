@@ -1578,6 +1578,7 @@ async fn dispatch_event_collect(
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: executor_subject.clone(),
+        technical_user_id: None,
         run_id: run_id.clone(),
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
@@ -1641,6 +1642,7 @@ async fn dispatch_event_collect(
         completed_at: Set(None),
         expires_at: Set(Some(now + chrono::Duration::hours(24))),
         user_id: Set(actor_user_id),
+        technical_user_id: Set(None),
         app_id: Set(event_row.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),

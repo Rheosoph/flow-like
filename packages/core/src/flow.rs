@@ -1,3 +1,4 @@
+pub mod ast;
 pub mod board;
 pub mod catalog;
 pub mod copilot;

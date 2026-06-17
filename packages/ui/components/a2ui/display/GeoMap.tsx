@@ -11,6 +11,7 @@ import {
 	MarkerContent,
 	MarkerLabel,
 } from "../../ui/map";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -68,6 +69,7 @@ export function A2UIGeoMap({
 	surfaceId,
 	onAction,
 }: ComponentProps<GeoMapComponent>) {
+	const triggerAction = useComponentActionTrigger(componentId);
 	const viewport = useResolved<GeoMapViewport>(component.viewport);
 	const markers = useResolved<GeoMapMarkerDef[]>(component.markers);
 	const routes = useResolved<GeoMapRouteDef[]>(component.routes);
@@ -134,8 +136,13 @@ export function A2UIGeoMap({
 					coordinate: marker.coordinate,
 				},
 			});
+			void triggerAction(component.actions, {
+				event: "markerClick",
+				markerId: marker.id,
+				coordinate: marker.coordinate,
+			});
 		},
-		[onAction, surfaceId, componentId],
+		[component.actions, componentId, onAction, surfaceId, triggerAction],
 	);
 
 	const handleMarkerDragEnd = useCallback(
@@ -151,8 +158,13 @@ export function A2UIGeoMap({
 					coordinate: { latitude: lngLat.lat, longitude: lngLat.lng },
 				},
 			});
+			void triggerAction(component.actions, {
+				event: "markerDragEnd",
+				markerId,
+				coordinate: { latitude: lngLat.lat, longitude: lngLat.lng },
+			});
 		},
-		[onAction, surfaceId, componentId],
+		[component.actions, componentId, onAction, surfaceId, triggerAction],
 	);
 
 	const handleRouteClick = useCallback(
@@ -165,8 +177,12 @@ export function A2UIGeoMap({
 				timestamp: Date.now(),
 				context: { routeId },
 			});
+			void triggerAction(component.actions, {
+				event: "routeClick",
+				routeId,
+			});
 		},
-		[onAction, surfaceId, componentId],
+		[component.actions, componentId, onAction, surfaceId, triggerAction],
 	);
 
 	const handleLocate = useCallback(
@@ -184,8 +200,15 @@ export function A2UIGeoMap({
 					},
 				},
 			});
+			void triggerAction(component.actions, {
+				event: "locate",
+				coordinate: {
+					latitude: coords.latitude,
+					longitude: coords.longitude,
+				},
+			});
 		},
-		[onAction, surfaceId, componentId],
+		[component.actions, componentId, onAction, surfaceId, triggerAction],
 	);
 
 	const validControlPosition = (

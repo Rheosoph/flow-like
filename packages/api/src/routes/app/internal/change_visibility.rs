@@ -151,6 +151,7 @@ pub async fn change_visibility(
             approver_id: NotSet,
             target_visibility: Set(body.visibility.clone()),
             status: Set(crate::entity::sea_orm_active_enums::PublicationRequestStatus::Pending),
+            ai_act_assessment_id: NotSet,
             created_at: Set(chrono::Utc::now().naive_utc()),
             updated_at: Set(chrono::Utc::now().naive_utc()),
         };

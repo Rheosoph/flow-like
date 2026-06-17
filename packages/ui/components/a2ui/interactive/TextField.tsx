@@ -5,7 +5,7 @@ import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
-import { useOnAction } from "../ActionHandler";
+import { useComponentActionTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -35,6 +35,7 @@ export function A2UITextField({
 }: ComponentProps<TextFieldComponent>) {
 	// Use onAction from context to ensure values are stored
 	const onAction = useOnAction();
+	const triggerAction = useComponentActionTrigger(componentId);
 	const resolvedValue = useResolved<string>(component.value);
 	const placeholder = useResolved<string>(component.placeholder);
 	const disabled = useResolved<boolean>(component.disabled);
@@ -98,6 +99,7 @@ export function A2UITextField({
 				context: { value: newValue },
 			});
 		}
+		void triggerAction(component.actions, { value: newValue });
 	};
 
 	const InputComponent = multiline ? Textarea : Input;

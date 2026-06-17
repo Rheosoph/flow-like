@@ -56,6 +56,7 @@ pub struct ExecutionRunRecord {
     pub completed_at: Option<i64>, // Unix timestamp ms
     pub expires_at: Option<i64>,   // Unix timestamp ms
     pub user_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub app_id: String,
     pub created_at: i64, // Unix timestamp ms
     pub updated_at: i64, // Unix timestamp ms
@@ -71,6 +72,7 @@ pub struct CreateRunInput {
     pub mode: RunMode,
     pub input_payload_len: i64,
     pub user_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub app_id: String,
     pub expires_at: Option<i64>,
 }

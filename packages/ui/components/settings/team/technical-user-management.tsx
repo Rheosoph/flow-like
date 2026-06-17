@@ -50,6 +50,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Textarea,
+	UserProfileLink,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
@@ -364,7 +365,6 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 	const isExpired = apiKey.valid_until
 		? apiKey.valid_until * 1000 < Date.now()
 		: false;
-
 	return (
 		<>
 			<div
@@ -400,6 +400,14 @@ function ApiKeyCard({ apiKey, roles, onDelete }: Readonly<ApiKeyCardProps>) {
 									{role.name}
 								</span>
 							)}
+							<UserProfileLink
+								userId={apiKey.creator_user_id}
+								name={apiKey.creator_display_name}
+								email={apiKey.creator_email}
+								fallbackLabel="Unknown owner"
+								className="max-w-48"
+								muted
+							/>
 							{apiKey.valid_until && (
 								<span className="flex items-center gap-1">
 									<Calendar className="h-3 w-3" />

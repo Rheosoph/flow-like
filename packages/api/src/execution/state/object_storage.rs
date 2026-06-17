@@ -163,6 +163,7 @@ impl ExecutionStateStore for ObjectStorageStateStore {
             completed_at: None,
             expires_at: input.expires_at,
             user_id: input.user_id,
+            technical_user_id: input.technical_user_id,
             app_id: input.app_id.clone(),
             created_at: now,
             updated_at: now,

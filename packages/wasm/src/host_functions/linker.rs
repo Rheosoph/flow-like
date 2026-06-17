@@ -713,13 +713,9 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                 {
                     return 0;
                 }
-                storage_dir_impl(
-                    &caller,
-                    node_scoped != 0,
-                    "storage",
-                    |ctx| ctx.get_storage_dir(node_scoped != 0),
-                    |ctx| ctx.stores.app_storage_store.clone(),
-                )
+                storage_dir_impl(&caller, "storage", |ctx| {
+                    ctx.get_storage_dir(node_scoped != 0)
+                })
             },
         )
         .map_err(|e| {
@@ -739,13 +735,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                 {
                     return 0;
                 }
-                storage_dir_impl(
-                    &caller,
-                    false,
-                    "upload",
-                    |ctx| ctx.get_upload_dir(),
-                    |ctx| ctx.stores.app_storage_store.clone(),
-                )
+                storage_dir_impl(&caller, "upload", |ctx| ctx.get_upload_dir())
             },
         )
         .map_err(|e| {
@@ -767,13 +757,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                 }
                 let node = node_scoped != 0;
                 let user = user_scoped != 0;
-                storage_dir_impl(
-                    &caller,
-                    node,
-                    "cache",
-                    |ctx| ctx.get_cache_dir(node, user),
-                    |ctx| ctx.stores.temporary_store.clone(),
-                )
+                storage_dir_impl(&caller, "cache", |ctx| ctx.get_cache_dir(node, user))
             },
         )
         .map_err(|e| {
@@ -793,13 +777,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                 {
                     return 0;
                 }
-                storage_dir_impl(
-                    &caller,
-                    node_scoped != 0,
-                    "user",
-                    |ctx| ctx.get_user_dir(node_scoped != 0),
-                    |ctx| ctx.stores.user_store.clone(),
-                )
+                storage_dir_impl(&caller, "user", |ctx| ctx.get_user_dir(node_scoped != 0))
             },
         )
         .map_err(|e| {
@@ -901,18 +879,17 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         None => return -1,
                     };
 
-                    let store = match ctx.resolve_store(&flow_path.store_ref) {
-                        Some(s) => s,
-                        None => return -1,
-                    };
-
-                    let path = Path::from(flow_path.path);
-                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
-                        flow_like_types::Bytes::from(data),
-                    );
-                    match store.as_generic().put(&path, payload).await {
-                        Ok(_) => 0,
-                        Err(_) => -1,
+                    if crate::host_functions::storage::put_flow_path(
+                        ctx,
+                        &flow_path,
+                        data,
+                        "wasm write-request",
+                    )
+                    .await
+                    {
+                        0
+                    } else {
+                        -1
                     }
                 })
             },
@@ -1040,17 +1017,17 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         Some(c) => c,
                         None => return -1,
                     };
-                    let store = match ctx.resolve_store(&pw.flow_path.store_ref) {
-                        Some(s) => s,
-                        None => return -1,
-                    };
-                    let path = Path::from(pw.flow_path.path);
-                    let payload = flow_like_storage::object_store::PutPayload::from_bytes(
-                        flow_like_types::Bytes::from(pw.buffer),
-                    );
-                    match store.as_generic().put(&path, payload).await {
-                        Ok(_) => 0,
-                        Err(_) => -1,
+                    if crate::host_functions::storage::put_flow_path(
+                        ctx,
+                        &pw.flow_path,
+                        pw.buffer,
+                        "wasm write-finish-request",
+                    )
+                    .await
+                    {
+                        0
+                    } else {
+                        -1
                     }
                 })
             },
@@ -1132,12 +1109,8 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
 /// Helper: build a FlowPath for a directory, register the store, and return packed JSON.
 fn storage_dir_impl(
     caller: &Caller<'_, StoreData>,
-    _node_scoped: bool,
     dir_type: &str,
     dir_getter: impl FnOnce(&crate::host_functions::StorageContext) -> Path,
-    store_getter: impl FnOnce(
-        &crate::host_functions::StorageContext,
-    ) -> Option<flow_like_storage::files::store::FlowLikeStore>,
 ) -> u64 {
     let ctx = match &caller.data().host_state.storage_context {
         Some(c) => c,
@@ -1145,20 +1118,9 @@ fn storage_dir_impl(
     };
 
     let dir = dir_getter(ctx);
-    let store_hash = format!("wasm_dirs__{dir_type}_{}", dir.as_ref());
-
-    if ctx.resolve_store(&store_hash).is_none() {
-        let store = match store_getter(ctx) {
-            Some(s) => s,
-            None => return 0,
-        };
-        ctx.register_store(&store_hash, store);
-    }
-
-    let flow_path = StorageFlowPath {
-        path: dir.as_ref().to_string(),
-        store_ref: store_hash,
-        cache_store_ref: None,
+    let flow_path = match ctx.dir_flow_path(dir_type, dir) {
+        Some(flow_path) => flow_path,
+        None => return 0,
     };
 
     match serde_json::to_vec(&flow_path) {

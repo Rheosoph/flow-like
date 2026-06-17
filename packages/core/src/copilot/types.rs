@@ -82,6 +82,10 @@ pub struct UnifiedCopilotResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_component_id: Option<String>,
 
+    /// Last FlowScript document submitted by the workflow agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flowscript_workspace: Option<String>,
+
     /// Suggested follow-up prompts
     #[serde(default)]
     pub suggestions: Vec<UnifiedSuggestion>,

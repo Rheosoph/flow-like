@@ -1,13 +1,14 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	type IApp,
-	type IAppVisibility,
+	IAppVisibility,
 	useBackend,
+	useFeatures,
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { AppAiActWizard } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-ai-act-wizard";
 import {
 	type AppPublicationRequestItem,
 	AppPublicationReviewCard,
@@ -15,6 +16,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
 interface VisibilityStatusSwitcherProps {
@@ -31,6 +33,7 @@ export function VisibilityStatusSwitcher({
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const queryClient = useQueryClient();
+	const features = useFeatures();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -74,6 +77,9 @@ export function VisibilityStatusSwitcher({
 				canEdit={canEdit}
 				onVisibilityChange={handleVisibilityChange}
 			/>
+			{localApp.visibility !== IAppVisibility.Offline &&
+				features.data?.ai_act &&
+				canEdit && <AppAiActWizard appId={localApp.id} />}
 			<AppPublicationReviewCard
 				requests={publicationRequests.data ?? []}
 				isLoading={publicationRequests.isLoading}

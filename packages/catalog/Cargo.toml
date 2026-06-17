@@ -130,6 +130,7 @@ flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [[bench]]
 name = "flow_bench"

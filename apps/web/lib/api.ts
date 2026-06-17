@@ -1,4 +1,5 @@
 import type { IProfile } from "@flow-like/flow-like-ui";
+import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { AuthContextProps } from "react-oidc-context";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
@@ -28,20 +29,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 ]);
 
 function constructUrl(profile: IProfile, path: string): string {
-	// Use profile.hub if available, then NEXT_PUBLIC_API_URL as fallback, then default
-	let baseUrl =
-		profile.hub || process.env.NEXT_PUBLIC_API_URL || "api.flow-like.com";
-	if (!baseUrl.endsWith("/")) {
-		baseUrl += "/";
-	}
-	const cleanPath = path.replace(/^\/+/, "");
-
-	if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
-		return `${baseUrl}api/v1/${cleanPath}`;
-	}
-
-	const protocol = profile.secure === false ? "http" : "https";
-	return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
+	return getApiUrl(profile, path);
 }
 
 function cleanApiPath(path: string): string {
@@ -215,7 +203,11 @@ export async function fetcher<T>(
 	options?: RequestInit,
 	auth?: AuthContextProps,
 ): Promise<T> {
-	ensureProtectedAppRouteAuth(path, auth, (options?.method ?? "GET").toUpperCase());
+	ensureProtectedAppRouteAuth(
+		path,
+		auth,
+		(options?.method ?? "GET").toUpperCase(),
+	);
 	const headers: HeadersInit = {};
 	if (auth?.user?.access_token) {
 		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;

@@ -3,7 +3,7 @@ use crate::{
     ensure_permission,
     entity::{
         app,
-        sea_orm_active_enums::{Status, Visibility},
+        sea_orm_active_enums::{ExecutionMode as DbExecutionMode, Status, Visibility},
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -18,6 +18,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use flow_like::app::{AppCategory, AppExecutionMode};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -29,6 +30,21 @@ pub struct FinalizeOnlineForkBody {
     /// with `Offline` until this call.
     #[serde(default)]
     pub visibility: Option<FinalizeVisibility>,
+    /// Optional app-level settings copied from the offline source.
+    /// Structural fields are intentionally excluded from this body.
+    #[serde(default)]
+    #[schema(value_type = Option<Object>)]
+    pub app_settings: Option<FinalizeOnlineForkAppSettings>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FinalizeOnlineForkAppSettings {
+    pub changelog: Option<String>,
+    pub primary_category: Option<AppCategory>,
+    pub secondary_category: Option<AppCategory>,
+    pub price: Option<u32>,
+    pub version: Option<String>,
+    pub execution_mode: AppExecutionMode,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
@@ -111,6 +127,11 @@ pub async fn finalize_online_fork(
     Path(app_id): Path<String>,
     Json(body): Json<FinalizeOnlineForkBody>,
 ) -> Result<Json<FinalizeOnlineForkResponse>, ApiError> {
+    let FinalizeOnlineForkBody {
+        visibility,
+        app_settings,
+    } = body;
+
     ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
 
     let app_row = app::Entity::find_by_id(app_id.as_str())
@@ -156,7 +177,7 @@ pub async fn finalize_online_fork(
         )));
     }
 
-    let visibility: Visibility = body.visibility.unwrap_or_default().into();
+    let visibility: Visibility = visibility.unwrap_or_default().into();
     let core_visibility = match &visibility {
         Visibility::Public => flow_like::app::AppVisibility::Public,
         Visibility::PublicRequestAccess => flow_like::app::AppVisibility::PublicRequestAccess,
@@ -171,6 +192,14 @@ pub async fn finalize_online_fork(
         .await?;
     bucket_app.visibility = core_visibility;
     bucket_app.status = flow_like::app::AppStatus::Active;
+    if let Some(settings) = &app_settings {
+        bucket_app.changelog = settings.changelog.clone();
+        bucket_app.primary_category = settings.primary_category.clone();
+        bucket_app.secondary_category = settings.secondary_category.clone();
+        bucket_app.price = settings.price;
+        bucket_app.version = settings.version.clone();
+        bucket_app.execution_mode = settings.execution_mode.clone();
+    }
     bucket_app.updated_at = std::time::SystemTime::now();
     bucket_app.save().await?;
 
@@ -178,6 +207,14 @@ pub async fn finalize_online_fork(
     active.visibility = Set(visibility.clone());
     active.status = Set(Status::Active);
     active.total_size = Set(total_size_bytes as i64);
+    if let Some(settings) = &app_settings {
+        active.changelog = Set(settings.changelog.clone());
+        active.primary_category = Set(settings.primary_category.clone().map(Into::into));
+        active.secondary_category = Set(settings.secondary_category.clone().map(Into::into));
+        active.price = Set(settings.price.unwrap_or(0) as i64);
+        active.version = Set(settings.version.clone());
+        active.execution_mode = Set(to_db_execution_mode(&settings.execution_mode));
+    }
     active.updated_at = Set(chrono::Utc::now().naive_utc());
     active.update(&state.db).await?;
 
@@ -188,4 +225,12 @@ pub async fn finalize_online_fork(
         visibility: format!("{:?}", visibility),
         status: format!("{:?}", Status::Active),
     }))
+}
+
+fn to_db_execution_mode(mode: &AppExecutionMode) -> DbExecutionMode {
+    match mode {
+        AppExecutionMode::Any => DbExecutionMode::Any,
+        AppExecutionMode::Local => DbExecutionMode::Local,
+        AppExecutionMode::Remote => DbExecutionMode::Remote,
+    }
 }

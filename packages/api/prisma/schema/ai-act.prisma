@@ -1,0 +1,130 @@
+// EU AI Act conformity records. Gated platform-wide behind `features.ai_act`.
+// See todo/EU-AI.md for the design. These tables are the record-keeping
+// artefact auditors ask for (Art. 11/12/19/72).
+
+enum AiRiskCategory {
+  PROHIBITED
+  HIGH
+  LIMITED
+  MINIMAL
+  UNDETERMINED
+}
+
+enum AiActAssessmentStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  BLOCKED
+}
+
+enum AiGpaiPosture {
+  UNKNOWN
+  HOSTED
+  OPEN_LICENCE
+  CLOSED
+  SYSTEMIC
+}
+
+enum AiModelSource {
+  MONITORED
+  BOARD_SCAN
+  BOTH
+}
+
+/// One current assessment per app version. History kept via versioned rows.
+model AiActAssessment {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  version Int                   @default(1)
+  status  AiActAssessmentStatus @default(DRAFT)
+
+  riskCategory    AiRiskCategory @default(UNDETERMINED)
+  conformityScore Int?
+  conformityBand  String?
+
+  /// Full questionnaire answers: [{ key, value, source, confidence }]
+  answers Json
+
+  /// Snapshot of auto-derived signals at submit time.
+  signals Json?
+
+  /// Transparency duties that apply + whether acknowledged.
+  transparencyObligations Json?
+
+  /// Responsible person (record-keeping) - copied from submitter at submit time.
+  responsibleUserId String?
+  responsibleName   String?
+  responsibleEmail  String?
+
+  submittedAt  DateTime?
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appId, version])
+  @@index([appId])
+  @@index([riskCategory])
+  @@index([status])
+}
+
+/// Live attached-model list - always reflects current reality, fed by both
+/// runtime monitoring and the static board scan.
+model AiActModelObservation {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  modelId  String
+  provider String?
+
+  source  AiModelSource @default(MONITORED)
+  posture AiGpaiPosture @default(UNKNOWN)
+
+  hosted          Boolean @default(false)
+  openLicence     Boolean @default(false)
+  systemicRisk    Boolean @default(false)
+  vetted          Boolean @default(false)
+  dynamicSelector Boolean @default(false)
+
+  driftFlagged Boolean @default(false)
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  @@unique([appId, modelId])
+  @@index([appId])
+  @@index([modelId])
+  @@index([posture])
+  @@index([driftFlagged])
+}
+
+/// Platform model registry: admin-editable GPAI posture keyed by provider +
+/// modelId. Setting a posture once resolves it for every app using that model.
+model AiActModelRegistry {
+  id String @id
+
+  provider String
+  modelId  String
+
+  posture      AiGpaiPosture @default(UNKNOWN)
+  hosted       Boolean       @default(false)
+  openLicence  Boolean       @default(false)
+  systemicRisk Boolean       @default(false)
+  vetted       Boolean       @default(false)
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([provider, modelId])
+  @@index([posture])
+}

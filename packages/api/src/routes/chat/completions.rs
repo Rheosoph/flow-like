@@ -120,6 +120,8 @@ impl HostedProvider {
 #[derive(Clone, Debug, Default)]
 struct UsageRequestContext {
     app_id: Option<String>,
+    user_id: String,
+    technical_user_id: Option<String>,
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -139,6 +141,18 @@ async fn resolve_usage_context(
     if let AppUser::Executor(executor) = user {
         return Ok(UsageRequestContext {
             app_id: Some(executor.app_id.clone()),
+            user_id: executor.sub.clone(),
+            technical_user_id: executor.technical_user_id.clone(),
+        });
+    }
+
+    if let AppUser::APIKey(api_key) = user {
+        user.execution_app_permission(&api_key.app_id, state)
+            .await?;
+        return Ok(UsageRequestContext {
+            app_id: Some(api_key.app_id.clone()),
+            user_id: user.effective_user_id()?,
+            technical_user_id: Some(api_key.key_id.clone()),
         });
     }
 
@@ -147,7 +161,11 @@ async fn resolve_usage_context(
         user.execution_app_permission(app_id, state).await?;
     }
 
-    Ok(UsageRequestContext { app_id })
+    Ok(UsageRequestContext {
+        app_id,
+        user_id: user.effective_user_id()?,
+        technical_user_id: None,
+    })
 }
 
 // --- helpers ---
@@ -502,6 +520,7 @@ async fn finalize_llm_usage(
         cost_micro.unwrap_or(0),
         latency_ms,
         usage_context.app_id.as_deref(),
+        usage_context.technical_user_id.as_deref(),
         Some(provider),
         Some(endpoint),
         invocation_id,
@@ -564,6 +583,7 @@ async fn finalize_cancelled_llm_usage(
         cost_micro.unwrap_or(0),
         latency_ms,
         usage_context.app_id.as_deref(),
+        usage_context.technical_user_id.as_deref(),
         Some(provider),
         Some(endpoint),
         invocation_id,
@@ -796,6 +816,7 @@ async fn handle_non_streaming(
                 usage.cost_micro.unwrap_or(0),
                 latency_ms,
                 usage_context.app_id.as_deref(),
+                usage_context.technical_user_id.as_deref(),
                 Some(provider),
                 Some(endpoint),
                 invocation_id,
@@ -869,7 +890,6 @@ pub async fn invoke_llm(
     headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<AxumResponse, ApiError> {
-    user.executor_scoped_sub()?;
     let model_field = payload
         .get("model")
         .and_then(|v| v.as_str())
@@ -890,13 +910,14 @@ pub async fn invoke_llm(
     );
     let (url, api_key) = build_provider_url(&state, &hosted_provider).await?;
     let provider_label = hosted_provider.label().to_string();
-    let user_sub = user.executor_scoped_sub()?;
+    let user_sub = usage_context.user_id.clone();
     let estimated_tokens = estimate_chat_tokens(&upstream_body);
     let invocation_id = start_usage_invocation(
         &state,
         UsageInvocationStart {
             kind: "llm",
             user_id: Some(&user_sub),
+            technical_user_id: usage_context.technical_user_id.as_deref(),
             app_id: usage_context.app_id.as_deref(),
             provider: Some(&provider_label),
             endpoint: Some(&url),
@@ -977,6 +998,7 @@ async fn track_llm_usage(
     price: i64,
     latency_ms: f64,
     app_id: Option<&str>,
+    technical_user_id: Option<&str>,
     provider: Option<&str>,
     endpoint: Option<&str>,
     invocation_id: Option<&str>,
@@ -999,6 +1021,7 @@ async fn track_llm_usage(
         token_out: Set(token_out),
         latency: Set(Some(latency_ms)),
         user_id: Set(Some(user_sub.to_string())),
+        technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(app_id.map(ToOwned::to_owned)),
         price: Set(price),
         created_at: Set(now),

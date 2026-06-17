@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Metadata about a node in the catalog
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeMetadata {
@@ -211,6 +215,8 @@ pub struct CopilotResponse {
     pub message: String,
     pub commands: Vec<BoardCommand>,
     pub suggestions: Vec<Suggestion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flowscript_workspace: Option<String>,
 }
 
 /// Context for a specific run (for log queries)
@@ -303,11 +309,67 @@ pub enum BoardCommand {
     },
     // Variable management
     CreateVariable {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variable_id: Option<String>,
         name: String,
         data_type: String,  // "String", "Integer", "Float", "Boolean", "Struct"
         value_type: String, // "Normal", "Array", "HashMap", "HashSet"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         default_value: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exposed: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        editable: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        runtime_configured: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_layer: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    UpdateVariable {
+        variable_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default_value: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        clear_default_value: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        clear_description: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        clear_category: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        clear_schema: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exposed: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        editable: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        runtime_configured: Option<bool>,
+        /// Backward-compatible alias used by older UI/model commands for "set default value".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<serde_json::Value>,
         #[serde(default)]
         summary: Option<String>,
     },
