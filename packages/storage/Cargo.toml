@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 flow-like-types.workspace = true
 object_store = {version="0.12.4", features = ["gcp", "aws", "azure", "serde", "serde_json", "cloud"] }
+chrono.workspace = true
+smb2 = "0.11.3"
 # fp16kernels are not supported on Windows (lance skips compiling the C kernels for MSVC)
 lancedb = { version = "=0.27.2", features = ["polars", "remote", "aws", "azure", "gcs"] }
 lance-io = { version = "=4.0.0" }

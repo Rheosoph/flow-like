@@ -3,18 +3,22 @@ use crate::data::providers::aws::AwsProvider;
 use crate::data::providers::azure::AzureProvider;
 use crate::data::providers::cloudflare::CloudflareProvider;
 use crate::data::providers::gcp::GcpProvider;
+use crate::data::providers::util::get_pin_string_value;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, NodeScores},
+    node::{Node, NodeLogic, NodeScores, remove_pin_by_name},
     pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::files::store::smb_store::{SmbConfig, SmbObjectStore};
 use flow_like_storage::object_store::{
     aws::AmazonS3Builder, azure::MicrosoftAzureBuilder, gcp::GoogleCloudStorageBuilder,
 };
 use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
+use std::time::Duration;
 
 // =============================================================================
 // AWS S3 -> FlowPath
@@ -555,8 +559,258 @@ impl NodeLogic for CloudflareR2StoreNode {
 }
 
 // =============================================================================
+// SMB Share -> FlowPath
+// =============================================================================
+
+const SMB_CREDENTIALS: &str = "credentials";
+const SMB_GUEST: &str = "guest";
+const SMB_AUTH_MODES: &[&str] = &[SMB_CREDENTIALS, SMB_GUEST];
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct SmbStoreNode {}
+
+impl SmbStoreNode {
+    pub fn new() -> Self {
+        SmbStoreNode {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for SmbStoreNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "external_smb_store",
+            "SMB Share",
+            "Turn an SMB2/3 share into a FlowPath.",
+            "Data/Files/External",
+        );
+        node.add_icon("/flow/icons/cloud.svg");
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "address",
+            "Address",
+            "SMB server address. Use host:port, or host to use port 445.",
+            VariableType::String,
+        );
+        node.add_input_pin("share", "Share", "SMB share name", VariableType::String);
+
+        add_smb_auth_mode_pin(&mut node);
+
+        node.add_input_pin(
+            "prefix",
+            "Prefix",
+            "Optional path prefix within the share",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        add_smb_credential_pins(&mut node);
+
+        node.add_input_pin(
+            "timeout_seconds",
+            "Timeout",
+            "Connection timeout in seconds",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(5)));
+        node.add_input_pin(
+            "compression",
+            "Compression",
+            "Enable SMB compression when supported by the server",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+        node.add_input_pin(
+            "dfs_enabled",
+            "DFS",
+            "Enable DFS referral handling",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
+        node.add_output_pin(
+            "path",
+            "Path",
+            "FlowPath pointing to the SMB share",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+
+        node.scores = Some(NodeScores {
+            privacy: 5,
+            security: 5,
+            performance: 6,
+            governance: 5,
+            reliability: 6,
+            cost: 8,
+        });
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let address: String = context.evaluate_pin("address").await?;
+        let share: String = context.evaluate_pin("share").await?;
+        let auth_mode: String = context
+            .evaluate_pin("auth_mode")
+            .await
+            .unwrap_or_else(|_| SMB_CREDENTIALS.to_string());
+        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
+        let timeout_seconds: i64 = context.evaluate_pin("timeout_seconds").await.unwrap_or(5);
+        let compression: bool = context.evaluate_pin("compression").await.unwrap_or(true);
+        let dfs_enabled: bool = context.evaluate_pin("dfs_enabled").await.unwrap_or(true);
+
+        if !SMB_AUTH_MODES.iter().any(|mode| *mode == auth_mode) {
+            return Err(flow_like_types::anyhow!(
+                "Unknown SMB auth_mode: '{}'. Expected one of {:?}",
+                auth_mode,
+                SMB_AUTH_MODES
+            ));
+        }
+
+        let (username, password, domain) = if auth_mode == SMB_GUEST {
+            (String::new(), String::new(), String::new())
+        } else {
+            (
+                context.evaluate_pin("username").await.unwrap_or_default(),
+                context.evaluate_pin("password").await.unwrap_or_default(),
+                context.evaluate_pin("domain").await.unwrap_or_default(),
+            )
+        };
+
+        let address = normalize_smb_address(&address)?;
+        if share.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("SMB share name is required"));
+        }
+
+        let mut config = SmbConfig::new(
+            address.clone(),
+            share.trim().to_string(),
+            username.clone(),
+            password,
+        );
+        config.domain = domain.clone();
+        config.timeout = Duration::from_secs(timeout_seconds.max(1) as u64);
+        config.compression = compression;
+        config.dfs_enabled = dfs_enabled;
+
+        let store = SmbObjectStore::connect(config)
+            .await
+            .map_err(|e| flow_like_types::anyhow!("Failed to connect SMB share: {}", e))?;
+        let store = FlowLikeStore::Other(Arc::new(store));
+        let auth_key = format!("{}:{}:{}", auth_mode, username, domain);
+        let share_key = format!("{}/{}", address, share.trim());
+        let path =
+            cache_and_wrap(context, "smb_store", &share_key, &prefix, &auth_key, store).await;
+
+        context.set_pin_value("path", json!(path)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        let auth_mode = get_pin_string_value(node, "auth_mode");
+        sync_smb_auth_mode_pins(node, &auth_mode);
+    }
+}
+
+// =============================================================================
 // Shared cache + FlowPath wrapping
 // =============================================================================
+
+fn add_smb_auth_mode_pin(node: &mut Node) {
+    node.add_input_pin(
+        "auth_mode",
+        "Auth Mode",
+        "How to authenticate: 'credentials' (username/password/domain) or 'guest' (anonymous/null session if the server allows it)",
+        VariableType::String,
+    )
+    .set_options(
+        PinOptions::new()
+            .set_valid_values(SMB_AUTH_MODES.iter().map(|mode| mode.to_string()).collect())
+            .build(),
+    )
+    .set_default_value(Some(json!(SMB_CREDENTIALS)));
+}
+
+fn add_smb_username_pin(node: &mut Node) {
+    node.add_input_pin("username", "Username", "SMB username", VariableType::String)
+        .set_default_value(Some(json!("")));
+}
+
+fn add_smb_password_pin(node: &mut Node) {
+    node.add_input_pin("password", "Password", "SMB password", VariableType::String)
+        .set_default_value(Some(json!("")))
+        .set_options(PinOptions::new().set_sensitive(true).build());
+}
+
+fn add_smb_domain_pin(node: &mut Node) {
+    node.add_input_pin(
+        "domain",
+        "Domain",
+        "Optional SMB domain or workgroup",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_credential_pins(node: &mut Node) {
+    if node.get_pin_by_name("username").is_none() {
+        add_smb_username_pin(node);
+    }
+    if node.get_pin_by_name("password").is_none() {
+        add_smb_password_pin(node);
+    }
+    if node.get_pin_by_name("domain").is_none() {
+        add_smb_domain_pin(node);
+    }
+}
+
+fn remove_smb_credential_pins(node: &mut Node) {
+    remove_pin_by_name(node, "username");
+    remove_pin_by_name(node, "password");
+    remove_pin_by_name(node, "domain");
+}
+
+fn sync_smb_auth_mode_pins(node: &mut Node, auth_mode: &str) {
+    let mode = if auth_mode.is_empty() {
+        SMB_CREDENTIALS
+    } else {
+        auth_mode
+    };
+    let want_credentials = mode == SMB_CREDENTIALS;
+    let has_credentials = node.get_pin_by_name("username").is_some()
+        || node.get_pin_by_name("password").is_some()
+        || node.get_pin_by_name("domain").is_some();
+
+    if want_credentials {
+        add_smb_credential_pins(node);
+    } else if has_credentials {
+        remove_smb_credential_pins(node);
+    }
+}
+
+fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
+    let address = address.trim();
+    if address.is_empty() {
+        return Err(flow_like_types::anyhow!("SMB server address is required"));
+    }
+
+    if address.contains(':') {
+        Ok(address.to_string())
+    } else {
+        Ok(format!("{address}:445"))
+    }
+}
 
 async fn cache_and_wrap(
     context: &mut ExecutionContext,
@@ -659,6 +913,78 @@ mod tests {
     }
 
     #[test]
+    fn test_smb_node_has_connection_pins() {
+        let node = SmbStoreNode::new().get_node();
+        assert_eq!(node.name, "external_smb_store");
+        assert_eq!(node.friendly_name, "SMB Share");
+        for pin in [
+            "address",
+            "share",
+            "prefix",
+            "auth_mode",
+            "username",
+            "password",
+            "domain",
+        ] {
+            let pin = find_pin(&node, pin, PinType::Input).expect("input pin");
+            assert_eq!(pin.data_type, VariableType::String);
+        }
+        assert_eq!(
+            find_pin(&node, "timeout_seconds", PinType::Input)
+                .expect("timeout input")
+                .data_type,
+            VariableType::Integer
+        );
+    }
+
+    #[test]
+    fn test_smb_auth_mode_pin_has_supported_values() {
+        let node = SmbStoreNode::new().get_node();
+        let pin = find_pin(&node, "auth_mode", PinType::Input).expect("auth_mode input");
+        let values = pin
+            .options
+            .as_ref()
+            .and_then(|options| options.valid_values.clone())
+            .expect("auth_mode valid values");
+        assert_eq!(
+            values,
+            vec![SMB_CREDENTIALS.to_string(), SMB_GUEST.to_string()]
+        );
+    }
+
+    #[test]
+    fn test_smb_auth_mode_sync_switches_and_is_idempotent() {
+        let mut node = SmbStoreNode::new().get_node();
+        assert!(node.get_pin_by_name("username").is_some());
+        let username_id = node.get_pin_by_name("username").unwrap().id.clone();
+
+        sync_smb_auth_mode_pins(&mut node, SMB_CREDENTIALS);
+        assert_eq!(
+            username_id,
+            node.get_pin_by_name("username").unwrap().id,
+            "credentials sync should not recreate existing credential pins"
+        );
+
+        sync_smb_auth_mode_pins(&mut node, SMB_GUEST);
+        assert!(node.get_pin_by_name("username").is_none());
+        assert!(node.get_pin_by_name("password").is_none());
+        assert!(node.get_pin_by_name("domain").is_none());
+
+        let pin_count_after_guest = node.pins.len();
+        sync_smb_auth_mode_pins(&mut node, SMB_GUEST);
+        assert_eq!(
+            pin_count_after_guest,
+            node.pins.len(),
+            "guest sync should be stable when repeated"
+        );
+
+        sync_smb_auth_mode_pins(&mut node, SMB_CREDENTIALS);
+        assert!(node.get_pin_by_name("username").is_some());
+        assert!(node.get_pin_by_name("password").is_some());
+        assert!(node.get_pin_by_name("domain").is_some());
+    }
+
+    #[test]
     fn test_all_bucket_nodes_emit_flowpath() {
         for node in [
             S3StoreNode::new().get_node(),
@@ -666,6 +992,7 @@ mod tests {
             AzureBlobStoreNode::new().get_node(),
             GcpStorageStoreNode::new().get_node(),
             CloudflareR2StoreNode::new().get_node(),
+            SmbStoreNode::new().get_node(),
         ] {
             let path = find_pin(&node, "path", PinType::Output).expect("path output");
             assert_eq!(path.data_type, VariableType::Struct);
