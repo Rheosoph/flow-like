@@ -947,11 +947,15 @@ fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
 
 fn smb_address_has_port(address: &str) -> flow_like_types::Result<bool> {
     if address.starts_with('[') {
-        let Some((_, suffix)) = address.rsplit_once(']') else {
+        let Some((host, suffix)) = address.rsplit_once(']') else {
             return Err(flow_like_types::anyhow!(
                 "Invalid bracketed IPv6 SMB address: missing closing ']'"
             ));
         };
+        let host = host.trim_start_matches('[').trim();
+        if host.is_empty() {
+            return Err(flow_like_types::anyhow!("SMB server host is required"));
+        }
         if suffix.is_empty() {
             return Ok(false);
         }
@@ -972,15 +976,23 @@ fn smb_address_has_port(address: &str) -> flow_like_types::Result<bool> {
         return Ok(false);
     }
 
-    let Some((_, port)) = address.rsplit_once(':') else {
+    let Some((host, port)) = address.rsplit_once(':') else {
         return Ok(false);
     };
+    if host.trim().is_empty() {
+        return Err(flow_like_types::anyhow!("SMB server host is required"));
+    }
     parse_smb_port(port).map(|_| true)
 }
 
 fn parse_smb_port(port: &str) -> flow_like_types::Result<u16> {
-    port.parse::<u16>()
-        .map_err(|_| flow_like_types::anyhow!("Invalid SMB port: '{}'", port))
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| flow_like_types::anyhow!("Invalid SMB port: '{}'", port))?;
+    if port == 0 {
+        return Err(flow_like_types::anyhow!("Invalid SMB port: '0'"));
+    }
+    Ok(port)
 }
 
 async fn cache_and_wrap(
@@ -1214,8 +1226,12 @@ mod tests {
     #[test]
     fn test_normalize_smb_address_rejects_invalid_ports() {
         assert!(normalize_smb_address("").is_err());
+        assert!(normalize_smb_address(":445").is_err());
+        assert!(normalize_smb_address("[]:445").is_err());
         assert!(normalize_smb_address("fileserver:notaport").is_err());
+        assert!(normalize_smb_address("fileserver:0").is_err());
         assert!(normalize_smb_address("[::1]:notaport").is_err());
+        assert!(normalize_smb_address("[::1]:0").is_err());
         assert!(normalize_smb_address("[::1").is_err());
     }
 

@@ -395,10 +395,10 @@ fn trimmed_option(value: &str) -> Option<String> {
 }
 
 fn host_without_port(address: &str) -> &str {
-    if let Some(rest) = address.strip_prefix('[')
-        && let Some((host, _)) = rest.split_once(']')
-    {
-        return host;
+    if let Some(rest) = address.strip_prefix('[') {
+        if let Some((host, _)) = rest.split_once(']') {
+            return host;
+        }
     }
 
     if address.chars().filter(|&c| c == ':').count() != 1 {
