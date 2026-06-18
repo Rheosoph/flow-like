@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 const STORE_NAME: &str = "SMB";
 
@@ -208,62 +208,80 @@ impl SmbObjectStore {
 
 impl SmbSession {
     async fn stat(&mut self, path: &str) -> smb2::Result<FileInfo> {
+        let path = to_smb_path(path);
         match self {
-            SmbSession::Client { client, tree } => client.stat(tree, path).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.stat(conn, path).await,
+            SmbSession::Client { client, tree } => client.stat(tree, &path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.stat(conn, &path).await,
         }
     }
 
     async fn create_directory(&mut self, path: &str) -> smb2::Result<()> {
+        let path = to_smb_path(path);
         match self {
-            SmbSession::Client { client, tree } => client.create_directory(tree, path).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.create_directory(conn, path).await,
+            SmbSession::Client { client, tree } => client.create_directory(tree, &path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.create_directory(conn, &path).await,
         }
     }
 
     async fn list_directory(&mut self, path: &str) -> smb2::Result<Vec<DirectoryEntry>> {
+        let path = to_smb_path(path);
         match self {
-            SmbSession::Client { client, tree } => client.list_directory(tree, path).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.list_directory(conn, path).await,
+            SmbSession::Client { client, tree } => client.list_directory(tree, &path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.list_directory(conn, &path).await,
         }
     }
 
-    async fn write_file_pipelined(&mut self, path: &str, data: &[u8]) -> smb2::Result<u64> {
+    async fn write_payload_streamed(
+        &mut self,
+        path: &str,
+        payload: PutPayload,
+    ) -> smb2::Result<u64> {
+        let path = to_smb_path(path);
+        let mut chunks = payload.into_iter();
+        let mut next_chunk = || chunks.next().map(|chunk| Ok(chunk.to_vec()));
+
         match self {
             SmbSession::Client { client, tree } => {
-                client.write_file_pipelined(tree, path, data).await
+                client
+                    .write_file_streamed(tree, &path, &mut next_chunk)
+                    .await
             }
             SmbSession::Kerberos { conn, tree, .. } => {
-                tree.write_file_pipelined(conn, path, data).await
+                tree.write_file_streamed(conn, &path, &mut next_chunk).await
             }
         }
     }
 
     async fn read_file_pipelined(&mut self, path: &str) -> smb2::Result<Vec<u8>> {
+        let path = to_smb_path(path);
         match self {
-            SmbSession::Client { client, tree } => client.read_file_pipelined(tree, path).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.read_file_pipelined(conn, path).await,
+            SmbSession::Client { client, tree } => client.read_file_pipelined(tree, &path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.read_file_pipelined(conn, &path).await,
         }
     }
 
     async fn delete_directory(&mut self, path: &str) -> smb2::Result<()> {
+        let path = to_smb_path(path);
         match self {
-            SmbSession::Client { client, tree } => client.delete_directory(tree, path).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.delete_directory(conn, path).await,
+            SmbSession::Client { client, tree } => client.delete_directory(tree, &path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.delete_directory(conn, &path).await,
         }
     }
 
     async fn delete_file(&mut self, path: &str) -> smb2::Result<()> {
+        let path = to_smb_path(path);
         match self {
-            SmbSession::Client { client, tree } => client.delete_file(tree, path).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.delete_file(conn, path).await,
+            SmbSession::Client { client, tree } => client.delete_file(tree, &path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.delete_file(conn, &path).await,
         }
     }
 
     async fn rename(&mut self, from: &str, to: &str) -> smb2::Result<()> {
+        let from = to_smb_path(from);
+        let to = to_smb_path(to);
         match self {
-            SmbSession::Client { client, tree } => client.rename(tree, from, to).await,
-            SmbSession::Kerberos { conn, tree, .. } => tree.rename(conn, from, to).await,
+            SmbSession::Client { client, tree } => client.rename(tree, &from, &to).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.rename(conn, &from, &to).await,
         }
     }
 }
@@ -377,6 +395,20 @@ fn trimmed_option(value: &str) -> Option<String> {
 }
 
 fn host_without_port(address: &str) -> &str {
+    if let Some(rest) = address.strip_prefix('[') {
+        if let Some((host, suffix)) = rest.split_once(']') {
+            let host = host.trim();
+            let suffix = suffix.trim();
+            if !host.is_empty() && (suffix.is_empty() || suffix.starts_with(':')) {
+                return host;
+            }
+        }
+    }
+
+    if address.chars().filter(|&c| c == ':').count() != 1 {
+        return address;
+    }
+
     address
         .rsplit_once(':')
         .map(|(host, _)| host)
@@ -424,11 +456,10 @@ impl ObjectStore for SmbObjectStore {
         }
 
         self.ensure_parent_directories(&path).await?;
-        let bytes = payload_to_bytes(payload);
         {
             let mut session = self.session.lock().await;
             session
-                .write_file_pipelined(&path, &bytes)
+                .write_payload_streamed(&path, payload)
                 .await
                 .map_err(|err| map_smb_error(err, path.clone()))?;
         }
@@ -442,15 +473,14 @@ impl ObjectStore for SmbObjectStore {
 
     async fn put_multipart_opts(
         &self,
-        location: &Path,
+        _location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         reject_attributes(&opts.attributes)?;
-        Ok(Box::new(SmbMultipartUpload {
-            store: self.clone(),
-            location: location.clone(),
-            parts: Vec::new(),
-        }))
+        Err(object_store::Error::NotSupported {
+            source: "SMB multipart uploads are not supported; regular puts stream payload chunks"
+                .into(),
+        })
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -613,6 +643,9 @@ impl ObjectStore for SmbObjectStore {
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         let from_path = object_path(from);
         let to_path = object_path(to);
+        if from_path == to_path {
+            return Ok(());
+        }
 
         match self.delete(to).await {
             Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
@@ -667,45 +700,16 @@ impl ObjectStore for SmbObjectStore {
     }
 }
 
-#[derive(Debug)]
-struct SmbMultipartUpload {
-    store: SmbObjectStore,
-    location: Path,
-    parts: Vec<PutPayload>,
-}
-
-#[async_trait]
-impl MultipartUpload for SmbMultipartUpload {
-    fn put_part(&mut self, data: PutPayload) -> object_store::UploadPart {
-        self.parts.push(data);
-        Box::pin(async { Ok(()) })
-    }
-
-    async fn complete(&mut self) -> Result<PutResult> {
-        let mut data = Vec::with_capacity(self.parts.iter().map(PutPayload::content_length).sum());
-        for payload in self.parts.drain(..) {
-            for chunk in payload {
-                data.extend_from_slice(&chunk);
-            }
-        }
-
-        self.store
-            .put(&self.location, PutPayload::from_bytes(Bytes::from(data)))
-            .await
-    }
-
-    async fn abort(&mut self) -> Result<()> {
-        self.parts.clear();
-        Ok(())
-    }
-}
-
 fn object_path(location: &Path) -> String {
     location
         .as_ref()
         .replace('\\', "/")
         .trim_matches('/')
         .to_string()
+}
+
+fn to_smb_path(path: &str) -> String {
+    path.replace('/', "\\")
 }
 
 fn parent_paths(path: &str) -> Vec<String> {
@@ -744,11 +748,7 @@ fn is_real_entry(name: &str) -> bool {
 }
 
 fn meta_from_info(path: &str, info: &FileInfo) -> ObjectMeta {
-    let last_modified = info
-        .modified
-        .to_system_time()
-        .map(DateTime::<Utc>::from)
-        .unwrap_or_else(Utc::now);
+    let last_modified = filetime_to_datetime(info.modified);
     ObjectMeta {
         location: Path::from(path),
         last_modified,
@@ -759,11 +759,7 @@ fn meta_from_info(path: &str, info: &FileInfo) -> ObjectMeta {
 }
 
 fn meta_from_entry(path: &str, entry: &DirectoryEntry) -> ObjectMeta {
-    let last_modified = entry
-        .modified
-        .to_system_time()
-        .map(DateTime::<Utc>::from)
-        .unwrap_or_else(Utc::now);
+    let last_modified = filetime_to_datetime(entry.modified);
     ObjectMeta {
         location: Path::from(path),
         last_modified,
@@ -773,23 +769,18 @@ fn meta_from_entry(path: &str, entry: &DirectoryEntry) -> ObjectMeta {
     }
 }
 
+fn filetime_to_datetime(filetime: smb2::pack::FileTime) -> DateTime<Utc> {
+    filetime
+        .to_system_time()
+        .map(DateTime::<Utc>::from)
+        .unwrap_or_else(|| DateTime::<Utc>::from(UNIX_EPOCH))
+}
+
 fn etag(size: u64, modified: DateTime<Utc>) -> String {
     let modified = modified
         .timestamp_nanos_opt()
         .unwrap_or_else(|| modified.timestamp_millis() * 1_000_000);
     format!("{size:x}-{modified:x}")
-}
-
-fn payload_to_bytes(payload: PutPayload) -> Bytes {
-    if payload.as_ref().len() == 1 {
-        return payload.into_iter().next().unwrap_or_else(Bytes::new);
-    }
-
-    let mut data = Vec::with_capacity(payload.content_length());
-    for chunk in payload {
-        data.extend_from_slice(&chunk);
-    }
-    Bytes::from(data)
 }
 
 fn reject_attributes(attributes: &Attributes) -> Result<()> {
@@ -840,5 +831,41 @@ fn range_error(path: &str) -> object_store::Error {
     object_store::Error::Generic {
         store: STORE_NAME,
         source: format!("Invalid SMB object range for {path}").into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_smb_path_uses_backslash_separators() {
+        assert_eq!(to_smb_path("dir/file.txt"), "dir\\file.txt");
+        assert_eq!(to_smb_path("dir\\file.txt"), "dir\\file.txt");
+        assert_eq!(to_smb_path(""), "");
+    }
+
+    #[test]
+    fn test_object_path_normalizes_for_object_store_keys() {
+        assert_eq!(object_path(&Path::from("/dir/file.txt")), "dir/file.txt");
+        assert_eq!(object_path(&Path::from("dir/file.txt")), "dir/file.txt");
+    }
+
+    #[test]
+    fn test_host_without_port_handles_ipv6() {
+        assert_eq!(host_without_port("server:445"), "server");
+        assert_eq!(host_without_port("[::1]:445"), "::1");
+        assert_eq!(host_without_port("[ ::1 ] :445"), "::1");
+        assert_eq!(host_without_port("[]:445"), "[]");
+        assert_eq!(host_without_port("[ ]:445"), "[ ]");
+        assert_eq!(host_without_port("[server]suffix:445"), "[server]suffix");
+        assert_eq!(host_without_port("fe80::1"), "fe80::1");
+    }
+
+    #[test]
+    fn test_filetime_to_datetime_uses_stable_fallback() {
+        let fallback = filetime_to_datetime(smb2::pack::FileTime::ZERO);
+        assert_eq!(fallback, DateTime::<Utc>::from(UNIX_EPOCH));
+        assert_eq!(etag(16, fallback), etag(16, fallback));
     }
 }
