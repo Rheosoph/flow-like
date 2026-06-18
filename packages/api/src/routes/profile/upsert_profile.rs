@@ -15,7 +15,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::profile::{ProfileApp, Settings};
+use flow_like::profile::{ProfileApp, ProfileShortcut, Settings};
 use flow_like_types::{Value, create_id};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ pub struct ProfileBody {
     pub bit_ids: Option<Vec<String>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub apps: Option<Vec<ProfileApp>>,
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub shortcuts: Option<Vec<ProfileShortcut>>,
     pub hub: Option<String>,
     pub hubs: Option<Vec<String>>,
     #[schema(value_type = Option<Object>)]
@@ -111,6 +113,11 @@ pub async fn upsert_profile(
             let apps: Value = Value::Array(apps);
             active_model.apps = Set(Some(apps));
         }
+        if let Some(shortcuts) = profile_body.shortcuts {
+            let shortcuts: Vec<Value> = shortcuts.iter().map(|v| to_value(v).unwrap()).collect();
+            let shortcuts: Value = Value::Array(shortcuts);
+            active_model.shortcuts = Set(Some(shortcuts));
+        }
         if let Some(settings) = profile_body.settings {
             let settings = to_value(&settings)?;
             active_model.settings = Set(Some(settings));
@@ -163,6 +170,7 @@ pub async fn upsert_profile(
         theme,
         bit_ids,
         apps,
+        shortcuts,
         hub,
         hubs,
         settings,
@@ -177,6 +185,13 @@ pub async fn upsert_profile(
 
     let settings = if let Some(settings) = settings {
         Some(to_value(&settings)?)
+    } else {
+        None
+    };
+
+    let shortcuts = if let Some(shortcuts) = shortcuts {
+        let shortcuts: Vec<Value> = shortcuts.iter().map(to_value).collect::<Result<_, _>>()?;
+        Some(Value::Array(shortcuts))
     } else {
         None
     };
@@ -214,6 +229,7 @@ pub async fn upsert_profile(
             theme: Set(theme.clone()),
             bit_ids: Set(bit_ids.clone()),
             apps: Set(apps.clone()),
+            shortcuts: Set(shortcuts.clone()),
             settings: Set(settings.clone()),
             hub: Set(hub.clone()),
             hubs: Set(hubs.clone()),

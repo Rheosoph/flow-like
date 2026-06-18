@@ -11,10 +11,23 @@ export interface IProfile {
 	interests?: string[];
 	name: string;
 	settings?: ISettings;
+	shortcuts?: IProfileShortcut[] | null;
 	tags?: string[];
 	theme?: any;
 	thumbnail?: null | string;
 	updated: string;
+	[property: string]: any;
+}
+
+export interface IProfileShortcut {
+	id: string;
+	profileId: string;
+	label: string;
+	path: string;
+	appId?: string | null;
+	icon?: string | null;
+	order: number;
+	createdAt: string;
 	[property: string]: any;
 }
 

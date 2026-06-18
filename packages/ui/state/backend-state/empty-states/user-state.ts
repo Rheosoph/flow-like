@@ -1,6 +1,7 @@
 import type {
 	IProfile,
 	IProfileApp,
+	IProfileShortcut,
 	ISettingsProfile,
 	IUserState,
 } from "@flow-like/flow-like-ui";
@@ -52,6 +53,12 @@ export class EmptyUserState implements IUserState {
 		profile: ISettingsProfile,
 		app: IProfileApp,
 		operation: "Upsert" | "Remove",
+	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	updateProfileShortcuts(
+		profile: ISettingsProfile,
+		shortcuts: IProfileShortcut[],
 	): Promise<void> {
 		throw new Error("Method not implemented.");
 	}

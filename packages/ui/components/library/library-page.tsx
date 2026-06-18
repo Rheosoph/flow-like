@@ -117,6 +117,7 @@ export function LibraryPage({
 				favorite: boolean;
 				pinned: boolean;
 				favorite_order?: number | null;
+				pinned_order?: number | null;
 			}
 		>();
 		for (const a of currentProfile.data?.hub_profile.apps ?? []) {
@@ -124,6 +125,7 @@ export function LibraryPage({
 				favorite: a.favorite,
 				pinned: a.pinned,
 				favorite_order: a.favorite_order,
+				pinned_order: a.pinned_order,
 			});
 		}
 		return map;
@@ -185,6 +187,7 @@ export function LibraryPage({
 						favorite: true,
 						pinned: existing?.pinned ?? false,
 						favorite_order: i,
+						pinned_order: existing?.pinned_order ?? null,
 					} as IProfileApp,
 					"Upsert",
 				);
@@ -194,14 +197,17 @@ export function LibraryPage({
 		[currentProfile, profileAppMap, backend.userState],
 	);
 
-	const pinnedItems = useMemo(
-		() =>
-			sortItems(
-				allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
-				sortMode,
-			),
-		[allItems, profileAppMap, sortMode],
-	);
+	const pinnedItems = useMemo(() => {
+		const sorted = sortItems(
+			allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
+			sortMode,
+		);
+		return sorted.toSorted((a, b) => {
+			const orderA = profileAppMap.get(a.id)?.pinned_order ?? 999;
+			const orderB = profileAppMap.get(b.id)?.pinned_order ?? 999;
+			return orderA - orderB;
+		});
+	}, [allItems, profileAppMap, sortMode]);
 
 	const favoriteItems = useMemo(() => {
 		const favs = allItems.filter(
