@@ -20,7 +20,8 @@ use flow_like_catalog::CatalogBuilder;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::json::json;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
+    path::{Path as FsPath, PathBuf},
     sync::Arc,
     time::SystemTime,
 };
@@ -120,6 +121,34 @@ fn format_violations(violations: &[LintViolation]) -> String {
         .join("\n")
 }
 
+fn workspace_root() -> PathBuf {
+    FsPath::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("catalog crate lives below the workspace root")
+}
+
+fn public_icon_roots(workspace_root: &FsPath) -> [PathBuf; 3] {
+    [
+        workspace_root.join("apps/desktop/public"),
+        workspace_root.join("apps/web/public"),
+        workspace_root.join("apps/embedded/public"),
+    ]
+}
+
+fn icon_public_relative_path(icon: &str) -> Option<&str> {
+    let icon = icon.trim();
+    if icon.starts_with("/flow/icons/")
+        && icon.ends_with(".svg")
+        && !icon.contains("..")
+        && !icon.contains('\\')
+    {
+        Some(icon.trim_start_matches('/'))
+    } else {
+        None
+    }
+}
+
 /// Print violations as warnings and assert the count hasn't *increased*
 /// beyond `ceiling`. As nodes are fixed, lower the ceiling.
 fn assert_ceiling(label: &str, violations: &[LintViolation], ceiling: usize) {
@@ -199,6 +228,71 @@ fn no_duplicate_node_names() {
         dupes.is_empty(),
         "Duplicate node names in catalog: {:?}",
         dupes
+    );
+}
+
+#[test]
+fn node_icon_assets_exist_in_public_folders() {
+    let root = workspace_root();
+    let public_roots = public_icon_roots(&root);
+    let mut icons_to_nodes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut violations = Vec::new();
+
+    for (name, node) in all_nodes() {
+        let Some(icon) = node.icon.as_deref().map(str::trim) else {
+            continue;
+        };
+
+        if icon.is_empty() {
+            violations.push(LintViolation {
+                node: name,
+                message: "Icon is set but empty".to_string(),
+            });
+            continue;
+        }
+
+        icons_to_nodes
+            .entry(icon.to_string())
+            .or_default()
+            .push(name);
+    }
+
+    for (icon, nodes) in icons_to_nodes {
+        let Some(relative_path) = icon_public_relative_path(&icon) else {
+            violations.push(LintViolation {
+                node: nodes.join(", "),
+                message: format!("Icon \"{icon}\" must be a /flow/icons/*.svg public asset path"),
+            });
+            continue;
+        };
+
+        let missing_roots = public_roots
+            .iter()
+            .filter(|public_root| !public_root.join(relative_path).is_file())
+            .map(|public_root| {
+                public_root
+                    .strip_prefix(&root)
+                    .unwrap_or(public_root)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        if !missing_roots.is_empty() {
+            violations.push(LintViolation {
+                node: nodes.join(", "),
+                message: format!(
+                    "Icon \"{icon}\" is missing from public folder(s): {}",
+                    missing_roots.join(", ")
+                ),
+            });
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Node icons without public SVG assets:\n{}",
+        format_violations(&violations)
     );
 }
 
