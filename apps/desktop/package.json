@@ -22,7 +22,7 @@
 		"dev:linux:x64": "dotenv -- bun run tauri dev --config src-tauri/configs/tauri.linux.x64.conf.json & bun run --watch ./scripts/translation-server.ts",
 		"prepare:windows-prereqs": "bun ./scripts/prepare-windows-prereqs.ts",
 		"postinstall": "bun run ./scripts/sync-version.ts",
-		"build": "next build --turbopack",
+		"build": "bun ../../scripts/sync-node-icons.ts && next build --turbopack",
 		"start": "next start",
 		"lint": "next lint",
 		"test": "vitest run",
