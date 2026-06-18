@@ -1,0 +1,30 @@
+---
+title: "Drive Node Catalog"
+description: "Data/Google/Drive Flow-Like node category with 10 generated node references."
+sidebar:
+  order: 0
+  label: "Drive"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Drive nodes, Data/Google/Drive, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Google/Drive"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Drive Node Catalog\",\"description\":\"Data/Google/Drive Flow-Like node category with 10 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/data/google/drive/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Google/Drive\",\"keywords\":\"Drive nodes, Data/Google/Drive, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/Google/Drive"}
+	label="Drive"
+	nodes={nodesByCategory["Data/Google/Drive"] ?? []}
+	client:load
+/>

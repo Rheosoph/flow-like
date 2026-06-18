@@ -7902,6 +7902,7 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "mimalloc",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

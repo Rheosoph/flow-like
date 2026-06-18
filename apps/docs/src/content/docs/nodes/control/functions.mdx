@@ -1,0 +1,30 @@
+---
+title: "Functions Node Catalog"
+description: "Control/Functions Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Functions"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Functions nodes, Control/Functions, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Control/Functions"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Functions Node Catalog\",\"description\":\"Control/Functions Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/control/functions/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Control/Functions\",\"keywords\":\"Functions nodes, Control/Functions, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Control/Functions"}
+	label="Functions"
+	nodes={nodesByCategory["Control/Functions"] ?? []}
+	client:load
+/>

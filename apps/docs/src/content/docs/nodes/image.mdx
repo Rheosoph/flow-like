@@ -1,0 +1,30 @@
+---
+title: "Image Node Catalog"
+description: "Image Flow-Like node category with 16 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Image"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Image nodes, Image, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Image"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Image Node Catalog\",\"description\":\"Image Flow-Like node category with 16 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/image/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Image\",\"keywords\":\"Image nodes, Image, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Image"}
+	label="Image"
+	nodes={nodesByCategory["Image"] ?? []}
+	client:load
+/>

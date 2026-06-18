@@ -4,6 +4,7 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
+		"docs:nodes": "cargo run -p flow-like-catalog --bin generate_node_docs",
 		"icons:lint": "bun scripts/sync-node-icons.ts --check",
 		"icons:sync": "bun scripts/sync-node-icons.ts",
 		"test:e2e:package-security": "bun test tests/package-manager-security.e2e.test.ts"

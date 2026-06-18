@@ -1,0 +1,30 @@
+---
+title: "Dataset Node Catalog"
+description: "AI/ML/Dataset Flow-Like node category with 5 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Dataset"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Dataset nodes, AI/ML/Dataset, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Dataset"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Dataset Node Catalog\",\"description\":\"AI/ML/Dataset Flow-Like node category with 5 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/dataset/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Dataset\",\"keywords\":\"Dataset nodes, AI/ML/Dataset, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"AI/ML/Dataset"}
+	label="Dataset"
+	nodes={nodesByCategory["AI/ML/Dataset"] ?? []}
+	client:load
+/>

@@ -1,0 +1,30 @@
+---
+title: "Reduction Node Catalog"
+description: "AI/ML/Reduction Flow-Like node category with 2 generated node references."
+sidebar:
+  order: 0
+  label: "Reduction"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Reduction nodes, AI/ML/Reduction, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Reduction"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Reduction Node Catalog\",\"description\":\"AI/ML/Reduction Flow-Like node category with 2 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/reduction/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Reduction\",\"keywords\":\"Reduction nodes, AI/ML/Reduction, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"AI/ML/Reduction"}
+	label="Reduction"
+	nodes={nodesByCategory["AI/ML/Reduction"] ?? []}
+	client:load
+/>

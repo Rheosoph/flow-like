@@ -1,0 +1,30 @@
+---
+title: "Scraping Node Catalog"
+description: "Web/Scraping Flow-Like node category with 1 generated node reference. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Scraping"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Scraping nodes, Web/Scraping, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Web/Scraping"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Scraping Node Catalog\",\"description\":\"Web/Scraping Flow-Like node category with 1 generated node reference. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/web/scraping/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Web/Scraping\",\"keywords\":\"Scraping nodes, Web/Scraping, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Web/Scraping"}
+	label="Scraping"
+	nodes={nodesByCategory["Web/Scraping"] ?? []}
+	client:load
+/>

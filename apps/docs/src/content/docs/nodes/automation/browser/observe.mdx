@@ -1,0 +1,30 @@
+---
+title: "Observe Node Catalog"
+description: "Automation/Browser/Observe Flow-Like node category with 5 generated node references."
+sidebar:
+  order: 0
+  label: "Observe"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Observe nodes, Automation/Browser/Observe, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation/Browser/Observe"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Observe Node Catalog\",\"description\":\"Automation/Browser/Observe Flow-Like node category with 5 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/automation/browser/observe/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation/Browser/Observe\",\"keywords\":\"Observe nodes, Automation/Browser/Observe, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation/Browser/Observe"}
+	label="Observe"
+	nodes={nodesByCategory["Automation/Browser/Observe"] ?? []}
+	client:load
+/>

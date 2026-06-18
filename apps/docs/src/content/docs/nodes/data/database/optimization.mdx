@@ -1,0 +1,30 @@
+---
+title: "Optimization Node Catalog"
+description: "Data/Database/Optimization Flow-Like node category with 4 generated node references."
+sidebar:
+  order: 0
+  label: "Optimization"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Optimization nodes, Data/Database/Optimization, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Database/Optimization"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Optimization Node Catalog\",\"description\":\"Data/Database/Optimization Flow-Like node category with 4 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/data/database/optimization/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Database/Optimization\",\"keywords\":\"Optimization nodes, Data/Database/Optimization, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/Database/Optimization"}
+	label="Optimization"
+	nodes={nodesByCategory["Data/Database/Optimization"] ?? []}
+	client:load
+/>

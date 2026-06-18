@@ -122,6 +122,8 @@ flow-like-catalog-processing.workspace = true
 flow-like-catalog-geo.workspace = true
 flow-like-catalog-automation.workspace = true
 mimalloc = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -129,7 +131,6 @@ criterion = { version = "0.7", features = ["html_reports", "async_tokio"] }
 flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
-serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [[bench]]

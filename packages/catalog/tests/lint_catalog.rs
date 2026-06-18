@@ -128,8 +128,9 @@ fn workspace_root() -> PathBuf {
         .expect("catalog crate lives below the workspace root")
 }
 
-fn public_icon_roots(workspace_root: &FsPath) -> [PathBuf; 3] {
+fn public_icon_roots(workspace_root: &FsPath) -> [PathBuf; 4] {
     [
+        workspace_root.join("apps/docs/public"),
         workspace_root.join("apps/desktop/public"),
         workspace_root.join("apps/web/public"),
         workspace_root.join("apps/embedded/public"),

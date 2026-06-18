@@ -1,0 +1,30 @@
+---
+title: "Wait Node Catalog"
+description: "Automation/Browser/Wait Flow-Like node category with 2 generated node references."
+sidebar:
+  order: 0
+  label: "Wait"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Wait nodes, Automation/Browser/Wait, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation/Browser/Wait"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Wait Node Catalog\",\"description\":\"Automation/Browser/Wait Flow-Like node category with 2 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/automation/browser/wait/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation/Browser/Wait\",\"keywords\":\"Wait nodes, Automation/Browser/Wait, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation/Browser/Wait"}
+	label="Wait"
+	nodes={nodesByCategory["Automation/Browser/Wait"] ?? []}
+	client:load
+/>

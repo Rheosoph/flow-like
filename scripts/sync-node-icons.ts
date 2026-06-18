@@ -14,6 +14,7 @@ const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, "..");
 const ICON_REFERENCE_PATTERN = /\/flow\/icons\/([a-zA-Z0-9_.-]+\.svg)/g;
 
 export const NODE_ICON_PUBLIC_DIRS = [
+	"apps/docs/public/flow/icons",
 	"apps/desktop/public/flow/icons",
 	"apps/web/public/flow/icons",
 	"apps/embedded/public/flow/icons",

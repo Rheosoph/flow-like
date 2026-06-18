@@ -1,0 +1,30 @@
+---
+title: "Browser Node Catalog"
+description: "Automation/Browser Flow-Like node category with 46 generated node references."
+sidebar:
+  order: 0
+  label: "Browser"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Browser nodes, Automation/Browser, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation/Browser"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Browser Node Catalog\",\"description\":\"Automation/Browser Flow-Like node category with 46 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/automation/browser/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation/Browser\",\"keywords\":\"Browser nodes, Automation/Browser, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation/Browser"}
+	label="Browser"
+	nodes={nodesByCategory["Automation/Browser"] ?? []}
+	client:load
+/>
