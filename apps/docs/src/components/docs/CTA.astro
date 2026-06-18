@@ -87,7 +87,7 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
     .bg-glow-1 {
         width: 400px;
         height: 300px;
-        background: hsl(var(--sl-color-accent));
+        background: var(--sl-color-accent);
         top: -100px;
         left: 50%;
         transform: translateX(-80%);
@@ -96,7 +96,7 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
     .bg-glow-2 {
         width: 350px;
         height: 250px;
-        background: hsl(142 76% 36%);
+        background: var(--flx-emerald);
         bottom: -80px;
         left: 50%;
         transform: translateX(-20%);
@@ -105,7 +105,7 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
     /* Card */
     .card {
         position: relative;
-        border-radius: 1.25rem;
+        border-radius: 8px;
         border: 1px solid var(--sl-color-gray-5);
         background: var(--sl-color-bg-nav);
         backdrop-filter: blur(12px);
@@ -117,9 +117,9 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
         content: "";
         position: absolute;
         inset: 0;
-        border-radius: 1.25rem;
+        border-radius: 8px;
         padding: 1px;
-        background: linear-gradient(135deg, hsl(var(--sl-color-accent) / 0.4), transparent, hsl(142 76% 36% / 0.4));
+        background: linear-gradient(135deg, color-mix(in oklab, var(--sl-color-accent) 40%, transparent), transparent, color-mix(in oklab, var(--flx-emerald) 40%, transparent));
         -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
         -webkit-mask-composite: xor;
         mask-composite: exclude;
@@ -135,7 +135,7 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
     .card-gradient {
         position: absolute;
         inset: 0;
-        background: linear-gradient(135deg, hsl(var(--sl-color-accent) / 0.05), transparent, hsl(142 76% 36% / 0.05));
+        background: linear-gradient(135deg, color-mix(in oklab, var(--sl-color-accent) 5%, transparent), transparent, color-mix(in oklab, var(--flx-emerald) 5%, transparent));
         pointer-events: none;
     }
 
@@ -152,9 +152,9 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
         gap: 0.625rem;
         padding: 0.5rem 1rem;
         border-radius: 9999px;
-        border: 1px solid hsl(var(--sl-color-accent) / 0.3);
-        background: hsl(var(--sl-color-accent) / 0.1);
-        color: hsl(var(--sl-color-accent));
+        border: 1px solid color-mix(in oklab, var(--sl-color-accent) 30%, transparent);
+        background: color-mix(in oklab, var(--sl-color-accent) 10%, transparent);
+        color: var(--sl-color-accent-high);
         font-size: 0.875rem;
         font-weight: 600;
         margin-bottom: 1.25rem;
@@ -165,8 +165,8 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
         width: 0.5rem;
         height: 0.5rem;
         border-radius: 50%;
-        background: hsl(var(--sl-color-accent));
-        box-shadow: 0 0 8px hsl(var(--sl-color-accent) / 0.6);
+        background: var(--sl-color-accent);
+        box-shadow: 0 0 8px color-mix(in oklab, var(--sl-color-accent) 60%, transparent);
         animation: pulse 2s infinite ease-in-out;
     }
 
@@ -180,9 +180,9 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
         margin: 0;
         font-size: clamp(1.75rem, 4vw, 2.5rem);
         font-weight: 700;
-        letter-spacing: -0.02em;
+        letter-spacing: 0;
         line-height: 1.2;
-        background: linear-gradient(135deg, var(--sl-color-text), hsl(var(--sl-color-accent)), hsl(142 76% 36%));
+        background: linear-gradient(135deg, var(--sl-color-text), var(--sl-color-accent), var(--flx-emerald));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -211,7 +211,7 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
         justify-content: center;
         gap: 0.5rem;
         padding: 0.75rem 1.5rem;
-        border-radius: 9999px;
+        border-radius: 8px;
         font-size: 0.875rem;
         font-weight: 500;
         text-decoration: none;
@@ -220,7 +220,7 @@ const { kicker, title, subtitle, primary, secondary } = Astro.props as Props;
 
     .btn.primary {
         background: var(--sl-color-text);
-        color: var(--sl-color-bg);
+        color: var(--sl-color-black);
         box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
     }
 

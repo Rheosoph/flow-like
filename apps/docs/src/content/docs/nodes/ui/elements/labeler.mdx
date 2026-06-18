@@ -1,0 +1,30 @@
+---
+title: "Labeler Node Catalog"
+description: "UI/Elements/Labeler Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Labeler"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Labeler nodes, UI/Elements/Labeler, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Elements/Labeler"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Labeler Node Catalog\",\"description\":\"UI/Elements/Labeler Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/ui/elements/labeler/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Elements/Labeler\",\"keywords\":\"Labeler nodes, UI/Elements/Labeler, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Elements/Labeler"}
+	label="Labeler"
+	nodes={nodesByCategory["UI/Elements/Labeler"] ?? []}
+	client:load
+/>

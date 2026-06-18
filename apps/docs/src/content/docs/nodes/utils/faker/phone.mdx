@@ -1,0 +1,30 @@
+---
+title: "Phone Node Catalog"
+description: "Utils/Faker/Phone Flow-Like node category with 2 generated node references."
+sidebar:
+  order: 0
+  label: "Phone"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Phone nodes, Utils/Faker/Phone, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Utils/Faker/Phone"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Phone Node Catalog\",\"description\":\"Utils/Faker/Phone Flow-Like node category with 2 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/utils/faker/phone/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Utils/Faker/Phone\",\"keywords\":\"Phone nodes, Utils/Faker/Phone, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Utils/Faker/Phone"}
+	label="Phone"
+	nodes={nodesByCategory["Utils/Faker/Phone"] ?? []}
+	client:load
+/>

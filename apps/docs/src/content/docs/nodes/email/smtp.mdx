@@ -1,0 +1,30 @@
+---
+title: "SMTP Node Catalog"
+description: "Email/SMTP Flow-Like node category with 2 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "SMTP"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "SMTP nodes, Email/SMTP, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Email/SMTP"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"SMTP Node Catalog\",\"description\":\"Email/SMTP Flow-Like node category with 2 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/email/smtp/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Email/SMTP\",\"keywords\":\"SMTP nodes, Email/SMTP, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Email/SMTP"}
+	label="SMTP"
+	nodes={nodesByCategory["Email/SMTP"] ?? []}
+	client:load
+/>

@@ -1,0 +1,30 @@
+---
+title: "Data Node Catalog"
+description: "UI/Data Flow-Like node category with 3 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Data"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Data nodes, UI/Data, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Data"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Data Node Catalog\",\"description\":\"UI/Data Flow-Like node category with 3 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/ui/data/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Data\",\"keywords\":\"Data nodes, UI/Data, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Data"}
+	label="Data"
+	nodes={nodesByCategory["UI/Data"] ?? []}
+	client:load
+/>

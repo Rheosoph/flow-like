@@ -2,6 +2,7 @@ import react from "@astrojs/react";
 import starlight from "@astrojs/starlight";
 import tailwindcss from "@tailwindcss/vite";
 
+import { generatedNodeSidebar } from "./src/generated/node-sidebar.mjs";
 import { defineConfig, passthroughImageService } from "astro/config";
 // https://astro.build/config
 export default defineConfig({
@@ -15,7 +16,7 @@ export default defineConfig({
 		react(),
 		starlight({
 			title: "Flow-Like Docs",
-			favicon: "/ico-light.svg",
+			favicon: "/favicon.svg",
 			description:
 				"Documentation for Flow-Like, the open source local-first workflow engine. Build type-safe, self-hosted automation with Rust performance.",
 			components: {
@@ -35,8 +36,26 @@ export default defineConfig({
 					tag: "link",
 					attrs: {
 						rel: "icon",
-						href: "/ico.ico",
+						type: "image/svg+xml",
+						href: "/favicon.svg",
+					},
+				},
+				{
+					tag: "link",
+					attrs: {
+						rel: "icon",
+						type: "image/png",
+						href: "/favicon-32x32.png",
 						sizes: "32x32",
+					},
+				},
+				{
+					tag: "link",
+					attrs: {
+						rel: "icon",
+						type: "image/png",
+						href: "/favicon-16x16.png",
+						sizes: "16x16",
 					},
 				},
 				{
@@ -52,8 +71,8 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 				baseUrl: "https://github.com/Rheosoph/flow-like/edit/main/apps/docs/",
 			},
 			logo: {
-				light: "./src/assets/app-logo-light.webp",
-				dark: "./src/assets/app-logo.webp",
+				light: "./src/assets/icon.webp",
+				dark: "./src/assets/icon.webp",
 			},
 			customCss: ["./src/styles/global.css"],
 			social: [
@@ -290,78 +309,6 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 								},
 							],
 						},
-						{
-							label: "Node Catalog",
-							collapsed: true,
-							items: [
-								{ label: "Overview", slug: "nodes/overview" },
-								{
-									label: "AI & LLM",
-									collapsed: true,
-									autogenerate: { directory: "nodes/AI" },
-								},
-								{
-									label: "Control Flow",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Control" },
-								},
-								{
-									label: "Database",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Database" },
-								},
-								{
-									label: "Events",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Events" },
-								},
-								{
-									label: "Image Processing",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Image" },
-								},
-								{
-									label: "Logging",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Logging" },
-								},
-								{
-									label: "Math",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Math" },
-								},
-								{
-									label: "Storage",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Storage" },
-								},
-								{
-									label: "Data Structures",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Structs" },
-								},
-								{
-									label: "Utilities",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Utils" },
-								},
-								{
-									label: "Variables",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Variable" },
-								},
-								{
-									label: "Web & HTTP",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Web" },
-								},
-								{
-									label: "Bit Operations",
-									collapsed: true,
-									autogenerate: { directory: "nodes/Bit" },
-								},
-							],
-						},
 					],
 				},
 				// ===== DEVOPS / ADMINS =====
@@ -483,6 +430,14 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 						{ label: "Widget Builder", slug: "reference/widget-builder" },
 						{ label: "FlowPilot UI", slug: "reference/flowpilot-ui" },
 						{ label: "A2UI Migration", slug: "reference/a2ui-migration" },
+					],
+				},
+				{
+					label: "Node Catalog",
+					collapsed: true,
+					items: [
+						{ label: "Overview", slug: "nodes/overview" },
+						...generatedNodeSidebar,
 					],
 				},
 			],

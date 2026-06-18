@@ -1,0 +1,30 @@
+---
+title: "Display Node Catalog"
+description: "UI/Elements/Display Flow-Like node category with 4 generated node references."
+sidebar:
+  order: 0
+  label: "Display"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Display nodes, UI/Elements/Display, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Elements/Display"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Display Node Catalog\",\"description\":\"UI/Elements/Display Flow-Like node category with 4 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/ui/elements/display/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Elements/Display\",\"keywords\":\"Display nodes, UI/Elements/Display, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Elements/Display"}
+	label="Display"
+	nodes={nodesByCategory["UI/Elements/Display"] ?? []}
+	client:load
+/>

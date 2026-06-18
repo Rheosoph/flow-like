@@ -1,0 +1,30 @@
+---
+title: "External Node Catalog"
+description: "Data/Files/External Flow-Like node category with 6 generated node references."
+sidebar:
+  order: 0
+  label: "External"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "External nodes, Data/Files/External, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Files/External"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"External Node Catalog\",\"description\":\"Data/Files/External Flow-Like node category with 6 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/data/files/external/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Files/External\",\"keywords\":\"External nodes, Data/Files/External, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/Files/External"}
+	label="External"
+	nodes={nodesByCategory["Data/Files/External"] ?? []}
+	client:load
+/>

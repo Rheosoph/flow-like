@@ -1,0 +1,30 @@
+---
+title: "Hotspot Node Catalog"
+description: "UI/Elements/Hotspot Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Hotspot"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Hotspot nodes, UI/Elements/Hotspot, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Elements/Hotspot"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Hotspot Node Catalog\",\"description\":\"UI/Elements/Hotspot Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/ui/elements/hotspot/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Elements/Hotspot\",\"keywords\":\"Hotspot nodes, UI/Elements/Hotspot, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Elements/Hotspot"}
+	label="Hotspot"
+	nodes={nodesByCategory["UI/Elements/Hotspot"] ?? []}
+	client:load
+/>

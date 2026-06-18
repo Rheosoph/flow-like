@@ -1,0 +1,30 @@
+---
+title: "Select Node Catalog"
+description: "UI/Elements/Select Flow-Like node category with 3 generated node references."
+sidebar:
+  order: 0
+  label: "Select"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Select nodes, UI/Elements/Select, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Elements/Select"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Select Node Catalog\",\"description\":\"UI/Elements/Select Flow-Like node category with 3 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/ui/elements/select/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Elements/Select\",\"keywords\":\"Select nodes, UI/Elements/Select, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Elements/Select"}
+	label="Select"
+	nodes={nodesByCategory["UI/Elements/Select"] ?? []}
+	client:load
+/>

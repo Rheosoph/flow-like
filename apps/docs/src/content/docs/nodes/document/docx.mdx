@@ -1,0 +1,30 @@
+---
+title: "DOCX Node Catalog"
+description: "Document/DOCX Flow-Like node category with 17 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "DOCX"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "DOCX nodes, Document/DOCX, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Document/DOCX"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"DOCX Node Catalog\",\"description\":\"Document/DOCX Flow-Like node category with 17 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/document/docx/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Document/DOCX\",\"keywords\":\"DOCX nodes, Document/DOCX, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Document/DOCX"}
+	label="DOCX"
+	nodes={nodesByCategory["Document/DOCX"] ?? []}
+	client:load
+/>

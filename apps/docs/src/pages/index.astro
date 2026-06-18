@@ -1,403 +1,1084 @@
 ---
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
 
-const quickLinks = [
-    { href: "/start/what-is-flow-like/", label: "What is Flow-Like?", icon: "📖" },
-    { href: "/start/getting-started/", label: "Getting Started", icon: "🚀" },
-    { href: "https://flow-like.com/download", label: "Download", icon: "⬇️", external: true },
+const primaryLinks = [
+	{
+		href: "/start/getting-started/",
+		label: "Start guide",
+		icon: "/flow/icons/play.svg",
+	},
+	{
+		href: "/nodes/overview/",
+		label: "Node catalog",
+		icon: "/flow/icons/workflow.svg",
+	},
+	{
+		href: "https://flow-like.com/download",
+		label: "Download Studio",
+		icon: "/flow/icons/cloud.svg",
+		external: true,
+	},
 ];
 
-const sections = [
-    {
-        title: "Learn the basics",
-        links: [
-            { href: "/start/what-is-flow-like/", label: "Introduction" },
-            { href: "/start/getting-started/", label: "Installation" },
-            { href: "/start/what-is-flow-like/", label: "Core concepts" },
-        ],
-    },
-    {
-        title: "Build workflows",
-        links: [
-            { href: "/start/what-is-flow-like/", label: "Creating nodes" },
-            { href: "/start/what-is-flow-like/", label: "Composing flows" },
-            { href: "/start/what-is-flow-like/", label: "Data types" },
-        ],
-    },
-    {
-        title: "Go to production",
-        links: [
-            { href: "/start/what-is-flow-like/", label: "Deployment" },
-            { href: "/start/what-is-flow-like/", label: "Performance" },
-            { href: "/start/what-is-flow-like/", label: "Best practices" },
-        ],
-    },
+const tracks = [
+	{
+		href: "/start/getting-started/",
+		kicker: "01",
+		title: "Get oriented",
+		desc: "Install Flow-Like, understand boards and flows, and get a first working automation running.",
+		icon: "/flow/icons/route.svg",
+	},
+	{
+		href: "/studio/overview/",
+		kicker: "02",
+		title: "Build visually",
+		desc: "Work with the editor, nodes, layers, variables, local execution, logs, and FlowPilot.",
+		icon: "/flow/icons/shape.svg",
+	},
+	{
+		href: "/dev/wasm-nodes/overview/",
+		kicker: "03",
+		title: "Extend the engine",
+		desc: "Write custom nodes, ship WASM packages, use SDKs, and wire new sinks into the system.",
+		icon: "/flow/icons/box.svg",
+	},
+	{
+		href: "/self-hosting/overview/",
+		kicker: "04",
+		title: "Run it yourself",
+		desc: "Deploy with Docker Compose or Kubernetes, configure storage, and operate execution backends.",
+		icon: "/flow/icons/shield.svg",
+	},
 ];
 
-const features = [
-    { icon: "🎛️", title: "Visual design", desc: "Build workflows with drag-and-drop" },
-    { icon: "🧩", title: "Composable", desc: "Small parts that combine reliably" },
-    { icon: "⚡", title: "Fast", desc: "Rust-powered performance" },
-    { icon: "🌍", title: "Portable", desc: "Run anywhere without lock-in" },
+const references = [
+	{ href: "/nodes/overview/", label: "Generated node catalog", icon: "/flow/icons/workflow.svg" },
+	{ href: "/topics/genai/overview/", label: "GenAI workflows", icon: "/flow/icons/bot-plan.svg" },
+	{ href: "/topics/data-pipelines/overview/", label: "Data pipelines", icon: "/flow/icons/database.svg" },
+	{ href: "/topics/api-integrations/overview/", label: "API integrations", icon: "/flow/icons/web.svg" },
+	{ href: "/reference/a2ui-components/", label: "A2UI components", icon: "/flow/icons/palette.svg" },
+	{ href: "/reference/security/", label: "Security reference", icon: "/flow/icons/lock.svg" },
+];
+
+const routeStrip = [
+	{ href: "/studio/overview/", label: "Studio", detail: "Editor, nodes, logs" },
+	{ href: "/apps/overview/", label: "Apps", detail: "Pages, widgets, routes" },
+	{ href: "/dev/wasm-nodes/overview/", label: "WASM", detail: "Custom node runtime" },
+	{ href: "/self-hosting/overview/", label: "Deploy", detail: "Docker and Kubernetes" },
+];
+
+const footerLinks = [
+	{ href: "https://flow-like.com", label: "Website" },
+	{ href: "https://flow-like.com/eula", label: "EULA" },
+	{ href: "https://flow-like.com/privacy-policy", label: "Privacy" },
+	{ href: "https://flow-like.com/data-deletion", label: "Data deletion" },
+	{ href: "https://great-co.de/legal-notice", label: "Imprint" },
 ];
 ---
 
 <StarlightPage
-    frontmatter={{
-        title: "Flow-Like Docs: Open Source Workflow Engine Documentation",
-        template: "splash",
-        description:
-            "Documentation for Flow-Like, the open source local-first workflow engine for type-safe, self-hosted automation.",
-    }}
+	frontmatter={{
+		title: "Flow-Like Docs: Open Source Workflow Engine Documentation",
+		template: "splash",
+		description:
+			"Documentation for Flow-Like, the open source local-first workflow engine for type-safe, self-hosted automation.",
+	}}
 >
-    <div class="docs-home not-content">
-        <!-- Hero -->
-        <header class="docs-hero">
-            <p class="hero-tagline">Model · Automate · Scale</p>
-            <h2 class="text-3xl sm:text-5xl mb-10 -mt-4">Flow-Like Docs</h2>
-            <p class="hero-desc">
-                Learn how to build typed, visual workflows that scale from prototype to production.
-            </p>
-            <div class="quick-links">
-                {quickLinks.map((link) => (
-                    <a
-                        href={link.href}
-                        class="quick-link"
-                        target={link.external ? "_blank" : undefined}
-                        rel={link.external ? "noopener" : undefined}
-                    >
-                        <span class="quick-link-icon">{link.icon}</span>
-                        <span>{link.label}</span>
-                        {link.external && <span class="external">↗</span>}
-                    </a>
-                ))}
-            </div>
-        </header>
+	<div class="docs-home-v3 not-content">
+		<header class="docs-hero">
+			<canvas id="docs-web-shader" class="hero-shader" aria-hidden="true"></canvas>
+			<div class="hero-fallback" aria-hidden="true"></div>
+			<div class="hero-grid" aria-hidden="true"></div>
 
-        <!-- Feature highlights -->
-        <section class="features">
-            {features.map((f) => (
-                <div class="feature">
-                    <span class="feature-icon">{f.icon}</span>
-                    <div class="feature-content">
-                        <strong>{f.title}</strong>
-                        <span class="feature-desc">{f.desc}</span>
-                    </div>
-                </div>
-            ))}
-        </section>
+			<div class="hero-copy">
+				<a class="hero-badge" href="/start/getting-started/">
+					<span class="hero-badge-dot"></span>
+					Flow-Like Docs
+					<svg viewBox="0 0 12 12" aria-hidden="true">
+						<path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+					</svg>
+				</a>
+				<img class="hero-logo" src="/icon.webp" alt="Flow Like" width="76" height="76" />
+				<h1 class="hero-title">Docs that move like the canvas.</h1>
+				<p class="hero-subtitle">
+					Trace concepts into nodes, app surfaces, and self-hosting routes through a map that mirrors how Flow-Like is built.
+				</p>
+				<nav class="hero-actions" aria-label="Primary documentation links">
+					{primaryLinks.map((link) => (
+						<a
+							href={link.href}
+							class:list={["hero-action", link.external && "hero-action-muted"]}
+							target={link.external ? "_blank" : undefined}
+							rel={link.external ? "noopener" : undefined}
+						>
+							<span class="icon-tile" aria-hidden="true">
+								<img src={link.icon} alt="" loading="lazy" />
+							</span>
+							<span>{link.label}</span>
+							{link.external && (
+								<svg class="external-icon" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+									<path fill="currentColor" d="M14 3h7v7h-2V6.41l-9.3 9.3-1.4-1.41L17.59 5H14V3ZM5 5h5v2H7v10h10v-3h2v5H5V5Z" />
+								</svg>
+							)}
+						</a>
+					))}
+				</nav>
+			</div>
 
-        <!-- Documentation sections -->
-        <section class="sections">
-            {sections.map((section) => (
-                <div class="section-card">
-                    <h2 class="section-title">{section.title}</h2>
-                    <ul class="section-links">
-                        {section.links.map((link) => (
-                            <li>
-                                <a href={link.href}>{link.label}</a>
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            ))}
-        </section>
+			<nav class="route-strip" aria-label="Popular documentation routes">
+				{routeStrip.map((item) => (
+					<a href={item.href}>
+						<strong>{item.label}</strong>
+						<span>{item.detail}</span>
+					</a>
+				))}
+			</nav>
+		</header>
 
-        <!-- Footer links -->
-        <footer class="footer">
-            <a href="https://flow-like.com" target="_blank" rel="noopener">Website</a>
-            <span class="sep">·</span>
-            <a href="https://github.com/Rheosoph/flow-like" target="_blank" rel="noopener">GitHub</a>
-            <span class="sep">·</span>
-            <a href="https://flow-like.com/download" target="_blank" rel="noopener">Download</a>
-        </footer>
-    </div>
+		<main>
+			<section class="track-section" aria-labelledby="tracks-title">
+				<div class="section-copy">
+					<p>Docs paths</p>
+					<h2 id="tracks-title">The shortest route to the thing you are changing.</h2>
+				</div>
+				<div class="track-grid">
+					{tracks.map((track) => (
+						<a href={track.href} class="track-card">
+							<span class="track-number">{track.kicker}</span>
+							<span class="track-icon" aria-hidden="true">
+								<img src={track.icon} alt="" loading="lazy" />
+							</span>
+							<strong>{track.title}</strong>
+							<span>{track.desc}</span>
+						</a>
+					))}
+				</div>
+			</section>
+
+			<section class="reference-section" aria-labelledby="reference-title">
+				<div class="section-copy">
+					<p>Reference shelf</p>
+					<h2 id="reference-title">High-frequency docs stay close to the top.</h2>
+					<span>
+						Generated pages and implementation references are grouped for repeat visits, so the homepage stays useful after the first read.
+					</span>
+				</div>
+				<nav class="reference-grid" aria-label="Reference links">
+					{references.map((item) => (
+						<a href={item.href} class="reference-link">
+							<span class="icon-tile" aria-hidden="true">
+								<img src={item.icon} alt="" loading="lazy" />
+							</span>
+							<span>{item.label}</span>
+						</a>
+					))}
+				</nav>
+			</section>
+		</main>
+
+		<footer class="docs-footer">
+			<div>
+				<strong>Flow Like</strong>
+				<span>Open source workflow engine documentation.</span>
+			</div>
+			<nav aria-label="Website and legal links">
+				{footerLinks.map((link) => (
+					<a href={link.href} target="_blank" rel="noopener">{link.label}</a>
+				))}
+			</nav>
+		</footer>
+	</div>
 </StarlightPage>
 
 <style>
-    /* Hide Starlight's default title/hero */
-    :global(.content-panel h1),
-    :global(.sl-markdown-content > h1:not(.hero-title)) {
-        display: none !important;
-    }
+	:global(html:has(.docs-home-v3)) {
+		--sl-content-width: 100%;
+		background: oklch(0.164 0.0111 268.0057);
+	}
 
-    .docs-home {
-        max-width: 1024px;
-        margin: 0 auto;
-        padding: 0 1rem;
-    }
+	:global(html:has(.docs-home-v3) .content-panel) {
+		border: 0;
+		padding: 0;
+	}
 
-    /* Hero */
-    .docs-hero {
-        text-align: center;
-        padding: 8rem 0 6rem;
-        border-bottom: 1px solid var(--sl-color-gray-6);
-        position: relative;
-        overflow: hidden;
-    }
+	:global(html:has(.docs-home-v3) body),
+	:global(html:has(.docs-home-v3) .page),
+	:global(html:has(.docs-home-v3) .main-frame),
+	:global(html:has(.docs-home-v3) .main-pane),
+	:global(html:has(.docs-home-v3) .main-pane > main),
+	:global(html:has(.docs-home-v3) .content-panel:has(.docs-home-v3)) {
+		background: oklch(0.164 0.0111 268.0057);
+	}
 
-    /* Grid Background */
-    .docs-hero::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background-image:
-            linear-gradient(var(--sl-color-gray-6) 1px, transparent 1px),
-            linear-gradient(90deg, var(--sl-color-gray-6) 1px, transparent 1px);
-        background-size: 3rem 3rem;
-        background-position: center top;
-        mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-        -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
-        opacity: 0.5;
-        z-index: -1;
-        pointer-events: none;
-    }
+	:global(html:has(.docs-home-v3) .content-panel:has(.docs-home-v3) > .sl-container) {
+		max-width: none;
+		padding: 0;
+	}
 
-    /* Glow Effect */
-    .docs-hero::after {
-        content: "";
-        position: absolute;
-        top: 40%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 120%;
-        height: 100%;
-        background: radial-gradient(circle at center, var(--sl-color-accent-low) 0%, transparent 50%);
-        opacity: 0.15;
-        z-index: -1;
-        filter: blur(60px);
-        pointer-events: none;
-    }
+	:global(html:has(.docs-home-v3) .sl-markdown-content:has(.docs-home-v3) + footer),
+	:global(html:has(.docs-home-v3) .content-panel:has(.docs-home-v3) > .sl-container > footer:not(.docs-footer)) {
+		display: none;
+	}
 
-    .hero-tagline {
-        font-family: var(--sl-font-mono);
-        font-size: 0.75rem;
-        letter-spacing: 0.25em;
-        text-transform: uppercase;
-        color: var(--sl-color-accent);
-        margin: 0 0 1.5rem;
-        opacity: 0.9;
-    }
+	:global(html:has(.docs-home-v3) .main-pane > main) {
+		padding-bottom: 0;
+	}
 
-    .hero-title {
-        font-size: 4rem;
-        font-weight: 800;
-        letter-spacing: -0.03em;
-        line-height: 1.1;
-        margin: 0 0 1.5rem;
-        color: var(--sl-color-white);
-        /* Subtle gradient text */
-        background: linear-gradient(to bottom right, var(--sl-color-white) 30%, var(--sl-color-gray-3));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
+	:global(html:has(.docs-home-v3) .sl-markdown-content:has(.docs-home-v3)) {
+		margin: 0;
+	}
 
-    .hero-desc {
-        font-size: 1.25rem;
-        line-height: 1.6;
-        color: var(--sl-color-gray-2);
-        margin: 0 auto 3rem;
-        max-width: 640px;
-        font-weight: 300;
-    }
+	:global(html:has(.docs-home-v3) h1#_top),
+	:global(.sl-markdown-content > h1:not(.hero-title)) {
+		display: none !important;
+	}
 
-    .quick-links {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 1rem;
-    }
+	.docs-home-v3 {
+		--sl-color-white: oklch(0.9544 0.0059 59.6503);
+		--sl-color-gray-1: oklch(0.9247 0.0077 61.447);
+		--sl-color-gray-2: oklch(0.82 0.012 264.467);
+		--sl-color-gray-3: oklch(0.6984 0.0157 264.467);
+		--sl-color-gray-4: oklch(0.52 0.015 264.467);
+		--sl-color-gray-5: oklch(0.2921 0.014 261.7008);
+		--sl-color-gray-6: oklch(0.1993 0.0111 260.661);
+		--sl-color-black: oklch(0.164 0.0111 268.0057);
+		--sl-color-accent-high: color-mix(in oklab, var(--sl-color-accent) 76%, white 24%);
+		--sl-color-accent-low: color-mix(in oklab, var(--sl-color-black) 88%, var(--sl-color-accent) 12%);
+		--hero-bg: oklch(0.164 0.0111 268.0057);
+		--hero-panel: oklch(0.1993 0.0111 260.661);
+		--hero-text: oklch(0.9544 0.0059 59.6503);
+		--hero-muted: oklch(0.78 0.014 264.467);
+		--hero-soft: oklch(0.62 0.014 264.467);
+		--hero-line: color-mix(in oklab, var(--hero-text) 10%, transparent);
+		--hero-line-strong: color-mix(in oklab, var(--hero-text) 16%, transparent);
+		width: 100%;
+		max-width: 100%;
+		overflow: hidden;
+		background: var(--hero-bg);
+		color: var(--hero-text);
+	}
 
-    .quick-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.75rem 1.5rem;
-        border-radius: 2px;
-        background: var(--sl-color-black);
-        border: 1px solid var(--sl-color-gray-5);
-        color: var(--sl-color-gray-2);
-        font-size: 0.9rem;
-        font-weight: 500;
-        text-decoration: none;
-        transition: all 0.2s ease;
-        font-family: var(--sl-font-mono);
-        letter-spacing: -0.01em;
-    }
+	.docs-hero {
+		position: relative;
+		display: grid;
+		align-content: center;
+		gap: clamp(1.25rem, 2.6vw, 2.1rem);
+		min-height: calc(100svh - var(--sl-nav-height));
+		padding: clamp(2.4rem, 4.8vw, 4.2rem) clamp(1rem, 5vw, 4rem) clamp(1.6rem, 3vw, 2.4rem);
+		overflow: hidden;
+		border-bottom: 1px solid var(--hero-line);
+		isolation: isolate;
+	}
 
-    .quick-link:hover {
-        border-color: var(--sl-color-accent);
-        color: var(--sl-color-white);
-        box-shadow: 0 0 15px -5px var(--sl-color-accent-low);
-        transform: translateY(-2px);
-    }
+	.hero-shader,
+	.hero-fallback,
+	.hero-grid {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+	}
 
-    /* Features Grid */
-    .features {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 2rem;
-        padding: 4rem 0;
-        border-bottom: 1px solid var(--sl-color-gray-6);
-    }
+	.hero-shader {
+		z-index: -4;
+		width: 100%;
+		height: 100%;
+		opacity: 0.96;
+	}
 
-    @media (max-width: 640px) {
-        .features {
-            grid-template-columns: 1fr;
-        }
-    }
+	.hero-fallback {
+		z-index: -5;
+		background:
+			radial-gradient(44rem 28rem at 50% 14%, color-mix(in oklab, var(--sl-color-accent) 20%, transparent), transparent 72%),
+			radial-gradient(32rem 24rem at 12% 72%, color-mix(in oklab, var(--flx-emerald) 12%, transparent), transparent 72%),
+			linear-gradient(180deg, var(--hero-bg), color-mix(in oklab, var(--hero-bg) 88%, black));
+	}
 
-    .feature {
-        display: flex;
-        align-items: flex-start;
-        gap: 1.5rem;
-        padding: 2rem;
-        border: 1px solid var(--sl-color-gray-6);
-        background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, transparent 100%);
-        height: 100%;
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
+	.hero-grid {
+		z-index: -3;
+		background-image:
+			linear-gradient(color-mix(in oklab, var(--hero-text) 4%, transparent) 1px, transparent 1px),
+			linear-gradient(90deg, color-mix(in oklab, var(--hero-text) 4%, transparent) 1px, transparent 1px),
+			radial-gradient(color-mix(in oklab, var(--hero-text) 12%, transparent) 1px, transparent 1px);
+		background-size:
+			64px 64px,
+			64px 64px,
+			16px 16px;
+		mask-image: linear-gradient(180deg, black 0%, black 74%, transparent 100%);
+		-webkit-mask-image: linear-gradient(180deg, black 0%, black 74%, transparent 100%);
+		opacity: 0.76;
+	}
 
-    /* Tech corner accent */
-    .feature::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 0;
-        height: 1px;
-        background: var(--sl-color-accent);
-        transition: width 0.3s ease;
-    }
+	.hero-copy {
+		position: relative;
+		z-index: 2;
+		display: grid;
+		justify-items: center;
+		width: min(900px, calc(100vw - 2rem));
+		margin-inline: auto;
+		text-align: center;
+	}
 
-    .feature:hover {
-        border-color: var(--sl-color-gray-4);
-        background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);
-        transform: translateY(-2px);
-    }
+	.hero-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		min-height: 2.15rem;
+		padding: 0 0.85rem 0 0.7rem;
+		border: 1px solid color-mix(in oklab, var(--sl-color-accent) 38%, transparent);
+		border-radius: 999px;
+		background: color-mix(in oklab, var(--hero-bg) 58%, transparent);
+		color: var(--sl-color-accent-high);
+		font-size: 0.82rem;
+		font-weight: 700;
+		text-decoration: none;
+		backdrop-filter: blur(18px);
+		box-shadow: 0 0 0 1px color-mix(in oklab, black 18%, transparent) inset;
+	}
 
-    .feature:hover::before {
-        width: 100%;
-    }
+	.hero-badge svg {
+		width: 0.75rem;
+		height: 0.75rem;
+		transition: transform 160ms ease;
+	}
 
-    .feature-icon {
-        font-size: 1.75rem;
-        line-height: 1;
-        padding-top: 0.25rem;
-        filter: grayscale(100%);
-        transition: filter 0.3s ease;
-    }
+	.hero-badge:hover svg {
+		transform: translateX(2px);
+	}
 
-    .feature:hover .feature-icon {
-        filter: grayscale(0%);
-    }
+	.hero-badge-dot {
+		position: relative;
+		width: 0.46rem;
+		height: 0.46rem;
+		border-radius: 999px;
+		background: var(--sl-color-accent);
+		box-shadow: 0 0 18px color-mix(in oklab, var(--sl-color-accent) 86%, transparent);
+	}
 
-    .feature-content {
-        flex: 1;
-    }
+	.hero-badge-dot::after {
+		content: "";
+		position: absolute;
+		inset: -0.25rem;
+		border-radius: inherit;
+		background: color-mix(in oklab, var(--sl-color-accent) 44%, transparent);
+		animation: badge-pulse 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+	}
 
-    .feature strong {
-        display: block;
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--sl-color-white);
-        margin-bottom: 0.5rem;
-        letter-spacing: -0.01em;
-    }
+	.hero-logo {
+		width: 4.35rem;
+		height: 4.35rem;
+		margin-top: 1rem;
+		border-radius: 14px;
+		box-shadow:
+			0 24px 85px color-mix(in oklab, var(--sl-color-accent) 32%, transparent),
+			0 0 0 1px color-mix(in oklab, var(--hero-text) 14%, transparent);
+	}
 
-    .feature-desc {
-        font-size: 0.95rem;
-        line-height: 1.6;
-        color: var(--sl-color-gray-3);
-    }
+	.hero-title {
+		width: min(100%, 14ch);
+		max-width: 14ch;
+		margin: 0.95rem 0 0;
+		color: var(--hero-text);
+		font-size: clamp(3rem, 6.6vw, 5.8rem);
+		font-weight: 850;
+		letter-spacing: 0;
+		line-height: 0.94;
+		text-wrap: balance;
+		background: linear-gradient(
+			135deg,
+			var(--hero-text) 12%,
+			color-mix(in oklab, var(--hero-text) 82%, var(--sl-color-accent) 18%) 38%,
+			var(--sl-color-accent-high) 72%,
+			var(--hero-text) 100%
+		);
+		background-size: 220% 100%;
+		-webkit-background-clip: text;
+		background-clip: text;
+		-webkit-text-fill-color: transparent;
+		animation: headline-shift 8s ease infinite;
+	}
 
-    /* Sections Grid */
-    .sections {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 2rem;
-        padding: 4rem 0;
-    }
+	.hero-subtitle {
+		max-width: 42rem;
+		margin: 1rem 0 0;
+		color: var(--hero-muted);
+		font-size: clamp(1rem, 1.8vw, 1.22rem);
+		line-height: 1.65;
+		text-wrap: balance;
+	}
 
-    @media (max-width: 768px) {
-        .sections {
-            grid-template-columns: 1fr;
-        }
-    }
+	.hero-actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 0.75rem;
+		margin-top: 1.35rem;
+	}
 
-    .section-card {
-        display: flex;
-        flex-direction: column;
-        padding: 0;
-        border-top: 1px solid var(--sl-color-gray-5);
-        background: transparent;
-        height: 100%;
-        transition: border-color 0.3s ease;
-    }
+	.hero-action,
+	.reference-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.65rem;
+		min-height: 2.85rem;
+		padding: 0.55rem 0.95rem;
+		border: 1px solid var(--hero-line);
+		border-radius: 999px;
+		background: color-mix(in oklab, var(--hero-bg) 68%, transparent);
+		color: var(--hero-text);
+		font-size: 0.92rem;
+		font-weight: 730;
+		text-decoration: none;
+		backdrop-filter: blur(18px);
+		transition:
+			border-color 160ms ease,
+			background 160ms ease,
+			box-shadow 160ms ease,
+			transform 160ms ease;
+	}
 
-    .section-card:hover {
-        border-color: var(--sl-color-accent);
-    }
+	.hero-action:first-child {
+		border-color: color-mix(in oklab, var(--sl-color-accent) 70%, transparent);
+		background:
+			linear-gradient(135deg, color-mix(in oklab, var(--sl-color-accent) 94%, black), color-mix(in oklab, var(--sl-color-accent) 78%, #ffb545)),
+			var(--sl-color-accent);
+		color: white;
+		box-shadow:
+			0 0 0 1px color-mix(in oklab, white 18%, transparent) inset,
+			0 18px 48px color-mix(in oklab, var(--sl-color-accent) 24%, transparent);
+	}
 
-    .section-title {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin: 1.5rem 0 1.5rem;
-        color: var(--sl-color-gray-2);
-        font-family: var(--sl-font-mono);
-    }
+	.hero-action:first-child .icon-tile {
+		border-color: color-mix(in oklab, white 24%, transparent);
+		background: color-mix(in oklab, white 16%, transparent);
+	}
 
-    .section-links {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-    }
+	.hero-action:first-child .icon-tile img {
+		filter: brightness(0) invert(1);
+		opacity: 0.94;
+	}
 
-    .section-links a {
-        display: block;
-        font-size: 0.95rem;
-        color: var(--sl-color-gray-3);
-        text-decoration: none;
-        transition: all 0.2s;
-        padding-left: 0;
-        border-left: 1px solid transparent;
-    }
+	.hero-action-muted {
+		color: var(--hero-muted);
+	}
 
-    .section-links a:hover {
-        color: var(--sl-color-white);
-        padding-left: 1rem;
-        border-left-color: var(--sl-color-accent);
-    }
+	.hero-action:hover,
+	.reference-link:hover {
+		border-color: color-mix(in oklab, var(--sl-color-accent) 58%, transparent);
+		background: color-mix(in oklab, var(--sl-color-accent) 10%, var(--hero-bg));
+		color: var(--hero-text);
+		transform: translateY(-1px);
+	}
 
-    /* Footer */
-    .footer {
-        text-align: center;
-        padding: 2rem 0 6rem;
-        font-size: 0.875rem;
-        color: var(--sl-color-gray-4);
-        font-family: var(--sl-font-mono);
-        opacity: 0.6;
-    }
+	.icon-tile,
+	.track-icon {
+		display: inline-grid;
+		flex: 0 0 auto;
+		place-items: center;
+		border: 1px solid color-mix(in oklab, var(--sl-color-accent) 28%, transparent);
+		border-radius: 8px;
+		background: color-mix(in oklab, var(--sl-color-accent) 11%, transparent);
+	}
 
-    .footer a {
-        color: var(--sl-color-gray-3);
-        text-decoration: none;
-        transition: color 0.2s;
-    }
+	.icon-tile {
+		width: 1.65rem;
+		height: 1.65rem;
+	}
 
-    .footer a:hover {
-        color: var(--sl-color-accent);
-    }
+	.icon-tile img,
+	.track-icon img {
+		object-fit: contain;
+		filter: brightness(0) saturate(100%) invert(54%) sepia(97%) saturate(2344%) hue-rotate(338deg) brightness(101%) contrast(101%);
+	}
 
-    .sep {
-        color: var(--sl-color-gray-5);
-        margin: 0 1rem;
-    }
+	.icon-tile img {
+		width: 0.95rem;
+		height: 0.95rem;
+	}
+
+	.external-icon {
+		flex: 0 0 auto;
+		opacity: 0.72;
+	}
+
+	.route-strip {
+		position: relative;
+		z-index: 2;
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.65rem;
+		width: min(980px, 100%);
+		margin-inline: auto;
+	}
+
+	.route-strip a {
+		display: grid;
+		gap: 0.2rem;
+		min-width: 0;
+		min-height: 4.7rem;
+		align-content: center;
+		padding: 0.85rem 0.95rem;
+		border: 1px solid color-mix(in oklab, var(--hero-text) 8%, transparent);
+		border-radius: 8px;
+		background: color-mix(in oklab, var(--hero-bg) 60%, transparent);
+		color: inherit;
+		text-decoration: none;
+		backdrop-filter: blur(16px);
+		transition:
+			border-color 160ms ease,
+			background 160ms ease,
+			transform 160ms ease;
+	}
+
+	.route-strip a:hover {
+		border-color: color-mix(in oklab, var(--sl-color-accent) 40%, transparent);
+		background: color-mix(in oklab, var(--sl-color-accent) 8%, var(--hero-bg));
+		transform: translateY(-1px);
+	}
+
+	.route-strip strong {
+		color: var(--hero-text);
+		font-size: 0.96rem;
+		line-height: 1.2;
+	}
+
+	.route-strip span {
+		color: var(--hero-soft);
+		font-size: 0.82rem;
+		line-height: 1.35;
+		overflow-wrap: anywhere;
+	}
+
+	.section-copy p {
+		display: block;
+		color: var(--sl-color-accent-high);
+		font-family: var(--sl-font-mono);
+		font-size: 0.7rem;
+		font-weight: 820;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+	}
+
+	.track-section,
+	.reference-section,
+	.docs-footer {
+		width: min(1180px, calc(100% - 2rem));
+		margin-inline: auto;
+	}
+
+	.track-section {
+		display: grid;
+		gap: 1.4rem;
+		padding: clamp(3rem, 7vw, 5.5rem) 0;
+	}
+
+	.section-copy {
+		max-width: 690px;
+	}
+
+	.section-copy p {
+		margin: 0 0 0.75rem;
+	}
+
+	.section-copy h2 {
+		margin: 0;
+		color: var(--sl-color-white);
+		font-size: clamp(1.9rem, 4vw, 3.35rem);
+		font-weight: 790;
+		letter-spacing: 0;
+		line-height: 1.05;
+		text-wrap: balance;
+	}
+
+	.section-copy > span {
+		display: block;
+		max-width: 34rem;
+		margin-top: 1rem;
+		color: var(--sl-color-gray-3);
+		line-height: 1.7;
+	}
+
+	.track-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.85rem;
+	}
+
+	.track-card {
+		position: relative;
+		display: grid;
+		min-height: 16.5rem;
+		align-content: end;
+		gap: 0.75rem;
+		padding: 1rem;
+		overflow: hidden;
+		border: 1px solid color-mix(in oklab, var(--sl-color-white) 8%, transparent);
+		border-radius: 8px;
+		background:
+			linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--sl-color-black) 78%, transparent) 100%),
+			color-mix(in oklab, var(--sl-color-gray-6) 58%, transparent);
+		color: inherit;
+		text-decoration: none;
+		transition:
+			border-color 160ms ease,
+			background 160ms ease,
+			transform 160ms ease;
+	}
+
+	.track-card::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		background:
+			radial-gradient(circle at 20% 14%, color-mix(in oklab, var(--sl-color-accent) 17%, transparent), transparent 36%),
+			linear-gradient(135deg, color-mix(in oklab, var(--sl-color-white) 5%, transparent), transparent 44%);
+		opacity: 0.78;
+		pointer-events: none;
+	}
+
+	.track-card:hover {
+		border-color: color-mix(in oklab, var(--sl-color-accent) 44%, transparent);
+		background:
+			linear-gradient(180deg, transparent 0%, color-mix(in oklab, var(--sl-color-black) 78%, transparent) 100%),
+			color-mix(in oklab, var(--sl-color-accent) 6%, var(--sl-color-gray-6));
+		transform: translateY(-2px);
+	}
+
+	.track-number {
+		position: absolute;
+		top: 0.85rem;
+		right: 1rem;
+		color: color-mix(in oklab, var(--sl-color-white) 16%, transparent);
+		font-family: var(--sl-font-mono);
+		font-size: 3.25rem;
+		font-weight: 900;
+		line-height: 1;
+	}
+
+	.track-icon {
+		position: relative;
+		z-index: 1;
+		width: 2.8rem;
+		height: 2.8rem;
+	}
+
+	.track-icon img {
+		width: 1.35rem;
+		height: 1.35rem;
+	}
+
+	.track-card strong,
+	.track-card > span:last-child {
+		position: relative;
+		z-index: 1;
+	}
+
+	.track-card strong {
+		color: var(--sl-color-white);
+		font-size: 1.08rem;
+		font-weight: 760;
+		line-height: 1.2;
+	}
+
+	.track-card > span:last-child {
+		color: var(--sl-color-gray-3);
+		font-size: 0.92rem;
+		line-height: 1.55;
+	}
+
+	.reference-section {
+		display: grid;
+		grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr);
+		gap: clamp(1.5rem, 5vw, 4rem);
+		align-items: start;
+		padding: 0 0 clamp(2rem, 4.5vw, 3.5rem);
+	}
+
+	.reference-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.75rem;
+	}
+
+	.reference-link {
+		justify-content: flex-start;
+		min-height: 4.35rem;
+		padding: 0.8rem;
+		border-radius: 8px;
+		background: color-mix(in oklab, var(--sl-color-gray-6) 52%, transparent);
+	}
+
+	.docs-footer {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+		justify-content: space-between;
+		padding: 1.5rem 0 1.75rem;
+		border-top: 1px solid color-mix(in oklab, var(--sl-color-white) 7%, transparent);
+		color: var(--sl-color-gray-3);
+		font-size: 0.86rem;
+	}
+
+	.docs-footer div {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.45rem;
+		align-items: center;
+	}
+
+	.docs-footer strong {
+		color: var(--sl-color-gray-1);
+	}
+
+	.docs-footer nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.85rem;
+		justify-content: flex-end;
+	}
+
+	.docs-footer a {
+		color: var(--sl-color-gray-3);
+		text-decoration: none;
+	}
+
+	.docs-footer a:hover {
+		color: var(--sl-color-accent-high);
+	}
+
+	@keyframes badge-pulse {
+		0% {
+			opacity: 0.62;
+			transform: scale(1);
+		}
+		100% {
+			opacity: 0;
+			transform: scale(2.75);
+		}
+	}
+
+	@keyframes headline-shift {
+		0%,
+		100% {
+			background-position: 0% 50%;
+		}
+		50% {
+			background-position: 100% 50%;
+		}
+	}
+
+	@media (max-width: 980px) {
+		.docs-hero {
+			min-height: auto;
+		}
+
+		.route-strip {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			width: min(42rem, 100%);
+		}
+
+		.track-grid,
+		.reference-section {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	@media (max-width: 640px) {
+		.docs-hero {
+			padding: 3.15rem 1rem 1.5rem;
+		}
+
+		.hero-logo {
+			width: 4rem;
+			height: 4rem;
+			border-radius: 12px;
+		}
+
+		.hero-title {
+			width: 100%;
+			max-width: 100%;
+			font-size: clamp(2.15rem, 9.4vw, 3.05rem);
+			line-height: 0.98;
+		}
+
+		.hero-actions,
+		.docs-footer,
+		.docs-footer nav {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.hero-action {
+			justify-content: center;
+			width: 100%;
+		}
+
+		.route-strip {
+			grid-template-columns: 1fr;
+		}
+
+		.track-grid,
+		.reference-section,
+		.reference-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.track-card {
+			min-height: 13rem;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.hero-title,
+		.hero-badge-dot::after {
+			animation: none !important;
+		}
+	}
 </style>
+
+<script is:inline>
+	(() => {
+		const canvas = document.getElementById("docs-web-shader");
+		if (!(canvas instanceof HTMLCanvasElement)) return;
+
+		const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		const gl = canvas.getContext("webgl", {
+			alpha: true,
+			antialias: false,
+			depth: false,
+			preserveDrawingBuffer: false,
+		});
+
+		if (!gl) {
+			canvas.style.display = "none";
+			return;
+		}
+
+		const vertexSource = `
+attribute vec2 a_position;
+void main() {
+	gl_Position = vec4(a_position, 0.0, 1.0);
+}`;
+
+		const fragmentSource = `
+precision mediump float;
+uniform vec2 u_resolution;
+uniform float u_time;
+
+float hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float noise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
+		mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+		u.y
+	);
+}
+
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+	vec2 pa = p - a;
+	vec2 ba = b - a;
+	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+	return length(pa - ba * h);
+}
+
+float segmentProgress(vec2 p, vec2 a, vec2 b) {
+	vec2 ba = b - a;
+	return clamp(dot(p - a, ba) / dot(ba, ba), 0.0, 1.0);
+}
+
+float connection(vec2 p, vec2 a, vec2 b, float phase) {
+	float d = sdSegment(p, a, b);
+	float h = segmentProgress(p, a, b);
+	float core = smoothstep(0.010, 0.0008, d);
+	float glow = smoothstep(0.075, 0.0, d) * 0.36;
+	float runner = fract(u_time * 0.115 + phase);
+	float pulse = smoothstep(0.055, 0.0, abs(h - runner)) * smoothstep(0.04, 0.0, d);
+	return core * 0.7 + glow + pulse * 1.8;
+}
+
+float nodeGlow(vec2 p, vec2 c, float r) {
+	float d = distance(p, c);
+	return smoothstep(r, 0.0, d) + smoothstep(r * 6.0, 0.0, d) * 0.28;
+}
+
+void main() {
+	vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+	float aspect = u_resolution.x / u_resolution.y;
+	vec2 p = vec2(uv.x * aspect, uv.y);
+
+	float t = u_time * 0.08;
+	float grain = noise(uv * vec2(150.0, 90.0) + u_time * 0.02);
+	float drift = noise(vec2(uv.x * 2.0 + t, uv.y * 2.6 - t));
+
+	vec3 bg = vec3(0.018, 0.021, 0.030);
+	vec3 red = vec3(1.0, 0.105, 0.18);
+	vec3 orange = vec3(1.0, 0.42, 0.055);
+	vec3 amber = vec3(1.0, 0.72, 0.25);
+	vec3 cream = vec3(0.94, 0.90, 0.80);
+	vec3 teal = vec3(0.12, 0.72, 0.56);
+
+	vec2 n0 = vec2(0.12 * aspect, 0.66);
+	vec2 n1 = vec2(0.30 * aspect, 0.38);
+	vec2 n2 = vec2(0.49 * aspect, 0.62);
+	vec2 n3 = vec2(0.66 * aspect, 0.40);
+	vec2 n4 = vec2(0.86 * aspect, 0.64);
+	vec2 n5 = vec2(0.82 * aspect, 0.28);
+
+	n0 += vec2(sin(u_time * 0.33), cos(u_time * 0.21)) * 0.010;
+	n1 += vec2(cos(u_time * 0.25), sin(u_time * 0.31)) * 0.012;
+	n2 += vec2(sin(u_time * 0.19), cos(u_time * 0.28)) * 0.010;
+	n3 += vec2(cos(u_time * 0.22), sin(u_time * 0.24)) * 0.011;
+	n4 += vec2(sin(u_time * 0.27), cos(u_time * 0.18)) * 0.010;
+	n5 += vec2(cos(u_time * 0.17), sin(u_time * 0.29)) * 0.010;
+
+	float web = 0.0;
+	web += connection(p, n0, n1, 0.04);
+	web += connection(p, n1, n2, 0.18);
+	web += connection(p, n2, n3, 0.34);
+	web += connection(p, n3, n4, 0.50);
+	web += connection(p, n2, n5, 0.68);
+	web += connection(p, n5, n4, 0.82);
+	web += connection(p, n0, n2, 0.58) * 0.58;
+	web += connection(p, n1, n3, 0.77) * 0.48;
+
+	float nodes = 0.0;
+	nodes += nodeGlow(p, n0, 0.012);
+	nodes += nodeGlow(p, n1, 0.012);
+	nodes += nodeGlow(p, n2, 0.014);
+	nodes += nodeGlow(p, n3, 0.012);
+	nodes += nodeGlow(p, n4, 0.014);
+	nodes += nodeGlow(p, n5, 0.012);
+
+	float horizontal = sin((uv.x + drift * 0.06) * 10.0 + u_time * 0.18) * 0.5 + 0.5;
+	float wash = smoothstep(0.0, 1.0, 1.0 - distance(uv, vec2(0.5, 0.36)));
+	float bottomFade = smoothstep(1.0, 0.34, uv.y);
+	float vignette = smoothstep(0.96, 0.20, distance(uv, vec2(0.5, 0.48)));
+
+	vec3 color = bg;
+	color += mix(red, orange, uv.x) * web * 0.30;
+	color += amber * pow(max(web - 0.72, 0.0), 1.8) * 0.45;
+	color += cream * nodes * 0.30;
+	color += orange * wash * horizontal * 0.09;
+	color += teal * smoothstep(0.75, 0.05, distance(uv, vec2(0.14, 0.78))) * 0.045;
+	color += red * smoothstep(0.92, 0.0, distance(uv, vec2(0.86, 0.22))) * 0.055;
+	color += (grain - 0.5) * 0.025;
+	color *= 0.72 + vignette * 0.36;
+	color *= 0.82 + bottomFade * 0.2;
+
+	float alpha = 0.92;
+	gl_FragColor = vec4(color, alpha);
+}`;
+
+		function compile(type, source) {
+			const shader = gl.createShader(type);
+			if (!shader) return null;
+			gl.shaderSource(shader, source);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				console.warn(gl.getShaderInfoLog(shader));
+				gl.deleteShader(shader);
+				return null;
+			}
+			return shader;
+		}
+
+		const vertexShader = compile(gl.VERTEX_SHADER, vertexSource);
+		const fragmentShader = compile(gl.FRAGMENT_SHADER, fragmentSource);
+		if (!vertexShader || !fragmentShader) return;
+
+		const program = gl.createProgram();
+		if (!program) return;
+		gl.attachShader(program, vertexShader);
+		gl.attachShader(program, fragmentShader);
+		gl.linkProgram(program);
+		if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+			console.warn(gl.getProgramInfoLog(program));
+			return;
+		}
+
+		const buffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+		gl.bufferData(
+			gl.ARRAY_BUFFER,
+			new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+			gl.STATIC_DRAW,
+		);
+
+		const position = gl.getAttribLocation(program, "a_position");
+		const resolution = gl.getUniformLocation(program, "u_resolution");
+		const time = gl.getUniformLocation(program, "u_time");
+		let frame = 0;
+		let visible = true;
+		const start = performance.now();
+
+		function resize() {
+			const ratio = Math.min(window.devicePixelRatio || 1, 2);
+			const width = Math.max(1, Math.floor(canvas.clientWidth * ratio));
+			const height = Math.max(1, Math.floor(canvas.clientHeight * ratio));
+			if (canvas.width !== width || canvas.height !== height) {
+				canvas.width = width;
+				canvas.height = height;
+				gl.viewport(0, 0, width, height);
+			}
+		}
+
+		function draw(now) {
+			resize();
+			gl.useProgram(program);
+			gl.enableVertexAttribArray(position);
+			gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+			gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+			gl.uniform2f(resolution, canvas.width, canvas.height);
+			gl.uniform1f(time, reduceMotion ? 0 : (now - start) / 1000);
+			gl.drawArrays(gl.TRIANGLES, 0, 6);
+		}
+
+		function render(now) {
+			if (!visible) {
+				frame = 0;
+				return;
+			}
+			draw(now);
+			if (!reduceMotion) frame = window.requestAnimationFrame(render);
+		}
+
+		function startLoop() {
+			if (!frame) frame = window.requestAnimationFrame(render);
+		}
+
+		function stopLoop() {
+			if (frame) window.cancelAnimationFrame(frame);
+			frame = 0;
+		}
+
+		const observer = "IntersectionObserver" in window
+			? new IntersectionObserver((entries) => {
+				visible = entries.some((entry) => entry.isIntersecting);
+				if (visible) startLoop();
+				else stopLoop();
+			})
+			: null;
+
+		window.addEventListener("resize", resize, { passive: true });
+		document.addEventListener("visibilitychange", () => {
+			visible = document.visibilityState === "visible";
+			if (visible) startLoop();
+			else stopLoop();
+		});
+
+		if (observer) observer.observe(canvas);
+		draw(start);
+		if (!reduceMotion) startLoop();
+
+		document.addEventListener("astro:before-swap", () => {
+			stopLoop();
+			window.removeEventListener("resize", resize);
+			if (observer) observer.disconnect();
+		}, { once: true });
+	})();
+</script>

@@ -1,0 +1,30 @@
+---
+title: "Email Node Catalog"
+description: "Email Flow-Like node category with 25 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Email"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Email nodes, Email, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Email"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Email Node Catalog\",\"description\":\"Email Flow-Like node category with 25 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/email/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Email\",\"keywords\":\"Email nodes, Email, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Email"}
+	label="Email"
+	nodes={nodesByCategory["Email"] ?? []}
+	client:load
+/>

@@ -1,0 +1,30 @@
+---
+title: "Random Node Catalog"
+description: "Math/Float/Random Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Random"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Random nodes, Math/Float/Random, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Math/Float/Random"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Random Node Catalog\",\"description\":\"Math/Float/Random Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/math/float/random/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Math/Float/Random\",\"keywords\":\"Random nodes, Math/Float/Random, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Math/Float/Random"}
+	label="Random"
+	nodes={nodesByCategory["Math/Float/Random"] ?? []}
+	client:load
+/>

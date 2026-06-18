@@ -83,7 +83,7 @@ const { items } = Astro.props as Props;
     .bg-glow-1 {
         width: 500px;
         height: 400px;
-        background: hsl(var(--sl-color-accent));
+        background: var(--sl-color-accent);
         top: -150px;
         left: -150px;
     }
@@ -91,7 +91,7 @@ const { items } = Astro.props as Props;
     .bg-glow-2 {
         width: 400px;
         height: 350px;
-        background: hsl(142 76% 36%);
+        background: var(--flx-emerald);
         bottom: -100px;
         right: -100px;
     }
@@ -108,9 +108,9 @@ const { items } = Astro.props as Props;
         gap: 0.625rem;
         padding: 0.5rem 1rem;
         border-radius: 9999px;
-        border: 1px solid hsl(var(--sl-color-accent) / 0.3);
-        background: hsl(var(--sl-color-accent) / 0.1);
-        color: hsl(var(--sl-color-accent));
+        border: 1px solid color-mix(in oklab, var(--sl-color-accent) 30%, transparent);
+        background: color-mix(in oklab, var(--sl-color-accent) 10%, transparent);
+        color: var(--sl-color-accent-high);
         font-size: 0.875rem;
         font-weight: 600;
         margin-bottom: 1rem;
@@ -121,21 +121,21 @@ const { items } = Astro.props as Props;
         width: 0.5rem;
         height: 0.5rem;
         border-radius: 50%;
-        background: hsl(var(--sl-color-accent));
-        box-shadow: 0 0 8px hsl(var(--sl-color-accent) / 0.6);
+        background: var(--sl-color-accent);
+        box-shadow: 0 0 8px color-mix(in oklab, var(--sl-color-accent) 60%, transparent);
     }
 
     .heading {
         font-size: clamp(1.75rem, 4vw, 2.5rem);
         font-weight: 700;
-        letter-spacing: -0.02em;
+        letter-spacing: 0;
         line-height: 1.2;
         margin: 0;
         color: var(--sl-color-text);
     }
 
     .grad {
-        background: linear-gradient(135deg, hsl(var(--sl-color-accent)), hsl(142 76% 36%));
+        background: linear-gradient(135deg, var(--sl-color-accent), var(--flx-emerald));
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -178,7 +178,7 @@ const { items } = Astro.props as Props;
         flex-direction: column;
         gap: 0.75rem;
         padding: 1.25rem;
-        border-radius: 1rem;
+        border-radius: 8px;
         background: var(--sl-color-gray-6);
         border: 1px solid var(--sl-color-gray-5);
         transition: all 0.2s ease;
@@ -188,9 +188,9 @@ const { items } = Astro.props as Props;
         content: "";
         position: absolute;
         inset: 0;
-        border-radius: 1rem;
+        border-radius: 8px;
         padding: 1px;
-        background: linear-gradient(135deg, hsl(var(--sl-color-accent) / 0.3), transparent, hsl(142 76% 36% / 0.3));
+        background: linear-gradient(135deg, color-mix(in oklab, var(--sl-color-accent) 30%, transparent), transparent, color-mix(in oklab, var(--flx-emerald) 30%, transparent));
         -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
         -webkit-mask-composite: xor;
         mask-composite: exclude;
@@ -215,8 +215,8 @@ const { items } = Astro.props as Props;
         justify-content: center;
         width: 2.75rem;
         height: 2.75rem;
-        border-radius: 0.75rem;
-        background: linear-gradient(135deg, hsl(var(--sl-color-accent) / 0.15), hsl(142 76% 36% / 0.1));
+        border-radius: 8px;
+        background: linear-gradient(135deg, color-mix(in oklab, var(--sl-color-accent) 15%, transparent), color-mix(in oklab, var(--flx-emerald) 10%, transparent));
         border: 1px solid var(--sl-color-gray-5);
         font-size: 1.25rem;
     }
@@ -243,7 +243,7 @@ const { items } = Astro.props as Props;
         font-size: 0.8rem;
         font-weight: 500;
         text-decoration: none;
-        color: hsl(var(--sl-color-accent));
+        color: var(--sl-color-accent-high);
         opacity: 0;
         transform: translateY(4px);
         transition: all 0.2s ease;

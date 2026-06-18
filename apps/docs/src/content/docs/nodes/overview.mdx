@@ -1,0 +1,21 @@
+---
+title: Node Catalog
+description: Explore all available nodes for building workflows.
+sidebar:
+  order: 1
+  badge:
+    text: Reference
+    variant: note
+---
+
+import { NodeCatalogOverview } from "../../../components/node-docs/NodeReference";
+import {
+  catalogCategories,
+  catalogNodes,
+} from "../../../generated/catalog-nodes";
+
+<NodeCatalogOverview
+  nodes={catalogNodes}
+  categories={catalogCategories}
+  client:load
+/>

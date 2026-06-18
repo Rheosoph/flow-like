@@ -1,0 +1,30 @@
+---
+title: "Surface Node Catalog"
+description: "UI/Surface Flow-Like node category with 6 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Surface"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Surface nodes, UI/Surface, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Surface"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Surface Node Catalog\",\"description\":\"UI/Surface Flow-Like node category with 6 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/ui/surface/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Surface\",\"keywords\":\"Surface nodes, UI/Surface, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Surface"}
+	label="Surface"
+	nodes={nodesByCategory["UI/Surface"] ?? []}
+	client:load
+/>

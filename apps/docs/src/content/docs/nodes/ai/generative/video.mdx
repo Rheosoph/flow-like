@@ -1,0 +1,30 @@
+---
+title: "Video Node Catalog"
+description: "AI/Generative/Video Flow-Like node category with 9 generated node references."
+sidebar:
+  order: 0
+  label: "Video"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Video nodes, AI/Generative/Video, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/Generative/Video"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Video Node Catalog\",\"description\":\"AI/Generative/Video Flow-Like node category with 9 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/ai/generative/video/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/Generative/Video\",\"keywords\":\"Video nodes, AI/Generative/Video, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"AI/Generative/Video"}
+	label="Video"
+	nodes={nodesByCategory["AI/Generative/Video"] ?? []}
+	client:load
+/>
