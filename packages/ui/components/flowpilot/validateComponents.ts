@@ -236,6 +236,18 @@ const KNOWN_PROPS: Record<string, Set<string>> = {
 		"aspectRatio",
 		"showPreview",
 	]),
+	voiceInput: new Set([
+		"value",
+		"label",
+		"helperText",
+		"maxDuration",
+		"autoStop",
+		"silenceThreshold",
+		"silenceDuration",
+		"disabled",
+		"error",
+		"visualizer",
+	]),
 	imageLabeler: new Set([
 		"src",
 		"labels",

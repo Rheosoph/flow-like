@@ -355,6 +355,7 @@ impl NodeLogic for PoseEstimationNode {
             "Detect human poses and keypoints using ONNX models. Download models from: YOLOv8-Pose (https://docs.ultralytics.com/models/yolov8/), MoveNet (https://tfhub.dev/google/movenet/), HRNet (https://github.com/OAID/TengineKit)",
             "AI/ML/ONNX",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
 

@@ -21,7 +21,9 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
+import { applyStyleUpdate } from "./style-updates";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 
 interface DialogState {
@@ -346,6 +348,27 @@ function RouteDialogRenderer({
 						text,
 					} as unknown as SurfaceComponent["component"],
 				};
+			} else if (updateType === "setStyle") {
+				updatedComponent = {
+					...component,
+					style: applyStyleUpdate(component.style, updateValue.style),
+				};
+			} else if (updateType === "setVisibility") {
+				const visible = updateValue.visible as boolean;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						hidden: { literalBool: !visible },
+					} as unknown as SurfaceComponent["component"],
+					style: visible
+						? applyStyleUpdate(component.style, { opacity: null })
+						: component.style,
+				};
 			} else if (updateType === "setMediaSource") {
 				updatedComponent = applyMediaSourceUpdate(component, updateValue);
 			} else if (updateType === "setGeoMapViewport") {
@@ -411,6 +434,98 @@ function RouteDialogRenderer({
 						...(updateValue.config !== undefined && {
 							config: { literalJson: JSON.stringify(configOrLayout) },
 						}),
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (
+				updateType === "setOverlayBoxes" ||
+				updateType === "setLabelerBoxes"
+			) {
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (
+				updateType === "addOverlayBox" ||
+				updateType === "addLabelerBox"
+			) {
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				const existing = resolveBoxesField(componentData.boxes);
+				const added = normalizeBoxes([updateValue.box]);
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						boxes: { literalOptions: [...existing, ...added] },
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (updateType === "clearOverlayBoxes") {
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						boxes: { literalOptions: [] },
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (updateType === "removeLabelerBox") {
+				const boxId = updateValue.boxId as string;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				const remaining = resolveBoxesField(componentData.boxes).filter(
+					(box) => box.id !== boxId,
+				);
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						boxes: { literalOptions: remaining },
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (updateType === "updateLabelerBoxLabel") {
+				const boxId = updateValue.boxId as string;
+				const label = updateValue.label as string;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				const updated = resolveBoxesField(componentData.boxes).map((box) =>
+					box.id === boxId ? { ...box, label } : box,
+				);
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						boxes: { literalOptions: updated },
+					} as unknown as SurfaceComponent["component"],
+				};
+			} else if (updateType === "setLabelerImage") {
+				const src = updateValue.src as string;
+				const alt = updateValue.alt as string | undefined;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						src: { literalString: src },
+						...(alt !== undefined ? { alt: { literalString: alt } } : {}),
 					} as unknown as SurfaceComponent["component"],
 				};
 			}
@@ -551,6 +666,7 @@ function RouteDialogRenderer({
 							widgetRefs={page?.widgetRefs}
 							appId={appId}
 							boardId={page?.boardId || routeEvent?.board_id}
+							eventId={routeEvent?.id}
 							onA2UIMessage={handleServerMessage}
 							isPreviewMode={true}
 							openDialog={openDialog}

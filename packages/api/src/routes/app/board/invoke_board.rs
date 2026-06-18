@@ -135,7 +135,8 @@ pub async fn invoke_board(
     Json(params): Json<InvokeBoardRequest>,
 ) -> Result<Response, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.sub()?;
+    let sub = permission.effective_user_id()?;
+    let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
 
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
@@ -209,9 +210,24 @@ pub async fn invoke_board(
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
+        technical_user_id: Set(technical_user_id.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
+    };
+    let execution_audit = crate::audit::ExecutionAudit {
+        run_id: run_id.clone(),
+        app_id: app_id.clone(),
+        board_id: board_id.clone(),
+        event_id: None,
+        node_id: Some(params.node_id.clone()),
+        version: params
+            .version
+            .map(|(maj, min, pat)| format!("{}.{}.{}", maj, min, pat)),
+        mode: run_mode.clone(),
+        status: RunStatus::Pending,
+        input_payload_len,
+        technical_user_id: technical_user_id.clone(),
     };
 
     // For local mode, insert synchronously and return JSON - no dispatch needed
@@ -220,10 +236,12 @@ pub async fn invoke_board(
             tracing::error!(error = %e, "Failed to create run record");
             ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
         })?;
+        crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
         println!("Tracking local run ID: {}", run_id);
         let poll_token = sign_execution_jwt(ExecutionJwtParams {
             user_id: sub.clone(),
+            technical_user_id: technical_user_id.clone(),
             run_id: run_id.clone(),
             app_id: app_id.clone(),
             board_id: board_id.clone(),
@@ -275,6 +293,7 @@ pub async fn invoke_board(
 
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: sub.clone(),
+        technical_user_id: technical_user_id.clone(),
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id: board_id.clone(),
@@ -303,6 +322,7 @@ pub async fn invoke_board(
         token: params.token,
         oauth_tokens: params.oauth_tokens,
         stream_state: params.stream_state,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::Sync),
         runtime_variables: params.runtime_variables,
         user_context: Some(permission.to_user_context()),
         profile,
@@ -316,6 +336,7 @@ pub async fn invoke_board(
             tracing::error!(error = %e, "Failed to create run record");
             ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
         })?;
+        crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
         let response = state
             .dispatcher
@@ -346,6 +367,7 @@ pub async fn invoke_board(
         tracing::error!(run_id = %run_id, error = %e, "Failed to create run record");
         ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
     })?;
+    crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
     // Dispatch based on the configured backend
     match backend {

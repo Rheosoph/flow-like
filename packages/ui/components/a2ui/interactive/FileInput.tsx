@@ -8,7 +8,12 @@ import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
-import { useActionContext, useOnAction } from "../ActionHandler";
+import {
+	useActionContext,
+	useExecuteAction,
+	useIsComponentTriggering,
+	useOnAction,
+} from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -24,6 +29,23 @@ interface FileData {
 	flowPath?: ITemporaryFlowPath;
 	uploading?: boolean;
 	uploadError?: string;
+}
+
+function toStoredFile(file: FileData): FileData {
+	const {
+		dataUrl: _dataUrl,
+		uploading: _uploading,
+		uploadError: _uploadError,
+		...stored
+	} = file;
+	return stored;
+}
+
+function toStoredFileValue(
+	value: FileData | FileData[] | null,
+): FileData | FileData[] | null {
+	if (Array.isArray(value)) return value.map(toStoredFile);
+	return value ? toStoredFile(value) : null;
 }
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -78,6 +100,8 @@ export function A2UIFileInput({
 	surfaceId,
 }: ComponentProps<FileInputComponent>) {
 	const onAction = useOnAction();
+	const { executeAction } = useExecuteAction();
+	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
 	const { appId } = useActionContext();
@@ -96,6 +120,7 @@ export function A2UIFileInput({
 
 	const [localFiles, setLocalFiles] = useState<FileData[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
+	const isBusy = isUploading || isTriggering;
 
 	const files = normalizeFileValue(value);
 	const displayFiles = localFiles.length > 0 ? localFiles : files;
@@ -216,10 +241,17 @@ export function A2UIFileInput({
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
 				context: {
-					value: newValue,
+					value: toStoredFileValue(newValue),
 					signedUrls: multiple ? urls : urls[0],
 				},
 			});
+
+			const action = component.actions?.[0];
+			if (action) {
+				await executeAction(action, componentId, {
+					signedUrls: multiple ? urls : urls[0],
+				});
+			}
 		}
 
 		if (inputRef.current) inputRef.current.value = "";
@@ -244,7 +276,7 @@ export function A2UIFileInput({
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
 			context: {
-				value: newValue,
+				value: toStoredFileValue(newValue),
 				signedUrls: multiple ? urls : (urls[0] ?? null),
 			},
 		});
@@ -262,12 +294,12 @@ export function A2UIFileInput({
 			<div
 				className={cn(
 					"border-2 border-dashed rounded-lg p-4 transition-colors",
-					disabled || isUploading
+					disabled || isBusy
 						? "opacity-50 cursor-not-allowed"
 						: "cursor-pointer hover:border-primary",
 					error ? "border-destructive" : "border-muted-foreground/25",
 				)}
-				onClick={() => !disabled && !isUploading && inputRef.current?.click()}
+				onClick={() => !disabled && !isBusy && inputRef.current?.click()}
 			>
 				<Input
 					ref={inputRef}
@@ -275,15 +307,17 @@ export function A2UIFileInput({
 					className="hidden"
 					accept={accept}
 					multiple={multiple}
-					disabled={disabled || isUploading}
+					disabled={disabled || isBusy}
 					onChange={handleFileSelect}
 				/>
 
 				<div className="flex flex-col items-center gap-2 text-muted-foreground">
-					{isUploading ? (
+					{isBusy ? (
 						<>
 							<Loader2 className="h-8 w-8 animate-spin" />
-							<span className="text-sm">Uploading files...</span>
+							<span className="text-sm">
+								{isUploading ? "Uploading files..." : "Running action..."}
+							</span>
 						</>
 					) : (
 						<>
@@ -342,7 +376,7 @@ export function A2UIFileInput({
 									e.stopPropagation();
 									handleRemove(index);
 								}}
-								disabled={disabled || file.uploading}
+								disabled={disabled || isBusy || file.uploading}
 							>
 								<X className="h-4 w-4" />
 							</Button>

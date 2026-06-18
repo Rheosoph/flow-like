@@ -8,6 +8,7 @@ use flow_like::flow::execution::{LogLevel, LogMeta, RunPayload, flush_run_cancel
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase};
 use flow_like::flow_like_storage::{Path, serde_arrow};
+use flow_like::hub::Hub;
 use flow_like::state::RunData;
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
 use flow_like_types::tokio_util::sync::CancellationToken;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::utils::UiEmitTarget;
+use crate::utils::{UiEmitTarget, local_execution_environment};
 use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
@@ -44,6 +45,7 @@ struct ExecutionOverrides {
     cancellation_log_message: Option<String>,
     log_flush_interval: Option<Duration>,
     log_batch_size: Option<usize>,
+    run_sub_override: Option<String>,
 }
 
 async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {
@@ -138,6 +140,46 @@ fn touch_run_last_update(app_handle: &AppHandle, events: &[InterComEvent]) {
                 run_data.touch_last_node_update();
             }
         }
+    }
+}
+
+fn credential_content_prefix(credentials: &SharedCredentials) -> Option<&str> {
+    match credentials {
+        SharedCredentials::Aws(aws) => aws.content_path_prefix.as_deref(),
+        SharedCredentials::Azure(azure) => azure.content_path_prefix.as_deref(),
+        SharedCredentials::Gcp(gcp) => gcp.content_path_prefix.as_deref().or_else(|| {
+            gcp.allowed_prefixes
+                .iter()
+                .find(|prefix| prefix.starts_with("apps/"))
+                .map(String::as_str)
+        }),
+        SharedCredentials::Mixed(mixed) => credential_content_prefix(&mixed.content),
+    }
+}
+
+fn credential_user_content_prefix(credentials: &SharedCredentials) -> Option<&str> {
+    match credentials {
+        SharedCredentials::Aws(aws) => aws.user_content_path_prefix.as_deref(),
+        SharedCredentials::Azure(azure) => azure.user_content_path_prefix.as_deref(),
+        SharedCredentials::Gcp(gcp) => gcp.user_content_path_prefix.as_deref().or_else(|| {
+            gcp.allowed_prefixes
+                .iter()
+                .find(|prefix| prefix.starts_with("users/"))
+                .map(String::as_str)
+        }),
+        SharedCredentials::Mixed(mixed) => credential_user_content_prefix(&mixed.content),
+    }
+}
+
+fn daemon_sub_from_credentials(credentials: &SharedCredentials, app_id: &str) -> Option<String> {
+    let prefix = credential_user_content_prefix(credentials)?;
+    let rest = prefix.strip_prefix("users/")?;
+    let (sub, prefix_app_id) = rest.split_once("/apps/")?;
+
+    if prefix_app_id == app_id {
+        Some(sub.to_string())
+    } else {
+        None
     }
 }
 
@@ -239,6 +281,11 @@ async fn execute_internal(
         oauth_tokens.unwrap_or_default().into_iter().collect(),
     )
     .await?;
+
+    if let Some(run_sub_override) = overrides.run_sub_override {
+        internal_run.set_execution_sub(run_sub_override).await;
+    }
+    internal_run.set_execution_environment(local_execution_environment());
 
     // Set offline user context for desktop app (always admin/owner)
     internal_run.set_offline_user_context();
@@ -409,6 +456,60 @@ pub(crate) async fn execute_daemon_event(
         ));
     }
 
+    let (credentials, run_sub_override) = if offline {
+        (None, None)
+    } else {
+        let token = token.as_deref().ok_or_else(|| {
+            TauriFunctionError::new("No token registered, cannot run online daemon event")
+        })?;
+        let profile = TauriSettingsState::current_profile(&app_handle).await?;
+        let hub_url = profile.hub_profile.hub;
+
+        if hub_url.is_empty() {
+            return Err(TauriFunctionError::new(
+                "No hub URL configured, cannot get daemon credentials",
+            ));
+        }
+
+        let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
+        let hub = Hub::new(&hub_url, http_client).await?;
+        tracing::info!(
+            app_id = %app_id,
+            event_id = %event_id,
+            token_kind = if token.starts_with("pat_") { "pat" } else { "jwt" },
+            "Fetching credentials for daemon event"
+        );
+        let shared_credentials = hub
+            .shared_credentials(token, &app_id)
+            .await
+            .map_err(|err| {
+                tracing::error!(
+                    app_id = %app_id,
+                    event_id = %event_id,
+                    error = %err,
+                    "Failed to fetch credentials for daemon event"
+                );
+                err
+            })?;
+        let content_prefix = credential_content_prefix(&shared_credentials).map(str::to_string);
+        let user_content_prefix =
+            credential_user_content_prefix(&shared_credentials).map(str::to_string);
+        let run_sub_override = if token.starts_with("pat_") {
+            daemon_sub_from_credentials(&shared_credentials, &app_id)
+        } else {
+            None
+        };
+        tracing::info!(
+            app_id = %app_id,
+            event_id = %event_id,
+            content_prefix = ?content_prefix,
+            user_content_prefix = ?user_content_prefix,
+            has_run_sub_override = run_sub_override.is_some(),
+            "Fetched credentials for daemon event"
+        );
+        (Some(shared_credentials), run_sub_override)
+    };
+
     execute_internal(
         app_handle,
         app_id,
@@ -422,7 +523,7 @@ pub(crate) async fn execute_daemon_event(
         None,
         Some(event_id),
         false,
-        None,
+        credentials,
         token,
         oauth_tokens,
         ExecutionOverrides {
@@ -431,6 +532,7 @@ pub(crate) async fn execute_daemon_event(
             cancellation_log_message: Some("Daemon run stopped".to_string()),
             log_flush_interval: Some(log_flush_interval),
             log_batch_size: Some(log_batch_size),
+            run_sub_override,
         },
     )
     .await

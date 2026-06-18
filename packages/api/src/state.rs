@@ -45,13 +45,18 @@ pub enum CachedAuth {
     OpenID { sub: String },
     /// PAT user with sub
     PAT { sub: String },
-    /// API key with key_id and app_id
-    ApiKey { key_id: String, app_id: String },
-    /// Executor JWT with sub, app_id, run_id
+    /// API key with key_id, app_id, and the creator user that owns tier/billing.
+    ApiKey {
+        key_id: String,
+        app_id: String,
+        creator_user_id: Option<String>,
+    },
+    /// Executor JWT with sub, app_id, run_id, and optional originating technical user.
     Executor {
         sub: String,
         app_id: String,
         run_id: String,
+        technical_user_id: Option<String>,
     },
     /// Invalid/expired token
     Invalid,
@@ -227,6 +232,10 @@ impl State {
         let db = Database::connect(opt)
             .await
             .expect("Failed to connect to database");
+
+        if let Err(error) = crate::db_backfills::run_startup_backfills(&db).await {
+            tracing::warn!("Failed to run startup database backfills: {error}");
+        }
 
         let stripe_client = if platform_config.features.premium {
             let stripe_key = secrets

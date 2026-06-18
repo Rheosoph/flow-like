@@ -344,7 +344,7 @@ export function ProfileSettingsPage({
 								<Label htmlFor="context_size">Max Context Size</Label>
 								<Input
 									id="context_size"
-									placeholder="8192"
+									placeholder="32000"
 									value={profile.execution_settings?.max_context_size || ""}
 									type="number"
 									onChange={(e) =>

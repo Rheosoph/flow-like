@@ -687,6 +687,7 @@ pub async fn trigger_event(
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: executor_subject.clone(),
+        technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -727,6 +728,9 @@ pub async fn trigger_event(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (refreshed if needed)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // Sink triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -753,6 +757,7 @@ pub async fn trigger_event(
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
         user_id: Set(actor_user_id),
+        technical_user_id: Set(None),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -977,6 +982,7 @@ pub async fn trigger_http(
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: executor_subject.clone(),
+        technical_user_id: None,
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id: event.board_id.clone(),
@@ -1018,6 +1024,9 @@ pub async fn trigger_http(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (if configured)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // HTTP sink triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -1044,6 +1053,7 @@ pub async fn trigger_http(
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
         user_id: Set(actor_user_id),
+        technical_user_id: Set(None),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -1368,6 +1378,7 @@ pub async fn trigger_telegram(
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: executor_subject.clone(),
+        technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -1409,6 +1420,9 @@ pub async fn trigger_telegram(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (if configured)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // Telegram webhook triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -1435,6 +1449,7 @@ pub async fn trigger_telegram(
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
         user_id: Set(actor_user_id),
+        technical_user_id: Set(None),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -1694,6 +1709,7 @@ pub async fn trigger_discord(
     // Sign JWT
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: executor_subject.clone(),
+        technical_user_id: None,
         run_id: run_id.clone(),
         app_id: sink.app_id.clone(),
         board_id: event.board_id.clone(),
@@ -1735,6 +1751,9 @@ pub async fn trigger_discord(
         token,        // PAT from sink (if configured)
         oauth_tokens, // OAuth tokens from sink (if configured)
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: None,
         user_context: None, // Discord webhook triggers don't have user context
         profile: sink.profile_json.clone(),
@@ -1761,6 +1780,7 @@ pub async fn trigger_discord(
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
         user_id: Set(actor_user_id),
+        technical_user_id: Set(None),
         app_id: Set(sink.app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),

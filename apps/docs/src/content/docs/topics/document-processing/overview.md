@@ -315,16 +315,16 @@ Draw Boxes
 Annotated image
 ```
 
-### Generate QR Codes
+### Generate Barcodes
 
 ```
-Write QR Code
+Write Barcode
 ├── data: "https://myapp.com/verify/abc123"
-├── size: 256
-└── format: PNG
+├── format: QR_CODE
+└── scale: 8
     │
     ▼
-QR code image
+Barcode image
 ```
 
 ## Text Extraction

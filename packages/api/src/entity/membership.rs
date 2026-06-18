@@ -44,6 +44,8 @@ pub enum Relation {
         on_delete = "Restrict"
     )]
     Role,
+    #[sea_orm(has_many = "super::technical_user::Entity")]
+    TechnicalUser,
     #[sea_orm(
         belongs_to = "super::user::Entity",
         from = "Column::UserId",
@@ -75,6 +77,12 @@ impl Related<super::invitation::Entity> for Entity {
 impl Related<super::role::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Role.def()
+    }
+}
+
+impl Related<super::technical_user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::TechnicalUser.def()
     }
 }
 

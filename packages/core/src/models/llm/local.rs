@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-use super::ExecutionSettings;
+use super::{DEFAULT_MAX_CONTEXT_SIZE, ExecutionSettings};
 
 pub struct LocalModel {
     bit: Bit,
@@ -101,7 +101,7 @@ impl ModelLogic for LocalModel {
 
 impl LocalModel {
     pub async fn check_health(port: &str) -> Result<bool> {
-        let response = reqwest::get(format!("http://localhost:{}/health", port)).await?;
+        let response = reqwest::get(format!("http://127.0.0.1:{}/health", port)).await?;
 
         if response.status().is_success() {
             Ok(true)
@@ -132,7 +132,7 @@ impl LocalModel {
     }
 
     async fn server_supports_tool_use(port: u16) -> Result<bool> {
-        let response = reqwest::get(format!("http://localhost:{port}/props")).await?;
+        let response = reqwest::get(format!("http://127.0.0.1:{port}/props")).await?;
         if !response.status().is_success() {
             return Ok(false);
         }
@@ -141,31 +141,61 @@ impl LocalModel {
         Ok(props_support_tool_use(&props))
     }
 
-    async fn spawn_server(
-        child_handle: &Arc<Mutex<Option<Child>>>,
+    fn resolve_context_length(model_context_length: Option<u32>, max_context_size: usize) -> u32 {
+        let max_context_size = if max_context_size == 0 {
+            DEFAULT_MAX_CONTEXT_SIZE as u32
+        } else {
+            u32::try_from(max_context_size).unwrap_or(u32::MAX)
+        };
+        let model_context_length = model_context_length
+            .filter(|context_length| *context_length > 0)
+            .unwrap_or(max_context_size);
+
+        std::cmp::min(model_context_length, max_context_size)
+    }
+
+    fn server_args(
         gguf_path: &PathBuf,
         context_length: u32,
         port: u16,
-        gpu_layer: u32,
+        gpu_mode: bool,
         projection_path: Option<&str>,
         template_override: &LlamaServerTemplateOverride,
-    ) -> Result<()> {
-        let program = PathBuf::from("llama-server");
-        let mut sidecar = crate::utils::execute::sidecar(&program, None).await?;
+    ) -> Vec<String> {
         let mut args = vec![
-            "-m".to_string(),
+            "--model".to_string(),
             gguf_path.to_string_lossy().into_owned(),
-            "-c".to_string(),
+            "--ctx-size".to_string(),
             context_length.to_string(),
             "--host".to_string(),
-            "localhost".to_string(),
+            "127.0.0.1".to_string(),
             "--port".to_string(),
             port.to_string(),
+            "--parallel".to_string(),
+            "1".to_string(),
             "--no-webui".to_string(),
             "--jinja".to_string(),
-            "-ngl".to_string(),
-            gpu_layer.to_string(),
         ];
+
+        if gpu_mode {
+            args.extend([
+                "--n-gpu-layers".to_string(),
+                "auto".to_string(),
+                "--flash-attn".to_string(),
+                "auto".to_string(),
+                "--fit".to_string(),
+                "on".to_string(),
+            ]);
+        } else {
+            args.extend([
+                "--device".to_string(),
+                "none".to_string(),
+                "--n-gpu-layers".to_string(),
+                "0".to_string(),
+                "--flash-attn".to_string(),
+                "off".to_string(),
+            ]);
+        }
 
         if let Some(projection_path) = projection_path {
             args.push("--mmproj".to_string());
@@ -179,6 +209,29 @@ impl LocalModel {
             args.push("--chat-template".to_string());
             args.push(chat_template.clone());
         }
+
+        args
+    }
+
+    async fn spawn_server(
+        child_handle: &Arc<Mutex<Option<Child>>>,
+        gguf_path: &PathBuf,
+        context_length: u32,
+        port: u16,
+        gpu_mode: bool,
+        projection_path: Option<&str>,
+        template_override: &LlamaServerTemplateOverride,
+    ) -> Result<()> {
+        let program = PathBuf::from("llama-server");
+        let mut sidecar = crate::utils::execute::sidecar(&program, None).await?;
+        let args = Self::server_args(
+            gguf_path,
+            context_length,
+            port,
+            gpu_mode,
+            projection_path,
+            template_override,
+        );
 
         println!("Starting LLM Server with args: {:?}", args);
 
@@ -271,9 +324,10 @@ impl LocalModel {
         let child_handle = Arc::new(Mutex::new(None));
         let port = pick_unused_port().unwrap();
 
-        let mut context_length = bit.try_to_context_length().unwrap_or(512);
-        context_length = std::cmp::min(context_length, execution_settings.max_context_size as u32);
-        let gpu_layer = if execution_settings.gpu_mode { 45 } else { 0 };
+        let context_length = Self::resolve_context_length(
+            bit.try_to_context_length(),
+            execution_settings.max_context_size,
+        );
 
         println!("Execution settings: {:?}", execution_settings);
 
@@ -282,7 +336,7 @@ impl LocalModel {
             &gguf_path,
             context_length,
             port,
-            gpu_layer,
+            execution_settings.gpu_mode,
             projection_path.as_deref(),
             &template_override,
         )
@@ -311,7 +365,7 @@ impl LocalModel {
                 &gguf_path,
                 context_length,
                 port,
-                gpu_layer,
+                execution_settings.gpu_mode,
                 projection_path.as_deref(),
                 &fallback_template,
             )
@@ -327,6 +381,79 @@ impl LocalModel {
             llm_model: Arc::new(llm_model),
             port,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arg_value<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
+        args.windows(2)
+            .find(|window| window[0] == key)
+            .map(|window| window[1].as_str())
+    }
+
+    #[test]
+    fn server_args_use_automatic_gpu_offload() {
+        let args = LocalModel::server_args(
+            &PathBuf::from("/models/model.gguf"),
+            8192,
+            9650,
+            true,
+            None,
+            &LlamaServerTemplateOverride::default(),
+        );
+
+        assert_eq!(arg_value(&args, "--n-gpu-layers"), Some("auto"));
+        assert_eq!(arg_value(&args, "--flash-attn"), Some("auto"));
+        assert_eq!(arg_value(&args, "--fit"), Some("on"));
+        assert_eq!(arg_value(&args, "--parallel"), Some("1"));
+        assert_eq!(arg_value(&args, "--host"), Some("127.0.0.1"));
+        assert_eq!(arg_value(&args, "--ctx-size"), Some("8192"));
+        assert!(!args.iter().any(|arg| arg == "-ngl" || arg == "45"));
+    }
+
+    #[test]
+    fn context_length_is_bounded_by_desktop_default() {
+        assert_eq!(
+            LocalModel::resolve_context_length(Some(128_000), DEFAULT_MAX_CONTEXT_SIZE),
+            DEFAULT_MAX_CONTEXT_SIZE as u32
+        );
+        assert_eq!(
+            LocalModel::resolve_context_length(Some(128_000), 0),
+            DEFAULT_MAX_CONTEXT_SIZE as u32
+        );
+    }
+
+    #[test]
+    fn server_args_can_pin_context_size() {
+        let args = LocalModel::server_args(
+            &PathBuf::from("/models/model.gguf"),
+            16_384,
+            9650,
+            true,
+            None,
+            &LlamaServerTemplateOverride::default(),
+        );
+
+        assert_eq!(arg_value(&args, "--ctx-size"), Some("16384"));
+    }
+
+    #[test]
+    fn server_args_can_disable_gpu_offload() {
+        let args = LocalModel::server_args(
+            &PathBuf::from("/models/model.gguf"),
+            8192,
+            9650,
+            false,
+            None,
+            &LlamaServerTemplateOverride::default(),
+        );
+
+        assert_eq!(arg_value(&args, "--device"), Some("none"));
+        assert_eq!(arg_value(&args, "--n-gpu-layers"), Some("0"));
+        assert_eq!(arg_value(&args, "--flash-attn"), Some("off"));
     }
 }
 

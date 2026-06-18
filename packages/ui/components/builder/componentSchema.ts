@@ -24,6 +24,13 @@ export interface PropSchema {
 
 export type ComponentSchema = Record<string, PropSchema>;
 
+const COMMON_COMPONENT_SCHEMA: ComponentSchema = {
+	hidden: {
+		type: "boundValue",
+		description: "Hide this component in the rendered UI",
+	},
+};
+
 // Registry of all valid component types and their allowed properties
 export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	// Layout
@@ -158,6 +165,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		type: { type: "string", required: true },
 		src: { type: "boundValue", required: true },
 		alt: { type: "boundValue" },
+		fallback: { type: "boundValue" },
 		fit: {
 			type: "boundValue",
 			enum: ["cover", "contain", "fill", "none", "scale-down"],
@@ -301,8 +309,22 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	filePreview: {
 		type: { type: "string", required: true },
 		src: { type: "boundValue", required: true },
+		url: { type: "boundValue" },
 		filename: { type: "boundValue" },
 		mimeType: { type: "boundValue" },
+		fileType: {
+			type: "boundValue",
+			enum: ["pdf", "image", "video", "audio", "code", "text", "unknown"],
+		},
+		showControls: { type: "boundValue" },
+		fit: {
+			type: "boundValue",
+			enum: ["contain", "cover", "fill", "none", "scaleDown", "scale-down"],
+		},
+		fallbackText: { type: "boundValue" },
+		height: { type: "boundValue" },
+		showDownload: { type: "boundValue" },
+		loading: { type: "boundValue", enum: ["lazy", "eager"] },
 	},
 	boundingBoxOverlay: {
 		type: { type: "string", required: true },
@@ -310,6 +332,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		boxes: { type: "boundValue" },
 		editable: { type: "boundValue" },
 		showLabels: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 
 	// Interactive
@@ -327,6 +350,52 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		iconPosition: { type: "boundValue", enum: ["left", "right"] },
 		tooltip: { type: "boundValue" },
 		actions: { type: "actions" },
+	},
+	feedback: {
+		type: { type: "string", required: true },
+		mode: {
+			type: "boundValue",
+			enum: ["icon", "compact", "segmented", "rating", "extended"],
+		},
+		size: { type: "boundValue", enum: ["sm", "md", "lg"] },
+		title: { type: "boundValue" },
+		description: { type: "boundValue" },
+		positiveLabel: { type: "boundValue" },
+		negativeLabel: { type: "boundValue" },
+		positiveRating: { type: "boundValue" },
+		negativeRating: { type: "boundValue" },
+		showComment: { type: "boundValue" },
+		commentMode: { type: "boundValue", enum: ["none", "inline", "modal"] },
+		commentLabel: { type: "boundValue" },
+		commentPlaceholder: { type: "boundValue" },
+		commentTitle: { type: "boundValue" },
+		commentDescription: { type: "boundValue" },
+		commentSubmitLabel: { type: "boundValue" },
+		commentCancelLabel: { type: "boundValue" },
+		feedbackId: { type: "boundValue" },
+		includeState: { type: "boundValue" },
+		pageContextMode: { type: "boundValue", enum: ["none", "path", "query"] },
+		pageContextQueryParamAllowlist: { type: "boundValue" },
+		pageContextQueryParamDenylist: { type: "boundValue" },
+		includePageHash: { type: "boundValue" },
+		successMessage: { type: "boundValue" },
+		disabled: { type: "boundValue" },
+		actions: { type: "actions" },
+	},
+	appLink: {
+		type: { type: "string", required: true },
+		target: { type: "boundValue", enum: ["config", "settings", "overview"] },
+		label: { type: "boundValue" },
+		variant: {
+			type: "boundValue",
+			enum: ["default", "secondary", "outline", "ghost", "destructive", "link"],
+		},
+		size: { type: "boundValue", enum: ["sm", "md", "lg", "icon"] },
+		icon: { type: "boundValue", description: "Lucide icon name" },
+		iconPosition: { type: "boundValue", enum: ["left", "right"] },
+		appId: { type: "boundValue" },
+		eventId: { type: "boundValue" },
+		disabled: { type: "boundValue" },
 	},
 	textField: {
 		type: { type: "string", required: true },
@@ -419,6 +488,20 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		showPreview: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
+	voiceInput: {
+		type: { type: "string", required: true },
+		value: { type: "boundValue" },
+		label: { type: "boundValue" },
+		helperText: { type: "boundValue" },
+		maxDuration: { type: "boundValue" },
+		autoStop: { type: "boundValue" },
+		silenceThreshold: { type: "boundValue" },
+		silenceDuration: { type: "boundValue" },
+		disabled: { type: "boundValue" },
+		error: { type: "boundValue" },
+		visualizer: { type: "boundValue", enum: ["waveform", "bars"] },
+		actions: { type: "actions" },
+	},
 	link: {
 		type: { type: "string", required: true },
 		label: { type: "boundValue", required: true },
@@ -479,6 +562,8 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		items: { type: "any" },
 		multiple: { type: "boundValue" },
 		collapsible: { type: "boundValue" },
+		defaultExpanded: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 	drawer: {
 		type: { type: "string", required: true },
@@ -501,10 +586,12 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	popover: {
 		type: { type: "string", required: true },
 		open: { type: "boundValue" },
+		contentComponentId: { type: "string" },
 		side: { type: "boundValue", enum: ["top", "right", "bottom", "left"] },
 		trigger: { type: "boundValue", enum: ["click", "hover"] },
 		closeOnClickOutside: { type: "boundValue" },
 		children: { type: "children" },
+		actions: { type: "actions" },
 	},
 
 	// Game
@@ -674,11 +761,14 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	},
 	miniMap: {
 		type: { type: "string", required: true },
+		mapImage: { type: "boundValue" },
 		width: { type: "boundValue" },
 		height: { type: "boundValue" },
+		markers: { type: "boundValue" },
 		playerX: { type: "boundValue" },
 		playerY: { type: "boundValue" },
 		playerRotation: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 	geoMap: {
 		type: { type: "string", required: true },
@@ -698,6 +788,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		clusterMarkers: { type: "boundValue" },
 		clusterRadius: { type: "boundValue" },
 		clusterMaxZoom: { type: "boundValue" },
+		actions: { type: "actions" },
 	},
 };
 
@@ -719,7 +810,8 @@ export function isValidComponentType(type: string): boolean {
  * Get the schema for a component type
  */
 export function getComponentSchema(type: string): ComponentSchema | undefined {
-	return COMPONENT_SCHEMAS[type];
+	const schema = COMPONENT_SCHEMAS[type];
+	return schema ? { ...COMMON_COMPONENT_SCHEMA, ...schema } : undefined;
 }
 
 /**
@@ -727,7 +819,14 @@ export function getComponentSchema(type: string): ComponentSchema | undefined {
  */
 export function getValidProperties(type: string): string[] {
 	const schema = COMPONENT_SCHEMAS[type];
-	return schema ? Object.keys(schema) : [];
+	return schema
+		? Array.from(
+				new Set([
+					...Object.keys(COMMON_COMPONENT_SCHEMA),
+					...Object.keys(schema),
+				]),
+			)
+		: [];
 }
 
 /**
@@ -735,5 +834,5 @@ export function getValidProperties(type: string): string[] {
  */
 export function isValidProperty(type: string, propName: string): boolean {
 	const schema = COMPONENT_SCHEMAS[type];
-	return schema ? propName in schema : false;
+	return schema ? propName in schema || propName in COMMON_COMPONENT_SCHEMA : false;
 }

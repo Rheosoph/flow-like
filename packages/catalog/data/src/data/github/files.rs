@@ -836,7 +836,7 @@ impl NodeLogic for DownloadGitHubFileNode {
             "Data/GitHub",
         );
         node.add_icon("/flow/icons/github.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "Trigger", VariableType::Execution);
 
@@ -894,9 +894,14 @@ impl NodeLogic for DownloadGitHubFileNode {
             VariableType::Execution,
         );
 
-        node.add_output_pin("path", "Path", "Written file path", VariableType::Struct)
-            .set_schema::<FlowPath>()
-            .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_output_pin(
+            "written_path",
+            "Path",
+            "Written file path",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
         node.add_output_pin("size", "Size", "File size in bytes", VariableType::Integer);
 
         node.add_required_oauth_scopes(GITHUB_PROVIDER_ID, vec!["repo"]);
@@ -981,7 +986,9 @@ impl NodeLogic for DownloadGitHubFileNode {
                     LogLevel::Info,
                 );
 
-                context.set_pin_value("path", json!(output_path)).await?;
+                context
+                    .set_pin_value("written_path", json!(output_path))
+                    .await?;
                 context.set_pin_value("size", json!(size)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }

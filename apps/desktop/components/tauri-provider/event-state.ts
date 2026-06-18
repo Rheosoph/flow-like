@@ -16,8 +16,8 @@ import {
 	checkOAuthTokens,
 	extractOAuthRequirementsFromBoard,
 	finishAllProgressToasts,
+	getCurrentPageContext,
 	injectDataFunction,
-	isEqual,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type {
@@ -44,6 +44,21 @@ import { resolveLocalFirstPrerun } from "./prerun-utils";
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
 
+function withFeedbackPageContext(localState?: Record<string, any>) {
+	if (
+		localState &&
+		Object.prototype.hasOwnProperty.call(localState, "pageContext")
+	) {
+		return localState;
+	}
+
+	const pageContext = getCurrentPageContext(undefined, { mode: "path" });
+	return {
+		...(localState ?? {}),
+		...(pageContext ? { pageContext } : {}),
+	};
+}
+
 async function getHubConfig(profile?: { hub?: string }): Promise<
 	IHub | undefined
 > {
@@ -65,6 +80,15 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 		});
 
 	return hubCachePromise;
+}
+
+function eventUpdatedAtMs(event?: IEvent): number {
+	const updatedAt = event?.updated_at;
+	if (!updatedAt) return Number.NaN;
+	return (
+		updatedAt.secs_since_epoch * 1000 +
+		updatedAt.nanos_since_epoch / 1_000_000
+	);
 }
 
 export class EventState implements IEventState {
@@ -116,7 +140,7 @@ export class EventState implements IEventState {
 		eventId: string,
 		version?: [number, number, number],
 	): Promise<IEvent> {
-		let event: IEvent;
+		let event: IEvent | undefined;
 		try {
 			event = await invoke<IEvent>("get_event", {
 				appId: appId,
@@ -124,79 +148,78 @@ export class EventState implements IEventState {
 				version: version,
 			});
 		} catch {
-			const isOffline = await this.backend.isOffline(appId);
-			if (isOffline || !this.backend.profile || !this.backend.auth) {
-				throw new Error(`Event not found: ${eventId}`);
-			}
-			let url = `apps/${appId}/events/${eventId}`;
-			if (version) {
-				url += `?version=${version.join("_")}`;
-			}
+			event = undefined;
+		}
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			if (event) return event;
+			throw new Error(`Event not found: ${eventId}`);
+		}
+
+		let url = `apps/${appId}/events/${eventId}`;
+		if (version) {
+			url += `?version=${version.join("_")}`;
+		}
+
+		try {
 			const remoteData = await fetcher<IEvent>(
 				this.backend.profile,
 				url,
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			await invoke("upsert_event", {
-				appId: appId,
-				event: remoteData,
-				enforceId: true,
-				offline: false,
-			}).catch(() => {});
-			return remoteData;
-		}
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (
-			isOffline ||
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			return event;
-		}
+			if (!remoteData) {
+				throw new Error("Failed to fetch event data");
+			}
 
-		const promise = injectDataFunction(
-			async () => {
-				let url = `apps/${appId}/events/${eventId}`;
-				if (version) {
-					url += `?version=${version.join("_")}`;
-				}
-				const remoteData = await fetcher<IEvent>(
-					this.backend.profile!,
-					url,
-					{
-						method: "GET",
-					},
-					this.backend.auth,
+			const localUpdated = eventUpdatedAtMs(event);
+			const remoteUpdated = eventUpdatedAtMs(remoteData);
+			const shouldUseRemote =
+				!event ||
+				typeof version !== "undefined" ||
+				Number.isNaN(localUpdated) ||
+				Number.isNaN(remoteUpdated) ||
+				remoteUpdated >= localUpdated;
+
+			if (!shouldUseRemote) {
+				return event!;
+			}
+
+			if (typeof version === "undefined") {
+				await invoke("upsert_event", {
+					appId: appId,
+					event: remoteData,
+					enforceId: true,
+					offline: isOffline,
+				}).catch(() => {});
+			}
+
+			if (this.backend.queryClient) {
+				this.backend.queryClient.setQueryData(
+					[this.getEvent.name || "backendFn", appId, eventId, version].filter(
+						(arg) => typeof arg !== "undefined",
+					),
+					remoteData,
 				);
+			}
 
-				if (!remoteData) {
-					throw new Error("Failed to fetch event data");
-				}
-
-				if (!isEqual(remoteData, event) && typeof version === "undefined") {
-					await invoke("upsert_event", {
-						appId: appId,
-						event: remoteData,
-						enforceId: true,
-						offline: isOffline,
-					});
-				}
-
-				return remoteData;
-			},
-			this,
-			this.backend.queryClient,
-			this.getEvent,
-			[appId, eventId, version],
-			[],
-			event,
-		);
-
-		this.backend.backgroundTaskHandler(promise);
-		return event;
+			return remoteData;
+		} catch (error) {
+			if (event) {
+				console.warn(
+					"[EventSync] Event fetch failed, falling back to local event:",
+					error,
+				);
+				return event;
+			}
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Event not found: ${eventId}`);
+			}
+			throw error;
+		}
 	}
 	async getEvents(appId: string, force?: boolean): Promise<IEvent[]> {
 		const events = await invoke<IEvent[]>("get_events", {
@@ -506,6 +529,7 @@ export class EventState implements IEventState {
 			);
 		}
 
+		const localState = withFeedbackPageContext(feedback.localState);
 		const response = await fetcher<{ feedback_id: string }>(
 			this.backend.profile,
 			`apps/${appId}/events/${eventId}/feedback`,
@@ -516,7 +540,7 @@ export class EventState implements IEventState {
 					context: {
 						history: feedback.history,
 						global_state: feedback.globalState,
-						local_state: feedback.localState,
+						local_state: localState,
 					},
 					comment: feedback.comment ?? "",
 					feedback_id: feedbackId,
@@ -578,6 +602,7 @@ export class EventState implements IEventState {
 			(event.board_version as [number, number, number]) ?? undefined,
 			true,
 		);
+		await this.backend.boardState.ensureAppPackagesInstalledForExecution?.(appId);
 		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {

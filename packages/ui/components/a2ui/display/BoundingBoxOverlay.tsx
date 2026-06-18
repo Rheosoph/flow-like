@@ -2,14 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
+import { useExecuteAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
-import type {
-	BoundValue,
-	BoundingBox,
-	BoundingBoxOverlayComponent,
-} from "../types";
+import { type NormalizedBox, normalizeBoxes } from "../bbox-utils";
+import type { BoundValue, BoundingBoxOverlayComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -31,16 +29,15 @@ const DEFAULT_COLORS = [
 export function A2UIBoundingBoxOverlay({
 	component,
 	style,
-	onAction,
-	surfaceId,
 	componentId,
 }: ComponentProps<BoundingBoxOverlayComponent>) {
+	const { executeAction } = useExecuteAction();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
 	const src = useResolved<string>(component.src);
 	const alt = useResolved<string>(component.alt) ?? "Image with bounding boxes";
-	const rawBoxes = useResolved<BoundingBox[]>(component.boxes) ?? [];
+	const rawBoxes = useResolved<unknown>(component.boxes);
 	const showLabels = useResolved<boolean>(component.showLabels) ?? true;
 	const showConfidence = useResolved<boolean>(component.showConfidence) ?? true;
 	const strokeWidth = useResolved<number>(component.strokeWidth) ?? 2;
@@ -54,18 +51,11 @@ export function A2UIBoundingBoxOverlay({
 	const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 	const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
 
-	// Parse boxes from various formats
-	const boxes = useMemo((): BoundingBox[] => {
-		if (!rawBoxes) return [];
-		if (typeof rawBoxes === "string") {
-			try {
-				return JSON.parse(rawBoxes);
-			} catch {
-				return [];
-			}
-		}
-		return Array.isArray(rawBoxes) ? rawBoxes : [];
-	}, [rawBoxes]);
+	// Parse boxes from various formats (top-left/size, corner coords, detection output, …)
+	const boxes = useMemo(
+		(): NormalizedBox[] => normalizeBoxes(rawBoxes),
+		[rawBoxes],
+	);
 
 	// Create color map for labels
 	const labelColorMap = useMemo(() => {
@@ -143,23 +133,14 @@ export function A2UIBoundingBoxOverlay({
 	}, [imageLoaded, imageSize, containerSize, fit, normalized]);
 
 	const handleBoxClick = useCallback(
-		(box: BoundingBox) => {
-			if (!interactive || !onAction || !component.actions?.length) return;
-			const clickAction = component.actions.find(
-				(a) => a.name === "onBoxClick" || a.name === "onClick",
-			);
-			if (clickAction) {
-				onAction({
-					type: "userAction",
-					name: clickAction.name,
-					surfaceId,
-					sourceComponentId: componentId,
-					timestamp: Date.now(),
-					context: { box, ...clickAction.context },
-				});
+		(box: NormalizedBox) => {
+			if (!interactive) return;
+			const action = component.actions?.[0];
+			if (action) {
+				void executeAction(action, componentId, { box });
 			}
 		},
-		[interactive, onAction, component.actions, surfaceId, componentId],
+		[component.actions, componentId, executeAction, interactive],
 	);
 
 	const fitClass =

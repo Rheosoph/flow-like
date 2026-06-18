@@ -66,6 +66,7 @@ const INBOUND_RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 const MCP_DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 const MCP_WELL_KNOWN_OAUTH_PATH: &str = "/.well-known/oauth-protected-resource";
+const MCP_BROWSER_INSPECTOR_TEMPLATE: &str = include_str!("../../../../assets/mcp-inspector.html");
 
 pub fn rest_routes() -> Router<AppState> {
     Router::new()
@@ -1445,7 +1446,7 @@ async fn dispatch_rest_fn(
     let body_value = parse_rest_body_value(body, &content_type)?;
     let headers_single = header_map_to_json(headers);
     let query_single = parse_query_single(raw_query);
-    let mut args = body_value.as_object().cloned().unwrap_or_default();
+    let mut args = rest_args_from_body_and_query(&body_value, &query_single);
 
     let request_id = headers
         .get("traceparent")
@@ -1466,7 +1467,7 @@ async fn dispatch_rest_fn(
     let request_value = json!({
         "method": method.as_str(),
         "path": request_path,
-        "query": query_single,
+        "query": query_single.clone(),
         "headers": headers_single,
         "body": body_value.clone(),
         "body_text": String::from_utf8(body.to_vec()).ok(),
@@ -1478,7 +1479,7 @@ async fn dispatch_rest_fn(
     args.insert("request".to_string(), request_value);
     args.insert("method".to_string(), json!(method.as_str()));
     args.insert("path".to_string(), json!(request_path));
-    args.insert("query".to_string(), json!(parse_query_single(raw_query)));
+    args.insert("query".to_string(), json!(query_single));
     args.insert("headers".to_string(), json!(header_map_to_json(headers)));
     args.insert("body".to_string(), body_value.clone());
     args.insert(
@@ -1577,6 +1578,7 @@ async fn dispatch_event_collect(
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: executor_subject.clone(),
+        technical_user_id: None,
         run_id: run_id.clone(),
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
@@ -1614,6 +1616,7 @@ async fn dispatch_event_collect(
         token,
         oauth_tokens,
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::Event),
         runtime_variables: None,
         user_context: None,
         profile: sink.as_ref().and_then(|sink| sink.profile_json.clone()),
@@ -1640,6 +1643,7 @@ async fn dispatch_event_collect(
         completed_at: Set(None),
         expires_at: Set(Some(now + chrono::Duration::hours(24))),
         user_id: Set(actor_user_id),
+        technical_user_id: Set(None),
         app_id: Set(event_row.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -1716,6 +1720,44 @@ fn parse_query_single(raw: &str) -> HashMap<String, String> {
         out.insert(key, value);
     }
     out
+}
+
+fn rest_args_from_body_and_query(
+    body: &Value,
+    query: &HashMap<String, String>,
+) -> serde_json::Map<String, Value> {
+    let mut args = serde_json::Map::new();
+
+    for (key, value) in query {
+        if !is_rest_internal_arg_key(key) {
+            args.insert(key.clone(), Value::String(value.clone()));
+        }
+    }
+
+    if let Some(body_object) = body.as_object() {
+        for (key, value) in body_object {
+            args.insert(key.clone(), value.clone());
+        }
+    }
+
+    args
+}
+
+fn is_rest_internal_arg_key(name: &str) -> bool {
+    matches!(
+        name,
+        "_client"
+            | "request"
+            | "method"
+            | "path"
+            | "query"
+            | "headers"
+            | "body"
+            | "body_text"
+            | "body_bytes"
+            | "payload"
+            | "__inbound_rest"
+    )
 }
 
 fn header_map_to_json(headers: &HeaderMap) -> HashMap<String, String> {
@@ -2382,978 +2424,8 @@ fn mcp_browser_inspector_response(slug_or_id: &str, headers: &HeaderMap) -> Resp
     let endpoint_path = format!("/m/{}", urlencoding::encode(slug_or_id));
     let endpoint_path_json =
         serde_json::to_string(&endpoint_path).unwrap_or_else(|_| "\"/m\"".to_string());
-    let html = r##"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Flow Like MCP Inspector</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0d0f14;
-      --panel: #151821;
-      --panel-2: #10131a;
-      --field: #0c0f14;
-      --border: #2b313d;
-      --border-strong: #414a5a;
-      --muted: #9aa3b5;
-      --text: #f6f7fb;
-      --accent: #38bdf8;
-      --accent-soft: rgba(56, 189, 248, .14);
-      --success: #34d399;
-      --violet: #a78bfa;
-      --danger: #fca5a5;
-      --shadow: 0 18px 50px rgba(0, 0, 0, .35);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: linear-gradient(180deg, #0b0d12 0%, var(--bg) 44%, #11141b 100%);
-      color: var(--text);
-      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    main {
-      width: min(1180px, calc(100vw - 32px));
-      margin: 0 auto;
-      padding: 36px 0;
-    }
-    .page-head {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      margin-bottom: 18px;
-    }
-    .brand-mark {
-      display: grid;
-      place-items: center;
-      width: 46px;
-      height: 46px;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
-      color: var(--accent);
-      font-weight: 800;
-    }
-    .eyebrow {
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    h1 {
-      margin: 0 0 6px;
-      font-size: 28px;
-      font-weight: 720;
-      letter-spacing: 0;
-    }
-    .muted { color: var(--muted); }
-    .panel {
-      overflow: hidden;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
-    }
-    .connection {
-      padding: 16px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, .02);
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 180px 260px auto;
-      gap: 10px;
-      align-items: end;
-    }
-    label {
-      display: grid;
-      gap: 6px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 650;
-      text-transform: uppercase;
-    }
-    input, button, textarea {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--field);
-      color: var(--text);
-      font: inherit;
-    }
-    input:focus, textarea:focus, select:focus {
-      outline: 2px solid var(--accent-soft);
-      border-color: var(--accent);
-    }
-    input {
-      width: 100%;
-      padding: 0 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-    }
-    input, button {
-      height: 38px;
-    }
-    textarea {
-      width: 100%;
-      min-height: 92px;
-      margin-top: 8px;
-      padding: 10px;
-      resize: vertical;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-    }
-    button {
-      padding: 0 14px;
-      cursor: pointer;
-      background: #1c2732;
-      border-color: #34495b;
-      white-space: nowrap;
-      font-weight: 650;
-      transition: border-color .15s ease, background .15s ease, transform .15s ease;
-    }
-    button:hover:not(:disabled) {
-      border-color: var(--accent);
-      background: #223243;
-    }
-    button:disabled {
-      cursor: not-allowed;
-      opacity: .6;
-    }
-    #inspect {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #061018;
-    }
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      padding: 16px 16px 0;
-    }
-    .metric {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-      background: var(--panel-2);
-      min-width: 0;
-    }
-    .metric span {
-      display: block;
-      color: var(--muted);
-      font-size: 10px;
-      text-transform: uppercase;
-      font-weight: 650;
-    }
-    .metric strong {
-      display: block;
-      margin-top: 4px;
-      overflow-wrap: anywhere;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-    }
-    .tabs {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin: 16px;
-      padding: 4px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel-2);
-    }
-    .tab {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border-color: var(--border);
-      background: transparent;
-      height: 34px;
-      border-radius: 7px;
-    }
-    .tab.active {
-      color: #061018;
-      background: var(--accent);
-      border-color: var(--accent);
-    }
-    .tab.active .badge {
-      border-color: rgba(6, 16, 24, .2);
-      background: rgba(6, 16, 24, .08);
-      color: #061018;
-    }
-    .items {
-      padding: 0 16px 16px;
-      display: grid;
-      gap: 12px;
-    }
-    .item {
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      background: var(--panel-2);
-    }
-    .item-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      padding: 12px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, .025);
-    }
-    .item-title {
-      display: grid;
-      gap: 4px;
-      min-width: 0;
-    }
-    .item-title code {
-      overflow-wrap: anywhere;
-      color: var(--text);
-      font-size: 13px;
-      font-weight: 650;
-    }
-    details {
-      margin: 12px;
-    }
-    summary {
-      cursor: pointer;
-      user-select: none;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      width: fit-content;
-      min-height: 22px;
-      padding: 0 8px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      color: var(--muted);
-      font-size: 11px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      background: rgba(255, 255, 255, .025);
-    }
-    .action {
-      height: 32px;
-      padding: 0 12px;
-      background: var(--field);
-    }
-    .arg-form {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-      margin: 12px;
-      padding: 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: rgba(255, 255, 255, .025);
-    }
-    .arg-field {
-      display: grid;
-      gap: 6px;
-      min-width: 0;
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--panel-2);
-    }
-    .arg-field label {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      min-width: 0;
-      text-transform: none;
-      color: var(--text);
-      font-size: 12px;
-    }
-    .arg-field small {
-      color: var(--muted);
-      font-size: 11px;
-    }
-    .arg-field input,
-    .arg-field select {
-      height: 34px;
-      width: 100%;
-      padding: 0 8px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--field);
-      color: var(--text);
-    }
-    .arg-field textarea {
-      min-height: 76px;
-      margin: 0;
-    }
-    .shape {
-      display: grid;
-      gap: 6px;
-      margin-top: 8px;
-    }
-    .shape-row {
-      display: grid;
-      grid-template-columns: 150px minmax(0, 1fr);
-      gap: 8px;
-      padding: 7px 8px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--field);
-    }
-    .shape-key {
-      min-width: 0;
-      overflow-wrap: anywhere;
-      color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 11px;
-    }
-    .pill {
-      display: inline-flex;
-      max-width: 100%;
-      padding: 2px 6px;
-      border-radius: 6px;
-      background: #222936;
-      overflow-wrap: anywhere;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 11px;
-    }
-    .content-block {
-      display: grid;
-      gap: 8px;
-      margin-top: 8px;
-      padding: 12px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--field);
-    }
-    .content-block img,
-    .content-block video {
-      display: block;
-      max-width: 100%;
-      max-height: 520px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: #0b0c10;
-      object-fit: contain;
-    }
-    .content-block audio {
-      width: 100%;
-    }
-    .output {
-      margin: 12px;
-      border-top: 1px solid var(--border);
-      padding-top: 12px;
-    }
-    #result > pre {
-      margin: 0 16px 16px;
-    }
-    #error > .error {
-      margin: 16px;
-    }
-    .resource-preview {
-      display: grid;
-      gap: 10px;
-      margin-top: 8px;
-    }
-    .resource-content {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-      background: var(--field);
-    }
-    .resource-content img,
-    .resource-content video {
-      display: block;
-      max-width: 100%;
-      max-height: 520px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: #0b0c10;
-      object-fit: contain;
-    }
-    .resource-content audio {
-      width: 100%;
-    }
-    .resource-content iframe {
-      width: 100%;
-      height: 520px;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: #0b0c10;
-    }
-    .download {
-      display: inline-flex;
-      align-items: center;
-      height: 34px;
-      padding: 0 12px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      text-decoration: none;
-      background: #24303a;
-    }
-    code, pre {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-    }
-    pre {
-      max-height: 360px;
-      overflow: auto;
-      margin: 8px 0 0;
-      padding: 10px;
-      border-radius: 10px;
-      background: #0b0c10;
-      color: #d7dde8;
-      border: 1px solid #1b212d;
-    }
-    .error {
-      margin-top: 12px;
-      border: 1px solid #7f1d1d;
-      background: #2a1214;
-      color: var(--danger);
-      border-radius: 10px;
-      padding: 12px;
-      overflow-wrap: anywhere;
-    }
-    @media (max-width: 820px) {
-      .grid, .metrics, .arg-form, .shape-row { grid-template-columns: 1fr; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <header class="page-head">
-      <div class="brand-mark">MCP</div>
-      <div>
-        <div class="eyebrow">Flow Like Remote Server</div>
-        <h1>Inspector</h1>
-        <div class="muted">Protocol visibility, live calls, and rendered outputs for this endpoint.</div>
-      </div>
-    </header>
-    <section class="panel">
-      <div class="connection">
-        <div class="grid">
-          <label>Endpoint
-            <input id="endpoint" readonly>
-          </label>
-          <label>Header
-            <input id="headerName" placeholder="Authorization">
-          </label>
-          <label>Value
-            <input id="headerValue" placeholder="Bearer ...">
-          </label>
-          <button id="inspect">Inspect</button>
-        </div>
-      </div>
-      <div id="error"></div>
-      <div id="result"></div>
-    </section>
-  </main>
-  <script>
-    const endpointPath = __ENDPOINT_PATH_JSON__;
-    const endpoint = new URL(endpointPath, window.location.origin).href;
-    const protocolDefault = "2025-06-18";
-    let activeTab = "tools";
-    let lastResult = null;
-    let sessionId = "";
-    let protocolVersion = protocolDefault;
-
-    const $ = (id) => document.getElementById(id);
-    $("endpoint").value = endpoint;
-
-    function pretty(value) {
-      try {
-        const json = JSON.stringify(value, null, 2);
-        return json === undefined ? String(value) : json;
-      } catch {
-        return String(value);
-      }
-    }
-
-    function authHeaders() {
-      const name = $("headerName").value.trim();
-      const value = $("headerValue").value.trim();
-      return name && value ? { [name]: value } : {};
-    }
-
-    function closeSession(id, version) {
-      if (!id) return;
-      fetch(endpoint, {
-        method: "DELETE",
-        headers: { "Mcp-Session-Id": id, "MCP-Protocol-Version": version || protocolDefault, ...authHeaders() },
-      }).catch(() => {});
-    }
-
-    async function rpc(method, params, notification) {
-      const payload = { jsonrpc: "2.0", method, params: params || {} };
-      if (!notification) payload.id = Date.now();
-      const headers = {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "MCP-Protocol-Version": protocolVersion,
-        ...authHeaders(),
-      };
-      if (sessionId) headers["Mcp-Session-Id"] = sessionId;
-      const started = performance.now();
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
-      const text = await response.text();
-      const body = text ? JSON.parse(text) : null;
-      const nextSession = response.headers.get("mcp-session-id");
-      if (nextSession) sessionId = nextSession;
-      const call = { method, status: response.status, durationMs: Math.round(performance.now() - started), body };
-      if (!response.ok) throw Object.assign(new Error(`${method}: HTTP ${response.status}`), { call });
-      if (body && body.error) throw Object.assign(new Error(`${method}: ${body.error.message || pretty(body.error)}`), { call });
-      return { result: body ? body.result : null, call };
-    }
-
-    async function inspect() {
-      $("inspect").disabled = true;
-      $("inspect").textContent = "Inspecting...";
-      $("error").innerHTML = "";
-      closeSession(sessionId, protocolVersion);
-      sessionId = "";
-      protocolVersion = protocolDefault;
-      const started = performance.now();
-      const calls = [];
-      try {
-        const init = await rpc("initialize", {
-          protocolVersion,
-          capabilities: {},
-          clientInfo: { name: "Flow Like Browser Inspector", version: "1.0.0" },
-        });
-        calls.push(init.call);
-        protocolVersion = init.result && init.result.protocolVersion || protocolVersion;
-        const initialized = await rpc("notifications/initialized", {}, true);
-        calls.push(initialized.call);
-        const tools = await rpc("tools/list", {});
-        calls.push(tools.call);
-        const resources = await rpc("resources/list", {});
-        calls.push(resources.call);
-        const prompts = await rpc("prompts/list", {});
-        calls.push(prompts.call);
-        lastResult = {
-          serverInfo: init.result && init.result.serverInfo || null,
-          capabilities: init.result && init.result.capabilities || null,
-          protocolVersion,
-          sessionId,
-          tools: tools.result && tools.result.tools || [],
-          resources: resources.result && resources.result.resources || [],
-          prompts: prompts.result && prompts.result.prompts || [],
-          calls,
-          totalDurationMs: Math.round(performance.now() - started),
-        };
-        render();
-      } catch (error) {
-        $("error").innerHTML = `<div class="error">${error.message}</div>`;
-        if (error.call) {
-          lastResult = { calls: [error.call], tools: [], resources: [], prompts: [], protocolVersion, sessionId, totalDurationMs: Math.round(performance.now() - started) };
-          render();
-        }
-      } finally {
-        $("inspect").disabled = false;
-        $("inspect").textContent = "Inspect";
-      }
-    }
-
-    function isObject(value) {
-      return value && typeof value === "object" && !Array.isArray(value);
-    }
-
-    function schemaProperties(schema) {
-      return isObject(schema) && isObject(schema.properties) ? schema.properties : {};
-    }
-
-    function schemaType(schema) {
-      if (!isObject(schema)) return "string";
-      if (typeof schema.type === "string") return schema.type;
-      if (Array.isArray(schema.type)) {
-        const nonNull = schema.type.find((value) => value !== "null");
-        if (typeof nonNull === "string") return nonNull;
-      }
-      if (Array.isArray(schema.enum)) return "string";
-      if (schema.properties) return "object";
-      if (schema.items) return "array";
-      return "string";
-    }
-
-    function schemaEnumValues(schema) {
-      return Array.isArray(schema && schema.enum)
-        ? schema.enum.filter((value) => value !== null && value !== undefined).map(String)
-        : [];
-    }
-
-    function schemaDefaultValue(schema) {
-      if (isObject(schema) && schema.default !== undefined) return schema.default;
-      const type = schemaType(schema);
-      if (type === "boolean") return false;
-      if (type === "number" || type === "integer") return 0;
-      if (type === "array") return [];
-      if (type === "object") return {};
-      return "";
-    }
-
-    function toolArgumentDefaults(item) {
-      const properties = schemaProperties(item.inputSchema);
-      const defaults = {};
-      for (const [key, prop] of Object.entries(properties)) {
-        defaults[key] = schemaDefaultValue(prop);
-      }
-      return defaults;
-    }
-
-    function promptArgumentSpecs(item) {
-      return Array.isArray(item.arguments)
-        ? item.arguments.filter((arg) => isObject(arg) && typeof arg.name === "string")
-        : [];
-    }
-
-    function promptArgumentDefaults(item) {
-      const defaults = {};
-      for (const arg of promptArgumentSpecs(item)) {
-        defaults[arg.name] = "";
-      }
-      return defaults;
-    }
-
-    function renderStructuredValue(value, depth = 0) {
-      if (value === undefined) return `<span class="pill">undefined</span>`;
-      if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-        return `<span class="pill">${escapeHtml(value === null ? "null" : String(value))}</span>`;
-      }
-      if (Array.isArray(value)) {
-        if (!value.length) return `<span class="muted">Empty array</span>`;
-        return `<div class="shape">${value.map((item, index) => `
-          <div class="shape-row">
-            <div class="shape-key">Item ${index + 1}</div>
-            <div>${renderStructuredValue(item, depth + 1)}</div>
-          </div>`).join("")}</div>`;
-      }
-      if (isObject(value)) {
-        const entries = Object.entries(value);
-        if (!entries.length) return `<span class="muted">Empty object</span>`;
-        if (depth > 1) {
-          return `<details><summary class="muted">Object</summary><pre>${escapeHtml(pretty(value))}</pre></details>`;
-        }
-        return `<div class="shape">${entries.map(([key, field]) => `
-          <div class="shape-row">
-            <div class="shape-key">${escapeHtml(key)}</div>
-            <div>${renderStructuredValue(field, depth + 1)}</div>
-          </div>`).join("")}</div>`;
-      }
-      return `<pre>${escapeHtml(pretty(value))}</pre>`;
-    }
-
-    function renderSmartText(text) {
-      const trimmed = String(text || "").trim();
-      if (/^[\[{"]|^-?\d|^(true|false|null)\b/.test(trimmed)) {
-        try {
-          const parsed = JSON.parse(trimmed);
-          return `<div class="content-block"><div class="muted">Parsed JSON</div>${renderStructuredValue(parsed)}<details><summary class="muted">Raw text</summary><pre>${escapeHtml(text)}</pre></details></div>`;
-        } catch {}
-      }
-      return `<pre>${escapeHtml(text)}</pre>`;
-    }
-
-    function renderSchemaField(kind, index, fieldIndex, name, schema, defaults) {
-      const type = schemaType(schema);
-      const enumValues = schemaEnumValues(schema);
-      const value = defaults[name] === undefined ? schemaDefaultValue(schema) : defaults[name];
-      const id = `arg-${kind}-${index}-${fieldIndex}`;
-      const label = typeof schema.title === "string" && schema.title ? schema.title : name;
-      const description = typeof schema.description === "string" ? `<small>${escapeHtml(schema.description)}</small>` : "";
-      const typeBadge = `<span class="badge">${escapeHtml(type)}</span>`;
-      let control = "";
-      if (enumValues.length) {
-        control = `<select id="${id}" data-type="${escapeHtml(type)}">${enumValues.map((option) => `<option value="${escapeHtml(option)}" ${String(value) === option ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`;
-      } else if (type === "boolean") {
-        control = `<input id="${id}" data-type="${type}" type="checkbox" ${value ? "checked" : ""}>`;
-      } else if (type === "number" || type === "integer") {
-        control = `<input id="${id}" data-type="${type}" type="number" step="${type === "integer" ? "1" : "any"}" value="${escapeHtml(String(value ?? ""))}">`;
-      } else if (type === "array" || type === "object") {
-        control = `<textarea id="${id}" data-type="${type}">${escapeHtml(pretty(value))}</textarea>`;
-      } else {
-        control = `<input id="${id}" data-type="${type}" value="${escapeHtml(String(value ?? ""))}">`;
-      }
-      return `<div class="arg-field"><label><span>${escapeHtml(label)}</span>${typeBadge}</label>${description}${control}</div>`;
-    }
-
-    function renderArgumentForm(item, kind, index) {
-      if (kind === "resources") return "";
-      if (kind === "tools") {
-        const properties = schemaProperties(item.inputSchema);
-        const entries = Object.entries(properties);
-        const defaults = toolArgumentDefaults(item);
-        if (!entries.length) {
-          return `<label>Arguments JSON<textarea id="args-${kind}-${index}">${escapeHtml(pretty(defaults))}</textarea></label>`;
-        }
-        return `<div class="arg-form">${entries.map(([name, schema], fieldIndex) => renderSchemaField(kind, index, fieldIndex, name, schema, defaults)).join("")}</div>`;
-      }
-      const specs = promptArgumentSpecs(item);
-      const defaults = promptArgumentDefaults(item);
-      if (!specs.length) return `<div class="arg-form"><div class="muted">No prompt arguments.</div></div>`;
-      return `<div class="arg-form">${specs.map((spec, fieldIndex) => `
-        <div class="arg-field">
-          <label><span>${escapeHtml(spec.name)}</span><span class="badge">string</span></label>
-          ${typeof spec.description === "string" ? `<small>${escapeHtml(spec.description)}</small>` : ""}
-          <input id="arg-${kind}-${index}-${fieldIndex}" data-type="string" value="${escapeHtml(String(defaults[spec.name] ?? ""))}">
-        </div>`).join("")}</div>`;
-    }
-
-    function renderItems(items, kind) {
-      if (!items.length) return `<div class="item muted">No ${kind} returned.</div>`;
-      return items.map((item, index) => {
-        const name = item.name || item.uri || `${kind}-${index + 1}`;
-        const description = item.description ? `<div class="muted">${escapeHtml(String(item.description))}</div>` : "";
-        const detail = kind === "tools" ? item.inputSchema : kind === "resources" ? { uri: item.uri, mimeType: item.mimeType } : { arguments: item.arguments };
-        const action = kind === "tools" ? "Call" : kind === "resources" ? "Read" : "Get";
-        const argsEditor = renderArgumentForm(item, kind, index);
-        return `
-          <div class="item">
-            <div class="item-head">
-              <div class="item-title">
-                <span class="badge">${kind.slice(0, -1)}</span>
-                <code>${escapeHtml(String(name))}</code>
-                ${description}
-              </div>
-              <button class="action" id="run-${kind}-${index}" onclick="runItem('${kind}', ${index})">${action}</button>
-            </div>
-            ${argsEditor}
-            <details><summary class="muted">Declared shape</summary>${renderStructuredValue(detail)}</details>
-            <div class="output" id="out-${kind}-${index}"></div>
-          </div>`;
-      }).join("");
-    }
-
-    function parseJsonArgsTextarea(id) {
-      const element = $(id);
-      if (!element) return {};
-      const text = element.value.trim();
-      if (!text) return {};
-      const value = JSON.parse(text);
-      if (!isObject(value)) throw new Error("Arguments must be a JSON object");
-      return value;
-    }
-
-    function readArgElement(element) {
-      const type = element.dataset.type || "string";
-      if (type === "boolean") return element.checked;
-      if (type === "number" || type === "integer") return element.value === "" ? "" : Number(element.value);
-      if (type === "array" || type === "object") {
-        const text = element.value.trim();
-        return text ? JSON.parse(text) : schemaDefaultValue({ type });
-      }
-      return element.value;
-    }
-
-    function collectArgs(kind, index) {
-      const item = (lastResult && lastResult[kind] || [])[index];
-      if (!item) return {};
-      if (kind === "tools") {
-        const entries = Object.entries(schemaProperties(item.inputSchema));
-        if (!entries.length) return parseJsonArgsTextarea(`args-${kind}-${index}`);
-        const args = {};
-        entries.forEach(([name], fieldIndex) => {
-          const element = $(`arg-${kind}-${index}-${fieldIndex}`);
-          if (element) args[name] = readArgElement(element);
-        });
-        return args;
-      }
-      if (kind === "prompts") {
-        const args = {};
-        promptArgumentSpecs(item).forEach((spec, fieldIndex) => {
-          const element = $(`arg-${kind}-${index}-${fieldIndex}`);
-          if (element) args[spec.name] = readArgElement(element);
-        });
-        return args;
-      }
-      return {};
-    }
-
-    function isTextMime(mime) {
-      const lower = String(mime || "").toLowerCase();
-      return lower.startsWith("text/") || lower.includes("json") || lower.includes("xml") || lower.includes("javascript") || lower.includes("yaml");
-    }
-
-    function resourceMime(content) {
-      return content.mimeType || content.mime_type || "application/octet-stream";
-    }
-
-    function resourceFilename(content, index) {
-      const uri = typeof content.uri === "string" ? content.uri : "";
-      const parts = uri.split(/[\\/]/).filter(Boolean);
-      return parts.pop() || `resource-${index + 1}`;
-    }
-
-    function decodeBase64Text(value) {
-      try {
-        const binary = atob(value);
-        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-        return new TextDecoder().decode(bytes);
-      } catch {
-        return value;
-      }
-    }
-
-    function renderResourceResponse(result) {
-      const contents = Array.isArray(result && result.contents) ? result.contents : [];
-      if (!contents.length) return `<pre>${escapeHtml(pretty(result))}</pre>`;
-      const rendered = contents.map((content, index) => {
-        const mime = resourceMime(content);
-        const filename = resourceFilename(content, index);
-        const uri = content.uri ? `<code>${escapeHtml(String(content.uri))}</code>` : "";
-        const meta = `<div class="muted">${escapeHtml(mime)} ${uri}</div>`;
-        if (typeof content.text === "string") {
-          return `<div class="resource-content">${meta}<pre>${escapeHtml(content.text)}</pre></div>`;
-        }
-        if (typeof content.blob !== "string") {
-          return `<div class="resource-content">${meta}<pre>${escapeHtml(pretty(content))}</pre></div>`;
-        }
-        const dataUrl = `data:${mime};base64,${content.blob}`;
-        if (mime.startsWith("image/")) {
-          return `<div class="resource-content">${meta}<img src="${dataUrl}" alt="${escapeHtml(filename)}"></div>`;
-        }
-        if (mime.startsWith("audio/")) {
-          return `<div class="resource-content">${meta}<audio src="${dataUrl}" controls></audio></div>`;
-        }
-        if (mime.startsWith("video/")) {
-          return `<div class="resource-content">${meta}<video src="${dataUrl}" controls></video></div>`;
-        }
-        if (mime === "application/pdf") {
-          return `<div class="resource-content">${meta}<iframe src="${dataUrl}" title="${escapeHtml(filename)}"></iframe></div>`;
-        }
-        if (isTextMime(mime)) {
-          return `<div class="resource-content">${meta}<pre>${escapeHtml(decodeBase64Text(content.blob))}</pre></div>`;
-        }
-        return `<div class="resource-content">${meta}<a class="download" href="${dataUrl}" download="${escapeHtml(filename)}">Download ${escapeHtml(filename)}</a></div>`;
-      }).join("");
-      return `<div class="resource-preview">${rendered}</div><details><summary class="muted">Raw resource response</summary><pre>${escapeHtml(pretty(result))}</pre></details>`;
-    }
-
-    function renderMcpContent(content) {
-      if (typeof content === "string") return renderSmartText(content);
-      if (!isObject(content)) return renderStructuredValue(content);
-      const type = typeof content.type === "string" ? content.type : "content";
-      const text = typeof content.text === "string" ? content.text : null;
-      const data = typeof content.data === "string" ? content.data : typeof content.blob === "string" ? content.blob : null;
-      const mime = content.mimeType || content.mime_type || (type === "image" ? "image/png" : "application/octet-stream");
-      const meta = `<div><span class="badge">${escapeHtml(type)}</span> <span class="muted">${escapeHtml(String(mime))}</span></div>`;
-      if (text !== null) return `<div class="content-block">${meta}${renderSmartText(text)}</div>`;
-      if (isObject(content.resource)) return `<div class="content-block">${meta}${renderResourceResponse({ contents: [content.resource] })}</div>`;
-      if (typeof data !== "string") return `<div class="content-block">${meta}${renderStructuredValue(content)}</div>`;
-      const dataUrl = `data:${mime};base64,${data}`;
-      if (String(mime).startsWith("image/")) return `<div class="content-block">${meta}<img src="${dataUrl}" alt="${escapeHtml(type)}"></div>`;
-      if (String(mime).startsWith("audio/")) return `<div class="content-block">${meta}<audio src="${dataUrl}" controls></audio></div>`;
-      if (String(mime).startsWith("video/")) return `<div class="content-block">${meta}<video src="${dataUrl}" controls></video></div>`;
-      if (isTextMime(String(mime))) return `<div class="content-block">${meta}${renderSmartText(decodeBase64Text(data))}</div>`;
-      return `<div class="content-block">${meta}<a class="download" href="${dataUrl}" download="mcp-content">Download content</a></div>`;
-    }
-
-    function renderToolResult(result) {
-      const content = Array.isArray(result && result.content) ? result.content : [];
-      const structured = result && (result.structuredContent !== undefined ? result.structuredContent : result.structured_content);
-      const error = result && result.isError ? `<div class="error">Tool reported an error result.</div>` : "";
-      const structuredHtml = structured !== undefined
-        ? `<div class="content-block"><div class="muted">Structured content</div>${renderStructuredValue(structured)}</div>`
-        : "";
-      const contentHtml = content.length ? content.map(renderMcpContent).join("") : "";
-      const fallback = !structuredHtml && !contentHtml ? renderStructuredValue(result) : "";
-      return `${error}${structuredHtml}${contentHtml}${fallback}<details><summary class="muted">Raw tool result</summary><pre>${escapeHtml(pretty(result))}</pre></details>`;
-    }
-
-    function renderPromptResult(result) {
-      const messages = Array.isArray(result && result.messages) ? result.messages : [];
-      if (!messages.length) return renderStructuredValue(result);
-      const rendered = messages.map((message, index) => {
-        const role = isObject(message) && typeof message.role === "string" ? message.role : `message ${index + 1}`;
-        const content = isObject(message) ? message.content : message;
-        return `<div class="content-block"><div><span class="badge">${escapeHtml(role)}</span></div>${renderMcpContent(content)}</div>`;
-      }).join("");
-      return `${rendered}<details><summary class="muted">Raw prompt result</summary><pre>${escapeHtml(pretty(result))}</pre></details>`;
-    }
-
-    function renderExecutionResult(method, result) {
-      if (method === "resources/read") return renderResourceResponse(result);
-      if (method === "tools/call") return renderToolResult(result);
-      if (method === "prompts/get") return renderPromptResult(result);
-      return renderStructuredValue(result);
-    }
-
-    async function runItem(kind, index) {
-      if (!sessionId) {
-        $("error").innerHTML = `<div class="error">Run Inspect before executing an item.</div>`;
-        return;
-      }
-      const item = (lastResult && lastResult[kind] || [])[index];
-      if (!item) return;
-      const button = $(`run-${kind}-${index}`);
-      const output = $(`out-${kind}-${index}`);
-      button.disabled = true;
-      output.innerHTML = `<div class="muted">Running...</div>`;
-      try {
-        let method = "tools/call";
-        let params = {};
-        if (kind === "tools") {
-          params = { name: item.name, arguments: collectArgs(kind, index) };
-        } else if (kind === "resources") {
-          method = "resources/read";
-          params = { uri: item.uri };
-        } else {
-          method = "prompts/get";
-          params = { name: item.name, arguments: collectArgs(kind, index) };
-        }
-        const started = performance.now();
-        const response = await rpc(method, params, false);
-        const resultHtml = renderExecutionResult(method, response.result);
-        output.innerHTML = `<div class="muted">${method} completed in ${Math.round(performance.now() - started)} ms</div>${resultHtml}`;
-      } catch (error) {
-        output.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    function escapeHtml(value) {
-      return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[ch]);
-    }
-
-    function render() {
-      if (!lastResult) return;
-      const info = lastResult.serverInfo || {};
-      const counts = {
-        tools: (lastResult.tools || []).length,
-        resources: (lastResult.resources || []).length,
-        prompts: (lastResult.prompts || []).length,
-      };
-      const tabButtons = ["tools", "resources", "prompts", "raw"].map((tab) =>
-        `<button class="tab ${activeTab === tab ? "active" : ""}" onclick="activeTab='${tab}'; render();">${tab}${counts[tab] !== undefined ? ` <span class="badge">${counts[tab]}</span>` : ""}</button>`
-      ).join("");
-      const body = activeTab === "raw"
-        ? `<pre>${escapeHtml(pretty(lastResult))}</pre>`
-        : `<div class="items">${renderItems(lastResult[activeTab] || [], activeTab)}</div>`;
-      $("result").innerHTML = `
-        <div class="metrics">
-          <div class="metric"><span>Server</span><strong>${escapeHtml(String(info.name || "MCP server"))}</strong></div>
-          <div class="metric"><span>Protocol</span><strong>${escapeHtml(lastResult.protocolVersion || "")}</strong></div>
-          <div class="metric"><span>Session</span><strong>${escapeHtml(lastResult.sessionId || "")}</strong></div>
-          <div class="metric"><span>Latency</span><strong>${lastResult.totalDurationMs || 0} ms</strong></div>
-        </div>
-        <div class="tabs">${tabButtons}</div>
-        ${body}
-      `;
-    }
-
-    $("inspect").addEventListener("click", inspect);
-    window.addEventListener("beforeunload", () => closeSession(sessionId, protocolVersion));
-  </script>
-</body>
-</html>"##
-        .replace("__ENDPOINT_PATH_JSON__", &endpoint_path_json);
+    let html =
+        MCP_BROWSER_INSPECTOR_TEMPLATE.replace("__ENDPOINT_PATH_JSON__", &endpoint_path_json);
     let mut resp = axum::response::Html(html).into_response();
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -4206,7 +3278,8 @@ mod tests {
 
     use super::{
         canonical_auth_kind, inbound_base_path, is_asymmetric_jwt_algorithm,
-        jwk_matches_oauth_header, mcp_resource_url, with_inbound_openapi_server,
+        jwk_matches_oauth_header, mcp_resource_url, parse_query_single,
+        rest_args_from_body_and_query, with_inbound_openapi_server,
     };
 
     #[test]
@@ -4257,6 +3330,26 @@ mod tests {
 
         assert_eq!(spec["servers"][0]["url"], json!("/r/public-alias"));
         assert_eq!(spec["paths"]["/hi"], json!({"get": {}}));
+    }
+
+    #[test]
+    fn rest_query_params_fill_named_args_without_overwriting_body_or_internal_args() {
+        let query = parse_query_single(
+            "name=from-query&limit=10&payload=ignored&body=ignored&encoded=hello+world",
+        );
+        let body = json!({
+            "name": "from-body",
+            "active": true
+        });
+
+        let args = rest_args_from_body_and_query(&body, &query);
+
+        assert_eq!(args.get("name").cloned(), Some(json!("from-body")));
+        assert_eq!(args.get("limit").cloned(), Some(json!("10")));
+        assert_eq!(args.get("active").cloned(), Some(json!(true)));
+        assert_eq!(args.get("encoded").cloned(), Some(json!("hello world")));
+        assert!(!args.contains_key("payload"));
+        assert!(!args.contains_key("body"));
     }
 
     #[test]

@@ -140,11 +140,13 @@ import {
 	hexToRgba,
 	isValidConnection,
 	parseBoard,
+	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
 import { getErrorMessage } from "../../lib/error-message";
 import { toastError, toastSuccess } from "../../lib/messages";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
+import type { IBit } from "../../lib/schema/bit/bit";
 import {
 	type IBoard,
 	type IComment,
@@ -171,6 +173,12 @@ import { FlowCursors } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
+import {
+	type FlowElementOption,
+	createEmptyFlowSelectorData,
+	flattenPageElements,
+	indexBitsByRef,
+} from "./flow-selector-data";
 import { FlowLayerIndicators } from "./flow-layer-indicators";
 import { PinEditModal } from "./flow-pin/edit-modal";
 import { FlowPresenceBar } from "./flow-presence-bar";
@@ -260,6 +268,198 @@ export function FlowBoard({
 		backend.userState,
 		[],
 	);
+	const selectorDataRef = useRef(createEmptyFlowSelectorData());
+	const [selectorDataVersion, setSelectorDataVersion] = useState(0);
+	const selectorCacheKeyRef = useRef("");
+	const selectorPrefetchKeyRef = useRef("");
+	const elementOptionsPromiseRef = useRef<
+		Promise<FlowElementOption[]> | undefined
+	>(undefined);
+	const bitOptionsPromiseRef = useRef<Promise<IBit[]> | undefined>(undefined);
+	const selectorCacheKey = `${
+		currentProfile.data?.hub_profile?.id ??
+		backend.profile?.id ??
+		backend.profile?.hub ??
+		"local"
+	}:${appId}`;
+
+	if (selectorCacheKeyRef.current !== selectorCacheKey) {
+		selectorCacheKeyRef.current = selectorCacheKey;
+		selectorDataRef.current = createEmptyFlowSelectorData();
+		elementOptionsPromiseRef.current = undefined;
+		bitOptionsPromiseRef.current = undefined;
+	}
+
+	const loadElementOptions = useCallback(async () => {
+		const cache = selectorDataRef.current;
+		if (cache.elementsLoaded) return cache.elementOptions;
+		if (elementOptionsPromiseRef.current)
+			return elementOptionsPromiseRef.current;
+
+		const cacheKey = selectorCacheKeyRef.current;
+		cache.elementsLoading = true;
+		cache.elementsError = undefined;
+
+		const promise = (async () => {
+			try {
+				const [routes, events, pages] = await Promise.all([
+					backend.routeState.getRoutes(appId),
+					backend.eventState.getEvents(appId),
+					backend.pageState.getPages(appId),
+				]);
+				const eventsMap = new Map(events.map((event) => [event.id, event]));
+				const pagesById = new Map(pages.map((page) => [page.pageId, page]));
+				const pageTargets = new Map<
+					string,
+					{ pageName?: string; pagePath?: string; boardId?: string }
+				>();
+
+				const queuePage = (
+					pageId: string,
+					pageName?: string,
+					pagePath?: string,
+					boardId?: string,
+				) => {
+					const existing = pageTargets.get(pageId);
+					if (existing) {
+						existing.pageName ??= pageName;
+						existing.pagePath ??= pagePath;
+						existing.boardId ??= boardId;
+						return;
+					}
+
+					pageTargets.set(pageId, { pageName, pagePath, boardId });
+				};
+
+				for (const route of routes) {
+					const event = eventsMap.get(route.eventId);
+					const pageId = event?.default_page_id;
+					if (!pageId) continue;
+
+					const pageInfo = pagesById.get(pageId);
+					queuePage(
+						pageId,
+						pageInfo?.name,
+						route.path,
+						pageInfo?.boardId ?? event.board_id,
+					);
+				}
+
+				for (const pageInfo of pages) {
+					queuePage(
+						pageInfo.pageId,
+						pageInfo.name,
+						undefined,
+						pageInfo.boardId,
+					);
+				}
+
+				const seenIds = new Set<string>();
+				const pageElements = await Promise.all(
+					Array.from(pageTargets.entries()).map(async ([pageId, pageInfo]) => {
+						try {
+							const page = await backend.pageState.getPage(
+								appId,
+								pageId,
+								pageInfo.boardId,
+							);
+							return flattenPageElements(page.components ?? []).map(
+								(element) => ({
+									...element,
+									id: `${pageId}/${element.id}`,
+									rawId: element.id,
+									label: pageInfo.pageName
+										? `${pageInfo.pageName} / ${element.label}`
+										: element.label,
+									pageName: pageInfo.pageName,
+									pagePath: pageInfo.pagePath,
+								}),
+							);
+						} catch {
+							return [];
+						}
+					}),
+				);
+
+				const allElements = pageElements.flat().filter((element) => {
+					if (seenIds.has(element.id)) return false;
+					seenIds.add(element.id);
+					return true;
+				});
+
+				if (selectorCacheKeyRef.current === cacheKey) {
+					cache.elementOptions = allElements;
+					cache.elementsLoaded = true;
+					setSelectorDataVersion((current) => current + 1);
+				}
+
+				return allElements;
+			} catch (error) {
+				console.error("Failed to load page elements:", error);
+				if (selectorCacheKeyRef.current === cacheKey) {
+					cache.elementsError = error;
+					setSelectorDataVersion((current) => current + 1);
+				}
+				return [];
+			} finally {
+				if (selectorCacheKeyRef.current === cacheKey) {
+					cache.elementsLoading = false;
+				}
+				elementOptionsPromiseRef.current = undefined;
+			}
+		})();
+
+		elementOptionsPromiseRef.current = promise;
+		return promise;
+	}, [appId, backend.eventState, backend.pageState, backend.routeState]);
+
+	const loadBitOptions = useCallback(async () => {
+		const cache = selectorDataRef.current;
+		if (cache.bitsLoaded) return cache.bitOptions;
+		if (bitOptionsPromiseRef.current) return bitOptionsPromiseRef.current;
+
+		const cacheKey = selectorCacheKeyRef.current;
+		cache.bitsLoading = true;
+		cache.bitsError = undefined;
+
+		const promise = (async () => {
+			try {
+				const bits = await backend.bitState.getProfileBits();
+				if (selectorCacheKeyRef.current === cacheKey) {
+					cache.bitOptions = bits;
+					cache.bitsByRef = indexBitsByRef(bits);
+					cache.bitsLoaded = true;
+					setSelectorDataVersion((current) => current + 1);
+				}
+				return bits;
+			} catch (error) {
+				console.error("Failed to load profile bits:", error);
+				if (selectorCacheKeyRef.current === cacheKey) {
+					cache.bitsError = error;
+					setSelectorDataVersion((current) => current + 1);
+				}
+				return [];
+			} finally {
+				if (selectorCacheKeyRef.current === cacheKey) {
+					cache.bitsLoading = false;
+				}
+				bitOptionsPromiseRef.current = undefined;
+			}
+		})();
+
+		bitOptionsPromiseRef.current = promise;
+		return promise;
+	}, [backend.bitState]);
+
+	selectorDataRef.current.loadElements = loadElementOptions;
+	selectorDataRef.current.loadBits = loadBitOptions;
+
+	useEffect(() => {
+		if (selectorPrefetchKeyRef.current === selectorCacheKey) return;
+		selectorPrefetchKeyRef.current = selectorCacheKey;
+		void loadElementOptions();
+		void loadBitOptions();
+	}, [selectorCacheKey, loadElementOptions, loadBitOptions]);
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
 	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
 	const { screenToFlowPosition, getViewport, setViewport, fitView, getNodes } =
@@ -719,9 +919,16 @@ export function FlowBoard({
 	const [searchOpen, setSearchOpen] = useState(false);
 	const [searchMode, setSearchMode] = useState<"dialog" | "sidebar">("dialog");
 	const [copilotOpen, setCopilotOpen] = useState(false);
+	const [copilotWorkspaceVisible, setCopilotWorkspaceVisible] = useState(false);
 	const [copilotInitialPrompt, setCopilotInitialPrompt] = useState<
 		string | undefined
 	>();
+
+	useEffect(() => {
+		if (!copilotOpen) {
+			setCopilotWorkspaceVisible(false);
+		}
+	}, [copilotOpen]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 
 	const { toggleVars, toggleRunHistory, toggleLogs } = useFlowPanels({
@@ -948,7 +1155,6 @@ export function FlowBoard({
 					true,
 					async (id: string) => {
 						if (added) return;
-						console.log("Run started", id);
 						runId = id;
 						added = true;
 						addRun(id, boardId, [node.id]);
@@ -1078,13 +1284,11 @@ export function FlowBoard({
 					true,
 					async (id: string) => {
 						if (added) return;
-						console.log("Remote run started", id);
 						runId = id;
 						added = true;
 						addRun(id, boardId, [node.id]);
 					},
 					(update) => {
-						console.dir(update);
 						const runUpdates = update
 							.filter((item) => item.event_type.startsWith("run:"))
 							.map((item) => item.payload);
@@ -1258,13 +1462,6 @@ export function FlowBoard({
 			// Only handle if this is for our board
 			if (eventAppId !== appId || eventBoardId !== boardId) return;
 
-			console.log(
-				"[FlowBoard] OAuth retry event received, re-executing node:",
-				nodeId,
-				"skipConsentCheck:",
-				skipConsentCheck,
-			);
-
 			// Find the node and re-execute
 			const node = nodes.find((n) => n.id === nodeId);
 			if (node?.data?.node) {
@@ -1333,6 +1530,9 @@ export function FlowBoard({
 
 	const handlePasteCB = useCallback(
 		async (event: ClipboardEvent) => {
+			if (shouldIgnoreBoardClipboardEvent(event)) {
+				return;
+			}
 			if (typeof version !== "undefined") {
 				toastError("Cannot change old version", <XIcon />);
 				return;
@@ -1372,6 +1572,9 @@ export function FlowBoard({
 
 	const handleCopyCB = useCallback(
 		(event?: ClipboardEvent) => {
+			if (shouldIgnoreBoardClipboardEvent(event)) {
+				return;
+			}
 			if (!board.data) return;
 			const mp = mousePositionRef.current;
 			const currentCursorPosition = screenToFlowPosition({
@@ -1564,7 +1767,8 @@ export function FlowBoard({
 		}
 
 		for (const edge of edges.filter((currentEdge) => currentEdge.selected)) {
-			const functionReferenceNodeIds = getFunctionReferenceNodeIdsFromEdge(edge);
+			const functionReferenceNodeIds =
+				getFunctionReferenceNodeIdsFromEdge(edge);
 			if (functionReferenceNodeIds) {
 				if (
 					selectedNodeIds.has(functionReferenceNodeIds.refOutNodeId) ||
@@ -1691,7 +1895,7 @@ export function FlowBoard({
 			const getVarNode = catalog.data?.find(
 				(node) => node.name === `variable_${operation}`,
 			);
-			if (!getVarNode) return console.dir(catalog.data);
+			if (!getVarNode) return;
 
 			const varRefPin = Object.values(getVarNode.pins).find(
 				(pin) => pin.name === "var_ref",
@@ -1861,6 +2065,8 @@ export function FlowBoard({
 					}
 				: undefined,
 			catalogLookup,
+			selectorDataRef,
+			selectorDataVersion,
 		);
 
 		setNodes(parsed.nodes);
@@ -1874,6 +2080,7 @@ export function FlowBoard({
 		isOffline,
 		hasRemoteExecution,
 		catalogLookup,
+		selectorDataVersion,
 	]);
 
 	// Apply remote execution presence indicators to nodes
@@ -2671,9 +2878,18 @@ export function FlowBoard({
 			{/* Desktop FlowPilot floating panel */}
 			{copilotOpen && (
 				<div className="hidden md:block fixed inset-0 z-100 pointer-events-none">
-					<div className="absolute top-4 right-4 w-[420px] h-[calc(100%-2rem)] max-h-[700px] pointer-events-auto">
+					<div
+						className="absolute inset-y-0 right-0 pointer-events-auto transition-[width] duration-300 ease-out"
+						style={{
+							width: copilotWorkspaceVisible
+								? "min(1120px, calc(100vw - 1rem))"
+								: "min(500px, calc(100vw - 1rem))",
+						}}
+					>
 						<FlowCopilot
+							appId={appId}
 							board={board.data}
+							catalogNodes={catalog.data}
 							selectedNodeIds={Array.from(selected.current)}
 							onAcceptSuggestion={onAcceptSuggestion}
 							onFocusNode={focusNode}
@@ -2685,7 +2901,9 @@ export function FlowBoard({
 							onClose={() => {
 								setCopilotOpen(false);
 								setCopilotInitialPrompt(undefined);
+								setCopilotWorkspaceVisible(false);
 							}}
+							onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 							mode="panel"
 							initialPrompt={copilotInitialPrompt}
 						/>
@@ -3286,10 +3504,12 @@ export function FlowBoard({
 						if (!open) setCopilotInitialPrompt(undefined);
 					}}
 				>
-					<SheetContent side="bottom" className="h-[85dvh] w-full p-0">
+					<SheetContent side="bottom" className="h-[100dvh] w-full p-0">
 						<div className="h-full w-full">
 							<FlowCopilot
+								appId={appId}
 								board={board.data}
+								catalogNodes={catalog.data}
 								selectedNodeIds={Array.from(selected.current)}
 								onAcceptSuggestion={onAcceptSuggestion}
 								onFocusNode={focusNode}
@@ -3301,7 +3521,9 @@ export function FlowBoard({
 								onClose={() => {
 									setCopilotOpen(false);
 									setCopilotInitialPrompt(undefined);
+									setCopilotWorkspaceVisible(false);
 								}}
+								onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 								mode="panel"
 								initialPrompt={copilotInitialPrompt}
 							/>

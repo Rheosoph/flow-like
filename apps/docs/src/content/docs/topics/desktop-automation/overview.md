@@ -76,7 +76,7 @@ Array of detected codes:
 - Code 39
 - EAN-13/8
 - UPC-A/E
-- DataMatrix
+- Data Matrix
 - Aztec
 
 **Example: Process shipping labels**
@@ -90,18 +90,18 @@ Read Barcodes (image)
 Extract tracking number ──▶ Add to database
 ```
 
-### QR Code Generation
+### Barcode Generation
 
-Create QR codes programmatically:
+Create barcodes programmatically:
 
 ```
-Write QR Code
+Write Barcode
 ├── data: "https://myapp.com/order/12345"
-├── size: 256
-└── format: PNG
+├── format: QR_CODE
+└── scale: 8
     │
     ▼
-QR Code Image ──▶ Save / Display / Email
+Barcode Image ──▶ Save / Display / Email
 ```
 
 ### IP Camera Integration

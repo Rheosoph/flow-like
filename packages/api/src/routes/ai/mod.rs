@@ -1,4 +1,5 @@
 pub mod copilot;
+pub mod governance;
 
 use axum::Router;
 

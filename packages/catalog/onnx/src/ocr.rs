@@ -76,6 +76,7 @@ impl NodeLogic for TextDetectionNode {
             "Detect text regions in images. Download models from: CRAFT (https://huggingface.co/quocanh34/craft_text_detection_onnx), DBNet (https://huggingface.co/Xenova/dbnet_resnet50_onnx), EAST (https://www.dropbox.com/s/r2ingd0l3zt8hxs/frozen_east_text_detection.tar.gz)",
             "AI/ML/ONNX/OCR",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/text-search.svg");
 
@@ -300,6 +301,7 @@ impl NodeLogic for TextRecognitionNode {
             "Recognize text from cropped text regions. Download models from: CRNN (https://huggingface.co/Xenova/crnn_onnx), TrOCR (https://huggingface.co/microsoft/trocr-base-printed), PaddleOCR (https://huggingface.co/aapot/paddleocr-onnx)",
             "AI/ML/ONNX/OCR",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/text.svg");
 

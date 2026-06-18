@@ -7,6 +7,7 @@ import type {
 	PlanStep,
 	Suggestion,
 } from "../../lib/schema/flow/copilot";
+import type { INode } from "../../lib/schema/flow/node";
 import type { SurfaceComponent } from "../a2ui/types";
 
 /**
@@ -20,9 +21,64 @@ export type AgentMode = "board" | "ui" | "both";
 /**
  * AI Provider type for FlowPilot
  * - "bits": Use configured model bits from user profile
- * - "copilot": Use the GitHub Copilot SDK directly in the desktop app
+ * - "github-copilot": Use the GitHub Copilot SDK directly in the desktop app
+ * - "codex": Use the Codex CLI through the shared FlowPilot MCP tool surface
+ * - "claude-code": Use Claude Code through the shared FlowPilot MCP tool surface
+ * - "copilot": Legacy alias for "github-copilot"
  */
-export type AIProvider = "bits" | "copilot";
+export type AIProvider =
+	| "bits"
+	| "github-copilot"
+	| "codex"
+	| "claude-code"
+	| "copilot";
+
+export type NormalizedAIProvider =
+	| "bits"
+	| "github-copilot"
+	| "codex"
+	| "claude-code";
+
+export type AgentBackendProvider = Exclude<NormalizedAIProvider, "bits">;
+
+export const AGENT_BACKEND_PROVIDERS: AgentBackendProvider[] = [
+	"github-copilot",
+	"codex",
+	"claude-code",
+];
+
+export function normalizeAIProvider(
+	provider?: AIProvider,
+): NormalizedAIProvider {
+	if (!provider) return "bits";
+	if (provider === "copilot") return "github-copilot";
+	return provider;
+}
+
+export function isAgentBackendProvider(
+	provider: AIProvider | NormalizedAIProvider,
+): provider is AgentBackendProvider {
+	return normalizeAIProvider(provider as AIProvider) !== "bits";
+}
+
+export function flowPilotModelIdForProvider(
+	provider: AIProvider | NormalizedAIProvider,
+	modelId?: string,
+): string | undefined {
+	if (!modelId) return undefined;
+
+	const normalized = normalizeAIProvider(provider as AIProvider);
+	switch (normalized) {
+		case "bits":
+			return modelId;
+		case "github-copilot":
+			return `github-copilot:${modelId}`;
+		case "codex":
+			return `codex:${modelId}`;
+		case "claude-code":
+			return `claude-code:${modelId}`;
+	}
+}
 
 /**
  * Copilot model information from the SDK
@@ -42,6 +98,8 @@ export interface CopilotAuthStatus {
 	authenticated: boolean;
 	/** GitHub username if authenticated */
 	login?: string;
+	/** Backend-specific status message */
+	message?: string;
 }
 
 /**
@@ -52,6 +110,8 @@ export interface CopilotConnectionConfig {
 	useStdio: boolean;
 	/** Server URL for remote/web mode */
 	serverUrl?: string;
+	/** Agent backend to start */
+	backend?: AgentBackendProvider;
 }
 
 /**
@@ -132,6 +192,32 @@ export interface AttachedImage {
  */
 export type UnifiedPlanStep = PlanStep | A2UIPlanStep;
 
+export type FlowPilotProcessEventKind =
+	| "tool"
+	| "progress"
+	| "workspace"
+	| "commands"
+	| "components";
+
+export type FlowPilotProcessEventStatus = "running" | "done" | "error" | "info";
+
+export interface FlowPilotProcessEvent {
+	id: string;
+	kind: FlowPilotProcessEventKind;
+	status: FlowPilotProcessEventStatus;
+	title: string;
+	summary?: string;
+	toolName?: string;
+	details?: string;
+	resultPreview?: string;
+	workspaceBefore?: string;
+	workspaceAfter?: string;
+	commands?: BoardCommand[];
+	componentCount?: number;
+	createdAt: number;
+	updatedAt?: number;
+}
+
 /**
  * Unified message format for the copilot chat
  */
@@ -147,6 +233,10 @@ export interface CopilotMessage {
 	appliedComponents?: SurfaceComponent[];
 	/** Executed board commands (board mode) */
 	executedCommands?: BoardCommand[];
+	/** Last FlowScript draft/workspace produced by the workflow agent */
+	flowscriptWorkspace?: string;
+	/** Live process timeline for tool calls, FlowScript edits, and queued changes */
+	processEvents?: FlowPilotProcessEvent[];
 }
 
 /**
@@ -165,6 +255,9 @@ export interface FlowPilotProps {
 	/** Callback when close button is clicked */
 	onClose?: () => void;
 
+	/** Notifies parent shells when the FlowScript workspace pane is visible. */
+	onWorkspaceVisibleChange?: (visible: boolean) => void;
+
 	// === Provider Props ===
 
 	/** Force a specific AI provider (if not set, shows provider selector) */
@@ -177,6 +270,12 @@ export interface FlowPilotProps {
 
 	/** The board to operate on (required for board mode) */
 	board?: IBoard | null;
+
+	/** Current app id, used by FlowPilot runtime tools for database/storage/event access. */
+	appId?: string;
+
+	/** App-scoped catalog nodes visible to the board, including installed package nodes. */
+	catalogNodes?: INode[];
 
 	/** Selected node IDs for context (board mode) */
 	selectedNodeIds?: string[];

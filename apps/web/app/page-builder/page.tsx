@@ -143,7 +143,7 @@ export default function PageBuilderPage() {
 		return {
 			appId,
 			boardId,
-			boardVersion: page?.version,
+			boardVersion: board.data?.version as [number, number, number] | undefined,
 			pages,
 			workflowEvents,
 			// Pass behavior hooks for preview mode
@@ -153,7 +153,15 @@ export default function PageBuilderPage() {
 			onIntervalEventId: page?.onIntervalEventId,
 			onIntervalSeconds: page?.onIntervalSeconds,
 		};
-	}, [appId, boardId, page, allPages.data, board.data?.nodes, pageId]);
+	}, [
+		appId,
+		boardId,
+		page,
+		allPages.data,
+		board.data?.nodes,
+		board.data?.version,
+		pageId,
+	]);
 
 	useEffect(() => {
 		const loadPage = async () => {

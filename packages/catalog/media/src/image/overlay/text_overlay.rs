@@ -1,10 +1,10 @@
-use crate::image::NodeImage;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
     pin::PinOptions,
     variable::VariableType,
 };
+use flow_like_catalog_core::NodeImage;
 use flow_like_types::{
     ab_glyph::FontArc,
     async_trait,
@@ -53,6 +53,7 @@ impl NodeLogic for TextOverlayNode {
             "Draw text on top of an image with configurable font size, position, and color",
             "Image/Overlay",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         node.add_input_pin(

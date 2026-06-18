@@ -1,0 +1,1543 @@
+// Utils — FlowScript node declarations (generated, do not edit).
+// One declare-function per catalog node. Names are camelCase node types.
+
+// === Utils ===
+
+/**
+ * Generates a Collision Resistant Unique Identifier
+ * @returns cuid — Generated CUID
+ * @impure has side effects / drives control flow
+ */
+declare function cuid(): string;
+
+
+// === Utils/Array ===
+
+/**
+ * Removes all elements from an array
+ * @param arrayIn — Your Array
+ * @returns arrayOut — Empty Array
+ * @impure has side effects / drives control flow
+ */
+declare function arrayClear({ arrayIn: any[] }): any[];
+
+/**
+ * Append an Array to another Array
+ * @param arrayIn — Your Array
+ * @param values — Value to push
+ * @returns arrayOut — Adjusted Array
+ * @impure has side effects / drives control flow
+ */
+declare function arrayExtend({ arrayIn: any[], values: any[] }): any[];
+
+/**
+ * Removes a specific field from every struct in an array. Elements without the field are kept unchanged. Returns the filtered array and count of removed fields.
+ * @param arrayIn — Array of structs to filter
+ * @param field — Field name to remove from each struct
+ * @returns arrayOut — Array with the field removed from each struct
+ * @returns removedCount — Number of fields that were removed
+ * @impure has side effects / drives control flow
+ */
+declare function arrayFilterField({ arrayIn: Struct[], field: string }): { arrayOut: Struct[], removedCount: int };
+
+/**
+ * Removes multiple fields from every struct in an array. Elements without the fields are kept unchanged. Returns the filtered array and count of removed fields.
+ * @param arrayIn — Array of structs to filter
+ * @param fields — Array of field names to remove from each struct
+ * @returns arrayOut — Array with the fields removed from each struct
+ * @returns removedCount — Total number of fields that were removed
+ * @impure has side effects / drives control flow
+ */
+declare function arrayFilterFields({ arrayIn: Struct[], fields: string[] }): { arrayOut: Struct[], removedCount: int };
+
+/**
+ * Finds the index of an item in an array
+ * @param arrayIn — Your Array
+ * @param item — Item to find
+ * @returns index — Index of the item (-1 if not found)
+ * @returns found — Was the item found?
+ * @impure has side effects / drives control flow
+ */
+declare function arrayFindItem({ arrayIn: any[], item: any }): { index: int, found: bool };
+
+/**
+ * Gets an element from an array by index
+ * @param arrayIn — Your Array
+ * @param index — Index of the element to get
+ * @returns element — Element at the specified index
+ * @returns success — Was the get successful?
+ */
+declare function arrayGet({ arrayIn: any[], index: int }): { element: any, success: bool };
+
+/**
+ * Checks if an array includes a certain value
+ * @param arrayIn — Your Array
+ * @param value — Value to search for
+ * @returns includes — Does the array include the value?
+ */
+declare function arrayIncludes({ arrayIn: any[], value: any }): bool;
+
+/**
+ * Gets the length of an array
+ * @param array — Input Array
+ * @returns length — Length of the array
+ */
+declare function arrayLength({ array: any[] }): int;
+
+/**
+ * Removes and returns the last element of an array
+ * @param arrayIn — Your Array
+ * @returns arrayOut — Adjusted Array
+ * @returns value — Popped Value
+ * @impure has side effects / drives control flow
+ */
+declare function arrayPop({ arrayIn: any[] }): { arrayOut: any[], value: any };
+
+/**
+ * Push an item into your Array
+ * @param arrayIn — Your Array
+ * @param value — Value to push
+ * @returns arrayOut — Adjusted Array
+ * @impure has side effects / drives control flow
+ */
+declare function arrayPush({ arrayIn: any[], value: any }): any[];
+
+/**
+ * Removes an element from an array at a specific index
+ * @param arrayIn — Your Array
+ * @param index — Index to remove
+ * @returns arrayOut — Adjusted Array
+ * @impure has side effects / drives control flow
+ */
+declare function arrayRemoveIndex({ arrayIn: any[], index: int }): any[];
+
+/**
+ * Sets an element at a specific index in an array
+ * @param arrayIn — Your Array
+ * @param index — Index to set
+ * @param value — Value to set
+ * @returns arrayOut — Adjusted Array
+ * @impure has side effects / drives control flow
+ */
+declare function arraySetIndex({ arrayIn: any[], index: int, value: any }): any[];
+
+/**
+ * Shuffle Array Items
+ * @param arrayIn — Your Array
+ * @returns arrayOut — Adjusted Array
+ */
+declare function arrayShuffle({ arrayIn: any[] }): any[];
+
+/**
+ * Creates an array from individual elements. Add more input pins by connecting to the 'element' pins.
+ * @param element — Element to include in the array
+ * @param element — Element to include in the array
+ * @returns arrayOut — The constructed array
+ */
+declare function constructArray({ element: any, element: any }): any[];
+
+/**
+ * Creates an empty array
+ * @returns arrayOut — The created array
+ */
+declare function makeArray(): any[];
+
+
+// === Utils/Array/Batch ===
+
+/**
+ * Push multiple items into an array in one operation. More efficient than multiple single pushes.
+ * @param arrayIn — Your Array
+ * @param items — Array of items to push
+ * @returns arrayOut — Array with all items pushed
+ * @impure has side effects / drives control flow
+ */
+declare function arrayBatchPush({ arrayIn: any[], items: any[] }): any[];
+
+/**
+ * Remove multiple elements at specific indices in one operation. More efficient than multiple single removes. Indices are processed in descending order to maintain correctness.
+ * @param arrayIn — Your Array
+ * @param indices — Array of indices to remove
+ * @returns arrayOut — Array with elements removed
+ * @returns removed — Array of removed values
+ * @impure has side effects / drives control flow
+ */
+declare function arrayBatchRemove({ arrayIn: any[], indices: int[] }): { arrayOut: any[], removed: any[] };
+
+/**
+ * Set multiple elements at specific indices in one operation. More efficient than multiple single sets.
+ * @param arrayIn — Your Array
+ * @param indices — Array of indices to set
+ * @param values — Array of values to set (must match indices length)
+ * @returns arrayOut — Array with all values set
+ * @impure has side effects / drives control flow
+ */
+declare function arrayBatchSet({ arrayIn: any[], indices: int[], values: any[] }): any[];
+
+
+// === Utils/Array/By Reference ===
+
+/**
+ * Clear all elements directly from a variable array without copying.
+ * @param varRef — Reference to the array variable to clear
+ * @impure has side effects / drives control flow
+ */
+declare function arrayClearRef({ varRef: string }): void;
+
+/**
+ * Append multiple items directly to a variable array without copying. Much faster for large arrays.
+ * @param varRef — Reference to the array variable to modify
+ * @param values — Array of values to append
+ * @impure has side effects / drives control flow
+ */
+declare function arrayExtendRef({ varRef: string, values: any[] }): void;
+
+/**
+ * Remove and return the last element directly from a variable array without copying. Much faster for large arrays.
+ * @param varRef — Reference to the array variable to modify
+ * @returns value — The popped value
+ * @impure has side effects / drives control flow
+ */
+declare function arrayPopRef({ varRef: string }): any;
+
+/**
+ * Push an item directly into a variable array without copying. Much faster for large arrays.
+ * @param varRef — Reference to the array variable to modify
+ * @param value — Value to push into the array
+ * @impure has side effects / drives control flow
+ */
+declare function arrayPushRef({ varRef: string, value: any }): void;
+
+/**
+ * Remove an element at a specific index directly from a variable array without copying. Much faster for large arrays.
+ * @param varRef — Reference to the array variable to modify
+ * @param index — Index to remove
+ * @returns value — The removed value
+ * @impure has side effects / drives control flow
+ */
+declare function arrayRemoveIndexRef({ varRef: string, index: int }): any;
+
+/**
+ * Set an element at a specific index directly in a variable array without copying. Much faster for large arrays.
+ * @param varRef — Reference to the array variable to modify
+ * @param index — Index to set
+ * @param value — Value to set at the index
+ * @impure has side effects / drives control flow
+ */
+declare function arraySetIndexRef({ varRef: string, index: int, value: any }): void;
+
+
+// === Utils/Bool ===
+
+/**
+ * Boolean And operation
+ * @param boolean (optional) — Input Pin for AND Operation
+ * @param boolean (optional) — Input Pin for AND Operation
+ * @returns result — AND operation between all boolean inputs
+ */
+declare function boolAnd({ boolean?: bool, boolean?: bool }): bool;
+
+/**
+ * Boolean Equal
+ * @param boolean (optional) — Input Pin for OR Operation
+ * @param boolean (optional) — Input Pin for OR Operation
+ * @returns result — == operation between all boolean inputs
+ */
+declare function boolEqual({ boolean?: bool, boolean?: bool }): bool;
+
+/**
+ * Boolean NOT
+ * @param boolean (optional) — Input Boolean
+ * @returns result — NOT operation on the input
+ */
+declare function boolNot({ boolean?: bool }): bool;
+
+/**
+ * Boolean Or operation
+ * @param boolean (optional) — Input Pin for OR Operation
+ * @param boolean (optional) — Input Pin for OR Operation
+ * @returns result — OR operation between all boolean inputs
+ */
+declare function boolOr({ boolean?: bool, boolean?: bool }): bool;
+
+/**
+ * Boolean XOR
+ * @param boolean (optional) — Input Boolean
+ * @param boolean (optional) — Input Boolean
+ * @returns result — XOR operation between all boolean inputs
+ */
+declare function boolXor({ boolean?: bool, boolean?: bool }): bool;
+
+/**
+ * Generates a random boolean value
+ * @param probability (optional) — The probability of the boolean being true
+ * @returns value — The random boolean value
+ */
+declare function randomBool({ probability?: float }): bool;
+
+
+// === Utils/CSV ===
+
+/**
+ * Stream Read a CSV File
+ * @param csv — CSV Path
+ * @param chunkSize (optional) — Chunk Size for Buffered Read
+ * @param delimiter (optional) — Delimiter for CSV
+ * @returns chunk — Chunk
+ * @impure has side effects / drives control flow
+ */
+declare function csvBufferedReader({ csv: Struct, chunkSize?: int, delimiter?: string }): Struct[];
+
+
+// === Utils/Conversions ===
+
+/**
+ * Convert String to Bytes
+ * @param bytes — Bytes to convert
+ * @returns value — Parsed Value
+ */
+declare function valFromBytes({ bytes: bytes[] }): any;
+
+/**
+ * Convert String to Struct
+ * @param string — String to convert
+ * @returns valueRef — Value of the Generic
+ */
+declare function valFromString({ string: string }): any;
+
+/**
+ * Convert Struct to Bytes
+ * @param value — Input Value
+ * @param pretty (optional) — Should the struct be pretty printed?
+ * @returns bytes — Output Bytes
+ */
+declare function valToBytes({ value: any, pretty?: bool }): bytes[];
+
+/**
+ * Convert any object to String
+ * @param value — Input Value
+ * @param pretty (optional) — Should the struct be pretty printed?
+ * @returns string — Output String
+ */
+declare function valToString({ value: any, pretty?: bool }): string;
+
+
+// === Utils/Crypto ===
+
+/**
+ * Decrypts an AES-256-GCM encrypted payload and verifies its authentication tag.
+ * @param key — 32-byte symmetric key
+ * @param encrypted — Authenticated encrypted payload
+ * @returns plaintext — Decrypted bytes
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoAesDecryptBytes({ key: bytes[], encrypted: Struct }): bytes[];
+
+/**
+ * Decrypts an AES-256-GCM payload and parses the plaintext as a struct.
+ * @param key — 32-byte symmetric key
+ * @param encrypted — Authenticated encrypted payload
+ * @returns value — Decrypted struct
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoAesDecryptValue({ key: bytes[], encrypted: Struct }): Struct;
+
+/**
+ * Encrypts bytes with AES-256-GCM. A fresh nonce is generated internally for every encryption.
+ * @param key — 32-byte symmetric key
+ * @param plaintext — Bytes to encrypt
+ * @param associatedData (optional) — Optional authenticated metadata stored alongside the ciphertext
+ * @returns encrypted — Authenticated encrypted payload with algorithm and generated nonce
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoAesEncryptBytes({ key: bytes[], plaintext: bytes[], associatedData?: Struct }): Struct;
+
+/**
+ * Serializes and encrypts a struct with AES-256-GCM. A fresh nonce is generated internally for every encryption.
+ * @param key — 32-byte symmetric key
+ * @param value — Struct to encrypt
+ * @param associatedData (optional) — Optional authenticated metadata stored alongside the ciphertext
+ * @returns encrypted — Authenticated encrypted payload with algorithm and generated nonce
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoAesEncryptValue({ key: bytes[], value: Struct, associatedData?: Struct }): Struct;
+
+/**
+ * Generates a 256-bit symmetric key for AES-256-GCM and XChaCha20-Poly1305.
+ * @returns key — Random 32-byte symmetric key
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoGenerateKey(): bytes[];
+
+/**
+ * Decrypts an XChaCha20-Poly1305 encrypted payload and verifies its authentication tag.
+ * @param key — 32-byte symmetric key
+ * @param encrypted — Authenticated encrypted payload
+ * @returns plaintext — Decrypted bytes
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoXchacha20DecryptBytes({ key: bytes[], encrypted: Struct }): bytes[];
+
+/**
+ * Decrypts an XChaCha20-Poly1305 payload and parses the plaintext as a struct.
+ * @param key — 32-byte symmetric key
+ * @param encrypted — Authenticated encrypted payload
+ * @returns value — Decrypted struct
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoXchacha20DecryptValue({ key: bytes[], encrypted: Struct }): Struct;
+
+/**
+ * Encrypts bytes with XChaCha20-Poly1305. A fresh 192-bit nonce is generated internally for every encryption.
+ * @param key — 32-byte symmetric key
+ * @param plaintext — Bytes to encrypt
+ * @param associatedData (optional) — Optional authenticated metadata stored alongside the ciphertext
+ * @returns encrypted — Authenticated encrypted payload with algorithm and generated nonce
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoXchacha20EncryptBytes({ key: bytes[], plaintext: bytes[], associatedData?: Struct }): Struct;
+
+/**
+ * Serializes and encrypts a struct with XChaCha20-Poly1305. A fresh 192-bit nonce is generated internally for every encryption.
+ * @param key — 32-byte symmetric key
+ * @param value — Struct to encrypt
+ * @param associatedData (optional) — Optional authenticated metadata stored alongside the ciphertext
+ * @returns encrypted — Authenticated encrypted payload with algorithm and generated nonce
+ * @impure has side effects / drives control flow
+ */
+declare function cryptoXchacha20EncryptValue({ key: bytes[], value: Struct, associatedData?: Struct }): Struct;
+
+
+// === Utils/DateTime ===
+
+/**
+ * Calculates the duration between two dates
+ * @param start — Start date
+ * @param end — End date
+ * @returns totalSeconds — Total duration in seconds
+ * @returns days — Number of days
+ * @returns hours — Remaining hours
+ * @returns minutes — Remaining minutes
+ * @returns seconds — Remaining seconds
+ * @returns humanReadable — Human readable duration string
+ * @returns errorMessage
+ * @impure has side effects / drives control flow
+ */
+declare function utilsDatetimeDiff({ start: Date, end: Date }): { totalSeconds: int, days: int, hours: int, minutes: int, seconds: int, humanReadable: string, errorMessage: string };
+
+/**
+ * Adds or subtracts a duration from a date
+ * @param date — Base date
+ * @param days (optional) — Days to add (negative to subtract)
+ * @param hours (optional) — Hours to add
+ * @param minutes (optional) — Minutes to add
+ * @param seconds (optional) — Seconds to add
+ * @returns result — Resulting date
+ */
+declare function utilsDatetimeDuration({ date: Date, days?: int, hours?: int, minutes?: int, seconds?: int }): Date;
+
+/**
+ * Converts a DateTime to a formatted string
+ * @param date — Date to format
+ * @param format (optional) — Format string (e.g., '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', 'rfc3339', 'rfc2822')
+ * @returns formatted — Formatted string
+ */
+declare function utilsDatetimeFormat({ date: Date, format?: string }): string;
+
+/**
+ * Returns the current date and time in UTC
+ * @returns date — Current UTC date and time
+ * @impure has side effects / drives control flow
+ */
+declare function utilsDatetimeNow(): Date;
+
+/**
+ * Parses a string into a DateTime. Auto-detects common formats or uses custom format string.
+ * @param input — String to parse
+ * @param format (optional) — Optional format string (e.g., '%Y-%m-%d %H:%M:%S'). Leave empty for auto-detection.
+ * @returns date — Parsed date
+ */
+declare function utilsDatetimeParse({ input: string, format?: string }): Date;
+
+/**
+ * Extracts date components from a DateTime
+ * @param date — DateTime to extract from
+ * @returns year — Year
+ * @returns month — Month (1-12)
+ * @returns day — Day of month (1-31)
+ * @returns weekday — Day of week (0=Monday, 6=Sunday)
+ * @returns dayOfYear — Day of year (1-366)
+ */
+declare function utilsDatetimeToDate({ date: Date }): { year: int, month: int, day: int, weekday: int, dayOfYear: int };
+
+/**
+ * Extracts time components from a DateTime
+ * @param date — DateTime to extract from
+ * @returns hour — Hour (0-23)
+ * @returns minute — Minute (0-59)
+ * @returns second — Second (0-59)
+ * @returns nanosecond — Nanosecond (0-999999999)
+ */
+declare function utilsDatetimeToTime({ date: Date }): { hour: int, minute: int, second: int, nanosecond: int };
+
+
+// === Utils/Encoding ===
+
+/**
+ * Decodes a Base64 string back to a UTF-8 string
+ * @param input — Base64 encoded string
+ * @returns output — Decoded UTF-8 string
+ */
+declare function utilsEncodingBase64Decode({ input: string }): string;
+
+/**
+ * Decodes a Base64 string to raw bytes
+ * @param input — Base64 encoded string
+ * @returns output — Decoded raw bytes
+ */
+declare function utilsEncodingBase64DecodeBytes({ input: string }): bytes[];
+
+/**
+ * Encodes a string to Base64
+ * @param input — String to encode
+ * @returns output — Base64 encoded string
+ */
+declare function utilsEncodingBase64Encode({ input: string }): string;
+
+/**
+ * Encodes raw bytes to a Base64 string
+ * @param input — Raw bytes to encode
+ * @returns output — Base64 encoded string
+ */
+declare function utilsEncodingBase64EncodeBytes({ input: bytes[] }): string;
+
+/**
+ * Decodes a hexadecimal string back to a UTF-8 string
+ * @param input — Hex-encoded string
+ * @returns output — Decoded UTF-8 string
+ */
+declare function utilsEncodingHexDecode({ input: string }): string;
+
+/**
+ * Decodes a hexadecimal string to raw bytes
+ * @param input — Hex-encoded string
+ * @returns output — Decoded raw bytes
+ */
+declare function utilsEncodingHexDecodeBytes({ input: string }): bytes[];
+
+/**
+ * Encodes a string's bytes to a hexadecimal string
+ * @param input — String to encode
+ * @returns output — Hex-encoded string
+ */
+declare function utilsEncodingHexEncode({ input: string }): string;
+
+/**
+ * Encodes raw bytes to a hexadecimal string
+ * @param input — Raw bytes to encode
+ * @returns output — Hex-encoded string
+ */
+declare function utilsEncodingHexEncodeBytes({ input: bytes[] }): string;
+
+/**
+ * Decodes HTML entities back to their original characters
+ * @param input — HTML-encoded string
+ * @returns output — Decoded string
+ */
+declare function utilsEncodingHtmlDecode({ input: string }): string;
+
+/**
+ * Encodes special characters as HTML entities (&amp; &lt; &gt; &quot; &#39;)
+ * @param input — String to encode
+ * @returns output — HTML-encoded string
+ */
+declare function utilsEncodingHtmlEncode({ input: string }): string;
+
+/**
+ * Decodes a percent-encoded URL string back to plain text
+ * @param input — URL-encoded string
+ * @returns output — Decoded string
+ */
+declare function utilsEncodingUrlDecode({ input: string }): string;
+
+/**
+ * Percent-encodes a string for safe use in URLs (RFC 3986)
+ * @param input — String to encode
+ * @returns output — URL-encoded string
+ */
+declare function utilsEncodingUrlEncode({ input: string }): string;
+
+
+// === Utils/Execution ===
+
+/**
+ * Determines whether the current run is executing in the desktop app/local runtime or on the server.
+ * @returns environment — The execution environment: desktop or server
+ * @returns isDesktop — True when the run is executing locally in the desktop app
+ * @returns isServer — True when the run is executing on the server
+ * @returns isLocal — True when the run has local/offline execution context
+ * @returns isRemote — True when the run does not have local/offline execution context
+ * @returns details — Structured execution environment details
+ */
+declare function utilsExecutionGetEnvironment(): { environment: string, isDesktop: bool, isServer: bool, isLocal: bool, isRemote: bool, details: Struct };
+
+
+// === Utils/Faker/Address ===
+
+/**
+ * Generates a random city name for mocking data
+ * @returns city — Generated city name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerCityName(): string;
+
+/**
+ * Generates a random country code (e.g., US, DE, FR) for mocking data
+ * @returns code — Generated country code
+ * @impure has side effects / drives control flow
+ */
+declare function fakerCountryCode(): string;
+
+/**
+ * Generates a random country name for mocking data
+ * @returns country — Generated country name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerCountryName(): string;
+
+/**
+ * Generates a random latitude coordinate for mocking data
+ * @returns latitude — Generated latitude
+ * @impure has side effects / drives control flow
+ */
+declare function fakerLatitude(): float;
+
+/**
+ * Generates a random longitude coordinate for mocking data
+ * @returns longitude — Generated longitude
+ * @impure has side effects / drives control flow
+ */
+declare function fakerLongitude(): float;
+
+/**
+ * Generates a random postal/zip code for mocking data
+ * @returns code — Generated postal code
+ * @impure has side effects / drives control flow
+ */
+declare function fakerPostCode(): string;
+
+/**
+ * Generates a random state/province name for mocking data
+ * @returns state — Generated state name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerStateName(): string;
+
+/**
+ * Generates a random full street address for mocking data
+ * @returns address — Generated street address
+ * @impure has side effects / drives control flow
+ */
+declare function fakerStreetAddress(): string;
+
+/**
+ * Generates a random street name for mocking data
+ * @returns street — Generated street name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerStreetName(): string;
+
+
+// === Utils/Faker/Company ===
+
+/**
+ * Generates a random business buzzword for mocking data
+ * @returns buzzword — Generated buzzword
+ * @impure has side effects / drives control flow
+ */
+declare function fakerBuzzword(): string;
+
+/**
+ * Generates a random business catch phrase for mocking data
+ * @returns phrase — Generated catch phrase
+ * @impure has side effects / drives control flow
+ */
+declare function fakerCatchPhrase(): string;
+
+/**
+ * Generates a random company name for mocking data
+ * @returns company — Generated company name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerCompanyName(): string;
+
+/**
+ * Generates a random industry name for mocking data
+ * @returns industry — Generated industry name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerIndustry(): string;
+
+/**
+ * Generates a random profession/job title for mocking data
+ * @returns profession — Generated profession
+ * @impure has side effects / drives control flow
+ */
+declare function fakerProfession(): string;
+
+
+// === Utils/Faker/Internet ===
+
+/**
+ * Generates a random domain suffix (com, org, net, etc.)
+ * @returns suffix — Generated domain suffix
+ * @impure has side effects / drives control flow
+ */
+declare function fakerDomainSuffix(): string;
+
+/**
+ * Generates a random email address for mocking data
+ * @returns email — Generated email address
+ * @impure has side effects / drives control flow
+ */
+declare function fakerEmail(): string;
+
+/**
+ * Generates a random IPv4 address for mocking data
+ * @returns ip — Generated IPv4 address
+ * @impure has side effects / drives control flow
+ */
+declare function fakerIpv4(): string;
+
+/**
+ * Generates a random IPv6 address for mocking data
+ * @returns ip — Generated IPv6 address
+ * @impure has side effects / drives control flow
+ */
+declare function fakerIpv6(): string;
+
+/**
+ * Generates a random password for mocking data
+ * @param minLength (optional) — Minimum password length
+ * @param maxLength (optional) — Maximum password length
+ * @returns password — Generated password
+ * @impure has side effects / drives control flow
+ */
+declare function fakerPassword({ minLength?: int, maxLength?: int }): string;
+
+/**
+ * Generates a random user agent string for mocking data
+ * @returns userAgent — Generated user agent
+ * @impure has side effects / drives control flow
+ */
+declare function fakerUserAgent(): string;
+
+/**
+ * Generates a random username for mocking data
+ * @returns username — Generated username
+ * @impure has side effects / drives control flow
+ */
+declare function fakerUsername(): string;
+
+
+// === Utils/Faker/Lorem ===
+
+/**
+ * Generates a random lorem ipsum paragraph for mocking data
+ * @param minSentences (optional) — Minimum sentences in paragraph
+ * @param maxSentences (optional) — Maximum sentences in paragraph
+ * @returns paragraph — Generated paragraph
+ * @impure has side effects / drives control flow
+ */
+declare function fakerParagraph({ minSentences?: int, maxSentences?: int }): string;
+
+/**
+ * Generates random lorem ipsum paragraphs for mocking data
+ * @param minCount (optional) — Minimum number of paragraphs
+ * @param maxCount (optional) — Maximum number of paragraphs
+ * @returns paragraphs — Generated paragraphs as array
+ * @impure has side effects / drives control flow
+ */
+declare function fakerParagraphs({ minCount?: int, maxCount?: int }): any;
+
+/**
+ * Generates a random lorem ipsum sentence for mocking data
+ * @param minWords (optional) — Minimum words in sentence
+ * @param maxWords (optional) — Maximum words in sentence
+ * @returns sentence — Generated sentence
+ * @impure has side effects / drives control flow
+ */
+declare function fakerSentence({ minWords?: int, maxWords?: int }): string;
+
+/**
+ * Generates random lorem ipsum sentences for mocking data
+ * @param minCount (optional) — Minimum number of sentences
+ * @param maxCount (optional) — Maximum number of sentences
+ * @returns sentences — Generated sentences as array
+ * @impure has side effects / drives control flow
+ */
+declare function fakerSentences({ minCount?: int, maxCount?: int }): any;
+
+/**
+ * Generates a random lorem ipsum word for mocking data
+ * @returns word — Generated word
+ * @impure has side effects / drives control flow
+ */
+declare function fakerWord(): string;
+
+/**
+ * Generates random lorem ipsum words for mocking data
+ * @param minCount (optional) — Minimum number of words
+ * @param maxCount (optional) — Maximum number of words
+ * @returns words — Generated words as array
+ * @impure has side effects / drives control flow
+ */
+declare function fakerWords({ minCount?: int, maxCount?: int }): any;
+
+
+// === Utils/Faker/Name ===
+
+/**
+ * Generates a random first name for mocking data
+ * @returns name — Generated first name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerFirstName(): string;
+
+/**
+ * Generates a random full name for mocking data
+ * @returns name — Generated full name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerFullName(): string;
+
+/**
+ * Generates a random last name for mocking data
+ * @returns name — Generated last name
+ * @impure has side effects / drives control flow
+ */
+declare function fakerLastName(): string;
+
+/**
+ * Generates a random name title (Mr., Mrs., Dr., etc.)
+ * @returns title — Generated title
+ * @impure has side effects / drives control flow
+ */
+declare function fakerTitle(): string;
+
+
+// === Utils/Faker/Number ===
+
+/**
+ * Generates a random boolean for mocking data
+ * @param probability (optional) — Probability of true (0.0 to 1.0)
+ * @returns value — Generated boolean
+ * @impure has side effects / drives control flow
+ */
+declare function fakerBoolean({ probability?: float }): bool;
+
+/**
+ * Generates a random digit (0-9) for mocking data
+ * @returns digit — Generated digit
+ * @impure has side effects / drives control flow
+ */
+declare function fakerDigit(): int;
+
+/**
+ * Generates a random float in a specified range for mocking data
+ * @param min (optional) — Minimum value (inclusive)
+ * @param max (optional) — Maximum value (exclusive)
+ * @returns number — Generated float
+ * @impure has side effects / drives control flow
+ */
+declare function fakerFloat({ min?: float, max?: float }): float;
+
+/**
+ * Generates a random integer in a specified range for mocking data
+ * @param min (optional) — Minimum value (inclusive)
+ * @param max (optional) — Maximum value (exclusive)
+ * @returns number — Generated integer
+ * @impure has side effects / drives control flow
+ */
+declare function fakerInteger({ min?: int, max?: int }): int;
+
+
+// === Utils/Faker/Phone ===
+
+/**
+ * Generates a random cell/mobile phone number for mocking data
+ * @returns phone — Generated cell number
+ * @impure has side effects / drives control flow
+ */
+declare function fakerCellNumber(): string;
+
+/**
+ * Generates a random phone number for mocking data
+ * @returns phone — Generated phone number
+ * @impure has side effects / drives control flow
+ */
+declare function fakerPhoneNumber(): string;
+
+
+// === Utils/Hash ===
+
+/**
+ * Computes the AHash of the input
+ * @param input — Input data to hash
+ * @param consistent (optional) — Use consistent hashing
+ * @param seed (optional) — Seed value for consistent hashing
+ * @returns hash — AHash of the input
+ * @impure has side effects / drives control flow
+ */
+declare function utilsHashAhash({ input: any, consistent?: bool, seed?: int }): int;
+
+/**
+ * Computes the Blake3 hash of the input
+ * @param input — Input data to hash
+ * @returns hash — Blake3 hash of the input
+ * @impure has side effects / drives control flow
+ */
+declare function utilsHashBlake3({ input: any }): string;
+
+/**
+ * Computes the MD5 hash of the input string. Note: MD5 is not collision-resistant — use SHA-256 or Blake3 for security-sensitive hashing.
+ * @param input — String to hash
+ * @returns hash — MD5 hash as hex string
+ * @impure has side effects / drives control flow
+ */
+declare function utilsHashMd5({ input: string }): string;
+
+/**
+ * Computes the SHA-256 hash of the input string
+ * @param input — String to hash
+ * @returns hash — SHA-256 hash as hex string
+ * @impure has side effects / drives control flow
+ */
+declare function utilsHashSha256({ input: string }): string;
+
+/**
+ * Computes the SHA-512 hash of the input string
+ * @param input — String to hash
+ * @returns hash — SHA-512 hash as hex string
+ * @impure has side effects / drives control flow
+ */
+declare function utilsHashSha512({ input: string }): string;
+
+
+// === Utils/JSON ===
+
+/**
+ * Parse JSON input Data With JSON/OpenAI Schema and Return Value
+ * @param schema — JSON Schema or OpenAI Function Definition
+ * @param data — JSON Input Data to be parsed
+ * @returns parsed — Parsed and Validated JSON
+ * @impure has side effects / drives control flow
+ */
+declare function parseWithSchema({ schema: string, data: string }): Struct;
+
+/**
+ * Attempts to repair and parse potentially malformed JSON
+ * @param jsonString — String containing potentially malformed JSON
+ * @returns result — The parsed JSON structure
+ * @impure has side effects / drives control flow
+ */
+declare function repairParse({ jsonString: string }): Struct;
+
+/**
+ * Generate Tool Definitions for Tool Calls
+ * @param exampleJson — Example JSON to infer schema from
+ * @returns schema — Generated JSON Schema / Tool Definition
+ * @impure has side effects / drives control flow
+ */
+declare function utilsJsonMakeSchema({ exampleJson: string }): Struct;
+
+
+// === Utils/Map ===
+
+/**
+ * Creates an empty map (string keys)
+ * @returns mapOut — The created map
+ */
+declare function makeMap(): Map<string, any>;
+
+/**
+ * Removes all entries from a map
+ * @param mapIn — Your Map
+ * @returns mapOut — Empty Map
+ * @impure has side effects / drives control flow
+ */
+declare function mapClear({ mapIn: Map<string, any> }): Map<string, any>;
+
+/**
+ * Gets a value from a map by key
+ * @param mapIn — Your Map
+ * @param key — Key to get
+ * @returns value — Value at the specified key
+ * @returns found — Was the key found in the map?
+ */
+declare function mapGet({ mapIn: Map<string, any>, key: string }): { value: any, found: bool };
+
+/**
+ * Checks if a key exists in the map
+ * @param mapIn — Your Map
+ * @param key — Key to check
+ * @returns hasKey — Does the map contain the key?
+ */
+declare function mapHasKey({ mapIn: Map<string, any>, key: string }): bool;
+
+/**
+ * Gets all keys from the map as an array
+ * @param mapIn — Your Map
+ * @returns keys — Array of all keys
+ */
+declare function mapKeys({ mapIn: Map<string, any> }): any[];
+
+/**
+ * Removes a key from the map
+ * @param mapIn — Your Map
+ * @param key — Key to remove
+ * @returns mapOut — Adjusted Map
+ * @returns value — The removed value (null if key not found)
+ * @returns wasPresent — Was the key in the map?
+ * @impure has side effects / drives control flow
+ */
+declare function mapRemove({ mapIn: Map<string, any>, key: string }): { mapOut: Map<string, any>, value: any, wasPresent: bool };
+
+/**
+ * Sets a value in a map at the given key
+ * @param mapIn — Your Map
+ * @param key — Key to set
+ * @param value — Value to set
+ * @returns mapOut — Adjusted Map
+ * @returns replaced — Was an existing value replaced?
+ * @impure has side effects / drives control flow
+ */
+declare function mapSet({ mapIn: Map<string, any>, key: string, value: any }): { mapOut: Map<string, any>, replaced: bool };
+
+/**
+ * Gets the number of entries in the map
+ * @param mapIn — Your Map
+ * @returns size — Number of entries in the map
+ */
+declare function mapSize({ mapIn: Map<string, any> }): int;
+
+/**
+ * Gets all values from the map as an array
+ * @param mapIn — Your Map
+ * @returns values — Array of all values
+ */
+declare function mapValues({ mapIn: Map<string, any> }): any[];
+
+
+// === Utils/Map/By Reference ===
+
+/**
+ * Clear all entries directly from a variable map without copying.
+ * @param varRef — Reference to the map variable to clear
+ * @impure has side effects / drives control flow
+ */
+declare function mapClearRef({ varRef: string }): void;
+
+/**
+ * Remove a key directly from a variable map without copying. Much faster for large maps.
+ * @param varRef — Reference to the map variable to modify
+ * @param key — Key to remove
+ * @returns value — The removed value (null if key not found)
+ * @returns wasPresent — Was the key in the map?
+ * @impure has side effects / drives control flow
+ */
+declare function mapRemoveRef({ varRef: string, key: string }): { value: any, wasPresent: bool };
+
+/**
+ * Set a value directly in a variable map without copying. Much faster for large maps.
+ * @param varRef — Reference to the map variable to modify
+ * @param key — Key to set
+ * @param value — Value to set at the key
+ * @impure has side effects / drives control flow
+ */
+declare function mapSetRef({ varRef: string, key: string, value: any }): void;
+
+
+// === Utils/Markdown ===
+
+/**
+ * Attempts to convert HTML to Markdown, removing unwanted tags
+ * @param html — Html to Parse
+ * @param skippedTags (optional) — Tags to skip
+ * @returns markdown — The parsed Markdown
+ * @impure has side effects / drives control flow
+ */
+declare function utilsMdHtmlToMd({ html: string, skippedTags?: string[] }): string;
+
+
+// === Utils/Math/Vector ===
+
+/**
+ * Adds two float vectors together element-wise
+ * @param vector1 — First float vector
+ * @param vector2 — Second float vector
+ * @returns resultVector — Sum of the two vectors
+ */
+declare function floatVectorAddition({ vector1: float[], vector2: float[] }): float[];
+
+/**
+ * Calculates the cosine similarity of two float vectors
+ * @param vector1 — First float vector
+ * @param vector2 — Second float vector
+ * @returns similarity — Cosine similarity of the two vectors
+ */
+declare function floatVectorCosineSimilarity({ vector1: float[], vector2: float[] }): float;
+
+/**
+ * Calculates the cross product of two float vectors
+ * @param vector1 — First float vector
+ * @param vector2 — Second float vector
+ * @returns resultVector — Cross product of the two vectors
+ */
+declare function floatVectorCrossProduct({ vector1: float[], vector2: float[] }): float[];
+
+/**
+ * Calculates the dot product of two float vectors
+ * @param vector1 — First float vector
+ * @param vector2 — Second float vector
+ * @returns result — Dot product of the two vectors
+ */
+declare function floatVectorDotProduct({ vector1: float[], vector2: float[] }): float;
+
+/**
+ * Multiplies two float vectors element-wise
+ * @param vector1 — First float vector
+ * @param vector2 — Second float vector
+ * @returns resultVector — Element-wise product of the two vectors
+ */
+declare function floatVectorMultiplication({ vector1: float[], vector2: float[] }): float[];
+
+/**
+ * Normalizes a float vector
+ * @param vector — Float vector to normalize
+ * @returns normalizedVector — Normalized float vector
+ */
+declare function floatVectorNormalize({ vector: float[] }): float[];
+
+/**
+ * Subtracts one float vector from another element-wise
+ * @param vector1 — First float vector
+ * @param vector2 — Second float vector
+ * @returns resultVector — Element-wise difference of the two vectors
+ */
+declare function floatVectorSubtraction({ vector1: float[], vector2: float[] }): float[];
+
+
+// === Utils/Set ===
+
+/**
+ * Converts an array to a set
+ * @param arrayIn
+ * @returns setOut
+ */
+declare function arrayToSet({ arrayIn: any[] }): Set<any>;
+
+/**
+ * Creates a set from the difference of 2 sets
+ * @param setIn1 — Your First Set
+ * @param setIn2 — Your Second Set
+ * @returns setOut — The difference set
+ * @impure has side effects / drives control flow
+ */
+declare function difference({ setIn1: Set<any>, setIn2: Set<any> }): Set<any>;
+
+/**
+ * Inserts an element to the set
+ * @param setIn — Your Set
+ * @param value — Value to push
+ * @returns setOut — Adjusted Set
+ * @returns existedBefore — Was the element there before?
+ * @impure has side effects / drives control flow
+ */
+declare function insert({ setIn: Set<any>, value: any }): { setOut: Set<any>, existedBefore: bool };
+
+/**
+ * Checks if one of the hash sets has at least one mutual element
+ * @param setIn1
+ * @param setIn2
+ * @returns isMutual — Does it include a mutual element that both sets share or not?
+ * @impure has side effects / drives control flow
+ */
+declare function isMutual({ setIn1: Set<any>, setIn2: Set<any> }): bool;
+
+/**
+ * Creates an empty set
+ * @returns setOut — The created set
+ */
+declare function makeSet(): Set<any>;
+
+/**
+ * Removes / Clears all elements from a set
+ * @param setIn — Your Set
+ * @returns setOut — Empty Set
+ * @impure has side effects / drives control flow
+ */
+declare function setClear({ setIn: Set<any> }): Set<any>;
+
+/**
+ * Discards an element of a set
+ * @param setIn — Your Set
+ * @param value — Value to remove
+ * @returns setOut — Adjusted Set
+ * @returns hasRemoved — If the element was removed
+ * @impure has side effects / drives control flow
+ */
+declare function setDiscard({ setIn: Set<any>, value: any }): { setOut: Set<any>, hasRemoved: bool };
+
+/**
+ * Gets the size of the hash set (how many elements)
+ * @param setIn — Your Set
+ * @returns size — How many elements does it have
+ */
+declare function setGetSize({ setIn: Set<any> }): int;
+
+/**
+ * Checks if an element is present in the set
+ * @param setIn — Your Set
+ * @param value — Value to search for
+ * @returns contains — Does the set include the value?
+ */
+declare function setHas({ setIn: Set<any>, value: any }): bool;
+
+/**
+ * Checks if a hash set is empty or not
+ * @param setIn — Your Set
+ * @returns isEmpty — Does it have any values or not?
+ */
+declare function setIsEmpty({ setIn: Set<any> }): bool;
+
+/**
+ * Checks if a hash set is a subset from a supposed bigger one
+ * @param setIn1 — Your Smaller Set
+ * @param setIn2 — Your Bigger Set
+ * @returns isSubset — Is the first set a subset of the second?
+ */
+declare function setIsSubset({ setIn1: Set<any>, setIn2: Set<any> }): bool;
+
+/**
+ * Checks if a hash set is a superset from a supposed smaller one
+ * @param setIn1 — Your Bigger Set
+ * @param setIn2 — Your Smaller Set
+ * @returns isSuperset — Is the first set a superset of the second?
+ */
+declare function setIsSuperset({ setIn1: Set<any>, setIn2: Set<any> }): bool;
+
+/**
+ * Pops a random element of a set
+ * @param setIn — Your Set
+ * @returns setOut — Adjusted Set
+ * @impure has side effects / drives control flow
+ */
+declare function setPop({ setIn: Set<any> }): Set<any>;
+
+/**
+ * Converts a set to an array
+ * @param setIn
+ * @returns arrayOut
+ */
+declare function setToArray({ setIn: Set<any> }): any[];
+
+/**
+ * Combines 2 sets into one unified hash set
+ * @param setIn1 — Your First Set
+ * @param setIn2 — Your Second Set
+ * @returns setOut — Combined Set
+ * @impure has side effects / drives control flow
+ */
+declare function union({ setIn1: Set<any>, setIn2: Set<any> }): Set<any>;
+
+
+// === Utils/Set/By Reference ===
+
+/**
+ * Clear all elements directly from a variable set without copying.
+ * @param varRef — Reference to the set variable to clear
+ * @impure has side effects / drives control flow
+ */
+declare function setClearRef({ varRef: string }): void;
+
+/**
+ * Remove an element directly from a variable set without copying. Much faster for large sets.
+ * @param varRef — Reference to the set variable to modify
+ * @param value — Value to remove from the set
+ * @returns wasPresent — True if the element was in the set and removed
+ * @impure has side effects / drives control flow
+ */
+declare function setDiscardRef({ varRef: string, value: any }): bool;
+
+/**
+ * Insert an element directly into a variable set without copying. Much faster for large sets.
+ * @param varRef — Reference to the set variable to modify
+ * @param value — Value to insert into the set
+ * @returns wasNew — True if the element was not already in the set
+ * @impure has side effects / drives control flow
+ */
+declare function setInsertRef({ varRef: string, value: any }): bool;
+
+
+// === Utils/String ===
+
+/**
+ * Compares two Strings
+ * @param string — Input
+ * @param string — Input
+ * @returns equal — Are the strings equal?
+ */
+declare function equalString({ string: string, string: string }): bool;
+
+/**
+ * Compares two Strings
+ * @param string — Input
+ * @param string — Input
+ * @returns unequal — Are the strings equal?
+ */
+declare function notEqualString({ string: string, string: string }): bool;
+
+/**
+ * Checks if a string contains a substring
+ * @param string — Input String
+ * @param substring — Substring to search for
+ * @returns contains — Does the string contain the substring?
+ */
+declare function stringContains({ string: string, substring: string }): bool;
+
+/**
+ * Checks if a string ends with a specific string
+ * @param string — Input String
+ * @param suffix — String to check against
+ * @returns endsWith — Does the string end with the suffix?
+ */
+declare function stringEndsWith({ string: string, suffix: string }): bool;
+
+/**
+ * Escapes special characters in a string (newlines, tabs, carriage returns, backslashes, quotes).
+ * @param string — Input String
+ * @returns escaped — String with special characters escaped
+ */
+declare function stringEscape({ string: string }): string;
+
+/**
+ * Formats a string with placeholders
+ * @param formatString — String with placeholders
+ * @returns formattedString — Formatted string
+ */
+declare function stringFormat({ formatString: string }): string;
+
+/**
+ * Joins multiple strings together
+ * @param strings — Strings to join
+ * @param separator — String to separate by
+ * @returns joinedString — Concatenated string
+ */
+declare function stringJoin({ strings: string[], separator: string }): string;
+
+/**
+ * Calculates the length of a string
+ * @param string — Input String
+ * @returns length — Length of the string
+ */
+declare function stringLength({ string: string }): int;
+
+/**
+ * Template Engine based on Jinja Templates
+ * @param template — Jinja Template String
+ * @returns rendered — Rendered String
+ */
+declare function stringRenderTemplate({ template: string }): string;
+
+/**
+ * Replaces occurrences of a substring or regex pattern within a string.
+ * @param string — Input String
+ * @param pattern — Substring or regex pattern to replace
+ * @param replacement — Replacement string (supports $1, $2, ... for regex capture groups)
+ * @param isRegex (optional) — Treat the pattern as a regular expression
+ * @returns newString — String with replacements
+ */
+declare function stringReplace({ string: string, pattern: string, replacement: string, isRegex?: bool }): string;
+
+/**
+ * Splits a string into substrings
+ * @param string — Input String
+ * @param separator — String to split by
+ * @returns substrings — Array of substrings
+ */
+declare function stringSplit({ string: string, separator: string }): string[];
+
+/**
+ * Checks if a string starts with a specific string
+ * @param string — Input String
+ * @param prefix — String to check against
+ * @returns startsWith — Does the string start with the prefix?
+ */
+declare function stringStartsWith({ string: string, prefix: string }): bool;
+
+/**
+ * Converts a string to lowercase
+ * @param string — Input String
+ * @returns lowercaseString — String in lowercase
+ */
+declare function stringToLower({ string: string }): string;
+
+/**
+ * Converts a string to uppercase
+ * @param string — Input String
+ * @returns uppercaseString — String in uppercase
+ */
+declare function stringToUpper({ string: string }): string;
+
+/**
+ * Removes leading and trailing whitespace from a string
+ * @param string — Input String
+ * @returns trimmedString — String without leading/trailing whitespace
+ */
+declare function stringTrim({ string: string }): string;
+
+/**
+ * Unescapes special character sequences in a string (\n, \t, \r, \\, \").
+ * @param string — Input String
+ * @returns unescaped — String with escape sequences resolved to actual characters
+ */
+declare function stringUnescape({ string: string }): string;
+
+/**
+ * Converts a byte array to a string using the UTF-8 lossy strategy
+ * @param bytes
+ * @returns string — Input String
+ */
+declare function utf8Lossy({ bytes: bytes[] }): string;
+
+
+// === Utils/String/Similarity ===
+
+/**
+ * Calculates the Damerau-Levenshtein distance between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @param normalize (optional) — Normalize the Distance
+ * @returns distance — Damerau-Levenshtein Distance
+ */
+declare function damerauLevenshteinDistance({ string1: string, string2: string, normalize?: bool }): float;
+
+/**
+ * Calculates the Hamming distance between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @returns distance — Hamming Distance
+ */
+declare function hammingDistance({ string1: string, string2: string }): float;
+
+/**
+ * Calculates the Jaro distance between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @returns distance — Jaro Distance
+ */
+declare function jaroDistance({ string1: string, string2: string }): float;
+
+/**
+ * Calculates the Jaro-Winkler distance between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @returns distance — Jaro-Winkler Distance
+ */
+declare function jaroWinklerDistance({ string1: string, string2: string }): float;
+
+/**
+ * Calculates the Levenshtein distance between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @param normalize (optional) — Normalize the Distance
+ * @returns distance — Levenshtein Distance
+ */
+declare function levenshteinDistance({ string1: string, string2: string, normalize?: bool }): float;
+
+/**
+ * Calculates the Optimal String Alignment distance between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @returns distance — Optimal String Alignment Distance
+ */
+declare function optimalStringAlignmentDistance({ string1: string, string2: string }): float;
+
+/**
+ * Calculates the Sørensen-Dice coefficient between two strings
+ * @param string1 — First String
+ * @param string2 — Second String
+ * @returns coefficient — Sørensen-Dice Coefficient
+ */
+declare function sorensenDiceCoefficient({ string1: string, string2: string }): float;
+
+
+// === Utils/Types ===
+
+/**
+ * Returns the input value if valid, otherwise returns the fallback default. Useful for handling optional values or error recovery.
+ * @param value — The primary value to use if available and valid
+ * @param default — Fallback value used when the primary value is null, missing, or invalid
+ * @returns result — The resolved value (primary if valid, otherwise default)
+ * @returns usedFallback — True if the fallback value was used
+ */
+declare function utilsTypesFallback({ value: any, default: any }): { result: any, usedFallback: bool };
+
+/**
+ * Selects between two values based on a boolean condition. Returns A if true, B if false.
+ * @param a — Value returned when condition is true
+ * @param b — Value returned when condition is false
+ * @param condition (optional) — If true, returns A. If false, returns B.
+ * @returns result — The selected value (A if true, B if false)
+ */
+declare function utilsTypesSelect({ a: any, b: any, condition?: bool }): any;
+
+/**
+ * Tries to transform cast types.
+ * @param typeIn — Type to transform
+ * @returns typeOut — If the type was successfully transformed, transformed type
+ * @returns success — Determines of tje transformation was successful
+ */
+declare function utilsTypesTryTransform({ typeIn: any }): { typeOut: any, success: bool };
+
+
+// === Utils/User ===
+
+/**
+ * Fetches the current user's persisted user information from the configured FlowLike hub's /api/v1/user/info endpoint when an execution token is available.
+ * @returns userInfo — The user record returned by /api/v1/user/info
+ * @returns success — True when user info was fetched successfully
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made
+ * @returns error — Error message when user info could not be fetched
+ */
+declare function utilsUserGetCurrentUserInfo(): { userInfo: Struct, success: bool, statusCode: int, error: string };
+
+/**
+ * Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and technical user info. Use 'Break Struct' to access individual fields.
+ * @returns userContext — The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), is_technical_user, key_id
+ * @returns hasUser — True if user context is available
+ */
+declare function utilsUserGetExecutingUser(): { userContext: Struct, hasUser: bool };
+
+/**
+ * Checks if the executing user's role has a specific attribute (tag). Attributes are custom string tags assigned to roles for flexible authorization. Returns false if no user context is available or the user has no role.
+ * @param attribute (optional) — The attribute (tag) to check for
+ * @returns hasAttribute — True if the user's role has the specified attribute
+ */
+declare function utilsUserHasAttribute({ attribute?: string }): bool;
+
+/**
+ * Checks if the executing user has a specific permission. Admin and Owner roles automatically have all permissions. Returns false if no user context is available.
+ * @param permission (optional) — The permission to check for
+ * @returns hasPermission — True if the user has the specified permission (or is Admin/Owner)
+ */
+declare function utilsUserHasPermission({ permission?: string }): bool;
+
+/**
+ * Checks if the current execution is triggered by a technical user (API key) rather than a human user. Technical users don't have a human identity (sub) but do have a key_id.
+ * @returns isTechnical — True if the execution is by a technical user (API key), false otherwise
+ * @returns keyId — The API key identifier for technical users, empty string for human users
+ */
+declare function utilsUserIsTechnicalUser(): { isTechnical: bool, keyId: string };
+

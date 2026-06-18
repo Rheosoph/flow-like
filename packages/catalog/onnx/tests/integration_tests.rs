@@ -159,6 +159,184 @@ const MOBILENET_URL: &str = "https://github.com/onnx/models/raw/main/validated/v
 // Segmentation - FCN ResNet-50-int8 is quantized and smaller (~34MB)
 const FCN_INT8_URL: &str = "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet50-12-int8.onnx";
 
+#[derive(Clone, Copy)]
+struct ModelZooCase {
+    name: &'static str,
+    url: &'static str,
+    filename: &'static str,
+}
+
+const ONNX_MODEL_ZOO_OBJECT_DETECTION_MODELS: &[ModelZooCase] = &[
+    ModelZooCase {
+        name: "Faster R-CNN 10",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/faster-rcnn/model/FasterRCNN-10.onnx",
+        filename: "FasterRCNN-10.onnx",
+    },
+    ModelZooCase {
+        name: "Faster R-CNN 12 int8",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/faster-rcnn/model/FasterRCNN-12-int8.onnx",
+        filename: "FasterRCNN-12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "Faster R-CNN 12 qdq",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/faster-rcnn/model/FasterRCNN-12-qdq.onnx",
+        filename: "FasterRCNN-12-qdq.onnx",
+    },
+    ModelZooCase {
+        name: "Faster R-CNN 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/faster-rcnn/model/FasterRCNN-12.onnx",
+        filename: "FasterRCNN-12.onnx",
+    },
+    ModelZooCase {
+        name: "Mask R-CNN 10",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-10.onnx",
+        filename: "MaskRCNN-10.onnx",
+    },
+    ModelZooCase {
+        name: "Mask R-CNN 12 int8",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-12-int8.onnx",
+        filename: "MaskRCNN-12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "Mask R-CNN 12 qdq",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-12-qdq.onnx",
+        filename: "MaskRCNN-12-qdq.onnx",
+    },
+    ModelZooCase {
+        name: "Mask R-CNN 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/mask-rcnn/model/MaskRCNN-12.onnx",
+        filename: "MaskRCNN-12.onnx",
+    },
+    ModelZooCase {
+        name: "RetinaNet 9",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/retinanet/model/retinanet-9.onnx",
+        filename: "retinanet-9.onnx",
+    },
+    ModelZooCase {
+        name: "SSD-MobileNetV1 10",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd-mobilenetv1/model/ssd_mobilenet_v1_10.onnx",
+        filename: "ssd_mobilenet_v1_10.onnx",
+    },
+    ModelZooCase {
+        name: "SSD-MobileNetV1 12 int8",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd-mobilenetv1/model/ssd_mobilenet_v1_12-int8.onnx",
+        filename: "ssd_mobilenet_v1_12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "SSD-MobileNetV1 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd-mobilenetv1/model/ssd_mobilenet_v1_12.onnx",
+        filename: "ssd_mobilenet_v1_12.onnx",
+    },
+    ModelZooCase {
+        name: "SSD-MobileNetV1 13 qdq",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd-mobilenetv1/model/ssd_mobilenet_v1_13-qdq.onnx",
+        filename: "ssd_mobilenet_v1_13-qdq.onnx",
+    },
+    ModelZooCase {
+        name: "SSD 10",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd/model/ssd-10.onnx",
+        filename: "ssd-10.onnx",
+    },
+    ModelZooCase {
+        name: "SSD 12 int8",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd/model/ssd-12-int8.onnx",
+        filename: "ssd-12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "SSD 12 qdq",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd/model/ssd-12-qdq.onnx",
+        filename: "ssd-12-qdq.onnx",
+    },
+    ModelZooCase {
+        name: "SSD 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/ssd/model/ssd-12.onnx",
+        filename: "ssd-12.onnx",
+    },
+    ModelZooCase {
+        name: "Tiny YOLOv2 7",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-7.onnx",
+        filename: "tinyyolov2-7.onnx",
+    },
+    ModelZooCase {
+        name: "Tiny YOLOv2 8",
+        url: TINY_YOLOV2_URL,
+        filename: "tinyyolov2-8.onnx",
+    },
+    ModelZooCase {
+        name: "Tiny YOLOv3 11",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/tiny-yolov3/model/tiny-yolov3-11.onnx",
+        filename: "tiny-yolov3-11.onnx",
+    },
+    ModelZooCase {
+        name: "YOLOv2 COCO 9",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov2-coco/model/yolov2-coco-9.onnx",
+        filename: "yolov2-coco-9.onnx",
+    },
+    ModelZooCase {
+        name: "YOLOv3 10",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov3/model/yolov3-10.onnx",
+        filename: "yolov3-10.onnx",
+    },
+    ModelZooCase {
+        name: "YOLOv3 12 int8",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov3/model/yolov3-12-int8.onnx",
+        filename: "yolov3-12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "YOLOv3 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov3/model/yolov3-12.onnx",
+        filename: "yolov3-12.onnx",
+    },
+    ModelZooCase {
+        name: "YOLOv4",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov4/model/yolov4.onnx",
+        filename: "yolov4.onnx",
+    },
+];
+
+const ONNX_MODEL_ZOO_SEGMENTATION_MODELS: &[ModelZooCase] = &[
+    ModelZooCase {
+        name: "DUC ResNet101 12 int8",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/duc/model/ResNet101-DUC-12-int8.onnx",
+        filename: "ResNet101-DUC-12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "DUC ResNet101 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/duc/model/ResNet101-DUC-12.onnx",
+        filename: "ResNet101-DUC-12.onnx",
+    },
+    ModelZooCase {
+        name: "DUC ResNet101 7",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/duc/model/ResNet101-DUC-7.onnx",
+        filename: "ResNet101-DUC-7.onnx",
+    },
+    ModelZooCase {
+        name: "FCN ResNet101 11",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet101-11.onnx",
+        filename: "fcn-resnet101-11.onnx",
+    },
+    ModelZooCase {
+        name: "FCN ResNet50 11",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet50-11.onnx",
+        filename: "fcn-resnet50-11.onnx",
+    },
+    ModelZooCase {
+        name: "FCN ResNet50 12 int8",
+        url: FCN_INT8_URL,
+        filename: "fcn-resnet50-12-int8.onnx",
+    },
+    ModelZooCase {
+        name: "FCN ResNet50 12 qdq",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet50-12-qdq.onnx",
+        filename: "fcn-resnet50-12-qdq.onnx",
+    },
+    ModelZooCase {
+        name: "FCN ResNet50 12",
+        url: "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet50-12.onnx",
+        filename: "fcn-resnet50-12.onnx",
+    },
+];
+
 // NER - BERT-base-NER ONNX (~430MB - requires HuggingFace)
 // Note: This requires authentication for HuggingFace, so we use a smaller test model
 #[allow(dead_code)]
@@ -789,6 +967,7 @@ mod classification_tests {
 #[cfg(feature = "execute")]
 mod object_detection_tests {
     use super::*;
+    use flow_like_catalog_onnx::{Provider, detection::ObjectDetection, load::determine_provider};
     use flow_like_model_provider::ml::{
         ndarray::Array4,
         ort::{inputs, session::Session, value::Value},
@@ -816,6 +995,12 @@ mod object_detection_tests {
 
         assert!(!session.inputs.is_empty());
         assert!(!session.outputs.is_empty());
+
+        let provider = determine_provider(&session).expect("provider detection should succeed");
+        assert!(
+            matches!(provider, Provider::YoloV2GridLike(_)),
+            "TinyYOLOv2 should be recognized as YOLOv2 grid provider"
+        );
     }
 
     #[test]
@@ -847,21 +1032,152 @@ mod object_detection_tests {
         let input_value = Value::from_array(input).expect("Failed to create input tensor");
 
         let input_name = session.inputs[0].name.clone();
-        let outputs = session
-            .run(inputs![input_name.as_str() => input_value])
-            .expect("Inference failed");
+        {
+            let outputs = session
+                .run(inputs![input_name.as_str() => input_value])
+                .expect("Inference failed");
 
-        println!(
-            "TinyYOLOv2 output keys: {:?}",
-            outputs.keys().collect::<Vec<_>>()
+            println!(
+                "TinyYOLOv2 output keys: {:?}",
+                outputs.keys().collect::<Vec<_>>()
+            );
+
+            for (name, tensor) in outputs.iter() {
+                if let Ok(arr) = tensor.try_extract_array::<f32>() {
+                    println!("Output '{}' shape: {:?}", name, arr.shape());
+                    // TinyYOLOv2 outputs detection grid
+                    assert!(arr.shape().len() >= 3, "Should have detection grid output");
+                }
+            }
+        }
+
+        let provider = determine_provider(&session).expect("provider detection should succeed");
+        let bboxes = match provider {
+            Provider::YoloV2GridLike(provider) => provider
+                .run(&mut session, &img, 1.0, 0.7, 5)
+                .expect("Object-detection provider should run TinyYOLOv2"),
+            _ => panic!("TinyYOLOv2 should be recognized as a YOLOv2 grid provider"),
+        };
+        assert!(bboxes.len() <= 5);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_yolov3_boxes_stay_in_wide_image_bounds() {
+        let model_path = download_if_missing(
+            "https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/yolov3/model/yolov3-12.onnx",
+            "yolov3-12.onnx",
         );
 
-        for (name, tensor) in outputs.iter() {
-            if let Ok(arr) = tensor.try_extract_array::<f32>() {
-                println!("Output '{}' shape: {:?}", name, arr.shape());
-                // TinyYOLOv2 outputs detection grid
-                assert!(arr.shape().len() >= 3, "Should have detection grid output");
+        let mut session = Session::builder()
+            .expect("Failed to create session builder")
+            .commit_from_file(&model_path)
+            .expect("Failed to load model");
+        let img = create_test_image(640, 360);
+        let provider = determine_provider(&session).expect("provider detection should succeed");
+        let bboxes = match provider {
+            Provider::YoloV3Like(provider) => provider
+                .run(&mut session, &img, 0.0, 0.7, 20)
+                .expect("Object-detection provider should run YOLOv3"),
+            _ => panic!("YOLOv3 should be recognized as a YOLOv3 provider"),
+        };
+
+        if bboxes.is_empty() {
+            println!("YOLOv3 returned no selected boxes for the synthetic wide test image");
+            return;
+        }
+
+        for bbox in bboxes {
+            assert!(
+                bbox.x1 >= 0.0
+                    && bbox.x1 <= img.width() as f32
+                    && bbox.x2 >= 0.0
+                    && bbox.x2 <= img.width() as f32
+                    && bbox.y1 >= 0.0
+                    && bbox.y1 <= img.height() as f32
+                    && bbox.y2 >= 0.0
+                    && bbox.y2 <= img.height() as f32
+                    && bbox.x2 >= bbox.x1
+                    && bbox.y2 >= bbox.y1,
+                "YOLOv3 returned out-of-bounds or inverted box: {:?}",
+                bbox
+            );
+        }
+    }
+
+    #[test]
+    fn test_onnx_model_zoo_manifest_counts() {
+        assert_eq!(ONNX_MODEL_ZOO_OBJECT_DETECTION_MODELS.len(), 25);
+        assert_eq!(ONNX_MODEL_ZOO_SEGMENTATION_MODELS.len(), 8);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_onnx_model_zoo_object_detection_weights_on_object_detection_node() {
+        let img = create_test_image(416, 416);
+
+        for case in ONNX_MODEL_ZOO_OBJECT_DETECTION_MODELS {
+            println!("--- {} ---", case.name);
+            let model_path = download_if_missing(case.url, case.filename);
+            let mut session = Session::builder()
+                .expect("Failed to create session builder")
+                .commit_from_file(&model_path)
+                .unwrap_or_else(|err| panic!("Failed to load {}: {err}", case.name));
+
+            let provider = determine_provider(&session).unwrap_or_else(|err| {
+                panic!("Failed to determine provider for {}: {err}", case.name)
+            });
+
+            let bboxes = match provider {
+                Provider::DfineLike(provider) => provider.run(&mut session, &img, 1.0, 0.7, 5),
+                Provider::YoloLike(provider) => provider.run(&mut session, &img, 1.0, 0.7, 5),
+                Provider::BoxLabelsScoresLike(provider) => {
+                    provider.run(&mut session, &img, 1.0, 0.7, 5)
+                }
+                Provider::SsdMobileNetLike(provider) => {
+                    provider.run(&mut session, &img, 1.0, 0.7, 5)
+                }
+                Provider::YoloV2GridLike(provider) => provider.run(&mut session, &img, 1.0, 0.7, 5),
+                Provider::YoloV3Like(provider) => provider.run(&mut session, &img, 1.0, 0.7, 5),
+                Provider::YoloV4Like(provider) => provider.run(&mut session, &img, 1.0, 0.7, 5),
+                Provider::RetinaNetLike(provider) => provider.run(&mut session, &img, 1.0, 0.7, 5),
+                Provider::TimmLike(_) | Provider::Generic => {
+                    panic!(
+                        "{} was not recognized as an object-detection provider",
+                        case.name
+                    )
+                }
             }
+            .unwrap_or_else(|err| panic!("Object detection failed for {}: {err}", case.name));
+
+            assert!(
+                bboxes.len() <= 5,
+                "{} returned more boxes than requested",
+                case.name
+            );
+            println!("{} returned {} boxes", case.name, bboxes.len());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_onnx_model_zoo_segmentation_weights_are_not_object_detection() {
+        for case in ONNX_MODEL_ZOO_SEGMENTATION_MODELS {
+            println!("--- {} ---", case.name);
+            let model_path = download_if_missing(case.url, case.filename);
+            let session = Session::builder()
+                .expect("Failed to create session builder")
+                .commit_from_file(&model_path)
+                .unwrap_or_else(|err| panic!("Failed to load {}: {err}", case.name));
+
+            let provider = determine_provider(&session).unwrap_or_else(|err| {
+                panic!("Failed to determine provider for {}: {err}", case.name)
+            });
+            assert!(
+                matches!(provider, Provider::Generic),
+                "{} is a segmentation model and should not be routed to object detection",
+                case.name
+            );
         }
     }
 }
@@ -877,7 +1193,6 @@ mod emotion_tests {
         ndarray::Array4,
         ort::{inputs, session::Session, value::Value},
     };
-    use image::GenericImageView;
 
     #[test]
     #[ignore]
@@ -981,7 +1296,6 @@ mod segmentation_tests {
         ndarray::Array4,
         ort::{inputs, session::Session, value::Value},
     };
-    use image::GenericImageView;
 
     #[test]
     #[ignore]

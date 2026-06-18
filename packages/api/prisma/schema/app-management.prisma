@@ -73,6 +73,7 @@ model Membership {
 
   invitations   Invitation[]
   addedPackages AppPackage[]
+  technicalUsersCreated TechnicalUser[] @relation("TechnicalUserCreatorMembership")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

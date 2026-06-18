@@ -3,6 +3,7 @@
 import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../ui/sheet";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -35,6 +36,7 @@ export function A2UIDrawer({
 	onAction,
 	renderChild,
 }: ComponentProps<DrawerComponent>) {
+	const triggerAction = useComponentActionTrigger(componentId);
 	const open = useResolved<boolean>(component.open);
 	const title = useResolved<string>(component.title);
 	const side = useResolved<string>(component.side);
@@ -51,8 +53,9 @@ export function A2UIDrawer({
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: {},
+				context: { open: false },
 			});
+			void triggerAction(component.actions, { open: false });
 		}
 	};
 

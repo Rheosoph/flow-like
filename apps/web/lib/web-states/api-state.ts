@@ -1,6 +1,7 @@
 import type { IApiState } from "@flow-like/flow-like-ui";
+import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { IProfile } from "@flow-like/flow-like-ui/types";
-import { type WebBackendRef, getApiBaseUrl } from "./api-utils";
+import { type WebBackendRef, ensureProtectedAppRouteAuth } from "./api-utils";
 
 export class WebApiState implements IApiState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -88,16 +89,7 @@ export class WebApiState implements IApiState {
 	}
 
 	private constructUrl(profile: IProfile, path: string): string {
-		let baseUrl = profile.hub ?? getApiBaseUrl();
-		if (!baseUrl.endsWith("/")) {
-			baseUrl += "/";
-		}
-		const cleanPath = path.replace(/^\/+/, "");
-		if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) {
-			return `${baseUrl}api/v1/${cleanPath}`;
-		}
-		const protocol = profile.secure === false ? "http" : "https";
-		return `${protocol}://${baseUrl}api/v1/${cleanPath}`;
+		return getApiUrl(profile, path);
 	}
 
 	private getHeaders(): HeadersInit {
@@ -116,6 +108,11 @@ export class WebApiState implements IApiState {
 		path: string,
 		options?: RequestInit,
 	): Promise<T> {
+		ensureProtectedAppRouteAuth(
+			path,
+			this.backend.auth,
+			(options?.method ?? "GET").toUpperCase(),
+		);
 		const url = this.constructUrl(profile, path);
 		const response = await fetch(url, {
 			...options,

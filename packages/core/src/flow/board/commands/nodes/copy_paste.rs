@@ -242,7 +242,8 @@ impl Command for CopyPasteCommand {
             new_node.start = blueprint_node.start;
             new_node.event_callback = blueprint_node.event_callback;
             new_node.wasm = blueprint_node.wasm.clone();
-            new_node.version = blueprint_node.version;
+            // Keep the source schema version. Board::node_updates runs after the
+            // command and must be able to detect stale copied nodes.
             new_node.long_running = blueprint_node.long_running;
             new_node.only_offline = blueprint_node.only_offline;
 

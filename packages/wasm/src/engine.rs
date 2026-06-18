@@ -43,9 +43,11 @@ pub struct WasmConfig {
     /// because `Module::new` is not available for cross targets.
     pub target: Option<String>,
     /// When false, the engine can only load precompiled (.cwasm) artifacts.
-    /// `Module::new` / compilation is disabled. Useful for platforms that
-    /// cannot JIT (iOS).
+    /// `Module::new` / compilation is disabled.
     pub compiler_enabled: bool,
+    /// Use iOS-compatible Wasmtime memory reservations even when compiling
+    /// off-device, for example when producing Pulley artifacts for iOS.
+    pub ios_memory_layout: bool,
 }
 
 impl Default for WasmConfig {
@@ -61,6 +63,7 @@ impl Default for WasmConfig {
             default_security: WasmSecurityConfig::default(),
             target: None,
             compiler_enabled: true,
+            ios_memory_layout: false,
         }
     }
 }
@@ -83,6 +86,7 @@ impl WasmConfig {
             default_security: WasmSecurityConfig::default(),
             target: None,
             compiler_enabled: true,
+            ios_memory_layout: false,
         }
     }
 
@@ -99,6 +103,7 @@ impl WasmConfig {
             default_security: WasmSecurityConfig::default(),
             target: None,
             compiler_enabled: true,
+            ios_memory_layout: false,
         }
     }
 
@@ -115,6 +120,7 @@ impl WasmConfig {
             default_security: WasmSecurityConfig::permissive(),
             target: None,
             compiler_enabled: true,
+            ios_memory_layout: false,
         }
     }
 
@@ -147,8 +153,15 @@ impl WasmConfig {
         self
     }
 
+    /// Use iOS-compatible linear-memory tunables for off-device compilation.
+    pub fn with_ios_memory_layout(mut self) -> Self {
+        self.ios_memory_layout = true;
+        self
+    }
+
     fn uses_ios_memory_layout(&self) -> bool {
         cfg!(target_os = "ios")
+            || self.ios_memory_layout
             || self
                 .target
                 .as_deref()
@@ -194,8 +207,16 @@ impl WasmConfig {
         let limits = &self.default_security.limits;
         config.max_wasm_stack(limits.max_stack_depth as usize * 1024);
 
-        // Cross-compilation target
-        if let Some(ref triple) = self.target {
+        // Cross-compilation target. iOS must execute through Pulley because
+        // App Store/TestFlight builds cannot jump into Wasmtime native-code
+        // artifacts.
+        let target = if cfg!(target_os = "ios") && self.target.is_none() {
+            Some("pulley64")
+        } else {
+            self.target.as_deref()
+        };
+
+        if let Some(triple) = target {
             config.target(triple).map_err(|e| {
                 WasmError::compilation(format!(
                     "Unsupported cross-compilation target '{}': {}",
@@ -225,9 +246,6 @@ pub struct WasmEngine {
     aot_cache: Option<AotCache>,
     /// Cached node definitions (wasm_hash -> definitions)
     definitions_cache: DashMap<String, Vec<WasmNodeDefinition>>,
-    /// Pulley fallback engine for iOS where native JIT is unavailable.
-    /// Cranelift compiles to Pulley bytecode which is interpreted at runtime.
-    pulley_engine: Option<Engine>,
 }
 
 impl WasmEngine {
@@ -240,23 +258,6 @@ impl WasmEngine {
 
         let aot_cache = config.cache_dir.as_ref().map(AotCache::new);
 
-        // On iOS, create a secondary Pulley-targeted engine as fallback.
-        // The primary engine targets the host (for deserializing native precompiled
-        // artifacts from the server). When no native artifact exists, we fall back
-        // to compiling via Cranelift→Pulley which doesn't need W+X memory pages.
-        // Android allows W+X (execmem) so Cranelift works natively there.
-        let pulley_engine = if cfg!(target_os = "ios") {
-            let mut pulley_config = config.to_wasmtime_config()?;
-            pulley_config.target("pulley64").map_err(|e| {
-                WasmError::compilation(format!("Failed to set Pulley target: {}", e))
-            })?;
-            Some(Engine::new(&pulley_config).map_err(|e| {
-                WasmError::compilation(format!("Failed to create Pulley engine: {}", e))
-            })?)
-        } else {
-            None
-        };
-
         Ok(Self {
             engine,
             config,
@@ -266,7 +267,6 @@ impl WasmEngine {
             epoch_ticker: Arc::new(RwLock::new(None)),
             aot_cache,
             definitions_cache: DashMap::new(),
-            pulley_engine,
         })
     }
 
@@ -327,15 +327,11 @@ impl WasmEngine {
         }
 
         let engine = self.engine.clone();
-        let pulley = self.pulley_engine.clone();
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(10));
             loop {
                 interval.tick().await;
                 engine.increment_epoch();
-                if let Some(ref pe) = pulley {
-                    pe.increment_epoch();
-                }
             }
         });
 
@@ -359,7 +355,7 @@ impl WasmEngine {
             return Ok(cached.clone());
         }
 
-        // 1. Try native AOT cache (server-injected or previously compiled)
+        // 1. Try AOT cache (server-injected or previously compiled)
         if let Some(aot) = &self.aot_cache {
             if let Some(precompiled) = aot.load_module(&self.engine, &hash) {
                 let module = Arc::new(WasmModule::from_precompiled(precompiled, hash.clone())?);
@@ -368,21 +364,8 @@ impl WasmEngine {
             }
         }
 
-        // 2. Pulley interpreter fallback (iOS): compile .wasm on the fly
-        if let Some(pulley_engine) = &self.pulley_engine {
-            tracing::info!(
-                hash = %hash,
-                "No native precompiled artifact — compiling with Pulley interpreter",
-            );
-
-            let module = wasmtime::Module::new(pulley_engine, bytes)
-                .map_err(|e| WasmError::compilation(format!("Pulley compilation failed: {}", e)))?;
-            let module = Arc::new(WasmModule::from_precompiled(module, hash.clone())?);
-            self.module_cache.insert(hash, module.clone());
-            return Ok(module);
-        }
-
-        // 3. Desktop/Android: compile with Cranelift (native)
+        // 2. Compile with the configured engine. On iOS this engine targets
+        // Pulley, so no native executable pages are produced.
         let module = if self.config.compiler_enabled {
             let m = WasmModule::from_bytes(self, bytes, hash.clone()).await?;
             if let Some(aot) = &self.aot_cache {
@@ -426,7 +409,7 @@ impl WasmEngine {
             return Ok(cached.clone());
         }
 
-        // 1. Try native AOT cache
+        // 1. Try AOT cache
         if let Some(aot) = &self.aot_cache {
             if let Some(precompiled) = aot.load_component(&self.engine, &hash) {
                 let component = Arc::new(WasmComponent::from_precompiled(
@@ -439,27 +422,8 @@ impl WasmEngine {
             }
         }
 
-        // 2. Pulley interpreter fallback (iOS): compile .wasm on the fly
-        if let Some(pulley_engine) = &self.pulley_engine {
-            tracing::info!(
-                hash = %hash,
-                "No native precompiled component — compiling with Pulley interpreter",
-            );
-
-            let component =
-                wasmtime::component::Component::new(pulley_engine, bytes).map_err(|e| {
-                    WasmError::compilation(format!("Pulley component compilation failed: {}", e))
-                })?;
-            let component = Arc::new(WasmComponent::from_precompiled(
-                component,
-                bytes,
-                hash.clone(),
-            )?);
-            self.component_cache.insert(hash, component.clone());
-            return Ok(component);
-        }
-
-        // 3. Desktop/Android: compile with Cranelift
+        // 2. Compile with the configured engine. On iOS this engine targets
+        // Pulley, so no native executable pages are produced.
         let component = if self.config.compiler_enabled {
             let c = WasmComponent::from_bytes(self, bytes, hash.clone()).await?;
             if let Some(aot) = &self.aot_cache {

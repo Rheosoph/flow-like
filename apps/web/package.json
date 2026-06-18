@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "next dev -p 3001",
-		"build": "next build",
+		"build": "bun ../../scripts/sync-node-icons.ts && next build",
 		"start": "next start -p 3001",
 		"deploy": "bun run build && bunx wrangler pages deploy out",
 		"deploy:force": "bun run build && bunx wrangler pages deploy out --branch main",

@@ -923,7 +923,10 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					onAction={handleAction}
 					surfaceId={surface.id}
 					appId={actionContext?.appId}
+					boardId={actionContext?.boardId}
+					eventId={actionContext?.eventId}
 					components={Object.fromEntries(allComponents)}
+					isPreviewMode={!!actionContext?.appId && !!actionContext?.boardId}
 				>
 					<div className={cn("min-h-full w-full", className)}>
 						<BuilderComponent

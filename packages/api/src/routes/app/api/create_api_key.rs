@@ -1,6 +1,6 @@
 use crate::{
     audit_branch, ensure_permission,
-    entity::{role, technical_user},
+    entity::{membership, role, technical_user},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -63,7 +63,17 @@ pub async fn create_api_key(
     Path(app_id): Path<String>,
     Json(input): Json<ApiKeyInput>,
 ) -> Result<Json<ApiKeyOut>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
+    let creator_user_id = permission.effective_user_id()?;
+    let creator_membership = membership::Entity::find()
+        .filter(
+            membership::Column::UserId
+                .eq(&creator_user_id)
+                .and(membership::Column::AppId.eq(&app_id)),
+        )
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::forbidden("Creator is not a member of this app"))?;
 
     // Validate role_id if provided
     let role_name = if let Some(role_id) = &input.role_id {
@@ -117,6 +127,8 @@ pub async fn create_api_key(
         key: Set(secret_hash),
         role_id: Set(input.role_id),
         app_id: Set(app_id.clone()),
+        creator_user_id: Set(Some(creator_user_id)),
+        creator_membership_id: Set(Some(creator_membership.id)),
         valid_until: Set(naive_datetime),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),

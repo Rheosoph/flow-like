@@ -23,7 +23,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { AuthContextProps } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
@@ -52,9 +51,16 @@ type SortOption =
 	| "updated_at"
 	| "created_at";
 
+type PackagesStoreAuth =
+	| {
+			readonly user?: { readonly access_token?: string } | null;
+	  }
+	| null
+	| undefined;
+
 interface PackagesStorePageProps {
 	fetcher: GenericFetcher;
-	auth: AuthContextProps;
+	auth: PackagesStoreAuth;
 	getPackageStatus?: (packageId: string) => CompileStatus | undefined;
 }
 
@@ -267,7 +273,7 @@ export function PackageDetailWrapper({
 	getPackageStatus,
 }: {
 	fetcher: GenericFetcher;
-	auth: AuthContextProps;
+	auth: PackagesStoreAuth;
 	getPackageStatus?: (packageId: string) => CompileStatus | undefined;
 }) {
 	const searchParams = useSearchParams();
@@ -428,7 +434,7 @@ function Swimlane({
 export function PackageListContent({
 	fetcher,
 	auth,
-}: { fetcher: GenericFetcher; auth: AuthContextProps }) {
+}: { fetcher: GenericFetcher; auth: PackagesStoreAuth }) {
 	const backend = useBackend();
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,

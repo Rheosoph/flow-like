@@ -55,6 +55,7 @@ model User {
   wasmPackagesAuthored        WasmPackageAuthor[]
   purchases                   AppPurchase[]
   interactions                Interaction[]
+  technicalUsersCreated       TechnicalUser[] @relation("TechnicalUserCreator")
 
   status UserStatus @default(ACTIVE)
   tier   UserTier   @default(FREE)
@@ -148,6 +149,9 @@ model LLMUsageTracking {
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
   userId String?
 
+  technicalUserId   String?
+  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
 
@@ -162,6 +166,7 @@ model LLMUsageTracking {
   @@index([modelId, createdAt])
   @@index([provider, createdAt])
   @@index([invocationId])
+  @@index([technicalUserId, createdAt])
 }
 
 model EmbeddingUsageTracking {
@@ -182,6 +187,9 @@ model EmbeddingUsageTracking {
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
 
+  technicalUserId   String?
+  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+
   price BigInt
 
   createdAt DateTime @default(now())
@@ -193,6 +201,7 @@ model EmbeddingUsageTracking {
   @@index([modelId, createdAt])
   @@index([provider, createdAt])
   @@index([invocationId])
+  @@index([technicalUserId, createdAt])
 }
 
 enum ExecutionStatus {
@@ -221,12 +230,16 @@ model ExecutionUsageTracking {
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?
 
+  technicalUserId   String?
+  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([createdAt])
   @@index([appId, createdAt])
   @@index([userId, createdAt])
+  @@index([technicalUserId, createdAt])
   @@index([version])
 }
 
@@ -239,6 +252,7 @@ model UsageInvocation {
   status String
 
   userId String?
+  technicalUserId String?
   appId  String?
 
   provider String?
@@ -267,6 +281,7 @@ model UsageInvocation {
   @@index([kind, createdAt])
   @@index([appId, createdAt])
   @@index([userId, createdAt])
+  @@index([technicalUserId, createdAt])
   @@index([provider, modelId, createdAt])
   @@index([providerRequestId])
 }
@@ -412,6 +427,9 @@ model ExecutionRun {
   /// App the board belongs to
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
+
+  technicalUserId   String?
+  technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
   /// Streaming events for this run
   events ExecutionEvent[]

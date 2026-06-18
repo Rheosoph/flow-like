@@ -414,15 +414,25 @@ fn split_target(target: &str) -> (String, HashMap<String, String>) {
     let mut query = HashMap::new();
     for pair in query_string.split('&').filter(|pair| !pair.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let key = urlencoding::decode(key)
-            .map(|value| value.into_owned())
-            .unwrap_or_else(|_| key.to_string());
-        let value = urlencoding::decode(value)
-            .map(|value| value.into_owned())
-            .unwrap_or_else(|_| value.to_string());
+        let key = decode_query_component(key);
+        let value = decode_query_component(value);
         query.insert(key, value);
     }
     (normalize_path(path), query)
+}
+
+#[cfg(feature = "execute")]
+fn decode_query_component(component: &str) -> String {
+    if component.contains('+') {
+        let replaced = component.replace('+', " ");
+        return urlencoding::decode(&replaced)
+            .map(|value| value.into_owned())
+            .unwrap_or_else(|_| component.to_string());
+    }
+
+    urlencoding::decode(component)
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|_| component.to_string())
 }
 
 #[cfg(feature = "execute")]
@@ -459,5 +469,27 @@ fn reason_phrase(status: u16) -> &'static str {
         500 => "Internal Server Error",
         501 => "Not Implemented",
         _ => "OK",
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::split_target;
+
+    #[test]
+    fn split_target_decodes_query_plus_like_space_and_percent_plus_literally() {
+        let (path, query) =
+            split_target("search?full+name=Felix+Lau&literal=a%2Bb&encoded=hello%20world");
+
+        assert_eq!(path, "/search");
+        assert_eq!(
+            query.get("full name").map(String::as_str),
+            Some("Felix Lau")
+        );
+        assert_eq!(query.get("literal").map(String::as_str), Some("a+b"));
+        assert_eq!(
+            query.get("encoded").map(String::as_str),
+            Some("hello world")
+        );
     }
 }

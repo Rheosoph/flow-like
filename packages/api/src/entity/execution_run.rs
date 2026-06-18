@@ -47,6 +47,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "technicalUserId", column_type = "Text", nullable)]
+    pub technical_user_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -61,6 +63,14 @@ pub enum Relation {
     App,
     #[sea_orm(has_many = "super::execution_event::Entity")]
     ExecutionEvent,
+    #[sea_orm(
+        belongs_to = "super::technical_user::Entity",
+        from = "Column::TechnicalUserId",
+        to = "super::technical_user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    TechnicalUser,
     #[sea_orm(
         belongs_to = "super::user::Entity",
         from = "Column::UserId",
@@ -80,6 +90,12 @@ impl Related<super::app::Entity> for Entity {
 impl Related<super::execution_event::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::ExecutionEvent.def()
+    }
+}
+
+impl Related<super::technical_user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::TechnicalUser.def()
     }
 }
 

@@ -98,6 +98,15 @@ pub async fn upsert_board(
     board.mark_changed();
     board.save(None).await?;
 
+    if let Err(err) =
+        crate::routes::app::board::scoring::persist_board_score(&state.db, &app_id, &board).await
+    {
+        tracing::warn!(
+            "failed to persist board score for {app_id}/{}: {err:?}",
+            board.id
+        );
+    }
+
     audit_branch!(
         state,
         user,

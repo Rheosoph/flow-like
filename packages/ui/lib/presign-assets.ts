@@ -1,35 +1,24 @@
 import type { BoundValue, SurfaceComponent } from "../components/a2ui/types";
 import type { IStorageState } from "../state/backend-state/storage-state";
 
-// Component types that have asset URLs
-const ASSET_COMPONENT_TYPES = new Set([
-	// Display components
-	"image",
-	"video",
-	"filePreview",
-	"avatar",
-	"lottie",
-	"iframe",
-	// Interactive components
-	"imageLabeler",
-	"imageHotspot",
-	// Game components
-	"sprite",
-	"model3d",
-	"scene3d",
-	"characterPortrait",
-	"miniMap",
-]);
-
-// Properties that contain asset URLs
-const ASSET_PROPERTIES = new Set([
-	"src", // image, video, filePreview, sprite, model3d, lottie, iframe
-	"poster", // video poster image
-	"fallback", // avatar fallback image
-	"image", // characterPortrait
-	"mapImage", // miniMap
-	"environmentMap", // scene3d HDR/environment
-]);
+// Component/property pairs that contain storage-backed asset URLs.
+// Keep this aligned with the builder inspector's asset picker rules.
+const ASSET_FIELDS_BY_COMPONENT: Record<string, string[]> = {
+	image: ["src", "fallback"],
+	video: ["src", "poster"],
+	filePreview: ["src", "url"],
+	avatar: ["src"],
+	lottie: ["src"],
+	iframe: ["src"],
+	boundingBoxOverlay: ["src"],
+	imageLabeler: ["src"],
+	imageHotspot: ["src"],
+	sprite: ["src"],
+	model3d: ["src", "hdriUrl"],
+	scene3d: ["environmentMap"],
+	characterPortrait: ["image"],
+	miniMap: ["mapImage"],
+};
 
 function isStoragePrefix(value: string): boolean {
 	// Storage prefixes are paths without http(s) scheme
@@ -84,11 +73,11 @@ export function extractAssetPrefixes(
 		const comp = component.component as unknown as Record<string, unknown>;
 		const type = comp.type as string;
 
-		// Check if this component type has assets
-		if (!ASSET_COMPONENT_TYPES.has(type)) continue;
+		const assetProperties = ASSET_FIELDS_BY_COMPONENT[type];
+		if (!assetProperties) continue;
 
 		// Check each asset property
-		for (const prop of ASSET_PROPERTIES) {
+		for (const prop of assetProperties) {
 			const value = comp[prop] as BoundValue | string | undefined;
 			if (!value) continue;
 
@@ -196,14 +185,64 @@ export function isAssetFile(path: string): boolean {
 		"svg",
 		"ico",
 		"bmp",
+		"avif",
 	];
-	const modelExtensions = ["glb", "gltf", "obj", "fbx"];
-	const videoExtensions = ["mp4", "webm", "ogg", "mov"];
+	const modelExtensions = [
+		"glb",
+		"gltf",
+		"obj",
+		"fbx",
+		"usdz",
+		"usd",
+		"3ds",
+		"dae",
+	];
+	const videoExtensions = ["mp4", "webm", "ogg", "ogv", "mov", "mkv", "avi"];
+	const audioExtensions = [
+		"mp3",
+		"wav",
+		"ogg",
+		"oga",
+		"opus",
+		"flac",
+		"aac",
+		"m4a",
+		"aif",
+		"aiff",
+	];
+	const documentExtensions = [
+		"pdf",
+		"txt",
+		"csv",
+		"md",
+		"mdx",
+		"log",
+		"json",
+		"xml",
+		"css",
+		"js",
+		"jsx",
+		"ts",
+		"tsx",
+		"py",
+		"rs",
+		"html",
+		"yml",
+		"yaml",
+		"toml",
+		"sql",
+	];
+	const animationExtensions = ["json", "lottie"];
+	const environmentExtensions = ["hdr", "exr"];
 
 	return (
 		imageExtensions.includes(ext) ||
 		modelExtensions.includes(ext) ||
-		videoExtensions.includes(ext)
+		videoExtensions.includes(ext) ||
+		audioExtensions.includes(ext) ||
+		documentExtensions.includes(ext) ||
+		animationExtensions.includes(ext) ||
+		environmentExtensions.includes(ext)
 	);
 }
 

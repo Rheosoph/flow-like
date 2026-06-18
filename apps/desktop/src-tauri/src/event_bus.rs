@@ -1,4 +1,7 @@
-use crate::{state::TauriSettingsState, utils::UiEmitTarget};
+use crate::{
+    state::TauriSettingsState,
+    utils::{UiEmitTarget, local_execution_environment},
+};
 use flow_like::app::App;
 use flow_like::flow::execution::{InternalRun, LogMeta};
 use flow_like::flow::oauth::OAuthToken;
@@ -53,7 +56,6 @@ impl EventBusEvent {
         &self,
         app_handle: &AppHandle,
         flow_like_state: Arc<FlowLikeState>,
-        hub: &Hub,
     ) -> flow_like_types::Result<Option<LogMeta>> {
         let execution_state = Arc::new(flow_like_state.for_execution_run());
 
@@ -114,9 +116,18 @@ impl EventBusEvent {
         };
 
         let mut credentials = None;
-        if !self.offline
-            && let Some(token) = &self.token
-        {
+        if !self.offline {
+            let token = self.token.as_ref().ok_or_else(|| {
+                flow_like_types::anyhow!("No token registered, cannot run online event")
+            })?;
+            let hub_url = profile.hub_profile.hub.clone();
+            if hub_url.is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "No hub URL configured, cannot get event credentials"
+                ));
+            }
+
+            let hub = Hub::new(&hub_url, flow_like_state.http_client.clone()).await?;
             let shared_credentials = hub.shared_credentials(token, &self.app_id).await?;
             credentials = Some(shared_credentials);
         }
@@ -138,6 +149,8 @@ impl EventBusEvent {
             self.oauth_tokens.clone(),
         )
         .await?;
+
+        internal_run.set_execution_environment(local_execution_environment());
 
         let run_id = internal_run.run.lock().await.id.clone();
 

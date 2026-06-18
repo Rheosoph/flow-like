@@ -133,6 +133,8 @@ pub struct DispatchPayload {
     #[serde(default)]
     pub stream_state: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_variables: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_context: Option<serde_json::Value>,

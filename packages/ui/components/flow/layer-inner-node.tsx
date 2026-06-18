@@ -17,6 +17,7 @@ import {
 } from "../../lib/schema/flow/board";
 import { CommentDialog } from "./comment-dialog";
 import { FlowPin } from "./flow-pin";
+import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { NameDialog } from "./name-dialog";
 
@@ -33,6 +34,8 @@ export type ILayerInnerNode = Node<
 		hash: string;
 		appId: string;
 		boardRef?: RefObject<IBoard | undefined>;
+		selectorDataRef?: FlowSelectorDataRef;
+		selectorDataVersion?: number;
 		pushLayer(layer: ILayer): Promise<void>;
 		onLayerUpdate(layer: ILayer): Promise<void>;
 		onLayerRemove(layer: ILayer, preserve_nodes: boolean): Promise<void>;
@@ -152,6 +155,8 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 							key={pin.id}
 							skipOffset={true}
 							onPinRemove={async () => {}}
+							selectorDataRef={props.data.selectorDataRef}
+							selectorDataVersion={props.data.selectorDataVersion}
 						/>
 					))}
 				{Object.values(props.data.layer.pins)
@@ -170,6 +175,8 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 							key={pin.id}
 							skipOffset={true}
 							onPinRemove={async () => {}}
+							selectorDataRef={props.data.selectorDataRef}
+							selectorDataVersion={props.data.selectorDataVersion}
 						/>
 					))}
 			</div>

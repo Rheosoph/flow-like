@@ -84,6 +84,24 @@ export class RolePermissions {
 		0b00000010_00000000_00000000_00000000n,
 	);
 
+	/**
+	 * Permission set a member's (default) role must grant for the
+	 * Fork-an-app feature to actually work. Forking copies boards, events,
+	 * files, templates, widgets and roles, so the caller must be able to
+	 * read each of those resource types.
+	 *
+	 * Must stay in sync with `FORK_REQUIRED_PERMISSIONS` in
+	 * packages/api/src/permission/fork_permission.rs.
+	 */
+	static readonly ForkRequired = new RolePermissions(
+		RolePermissions.ReadBoards.value |
+			RolePermissions.ReadEvents.value |
+			RolePermissions.ReadFiles.value |
+			RolePermissions.ReadTemplates.value |
+			RolePermissions.ReadWidgets.value |
+			RolePermissions.ReadRoles.value,
+	);
+
 	/** @deprecated Use ListEvents instead */
 	static readonly ListReleases = RolePermissions.ListEvents;
 	/** @deprecated Use ReadEvents instead */

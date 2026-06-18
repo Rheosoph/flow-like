@@ -11,7 +11,7 @@ use flow_like_types::{
     utils::data_url::image_to_data_url,
 };
 
-use crate::image::NodeImage;
+use flow_like_catalog_core::NodeImage;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -32,6 +32,7 @@ impl NodeLogic for WriteImageDataUrlNode {
             "Writes an image to a data URL",
             "Web/Camera",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/image.svg");
 

@@ -11,13 +11,23 @@ import type { TauriBackend } from "../tauri-provider";
 export class AnalyticsState implements IAnalyticsState {
 	constructor(private readonly backend: TauriBackend) {}
 
-	async getAnalyticsOverview(appId: string): Promise<IAnalyticsOverview> {
+	async getAnalyticsOverview(
+		appId: string,
+		eventId?: string,
+	): Promise<IAnalyticsOverview> {
 		if (!this.backend.profile) {
 			throw new Error("Profile not available");
 		}
+		const params = new URLSearchParams();
+		if (eventId) params.set("event_id", eventId);
+
+		const query = params.toString();
+		const url = query
+			? `apps/${appId}/analytics/?${query}`
+			: `apps/${appId}/analytics/`;
 		return await fetcher<IAnalyticsOverview>(
 			this.backend.profile,
-			`apps/${appId}/analytics/`,
+			url,
 			undefined,
 			this.backend.auth,
 		);
@@ -28,6 +38,7 @@ export class AnalyticsState implements IAnalyticsState {
 		startDate?: string,
 		endDate?: string,
 		period?: "day" | "week" | "month",
+		eventId?: string,
 	): Promise<IAnalyticsDashboard> {
 		if (!this.backend.profile) {
 			throw new Error("Profile not available");
@@ -36,6 +47,7 @@ export class AnalyticsState implements IAnalyticsState {
 		if (startDate) params.set("start_date", startDate);
 		if (endDate) params.set("end_date", endDate);
 		if (period) params.set("period", period);
+		if (eventId) params.set("event_id", eventId);
 
 		const query = params.toString();
 		const url = query
@@ -54,6 +66,7 @@ export class AnalyticsState implements IAnalyticsState {
 		startDate?: string,
 		endDate?: string,
 		period?: "day" | "week" | "month",
+		eventId?: string,
 	): Promise<IAnalyticsStats> {
 		if (!this.backend.profile) {
 			throw new Error("Profile not available");
@@ -62,6 +75,7 @@ export class AnalyticsState implements IAnalyticsState {
 		if (startDate) params.set("start_date", startDate);
 		if (endDate) params.set("end_date", endDate);
 		if (period) params.set("period", period);
+		if (eventId) params.set("event_id", eventId);
 
 		const query = params.toString();
 		const url = query
@@ -81,6 +95,7 @@ export class AnalyticsState implements IAnalyticsState {
 		limit?: number,
 		minRating?: number,
 		maxRating?: number,
+		eventId?: string,
 	): Promise<IPaginatedFeedback> {
 		if (!this.backend.profile) {
 			throw new Error("Profile not available");
@@ -90,6 +105,7 @@ export class AnalyticsState implements IAnalyticsState {
 		if (limit !== undefined) params.set("limit", limit.toString());
 		if (minRating !== undefined) params.set("min_rating", minRating.toString());
 		if (maxRating !== undefined) params.set("max_rating", maxRating.toString());
+		if (eventId) params.set("event_id", eventId);
 
 		const query = params.toString();
 		const url = query

@@ -2,6 +2,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { CopyIcon, Import } from "lucide-react";
 import type { RefObject } from "react";
 import { toast } from "sonner";
+import type { FlowSelectorDataRef } from "../components/flow/flow-selector-data";
 import { InnerLayerNodeType } from "../components/flow/layer-inner-node";
 import { typeToColor } from "../components/flow/utils";
 import {
@@ -145,6 +146,40 @@ function deserializeNode(node: ISerializedNode): INode {
 		fn_refs: node.fn_refs ?? undefined,
 		version: node.version ?? undefined,
 	};
+}
+
+function isEditableClipboardTarget(
+	element: EventTarget | Element | null,
+): boolean {
+	if (!(element instanceof Element)) return false;
+	if (element instanceof HTMLElement && element.isContentEditable) {
+		return true;
+	}
+	if (
+		element instanceof HTMLInputElement ||
+		element instanceof HTMLTextAreaElement ||
+		element instanceof HTMLSelectElement
+	) {
+		return true;
+	}
+	return Boolean(
+		element.closest("[contenteditable='true'], [contenteditable='']"),
+	);
+}
+
+function hasSelectedPageText(): boolean {
+	const selection = window.getSelection?.();
+	return Boolean(selection && !selection.isCollapsed && selection.toString());
+}
+
+export function shouldIgnoreBoardClipboardEvent(
+	event?: ClipboardEvent,
+): boolean {
+	return (
+		isEditableClipboardTarget(event?.target ?? null) ||
+		isEditableClipboardTarget(document.activeElement) ||
+		hasSelectedPageText()
+	);
 }
 
 export function isValidConnection(
@@ -368,6 +403,8 @@ export function parseBoard(
 		onRemoteExecute?: (node: INode, payload?: object) => Promise<void>;
 	},
 	catalogLookup?: { nodeNames: Set<string>; wasmNodeKeys: Set<string> },
+	selectorDataRef?: FlowSelectorDataRef,
+	selectorDataVersion?: number,
 ) {
 	const nodes: any[] = [];
 	const edges: any[] = [];
@@ -427,7 +464,9 @@ export function parseBoard(
 			oldNode &&
 			oldNode.selected === sel &&
 			oldNode.data?.isUnavailable === isUnavailable &&
-			oldNode.data?.fnRefsHash === fnRefsHash
+			oldNode.data?.fnRefsHash === fnRefsHash &&
+			oldNode.data?.selectorDataRef === selectorDataRef &&
+			oldNode.data?.selectorDataVersion === selectorDataVersion
 		) {
 			// Hash + selected + isUnavailable + fnRefsHash all match — reuse exact reference
 			nodes.push(oldNode);
@@ -445,6 +484,8 @@ export function parseBoard(
 					fnRefsHash,
 					node: nodeForData,
 					boardRef,
+					selectorDataRef,
+					selectorDataVersion,
 				},
 				selected: sel,
 			});
@@ -465,6 +506,8 @@ export function parseBoard(
 				data: {
 					label: node.name,
 					boardRef: boardRef,
+					selectorDataRef,
+					selectorDataVersion,
 					fnRefsHash: fnRefsHash,
 					node: nodeForData,
 					hash: hash,
@@ -537,6 +580,8 @@ export function parseBoard(
 							boardId: board.id,
 							appId: appId,
 							boardRef: boardRef,
+							selectorDataRef,
+							selectorDataVersion,
 							type: InnerLayerNodeType.INPUT,
 							layer: {
 								...layer,
@@ -581,6 +626,8 @@ export function parseBoard(
 							boardId: board.id,
 							appId: appId,
 							boardRef: boardRef,
+							selectorDataRef,
+							selectorDataVersion,
 							type: InnerLayerNodeType.RETURN,
 							layer: {
 								...layer,
@@ -637,6 +684,8 @@ export function parseBoard(
 					appId: appId,
 					layer: layer,
 					boardRef: boardRef,
+					selectorDataRef,
+					selectorDataVersion,
 					hash: layer.hash ?? -1,
 					pinLookup: lookup,
 					pushLayer: async (layer: ILayer) => {
@@ -872,12 +921,7 @@ export function handleCopy(
 	event?: ClipboardEvent,
 	currentLayer?: string,
 ) {
-	const activeElement = document.activeElement;
-	if (
-		activeElement instanceof HTMLInputElement ||
-		activeElement instanceof HTMLTextAreaElement ||
-		(activeElement as any)?.isContentEditable
-	) {
+	if (shouldIgnoreBoardClipboardEvent(event)) {
 		return;
 	}
 
@@ -1002,12 +1046,7 @@ export async function handlePaste(
 	currentLayer?: string,
 	catalog?: INode[],
 ) {
-	const activeElement = document.activeElement;
-	if (
-		activeElement instanceof HTMLInputElement ||
-		activeElement instanceof HTMLTextAreaElement ||
-		(activeElement as any)?.isContentEditable
-	) {
+	if (shouldIgnoreBoardClipboardEvent(event)) {
 		return;
 	}
 

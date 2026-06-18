@@ -9,7 +9,8 @@ import {
 	Settings,
 	Star,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { formatAppCategory } from "../../lib/app-category";
@@ -19,12 +20,15 @@ import { cn } from "../../lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { Badge } from "./badge";
 
+const MotionLink = motion.create(Link);
+
 interface AppCardProps {
 	app: IApp;
 	metadata?: IMetadata;
 	variant: "extended" | "small";
 	onClick?: () => void;
 	onSettingsClick?: () => void;
+	settingsHref?: string;
 	multiSelected?: boolean;
 	className?: string;
 	isOwned?: boolean;
@@ -37,6 +41,7 @@ export function AppCard({
 	variant = "extended",
 	onClick,
 	onSettingsClick,
+	settingsHref,
 	multiSelected,
 	className = "",
 	isOwned,
@@ -49,6 +54,7 @@ export function AppCard({
 				metadata={metadata}
 				onClick={onClick}
 				onSettingsClick={onSettingsClick}
+				settingsHref={settingsHref}
 				className={className}
 				multiSelected={multiSelected}
 				isOwned={isOwned}
@@ -63,6 +69,7 @@ export function AppCard({
 			metadata={metadata}
 			onClick={onClick}
 			onSettingsClick={onSettingsClick}
+			settingsHref={settingsHref}
 			className={className}
 			multiSelected={multiSelected}
 			isOwned={isOwned}
@@ -202,6 +209,7 @@ function SmallAppCard({
 		| "metadata"
 		| "onClick"
 		| "onSettingsClick"
+		| "settingsHref"
 		| "className"
 		| "multiSelected"
 		| "href"
@@ -210,6 +218,13 @@ function SmallAppCard({
 >) {
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
 	const { primaryHue, isDark } = useThemeInfo();
+	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+		if (!onClick || event.defaultPrevented) return;
+		if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault();
+			onClick();
+		}
+	};
 
 	const itemVariants = {
 		hidden: { opacity: 0, y: 20 },
@@ -224,9 +239,11 @@ function SmallAppCard({
 			whileTap={{ scale: 0.98 }}
 			transition={{ type: "spring", stiffness: 300 }}
 		>
-			<button
-				type="button"
+			<div
+				role={onClick ? "button" : undefined}
+				tabIndex={onClick ? 0 : undefined}
 				onClick={onClick}
+				onKeyDown={handleCardKeyDown}
 				data-href={href}
 				data-title={metadata?.name ?? app.id}
 				className={cn(
@@ -335,7 +352,7 @@ function SmallAppCard({
 						)}
 					</div>
 				</div>
-			</button>
+			</div>
 		</motion.div>
 	);
 }
@@ -345,6 +362,7 @@ function ExtendedAppCard({
 	metadata,
 	onClick,
 	onSettingsClick,
+	settingsHref,
 	className,
 	multiSelected,
 	isOwned,
@@ -356,6 +374,7 @@ function ExtendedAppCard({
 		| "metadata"
 		| "onClick"
 		| "onSettingsClick"
+		| "settingsHref"
 		| "className"
 		| "multiSelected"
 		| "isOwned"
@@ -368,10 +387,17 @@ function ExtendedAppCard({
 	const hasRating = app.rating_count > 0;
 	const { primaryHue, isDark } = useThemeInfo();
 	const showSettingsButton =
-		onSettingsClick &&
+		(onSettingsClick || settingsHref) &&
 		(app.visibility === IAppVisibility.Offline ||
 			app.visibility === IAppVisibility.Private ||
 			isOwned);
+	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+		if (!onClick || event.defaultPrevented) return;
+		if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault();
+			onClick();
+		}
+	};
 
 	const itemVariants = {
 		hidden: { opacity: 0, y: 20 },
@@ -386,9 +412,11 @@ function ExtendedAppCard({
 			whileTap={{ scale: 0.98 }}
 			transition={{ type: "spring", stiffness: 300 }}
 		>
-			<button
-				type="button"
+			<div
+				role={onClick ? "button" : undefined}
+				tabIndex={onClick ? 0 : undefined}
 				onClick={onClick}
+				onKeyDown={handleCardKeyDown}
 				data-href={href}
 				data-title={metadata?.name ?? app.id}
 				className={cn(
@@ -436,30 +464,46 @@ function ExtendedAppCard({
 
 					<div className="absolute top-3 right-3 z-10 flex items-center gap-2">
 						{showSettingsButton && (
-							<motion.div
-								role="button"
-								tabIndex={0}
-								onClick={(e) => {
-									e.preventDefault();
-									e.stopPropagation();
-									onSettingsClick?.();
-								}}
-								onPointerDown={(e) => {
-									e.stopPropagation();
-								}}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" || e.key === " ") {
+							settingsHref ? (
+								<MotionLink
+									href={settingsHref}
+									data-href={settingsHref}
+									aria-label={`Open settings for ${appName}`}
+									onClick={(e) => {
+										e.stopPropagation();
+										onSettingsClick?.();
+									}}
+									onPointerDown={(e) => {
+										e.stopPropagation();
+									}}
+									onKeyDown={(e) => {
+										e.stopPropagation();
+									}}
+									className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300 cursor-pointer"
+									whileHover={{ scale: 1.05 }}
+									whileTap={{ scale: 0.95 }}
+								>
+									<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
+								</MotionLink>
+							) : (
+								<motion.button
+									type="button"
+									aria-label={`Open settings for ${appName}`}
+									onClick={(e) => {
 										e.preventDefault();
 										e.stopPropagation();
 										onSettingsClick?.();
-									}
-								}}
-								className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300 cursor-pointer"
-								whileHover={{ scale: 1.05 }}
-								whileTap={{ scale: 0.95 }}
-							>
-								<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
-							</motion.div>
+									}}
+									onPointerDown={(e) => {
+										e.stopPropagation();
+									}}
+									className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300 cursor-pointer"
+									whileHover={{ scale: 1.05 }}
+									whileTap={{ scale: 0.95 }}
+								>
+									<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
+								</motion.button>
+							)
 						)}
 						<VisibilityIcon visibility={app.visibility} />
 					</div>
@@ -543,7 +587,7 @@ function ExtendedAppCard({
 						</div>
 					</div>
 				</div>
-			</button>
+			</div>
 		</motion.div>
 	);
 }

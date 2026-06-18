@@ -129,8 +129,15 @@ function formatBytes(bytes: number) {
 	return `${(bytes / k ** i).toFixed(1)} ${sizes[i]}`;
 }
 
-function formatCents(cents: number) {
-	return `$${(cents / 100).toFixed(2)}`;
+const microDollarFormatter = new Intl.NumberFormat(undefined, {
+	style: "currency",
+	currency: "USD",
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2,
+});
+
+function formatMicroDollars(microDollars: number) {
+	return microDollarFormatter.format(microDollars / 1_000_000);
 }
 
 function PermissionDialog({
@@ -284,7 +291,7 @@ function UserRow({
 				{formatBytes(user.total_size)}
 			</TableCell>
 			<TableCell className="text-xs text-muted-foreground">
-				{formatCents(user.total_llm_price)}
+				{formatMicroDollars(user.total_llm_price)}
 			</TableCell>
 			<TableCell className="text-xs text-muted-foreground">
 				{relativeDate}

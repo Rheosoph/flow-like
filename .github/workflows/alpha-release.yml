@@ -163,6 +163,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare Windows VC runtime DLLs
+        if: runner.os == 'Windows'
+        working-directory: apps/desktop
+        run: bun ./scripts/prepare-windows-prereqs.ts --arch x64
+
       - name: Build and Release
         id: build_release
         continue-on-error: true

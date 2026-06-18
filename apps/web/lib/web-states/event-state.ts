@@ -12,6 +12,7 @@ import {
 	type ProgressToastData,
 	checkOAuthTokens,
 	finishAllProgressToasts,
+	getCurrentPageContext,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthCheckResult } from "@flow-like/flow-like-ui/state/backend-state/event-state";
@@ -36,6 +37,21 @@ import {
 // Hub configuration cache
 let hubCache: IHub | undefined;
 let hubCachePromise: Promise<IHub | undefined> | undefined;
+
+function withFeedbackPageContext(localState?: Record<string, any>) {
+	if (
+		localState &&
+		Object.prototype.hasOwnProperty.call(localState, "pageContext")
+	) {
+		return localState;
+	}
+
+	const pageContext = getCurrentPageContext(undefined, { mode: "path" });
+	return {
+		...(localState ?? {}),
+		...(pageContext ? { pageContext } : {}),
+	};
+}
 
 async function getHubConfig(profile?: { hub?: string }): Promise<
 	IHub | undefined
@@ -250,12 +266,13 @@ export class WebEventState implements IEventState {
 			comment?: string;
 		},
 	): Promise<string> {
+		const localState = withFeedbackPageContext(feedback.localState);
 		const context =
-			feedback.history || feedback.globalState || feedback.localState
+			feedback.history || feedback.globalState || localState
 				? {
 						history: feedback.history,
 						global_state: feedback.globalState,
-						local_state: feedback.localState,
+						local_state: localState,
 					}
 				: undefined;
 

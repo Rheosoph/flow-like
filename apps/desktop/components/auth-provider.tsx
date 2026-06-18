@@ -375,20 +375,29 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	}, [userManager]);
 	useEffect(() => {
 		if (!auth) return;
-		if (!auth.isAuthenticated) {
-			return;
+
+		if (backend instanceof TauriBackend) {
+			console.log("Pushing auth context to backend:", auth);
+			backend.pushAuthContext(auth);
 		}
+
+		if (!auth.isAuthenticated) return;
 
 		if (!auth.user?.id_token) {
 			console.warn("User is authenticated but no ID token found.");
 			return;
 		}
 
-		if (backend instanceof TauriBackend) {
-			console.log("Pushing auth context to backend:", auth);
-			backend.pushAuthContext(auth);
+		if (!auth.user?.access_token) {
+			console.warn("User is authenticated but no access token found.");
 		}
-	}, [auth?.isAuthenticated, auth?.user?.id_token, backend]);
+	}, [
+		auth?.isAuthenticated,
+		auth?.isLoading,
+		auth?.user?.access_token,
+		auth?.user?.id_token,
+		backend,
+	]);
 
 	useEffect(() => {
 		if (!auth) return;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
+import { useExecuteAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -20,6 +21,7 @@ export function A2UIImageHotspot({
 	surfaceId,
 	componentId,
 }: ComponentProps<ImageHotspotComponent>) {
+	const { executeAction } = useExecuteAction();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
@@ -121,20 +123,12 @@ export function A2UIImageHotspot({
 			setActiveHotspot(hotspot.id);
 			setTimeout(() => setActiveHotspot(null), 300);
 
-			if (onAction && component.actions?.length) {
-				const clickAction = component.actions.find(
-					(a) => a.name === "onHotspotClick" || a.name === "onClick",
-				);
-				if (clickAction) {
-					onAction({
-						type: "userAction",
-						name: clickAction.name,
-						surfaceId,
-						sourceComponentId: componentId,
-						timestamp: Date.now(),
-						context: { hotspot, hotspotId: hotspot.id, ...clickAction.context },
-					});
-				}
+			const action = component.actions?.[0];
+			if (action) {
+				void executeAction(action, componentId, {
+					hotspot,
+					hotspotId: hotspot.id,
+				});
 			}
 
 			// Also fire hotspot-specific action if defined
@@ -149,7 +143,7 @@ export function A2UIImageHotspot({
 				});
 			}
 		},
-		[onAction, component.actions, surfaceId, componentId],
+		[component.actions, componentId, executeAction, onAction, surfaceId],
 	);
 
 	const getMarkerClasses = (

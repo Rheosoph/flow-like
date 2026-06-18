@@ -34,6 +34,9 @@ export const enCompare = {
 	"compare.category.lowcode": "Low-Code App Builders",
 	"compare.category.lowcode.desc":
 		"Tools for building internal apps and dashboards. Great for UIs, but limited automation and workflow capabilities.",
+	"compare.category.bi_analytics": "BI & Analytics",
+	"compare.category.bi_analytics.desc":
+		"Dashboards and semantic reporting tools for analyzing business data. Strong at visibility, but weak at turning insights into governed operational workflows and apps.",
 	"compare.category.orchestration": "Data & Workflow Orchestration",
 	"compare.category.orchestration.desc":
 		"Enterprise-grade tools for complex data pipelines and workflow orchestration. Powerful but require engineering expertise.",
@@ -42,10 +45,16 @@ export const enCompare = {
 		"Ontology- and ERP-driven platforms built around proprietary enterprise data models. Powerful for large organisations, but slow to adopt, expensive, and locked to one vendor.",
 	"compare.category.enterprise_automation": "Enterprise Automation Suites",
 	"compare.category.enterprise_automation.desc":
-		"Process and workflow suites built around RPA, CRM, or AI agents. Strong for specific business motions, but SaaS-bound, with heavy licensing and limited portability.",
+		"Process and workflow suites built around CRM, service management, or AI agents. Strong for specific business motions, but SaaS-bound, with heavy licensing and limited portability.",
+	"compare.category.rpa": "Robotic Process Automation",
+	"compare.category.rpa.desc":
+		"Bot-based automation for legacy screens and repetitive desktop tasks. Useful as a bridge, but brittle, hard to govern, and costly to scale across real business processes.",
+	"compare.category.compliance_grc": "Compliance & GRC",
+	"compare.category.compliance_grc.desc":
+		"Governance, risk, and compliance suites for controls, evidence, and policy workflows. Strong audit systems, but disconnected from the operational workflows that produce the evidence.",
 	"compare.category.agent_runtimes": "Agent Runtimes",
 	"compare.category.agent_runtimes.desc":
-		"Python frameworks for orchestrating autonomous AI agents. Great for rapid prototyping—but ship file-based state with no concurrent-write safety, execute tools with zero sandboxing, and top out at single-process throughput.",
+		"Agent runtimes and AI workflow platforms for orchestrating autonomous agents. Great for rapid prototyping and company AI rollout, but often leave production-grade sandboxing, state safety, app delivery, and portability incomplete.",
 	"compare.category.llm_frameworks": "LLM App Frameworks",
 	"compare.category.llm_frameworks.desc":
 		"Code-first SDKs for building retrieval, embedding, and AI pipeline logic. Powerful building blocks, but require you to hand-stitch every UI, deployment, and governance concern yourself.",
@@ -55,6 +64,9 @@ export const enCompare = {
 	"compare.category.coding_agents": "Autonomous Personal Agents",
 	"compare.category.coding_agents.desc":
 		"Personal AI agents that run tasks, write code, and browse the web autonomously on your local machine. Powerful for individual use, but tool calls execute on the bare host OS with zero sandboxing — prompt injection becomes arbitrary code execution — and all state lives in flat files with no concurrent-write protection.",
+	"compare.category.custom_development": "Custom Development",
+	"compare.category.custom_development.desc":
+		"Internal teams, agencies, and contractors building bespoke workflow apps. Flexible in theory, but every new process becomes a project with hand-coded integrations, maintenance, and knowledge transfer risk.",
 
 	// Legend
 	"compare.legend.native": "Native support",
@@ -80,6 +92,12 @@ export const enCompare = {
 	// Per-category mini bubble plot inside the matrix
 	"compare.matrix.col.capability": "Capability",
 	"compare.matrix.security_risk": "Security Risk",
+	"compare.competitor.ontology.examples": "Examples: Palantir Foundry / AIP",
+	"compare.competitor.ontology.note":
+		"Category comparison. Palantir Foundry and Palantir AIP are named only as public examples of ontology-driven data platforms. No affiliation, sponsorship, or endorsement is implied. Third-party marks remain the property of their respective owners.",
+	"compare.competitor.erp.examples": "Examples: SAP Build / SAP BTP",
+	"compare.competitor.erp.note":
+		"Category comparison. SAP Build Process Automation and SAP Business Technology Platform are named only as public examples of ERP-adjacent process platforms. No affiliation, sponsorship, or endorsement is implied. Third-party marks remain the property of their respective owners.",
 	"compare.matrix.plot.title": "Positioning vs. Flow-Like",
 	"compare.matrix.plot.description":
 		"Where these tools land on the two axes that actually differentiate this category. Flow-Like always sits in the top-right.",
@@ -89,6 +107,12 @@ export const enCompare = {
 	"compare.support.basic": "Basic",
 	"compare.support.unlimited": "Unlimited",
 	"compare.support.depends": "Depends",
+	"compare.note.open": "Why this rating",
+	"compare.note.close": "Close",
+	"compare.note.evidence": "Evidence",
+	"compare.note.caveat": "Caveat",
+	"compare.note.sources": "Sources",
+	"compare.note.checked": "Last checked",
 
 	// Per-category axes (X & Y differ per category to highlight what matters most)
 	"compare.matrix.plot.axis.extensibility": "Code & Extensibility",
@@ -135,7 +159,7 @@ export const enCompare = {
 	"compare.overview.tagline": "At a Glance",
 	"compare.overview.headline": "The enterprise operating stack",
 	"compare.overview.description":
-		"Nine categories, one honest scoring rubric. How each class of tool stacks up on execution, data layer depth, AI, app delivery, portability, and governance.",
+		"Thirteen categories, one honest scoring rubric. How each class of tool stacks up on execution, data layer depth, AI, app delivery, portability, and governance.",
 	"compare.overview.flowlike": "Flow-Like",
 	"compare.overview.badge.us": "US",
 	"compare.overview.col.category": "Category",
@@ -317,7 +341,7 @@ export const enCompare = {
 	"compare.insight.tagline": "The Key Insight",
 	"compare.insight.headline": "Other tools make you choose",
 	"compare.insight.description":
-		"Execution engines run workflows. UI shells build interfaces. Traditional enterprise suites model company data but stay heavyweight and locked down. SaaS automation suites cover narrow business motions. Agent runtimes and LLM SDKs leave safety, state, deployment, and governance to you. Flow-Like is the rare system that combines governed data, big-data execution, AI, automation, BI, and real portable applications.",
+		"Execution engines run workflows. UI shells build interfaces. BI dashboards report on work. GRC suites govern evidence. Custom builds turn every process into a project. Agent runtimes and LLM SDKs leave safety, state, deployment, and governance to you. Flow-Like is the rare system that combines governed data, big-data execution, AI, automation, BI, and real portable applications.",
 	"compare.insight.card.execution.title": "Execution Engines",
 	"compare.insight.card.execution.body": "Can run workflows",
 	"compare.insight.card.execution.replayable": "✓ = replayable",
@@ -327,7 +351,7 @@ export const enCompare = {
 	"compare.insight.card.enterprise_data.body1": "Ontology / ERP centric.",
 	"compare.insight.card.enterprise_data.body2": "Powerful, heavy, locked in.",
 	"compare.insight.card.enterprise_automation.title": "Enterprise Automation",
-	"compare.insight.card.enterprise_automation.body1": "RPA / CRM / agents.",
+	"compare.insight.card.enterprise_automation.body1": "CRM / service / agents.",
 	"compare.insight.card.enterprise_automation.body2": "SaaS-bound & per-seat.",
 	"compare.insight.flowlike.badge": "All of it",
 	"compare.insight.flowlike.cap.workflows": "Workflows",
@@ -386,6 +410,8 @@ export const enCompare = {
 		"LangChain's graph-based stateful agent framework. Good for building complex reasoning loops, but no tool sandboxing, checkpointing via SQLite/Postgres can race under concurrent writes, and it remains a code-only developer SDK with no visual tooling or deployment story.",
 	"compare.competitor.dify":
 		"Open-source LLM app builder with a visual canvas and self-host option. Closest in spirit to Flow-Like in this category, but limited to LLM-centric pipelines. The 'UI builder' is a configurable chatbot widget (theme, welcome message, feature toggles) — you cannot build custom forms, dashboards, or non-chat surfaces. No native distribution (desktop/mobile/offline), and a 15 MB file cap that blocks real-world document workflows.",
+	"compare.competitor.langdock":
+		"Enterprise AI adoption platform with agents, visual workflows, integrations, MCP support, mobile apps, and hosted or self-hosted deployment options. Strong for internal AI rollout, but still centered on Langdock-hosted assistants and workflows rather than shipping portable customer-facing apps, offline runtimes, or a local-first data layer.",
 	"compare.competitor.flowise":
 		"Drag-and-drop LLM chain builder built on Node.js. Visual and beginner-friendly, but no sandbox for code execution, SQLite-backed state doesn't survive concurrent load, no mobile/desktop packaging, and limited to LangChain-style chain topologies.",
 	"compare.competitor.pydantic_ai":

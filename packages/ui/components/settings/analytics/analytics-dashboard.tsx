@@ -1,26 +1,36 @@
 "use client";
 
 import { ResponsiveBar } from "@nivo/bar";
+import type { BarDatum, BarTooltipProps } from "@nivo/bar";
 import { ResponsiveLine } from "@nivo/line";
-import { ResponsivePie } from "@nivo/pie";
+import type { PointTooltipProps } from "@nivo/line";
 import {
 	ActivityIcon,
-	ArrowDownIcon,
-	ArrowUpIcon,
+	AlertTriangleIcon,
 	BrainIcon,
 	CheckCircleIcon,
 	ClockIcon,
+	ExternalLinkIcon,
+	FilterIcon,
 	MessageSquareIcon,
-	StarIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
+	TrendingUpIcon,
 	UsersIcon,
-	XCircleIcon,
+	XIcon,
 } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+	type ComponentType,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { toast } from "sonner";
 
+import { cn } from "../../../lib/utils";
+import type { IEvent } from "../../../lib";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	IAnalyticsOverview,
@@ -43,7 +53,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
-import { Separator } from "../../ui/separator";
 import { Skeleton } from "../../ui/skeleton";
 import {
 	Table,
@@ -53,14 +62,74 @@ import {
 	TableHeader,
 	TableRow,
 } from "../../ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 
-function formatPercent(value: number | null): string {
-	if (value === null) return "N/A";
-	return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+const MICRO_DOLLARS_PER_DOLLAR = 1_000_000;
+
+const analyticsCardClassName =
+	"border-border/60 bg-card/85 shadow-sm shadow-black/5 dark:bg-card/70 dark:shadow-black/20";
+
+const chartContainerClassName = "h-[280px] min-w-0";
+
+const chartColors = {
+	executions: "var(--chart-1)",
+	users: "var(--chart-2)",
+	success: "oklch(0.72 0.16 150)",
+	failure: "var(--destructive)",
+	latencyAvg: "var(--chart-3)",
+	latencyP95: "var(--chart-4)",
+	llm: "var(--chart-1)",
+	embedding: "var(--chart-5)",
+	positive: "oklch(0.72 0.16 150)",
+	negative: "var(--destructive)",
+};
+
+const nivoTheme = {
+	text: {
+		fill: "var(--foreground)",
+		fontSize: 11,
+	},
+	axis: {
+		domain: { line: { stroke: "var(--border)" } },
+		ticks: {
+			line: { stroke: "var(--border)" },
+			text: { fill: "var(--muted-foreground)", fontSize: 11 },
+		},
+		legend: { text: { fill: "var(--muted-foreground)", fontSize: 11 } },
+	},
+	grid: { line: { stroke: "var(--border)", strokeOpacity: 0.55 } },
+	legends: { text: { fill: "var(--muted-foreground)", fontSize: 11 } },
+	crosshair: { line: { stroke: "var(--primary)" } },
+	tooltip: {
+		container: {
+			background: "var(--popover)",
+			color: "var(--popover-foreground)",
+			borderRadius: "8px",
+			boxShadow:
+				"0 12px 30px color-mix(in oklch, var(--foreground) 14%, transparent)",
+			border: "1px solid var(--border)",
+			fontSize: "12px",
+		},
+	},
+};
+
+type AnalyticsLineSeries = {
+	id: string;
+	data: Array<{ x: string; y: number }>;
+};
+
+function parseDate(dateStr: string): Date {
+	const [year, month, day] = dateStr.split("-").map(Number);
+	return new Date(year, (month ?? 1) - 1, day ?? 1);
 }
 
-function formatDate(dateStr: string): string {
+function formatChartDate(dateStr: string): string {
+	return parseDate(dateStr).toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+	});
+}
+
+function formatDateTime(dateStr: string): string {
 	return new Date(dateStr).toLocaleDateString("en-US", {
 		month: "short",
 		day: "numeric",
@@ -68,145 +137,412 @@ function formatDate(dateStr: string): string {
 	});
 }
 
-function formatLatency(ms: number | null): string {
-	if (ms === null) return "N/A";
+function compactIdentifier(value?: string | null): string | null {
+	const trimmed = value?.trim();
+	if (!trimmed) return null;
+	if (trimmed.length <= 18) return trimmed;
+	return `${trimmed.slice(0, 8)}...${trimmed.slice(-6)}`;
+}
+
+function formatFeedbackPageSource(
+	item: IFeedbackItem,
+	event?: IEvent,
+): string | null {
+	const path =
+		item.pagePath?.trim() ||
+		item.routePathname?.trim() ||
+		item.eventRoute?.trim() ||
+		getEventRoute(event) ||
+		null;
+	const search = item.pageSearch?.trim() || "";
+	const hash = item.pageHash?.trim() || "";
+
+	if (!path && !search && !hash) return null;
+	return `${path ?? ""}${search}${hash}`;
+}
+
+function getEventRoute(event?: IEvent): string | null {
+	const route = typeof event?.route === "string" ? event.route.trim() : "";
+	return route || null;
+}
+
+function getEventPageId(event?: IEvent): string | null {
+	const pageId =
+		typeof event?.default_page_id === "string"
+			? event.default_page_id.trim()
+			: "";
+	return pageId || null;
+}
+
+function formatFeedbackEventSource(
+	item: IFeedbackItem,
+	event?: IEvent,
+): string | null {
+	return (
+		item.eventName?.trim() ||
+		event?.name?.trim() ||
+		compactIdentifier(item.eventId)
+	);
+}
+
+function getAnalyticsEventHref(
+	appId: string | null | undefined,
+	eventId: string | null | undefined,
+): string | null {
+	const app = appId?.trim();
+	const event = eventId?.trim();
+	if (!app || !event) return null;
+
+	const params = new URLSearchParams();
+	params.set("id", app);
+	params.set("eventId", event);
+	return `/library/config/analytics?${params.toString()}`;
+}
+
+function formatLocalDate(date: Date): string {
+	const localDate = new Date(
+		date.getTime() - date.getTimezoneOffset() * 60_000,
+	);
+	return localDate.toISOString().split("T")[0] ?? "";
+}
+
+function formatNumber(value: number): string {
+	return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatCompactNumber(value: number): string {
+	return new Intl.NumberFormat("en-US", {
+		notation: "compact",
+		maximumFractionDigits: value < 10 ? 1 : 0,
+	}).format(value);
+}
+
+function formatPercent(value: number): string {
+	return `${value.toFixed(value < 10 ? 1 : 0)}%`;
+}
+
+function formatLatency(ms: number | null | undefined): string {
+	if (ms === null || ms === undefined) return "N/A";
 	if (ms < 1000) return `${Math.round(ms)}ms`;
-	return `${(ms / 1000).toFixed(1)}s`;
+	return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 }
 
-function formatCost(cost: number): string {
-	if (cost === 0) return "$0.00";
-	if (cost < 0.01) return `$${cost.toFixed(4)}`;
-	return `$${cost.toFixed(2)}`;
+function microDollarsToDollars(value: number): number {
+	return value / MICRO_DOLLARS_PER_DOLLAR;
 }
 
-const analyticsCardClassName =
-	"border-border/60 bg-card/90 shadow-sm shadow-black/5 dark:bg-card/70 dark:shadow-black/20";
+function formatDollarAmount(amount: number): string {
+	if (amount === 0) return "$0.00";
+	if (Math.abs(amount) < 0.0001) return "<$0.0001";
+	if (Math.abs(amount) < 0.01) return `$${amount.toFixed(4)}`;
+	return new Intl.NumberFormat("en-US", {
+		style: "currency",
+		currency: "USD",
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2,
+	}).format(amount);
+}
 
-const analyticsInsetClassName =
-	"rounded-xl border border-border/50 bg-background/40 dark:bg-background/20";
+function formatCost(microDollars: number): string {
+	return formatDollarAmount(microDollarsToDollars(microDollars));
+}
 
-const nivoTheme = {
-	axis: {
-		ticks: { text: { fill: "hsl(var(--muted-foreground))" } },
-		legend: { text: { fill: "hsl(var(--muted-foreground))" } },
-	},
-	grid: { line: { stroke: "hsl(var(--border))" } },
-	legends: { text: { fill: "hsl(var(--muted-foreground))" } },
-	crosshair: { line: { stroke: "hsl(var(--primary))" } },
-	labels: { text: { fill: "hsl(var(--foreground))" } },
-	tooltip: {
-		container: {
-			background: "hsl(var(--popover))",
-			color: "hsl(var(--popover-foreground))",
-			borderRadius: "8px",
-			boxShadow: "0 4px 12px hsl(var(--foreground) / 0.1)",
-			border: "1px solid hsl(var(--border))",
-			fontSize: "12px",
-		},
-	},
+function getTickValues(labels: string[]): string[] {
+	if (labels.length <= 8) return labels;
+	const step = Math.ceil(labels.length / 8);
+	return labels.filter(
+		(_, index) => index % step === 0 || index === labels.length - 1,
+	);
+}
+
+function getSuccessfulExecutions(day: IDailyAnalyticsStat): number {
+	return Math.max(day.executions - getFailedExecutions(day), 0);
+}
+
+function getFailedExecutions(day: IDailyAnalyticsStat): number {
+	return day.failedExecutions ?? 0;
+}
+
+function ChartTooltip({
+	color,
+	title,
+	subtitle,
+	value,
+}: {
+	color: string;
+	title: string;
+	subtitle: string;
+	value: string;
+}) {
+	return (
+		<div className="rounded-lg border border-border bg-popover px-3 py-2 text-popover-foreground shadow-xl">
+			<div className="flex items-center gap-2">
+				<span
+					className="h-2.5 w-2.5 rounded-sm"
+					style={{ backgroundColor: color }}
+				/>
+				<span className="text-sm font-semibold">{title}</span>
+			</div>
+			<div className="mt-1 flex items-center justify-between gap-5 text-xs">
+				<span className="text-muted-foreground">{subtitle}</span>
+				<span className="font-medium text-foreground">{value}</span>
+			</div>
+		</div>
+	);
+}
+
+function CountLineTooltip({ point }: PointTooltipProps<AnalyticsLineSeries>) {
+	return (
+		<ChartTooltip
+			color={point.seriesColor}
+			title={String(point.seriesId)}
+			subtitle={String(point.data.xFormatted)}
+			value={formatNumber(Number(point.data.y))}
+		/>
+	);
+}
+
+function LatencyLineTooltip({ point }: PointTooltipProps<AnalyticsLineSeries>) {
+	return (
+		<ChartTooltip
+			color={point.seriesColor}
+			title={String(point.seriesId)}
+			subtitle={String(point.data.xFormatted)}
+			value={formatLatency(Number(point.data.y))}
+		/>
+	);
+}
+
+const reliabilityTooltipLabels: Record<string, string> = {
+	successful: "Successful executions",
+	failed: "Failed executions",
 };
 
-const chartColors = {
-	executions: ["hsl(217, 91%, 60%)", "hsl(262, 83%, 58%)"],
-	latency: ["hsl(217, 91%, 60%)"],
-	feedback: ["hsl(142, 71%, 45%)", "hsl(0, 84%, 60%)"],
-	cost: { llm: "hsl(217, 91%, 60%)", embedding: "hsl(142, 71%, 45%)" },
+const costTooltipLabels: Record<string, string> = {
+	llm: "LLM cost",
+	embeddings: "Embedding cost",
 };
 
-function StatCard({
+const feedbackTooltipLabels: Record<string, string> = {
+	positive: "Positive feedback",
+	negative: "Negative feedback",
+};
+
+function CountBarTooltip({
+	color,
+	id,
+	indexValue,
+	value,
+}: BarTooltipProps<BarDatum>) {
+	return (
+		<ChartTooltip
+			color={color}
+			title={reliabilityTooltipLabels[String(id)] ?? String(id)}
+			subtitle={String(indexValue)}
+			value={formatNumber(value)}
+		/>
+	);
+}
+
+function CostBarTooltip({
+	color,
+	id,
+	indexValue,
+	value,
+}: BarTooltipProps<BarDatum>) {
+	return (
+		<ChartTooltip
+			color={color}
+			title={costTooltipLabels[String(id)] ?? String(id)}
+			subtitle={String(indexValue)}
+			value={formatDollarAmount(value)}
+		/>
+	);
+}
+
+function FeedbackBarTooltip({
+	color,
+	id,
+	indexValue,
+	value,
+}: BarTooltipProps<BarDatum>) {
+	return (
+		<ChartTooltip
+			color={color}
+			title={feedbackTooltipLabels[String(id)] ?? String(id)}
+			subtitle={String(indexValue)}
+			value={formatNumber(value)}
+		/>
+	);
+}
+
+function EmptyChart({ label }: { label: string }) {
+	return (
+		<div className="flex h-full min-h-[220px] items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 px-4 text-center text-sm text-muted-foreground">
+			{label}
+		</div>
+	);
+}
+
+function MetricCard({
 	title,
 	value,
-	change,
+	detail,
 	icon: Icon,
-	subtitle,
+	tone = "neutral",
 }: {
 	title: string;
 	value: string;
-	change?: number | null;
-	icon: React.ComponentType<{ className?: string }>;
-	subtitle?: string;
+	detail: string;
+	icon: ComponentType<{ className?: string }>;
+	tone?: "neutral" | "success" | "warning" | "danger";
 }) {
+	const toneClassName = {
+		neutral:
+			"bg-[color-mix(in_oklch,var(--primary)_12%,transparent)] text-primary",
+		success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+		warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+		danger: "bg-destructive/10 text-destructive",
+	}[tone];
+
 	return (
 		<Card className={analyticsCardClassName}>
-			<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-				<CardTitle className="text-sm font-medium">{title}</CardTitle>
-				<Icon className="h-4 w-4 text-muted-foreground" />
-			</CardHeader>
-			<CardContent>
-				<div className="text-2xl font-bold">{value}</div>
-				{change !== undefined && change !== null && (
-					<p
-						className={`text-xs ${change >= 0 ? "text-green-600" : "text-red-600"} flex items-center gap-1`}
-					>
-						{change >= 0 ? (
-							<ArrowUpIcon className="h-3 w-3" />
-						) : (
-							<ArrowDownIcon className="h-3 w-3" />
-						)}
-						{formatPercent(change)} from last period
-					</p>
-				)}
-				{subtitle && (
-					<p className="text-xs text-muted-foreground mt-1">{subtitle}</p>
-				)}
+			<CardContent className="p-4">
+				<div className="flex items-start justify-between gap-3">
+					<div className="min-w-0 space-y-1">
+						<p className="text-sm font-medium text-muted-foreground">{title}</p>
+						<p className="truncate text-2xl font-semibold">{value}</p>
+					</div>
+					<div className={cn("rounded-md p-2", toneClassName)}>
+						<Icon className="h-4 w-4" />
+					</div>
+				</div>
+				<p className="mt-3 min-h-4 truncate text-xs text-muted-foreground">
+					{detail}
+				</p>
 			</CardContent>
 		</Card>
 	);
 }
 
-function ExecutionsChart({ data }: { data: IDailyAnalyticsStat[] }) {
+function ActivityTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const labels = useMemo(
+		() => data.map((d) => formatChartDate(d.date)),
+		[data],
+	);
+	const hasActivity = data.some((d) => d.executions > 0 || d.uniqueUsers > 0);
 	const chartData = useMemo(
-		() =>
-			data.map((d) => ({
-				date: new Date(d.date).toLocaleDateString("en-US", {
-					month: "short",
-					day: "numeric",
-				}),
-				executions: d.executions,
-				uniqueUsers: d.uniqueUsers,
-			})),
+		() => [
+			{
+				id: "Executions",
+				data: data.map((d) => ({
+					x: formatChartDate(d.date),
+					y: d.executions,
+				})),
+			},
+			{
+				id: "Unique users",
+				data: data.map((d) => ({
+					x: formatChartDate(d.date),
+					y: d.uniqueUsers,
+				})),
+			},
+		],
 		[data],
 	);
 
-	if (data.length === 0) {
-		return (
-			<div className="flex h-75 items-center justify-center text-muted-foreground">
-				No execution data available
-			</div>
-		);
+	if (data.length === 0 || !hasActivity) {
+		return <EmptyChart label="No executions in this date range" />;
 	}
 
 	return (
-		<div className="h-75">
-			<ResponsiveBar
+		<div className={chartContainerClassName}>
+			<ResponsiveLine
 				data={chartData}
-				keys={["executions", "uniqueUsers"]}
-				indexBy="date"
-				margin={{ top: 20, right: 100, bottom: 50, left: 60 }}
-				padding={0.3}
-				groupMode="grouped"
-				colors={chartColors.executions}
+				margin={{ top: 18, right: 24, bottom: 42, left: 46 }}
+				xScale={{ type: "point" }}
+				yScale={{ type: "linear", min: 0, max: "auto" }}
+				yFormat={(value) => formatNumber(Number(value))}
 				axisBottom={{
-					tickRotation: -45,
-					legend: "Date",
-					legendOffset: 40,
-					legendPosition: "middle",
+					tickRotation: 0,
+					tickValues: getTickValues(labels),
 				}}
 				axisLeft={{
-					legend: "Count",
-					legendOffset: -50,
-					legendPosition: "middle",
+					format: (value) => formatCompactNumber(Number(value)),
+				}}
+				colors={[chartColors.executions, chartColors.users]}
+				curve="monotoneX"
+				enableArea={true}
+				areaOpacity={0.08}
+				enableGridX={false}
+				pointSize={data.length <= 31 ? 7 : 4}
+				pointBorderWidth={2}
+				pointBorderColor={{ from: "serieColor" }}
+				useMesh={true}
+				tooltip={CountLineTooltip}
+				legends={[
+					{
+						anchor: "top-right",
+						direction: "row",
+						translateY: -16,
+						itemWidth: 102,
+						itemHeight: 16,
+						symbolSize: 8,
+						symbolShape: "circle",
+					},
+				]}
+				theme={nivoTheme}
+			/>
+		</div>
+	);
+}
+
+function ReliabilityChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const chartData = useMemo(
+		() =>
+			data.map((d) => ({
+				date: formatChartDate(d.date),
+				successful: getSuccessfulExecutions(d),
+				failed: getFailedExecutions(d),
+			})),
+		[data],
+	);
+	const hasExecutions = data.some((d) => d.executions > 0);
+
+	if (data.length === 0 || !hasExecutions) {
+		return <EmptyChart label="No reliability data in this date range" />;
+	}
+
+	return (
+		<div className={chartContainerClassName}>
+			<ResponsiveBar
+				data={chartData}
+				keys={["successful", "failed"]}
+				indexBy="date"
+				margin={{ top: 18, right: 18, bottom: 42, left: 44 }}
+				padding={0.25}
+				groupMode="stacked"
+				colors={[chartColors.success, chartColors.failure]}
+				enableLabel={false}
+				borderRadius={2}
+				valueFormat={(value) => formatNumber(Number(value))}
+				tooltip={CountBarTooltip}
+				axisBottom={{
+					tickRotation: 0,
+					tickValues: getTickValues(chartData.map((d) => d.date)),
+				}}
+				axisLeft={{
+					format: (value) => formatCompactNumber(Number(value)),
 				}}
 				legends={[
 					{
 						dataFrom: "keys",
-						anchor: "bottom-right",
-						direction: "column",
-						translateX: 100,
-						itemWidth: 80,
-						itemHeight: 20,
-						itemTextColor: "hsl(var(--muted-foreground))",
+						anchor: "top-right",
+						direction: "row",
+						translateY: -16,
+						itemWidth: 78,
+						itemHeight: 16,
+						symbolSize: 8,
 					},
 				]}
 				theme={nivoTheme}
@@ -217,123 +553,67 @@ function ExecutionsChart({ data }: { data: IDailyAnalyticsStat[] }) {
 
 function LatencyChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	const chartData = useMemo(
-		() => [
-			{
-				id: "Avg Latency",
-				data: data
-					.filter((d) => d.avgLatency !== null)
-					.map((d) => ({
-						x: new Date(d.date).toLocaleDateString("en-US", {
-							month: "short",
-							day: "numeric",
-						}),
-						y: d.avgLatency,
-					})),
-			},
-		],
-		[data],
-	);
-
-	if (chartData[0].data.length === 0) {
-		return (
-			<div className="flex h-75 items-center justify-center text-muted-foreground">
-				No latency data available
-			</div>
-		);
-	}
-
-	return (
-		<div className="h-75">
-			<ResponsiveLine
-				data={chartData}
-				margin={{ top: 20, right: 20, bottom: 50, left: 60 }}
-				xScale={{ type: "point" }}
-				yScale={{ type: "linear", min: 0, max: "auto" }}
-				axisBottom={{
-					tickRotation: -45,
-					legend: "Date",
-					legendOffset: 40,
-					legendPosition: "middle",
-				}}
-				axisLeft={{
-					legend: "Latency (ms)",
-					legendOffset: -50,
-					legendPosition: "middle",
-					format: (v) => `${v}ms`,
-				}}
-				colors={chartColors.latency}
-				pointSize={8}
-				pointBorderWidth={2}
-				pointBorderColor={{ from: "serieColor" }}
-				enableArea={true}
-				areaOpacity={0.1}
-				useMesh={true}
-				enableGridX={false}
-				theme={nivoTheme}
-			/>
-		</div>
-	);
-}
-
-function FeedbackChart({ data }: { data: IDailyAnalyticsStat[] }) {
-	const chartData = useMemo(
 		() =>
-			data
-				.filter(
-					(d) =>
-						d.feedbackCount > 0 ||
-						d.positiveFeedback > 0 ||
-						d.negativeFeedback > 0,
-				)
-				.map((d) => ({
-					date: new Date(d.date).toLocaleDateString("en-US", {
-						month: "short",
-						day: "numeric",
-					}),
-					positive: d.positiveFeedback,
-					negative: d.negativeFeedback,
-				})),
+			[
+				{
+					id: "Average",
+					data: data
+						.filter((d) => d.avgLatency !== null)
+						.map((d) => ({
+							x: formatChartDate(d.date),
+							y: d.avgLatency ?? 0,
+						})),
+				},
+				{
+					id: "Daily p95",
+					data: data
+						.filter((d) => d.p95Latency !== null)
+						.map((d) => ({
+							x: formatChartDate(d.date),
+							y: d.p95Latency ?? 0,
+						})),
+				},
+			].filter((series) => series.data.length > 0),
 		[data],
 	);
 
 	if (chartData.length === 0) {
-		return (
-			<div className="flex h-75 items-center justify-center text-muted-foreground">
-				No feedback data available
-			</div>
-		);
+		return <EmptyChart label="No latency samples in this date range" />;
 	}
 
 	return (
-		<div className="h-75">
-			<ResponsiveBar
+		<div className={chartContainerClassName}>
+			<ResponsiveLine
 				data={chartData}
-				keys={["positive", "negative"]}
-				indexBy="date"
-				margin={{ top: 20, right: 100, bottom: 50, left: 60 }}
-				padding={0.3}
-				groupMode="stacked"
-				colors={chartColors.feedback}
+				margin={{ top: 18, right: 24, bottom: 42, left: 56 }}
+				xScale={{ type: "point" }}
+				yScale={{ type: "linear", min: 0, max: "auto" }}
+				yFormat={(value) => formatLatency(Number(value))}
 				axisBottom={{
-					tickRotation: -45,
-					legend: "Date",
-					legendOffset: 40,
-					legendPosition: "middle",
+					tickRotation: 0,
+					tickValues: getTickValues(data.map((d) => formatChartDate(d.date))),
 				}}
 				axisLeft={{
-					legend: "Feedback",
-					legendOffset: -50,
-					legendPosition: "middle",
+					format: (value) => formatLatency(Number(value)),
 				}}
+				colors={[chartColors.latencyAvg, chartColors.latencyP95]}
+				curve="monotoneX"
+				enableArea={false}
+				enableGridX={false}
+				pointSize={data.length <= 31 ? 7 : 4}
+				pointBorderWidth={2}
+				pointBorderColor={{ from: "serieColor" }}
+				useMesh={true}
+				tooltip={LatencyLineTooltip}
 				legends={[
 					{
-						dataFrom: "keys",
-						anchor: "bottom-right",
-						direction: "column",
-						translateX: 100,
-						itemWidth: 80,
-						itemHeight: 20,
-						itemTextColor: "hsl(var(--muted-foreground))",
+						anchor: "top-right",
+						direction: "row",
+						translateY: -16,
+						itemWidth: 86,
+						itemHeight: 16,
+						symbolSize: 8,
+						symbolShape: "circle",
 					},
 				]}
 				theme={nivoTheme}
@@ -342,84 +622,147 @@ function FeedbackChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	);
 }
 
-function CostBreakdownChart({ overview }: { overview: IAnalyticsOverview }) {
+function CostTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
 	const chartData = useMemo(
 		() =>
-			[
-				{
-					id: "LLM Cost",
-					value: overview.totalLlmCost,
-					color: chartColors.cost.llm,
-				},
-				{
-					id: "Embedding Cost",
-					value: overview.totalEmbeddingCost,
-					color: chartColors.cost.embedding,
-				},
-			].filter((d) => d.value > 0),
-		[overview],
+			data.map((d) => ({
+				date: formatChartDate(d.date),
+				llm: microDollarsToDollars(d.llmCost),
+				embeddings: microDollarsToDollars(d.embeddingCost),
+			})),
+		[data],
 	);
+	const hasCost = chartData.some((d) => d.llm > 0 || d.embeddings > 0);
 
-	if (chartData.length === 0) {
-		return (
-			<div className="flex h-62.5 items-center justify-center text-muted-foreground">
-				No cost data available
-			</div>
-		);
+	if (data.length === 0 || !hasCost) {
+		return <EmptyChart label="No AI cost in this date range" />;
 	}
 
 	return (
-		<div className="h-62.5">
-			<ResponsivePie
+		<div className={chartContainerClassName}>
+			<ResponsiveBar
 				data={chartData}
-				margin={{ top: 20, right: 80, bottom: 20, left: 80 }}
-				innerRadius={0.5}
-				padAngle={0.7}
-				cornerRadius={3}
-				activeOuterRadiusOffset={8}
-				colors={{ datum: "data.color" }}
-				arcLinkLabelsSkipAngle={10}
-				arcLinkLabelsTextColor="hsl(var(--muted-foreground))"
-				arcLinkLabelsThickness={2}
-				arcLabelsSkipAngle={10}
-				arcLabelsTextColor="white"
-				valueFormat={(v) => formatCost(v)}
+				keys={["llm", "embeddings"]}
+				indexBy="date"
+				margin={{ top: 18, right: 18, bottom: 42, left: 58 }}
+				padding={0.25}
+				groupMode="stacked"
+				colors={[chartColors.llm, chartColors.embedding]}
+				enableLabel={false}
+				borderRadius={2}
+				valueFormat={(value) => formatDollarAmount(Number(value))}
+				tooltip={CostBarTooltip}
+				axisBottom={{
+					tickRotation: 0,
+					tickValues: getTickValues(chartData.map((d) => d.date)),
+				}}
+				axisLeft={{
+					format: (value) => formatDollarAmount(Number(value)),
+				}}
+				legends={[
+					{
+						dataFrom: "keys",
+						anchor: "top-right",
+						direction: "row",
+						translateY: -16,
+						itemWidth: 88,
+						itemHeight: 16,
+						symbolSize: 8,
+					},
+				]}
 				theme={nivoTheme}
 			/>
 		</div>
 	);
 }
 
-function RatingBadge({ rating }: { rating: number }) {
-	if (rating >= 4) {
-		return (
-			<Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-				<ThumbsUpIcon className="h-3 w-3 mr-1" />
-				{rating}/5
-			</Badge>
-		);
-	}
-	if (rating >= 3) {
-		return (
-			<Badge variant="secondary">
-				<StarIcon className="h-3 w-3 mr-1" />
-				{rating}/5
-			</Badge>
-		);
-	}
-	return (
-		<Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
-			<ThumbsDownIcon className="h-3 w-3 mr-1" />
-			{rating}/5
-		</Badge>
+function FeedbackTrendChart({ data }: { data: IDailyAnalyticsStat[] }) {
+	const chartData = useMemo(
+		() =>
+			data.map((d) => ({
+				date: formatChartDate(d.date),
+				positive: d.positiveFeedback,
+				negative: d.negativeFeedback,
+			})),
+		[data],
 	);
+	const hasFeedback = data.some(
+		(d) => d.positiveFeedback > 0 || d.negativeFeedback > 0,
+	);
+
+	if (data.length === 0 || !hasFeedback) {
+		return <EmptyChart label="No feedback signal in this date range" />;
+	}
+
+	return (
+		<div className={chartContainerClassName}>
+			<ResponsiveBar
+				data={chartData}
+				keys={["positive", "negative"]}
+				indexBy="date"
+				margin={{ top: 18, right: 18, bottom: 42, left: 44 }}
+				padding={0.25}
+				groupMode="stacked"
+				colors={[chartColors.positive, chartColors.negative]}
+				enableLabel={false}
+				borderRadius={2}
+				valueFormat={(value) => formatNumber(Number(value))}
+				tooltip={FeedbackBarTooltip}
+				axisBottom={{
+					tickRotation: 0,
+					tickValues: getTickValues(chartData.map((d) => d.date)),
+				}}
+				axisLeft={{
+					format: (value) => formatCompactNumber(Number(value)),
+				}}
+				legends={[
+					{
+						dataFrom: "keys",
+						anchor: "top-right",
+						direction: "row",
+						translateY: -16,
+						itemWidth: 82,
+						itemHeight: 16,
+						symbolSize: 8,
+					},
+				]}
+				theme={nivoTheme}
+			/>
+		</div>
+	);
+}
+
+function FeedbackBadge({ rating }: { rating: number }) {
+	if (rating > 0) {
+		return (
+			<Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+				<ThumbsUpIcon className="mr-1 h-3 w-3" />
+				Positive
+			</Badge>
+		);
+	}
+
+	if (rating < 0) {
+		return (
+			<Badge className="bg-destructive/10 text-destructive">
+				<ThumbsDownIcon className="mr-1 h-3 w-3" />
+				Negative
+			</Badge>
+		);
+	}
+
+	return <Badge variant="secondary">Neutral</Badge>;
 }
 
 export function AnalyticsDashboard() {
 	const backend = useBackend();
 	const analyticsState = backend.analyticsState;
+	const eventState = backend.eventState;
+	const router = useRouter();
+	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const appId = searchParams.get("id");
+	const eventIdParam = searchParams.get("eventId")?.trim() || "all";
 
 	const [loading, setLoading] = useState(true);
 	const [overview, setOverview] = useState<IAnalyticsOverview | null>(null);
@@ -427,8 +770,10 @@ export function AnalyticsDashboard() {
 	const [feedbackItems, setFeedbackItems] = useState<IFeedbackItem[]>([]);
 	const [feedbackTotal, setFeedbackTotal] = useState(0);
 	const [feedbackPage, setFeedbackPage] = useState(0);
+	const [events, setEvents] = useState<IEvent[]>([]);
 
 	const [dateRange, setDateRange] = useState<"7d" | "30d" | "90d">("30d");
+	const [selectedEventId, setSelectedEventId] = useState(eventIdParam);
 	const [feedbackFilter, setFeedbackFilter] = useState<
 		"all" | "positive" | "negative"
 	>("all");
@@ -441,39 +786,42 @@ export function AnalyticsDashboard() {
 		setLoading(true);
 		try {
 			const days = dateRange === "7d" ? 7 : dateRange === "30d" ? 30 : 90;
-			const endDate = new Date().toISOString().split("T")[0];
-			const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
-				.toISOString()
-				.split("T")[0];
+			const end = new Date();
+			const start = new Date(end);
+			start.setDate(end.getDate() - (days - 1));
 
-			const minRating =
-				feedbackFilter === "positive"
-					? 4
-					: feedbackFilter === "negative"
-						? undefined
-						: undefined;
-			const maxRating =
-				feedbackFilter === "negative"
-					? 2
-					: feedbackFilter === "positive"
-						? undefined
-						: undefined;
+			const endDate = formatLocalDate(end);
+			const startDate = formatLocalDate(start);
 
-			const [dashboardData, feedbackData] = await Promise.all([
-				analyticsState.getAnalyticsDashboard(appId, startDate, endDate),
+			const minRating = feedbackFilter === "positive" ? 1 : undefined;
+			const maxRating = feedbackFilter === "negative" ? -1 : undefined;
+			const eventFilter =
+				selectedEventId === "all" ? undefined : selectedEventId;
+
+			const [dashboardData, feedbackData, eventsData] = await Promise.all([
+				analyticsState.getAnalyticsDashboard(
+					appId,
+					startDate,
+					endDate,
+					"day",
+					eventFilter,
+				),
 				analyticsState.listFeedback(
 					appId,
 					feedbackPage * FEEDBACK_LIMIT,
 					FEEDBACK_LIMIT,
 					minRating,
 					maxRating,
+					eventFilter,
 				),
+				eventState.getEvents(appId).catch(() => []),
 			]);
 
-			setOverview(dashboardData.overview);
+			setOverview(dashboardData.stats.summary ?? dashboardData.overview);
 			setDailyStats(dashboardData.stats.dailyStats);
 			setFeedbackItems(feedbackData.items);
 			setFeedbackTotal(feedbackData.total);
+			setEvents(eventsData);
 		} catch (error) {
 			toast.error(
 				error instanceof Error
@@ -483,17 +831,110 @@ export function AnalyticsDashboard() {
 		} finally {
 			setLoading(false);
 		}
-	}, [appId, dateRange, feedbackFilter, feedbackPage, analyticsState]);
+	}, [
+		appId,
+		dateRange,
+		feedbackFilter,
+		feedbackPage,
+		selectedEventId,
+		analyticsState,
+		eventState,
+	]);
 
 	useEffect(() => {
 		loadData();
 	}, [loadData]);
 
+	useEffect(() => {
+		setSelectedEventId(eventIdParam);
+		setFeedbackPage(0);
+	}, [eventIdParam]);
+
+	const updateEventFilter = useCallback(
+		(value: string) => {
+			setSelectedEventId(value);
+			setFeedbackPage(0);
+
+			const params = new URLSearchParams(searchParams.toString());
+			if (value === "all") {
+				params.delete("eventId");
+			} else {
+				params.set("eventId", value);
+			}
+
+			const query = params.toString();
+			router.replace(query ? `${pathname}?${query}` : pathname, {
+				scroll: false,
+			});
+		},
+		[pathname, router, searchParams],
+	);
+
 	const feedbackTotalPages = Math.ceil(feedbackTotal / FEEDBACK_LIMIT);
+	const dateRangeLabel =
+		dateRange === "7d"
+			? "Last 7 days"
+			: dateRange === "30d"
+				? "Last 30 days"
+				: "Last 90 days";
+	const analyticsScopeCopy =
+		selectedEventId === "all"
+			? "Usage, reliability, cost, and feedback"
+			: "Usage, reliability, and feedback";
+	const eventOptions = useMemo(
+		() =>
+			[...events]
+				.filter((event) => event.id?.trim())
+				.sort((a, b) => a.name.localeCompare(b.name)),
+		[events],
+	);
+	const eventLookup = useMemo(
+		() => new Map(eventOptions.map((event) => [event.id, event])),
+		[eventOptions],
+	);
+	const selectedEvent =
+		selectedEventId === "all" ? undefined : eventLookup.get(selectedEventId);
+	const selectedEventLabel =
+		selectedEventId === "all"
+			? "all events"
+			: selectedEvent?.name ||
+				compactIdentifier(selectedEventId) ||
+				"selected event";
+	const selectedEventIsMissing =
+		selectedEventId !== "all" && !selectedEvent && selectedEventId.trim();
+
+	const totalExecutions = overview?.totalExecutions ?? 0;
+	const failedExecutions = overview?.failedExecutions ?? 0;
+	const successfulExecutions =
+		totalExecutions > 0
+			? Math.max(totalExecutions - failedExecutions, 0)
+			: (overview?.successfulExecutions ?? 0);
+	const uniqueUsers = overview?.uniqueUsers ?? 0;
+	const successRate =
+		totalExecutions > 0 ? (successfulExecutions / totalExecutions) * 100 : null;
+	const totalCost =
+		(overview?.totalLlmCost ?? 0) + (overview?.totalEmbeddingCost ?? 0);
+	const costPerExecution =
+		totalExecutions > 0 ? totalCost / totalExecutions : 0;
+	const totalFeedback = overview?.totalFeedback ?? 0;
+	const positiveFeedback = overview?.positiveFeedback ?? 0;
+	const negativeFeedback = overview?.negativeFeedback ?? 0;
+	const positiveRate =
+		totalFeedback > 0 ? (positiveFeedback / totalFeedback) * 100 : null;
+	const runsPerUser =
+		uniqueUsers > 0 ? (totalExecutions / uniqueUsers).toFixed(1) : "0";
+	const peakP95Latency = useMemo(() => {
+		const values = dailyStats
+			.map((day) => day.p95Latency)
+			.filter(
+				(value): value is number => value !== null && value !== undefined,
+			);
+		return values.length > 0 ? Math.max(...values) : null;
+	}, [dailyStats]);
 
 	if (!analyticsState) {
 		return (
-			<div className="flex items-center justify-center h-full">
+			<div className="flex h-full items-center justify-center">
 				<p className="text-muted-foreground">Analytics is not available</p>
 			</div>
 		);
@@ -501,7 +942,7 @@ export function AnalyticsDashboard() {
 
 	if (!appId) {
 		return (
-			<div className="flex items-center justify-center h-full">
+			<div className="flex h-full items-center justify-center">
 				<p className="text-muted-foreground">No app selected</p>
 			</div>
 		);
@@ -509,321 +950,401 @@ export function AnalyticsDashboard() {
 
 	if (loading) {
 		return (
-			<div className="p-6 space-y-6">
-				<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-					{Array.from({ length: 4 }).map((_, i) => (
-						<Skeleton key={`skeleton-stat-${i}`} className="h-32" />
+			<div className="space-y-5 p-6">
+				<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+					{Array.from({ length: 5 }).map((_, index) => (
+						<Skeleton key={`analytics-card-${index}`} className="h-32" />
 					))}
 				</div>
-				<Skeleton className="h-75" />
+				<div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
+					<Skeleton className="h-[370px]" />
+					<Skeleton className="h-[370px]" />
+				</div>
+				<div className="grid gap-4 xl:grid-cols-2">
+					<Skeleton className="h-[370px]" />
+					<Skeleton className="h-[370px]" />
+				</div>
 			</div>
 		);
 	}
 
 	return (
-		<div className="space-y-6 text-foreground">
-			{/* Header */}
-			<div className="flex items-center justify-between">
-				<div>
-					<h1 className="text-2xl font-bold">Analytics Dashboard</h1>
-					<p className="text-muted-foreground">
-						Track your app&apos;s usage, performance, and feedback
+		<div className="space-y-5 text-foreground">
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+				<div className="space-y-1">
+					<h1 className="text-2xl font-semibold">Analytics</h1>
+					<p className="text-sm text-muted-foreground">
+						{analyticsScopeCopy} for {dateRangeLabel.toLowerCase()} across{" "}
+						{selectedEventLabel}
 					</p>
 				</div>
-				<Select
-					value={dateRange}
-					onValueChange={(v) => setDateRange(v as typeof dateRange)}
-				>
-					<SelectTrigger className="w-32 bg-background/70 dark:bg-background/30">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="7d">Last 7 days</SelectItem>
-						<SelectItem value="30d">Last 30 days</SelectItem>
-						<SelectItem value="90d">Last 90 days</SelectItem>
-					</SelectContent>
-				</Select>
-			</div>
-
-			{/* Stats Cards */}
-			<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-				<StatCard
-					title="Total Executions"
-					value={(overview?.totalExecutions ?? 0).toLocaleString()}
-					change={overview?.executionsChangePercent}
-					icon={ActivityIcon}
-					subtitle={`${overview?.successfulExecutions ?? 0} successful, ${overview?.failedExecutions ?? 0} failed`}
-				/>
-				<StatCard
-					title="Unique Users"
-					value={(overview?.uniqueUsers ?? 0).toLocaleString()}
-					change={overview?.usersChangePercent}
-					icon={UsersIcon}
-					subtitle={`${overview?.periodUniqueUsers ?? 0} in selected period`}
-				/>
-				<StatCard
-					title="Avg Rating"
-					value={
-						overview?.avgFeedbackRating !== null &&
-						overview?.avgFeedbackRating !== undefined
-							? `${overview.avgFeedbackRating.toFixed(1)}/5`
-							: "N/A"
-					}
-					icon={StarIcon}
-					subtitle={`${overview?.totalFeedback ?? 0} total ratings`}
-				/>
-				<StatCard
-					title="Avg Latency"
-					value={formatLatency(overview?.avgLatencyMs ?? null)}
-					icon={ClockIcon}
-				/>
-			</div>
-
-			{/* Secondary Stats */}
-			<div className="grid gap-4 md:grid-cols-3">
-				<Card className={analyticsCardClassName}>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">
-							Feedback Sentiment
-						</CardTitle>
-						<MessageSquareIcon className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						<div className="flex items-center gap-4">
-							<div className="flex items-center gap-1 text-green-600">
-								<ThumbsUpIcon className="h-4 w-4" />
-								<span className="text-lg font-semibold">
-									{overview?.positiveFeedback ?? 0}
-								</span>
-							</div>
-							<div className="flex items-center gap-1 text-red-600">
-								<ThumbsDownIcon className="h-4 w-4" />
-								<span className="text-lg font-semibold">
-									{overview?.negativeFeedback ?? 0}
-								</span>
-							</div>
-						</div>
-						{overview && overview.totalFeedback > 0 && (
-							<div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted/80 dark:bg-muted/50">
-								<div
-									className="h-full bg-green-600 dark:bg-green-500"
-									style={{
-										width: `${(overview.positiveFeedback / overview.totalFeedback) * 100}%`,
-									}}
-								/>
-							</div>
-						)}
-					</CardContent>
-				</Card>
-
-				<Card className={analyticsCardClassName}>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">Success Rate</CardTitle>
-						<CheckCircleIcon className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						<div className="text-2xl font-bold">
-							{overview && overview.totalExecutions > 0
-								? `${((overview.successfulExecutions / overview.totalExecutions) * 100).toFixed(1)}%`
-								: "N/A"}
-						</div>
-						<div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-							<span className="flex items-center gap-1 text-green-600">
-								<CheckCircleIcon className="h-3 w-3" />
-								{overview?.successfulExecutions ?? 0}
-							</span>
-							<span className="flex items-center gap-1 text-red-600">
-								<XCircleIcon className="h-3 w-3" />
-								{overview?.failedExecutions ?? 0}
-							</span>
-						</div>
-					</CardContent>
-				</Card>
-
-				<Card className={analyticsCardClassName}>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">AI Costs</CardTitle>
-						<BrainIcon className="h-4 w-4 text-muted-foreground" />
-					</CardHeader>
-					<CardContent>
-						<div className="text-2xl font-bold">
-							{formatCost(
-								(overview?.totalLlmCost ?? 0) +
-									(overview?.totalEmbeddingCost ?? 0),
-							)}
-						</div>
-						<div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-							<span>LLM: {formatCost(overview?.totalLlmCost ?? 0)}</span>
-							<span>
-								Embed: {formatCost(overview?.totalEmbeddingCost ?? 0)}
-							</span>
-						</div>
-					</CardContent>
-				</Card>
-			</div>
-
-			{/* Charts */}
-			<Tabs defaultValue="executions" className="space-y-4">
-				<TabsList className="bg-muted/80 dark:bg-muted/40">
-					<TabsTrigger value="executions">Executions</TabsTrigger>
-					<TabsTrigger value="latency">Latency</TabsTrigger>
-					<TabsTrigger value="feedback">Feedback</TabsTrigger>
-					<TabsTrigger value="costs">Costs</TabsTrigger>
-				</TabsList>
-
-				<TabsContent value="executions">
-					<Card className={analyticsCardClassName}>
-						<CardHeader>
-							<CardTitle>Executions Over Time</CardTitle>
-							<CardDescription>
-								Daily executions and unique users
-							</CardDescription>
-						</CardHeader>
-						<CardContent className={analyticsInsetClassName}>
-							<ExecutionsChart data={dailyStats} />
-						</CardContent>
-					</Card>
-				</TabsContent>
-
-				<TabsContent value="latency">
-					<Card className={analyticsCardClassName}>
-						<CardHeader>
-							<CardTitle>Average Latency</CardTitle>
-							<CardDescription>
-								Response time trends over the selected period
-							</CardDescription>
-						</CardHeader>
-						<CardContent className={analyticsInsetClassName}>
-							<LatencyChart data={dailyStats} />
-						</CardContent>
-					</Card>
-				</TabsContent>
-
-				<TabsContent value="feedback">
-					<Card className={analyticsCardClassName}>
-						<CardHeader>
-							<CardTitle>Feedback Over Time</CardTitle>
-							<CardDescription>
-								Positive vs negative feedback distribution
-							</CardDescription>
-						</CardHeader>
-						<CardContent className={analyticsInsetClassName}>
-							<FeedbackChart data={dailyStats} />
-						</CardContent>
-					</Card>
-				</TabsContent>
-
-				<TabsContent value="costs">
-					<Card className={analyticsCardClassName}>
-						<CardHeader>
-							<CardTitle>Cost Breakdown</CardTitle>
-							<CardDescription>
-								LLM and embedding costs for the selected period
-							</CardDescription>
-						</CardHeader>
-						<CardContent className={analyticsInsetClassName}>
-							{overview && <CostBreakdownChart overview={overview} />}
-						</CardContent>
-					</Card>
-				</TabsContent>
-			</Tabs>
-
-			<Separator />
-
-			{/* Feedback List */}
-			<div className="space-y-4">
-				<div className="flex items-center justify-between">
-					<div>
-						<h2 className="text-xl font-semibold">Recent Feedback</h2>
-						<p className="text-sm text-muted-foreground">
-							{feedbackTotal} total feedback entries
-						</p>
-					</div>
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
 					<Select
-						value={feedbackFilter}
-						onValueChange={(v) => {
-							setFeedbackFilter(v as typeof feedbackFilter);
-							setFeedbackPage(0);
-						}}
+						value={dateRange}
+						onValueChange={(value) => setDateRange(value as typeof dateRange)}
 					>
-						<SelectTrigger className="w-32 bg-background/70 dark:bg-background/30">
+						<SelectTrigger className="w-full bg-background/70 sm:w-40 dark:bg-background/30">
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							<SelectItem value="all">All</SelectItem>
-							<SelectItem value="positive">Positive</SelectItem>
-							<SelectItem value="negative">Negative</SelectItem>
+							<SelectItem value="7d">Last 7 days</SelectItem>
+							<SelectItem value="30d">Last 30 days</SelectItem>
+							<SelectItem value="90d">Last 90 days</SelectItem>
 						</SelectContent>
 					</Select>
+					<Select value={selectedEventId} onValueChange={updateEventFilter}>
+						<SelectTrigger className="w-full bg-background/70 sm:w-60 dark:bg-background/30">
+							<FilterIcon className="mr-2 h-4 w-4 text-muted-foreground" />
+							<SelectValue placeholder="All events" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">All events</SelectItem>
+							{selectedEventIsMissing && (
+								<SelectItem value={selectedEventId}>
+									{compactIdentifier(selectedEventId) || "Selected event"}
+								</SelectItem>
+							)}
+							{eventOptions.map((event) => (
+								<SelectItem key={event.id} value={event.id}>
+									{event.name ||
+										compactIdentifier(event.id) ||
+										"Untitled event"}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					{selectedEventId !== "all" && (
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={() => updateEventFilter("all")}
+						>
+							<XIcon className="mr-1 h-3.5 w-3.5" />
+							Clear
+						</Button>
+					)}
 				</div>
+			</div>
 
-				{feedbackItems.length === 0 ? (
-					<Card className={analyticsCardClassName}>
-						<CardContent className="flex flex-col items-center justify-center py-12">
-							<MessageSquareIcon className="h-12 w-12 text-muted-foreground mb-4" />
-							<p className="text-muted-foreground">No feedback yet</p>
-						</CardContent>
-					</Card>
-				) : (
-					<>
-						<Card className={analyticsCardClassName}>
-							<Table>
-								<TableHeader>
-									<TableRow>
-										<TableHead>Rating</TableHead>
-										<TableHead>Comment</TableHead>
-										<TableHead>Date</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{feedbackItems.map((item) => (
-										<TableRow key={item.id}>
-											<TableCell>
-												<RatingBadge rating={item.rating} />
-											</TableCell>
-											<TableCell className="max-w-md">
-												<p className="truncate">
-													{item.comment || (
-														<span className="text-muted-foreground italic">
-															No comment
-														</span>
-													)}
-												</p>
-											</TableCell>
-											<TableCell className="whitespace-nowrap">
-												{formatDate(item.createdAt)}
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						</Card>
+			<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+				<MetricCard
+					title="Executions"
+					value={formatNumber(totalExecutions)}
+					detail={`${formatNumber(successfulExecutions)} successful, ${formatNumber(failedExecutions)} failed`}
+					icon={ActivityIcon}
+					tone={failedExecutions > 0 ? "warning" : "neutral"}
+				/>
+				<MetricCard
+					title="Users"
+					value={formatNumber(uniqueUsers)}
+					detail={`${runsPerUser} executions per user`}
+					icon={UsersIcon}
+				/>
+				<MetricCard
+					title="Reliability"
+					value={successRate === null ? "N/A" : formatPercent(successRate)}
+					detail={
+						failedExecutions > 0
+							? `${formatNumber(failedExecutions)} failed executions`
+							: "No failed executions"
+					}
+					icon={
+						successRate === null || failedExecutions > 0
+							? AlertTriangleIcon
+							: CheckCircleIcon
+					}
+					tone={failedExecutions > 0 ? "warning" : "success"}
+				/>
+				<MetricCard
+					title="Latency"
+					value={formatLatency(overview?.avgLatencyMs)}
+					detail={
+						peakP95Latency === null
+							? "No p95 samples"
+							: `Peak daily p95 ${formatLatency(peakP95Latency)}`
+					}
+					icon={ClockIcon}
+				/>
+				<MetricCard
+					title="AI Spend"
+					value={selectedEventId === "all" ? formatCost(totalCost) : "N/A"}
+					detail={
+						selectedEventId === "all"
+							? `${formatCost(costPerExecution)} per execution`
+							: "Event-level cost is not tracked yet"
+					}
+					icon={BrainIcon}
+				/>
+			</div>
 
-						{feedbackTotalPages > 1 && (
-							<div className="flex items-center justify-center gap-2">
-								<Button
-									variant="outline"
-									size="sm"
-									disabled={feedbackPage === 0}
-									onClick={() => setFeedbackPage((p) => p - 1)}
-								>
-									Previous
-								</Button>
-								<span className="text-sm text-muted-foreground">
-									Page {feedbackPage + 1} of {feedbackTotalPages}
-								</span>
-								<Button
-									variant="outline"
-									size="sm"
-									disabled={feedbackPage >= feedbackTotalPages - 1}
-									onClick={() => setFeedbackPage((p) => p + 1)}
-								>
-									Next
-								</Button>
+			<div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
+				<Card className={analyticsCardClassName}>
+					<CardHeader className="pb-3">
+						<div className="flex items-start justify-between gap-3">
+							<div>
+								<CardTitle>Runs and Users</CardTitle>
+								<CardDescription>
+									Daily execution volume and active users
+								</CardDescription>
+							</div>
+							<Badge variant="outline">
+								<TrendingUpIcon className="mr-1 h-3 w-3" />
+								{dateRangeLabel}
+							</Badge>
+						</div>
+					</CardHeader>
+					<CardContent className="pt-0">
+						<ActivityTrendChart data={dailyStats} />
+					</CardContent>
+				</Card>
+
+				<Card className={analyticsCardClassName}>
+					<CardHeader className="pb-3">
+						<CardTitle>Reliability</CardTitle>
+						<CardDescription>Successful and failed executions</CardDescription>
+					</CardHeader>
+					<CardContent className="pt-0">
+						<ReliabilityChart data={dailyStats} />
+					</CardContent>
+				</Card>
+			</div>
+
+			<div className="grid gap-4 xl:grid-cols-2">
+				<Card className={analyticsCardClassName}>
+					<CardHeader className="pb-3">
+						<CardTitle>Response Time</CardTitle>
+						<CardDescription>
+							Average and daily p95 execution latency
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="pt-0">
+						<LatencyChart data={dailyStats} />
+					</CardContent>
+				</Card>
+
+				<Card className={analyticsCardClassName}>
+					<CardHeader className="pb-3">
+						<div className="flex items-start justify-between gap-3">
+							<div>
+								<CardTitle>AI Cost</CardTitle>
+								<CardDescription>
+									{selectedEventId === "all"
+										? "Daily LLM and embedding spend"
+										: "Event-level AI spend is not tracked yet"}
+								</CardDescription>
+							</div>
+							<div className="text-right text-xs text-muted-foreground">
+								<div>LLM {formatCost(overview?.totalLlmCost ?? 0)}</div>
+								<div>
+									Embeddings {formatCost(overview?.totalEmbeddingCost ?? 0)}
+								</div>
+							</div>
+						</div>
+					</CardHeader>
+					<CardContent className="pt-0">
+						{selectedEventId === "all" ? (
+							<CostTrendChart data={dailyStats} />
+						) : (
+							<EmptyChart label="Event-level AI spend is not tracked yet" />
+						)}
+					</CardContent>
+				</Card>
+			</div>
+
+			<div className="grid gap-4 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]">
+				<Card className={analyticsCardClassName}>
+					<CardHeader className="pb-3">
+						<div className="flex items-start justify-between gap-3">
+							<div>
+								<CardTitle>Feedback Signal</CardTitle>
+								<CardDescription>
+									Positive and negative responses for {selectedEventLabel}
+								</CardDescription>
+							</div>
+							<Badge
+								variant={positiveRate === null ? "secondary" : "outline"}
+								className={cn(
+									positiveRate !== null &&
+										positiveRate >= 80 &&
+										"text-emerald-600 dark:text-emerald-400",
+									positiveRate !== null &&
+										positiveRate < 50 &&
+										"text-destructive",
+								)}
+							>
+								<MessageSquareIcon className="mr-1 h-3 w-3" />
+								{positiveRate === null
+									? "No signal"
+									: `${formatPercent(positiveRate)} positive`}
+							</Badge>
+						</div>
+					</CardHeader>
+					<CardContent className="pt-0">
+						<FeedbackTrendChart data={dailyStats} />
+					</CardContent>
+				</Card>
+
+				<Card className={analyticsCardClassName}>
+					<CardHeader className="pb-3">
+						<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+							<div>
+								<CardTitle>Recent Feedback</CardTitle>
+								<CardDescription>
+									{formatNumber(feedbackTotal)} entries for {selectedEventLabel}
+								</CardDescription>
+							</div>
+							<Select
+								value={feedbackFilter}
+								onValueChange={(value) => {
+									setFeedbackFilter(value as typeof feedbackFilter);
+									setFeedbackPage(0);
+								}}
+							>
+								<SelectTrigger className="w-full bg-background/70 sm:w-36 dark:bg-background/30">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="all">All</SelectItem>
+									<SelectItem value="positive">Positive</SelectItem>
+									<SelectItem value="negative">Negative</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					</CardHeader>
+					<CardContent className="pt-0">
+						{feedbackItems.length === 0 ? (
+							<div className="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 px-4 text-center text-sm text-muted-foreground">
+								<MessageSquareIcon className="mb-3 h-8 w-8" />
+								No feedback yet
+							</div>
+						) : (
+							<div className="space-y-3">
+								<div className="overflow-hidden rounded-lg border border-border/70">
+									<Table>
+										<TableHeader>
+											<TableRow>
+												<TableHead>Signal</TableHead>
+												<TableHead className="w-80">Source</TableHead>
+												<TableHead>Comment</TableHead>
+												<TableHead className="w-32">Date</TableHead>
+											</TableRow>
+										</TableHeader>
+										<TableBody>
+											{feedbackItems.map((item) => {
+												const eventFromList = item.eventId
+													? eventLookup.get(item.eventId)
+													: undefined;
+												const pageSource = formatFeedbackPageSource(
+													item,
+													eventFromList,
+												);
+												const eventSource = formatFeedbackEventSource(
+													item,
+													eventFromList,
+												);
+												const eventHref = getAnalyticsEventHref(
+													appId,
+													item.eventId,
+												);
+												const eventTitle = [
+													item.eventName || eventFromList?.name,
+													item.eventId,
+													item.eventRoute || getEventRoute(eventFromList),
+													item.eventPageId || getEventPageId(eventFromList),
+												]
+													.filter(Boolean)
+													.join(" | ");
+
+												return (
+													<TableRow key={item.id}>
+														<TableCell>
+															<FeedbackBadge rating={item.rating} />
+														</TableCell>
+														<TableCell className="max-w-[20rem]">
+															<div className="min-w-0 space-y-1">
+																<div className="min-w-0 truncate text-sm font-medium">
+																	{eventSource && eventHref ? (
+																		<a
+																			href={eventHref}
+																			className="inline-flex max-w-full items-center gap-1 text-primary underline-offset-2 hover:underline"
+																			title={eventTitle || eventSource}
+																		>
+																			<span className="truncate">
+																				{eventSource}
+																			</span>
+																			<ExternalLinkIcon className="h-3 w-3 shrink-0" />
+																		</a>
+																	) : eventSource ? (
+																		<span title={eventTitle || eventSource}>
+																			{eventSource}
+																		</span>
+																	) : (
+																		<span className="text-muted-foreground italic">
+																			Unknown event
+																		</span>
+																	)}
+																</div>
+																{pageSource ? (
+																	<p
+																		className="truncate text-xs text-muted-foreground"
+																		title={pageSource}
+																	>
+																		{pageSource}
+																	</p>
+																) : (
+																	<p className="text-xs text-muted-foreground italic">
+																		No page context
+																	</p>
+																)}
+															</div>
+														</TableCell>
+														<TableCell className="max-w-sm">
+															<p className="truncate">
+																{item.comment || (
+																	<span className="text-muted-foreground italic">
+																		No comment
+																	</span>
+																)}
+															</p>
+														</TableCell>
+														<TableCell className="whitespace-nowrap text-muted-foreground">
+															{formatDateTime(item.createdAt)}
+														</TableCell>
+													</TableRow>
+												);
+											})}
+										</TableBody>
+									</Table>
+								</div>
+
+								{feedbackTotalPages > 1 && (
+									<div className="flex items-center justify-end gap-2">
+										<Button
+											variant="outline"
+											size="sm"
+											disabled={feedbackPage === 0}
+											onClick={() => setFeedbackPage((page) => page - 1)}
+										>
+											Previous
+										</Button>
+										<span className="text-sm text-muted-foreground">
+											Page {feedbackPage + 1} of {feedbackTotalPages}
+										</span>
+										<Button
+											variant="outline"
+											size="sm"
+											disabled={feedbackPage >= feedbackTotalPages - 1}
+											onClick={() => setFeedbackPage((page) => page + 1)}
+										>
+											Next
+										</Button>
+									</div>
+								)}
 							</div>
 						)}
-					</>
-				)}
+					</CardContent>
+				</Card>
 			</div>
 		</div>
 	);

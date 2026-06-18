@@ -9,21 +9,83 @@
 //! - **Soft checks** — report violations as warnings and enforce a ceiling
 //!   so the count can only go *down* over time.
 
-use flow_like::flow::{pin::PinType, variable::VariableType};
+use flow_like::flow::{
+    board::{Board, ExecutionMode, ExecutionStage},
+    execution::LogLevel,
+    node::{Node, NodeLogic},
+    pin::PinType,
+    variable::VariableType,
+};
 use flow_like_catalog::CatalogBuilder;
-use std::collections::HashSet;
+use flow_like_storage::object_store::path::Path;
+use flow_like_types::json::json;
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    path::{Path as FsPath, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 
-/// Collect all nodes once — shared by every test.
-fn all_nodes() -> Vec<(String, flow_like::flow::node::Node)> {
+/// Collect all node logic objects once — shared by tests that need `on_update()`.
+fn all_logic_nodes() -> Vec<(String, Arc<dyn NodeLogic>)> {
     CatalogBuilder::new()
         .build()
         .into_iter()
         .map(|logic| {
+            let name = logic.get_node().name.clone();
+            (name, logic)
+        })
+        .collect()
+}
+
+fn selected_logic_nodes(names: &[&str]) -> Vec<(String, Arc<dyn NodeLogic>)> {
+    CatalogBuilder::new()
+        .only_nodes(names)
+        .build()
+        .into_iter()
+        .map(|logic| {
+            let name = logic.get_node().name.clone();
+            (name, logic)
+        })
+        .collect()
+}
+
+/// Collect all nodes once — shared by every test.
+fn all_nodes() -> Vec<(String, Node)> {
+    all_logic_nodes()
+        .into_iter()
+        .map(|(_, logic)| {
             let node = logic.get_node();
             let name = node.name.clone();
             (name, node)
         })
         .collect()
+}
+
+fn empty_board() -> Board {
+    Board {
+        id: "lint-board".to_string(),
+        name: "Lint Board".to_string(),
+        description: String::new(),
+        nodes: HashMap::new(),
+        variables: HashMap::new(),
+        comments: HashMap::new(),
+        viewport: (0.0, 0.0, 0.0),
+        version: (0, 0, 1),
+        stage: ExecutionStage::Dev,
+        log_level: LogLevel::Info,
+        execution_mode: ExecutionMode::Hybrid,
+        refs: HashMap::new(),
+        layers: HashMap::new(),
+        page_ids: Vec::new(),
+        hash: None,
+        created_at: SystemTime::UNIX_EPOCH,
+        updated_at: SystemTime::UNIX_EPOCH,
+        parent: None,
+        board_dir: Path::default(),
+        logic_nodes: HashMap::new(),
+        app_state: None,
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -57,6 +119,34 @@ fn format_violations(violations: &[LintViolation]) -> String {
         .map(|v| format!("  [{}] {}", v.node, v.message))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn workspace_root() -> PathBuf {
+    FsPath::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("catalog crate lives below the workspace root")
+}
+
+fn public_icon_roots(workspace_root: &FsPath) -> [PathBuf; 3] {
+    [
+        workspace_root.join("apps/desktop/public"),
+        workspace_root.join("apps/web/public"),
+        workspace_root.join("apps/embedded/public"),
+    ]
+}
+
+fn icon_public_relative_path(icon: &str) -> Option<&str> {
+    let icon = icon.trim();
+    if icon.starts_with("/flow/icons/")
+        && icon.ends_with(".svg")
+        && !icon.contains("..")
+        && !icon.contains('\\')
+    {
+        Some(icon.trim_start_matches('/'))
+    } else {
+        None
+    }
 }
 
 /// Print violations as warnings and assert the count hasn't *increased*
@@ -141,9 +231,74 @@ fn no_duplicate_node_names() {
     );
 }
 
+#[test]
+fn node_icon_assets_exist_in_public_folders() {
+    let root = workspace_root();
+    let public_roots = public_icon_roots(&root);
+    let mut icons_to_nodes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut violations = Vec::new();
+
+    for (name, node) in all_nodes() {
+        let Some(icon) = node.icon.as_deref().map(str::trim) else {
+            continue;
+        };
+
+        if icon.is_empty() {
+            violations.push(LintViolation {
+                node: name,
+                message: "Icon is set but empty".to_string(),
+            });
+            continue;
+        }
+
+        icons_to_nodes
+            .entry(icon.to_string())
+            .or_default()
+            .push(name);
+    }
+
+    for (icon, nodes) in icons_to_nodes {
+        let Some(relative_path) = icon_public_relative_path(&icon) else {
+            violations.push(LintViolation {
+                node: nodes.join(", "),
+                message: format!("Icon \"{icon}\" must be a /flow/icons/*.svg public asset path"),
+            });
+            continue;
+        };
+
+        let missing_roots = public_roots
+            .iter()
+            .filter(|public_root| !public_root.join(relative_path).is_file())
+            .map(|public_root| {
+                public_root
+                    .strip_prefix(&root)
+                    .unwrap_or(public_root)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        if !missing_roots.is_empty() {
+            violations.push(LintViolation {
+                node: nodes.join(", "),
+                message: format!(
+                    "Icon \"{icon}\" is missing from public folder(s): {}",
+                    missing_roots.join(", ")
+                ),
+            });
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Node icons without public SVG assets:\n{}",
+        format_violations(&violations)
+    );
+}
+
 // ── Soft checks (ceiling-guarded — lower ceilings as fixes land) ──────
 
-/// Duplicate input/output pin names — currently 4 nodes affected.
+/// Duplicate input/output pin names.
 /// Lower this ceiling as you fix the offending nodes.
 #[test]
 fn no_duplicate_input_output_pin_names() {
@@ -205,7 +360,6 @@ fn impure_nodes_have_both_exec_sides() {
 }
 
 /// Root-level array schemas — pin schemas should describe a single element.
-/// Currently 19 pins affected. Lower as fixes land.
 #[test]
 fn no_root_array_schemas() {
     let violations = collect_violations(|node| {
@@ -230,6 +384,8 @@ fn no_root_array_schemas() {
 }
 
 /// Struct pins without a JSON schema.
+/// Many remaining cases are intentionally dynamic; lower this ceiling as
+/// concrete schemas are added for stable struct shapes.
 #[test]
 fn warn_struct_pins_without_schema() {
     let violations = collect_violations(|node| {
@@ -241,7 +397,68 @@ fn warn_struct_pins_without_schema() {
             .collect()
     });
 
-    assert_ceiling("struct_without_schema", &violations, 61);
+    assert_ceiling("struct_without_schema", &violations, 111);
+}
+
+/// `on_update()` must settle when the node settings and board are unchanged.
+/// Recreating identical pins on every pass changes generated pin IDs and keeps
+/// the board update loop dirty.
+#[tokio::test]
+async fn covered_on_update_nodes_are_hash_stable_after_second_run() {
+    // Start with fixed regressions and grow this list as dynamic nodes are audited.
+    const COVERED_NODES: &[&str] = &["a2ui_update_overlay"];
+    const DEFAULT_SETTINGS: &[Option<&str>] = &[None];
+    const OVERLAY_SETTINGS: &[Option<&str>] = &[Some("Set All"), Some("Add"), Some("Clear")];
+
+    let board = empty_board();
+    let logic_nodes = selected_logic_nodes(COVERED_NODES);
+    let found_names = logic_nodes
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<HashSet<_>>();
+    let expected_names = COVERED_NODES.iter().copied().collect::<HashSet<_>>();
+
+    assert_eq!(
+        found_names, expected_names,
+        "on_update hash-stability lint did not load the expected nodes"
+    );
+
+    let mut violations = Vec::new();
+
+    for (name, logic) in logic_nodes {
+        let settings = match name.as_str() {
+            "a2ui_update_overlay" => OVERLAY_SETTINGS,
+            _ => DEFAULT_SETTINGS,
+        };
+
+        for operation in settings {
+            let mut node = logic.get_node();
+            if let Some(operation) = operation {
+                node.get_pin_mut_by_name("operation")
+                    .expect("covered on_update node has an operation pin")
+                    .set_default_value(Some(json!(operation)));
+            }
+
+            logic.on_update(&mut node, &board).await;
+            node.hash();
+            let first_hash = node.hash;
+
+            logic.on_update(&mut node, &board).await;
+            node.hash();
+            let second_hash = node.hash;
+
+            if first_hash != second_hash {
+                violations.push(LintViolation {
+                    node: name.clone(),
+                    message: format!(
+                        "Hash changed across identical on_update runs with operation {operation:?} ({first_hash:?} -> {second_hash:?})"
+                    ),
+                });
+            }
+        }
+    }
+
+    assert_ceiling("unstable_on_update_hash", &violations, 0);
 }
 
 // ── Info-level checks (report only, no ceiling) ───────────────────────

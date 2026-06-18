@@ -33,6 +33,8 @@ pub struct Model {
     pub provider_request_id: Option<String>,
     #[sea_orm(column_name = "rawUsage", column_type = "JsonBinary", nullable)]
     pub raw_usage: Option<Json>,
+    #[sea_orm(column_name = "technicalUserId", column_type = "Text", nullable)]
+    pub technical_user_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -46,6 +48,14 @@ pub enum Relation {
     )]
     App,
     #[sea_orm(
+        belongs_to = "super::technical_user::Entity",
+        from = "Column::TechnicalUserId",
+        to = "super::technical_user::Column::Id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    TechnicalUser,
+    #[sea_orm(
         belongs_to = "super::user::Entity",
         from = "Column::UserId",
         to = "super::user::Column::Id",
@@ -58,6 +68,12 @@ pub enum Relation {
 impl Related<super::app::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::App.def()
+    }
+}
+
+impl Related<super::technical_user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::TechnicalUser.def()
     }
 }
 

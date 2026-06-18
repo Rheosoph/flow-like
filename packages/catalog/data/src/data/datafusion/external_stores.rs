@@ -3,18 +3,24 @@ use crate::data::providers::aws::AwsProvider;
 use crate::data::providers::azure::AzureProvider;
 use crate::data::providers::cloudflare::CloudflareProvider;
 use crate::data::providers::gcp::GcpProvider;
+use crate::data::providers::util::get_pin_string_value;
 use flow_like::flow::{
+    board::Board,
     execution::context::ExecutionContext,
-    node::{Node, NodeLogic, NodeScores},
+    node::{Node, NodeLogic, NodeScores, remove_pin_by_name},
     pin::PinOptions,
     variable::VariableType,
 };
 use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::files::store::smb_store::{
+    SmbAuth, SmbConfig, SmbKerberosCcacheConfig, SmbObjectStore,
+};
 use flow_like_storage::object_store::{
     aws::AmazonS3Builder, azure::MicrosoftAzureBuilder, gcp::GoogleCloudStorageBuilder,
 };
 use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
+use std::time::Duration;
 
 // =============================================================================
 // AWS S3 -> FlowPath
@@ -555,8 +561,456 @@ impl NodeLogic for CloudflareR2StoreNode {
 }
 
 // =============================================================================
+// SMB Share -> FlowPath
+// =============================================================================
+
+const SMB_CREDENTIALS: &str = "credentials";
+const SMB_GUEST: &str = "guest";
+const SMB_KERBEROS_CCACHE: &str = "kerberos_ccache";
+const SMB_AUTH_MODES: &[&str] = &[SMB_CREDENTIALS, SMB_GUEST, SMB_KERBEROS_CCACHE];
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct SmbStoreNode {}
+
+impl SmbStoreNode {
+    pub fn new() -> Self {
+        SmbStoreNode {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for SmbStoreNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "external_smb_store",
+            "SMB Share",
+            "Turn an SMB2/3 share into a FlowPath.",
+            "Data/Files/External",
+        );
+        node.add_icon("/flow/icons/cloud.svg");
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "address",
+            "Address",
+            "SMB server address. Use host:port, or host to use port 445.",
+            VariableType::String,
+        );
+        node.add_input_pin("share", "Share", "SMB share name", VariableType::String);
+
+        add_smb_auth_mode_pin(&mut node);
+
+        node.add_input_pin(
+            "prefix",
+            "Prefix",
+            "Optional path prefix within the share",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        add_smb_credential_pins(&mut node);
+
+        node.add_input_pin(
+            "timeout_seconds",
+            "Timeout",
+            "Connection timeout in seconds",
+            VariableType::Integer,
+        )
+        .set_default_value(Some(json!(5)));
+        node.add_input_pin(
+            "compression",
+            "Compression",
+            "Enable SMB compression when supported by the server",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+        node.add_input_pin(
+            "dfs_enabled",
+            "DFS",
+            "Enable DFS referral handling",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+
+        node.add_output_pin("exec_out", "Done", "Store created", VariableType::Execution);
+        node.add_output_pin(
+            "path",
+            "Path",
+            "FlowPath pointing to the SMB share",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>();
+
+        node.scores = Some(NodeScores {
+            privacy: 5,
+            security: 5,
+            performance: 6,
+            governance: 5,
+            reliability: 6,
+            cost: 8,
+        });
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let address: String = context.evaluate_pin("address").await?;
+        let share: String = context.evaluate_pin("share").await?;
+        let auth_mode: String = context
+            .evaluate_pin("auth_mode")
+            .await
+            .unwrap_or_else(|_| SMB_CREDENTIALS.to_string());
+        let prefix: String = context.evaluate_pin("prefix").await.unwrap_or_default();
+        let timeout_seconds: i64 = context.evaluate_pin("timeout_seconds").await.unwrap_or(5);
+        let compression: bool = context.evaluate_pin("compression").await.unwrap_or(true);
+        let dfs_enabled: bool = context.evaluate_pin("dfs_enabled").await.unwrap_or(true);
+
+        if !SMB_AUTH_MODES.iter().any(|mode| *mode == auth_mode) {
+            return Err(flow_like_types::anyhow!(
+                "Unknown SMB auth_mode: '{}'. Expected one of {:?}",
+                auth_mode,
+                SMB_AUTH_MODES
+            ));
+        }
+
+        let address = normalize_smb_address(&address)?;
+        if share.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("SMB share name is required"));
+        }
+
+        let (username, password, domain) = if auth_mode == SMB_CREDENTIALS {
+            (
+                context.evaluate_pin("username").await.unwrap_or_default(),
+                context.evaluate_pin("password").await.unwrap_or_default(),
+                context.evaluate_pin("domain").await.unwrap_or_default(),
+            )
+        } else {
+            (String::new(), String::new(), String::new())
+        };
+
+        let mut config = SmbConfig::new(
+            address.clone(),
+            share.trim().to_string(),
+            username.clone(),
+            password,
+        );
+        config.domain = domain.clone();
+        config.timeout = Duration::from_secs(timeout_seconds.max(1) as u64);
+        config.compression = compression;
+        config.dfs_enabled = dfs_enabled;
+        let auth_key = if auth_mode == SMB_KERBEROS_CCACHE {
+            let kerberos_username: String = context
+                .evaluate_pin("kerberos_username")
+                .await
+                .unwrap_or_default();
+            let kerberos_realm: String = context
+                .evaluate_pin("kerberos_realm")
+                .await
+                .unwrap_or_default();
+            let kerberos_kdc_address: String = context
+                .evaluate_pin("kerberos_kdc_address")
+                .await
+                .unwrap_or_default();
+            let kerberos_ccache_path: String = context
+                .evaluate_pin("kerberos_ccache_path")
+                .await
+                .unwrap_or_default();
+            let kerberos_spn_host: String = context
+                .evaluate_pin("kerberos_spn_host")
+                .await
+                .unwrap_or_default();
+
+            config.auth = SmbAuth::KerberosCcache(SmbKerberosCcacheConfig {
+                username: kerberos_username.clone(),
+                realm: kerberos_realm.clone(),
+                kdc_address: kerberos_kdc_address.clone(),
+                ccache_path: kerberos_ccache_path.clone(),
+                server_hostname: kerberos_spn_host.clone(),
+            });
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                auth_mode,
+                kerberos_username,
+                kerberos_realm,
+                kerberos_kdc_address,
+                kerberos_ccache_path,
+                kerberos_spn_host
+            )
+        } else {
+            format!("{}:{}:{}", auth_mode, username, domain)
+        };
+
+        let store = SmbObjectStore::connect(config)
+            .await
+            .map_err(|e| flow_like_types::anyhow!("Failed to connect SMB share: {}", e))?;
+        let store = FlowLikeStore::Other(Arc::new(store));
+        let share_key = format!("{}/{}", address, share.trim());
+        let path =
+            cache_and_wrap(context, "smb_store", &share_key, &prefix, &auth_key, store).await;
+
+        context.set_pin_value("path", json!(path)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        let auth_mode = get_pin_string_value(node, "auth_mode");
+        sync_smb_auth_mode_pins(node, &auth_mode);
+    }
+}
+
+// =============================================================================
 // Shared cache + FlowPath wrapping
 // =============================================================================
+
+fn add_smb_auth_mode_pin(node: &mut Node) {
+    node.add_input_pin(
+        "auth_mode",
+        "Auth Mode",
+        "How to authenticate: 'credentials' (username/password/domain), 'guest', or 'kerberos_ccache' (local FILE ccache/kinit)",
+        VariableType::String,
+    )
+    .set_options(
+        PinOptions::new()
+            .set_valid_values(SMB_AUTH_MODES.iter().map(|mode| mode.to_string()).collect())
+            .build(),
+    )
+    .set_default_value(Some(json!(SMB_CREDENTIALS)));
+}
+
+fn add_smb_username_pin(node: &mut Node) {
+    node.add_input_pin("username", "Username", "SMB username", VariableType::String)
+        .set_default_value(Some(json!("")));
+}
+
+fn add_smb_password_pin(node: &mut Node) {
+    node.add_input_pin("password", "Password", "SMB password", VariableType::String)
+        .set_default_value(Some(json!("")))
+        .set_options(PinOptions::new().set_sensitive(true).build());
+}
+
+fn add_smb_domain_pin(node: &mut Node) {
+    node.add_input_pin(
+        "domain",
+        "Domain",
+        "Optional SMB domain or workgroup",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_credential_pins(node: &mut Node) {
+    if node.get_pin_by_name("username").is_none() {
+        add_smb_username_pin(node);
+    }
+    if node.get_pin_by_name("password").is_none() {
+        add_smb_password_pin(node);
+    }
+    if node.get_pin_by_name("domain").is_none() {
+        add_smb_domain_pin(node);
+    }
+}
+
+fn add_smb_kerberos_username_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_username",
+        "Principal",
+        "Optional Kerberos username. Defaults to the ccache principal.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_realm_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_realm",
+        "Realm",
+        "Optional Kerberos realm. Defaults to the ccache principal realm.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_kdc_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_kdc_address",
+        "KDC",
+        "Optional KDC address. Required if the ccache has only a TGT and needs a service ticket.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_ccache_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_ccache_path",
+        "CCache",
+        "Optional FILE ccache path. Empty uses KRB5CCNAME.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_spn_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_spn_host",
+        "SPN Host",
+        "Optional hostname used for the cifs/<host> service principal. Defaults to the SMB address host.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_pins(node: &mut Node) {
+    if node.get_pin_by_name("kerberos_username").is_none() {
+        add_smb_kerberos_username_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_realm").is_none() {
+        add_smb_kerberos_realm_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_kdc_address").is_none() {
+        add_smb_kerberos_kdc_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_ccache_path").is_none() {
+        add_smb_kerberos_ccache_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_spn_host").is_none() {
+        add_smb_kerberos_spn_pin(node);
+    }
+}
+
+fn remove_smb_credential_pins(node: &mut Node) {
+    remove_pin_by_name(node, "username");
+    remove_pin_by_name(node, "password");
+    remove_pin_by_name(node, "domain");
+}
+
+fn remove_smb_kerberos_pins(node: &mut Node) {
+    remove_pin_by_name(node, "kerberos_username");
+    remove_pin_by_name(node, "kerberos_realm");
+    remove_pin_by_name(node, "kerberos_kdc_address");
+    remove_pin_by_name(node, "kerberos_ccache_path");
+    remove_pin_by_name(node, "kerberos_spn_host");
+}
+
+fn sync_smb_auth_mode_pins(node: &mut Node, auth_mode: &str) {
+    let mode = if auth_mode.is_empty() {
+        SMB_CREDENTIALS
+    } else {
+        auth_mode
+    };
+    let want_credentials = mode == SMB_CREDENTIALS;
+    let want_kerberos = mode == SMB_KERBEROS_CCACHE;
+    let has_credentials = node.get_pin_by_name("username").is_some()
+        || node.get_pin_by_name("password").is_some()
+        || node.get_pin_by_name("domain").is_some();
+    let has_kerberos = node.get_pin_by_name("kerberos_username").is_some()
+        || node.get_pin_by_name("kerberos_realm").is_some()
+        || node.get_pin_by_name("kerberos_kdc_address").is_some()
+        || node.get_pin_by_name("kerberos_ccache_path").is_some()
+        || node.get_pin_by_name("kerberos_spn_host").is_some();
+
+    if want_credentials {
+        add_smb_credential_pins(node);
+    } else if has_credentials {
+        remove_smb_credential_pins(node);
+    }
+
+    if want_kerberos {
+        add_smb_kerberos_pins(node);
+    } else if has_kerberos {
+        remove_smb_kerberos_pins(node);
+    }
+}
+
+fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
+    let address = address.trim();
+    if address.is_empty() {
+        return Err(flow_like_types::anyhow!("SMB server address is required"));
+    }
+
+    if let Some(port) = smb_address_port(address)? {
+        if address.starts_with('[') {
+            let (host, _) = split_bracketed_smb_address(address)?;
+            Ok(format!("[{host}]:{port}"))
+        } else {
+            let (host, _) = address.rsplit_once(':').ok_or_else(|| {
+                flow_like_types::anyhow!("Invalid SMB server address: '{}'", address)
+            })?;
+            Ok(format!("{}:{port}", host.trim()))
+        }
+    } else if address.starts_with('[') {
+        let (host, _) = split_bracketed_smb_address(address)?;
+        Ok(format!("[{host}]:445"))
+    } else if address.contains(':') && !address.starts_with('[') {
+        Ok(format!("[{address}]:445"))
+    } else {
+        Ok(format!("{address}:445"))
+    }
+}
+
+fn smb_address_port(address: &str) -> flow_like_types::Result<Option<u16>> {
+    if address.starts_with('[') {
+        let (_, suffix) = split_bracketed_smb_address(address)?;
+        if suffix.is_empty() {
+            return Ok(None);
+        }
+        let Some(port) = suffix.strip_prefix(':') else {
+            return Err(flow_like_types::anyhow!(
+                "Invalid bracketed IPv6 SMB address suffix: '{}'",
+                suffix
+            ));
+        };
+        return parse_smb_port(port).map(Some);
+    }
+
+    let colon_count = address.chars().filter(|&c| c == ':').count();
+    if colon_count == 0 {
+        return Ok(None);
+    }
+    if colon_count > 1 {
+        return Ok(None);
+    }
+
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return Ok(None);
+    };
+    if host.trim().is_empty() {
+        return Err(flow_like_types::anyhow!("SMB server host is required"));
+    }
+    parse_smb_port(port).map(Some)
+}
+
+fn split_bracketed_smb_address(address: &str) -> flow_like_types::Result<(&str, &str)> {
+    let Some((host, suffix)) = address.rsplit_once(']') else {
+        return Err(flow_like_types::anyhow!(
+            "Invalid bracketed IPv6 SMB address: missing closing ']'"
+        ));
+    };
+    let host = host.trim_start_matches('[').trim();
+    if host.is_empty() {
+        return Err(flow_like_types::anyhow!("SMB server host is required"));
+    }
+    Ok((host, suffix.trim()))
+}
+
+fn parse_smb_port(port: &str) -> flow_like_types::Result<u16> {
+    let port = port.trim();
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| flow_like_types::anyhow!("Invalid SMB port: '{}'", port))?;
+    if port == 0 {
+        return Err(flow_like_types::anyhow!("Invalid SMB port: '0'"));
+    }
+    Ok(port)
+}
 
 async fn cache_and_wrap(
     context: &mut ExecutionContext,
@@ -659,6 +1113,151 @@ mod tests {
     }
 
     #[test]
+    fn test_smb_node_has_connection_pins() {
+        let node = SmbStoreNode::new().get_node();
+        assert_eq!(node.name, "external_smb_store");
+        assert_eq!(node.friendly_name, "SMB Share");
+        for pin in [
+            "address",
+            "share",
+            "prefix",
+            "auth_mode",
+            "username",
+            "password",
+            "domain",
+        ] {
+            let pin = find_pin(&node, pin, PinType::Input).expect("input pin");
+            assert_eq!(pin.data_type, VariableType::String);
+        }
+        for pin in [
+            "kerberos_username",
+            "kerberos_realm",
+            "kerberos_kdc_address",
+            "kerberos_ccache_path",
+            "kerberos_spn_host",
+        ] {
+            assert!(find_pin(&node, pin, PinType::Input).is_none());
+        }
+        assert_eq!(
+            find_pin(&node, "timeout_seconds", PinType::Input)
+                .expect("timeout input")
+                .data_type,
+            VariableType::Integer
+        );
+    }
+
+    #[test]
+    fn test_smb_auth_mode_pin_has_supported_values() {
+        let node = SmbStoreNode::new().get_node();
+        let pin = find_pin(&node, "auth_mode", PinType::Input).expect("auth_mode input");
+        let values = pin
+            .options
+            .as_ref()
+            .and_then(|options| options.valid_values.clone())
+            .expect("auth_mode valid values");
+        assert_eq!(
+            values,
+            vec![
+                SMB_CREDENTIALS.to_string(),
+                SMB_GUEST.to_string(),
+                SMB_KERBEROS_CCACHE.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_smb_auth_mode_sync_switches_and_is_idempotent() {
+        let mut node = SmbStoreNode::new().get_node();
+        assert!(node.get_pin_by_name("username").is_some());
+        let username_id = node.get_pin_by_name("username").unwrap().id.clone();
+
+        sync_smb_auth_mode_pins(&mut node, SMB_CREDENTIALS);
+        assert_eq!(
+            username_id,
+            node.get_pin_by_name("username").unwrap().id,
+            "credentials sync should not recreate existing credential pins"
+        );
+
+        sync_smb_auth_mode_pins(&mut node, SMB_GUEST);
+        assert!(node.get_pin_by_name("username").is_none());
+        assert!(node.get_pin_by_name("password").is_none());
+        assert!(node.get_pin_by_name("domain").is_none());
+        assert!(node.get_pin_by_name("kerberos_username").is_none());
+
+        let pin_count_after_guest = node.pins.len();
+        sync_smb_auth_mode_pins(&mut node, SMB_GUEST);
+        assert_eq!(
+            pin_count_after_guest,
+            node.pins.len(),
+            "guest sync should be stable when repeated"
+        );
+
+        sync_smb_auth_mode_pins(&mut node, SMB_KERBEROS_CCACHE);
+        assert!(node.get_pin_by_name("username").is_none());
+        assert!(node.get_pin_by_name("password").is_none());
+        assert!(node.get_pin_by_name("domain").is_none());
+        assert!(node.get_pin_by_name("kerberos_username").is_some());
+        assert!(node.get_pin_by_name("kerberos_realm").is_some());
+        assert!(node.get_pin_by_name("kerberos_kdc_address").is_some());
+        assert!(node.get_pin_by_name("kerberos_ccache_path").is_some());
+        assert!(node.get_pin_by_name("kerberos_spn_host").is_some());
+
+        let kerberos_username_id = node
+            .get_pin_by_name("kerberos_username")
+            .unwrap()
+            .id
+            .clone();
+        sync_smb_auth_mode_pins(&mut node, SMB_KERBEROS_CCACHE);
+        assert_eq!(
+            kerberos_username_id,
+            node.get_pin_by_name("kerberos_username").unwrap().id,
+            "kerberos sync should not recreate existing kerberos pins"
+        );
+
+        sync_smb_auth_mode_pins(&mut node, SMB_CREDENTIALS);
+        assert!(node.get_pin_by_name("username").is_some());
+        assert!(node.get_pin_by_name("password").is_some());
+        assert!(node.get_pin_by_name("domain").is_some());
+        assert!(node.get_pin_by_name("kerberos_username").is_none());
+        assert!(node.get_pin_by_name("kerberos_realm").is_none());
+        assert!(node.get_pin_by_name("kerberos_kdc_address").is_none());
+        assert!(node.get_pin_by_name("kerberos_ccache_path").is_none());
+        assert!(node.get_pin_by_name("kerberos_spn_host").is_none());
+    }
+
+    #[test]
+    fn test_normalize_smb_address_handles_ipv4_hostnames_and_ipv6() {
+        assert_eq!(
+            normalize_smb_address("10.50.0.33").unwrap(),
+            "10.50.0.33:445"
+        );
+        assert_eq!(
+            normalize_smb_address("fileserver:1445").unwrap(),
+            "fileserver:1445"
+        );
+        assert_eq!(
+            normalize_smb_address("fileserver: 1445").unwrap(),
+            "fileserver:1445"
+        );
+        assert_eq!(normalize_smb_address("fe80::1").unwrap(), "[fe80::1]:445");
+        assert_eq!(normalize_smb_address("[::1]").unwrap(), "[::1]:445");
+        assert_eq!(normalize_smb_address("[::1]:1445").unwrap(), "[::1]:1445");
+        assert_eq!(normalize_smb_address("[::1] :1445").unwrap(), "[::1]:1445");
+    }
+
+    #[test]
+    fn test_normalize_smb_address_rejects_invalid_ports() {
+        assert!(normalize_smb_address("").is_err());
+        assert!(normalize_smb_address(":445").is_err());
+        assert!(normalize_smb_address("[]:445").is_err());
+        assert!(normalize_smb_address("fileserver:notaport").is_err());
+        assert!(normalize_smb_address("fileserver:0").is_err());
+        assert!(normalize_smb_address("[::1]:notaport").is_err());
+        assert!(normalize_smb_address("[::1]:0").is_err());
+        assert!(normalize_smb_address("[::1").is_err());
+    }
+
+    #[test]
     fn test_all_bucket_nodes_emit_flowpath() {
         for node in [
             S3StoreNode::new().get_node(),
@@ -666,6 +1265,7 @@ mod tests {
             AzureBlobStoreNode::new().get_node(),
             GcpStorageStoreNode::new().get_node(),
             CloudflareR2StoreNode::new().get_node(),
+            SmbStoreNode::new().get_node(),
         ] {
             let path = find_pin(&node, "path", PinType::Output).expect("path output");
             assert_eq!(path.data_type, VariableType::Struct);

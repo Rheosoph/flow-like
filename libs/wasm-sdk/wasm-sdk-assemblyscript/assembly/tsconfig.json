@@ -1,4 +1,7 @@
 {
+	"compilerOptions": {
+		"ignoreDeprecations": "6.0"
+	},
 	"extends": "assemblyscript/std/assembly.json",
 	"include": ["./**/*.ts"]
 }

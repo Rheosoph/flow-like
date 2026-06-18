@@ -44,8 +44,8 @@ impl WasmInstance {
     ) -> WasmResult<Self> {
         // Use the engine that compiled/deserialized this module to ensure
         // Store, Linker, and Module are all tied to the same Engine instance.
-        // This is critical for the Pulley fallback on iOS where the
-        // module may come from a different engine than the primary one.
+        // This is critical for Pulley-targeted iOS modules and other
+        // non-default engine targets.
         let module_engine = module.module().engine();
 
         let mut linker = Linker::new(module_engine);

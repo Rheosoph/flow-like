@@ -9,7 +9,7 @@ use crate::types::{EventType, ExecutionEvent, ExecutionRequest, ExecutionResult,
 use flow_like::credentials::StoreType;
 use flow_like::flow::board::Board;
 use flow_like::flow::event::Event;
-use flow_like::flow::execution::{InternalRun, RunPayload};
+use flow_like::flow::execution::{ExecutionEnvironment, InternalRun, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::profile::Profile;
@@ -482,6 +482,13 @@ pub async fn execute(
     )
     .await
     .map_err(|e| ExecutorError::RunInit(e.to_string()))?;
+
+    run.set_execution_environment(
+        ExecutionEnvironment::from_env().unwrap_or(ExecutionEnvironment::Server),
+    );
+    if let Some(mode) = request.execution_mode {
+        run.set_execution_mode(mode);
+    }
 
     run.set_execution_sub(claims.sub.clone()).await;
 

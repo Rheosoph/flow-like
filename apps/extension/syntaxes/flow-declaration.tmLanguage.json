@@ -1,0 +1,91 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "FlowScript Declarations",
+	"scopeName": "source.flow.declaration",
+	"patterns": [
+		{ "include": "#jsdoc" },
+		{ "include": "#comments" },
+		{ "include": "#declare" },
+		{ "include": "#types" },
+		{ "include": "#strings" },
+		{ "include": "#numbers" },
+		{ "include": "#object-keys" },
+		{ "include": "#punctuation" }
+	],
+	"repository": {
+		"comments": {
+			"name": "comment.line.double-slash.flow",
+			"begin": "//",
+			"end": "$"
+		},
+		"jsdoc": {
+			"name": "comment.block.documentation.flow",
+			"begin": "/\\*\\*",
+			"end": "\\*/",
+			"patterns": [
+				{
+					"match": "(@)(param|returns|impure|pure)\\b",
+					"captures": {
+						"1": { "name": "punctuation.definition.block.tag.jsdoc.flow" },
+						"2": { "name": "storage.type.class.jsdoc.flow" }
+					}
+				},
+				{
+					"match": "(?<=@param\\s|@returns\\s)([A-Za-z_$][\\w$]*)",
+					"name": "variable.other.jsdoc.flow"
+				}
+			]
+		},
+		"declare": {
+			"patterns": [
+				{
+					"match": "\\b(declare)\\s+(function)\\s+([A-Za-z_$][\\w$]*)",
+					"captures": {
+						"1": { "name": "storage.modifier.flow" },
+						"2": { "name": "storage.type.function.flow" },
+						"3": { "name": "entity.name.function.flow" }
+					}
+				}
+			]
+		},
+		"types": {
+			"patterns": [
+				{
+					"name": "support.type.primitive.flow",
+					"match": "\\b(string|int|float|bool|void|Date|Generic|Byte|PathBuf)\\b"
+				},
+				{
+					"name": "support.type.flow",
+					"match": "\\b(Struct|Map|Set)\\b"
+				}
+			]
+		},
+		"object-keys": {
+			"patterns": [
+				{
+					"match": "([A-Za-z_$][\\w$]*)(\\??)\\s*(:)",
+					"captures": {
+						"1": { "name": "variable.parameter.flow" },
+						"2": { "name": "keyword.operator.optional.flow" },
+						"3": { "name": "punctuation.separator.key-value.flow" }
+					}
+				}
+			]
+		},
+		"strings": {
+			"name": "string.quoted.double.flow",
+			"begin": "\"",
+			"end": "\""
+		},
+		"numbers": {
+			"name": "constant.numeric.flow",
+			"match": "\\b-?\\d+(\\.\\d+)?\\b"
+		},
+		"punctuation": {
+			"patterns": [
+				{ "name": "punctuation.terminator.flow", "match": ";" },
+				{ "name": "punctuation.array.flow", "match": "\\[\\]" }
+			]
+		}
+	}
+}

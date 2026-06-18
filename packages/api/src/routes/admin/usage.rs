@@ -1,7 +1,8 @@
 use crate::{
     entity::{
         app, app_usage_limit, embedding_usage_tracking, execution_usage_tracking,
-        llm_usage_tracking, meta, usage_alert, usage_invocation, usage_limit_audit_log, user,
+        llm_usage_tracking, meta, technical_user, usage_alert, usage_invocation,
+        usage_limit_audit_log, user,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -11,8 +12,8 @@ use crate::{
         UsageReconciliationResult, reconcile_stale_invocations, record_usage_limit_audit,
     },
     usage_limits::{
-        AppUsageLimits, MONTHLY, get_app_usage_limits, normalize_period, period_start,
-        set_app_usage_limits,
+        AppUsageLimits, MONTHLY, get_app_usage_limits, get_app_usage_limits_for_scope,
+        normalize_period, period_start, set_app_usage_limits, set_app_usage_limits_for_scope,
     },
 };
 use axum::{
@@ -39,6 +40,7 @@ pub struct UsageListQuery {
     pub page_size: Option<u64>,
     pub app_id: Option<String>,
     pub user_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub status: Option<String>,
 }
 
@@ -187,6 +189,22 @@ pub struct AdminAppUsage {
 
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct AdminTechnicalUserUsage {
+    pub technical_user_id: String,
+    pub name: Option<String>,
+    pub app_id: Option<String>,
+    pub app_name: Option<String>,
+    pub creator_user_id: Option<String>,
+    pub creator_membership_id: Option<String>,
+    pub creator_display_name: Option<String>,
+    pub creator_email: Option<String>,
+    pub limits: Option<AppUsageLimits>,
+    #[serde(flatten)]
+    pub totals: AdminUsageTotals,
+}
+
+#[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct AdminModelUsage {
     pub kind: String,
     pub model_id: String,
@@ -256,6 +274,7 @@ pub struct AdminUsageOverview {
     pub trend: Vec<AdminUsageTrendPoint>,
     pub power_users: Vec<AdminPowerUser>,
     pub users: Vec<AdminUserUsage>,
+    pub technical_users: Vec<AdminTechnicalUserUsage>,
     pub apps: Vec<AdminAppUsage>,
     pub models: Vec<AdminModelUsage>,
 }
@@ -267,6 +286,7 @@ pub struct AdminUsageInvocation {
     pub kind: String,
     pub status: String,
     pub user_id: Option<String>,
+    pub technical_user_id: Option<String>,
     pub app_id: Option<String>,
     pub provider: Option<String>,
     pub endpoint: Option<String>,
@@ -291,6 +311,7 @@ impl From<usage_invocation::Model> for AdminUsageInvocation {
             kind: row.kind,
             status: row.status,
             user_id: row.user_id,
+            technical_user_id: row.technical_user_id,
             app_id: row.app_id,
             provider: row.provider,
             endpoint: row.endpoint,
@@ -447,10 +468,12 @@ pub async fn overview(
 
     let mut totals = UsageAggregate::default();
     let mut users: HashMap<Option<String>, UsageAggregate> = HashMap::new();
+    let mut technical_users: HashMap<String, UsageAggregate> = HashMap::new();
     let mut apps: HashMap<Option<String>, UsageAggregate> = HashMap::new();
     let mut models: HashMap<(String, String, Option<String>, Option<String>), ModelAggregate> =
         HashMap::new();
     let mut user_ids = HashSet::new();
+    let mut technical_user_ids = HashSet::new();
     let mut app_ids = HashSet::new();
 
     for row in &llm_rows {
@@ -470,6 +493,16 @@ pub async fn overview(
         user_total.llm_price += row.price;
         user_total.llm_tokens += tokens;
         user_total.llm_invocations += 1;
+
+        if let Some(technical_user_id) = &row.technical_user_id {
+            technical_user_ids.insert(technical_user_id.clone());
+            let technical_total = technical_users
+                .entry(technical_user_id.clone())
+                .or_default();
+            technical_total.llm_price += row.price;
+            technical_total.llm_tokens += tokens;
+            technical_total.llm_invocations += 1;
+        }
 
         let app_total = apps.entry(row.app_id.clone()).or_default();
         app_total.llm_price += row.price;
@@ -510,6 +543,16 @@ pub async fn overview(
         user_total.embedding_tokens += row.token_count;
         user_total.embedding_invocations += 1;
 
+        if let Some(technical_user_id) = &row.technical_user_id {
+            technical_user_ids.insert(technical_user_id.clone());
+            let technical_total = technical_users
+                .entry(technical_user_id.clone())
+                .or_default();
+            technical_total.embedding_price += row.price;
+            technical_total.embedding_tokens += row.token_count;
+            technical_total.embedding_invocations += 1;
+        }
+
         let app_total = apps.entry(row.app_id.clone()).or_default();
         app_total.embedding_price += row.price;
         app_total.embedding_tokens += row.token_count;
@@ -547,6 +590,15 @@ pub async fn overview(
         user_total.executions += 1;
         user_total.execution_microseconds += row.microseconds;
 
+        if let Some(technical_user_id) = &row.technical_user_id {
+            technical_user_ids.insert(technical_user_id.clone());
+            let technical_total = technical_users
+                .entry(technical_user_id.clone())
+                .or_default();
+            technical_total.executions += 1;
+            technical_total.execution_microseconds += row.microseconds;
+        }
+
         let app_total = apps.entry(row.app_id.clone()).or_default();
         app_total.executions += 1;
         app_total.execution_microseconds += row.microseconds;
@@ -581,9 +633,25 @@ pub async fn overview(
         user_ids.insert(user_id.clone());
     }
 
+    let technical_user_lookup = load_technical_users(&state, technical_user_ids).await?;
+    for technical_user in technical_user_lookup.values() {
+        if let Some(creator_user_id) = &technical_user.creator_user_id {
+            user_ids.insert(creator_user_id.clone());
+        }
+        app_ids.insert(technical_user.app_id.clone());
+    }
+
     let user_lookup = load_users(&state, user_ids).await?;
     let app_names = load_app_names(&state, app_ids.clone()).await?;
     let app_limits = load_app_limits(&state, app_ids).await?;
+    let technical_user_limits = load_scoped_limits(
+        &state,
+        technical_user_lookup
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>(),
+    )
+    .await?;
     let power_users = build_power_users(power_aggregates, &user_lookup);
 
     let mut users: Vec<AdminUserUsage> = users
@@ -605,6 +673,45 @@ pub async fn overview(
         .collect();
     users.sort_by_key(|row| std::cmp::Reverse(row.totals.total_price));
     users.truncate(10);
+
+    let mut technical_users: Vec<AdminTechnicalUserUsage> = technical_users
+        .into_iter()
+        .map(|(technical_user_id, totals)| {
+            let technical_user = technical_user_lookup.get(&technical_user_id);
+            let creator = technical_user
+                .and_then(|technical_user| technical_user.creator_user_id.as_ref())
+                .and_then(|creator_user_id| user_lookup.get(creator_user_id));
+            let app_id = technical_user.map(|technical_user| technical_user.app_id.clone());
+            let limits = technical_user_limits.get(&technical_user_id).cloned();
+            AdminTechnicalUserUsage {
+                technical_user_id,
+                name: technical_user.map(|technical_user| technical_user.name.clone()),
+                app_name: app_id.as_ref().and_then(|id| app_names.get(id).cloned()),
+                app_id,
+                creator_user_id: technical_user
+                    .and_then(|technical_user| technical_user.creator_user_id.clone()),
+                creator_membership_id: technical_user
+                    .and_then(|technical_user| technical_user.creator_membership_id.clone()),
+                creator_display_name: creator.and_then(|user| {
+                    user.name
+                        .clone()
+                        .or_else(|| user.preferred_username.clone())
+                        .or_else(|| user.username.clone())
+                }),
+                creator_email: creator.and_then(|user| user.email.clone()),
+                limits,
+                totals: totals.into(),
+            }
+        })
+        .collect();
+    technical_users.sort_by_key(|row| {
+        std::cmp::Reverse((
+            row.totals.total_price,
+            row.totals.total_tokens,
+            row.totals.executions,
+        ))
+    });
+    technical_users.truncate(10);
 
     let mut apps: Vec<AdminAppUsage> = apps
         .into_iter()
@@ -644,6 +751,7 @@ pub async fn overview(
         trend,
         power_users,
         users,
+        technical_users,
         apps,
         models,
     }))
@@ -710,6 +818,72 @@ pub async fn put_limits(
     Ok(Json(updated))
 }
 
+#[tracing::instrument(
+    name = "GET /admin/usage/apps/{app_id}/technical-users/{technical_user_id}/limits",
+    skip(state, user)
+)]
+pub async fn get_technical_user_limits(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app_id, technical_user_id)): Path<(String, String)>,
+) -> Result<Json<AppUsageLimits>, ApiError> {
+    user.check_global_permission(&state, GlobalPermission::Admin)
+        .await?;
+
+    technical_user::Entity::find_by_id(&technical_user_id)
+        .filter(technical_user::Column::AppId.eq(&app_id))
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+
+    Ok(Json(
+        get_app_usage_limits_for_scope(&state.db, &app_id, &technical_user_id)
+            .await
+            .map_err(|e| ApiError::internal_error(e.into()))?,
+    ))
+}
+
+#[tracing::instrument(
+    name = "PUT /admin/usage/apps/{app_id}/technical-users/{technical_user_id}/limits",
+    skip(state, user, limits)
+)]
+pub async fn put_technical_user_limits(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app_id, technical_user_id)): Path<(String, String)>,
+    Json(limits): Json<AppUsageLimits>,
+) -> Result<Json<AppUsageLimits>, ApiError> {
+    user.check_global_permission(&state, GlobalPermission::Admin)
+        .await?;
+
+    technical_user::Entity::find_by_id(&technical_user_id)
+        .filter(technical_user::Column::AppId.eq(&app_id))
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+
+    let before = get_app_usage_limits_for_scope(&state.db, &app_id, &technical_user_id)
+        .await
+        .map_err(|e| ApiError::internal_error(e.into()))?;
+    let updated = set_app_usage_limits_for_scope(&state.db, &app_id, &technical_user_id, limits)
+        .await
+        .map_err(|e| ApiError::internal_error(e.into()))?;
+    let actor_user_id = user.executor_scoped_sub().ok();
+    record_usage_limit_audit(
+        &state.db,
+        Some(&app_id),
+        Some(&technical_user_id),
+        actor_user_id.as_deref(),
+        "set_technical_user_limits",
+        flow_like_types::json::to_value(before).ok(),
+        flow_like_types::json::to_value(&updated).ok(),
+    )
+    .await
+    .map_err(|e| ApiError::internal_error(e.into()))?;
+
+    Ok(Json(updated))
+}
+
 #[tracing::instrument(name = "GET /admin/usage/invocations", skip(state, user))]
 pub async fn invocations(
     State(state): State<AppState>,
@@ -734,6 +908,13 @@ pub async fn invocations(
     }
     if let Some(user_id) = query.user_id.as_deref().filter(|value| !value.is_empty()) {
         select = select.filter(usage_invocation::Column::UserId.eq(user_id));
+    }
+    if let Some(technical_user_id) = query
+        .technical_user_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        select = select.filter(usage_invocation::Column::TechnicalUserId.eq(technical_user_id));
     }
     if let Some(status) = query.status.as_deref().filter(|value| !value.is_empty()) {
         select = select.filter(usage_invocation::Column::Status.eq(status));
@@ -1234,6 +1415,23 @@ async fn load_users(
     Ok(rows.into_iter().map(|row| (row.id.clone(), row)).collect())
 }
 
+async fn load_technical_users(
+    state: &AppState,
+    technical_user_ids: HashSet<String>,
+) -> Result<HashMap<String, technical_user::Model>, ApiError> {
+    if technical_user_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let technical_user_ids: Vec<String> = technical_user_ids.into_iter().collect();
+
+    let rows = technical_user::Entity::find()
+        .filter(technical_user::Column::Id.is_in(technical_user_ids))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal_error(e.into()))?;
+    Ok(rows.into_iter().map(|row| (row.id.clone(), row)).collect())
+}
+
 async fn load_app_names(
     state: &AppState,
     app_ids: HashSet<String>,
@@ -1285,5 +1483,31 @@ async fn load_app_limits(
     Ok(grouped
         .into_iter()
         .map(|(app_id, rows)| (app_id, AppUsageLimits::from_rows(rows)))
+        .collect())
+}
+
+async fn load_scoped_limits(
+    state: &AppState,
+    scoped_user_ids: HashSet<String>,
+) -> Result<HashMap<String, AppUsageLimits>, ApiError> {
+    if scoped_user_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let scoped_user_ids: Vec<String> = scoped_user_ids.into_iter().collect();
+
+    let rows = app_usage_limit::Entity::find()
+        .filter(app_usage_limit::Column::UserId.is_in(scoped_user_ids))
+        .all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal_error(e.into()))?;
+
+    let mut grouped: HashMap<String, Vec<app_usage_limit::Model>> = HashMap::new();
+    for row in rows {
+        grouped.entry(row.user_id.clone()).or_default().push(row);
+    }
+
+    Ok(grouped
+        .into_iter()
+        .map(|(user_id, rows)| (user_id, AppUsageLimits::from_rows(rows)))
         .collect())
 }

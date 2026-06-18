@@ -22,7 +22,6 @@ use flow_like::{
         files::store::{FlowLikeStore, local_store::LocalObjectStore},
         lancedb,
     },
-    hub::Hub,
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
@@ -800,34 +799,10 @@ pub fn run() {
 
                 println!("Starting EventBus Sink");
 
-                let (flow_like_state, hub_url, http_client) = {
-                    let flow_like_state = match state::TauriFlowLikeState::construct(&handle).await
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("EventBus sink init failed: {:?}", e);
-                            return;
-                        }
-                    };
-
-                    let settings = match state::TauriSettingsState::construct(&handle).await {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("EventBus sink settings init failed: {:?}", e);
-                            return;
-                        }
-                    };
-
-                    let hub_url = settings.lock().await.default_hub.clone();
-                    let http_client = flow_like_state.http_client.clone();
-
-                    (flow_like_state, hub_url, http_client)
-                };
-
-                let hub = match Hub::new(&hub_url, http_client).await {
-                    Ok(h) => h,
+                let flow_like_state = match state::TauriFlowLikeState::construct(&handle).await {
+                    Ok(s) => s,
                     Err(e) => {
-                        eprintln!("Failed to initialize Hub for EventBus: {:?}", e);
+                        eprintln!("EventBus sink init failed: {:?}", e);
                         return;
                     }
                 };
@@ -838,13 +813,9 @@ pub fn run() {
                     // Spawn each event execution as a separate task for parallel processing
                     let handle_clone = handle.clone();
                     let flow_like_state_clone = flow_like_state.clone();
-                    let hub_clone = hub.clone();
 
                     tokio::spawn(async move {
-                        match event
-                            .execute(&handle_clone, flow_like_state_clone, &hub_clone)
-                            .await
-                        {
+                        match event.execute(&handle_clone, flow_like_state_clone).await {
                             Ok(meta) => _ = meta,
                             Err(e) => {
                                 eprintln!("Error executing event: {:?}", e);
@@ -1005,6 +976,14 @@ pub fn run() {
             functions::ai::copilot::copilot_sdk_list_models,
             functions::ai::copilot::copilot_sdk_get_auth_status,
             functions::ai::copilot::copilot_sdk_create_agent_session,
+            functions::ai::copilot::flowpilot_agent_backend_start,
+            functions::ai::copilot::flowpilot_agent_backend_stop,
+            functions::ai::copilot::flowpilot_agent_backend_is_running,
+            functions::ai::copilot::flowpilot_agent_backend_list_models,
+            functions::ai::copilot::flowpilot_agent_backend_get_auth_status,
+            functions::ai::copilot::flowpilot_agent_backend_status,
+            functions::ai::copilot::flowpilot_agent_backend_list,
+            functions::ai::frontend_tool_bridge::flowpilot_frontend_tool_result,
             functions::a2ui::widget::get_widgets,
             functions::a2ui::widget::get_widget,
             functions::a2ui::widget::create_widget,

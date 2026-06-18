@@ -1,6 +1,5 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { useBackend, useInvoke } from "@flow-like/flow-like-ui";
 import { AppPublicationPage } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-page";
 import {
@@ -8,6 +7,7 @@ import {
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export default function Page() {
@@ -42,6 +42,7 @@ export default function Page() {
 	return (
 		<AppPublicationPage
 			requests={publicationRequests.data ?? []}
+			appId={id}
 			isLoading={publicationRequests.isLoading}
 			error={
 				publicationRequests.isError

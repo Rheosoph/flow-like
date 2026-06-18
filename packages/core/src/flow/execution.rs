@@ -129,6 +129,126 @@ impl LogLevel {
     }
 }
 
+#[derive(
+    Serialize, Deserialize, JsonSchema, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionEnvironment {
+    Local,
+    Desktop,
+    Mobile,
+    BrowserSandbox,
+    Server,
+}
+
+impl Default for ExecutionEnvironment {
+    fn default() -> Self {
+        Self::Local
+    }
+}
+
+impl ExecutionEnvironment {
+    pub const ENV_VAR: &'static str = "FLOW_LIKE_EXECUTION_ENVIRONMENT";
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+            Self::BrowserSandbox => "browser_sandbox",
+            Self::Server => "server",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "local" => Some(Self::Local),
+            "desktop" => Some(Self::Desktop),
+            "mobile" => Some(Self::Mobile),
+            "browser_sandbox" | "browser-sandbox" | "browser" | "sandbox" => {
+                Some(Self::BrowserSandbox)
+            }
+            "server" | "remote" => Some(Self::Server),
+            _ => None,
+        }
+    }
+
+    pub fn is_local(self) -> bool {
+        !matches!(self, Self::Server)
+    }
+
+    pub fn from_env() -> Option<Self> {
+        match std::env::var(Self::ENV_VAR) {
+            Ok(value) => match Self::parse(&value) {
+                Some(environment) => Some(environment),
+                None => {
+                    tracing::warn!(
+                        env_var = Self::ENV_VAR,
+                        value = %value,
+                        "Ignoring invalid execution environment override"
+                    );
+                    None
+                }
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(err) => {
+                tracing::warn!(
+                    env_var = Self::ENV_VAR,
+                    error = %err,
+                    "Unable to read execution environment override"
+                );
+                None
+            }
+        }
+    }
+}
+
+#[derive(
+    Serialize, Deserialize, JsonSchema, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    Sync,
+    Async,
+    Event,
+    Scheduled,
+}
+
+impl Default for ExecutionMode {
+    fn default() -> Self {
+        Self::Sync
+    }
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sync => "sync",
+            Self::Async => "async",
+            Self::Event => "event",
+            Self::Scheduled => "scheduled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "sync" | "synchronous" => Some(Self::Sync),
+            "async" | "asynchronous" | "queue" | "queued" => Some(Self::Async),
+            "event" => Some(Self::Event),
+            "scheduled" | "schedule" | "cron" => Some(Self::Scheduled),
+            _ => None,
+        }
+    }
+
+    pub fn from_event(event: Option<&Event>) -> Self {
+        match event {
+            Some(event) if event.event_type.eq_ignore_ascii_case("cron") => Self::Scheduled,
+            Some(_) => Self::Event,
+            None => Self::Sync,
+        }
+    }
+}
+
 /// Storage struct for LanceDB - excludes runtime-only fields like is_remote
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoredLogMeta {
@@ -636,6 +756,8 @@ pub struct RunMeta {
     pub board_dir: Path,
     pub sub: String,
     pub stream_state: bool,
+    pub environment: ExecutionEnvironment,
+    pub execution_mode: ExecutionMode,
     pub log_spill_threshold: usize,
     pub log_flush_interval: Duration,
     pub nodes_executed: Arc<AtomicU64>,
@@ -751,6 +873,7 @@ impl InternalRun {
 
         let before = Instant::now();
         let run_id = run_id.unwrap_or_else(create_id);
+        let execution_mode = ExecutionMode::from_event(event.as_ref());
 
         let (log_store, db, lance_write_options) = {
             let guard = handler.config.read().await;
@@ -1105,6 +1228,8 @@ impl InternalRun {
                 board_dir: board.board_dir.clone(),
                 sub: sub_value.clone(),
                 stream_state,
+                environment: ExecutionEnvironment::Local,
+                execution_mode,
                 log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
                 nodes_executed: Arc::new(AtomicU64::new(0)),
@@ -1141,6 +1266,14 @@ impl InternalRun {
     pub fn set_cancellation_log(&mut self, message: impl Into<String>, level: LogLevel) {
         self.cancellation_log_message = message.into();
         self.cancellation_log_level = level;
+    }
+
+    pub fn set_execution_environment(&mut self, environment: ExecutionEnvironment) {
+        self.meta.environment = environment;
+    }
+
+    pub fn set_execution_mode(&mut self, mode: ExecutionMode) {
+        self.meta.execution_mode = mode;
     }
 
     /// Set the user execution context for this run

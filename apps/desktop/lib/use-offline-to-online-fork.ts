@@ -2,7 +2,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
-	IAppStatus,
 	IAppVisibility,
 	IVersionType,
 	type IApp,
@@ -18,6 +17,7 @@ import {
 import type {
 	IBeginOnlineForkBody,
 	IBeginOnlineForkResponse,
+	IFinalizeOnlineForkAppSettings,
 	IFinalizeOnlineForkResponse,
 	IForkBundleSummary,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
@@ -61,14 +61,6 @@ function cloneValue<T>(value: T): T {
 	return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function systemTimeNow() {
-	const ms = Date.now();
-	return {
-		secs_since_epoch: Math.floor(ms / 1000),
-		nanos_since_epoch: (ms % 1000) * 1_000_000,
-	};
-}
-
 function stripForkSecrets<T>(value: T): T {
 	const clone = cloneValue(value);
 	stripForkSecretsInPlace(clone, new WeakSet<object>());
@@ -96,16 +88,17 @@ function stripForkSecretsInPlace(value: unknown, seen: WeakSet<object>) {
 	}
 }
 
-function prepareAppForOnlineFork(sourceApp: IApp, newAppId: string): IApp {
-	const app = stripForkSecrets(sourceApp);
-	app.id = newAppId;
-	app.visibility = IAppVisibility.Private;
-	app.status = IAppStatus.Active;
-	app.allow_forking = false;
-	app.forked_from = sourceApp.id;
-	app.forked_at = systemTimeNow();
-	app.updated_at = systemTimeNow();
-	return app;
+function getFinalizeAppSettings(
+	sourceApp: IApp,
+): IFinalizeOnlineForkAppSettings {
+	return {
+		changelog: sourceApp.changelog ?? null,
+		primary_category: sourceApp.primary_category ?? null,
+		secondary_category: sourceApp.secondary_category ?? null,
+		price: sourceApp.price ?? null,
+		version: sourceApp.version ?? null,
+		execution_mode: sourceApp.execution_mode,
+	};
 }
 
 function formatBytes(bytes: number): string {
@@ -331,10 +324,6 @@ export function useOfflineToOnlineFork() {
 					}
 				}
 
-				const preparedApp = prepareAppForOnlineFork(sourceApp, begin.new_app_id);
-				await backend.apiState.put<IApp>(profile, `apps/${begin.new_app_id}`, {
-					app: preparedApp,
-				});
 				await backend.apiState.put<void>(
 					profile,
 					`apps/${begin.new_app_id}/meta?language=${LANGUAGE}`,
@@ -345,7 +334,10 @@ export function useOfflineToOnlineFork() {
 					await backend.apiState.post<IFinalizeOnlineForkResponse>(
 						profile,
 						`apps/${begin.new_app_id}/fork/online/finalize`,
-						{ visibility: "private" },
+						{
+							visibility: "private",
+							app_settings: getFinalizeAppSettings(sourceApp),
+						},
 					);
 
 				await backend.userState.updateProfileApp(

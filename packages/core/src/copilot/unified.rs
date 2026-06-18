@@ -237,6 +237,7 @@ impl UnifiedCopilot {
             active_scope: CopilotScope::Board,
             canvas_settings: None,
             root_component_id: None,
+            flowscript_workspace: response.flowscript_workspace,
         })
     }
 
@@ -308,6 +309,7 @@ impl UnifiedCopilot {
             active_scope: CopilotScope::Frontend,
             canvas_settings: response.canvas_settings,
             root_component_id: response.root_component_id,
+            flowscript_workspace: None,
         })
     }
 
@@ -607,6 +609,9 @@ impl UnifiedCopilot {
 
         let mut suggestions = primary.suggestions;
         suggestions.extend(secondary.suggestions);
+        let flowscript_workspace = primary
+            .flowscript_workspace
+            .or(secondary.flowscript_workspace);
 
         UnifiedCopilotResponse {
             message: message_parts.join("\n\n"),
@@ -616,6 +621,7 @@ impl UnifiedCopilot {
             active_scope: CopilotScope::Both,
             canvas_settings: secondary.canvas_settings.or(primary.canvas_settings),
             root_component_id: secondary.root_component_id.or(primary.root_component_id),
+            flowscript_workspace,
         }
     }
 

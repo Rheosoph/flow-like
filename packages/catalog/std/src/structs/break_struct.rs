@@ -5,7 +5,10 @@ use flow_like::flow::{
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
-use flow_like_types::{Value, async_trait, json::json};
+use flow_like_types::{
+    Value, async_trait,
+    json::{Map, json},
+};
 
 /// Unique identifier prefix for break struct pins to enable special connection rules
 pub const BREAK_STRUCT_PIN_PREFIX: &str = "__break_struct_field__";
@@ -57,9 +60,49 @@ fn resolve_schema<'a>(schema: &'a Value, root_schema: &'a Value) -> &'a Value {
     schema
 }
 
+fn is_null_schema(schema: &Value) -> bool {
+    schema.get("type").and_then(|t| t.as_str()) == Some("null")
+}
+
+fn union_object_properties(schema: &Value, root_schema: &Value) -> Option<Map<String, Value>> {
+    let one_of = schema.get("oneOf").and_then(|a| a.as_array())?;
+    let mut properties = Map::new();
+
+    for variant in one_of {
+        if is_null_schema(variant) {
+            continue;
+        }
+
+        let resolved = resolve_schema(variant, root_schema);
+        if let Some(variant_properties) = resolved.get("properties").and_then(|p| p.as_object()) {
+            for (name, prop_schema) in variant_properties {
+                properties.insert(name.clone(), prop_schema.clone());
+            }
+        }
+    }
+
+    if properties.is_empty() {
+        None
+    } else {
+        Some(properties)
+    }
+}
+
+fn add_root_definitions(schema: &mut Value, root_schema: &Value) {
+    if let Some(defs) = root_schema.get("definitions") {
+        schema["definitions"] = defs.clone();
+    } else if let Some(defs) = root_schema.get("$defs") {
+        schema["$defs"] = defs.clone();
+    }
+}
+
 /// Get the variable type from a resolved schema
 fn get_schema_type(schema: &Value, root_schema: &Value) -> (VariableType, ValueType) {
     let resolved = resolve_schema(schema, root_schema);
+
+    if union_object_properties(resolved, root_schema).is_some() {
+        return (VariableType::Struct, ValueType::Normal);
+    }
 
     // Check for array type
     if let Some(type_val) = resolved.get("type") {
@@ -122,6 +165,18 @@ fn get_schema_type(schema: &Value, root_schema: &Value) -> (VariableType, ValueT
 fn build_standalone_schema(schema: &Value, root_schema: &Value) -> Value {
     let resolved = resolve_schema(schema, root_schema);
 
+    if let Some(properties) = union_object_properties(resolved, root_schema) {
+        let mut new_schema = json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object"
+        });
+
+        new_schema["properties"] = Value::Object(properties);
+        add_root_definitions(&mut new_schema, root_schema);
+
+        return new_schema;
+    }
+
     // For objects, build a complete schema with properties
     if resolved.get("type").and_then(|t| t.as_str()) == Some("object")
         || resolved.get("properties").is_some()
@@ -142,11 +197,7 @@ fn build_standalone_schema(schema: &Value, root_schema: &Value) -> Value {
         if let Some(additional) = resolved.get("additionalProperties") {
             new_schema["additionalProperties"] = additional.clone();
         }
-        if let Some(defs) = root_schema.get("definitions") {
-            new_schema["definitions"] = defs.clone();
-        } else if let Some(defs) = root_schema.get("$defs") {
-            new_schema["$defs"] = defs.clone();
-        }
+        add_root_definitions(&mut new_schema, root_schema);
 
         return new_schema;
     }
@@ -322,17 +373,23 @@ impl NodeLogic for BreakStructNode {
             // Skip if pin already exists with this name, but also update its schema
             // so that downstream on_update calls can find it (important after paste,
             // where schemas survive the clipboard but may need refreshing).
-            if node.pins.iter().any(|(_, p)| p.name == pin_id) {
+            if let Some(existing_pin) = node.get_pin_mut_by_name(&pin_id) {
+                existing_pin.data_type = var_type.clone();
+                existing_pin.value_type = value_type.clone();
+                existing_pin.index = index;
+
                 if var_type == VariableType::Struct {
                     let standalone = build_standalone_schema(prop_schema, &schema);
-                    if let Ok(sub_schema_str) = flow_like_types::json::to_string(&standalone)
-                        && let Some(existing_pin) = node.get_pin_mut_by_name(&pin_id)
-                    {
+                    if let Ok(sub_schema_str) = flow_like_types::json::to_string(&standalone) {
                         existing_pin.schema = Some(sub_schema_str);
                         existing_pin
                             .set_options(PinOptions::new().set_enforce_schema(false).build());
                     }
+                } else {
+                    existing_pin.schema = None;
+                    existing_pin.options = None;
                 }
+
                 index += 1;
                 continue;
             }

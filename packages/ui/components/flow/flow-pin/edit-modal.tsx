@@ -73,33 +73,17 @@ export function PinEditModal({
 	}, [appId, boardId, backend, invalidate]);
 
 	const onChangeDefaultValue = useCallback(async () => {
-		console.log("[PinEditModal] onChangeDefaultValue called", {
-			version,
-			editedPin,
-			isLayerPin,
-			layer,
-			node,
-			directNode,
-			defaultValueState,
-		});
-
 		if (typeof version !== "undefined") {
-			console.log("[PinEditModal] Early exit: version defined");
 			stopEditPin();
 			return;
 		}
 
 		if (!editedPin?.node || !editedPin?.pin) {
-			console.log("[PinEditModal] Early exit: no editedPin");
 			stopEditPin();
 			return;
 		}
 
 		const hasChanged = !isEqual(defaultValueState, editedPin.pin.default_value);
-		console.log("[PinEditModal] hasChanged:", hasChanged, {
-			defaultValueState,
-			originalValue: editedPin.pin.default_value,
-		});
 
 		if (!hasChanged) {
 			stopEditPin();
@@ -108,13 +92,8 @@ export function PinEditModal({
 
 		// Handle layer pins
 		if (isLayerPin && layer) {
-			console.log("[PinEditModal] Handling layer pin");
 			const originalPin = layer.pins[editedPin.pin.id];
 			if (!originalPin) {
-				console.log("[PinEditModal] Early exit: originalPin not found", {
-					pinId: editedPin.pin.id,
-					layerPins: Object.keys(layer.pins),
-				});
 				stopEditPin();
 				return;
 			}
@@ -134,7 +113,6 @@ export function PinEditModal({
 				node_ids: [],
 			});
 
-			console.log("[PinEditModal] Executing layer command", command);
 			const result = await backend.boardState.executeCommand(
 				appId,
 				boardId,
@@ -148,7 +126,6 @@ export function PinEditModal({
 
 		// Handle regular node pins
 		if (node && directNode) {
-			console.log("[PinEditModal] Handling regular node pin");
 			const command = updateNodeCommand({
 				node: {
 					...node,
@@ -174,12 +151,6 @@ export function PinEditModal({
 			return;
 		}
 
-		console.log("[PinEditModal] No handler matched - falling through", {
-			isLayerPin,
-			hasLayer: !!layer,
-			hasNode: !!node,
-			hasDirectNode: !!directNode,
-		});
 		stopEditPin();
 	}, [
 		appId,

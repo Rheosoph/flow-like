@@ -25,9 +25,18 @@ pub const WASMTIME_MAJOR_VERSION: &str = env!("WASMTIME_MAJOR_VERSION");
 /// Backwards-compatible alias for callers that imported the previous name.
 pub const WASMTIME_VERSION: &str = WASMTIME_MAJOR_VERSION;
 
-/// Build the platform key for the current host (e.g. `ios-aarch64-wt43`).
-/// This always returns the native platform key so the client can request
-/// native precompiled artifacts from the server.
+/// Build the executable platform key for the current host.
+///
+/// iOS cannot execute Wasmtime native-code artifacts in App Store/TestFlight
+/// builds, so its execution platform is Pulley bytecode rather than arm64
+/// native code.
+#[cfg(target_os = "ios")]
+pub fn host_platform_key() -> String {
+    format!("ios-pulley64-wt{}", WASMTIME_MAJOR_VERSION)
+}
+
+/// Build the executable platform key for the current host.
+#[cfg(not(target_os = "ios"))]
 pub fn host_platform_key() -> String {
     format!(
         "{}-{}-wt{}",
@@ -38,13 +47,7 @@ pub fn host_platform_key() -> String {
 }
 
 fn cache_key(wasm_hash: &str) -> String {
-    format!(
-        "{}-{}-{}-wt{}",
-        wasm_hash,
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        WASMTIME_MAJOR_VERSION,
-    )
+    format!("{}-{}", wasm_hash, host_platform_key())
 }
 
 pub struct AotCache {

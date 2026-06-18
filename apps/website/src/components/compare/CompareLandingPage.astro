@@ -1,0 +1,454 @@
+---
+import "@flow-like/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import PostHog from "../posthog.astro";
+import { Header } from "../header";
+import { BlogFooter } from "../blog-footer";
+import type { ComparisonLandingPage } from "../../data/comparison-landing-pages";
+import { comparisonLandingLastChecked } from "../../data/comparison-landing-pages";
+
+interface Props {
+	page: ComparisonLandingPage;
+}
+
+const { page } = Astro.props as Props;
+
+const site = Astro.site ?? import.meta.env.SITE ?? "https://flow-like.com";
+const siteUrl = typeof site === "string" ? site : site.toString();
+const canonicalPath = `/compare/${page.slug}`;
+const canonical = new URL(canonicalPath, siteUrl).toString();
+const cover = new URL("/og.png", siteUrl).toString();
+const competitorUrl = page.sources[0]?.url ?? canonical;
+
+const accentClass = {
+	amber: {
+		text: "text-amber-600",
+		border: "border-amber-500/30",
+		bg: "bg-amber-500/10",
+		bar: "bg-amber-500",
+	},
+	blue: {
+		text: "text-blue-600",
+		border: "border-blue-500/30",
+		bg: "bg-blue-500/10",
+		bar: "bg-blue-500",
+	},
+	cyan: {
+		text: "text-cyan-600",
+		border: "border-cyan-500/30",
+		bg: "bg-cyan-500/10",
+		bar: "bg-cyan-500",
+	},
+	emerald: {
+		text: "text-emerald-600",
+		border: "border-emerald-500/30",
+		bg: "bg-emerald-500/10",
+		bar: "bg-emerald-500",
+	},
+	fuchsia: {
+		text: "text-fuchsia-600",
+		border: "border-fuchsia-500/30",
+		bg: "bg-fuchsia-500/10",
+		bar: "bg-fuchsia-500",
+	},
+	rose: {
+		text: "text-rose-600",
+		border: "border-rose-500/30",
+		bg: "bg-rose-500/10",
+		bar: "bg-rose-500",
+	},
+	violet: {
+		text: "text-violet-600",
+		border: "border-violet-500/30",
+		bg: "bg-violet-500/10",
+		bar: "bg-violet-500",
+	},
+}[page.accent];
+
+const scoreWidth = (score: number) =>
+	`${Math.max(0, Math.min(5, score)) * 20}%`;
+
+const ldWebPage = {
+	"@context": "https://schema.org",
+	"@type": "WebPage",
+	name: page.metaTitle,
+	description: page.metaDescription,
+	url: canonical,
+	dateModified: comparisonLandingLastChecked,
+	inLanguage: "en",
+	isPartOf: {
+		"@type": "WebSite",
+		name: "Flow-Like",
+		url: siteUrl,
+	},
+	about: [
+		{
+			"@type": "SoftwareApplication",
+			name: "Flow-Like",
+			url: siteUrl,
+			applicationCategory: "Workflow automation",
+		},
+		{
+			"@type": "SoftwareApplication",
+			name: page.competitor,
+			url: competitorUrl,
+			applicationCategory: page.category,
+		},
+	],
+	mainEntity: {
+		"@type": "ItemList",
+		name: `Flow-Like vs ${page.competitor} key comparison facts`,
+		itemListElement: page.facts.map((item, index) => ({
+			"@type": "ListItem",
+			position: index + 1,
+			name: item.label,
+			description: `${item.label}: Flow-Like - ${item.flowLike}; ${page.competitor} - ${item.competitor}`,
+			url: item.sourceUrl,
+		})),
+	},
+};
+
+const ldFaq = {
+	"@context": "https://schema.org",
+	"@type": "FAQPage",
+	mainEntity: page.faq.map((item) => ({
+		"@type": "Question",
+		name: item.question,
+		acceptedAnswer: {
+			"@type": "Answer",
+			text: item.answer,
+		},
+	})),
+};
+
+const ldBreadcrumb = {
+	"@context": "https://schema.org",
+	"@type": "BreadcrumbList",
+	itemListElement: [
+		{
+			"@type": "ListItem",
+			position: 1,
+			name: "Home",
+			item: siteUrl,
+		},
+		{
+			"@type": "ListItem",
+			position: 2,
+			name: "Compare",
+			item: new URL("/compare", siteUrl).toString(),
+		},
+		{
+			"@type": "ListItem",
+			position: 3,
+			name: `Flow-Like vs ${page.competitor}`,
+			item: canonical,
+		},
+	],
+};
+---
+
+<!doctype html>
+<html lang="en" class="scroll-smooth">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="generator" content={Astro.generator} />
+
+		<title>{page.metaTitle}</title>
+		<meta name="description" content={page.metaDescription} />
+		<meta name="keywords" content={page.keywords.join(", ")} />
+		<meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+		<link rel="canonical" href={canonical} />
+		<link rel="alternate" hreflang="en" href={canonical} />
+		<link rel="alternate" hreflang="x-default" href={canonical} />
+		<link rel="sitemap" href="/sitemap-index.xml" />
+		<meta name="theme-color" content="#ffffff" />
+
+		<meta property="og:type" content="article" />
+		<meta property="og:site_name" content="Flow-Like" />
+		<meta property="og:url" content={canonical} />
+		<meta property="og:title" content={page.metaTitle} />
+		<meta property="og:description" content={page.metaDescription} />
+		<meta property="og:image" content={cover} />
+		<meta property="og:locale" content="en_US" />
+
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={page.metaTitle} />
+		<meta name="twitter:description" content={page.metaDescription} />
+		<meta name="twitter:image" content={cover} />
+
+		<script type="application/ld+json" is:inline set:html={JSON.stringify(ldWebPage)} />
+		<script type="application/ld+json" is:inline set:html={JSON.stringify(ldFaq)} />
+		<script type="application/ld+json" is:inline set:html={JSON.stringify(ldBreadcrumb)} />
+
+		<PostHog />
+	</head>
+	<body class="bg-background text-foreground antialiased overflow-x-hidden max-w-full">
+		<Header client:only="react" />
+
+		<main class="pt-16">
+			<section class="border-b border-border/50 bg-background">
+				<div class="mx-auto max-w-7xl px-6 py-16 lg:px-8 lg:py-24">
+					<nav aria-label="Breadcrumb" class="mb-8 text-sm text-muted-foreground">
+						<ol class="flex flex-wrap items-center gap-2">
+							<li><a href="/" class="hover:text-foreground">Home</a></li>
+							<li aria-hidden="true">/</li>
+							<li><a href="/compare" class="hover:text-foreground">Compare</a></li>
+							<li aria-hidden="true">/</li>
+							<li class="text-foreground">Flow-Like vs {page.competitor}</li>
+						</ol>
+					</nav>
+
+					<div class="grid gap-12 lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)] lg:items-start">
+						<div class="min-w-0">
+							<p class:list={["mb-4 text-[11px] font-medium uppercase tracking-[0.28em]", accentClass.text]}>
+								Objective comparison
+							</p>
+							<h1 class="text-4xl font-bold tracking-tight leading-tight sm:text-5xl lg:text-6xl">
+								Flow-Like vs {page.competitor}
+							</h1>
+							<p class="mt-6 text-lg leading-8 text-muted-foreground">
+								{page.heroSummary}
+							</p>
+							<div class="mt-8 flex flex-wrap items-center gap-3">
+								<a
+									href="/download"
+									class="inline-flex items-center justify-center rounded-full bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90"
+								>
+									Try Flow-Like
+								</a>
+								<a
+									href="#result"
+									class="inline-flex items-center justify-center rounded-full border border-border bg-background px-5 py-2.5 text-sm font-medium text-foreground transition hover:bg-muted/50"
+								>
+									Read the result
+								</a>
+							</div>
+							<p class="mt-6 text-xs text-muted-foreground">
+								Last fact check: {comparisonLandingLastChecked}. No affiliation, sponsorship, or endorsement is implied by any third-party product name.
+							</p>
+						</div>
+
+						<aside aria-labelledby="graphic-summary" class="rounded-2xl border border-border/70 bg-card/70 p-5 shadow-sm">
+							<div class="mb-5 flex items-center justify-between gap-4">
+								<div>
+									<h2 id="graphic-summary" class="text-base font-semibold">Decision Snapshot</h2>
+									<p class="text-sm text-muted-foreground">Summary based on the criteria below.</p>
+								</div>
+								<span class:list={["rounded-full border px-3 py-1 text-xs font-medium", accentClass.border, accentClass.bg, accentClass.text]}>
+									{page.category}
+								</span>
+							</div>
+
+							<div class="grid gap-3">
+								{page.graphSummary.map((item) => (
+									<div class="flex gap-3 rounded-xl border border-border/50 bg-background/80 p-3">
+										<span class:list={["mt-1 h-2.5 w-2.5 shrink-0 rounded-full", accentClass.bar]}></span>
+										<p class="text-sm leading-6 text-muted-foreground">{item}</p>
+									</div>
+								))}
+							</div>
+
+							<div class="mt-6 space-y-5">
+								{page.axes.map((item) => (
+									<div>
+										<div class="mb-2 flex items-center justify-between gap-3 text-sm">
+											<span class="font-medium">{item.label}</span>
+											<span class="text-xs text-muted-foreground">Score / 5</span>
+										</div>
+										<div class="space-y-2">
+											<div>
+												<div class="mb-1 flex justify-between text-xs text-muted-foreground">
+													<span>Flow-Like</span>
+													<span>{item.flowLike}</span>
+												</div>
+												<div class="h-2 rounded-full bg-muted">
+													<div
+														class="h-2 rounded-full bg-primary"
+														style={`width: ${scoreWidth(item.flowLike)}`}
+														role="progressbar"
+														aria-label={`Flow-Like ${item.label} score`}
+														aria-valuemin="0"
+														aria-valuemax="5"
+														aria-valuenow={item.flowLike}
+													></div>
+												</div>
+											</div>
+											<div>
+												<div class="mb-1 flex justify-between text-xs text-muted-foreground">
+													<span>{page.competitor}</span>
+													<span>{item.competitor}</span>
+												</div>
+												<div class="h-2 rounded-full bg-muted">
+													<div
+														class:list={["h-2 rounded-full", accentClass.bar]}
+														style={`width: ${scoreWidth(item.competitor)}`}
+														role="progressbar"
+														aria-label={`${page.competitor} ${item.label} score`}
+														aria-valuemin="0"
+														aria-valuemax="5"
+														aria-valuenow={item.competitor}
+													></div>
+												</div>
+											</div>
+										</div>
+										<p class="mt-2 text-xs leading-5 text-muted-foreground">{item.note}</p>
+									</div>
+								))}
+							</div>
+						</aside>
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="quick-answer" class="py-16 lg:py-20">
+				<div class="mx-auto max-w-5xl px-6 lg:px-8">
+					<div class="rounded-2xl border border-border bg-muted/20 p-6 sm:p-8">
+						<p class:list={["mb-3 text-[11px] font-medium uppercase tracking-[0.25em]", accentClass.text]}>
+							Short answer
+						</p>
+						<h2 id="quick-answer" class="text-2xl font-semibold tracking-tight">Which should you use?</h2>
+						<p class="mt-4 text-base leading-8 text-muted-foreground">{page.neutralVerdict}</p>
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="facts" class="border-y border-border/50 bg-muted/20 py-16 lg:py-20">
+				<div class="mx-auto max-w-7xl px-6 lg:px-8">
+					<div class="mb-8 max-w-3xl">
+						<p class:list={["mb-3 text-[11px] font-medium uppercase tracking-[0.25em]", accentClass.text]}>
+							Facts used
+						</p>
+						<h2 id="facts" class="text-3xl font-semibold tracking-tight">Fact-based comparison table</h2>
+						<p class="mt-3 text-muted-foreground">
+							Each row links to the public source used for that comparison point. Flow-Like claims link to Flow-Like docs or the public repository.
+						</p>
+					</div>
+
+					<div class="overflow-x-auto rounded-2xl border border-border bg-background">
+						<table class="min-w-[760px] w-full text-left text-sm">
+							<thead class="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
+								<tr>
+									<th scope="col" class="px-4 py-3 font-medium">Criterion</th>
+									<th scope="col" class="px-4 py-3 font-medium">Flow-Like</th>
+									<th scope="col" class="px-4 py-3 font-medium">{page.competitor}</th>
+									<th scope="col" class="px-4 py-3 font-medium">Source</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-border/60">
+								{page.facts.map((item) => (
+									<tr>
+										<th scope="row" class="px-4 py-4 align-top font-medium">{item.label}</th>
+										<td class="px-4 py-4 align-top leading-6 text-muted-foreground">{item.flowLike}</td>
+										<td class="px-4 py-4 align-top leading-6 text-muted-foreground">{item.competitor}</td>
+										<td class="px-4 py-4 align-top">
+											<a href={item.sourceUrl} target="_blank" rel="noreferrer" class="text-primary underline-offset-4 hover:underline">
+												{item.sourceLabel}
+											</a>
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="analysis" class="py-16 lg:py-24">
+				<div class="mx-auto grid max-w-7xl gap-10 px-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(360px,0.75fr)] lg:px-8">
+					<article class="min-w-0">
+						<p class:list={["mb-3 text-[11px] font-medium uppercase tracking-[0.25em]", accentClass.text]}>
+							Prose analysis
+						</p>
+						<h2 id="analysis" class="text-3xl font-semibold tracking-tight">{page.prose.heading}</h2>
+						<div class="mt-6 space-y-5 text-base leading-8 text-muted-foreground">
+							{page.prose.body.map((paragraph) => <p>{paragraph}</p>)}
+						</div>
+					</article>
+
+					<aside class="space-y-5">
+						<div class="rounded-2xl border border-border bg-card p-5">
+							<h3 class="font-semibold">Use Flow-Like When</h3>
+							<ul class="mt-4 space-y-3 text-sm leading-6 text-muted-foreground">
+								{page.useFlowLikeWhen.map((item) => (
+									<li class="flex gap-3">
+										<span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary"></span>
+										<span>{item}</span>
+									</li>
+								))}
+							</ul>
+						</div>
+						<div class="rounded-2xl border border-border bg-card p-5">
+							<h3 class="font-semibold">Use {page.competitor} When</h3>
+							<ul class="mt-4 space-y-3 text-sm leading-6 text-muted-foreground">
+								{page.useCompetitorWhen.map((item) => (
+									<li class="flex gap-3">
+										<span class:list={["mt-2 h-1.5 w-1.5 shrink-0 rounded-full", accentClass.bar]}></span>
+										<span>{item}</span>
+									</li>
+								))}
+							</ul>
+						</div>
+					</aside>
+				</div>
+			</section>
+
+			<section id="result" aria-labelledby="result-title" class="border-y border-border/50 bg-muted/20 py-16 lg:py-20">
+				<div class="mx-auto max-w-5xl px-6 lg:px-8">
+					<p class:list={["mb-3 text-[11px] font-medium uppercase tracking-[0.25em]", accentClass.text]}>
+						Result
+					</p>
+					<h2 id="result-title" class="text-3xl font-semibold tracking-tight">Objective recommendation</h2>
+					<p class="mt-5 text-lg leading-8 text-muted-foreground">{page.neutralVerdict}</p>
+					<div class="mt-8 rounded-2xl border border-border bg-background p-6">
+						<h3 class="text-base font-semibold">Can they work together?</h3>
+						<p class="mt-3 text-sm leading-7 text-muted-foreground">{page.combine}</p>
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="faq" class="py-16 lg:py-24">
+				<div class="mx-auto max-w-5xl px-6 lg:px-8">
+					<p class:list={["mb-3 text-[11px] font-medium uppercase tracking-[0.25em]", accentClass.text]}>
+						FAQ
+					</p>
+					<h2 id="faq" class="text-3xl font-semibold tracking-tight">Common questions</h2>
+					<div class="mt-8 divide-y divide-border rounded-2xl border border-border bg-card">
+						{page.faq.map((item) => (
+							<details class="group p-5">
+								<summary class="cursor-pointer list-none font-medium">
+									<span class="inline-flex w-full items-center justify-between gap-4">
+										{item.question}
+										<span class="text-muted-foreground transition group-open:rotate-45">+</span>
+									</span>
+								</summary>
+								<p class="mt-3 text-sm leading-7 text-muted-foreground">{item.answer}</p>
+							</details>
+						))}
+					</div>
+				</div>
+			</section>
+
+			<section aria-labelledby="sources" class="border-t border-border/50 bg-muted/20 py-12">
+				<div class="mx-auto max-w-5xl px-6 lg:px-8">
+					<h2 id="sources" class="text-xl font-semibold">Sources</h2>
+					<p class="mt-2 text-sm text-muted-foreground">
+						Sources are public vendor documentation or product pages. Third-party trademarks belong to their owners.
+					</p>
+					<ul class="mt-5 grid gap-3 text-sm sm:grid-cols-2">
+						{page.sources.map((item) => (
+							<li>
+								<a href={item.url} target="_blank" rel="noreferrer" class="text-primary underline-offset-4 hover:underline">
+									{item.label}
+								</a>
+							</li>
+						))}
+					</ul>
+				</div>
+			</section>
+		</main>
+
+		<BlogFooter client:only="react" />
+	</body>
+</html>

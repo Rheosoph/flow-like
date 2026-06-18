@@ -25,6 +25,8 @@ const APP_ID_HEADER: &str = "x-flow-like-app-id";
 #[derive(Clone, Debug, Default)]
 struct UsageRequestContext {
     app_id: Option<String>,
+    user_id: String,
+    technical_user_id: Option<String>,
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -44,6 +46,18 @@ async fn resolve_usage_context(
     if let AppUser::Executor(executor) = user {
         return Ok(UsageRequestContext {
             app_id: Some(executor.app_id.clone()),
+            user_id: executor.sub.clone(),
+            technical_user_id: executor.technical_user_id.clone(),
+        });
+    }
+
+    if let AppUser::APIKey(api_key) = user {
+        user.execution_app_permission(&api_key.app_id, state)
+            .await?;
+        return Ok(UsageRequestContext {
+            app_id: Some(api_key.app_id.clone()),
+            user_id: user.effective_user_id()?,
+            technical_user_id: Some(api_key.key_id.clone()),
         });
     }
 
@@ -52,7 +66,11 @@ async fn resolve_usage_context(
         user.execution_app_permission(app_id, state).await?;
     }
 
-    Ok(UsageRequestContext { app_id })
+    Ok(UsageRequestContext {
+        app_id,
+        user_id: user.effective_user_id()?,
+        technical_user_id: None,
+    })
 }
 
 /// Bit cache entry with expiration
@@ -239,9 +257,7 @@ pub async fn embed_text(
     // 2. Enforce user tier
     enforce_embedding_tier(&user, &state, &embedding_provider).await?;
     let usage_context = resolve_usage_context(&state, &user, &headers).await?;
-    let user_id = user
-        .executor_scoped_sub()
-        .unwrap_or_else(|_| "unknown".to_string());
+    let user_id = usage_context.user_id.clone();
 
     // 3. Build upstream request based on implementation
     let start = Instant::now();
@@ -256,6 +272,7 @@ pub async fn embed_text(
         UsageInvocationStart {
             kind: "embedding",
             user_id: Some(&user_id),
+            technical_user_id: usage_context.technical_user_id.as_deref(),
             app_id: usage_context.app_id.as_deref(),
             provider: Some(&embedding_provider.provider.provider_name),
             endpoint: Some("internal"),
@@ -307,6 +324,7 @@ pub async fn embed_text(
         price,
         latency_ms,
         usage_context.app_id.as_deref(),
+        usage_context.technical_user_id.as_deref(),
         Some(&embedding_provider.provider.provider_name),
         Some("internal"),
         invocation_id.as_deref(),
@@ -358,6 +376,7 @@ async fn track_embedding_usage(
     price: i64,
     latency_ms: f64,
     app_id: Option<&str>,
+    technical_user_id: Option<&str>,
     provider: Option<&str>,
     endpoint: Option<&str>,
     invocation_id: Option<&str>,
@@ -379,6 +398,7 @@ async fn track_embedding_usage(
         token_count: Set(token_count),
         latency: Set(Some(latency_ms)),
         user_id: Set(Some(user_sub.to_string())),
+        technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(app_id.map(ToOwned::to_owned)),
         price: Set(price),
         created_at: Set(now),

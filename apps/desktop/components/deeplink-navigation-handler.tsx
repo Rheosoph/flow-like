@@ -6,6 +6,7 @@ import { type ReactNode, useEffect } from "react";
 
 interface DeeplinkStorePayload {
 	appId: string | null;
+	packageId?: string | null;
 }
 
 interface DeeplinkJoinPayload {
@@ -22,10 +23,15 @@ export function DeeplinkNavigationHandler({
 		const storeUnlisten = listen<DeeplinkStorePayload>(
 			"deeplink/store",
 			(event) => {
-				const { appId } = event.payload;
+				const { appId, packageId } = event.payload;
+				if (packageId) {
+					console.log("Navigating to package store page:", packageId);
+					router.push(`/store/packages?id=${encodeURIComponent(packageId)}`);
+					return;
+				}
 				if (appId) {
 					console.log("Navigating to store page for app:", appId);
-					router.push(`/store?id=${appId}`);
+					router.push(`/store?id=${encodeURIComponent(appId)}`);
 				}
 			},
 		);

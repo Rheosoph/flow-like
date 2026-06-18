@@ -240,6 +240,7 @@ impl NodeLogic for VoiceActivityDetectionNode {
             "Detect speech segments in audio. Download Silero VAD model from: https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx",
             "AI/ML/ONNX/Audio",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/microphone.svg");
 

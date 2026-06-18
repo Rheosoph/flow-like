@@ -6,16 +6,18 @@ use crate::abi::{WasmExecutionInput, WasmNodeDefinition, WasmPinDefinition};
 use crate::engine::WasmEngine;
 use crate::error::WasmResult;
 use crate::host_functions::{ExecutionMetadata, ModelContext, StorageContext};
-use crate::limits::WasmSecurityConfig;
+use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::module::WasmModule;
 use crate::unified::LoadedWasm;
 use async_trait::async_trait;
-use flow_like::flow::execution::context::ExecutionContext;
+use flow_like::flow::execution::context::{ExecutionContext, ExecutionContextCache};
 use flow_like::flow::execution::{LogLevel, Run};
 use flow_like::flow::node::{Node, NodeLogic, NodeScores, NodeWasm};
 use flow_like::flow::pin::{Pin, PinOptions, PinType, ValueType};
 use flow_like::flow::variable::VariableType;
-use flow_like_types::{sync::Mutex, tokio::sync::RwLock, Value};
+use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::object_store::path::Path;
+use flow_like_types::{sync::Mutex, tokio::sync::RwLock, Cacheable, Value};
 use parking_lot::RwLock as ParkingRwLock;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -219,6 +221,82 @@ fn map_wasm_data_type(wasm_type: &str) -> VariableType {
         "struct" | "object" | "json" => VariableType::Struct,
         _ => VariableType::Generic,
     }
+}
+
+async fn register_wasm_flowpath_stores(
+    context: &ExecutionContext,
+    exec_cache: &ExecutionContextCache,
+    credentials_store: Option<FlowLikeStore>,
+) -> flow_like_types::Result<()> {
+    let mut dirs: Vec<(&str, Path, Option<FlowLikeStore>)> = Vec::with_capacity(9);
+    dirs.push((
+        "storage",
+        exec_cache.get_storage(false)?,
+        exec_cache.stores.app_storage_store.clone(),
+    ));
+    dirs.push((
+        "storage",
+        exec_cache.get_storage(true)?,
+        exec_cache.stores.app_storage_store.clone(),
+    ));
+    dirs.push((
+        "upload",
+        exec_cache.get_upload_dir()?,
+        exec_cache.stores.app_storage_store.clone(),
+    ));
+    dirs.push((
+        "cache",
+        exec_cache.get_cache(false, false)?,
+        exec_cache.stores.temporary_store.clone(),
+    ));
+    dirs.push((
+        "cache",
+        exec_cache.get_cache(true, false)?,
+        exec_cache.stores.temporary_store.clone(),
+    ));
+    dirs.push((
+        "cache",
+        exec_cache.get_cache(false, true)?,
+        exec_cache.stores.temporary_store.clone(),
+    ));
+    dirs.push((
+        "cache",
+        exec_cache.get_cache(true, true)?,
+        exec_cache.stores.temporary_store.clone(),
+    ));
+    dirs.push((
+        "user",
+        exec_cache.get_user_dir(false)?,
+        exec_cache.stores.user_store.clone(),
+    ));
+    dirs.push((
+        "user",
+        exec_cache.get_user_dir(true)?,
+        exec_cache.stores.user_store.clone(),
+    ));
+
+    for (dir_type, dir, backing_store) in dirs {
+        let Some(backing_store) = backing_store else {
+            continue;
+        };
+
+        let store_ref = format!("dirs__{dir_type}_{}", dir.as_ref());
+        if credentials_store.is_some() || !context.has_cache(&store_ref).await {
+            let primary_store = credentials_store
+                .clone()
+                .unwrap_or_else(|| backing_store.clone());
+            let cacheable_store: Arc<dyn Cacheable> = Arc::new(primary_store);
+            context.set_cache(&store_ref, cacheable_store).await;
+        }
+
+        if credentials_store.is_some() {
+            let cache_store_ref = format!("cache_dirs__{dir_type}_{}", dir.as_ref());
+            let cacheable_store: Arc<dyn Cacheable> = Arc::new(backing_store);
+            context.set_cache(&cache_store_ref, cacheable_store).await;
+        }
+    }
+
+    Ok(())
 }
 
 /// Convert a `WasmNodeDefinition` into a `PackageNodeEntry` suitable for storage
@@ -463,10 +541,29 @@ impl NodeLogic for WasmNodeLogic {
         };
 
         // Populate storage context from ExecutionContext
-        if let Some(ref exec_cache) = context.execution_cache {
+        if let Some(exec_cache) = context.execution_cache.clone() {
+            let has_storage_capability = self.security.capabilities.intersects(
+                WasmCapabilities::STORAGE_READ
+                    | WasmCapabilities::STORAGE_WRITE
+                    | WasmCapabilities::STORAGE_DELETE,
+            );
+            let credentials_store = if has_storage_capability {
+                match &context.credentials {
+                    Some(credentials) => Some(credentials.to_store(false).await?),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            if has_storage_capability {
+                register_wasm_flowpath_stores(context, &exec_cache, credentials_store.clone())
+                    .await?;
+            }
+
             host_state.storage_context = Some(StorageContext {
                 stores: exec_cache.stores.clone(),
                 store_cache: ParkingRwLock::new(HashMap::new()),
+                credentials_store,
                 app_id: exec_cache.app_id.clone(),
                 board_dir: exec_cache.board_dir.clone(),
                 board_id: exec_cache.board_id.clone(),

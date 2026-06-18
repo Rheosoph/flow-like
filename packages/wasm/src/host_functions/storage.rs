@@ -91,6 +91,56 @@ pub fn append_chunk(
     true
 }
 
+pub async fn put_flow_path(
+    storage_ctx: &StorageContext,
+    flow_path: &StorageFlowPath,
+    data: Vec<u8>,
+    log_prefix: &str,
+) -> bool {
+    let Some(store) = storage_ctx.resolve_store(&flow_path.store_ref) else {
+        tracing::warn!(
+            "[{log_prefix}] rejected: unresolved store_ref={}",
+            flow_path.store_ref
+        );
+        return false;
+    };
+
+    let path = Path::from(flow_path.path.clone());
+    let payload = PutPayload::from_bytes(Bytes::from(data));
+
+    if let Err(e) = store.as_generic().put(&path, payload.clone()).await {
+        tracing::warn!(
+            "[{log_prefix}] put failed for path={} store_ref={}: {e}",
+            flow_path.path,
+            flow_path.store_ref
+        );
+        return false;
+    }
+
+    if let Some(cache_store_ref) = flow_path.cache_store_ref.as_deref() {
+        if cache_store_ref == flow_path.store_ref {
+            return true;
+        }
+
+        let Some(cache_store) = storage_ctx.resolve_store(cache_store_ref) else {
+            tracing::warn!(
+                "[{log_prefix}] cache write skipped: unresolved cache_store_ref={cache_store_ref}"
+            );
+            return true;
+        };
+
+        if let Err(e) = cache_store.as_generic().put(&path, payload).await {
+            tracing::warn!(
+                "[{log_prefix}] cache put failed for path={} cache_store_ref={}: {e}",
+                flow_path.path,
+                cache_store_ref
+            );
+        }
+    }
+
+    true
+}
+
 pub async fn finish_write(
     pending: &mut HashMap<String, PendingWrite>,
     write_id: &str,
@@ -100,24 +150,5 @@ pub async fn finish_write(
         tracing::warn!("[wasm write-finish] rejected: unknown write_id {write_id}");
         return false;
     };
-    let Some(store) = storage_ctx.resolve_store(&pw.flow_path.store_ref) else {
-        tracing::warn!(
-            "[wasm write-finish] rejected: unresolved store_ref={}",
-            pw.flow_path.store_ref
-        );
-        return false;
-    };
-    let path = Path::from(pw.flow_path.path.clone());
-    let payload = PutPayload::from_bytes(Bytes::from(pw.buffer));
-    match store.as_generic().put(&path, payload).await {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::warn!(
-                "[wasm write-finish] put failed for path={} store_ref={}: {e}",
-                pw.flow_path.path,
-                pw.flow_path.store_ref
-            );
-            false
-        }
-    }
+    put_flow_path(storage_ctx, &pw.flow_path, pw.buffer, "wasm write-finish").await
 }

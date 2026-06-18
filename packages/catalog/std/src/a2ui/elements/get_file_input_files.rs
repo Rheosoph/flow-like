@@ -1,16 +1,20 @@
 use super::element_utils::{extract_element_id_from_pin, find_element};
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
+use flow_like_storage::{Path, files::store::FlowLikeStore};
 use flow_like_types::{
-    Value, async_trait,
+    Cacheable, Value, async_trait,
     json::{Deserialize, Serialize, json},
+    reqwest,
 };
 use schemars::JsonSchema;
+use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +31,15 @@ pub struct A2UIFileInputFile {
     pub backend_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flow_path: Option<FlowPath>,
+}
+
+impl A2UIFileInputFile {
+    fn signed_url(&self) -> Option<&str> {
+        self.url
+            .as_deref()
+            .or(self.backend_url.as_deref())
+            .filter(|url| !url.is_empty())
+    }
 }
 
 /// Gets files selected in an A2UI fileInput element.
@@ -123,6 +136,157 @@ fn extract_files(element_value: &Value) -> Vec<A2UIFileInputFile> {
     }
 }
 
+fn sanitize_cache_key(value: &str) -> String {
+    let mut sanitized = value
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+
+    sanitized.truncate(64);
+
+    if sanitized.is_empty() {
+        "file_input".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    let segment = value.rsplit(['/', '\\']).next().unwrap_or(value).trim();
+    let sanitized = segment
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        "file".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn file_name_from_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let segment = parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .next_back()?;
+    Some(
+        urlencoding::decode(segment)
+            .map(|decoded| decoded.into_owned())
+            .unwrap_or_else(|_| segment.to_string()),
+    )
+}
+
+fn flow_path_file_name(file: &A2UIFileInputFile, index: usize) -> String {
+    let raw_name = file
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| file.signed_url().and_then(file_name_from_url))
+        .unwrap_or_else(|| "file".to_string());
+
+    format!("{:03}_{}", index + 1, sanitize_path_segment(&raw_name))
+}
+
+async fn create_memory_store(context: &mut ExecutionContext, element_id: &str) -> String {
+    let store_ref = format!(
+        "a2ui_file_input_files_{}_{}",
+        sanitize_cache_key(element_id),
+        Uuid::new_v4()
+    );
+    let store = FlowLikeStore::Memory(Arc::new(
+        flow_like_storage::object_store::memory::InMemory::new(),
+    ));
+    let store: Arc<dyn Cacheable> = Arc::new(store);
+    context.set_cache(&store_ref, store).await;
+    store_ref
+}
+
+async fn download_file_input_url(
+    client: &reqwest::Client,
+    url: &str,
+    name: &str,
+) -> flow_like_types::Result<Vec<u8>> {
+    let response = client.get(url).send().await.map_err(|err| {
+        flow_like_types::anyhow!("Failed to download uploaded file \"{}\": {}", name, err)
+    })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let body = body.chars().take(512).collect::<String>();
+        return Err(flow_like_types::anyhow!(
+            "Failed to download uploaded file \"{}\" with status {}: {}",
+            name,
+            status,
+            body
+        ));
+    }
+
+    Ok(response.bytes().await?.to_vec())
+}
+
+async fn materialize_missing_flow_paths(
+    context: &mut ExecutionContext,
+    element_id: &str,
+    files: &mut [A2UIFileInputFile],
+) -> flow_like_types::Result<Vec<FlowPath>> {
+    let needs_memory_store = files
+        .iter()
+        .any(|file| file.flow_path.is_none() && file.signed_url().is_some());
+
+    let store_ref = if needs_memory_store {
+        Some(create_memory_store(context, element_id).await)
+    } else {
+        None
+    };
+    let client = reqwest::Client::new();
+    let mut flow_paths = Vec::new();
+
+    for (index, file) in files.iter_mut().enumerate() {
+        if let Some(flow_path) = file.flow_path.clone() {
+            flow_paths.push(flow_path);
+            continue;
+        }
+
+        let Some(url) = file.signed_url().map(str::to_string) else {
+            context.log_message(
+                "File input item did not contain a URL or FlowPath; skipping FlowPath creation",
+                LogLevel::Warn,
+            );
+            continue;
+        };
+
+        let file_name = flow_path_file_name(file, index);
+        let object_path = Path::from("files").child(file_name.as_str());
+        let flow_path = FlowPath::new(
+            object_path.as_ref().to_string(),
+            store_ref
+                .as_ref()
+                .expect("memory store exists when a file URL must be materialized")
+                .clone(),
+            None,
+        );
+        let bytes = download_file_input_url(&client, &url, &file_name).await?;
+        flow_path.put(context, bytes, true).await?;
+
+        file.flow_path = Some(flow_path.clone());
+        flow_paths.push(flow_path);
+    }
+
+    Ok(flow_paths)
+}
+
 #[async_trait]
 impl NodeLogic for GetFileInputFiles {
     fn get_node(&self) -> Node {
@@ -192,15 +356,13 @@ impl NodeLogic for GetFileInputFiles {
         let element = elements.as_ref().and_then(|e| find_element(e, &element_id));
 
         if let Some((_found_id, element_value)) = element {
-            let files = extract_files(element_value);
+            let mut files = extract_files(element_value);
             let signed_urls: Vec<String> = files
                 .iter()
                 .filter_map(|file| file.url.clone().or_else(|| file.backend_url.clone()))
                 .collect();
-            let flow_paths: Vec<FlowPath> = files
-                .iter()
-                .filter_map(|file| file.flow_path.clone())
-                .collect();
+            let flow_paths =
+                materialize_missing_flow_paths(context, &element_id, &mut files).await?;
 
             context.set_pin_value("files", json!(files)).await?;
             context

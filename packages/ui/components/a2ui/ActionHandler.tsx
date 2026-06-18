@@ -10,7 +10,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
+import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import type { IBoard } from "../../lib/schema/flow/board";
 import { useBackend } from "../../state/backend-state";
@@ -26,6 +28,34 @@ import type {
 
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
+
+const COMPACT_PAYLOAD_OMIT_KEYS = new Set(["dataUrl"]);
+
+export function compactWorkflowPayload(value: unknown): unknown {
+	if (value === null || value === undefined) return undefined;
+
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => compactWorkflowPayload(item))
+			.filter((item) => item !== undefined);
+	}
+
+	if (typeof value === "object") {
+		const compacted: Record<string, unknown> = {};
+		for (const [key, childValue] of Object.entries(
+			value as Record<string, unknown>,
+		)) {
+			if (COMPACT_PAYLOAD_OMIT_KEYS.has(key)) continue;
+			const nextValue = compactWorkflowPayload(childValue);
+			if (nextValue !== undefined) {
+				compacted[key] = nextValue;
+			}
+		}
+		return compacted;
+	}
+
+	return value;
+}
 
 function toBoundValue(value: unknown): Record<string, unknown> {
 	if (typeof value === "boolean") return { literalBool: value };
@@ -194,6 +224,7 @@ interface ActionContextValue {
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
+	eventId?: string;
 	components?: Record<string, SurfaceComponent>;
 	globalState: Record<string, unknown>;
 	pageState: Record<string, unknown>;
@@ -221,6 +252,7 @@ interface ActionProviderProps {
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
+	eventId?: string;
 	components?: Record<string, SurfaceComponent>;
 	children: ReactNode;
 	isPreviewMode?: boolean;
@@ -239,6 +271,7 @@ export function ActionProvider({
 	surfaceId,
 	appId,
 	boardId,
+	eventId,
 	components,
 	children,
 	isPreviewMode = false,
@@ -299,7 +332,10 @@ export function ActionProvider({
 			// Store element values on change actions
 			if (message.name === "change" && message.sourceComponentId) {
 				const elementId = `${message.surfaceId}/${message.sourceComponentId}`;
-				const value = message.context?.value ?? message.context?.checked;
+				const context = message.context ?? {};
+				const value = Object.prototype.hasOwnProperty.call(context, "value")
+					? context.value
+					: context.checked;
 
 				console.log("[ActionHandler] Storing element value:", {
 					elementId,
@@ -510,6 +546,7 @@ export function ActionProvider({
 				surfaceId,
 				appId,
 				boardId,
+				eventId,
 				components,
 				globalState,
 				pageState,
@@ -535,6 +572,7 @@ export function useActionContext() {
 		return {
 			appId: undefined,
 			boardId: undefined,
+			eventId: undefined,
 			surfaceId: "",
 			isPreviewMode: false,
 		};
@@ -542,6 +580,7 @@ export function useActionContext() {
 	return {
 		appId: context.appId,
 		boardId: context.boardId,
+		eventId: context.eventId,
 		surfaceId: context.surfaceId,
 		isPreviewMode: context.isPreviewMode,
 	};
@@ -698,6 +737,19 @@ export function useActions() {
 	return { trigger, isPreviewMode };
 }
 
+export function useComponentActionTrigger(componentId: string | undefined) {
+	const { executeAction } = useExecuteAction();
+
+	return useCallback(
+		(actions: Action[] | undefined, context: Record<string, unknown> = {}) => {
+			const action = actions?.[0];
+			if (!action) return Promise.resolve();
+			return executeAction(action, componentId, context);
+		},
+		[componentId, executeAction],
+	);
+}
+
 export function useExecuteAction() {
 	const router = useRouter();
 	const pathname = usePathname();
@@ -710,6 +762,7 @@ export function useExecuteAction() {
 		surfaceId,
 		appId,
 		boardId,
+		eventId,
 		components,
 		globalState,
 		pageState,
@@ -890,11 +943,16 @@ export function useExecuteAction() {
 	);
 
 	const executeAction = useCallback(
-		async (action: Action | undefined, triggeringComponentId?: string) => {
+		async (
+			action: Action | undefined,
+			triggeringComponentId?: string,
+			additionalContext: Record<string, unknown> = {},
+		) => {
 			// Only execute actions in preview mode
 			if (!isPreviewMode || !action) return;
 
-			const { name, context } = action;
+			const { name } = action;
+			const context = { ...(action.context ?? {}), ...additionalContext };
 
 			console.log("[ActionHandler] executeAction:", {
 				name,
@@ -977,6 +1035,122 @@ export function useExecuteAction() {
 						if (url) {
 							window.open(url, "_blank", "noopener,noreferrer");
 						}
+						break;
+					}
+					case "navigate_app_config": {
+						const contextAppId = context.appId as string | undefined;
+						const targetAppId = contextAppId || appId;
+						if (!targetAppId) {
+							console.warn("[A2UI] navigate_app_config missing appId");
+							break;
+						}
+
+						router.push(
+							`/library/config?id=${encodeURIComponent(targetAppId)}`,
+						);
+						break;
+					}
+					case "navigate_app_overview": {
+						const contextAppId = context.appId as string | undefined;
+						const contextEventId = context.eventId as string | undefined;
+						const targetAppId = contextAppId || appId;
+						const targetEventId = contextEventId || eventId;
+						if (!targetAppId) {
+							console.warn("[A2UI] navigate_app_overview missing appId");
+							break;
+						}
+
+						const params = new URLSearchParams();
+						params.set("id", targetAppId);
+						if (targetEventId) params.set("eventId", targetEventId);
+						router.push(`/store?${params.toString()}`);
+						break;
+					}
+					case "submit_feedback": {
+						const contextAppId = context.appId as string | undefined;
+						const contextEventId = context.eventId as string | undefined;
+						const targetAppId = contextAppId || appId;
+						const targetEventId = contextEventId || eventId;
+
+						if (!targetAppId || !targetEventId) {
+							console.warn("[A2UI] submit_feedback missing appId or eventId", {
+								appId: targetAppId,
+								eventId: targetEventId,
+							});
+							toast.error("Feedback is not available on this page.");
+							break;
+						}
+
+						const rawRating = Number(context.rating ?? 5);
+						const rating = Number.isFinite(rawRating)
+							? Math.max(0, Math.min(5, Math.round(rawRating)))
+							: 5;
+						const feedbackId =
+							typeof context.feedbackId === "string" &&
+							context.feedbackId.trim()
+								? context.feedbackId.trim()
+								: (triggeringComponentId ?? "feedback");
+						const namespacedFeedbackId = `${surfaceId}:${feedbackId}`;
+
+						let comment =
+							typeof context.comment === "string" ? context.comment : "";
+						const commentComponentId = context.commentComponentId as
+							| string
+							| undefined;
+						const storedElementValues = getElementValues?.() ?? {};
+						if (commentComponentId) {
+							const elementId = commentComponentId.includes("/")
+								? commentComponentId
+								: `${surfaceId}/${commentComponentId}`;
+							const value = storedElementValues[elementId];
+							if (value !== undefined && value !== null) {
+								comment = String(value);
+							}
+						}
+
+						const includeState = context.includeState !== false;
+						const pageContext = getCurrentPageContext(pathname, {
+							mode:
+								typeof context.pageContextMode === "string"
+									? context.pageContextMode
+									: "path",
+							queryParamAllowlist:
+								typeof context.pageContextQueryParamAllowlist === "string"
+									? context.pageContextQueryParamAllowlist
+									: undefined,
+							queryParamDenylist:
+								typeof context.pageContextQueryParamDenylist === "string"
+									? context.pageContextQueryParamDenylist
+									: undefined,
+							includeHash: context.includePageHash === true,
+						});
+						const localState = {
+							...(includeState
+								? {
+										...pageState,
+										elementValues: storedElementValues,
+									}
+								: {}),
+							pageContext,
+						};
+
+						await backend.eventState.upsertEventFeedback(
+							targetAppId,
+							targetEventId,
+							namespacedFeedbackId,
+							{
+								rating,
+								comment,
+								globalState: includeState ? globalState : undefined,
+								localState,
+							},
+						);
+
+						const successMessage =
+							typeof context.successMessage === "string"
+								? context.successMessage
+								: "Thanks for the feedback.";
+						toast.success(successMessage);
 						break;
 					}
 					case "workflow_event": {
@@ -1106,11 +1280,13 @@ export function useExecuteAction() {
 									});
 								}
 
-								const payload = {
+								const payload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
 										_input_values: inputValues,
+										_action_context: context,
+										_triggering_component_id: triggeringComponentId ?? "",
 										_route:
 											typeof window !== "undefined"
 												? window.location.pathname
@@ -1121,6 +1297,10 @@ export function useExecuteAction() {
 										_page_state: pageState || {},
 									},
 									version: boardVersion,
+								}) as {
+									id: string;
+									payload: Record<string, unknown>;
+									version?: [number, number, number];
 								};
 
 								// Use execution service if available (checks runtime variables)
@@ -1244,7 +1424,7 @@ export function useExecuteAction() {
 									}
 								}
 
-								const payload = {
+								const payload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
@@ -1253,7 +1433,7 @@ export function useExecuteAction() {
 										_action_id: actionId,
 										_action_context: context,
 									},
-								};
+								}) as { id: string; payload: Record<string, unknown> };
 
 								const execFn =
 									executionService?.executeBoard ??
@@ -1307,6 +1487,7 @@ export function useExecuteAction() {
 			surfaceId,
 			appId,
 			boardId,
+			eventId,
 			components,
 			globalState,
 			pageState,

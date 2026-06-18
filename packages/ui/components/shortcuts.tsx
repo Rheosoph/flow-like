@@ -21,36 +21,18 @@ import {
 	Bookmark,
 	Cable,
 	Database,
-	ExternalLink,
 	FolderClosed,
-	Globe,
 	GripVertical,
-	Loader2,
 	type LucideIcon,
-	Sparkles,
 	Trash2,
-	WifiOff,
 	Workflow,
 } from "lucide-react";
 import { type ComponentType, useCallback, useState } from "react";
-import { isTauri } from "../lib/platform";
 import { AnimatedPinIcon } from "./animated-icons";
 import { AnimatedNewProjectIcon } from "./animated-icons/animated-plus";
-import { AutoPlayNewProjectIcon } from "./animated-icons/animated-plus-autoplay";
+import { CreateFlowDialog } from "./create-flow-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
-import {
-	Dialog,
-	DialogClose,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "./ui/dialog";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
-import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import {
 	SidebarGroup,
 	SidebarGroupLabel,
@@ -87,6 +69,16 @@ interface PredefinedShortcut {
 	label: string;
 	icon: LucideIcon | ComponentType<{ className?: string }>;
 	action: () => void;
+}
+
+function getAppMetadataAppId(appData: unknown): string | undefined {
+	if (Array.isArray(appData)) return getAppMetadataAppId(appData[0]);
+	if (typeof appData !== "object" || appData === null || !("id" in appData)) {
+		return undefined;
+	}
+
+	const id = (appData as { id?: unknown }).id;
+	return typeof id === "string" ? id : undefined;
 }
 
 interface ShortcutsProps<TBackend, TAppMetadata> {
@@ -142,9 +134,6 @@ export function Shortcuts<TBackend, TAppMetadata>({
 }: ShortcutsProps<TBackend, TAppMetadata>) {
 	const { state: sidebarState } = useSidebar();
 	const [startCodingOpen, setStartCodingOpen] = useState(false);
-	const [projectName, setProjectName] = useState("");
-	const [isOnline, setIsOnline] = useState(true);
-	const [isCreating, setIsCreating] = useState(false);
 
 	// Helper to get page type from path
 	const getPageType = (
@@ -166,41 +155,13 @@ export function Shortcuts<TBackend, TAppMetadata>({
 	};
 
 	// Helper to get app metadata by ID
-	const getAppMetadata = (appId: string) => {
-		if (!appMetadata) return null;
-		return getAppMetadataById(appId, appMetadata);
-	};
-
-	const handleStartCoding = useCallback(async () => {
-		if (!projectName.trim()) {
-			toast.error("Please enter a project name");
-			return;
-		}
-
-		if (isOnline && !auth?.isAuthenticated) {
-			toast.error("You must be logged in to create an online project");
-			return;
-		}
-
-		if (!onCreateProject) {
-			toast.error("Project creation is not configured");
-			return;
-		}
-
-		setIsCreating(true);
-		try {
-			await onCreateProject(projectName.trim(), isOnline);
-			toast.success("Project created! 🎉");
-			setStartCodingOpen(false);
-			setProjectName("");
-			setIsOnline(true);
-		} catch (error) {
-			console.error("Failed to create project:", error);
-			toast.error("Failed to create project");
-		} finally {
-			setIsCreating(false);
-		}
-	}, [projectName, isOnline, auth?.isAuthenticated, onCreateProject, toast]);
+	const getAppMetadata = useCallback(
+		(appId: string) => {
+			if (!appMetadata) return null;
+			return getAppMetadataById(appId, appMetadata);
+		},
+		[appMetadata, getAppMetadataById],
+	);
 
 	const handleAddCurrentLocation = useCallback(async () => {
 		if (!currentProfileId) {
@@ -228,16 +189,16 @@ export function Shortcuts<TBackend, TAppMetadata>({
 				// Search through all apps to find which one contains this board
 				for (const appData of appMetadata) {
 					try {
-						const boards = await getBoardsByAppId(
-							backend,
-							(appData as any).id || (appData as any)[0]?.id,
-						);
+						const candidateAppId = getAppMetadataAppId(appData);
+						if (!candidateAppId) continue;
+
+						const boards = await getBoardsByAppId(backend, candidateAppId);
 						if (boards?.some((board) => board.id === boardId)) {
-							appId = (appData as any).id || (appData as any)[0]?.id;
+							appId = candidateAppId;
 							break;
 						}
 					} catch (error) {
-						console.error(`Failed to fetch boards for app:`, error);
+						console.error("Failed to fetch boards for app:", error);
 					}
 				}
 			}
@@ -288,9 +249,6 @@ export function Shortcuts<TBackend, TAppMetadata>({
 					label: "Create Flow",
 					icon: AnimatedNewProjectIcon,
 					action: () => {
-						if (!auth?.isAuthenticated) {
-							setIsOnline(false);
-						}
 						setStartCodingOpen(true);
 					},
 				},
@@ -414,127 +372,14 @@ export function Shortcuts<TBackend, TAppMetadata>({
 			</SidebarGroup>
 
 			{onCreateProject && (
-				<Dialog open={startCodingOpen} onOpenChange={setStartCodingOpen}>
-					<DialogContent>
-						<DialogHeader>
-							<DialogTitle className="flex items-center gap-2">
-								<AutoPlayNewProjectIcon className="h-5 w-5" />
-								Create Flow
-							</DialogTitle>
-							<DialogDescription>
-								Create a new project with all embedding models from your current
-								profile
-							</DialogDescription>
-						</DialogHeader>
-						<div className="grid gap-4 py-4">
-							<div className="grid gap-2">
-								<Label htmlFor="project-name">Project Name</Label>
-								<Input
-									id="project-name"
-									placeholder="My Awesome Project"
-									value={projectName}
-									onChange={(e) => setProjectName(e.target.value)}
-									onKeyDown={(e) => {
-										if (e.key === "Enter" && !isCreating) {
-											handleStartCoding();
-										}
-									}}
-									disabled={isCreating}
-								/>
-							</div>
-							<div className="grid gap-3">
-								<Label>Connectivity</Label>
-								<RadioGroup
-									value={isOnline ? "online" : "offline"}
-									onValueChange={(value) => {
-										if (value === "online" && !auth?.isAuthenticated) {
-											toast.error("Please log in to create online projects");
-											return;
-										}
-										setIsOnline(value === "online");
-									}}
-									disabled={isCreating}
-								>
-									<div className="flex items-center space-x-2 relative">
-										<RadioGroupItem
-											value="online"
-											id="online"
-											disabled={!auth?.isAuthenticated || isCreating}
-										/>
-										<Label
-											htmlFor="online"
-											className={`flex items-center gap-2 font-normal ${
-												auth?.isAuthenticated
-													? "cursor-pointer"
-													: "cursor-not-allowed opacity-50"
-											}`}
-										>
-											<Globe className="h-4 w-4" />
-											Online - Sync with cloud
-											{!auth?.isAuthenticated && (
-												<span className="text-xs text-muted-foreground ml-1">
-													(Login required)
-												</span>
-											)}
-										</Label>
-									</div>
-									{isTauri() ? (
-										<div className="flex items-center space-x-2">
-											<RadioGroupItem value="offline" id="offline" />
-											<Label
-												htmlFor="offline"
-												className="flex items-center gap-2 font-normal cursor-pointer"
-											>
-												<WifiOff className="h-4 w-4" />
-												Offline - Local only
-											</Label>
-										</div>
-									) : (
-										<div className="flex items-center space-x-2 opacity-50">
-											<RadioGroupItem value="offline" id="offline" disabled />
-											<Label
-												htmlFor="offline"
-												className="flex items-center gap-2 font-normal cursor-not-allowed"
-											>
-												<WifiOff className="h-4 w-4" />
-												Offline - Local only
-												<a
-													href="https://flow-like.com/download"
-													target="_blank"
-													rel="noopener noreferrer"
-													className="text-xs text-primary hover:underline flex items-center gap-1 ml-1"
-													onClick={(e) => e.stopPropagation()}
-												>
-													(Get Studio <ExternalLink className="h-3 w-3" />)
-												</a>
-											</Label>
-										</div>
-									)}
-								</RadioGroup>
-							</div>
-						</div>
-						<DialogFooter>
-							<DialogClose asChild>
-								<Button variant="outline" disabled={isCreating}>
-									Cancel
-								</Button>
-							</DialogClose>
-							<Button onClick={handleStartCoding} disabled={isCreating}>
-								{isCreating ? (
-									<>
-										<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-										Creating...
-									</>
-								) : (
-									<>
-										<Sparkles className="mr-2 h-4 w-4" />
-										Create Project
-									</>
-								)}
-							</Button>
-						</DialogFooter>
-					</DialogContent>
-				</Dialog>
+				<CreateFlowDialog
+					open={startCodingOpen}
+					onOpenChange={setStartCodingOpen}
+					onCreateProject={onCreateProject}
+					isAuthenticated={auth?.isAuthenticated}
+					defaultOnline={auth?.isAuthenticated}
+					toast={toast}
+				/>
 			)}
 		</>
 	);

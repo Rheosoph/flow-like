@@ -406,6 +406,7 @@ impl NodeLogic for NerNode {
             "Extract named entities (persons, organizations, locations, dates, etc.) from text using ONNX models. Supports BERT, RoBERTa, and other transformer-based NER models with automatic tokenization. Download models from: BERT-base-NER (https://huggingface.co/dslim/bert-base-NER), Multilingual NER (https://huggingface.co/Davlan/bert-base-multilingual-cased-ner-hrl), spaCy NER (https://huggingface.co/spacy). Download tokenizer.json from the same model repository.",
             "AI/ML/ONNX/NLP",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/type.svg");
 

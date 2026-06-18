@@ -38,6 +38,13 @@ export class AppState implements IAppState {
 		return this.backend.auth?.isAuthenticated ? this.backend.auth : undefined;
 	}
 
+	private hasRemoteAccessToken() {
+		return Boolean(
+			this.backend.auth?.isAuthenticated &&
+				this.backend.auth.user?.access_token,
+		);
+	}
+
 	private async fetchRemoteApp(appId: string): Promise<IApp> {
 		if (!this.backend.profile) {
 			throw new Error("Profile not set. Cannot get app.");
@@ -276,7 +283,8 @@ export class AppState implements IAppState {
 		if (
 			!this?.backend?.queryClient ||
 			!this.backend.profile ||
-			!this.backend.auth
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
 		) {
 			return localApps;
 		}
@@ -366,6 +374,13 @@ export class AppState implements IAppState {
 		}
 
 		if (localApp) {
+			const isOffline =
+				localApp.visibility === IAppVisibility.Offline ||
+				(await this.backend.isOffline(appId));
+			if (isOffline) {
+				return localApp;
+			}
+
 			if (!this.backend.queryClient || !this.backend.profile) {
 				return localApp;
 			}

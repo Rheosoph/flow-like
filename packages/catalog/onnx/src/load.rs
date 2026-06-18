@@ -12,8 +12,10 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
-use flow_like_model_provider::ml::ort::session::Session;
-use flow_like_types::{Result, anyhow, async_trait, json::json};
+use flow_like_model_provider::ml::ort::session::{Input, Output, Session};
+#[cfg(feature = "execute")]
+use flow_like_types::json::json;
+use flow_like_types::{Result, anyhow, async_trait};
 
 // ## Loader Utilities
 // Identifying ONNX-I/Os
@@ -29,6 +31,24 @@ static YOLO_OUTPUTS: [&str; 1] = ["output0"];
 static TIMM_INPUTS: [&str; 1] = ["input0"];
 #[cfg(feature = "execute")]
 static TIMM_OUTPUTS: [&str; 1] = ["output0"];
+#[cfg(feature = "execute")]
+static BOX_LABEL_SCORE_OUTPUTS: [&str; 3] = ["boxes", "labels", "scores"];
+#[cfg(feature = "execute")]
+static SSD_MOBILENET_OUTPUTS: [&str; 4] = [
+    "num_detections:0",
+    "detection_boxes:0",
+    "detection_scores:0",
+    "detection_classes:0",
+];
+#[cfg(feature = "execute")]
+static SSD_MOBILENET_OUTPUTS_NO_SUFFIX: [&str; 4] = [
+    "num_detections",
+    "detection_boxes",
+    "detection_scores",
+    "detection_classes",
+];
+#[cfg(feature = "execute")]
+static YOLOV3_OUTPUTS: [&str; 3] = ["boxes", "scores", "indices"];
 
 #[cfg(feature = "execute")]
 /// Factory Function Matching ONNX Assets to a Provider-Frameworks
@@ -53,6 +73,108 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
             input_width,
             input_height,
         }))
+    } else if let Some((
+        num_detections_output_name,
+        boxes_output_name,
+        scores_output_name,
+        classes_output_name,
+    )) = ssd_mobilenet_outputs(&output_names)
+    {
+        let input_name = first_input_name(session)?;
+        Ok(Provider::SsdMobileNetLike(detection::SsdMobileNetLike {
+            input_name,
+            num_detections_output_name,
+            boxes_output_name,
+            scores_output_name,
+            classes_output_name,
+        }))
+    } else if let Some((boxes_output_name, scores_output_name, indices_output_name)) =
+        yolo_v3_outputs(session, &output_names)
+    {
+        let image_input = session
+            .inputs
+            .iter()
+            .find(|input| input_rank(input) == Some(4))
+            .ok_or_else(|| anyhow!("Failed to determine YOLOv3 image input"))?;
+        let shape_input = session
+            .inputs
+            .iter()
+            .find(|input| input.name != image_input.name)
+            .ok_or_else(|| anyhow!("Failed to determine YOLOv3 image-shape input"))?;
+        let (input_width, input_height) = fixed_input_size(image_input, 416, InputLayout::Nchw);
+        Ok(Provider::YoloV3Like(detection::YoloV3Like {
+            image_input_name: image_input.name.clone(),
+            image_shape_input_name: shape_input.name.clone(),
+            boxes_output_name,
+            scores_output_name,
+            indices_output_name,
+            input_width,
+            input_height,
+            image_shape_kind: numeric_input_kind(shape_input),
+        }))
+    } else if let Some((boxes_output_name, labels_output_name, scores_output_name)) =
+        box_label_score_outputs(session, &output_names)
+    {
+        let input = session
+            .inputs
+            .first()
+            .ok_or_else(|| anyhow!("Object detection model has no inputs"))?;
+        let rank = input_rank(input).unwrap_or(4);
+        let (input_width, input_height) = if rank == 4 {
+            fixed_input_size(input, 1200, InputLayout::Nchw)
+        } else {
+            (0, 0)
+        };
+        let preprocessing = if rank == 3 {
+            detection::BoxLabelsScoresPreprocessing::DetectronBgrChw
+        } else {
+            detection::BoxLabelsScoresPreprocessing::ImagenetNchw
+        };
+        Ok(Provider::BoxLabelsScoresLike(
+            detection::BoxLabelsScoresLike {
+                input_name: input.name.clone(),
+                boxes_output_name,
+                labels_output_name,
+                scores_output_name,
+                input_width,
+                input_height,
+                preprocessing,
+            },
+        ))
+    } else if let Some((input_name, output_name, input_width, input_height, num_classes)) =
+        yolo_v2_grid_signature(session)
+    {
+        Ok(Provider::YoloV2GridLike(detection::YoloV2GridLike {
+            input_name,
+            output_name,
+            input_width,
+            input_height,
+            num_classes,
+        }))
+    } else if let Some((input_name, input_width, input_height)) = yolo_v4_signature(session) {
+        Ok(Provider::YoloV4Like(detection::YoloV4Like {
+            input_name,
+            input_width,
+            input_height,
+        }))
+    } else if is_retinanet_like(session) {
+        let input = session
+            .inputs
+            .first()
+            .ok_or_else(|| anyhow!("RetinaNet model has no inputs"))?;
+        let static_input_size = static_input_size(input, InputLayout::Nchw);
+        let (input_width, input_height) = static_input_size.unwrap_or((0, 0));
+        Ok(Provider::RetinaNetLike(detection::RetinaNetLike {
+            input_name: input.name.clone(),
+            output_names: session
+                .outputs
+                .iter()
+                .map(|output| output.name.clone())
+                .collect(),
+            input_width,
+            input_height,
+            resize_input: static_input_size.is_some(),
+        }))
     } else {
         tracing::info!(
             "Model does not match known patterns, using Generic provider. Inputs: {:?}, Outputs: {:?}",
@@ -61,6 +183,272 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
         );
         Ok(Provider::Generic)
     }
+}
+
+#[cfg(feature = "execute")]
+fn has_outputs(output_names: &[&str], expected: &[&str]) -> bool {
+    expected
+        .iter()
+        .all(|expected_name| output_names.iter().any(|name| name == expected_name))
+}
+
+#[cfg(feature = "execute")]
+fn first_input_name(session: &Session) -> Result<String> {
+    session
+        .inputs
+        .first()
+        .map(|input| input.name.clone())
+        .ok_or_else(|| anyhow!("ONNX model has no inputs"))
+}
+
+#[cfg(feature = "execute")]
+fn input_rank(input: &Input) -> Option<usize> {
+    input.input_type.tensor_shape().map(|dims| dims.len())
+}
+
+#[cfg(feature = "execute")]
+fn output_shape(output: &Output) -> Option<Vec<i64>> {
+    output
+        .output_type
+        .tensor_shape()
+        .map(|dims| dims.iter().copied().collect())
+}
+
+#[cfg(feature = "execute")]
+fn input_shape(input: &Input) -> Option<Vec<i64>> {
+    input
+        .input_type
+        .tensor_shape()
+        .map(|dims| dims.iter().copied().collect())
+}
+
+#[cfg(feature = "execute")]
+enum InputLayout {
+    Nchw,
+    Nhwc,
+}
+
+#[cfg(feature = "execute")]
+fn fixed_input_size(input: &Input, fallback: u32, layout: InputLayout) -> (u32, u32) {
+    static_input_size(input, layout).unwrap_or((fallback, fallback))
+}
+
+#[cfg(feature = "execute")]
+fn static_input_size(input: &Input, layout: InputLayout) -> Option<(u32, u32)> {
+    let Some(shape) = input_shape(input) else {
+        return None;
+    };
+
+    match layout {
+        InputLayout::Nchw if shape.len() == 4 => {
+            Some((positive_dim(shape[3])?, positive_dim(shape[2])?))
+        }
+        InputLayout::Nhwc if shape.len() == 4 => {
+            Some((positive_dim(shape[2])?, positive_dim(shape[1])?))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "execute")]
+fn positive_dim(dim: i64) -> Option<u32> {
+    if dim > 0 { Some(dim as u32) } else { None }
+}
+
+#[cfg(feature = "execute")]
+fn numeric_input_kind(input: &Input) -> detection::YoloImageShapeKind {
+    let ty = format!("{:?}", input.input_type);
+    if ty.contains("Int64") {
+        detection::YoloImageShapeKind::I64
+    } else if ty.contains("Int32") {
+        detection::YoloImageShapeKind::I32
+    } else {
+        detection::YoloImageShapeKind::F32
+    }
+}
+
+#[cfg(feature = "execute")]
+fn ssd_mobilenet_outputs(output_names: &[&str]) -> Option<(String, String, String, String)> {
+    if has_outputs(output_names, &SSD_MOBILENET_OUTPUTS) {
+        return Some((
+            "num_detections:0".into(),
+            "detection_boxes:0".into(),
+            "detection_scores:0".into(),
+            "detection_classes:0".into(),
+        ));
+    }
+
+    if has_outputs(output_names, &SSD_MOBILENET_OUTPUTS_NO_SUFFIX) {
+        return Some((
+            "num_detections".into(),
+            "detection_boxes".into(),
+            "detection_scores".into(),
+            "detection_classes".into(),
+        ));
+    }
+
+    None
+}
+
+#[cfg(feature = "execute")]
+fn box_label_score_outputs(
+    session: &Session,
+    output_names: &[&str],
+) -> Option<(String, String, String)> {
+    if has_outputs(output_names, &BOX_LABEL_SCORE_OUTPUTS) {
+        return Some(("boxes".into(), "labels".into(), "scores".into()));
+    }
+
+    let boxes = session.outputs.iter().find(|output| {
+        is_float_output(output)
+            && output_shape(output)
+                .map(|shape| {
+                    (shape.len() == 2 || shape.len() == 3) && shape.last().copied() == Some(4)
+                })
+                .unwrap_or(false)
+    })?;
+
+    let labels = session.outputs.iter().find(|output| {
+        output.name != boxes.name
+            && is_integer_output(output)
+            && output_shape(output)
+                .map(|shape| shape.len() == 1 || shape.len() == 2)
+                .unwrap_or(false)
+    })?;
+
+    let scores = session.outputs.iter().find(|output| {
+        output.name != boxes.name
+            && output.name != labels.name
+            && is_float_output(output)
+            && output_shape(output)
+                .map(|shape| shape.len() == 1 || shape.len() == 2)
+                .unwrap_or(false)
+    })?;
+
+    Some((boxes.name.clone(), labels.name.clone(), scores.name.clone()))
+}
+
+#[cfg(feature = "execute")]
+fn yolo_v3_outputs(session: &Session, output_names: &[&str]) -> Option<(String, String, String)> {
+    if session.inputs.len() < 2 {
+        return None;
+    }
+
+    if has_outputs(output_names, &YOLOV3_OUTPUTS) {
+        return Some(("boxes".into(), "scores".into(), "indices".into()));
+    }
+
+    let boxes = session.outputs.iter().find(|output| {
+        is_float_output(output)
+            && output_shape(output)
+                .map(|shape| shape.len() == 3 && shape.last().copied() == Some(4))
+                .unwrap_or(false)
+    })?;
+
+    let scores = session.outputs.iter().find(|output| {
+        output.name != boxes.name
+            && is_float_output(output)
+            && output_shape(output)
+                .map(|shape| shape.len() == 3 && shape.get(1).copied() == Some(80))
+                .unwrap_or(false)
+    })?;
+
+    let indices = session.outputs.iter().find(|output| {
+        output.name != boxes.name
+            && output.name != scores.name
+            && is_integer_output(output)
+            && output_shape(output)
+                .map(|shape| {
+                    shape.len() == 2 || (shape.len() == 3 && shape.last().copied() == Some(3))
+                })
+                .unwrap_or(false)
+    })?;
+
+    Some((
+        boxes.name.clone(),
+        scores.name.clone(),
+        indices.name.clone(),
+    ))
+}
+
+#[cfg(feature = "execute")]
+fn is_float_output(output: &Output) -> bool {
+    format!("{:?}", output.output_type).contains("Float")
+}
+
+#[cfg(feature = "execute")]
+fn is_integer_output(output: &Output) -> bool {
+    let ty = format!("{:?}", output.output_type);
+    ty.contains("Int32") || ty.contains("Int64")
+}
+
+#[cfg(feature = "execute")]
+fn yolo_v2_grid_signature(session: &Session) -> Option<(String, String, u32, u32, usize)> {
+    if session.inputs.len() != 1 || session.outputs.len() != 1 {
+        return None;
+    }
+
+    let input = session.inputs.first()?;
+    let output = session.outputs.first()?;
+    let shape = output_shape(output)?;
+    if shape.len() != 4 || shape[2] != 13 || shape[3] != 13 {
+        return None;
+    }
+
+    let num_classes = match shape[1] {
+        125 => 20,
+        425 => 80,
+        _ => return None,
+    };
+    let (input_width, input_height) = fixed_input_size(input, 416, InputLayout::Nchw);
+    Some((
+        input.name.clone(),
+        output.name.clone(),
+        input_width,
+        input_height,
+        num_classes,
+    ))
+}
+
+#[cfg(feature = "execute")]
+fn yolo_v4_signature(session: &Session) -> Option<(String, u32, u32)> {
+    if session.inputs.len() != 1 {
+        return None;
+    }
+
+    let has_yolov4_output = session.outputs.iter().any(|output| {
+        output_shape(output)
+            .map(|shape| shape.len() == 5 && shape[3] == 3 && shape[4] == 85)
+            .unwrap_or(false)
+    });
+    if !has_yolov4_output {
+        return None;
+    }
+
+    let input = session.inputs.first()?;
+    let (input_width, input_height) = fixed_input_size(input, 416, InputLayout::Nhwc);
+    Some((input.name.clone(), input_width, input_height))
+}
+
+#[cfg(feature = "execute")]
+fn is_retinanet_like(session: &Session) -> bool {
+    let mut class_heads = 0usize;
+    let mut box_heads = 0usize;
+    for output in &session.outputs {
+        let Some(shape) = output_shape(output) else {
+            continue;
+        };
+        if shape.len() != 4 {
+            continue;
+        }
+        if shape[1] % 80 == 0 && shape[1] >= 80 {
+            class_heads += 1;
+        } else if shape[1] % 4 == 0 {
+            box_heads += 1;
+        }
+    }
+
+    class_heads >= 1 && box_heads >= 1
 }
 
 #[cfg(feature = "execute")]
@@ -101,6 +489,7 @@ impl NodeLogic for LoadOnnxNode {
             "Load ONNX Model from Path",
             "AI/ML/ONNX",
         );
+        node.set_version(1);
 
         node.add_icon("/flow/icons/find_model.svg");
 

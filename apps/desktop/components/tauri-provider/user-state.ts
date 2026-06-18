@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import type {
+	IMetadata,
 	IProfile,
 	IProfileApp,
 	ISettingsProfile,
@@ -20,6 +20,7 @@ import type {
 	IUserUpdate,
 	IUserWidgetInfo,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import {
 	type ILocalNotification,
@@ -183,7 +184,7 @@ export class UserState implements IUserState {
 			try {
 				const remoteResult = await fetcher<INotificationsOverview>(
 					this.backend.profile,
-					`user/notifications`,
+					"user/notifications",
 					{ method: "GET" },
 					this.backend.auth,
 				);
@@ -331,7 +332,7 @@ export class UserState implements IUserState {
 			try {
 				remoteResult = await fetcher<number>(
 					this.backend.profile,
-					`user/notifications/read-all`,
+					"user/notifications/read-all",
 					{
 						method: "POST",
 					},
@@ -361,8 +362,9 @@ export class UserState implements IUserState {
 		return profile.hub_profile;
 	}
 	async getProfiles(): Promise<IProfile[]> {
-		const profiles: ISettingsProfile[] = await invoke("get_profiles");
-		return profiles
+		const profiles =
+			await invoke<Record<string, ISettingsProfile>>("get_profiles");
+		return Object.values(profiles)
 			.map((p) => p.hub_profile)
 			.filter((p): p is IProfile => p !== undefined);
 	}
@@ -371,8 +373,9 @@ export class UserState implements IUserState {
 		return profile;
 	}
 	async getAllSettingsProfiles(): Promise<ISettingsProfile[]> {
-		const profiles: ISettingsProfile[] = await invoke("get_profiles");
-		return profiles;
+		const profiles =
+			await invoke<Record<string, ISettingsProfile>>("get_profiles");
+		return Object.values(profiles);
 	}
 
 	async updateUser(data: IUserUpdate, avatar?: File): Promise<void> {
@@ -390,7 +393,7 @@ export class UserState implements IUserState {
 
 		const response = await fetcher<{ signed_url?: string }>(
 			this.backend.profile,
-			`user/info`,
+			"user/info",
 			{
 				method: "PUT",
 				body: JSON.stringify(data),
@@ -420,7 +423,7 @@ export class UserState implements IUserState {
 
 		const result = await fetcher<IUserInfo>(
 			this.backend.profile,
-			`user/info`,
+			"user/info",
 			{
 				method: "GET",
 			},
@@ -460,7 +463,7 @@ export class UserState implements IUserState {
 			permission: number;
 		}>(
 			this.backend.profile,
-			`user/pat`,
+			"user/pat",
 			{
 				method: "PUT",
 				body: JSON.stringify({ name, valid_until: unix, permissions }),
@@ -494,7 +497,7 @@ export class UserState implements IUserState {
 			}[]
 		>(
 			this.backend.profile,
-			`user/pat`,
+			"user/pat",
 			{
 				method: "GET",
 			},
@@ -576,7 +579,8 @@ export class UserState implements IUserState {
 
 		// First, get all local apps and their widgets
 		try {
-			const localApps = await invoke<[{ id: string }, any][]>("get_apps");
+			const localApps =
+				await invoke<[{ id: string }, IMetadata | undefined][]>("get_apps");
 			for (const [app] of localApps) {
 				try {
 					const widgets = await invoke<{ id: string }[]>("get_widgets", {
@@ -584,17 +588,24 @@ export class UserState implements IUserState {
 					});
 					for (const widget of widgets) {
 						try {
-							const metadata = await invoke<any | null>("get_widget_meta", {
-								appId: app.id,
-								widgetId: widget.id,
-								language,
-							});
+							const metadata = await invoke<IMetadata | null>(
+								"get_widget_meta",
+								{
+									appId: app.id,
+									widgetId: widget.id,
+									language,
+								},
+							);
+							const widgetName =
+								typeof metadata?.name === "string" ? metadata.name.trim() : "";
+							if (!widgetName || widgetName === widget.id) continue;
+
 							const key = `${app.id}:${widget.id}`;
 							mergedWidgets.set(key, {
 								appId: app.id,
 								widgetId: widget.id,
 								metadata: {
-									name: metadata?.name ?? widget.id,
+									name: widgetName,
 									description: metadata?.description ?? "",
 									thumbnail: metadata?.thumbnail ?? null,
 									tags: metadata?.tags ?? [],
@@ -603,20 +614,7 @@ export class UserState implements IUserState {
 								},
 							});
 						} catch {
-							// Widget meta not available, use defaults
-							const key = `${app.id}:${widget.id}`;
-							mergedWidgets.set(key, {
-								appId: app.id,
-								widgetId: widget.id,
-								metadata: {
-									name: widget.id,
-									description: "",
-									thumbnail: null,
-									tags: [],
-									icon: null,
-									preview_media: [],
-								},
-							});
+							// Widgets without metadata names are intentionally omitted.
 						}
 					}
 				} catch {
@@ -633,7 +631,7 @@ export class UserState implements IUserState {
 				const queryParams = language
 					? `?language=${encodeURIComponent(language)}`
 					: "";
-				const remoteWidgets = await fetcher<[string, string, any][]>(
+				const remoteWidgets = await fetcher<[string, string, IMetadata][]>(
 					this.backend.profile,
 					`user/widgets${queryParams}`,
 					{ method: "GET" },
@@ -641,12 +639,16 @@ export class UserState implements IUserState {
 				);
 
 				for (const [appId, widgetId, metadata] of remoteWidgets) {
+					const widgetName =
+						typeof metadata?.name === "string" ? metadata.name.trim() : "";
+					if (!widgetName || widgetName === widgetId) continue;
+
 					const key = `${appId}:${widgetId}`;
 					mergedWidgets.set(key, {
 						appId,
 						widgetId,
 						metadata: {
-							name: metadata?.name ?? widgetId,
+							name: widgetName,
 							description: metadata?.description ?? "",
 							thumbnail: metadata?.thumbnail,
 							tags: metadata?.tags ?? [],
@@ -671,7 +673,7 @@ export class UserState implements IUserState {
 		const queryParams = language
 			? `?language=${encodeURIComponent(language)}`
 			: "";
-		const result = await fetcher<[string, string, any][]>(
+		const result = await fetcher<[string, string, IMetadata][]>(
 			this.backend.profile,
 			`user/templates${queryParams}`,
 			{ method: "GET" },

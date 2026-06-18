@@ -7,6 +7,8 @@ use serde_json::json;
 use super::provider::CatalogProvider;
 use super::search::score_catalog_metadata;
 use super::types::{BoardCommand, RunContext, TemplateInfo};
+use crate::flow::ast::{ReconcileResult, reconcile_text_with_catalog};
+use crate::flow::board::Board;
 use crate::state::FlowLikeState;
 
 // ============================================================================
@@ -36,6 +38,10 @@ pub struct EmitCommandsToolError;
 #[derive(Debug, thiserror::Error)]
 #[error("Query logs tool error: {0}")]
 pub struct QueryLogsToolError(pub String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("FlowScript tool error: {0}")]
+pub struct FlowScriptToolError(pub String);
 
 // ============================================================================
 // Tool Argument Types
@@ -94,6 +100,22 @@ pub struct QueryLogsArgs {
     pub limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct GetDeclarationsArgs {
+    /// Free-text search for the kinds of nodes you want to call in FlowScript
+    /// (e.g. "http request", "parse json", "invoke agent").
+    pub query: String,
+}
+
+#[derive(Deserialize)]
+pub struct EditFlowScriptArgs {
+    /// The full edited FlowScript source for the board. Preserve the `//@n:<id>` anchor comments
+    /// on existing statements so identities are matched; literal argument changes become pin
+    /// updates and removed anchored statements become node deletions.
+    #[serde(alias = "script", alias = "source", alias = "content")]
+    pub flowscript: String,
+}
+
 // ============================================================================
 // Catalog Search Tool
 // ============================================================================
@@ -112,16 +134,17 @@ impl Tool for CatalogTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "catalog_search".to_string(),
-            description: r#"Search the node catalog by functionality or name. Returns matching nodes with their node_type (needed for AddNode).
+            description: r#"Search the node catalog by functionality or name. Returns matching nodes with their node_type for legacy/manual AddNode commands.
 
-WHEN TO USE: Before adding any node - to get the exact node_type
-EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if""#.to_string(),
+WHEN TO USE: Only for manual command JSON, layout/modeling operations, or debugging catalog metadata.
+FOR WORKFLOW EDITS: Prefer get_declarations, write FlowScript, then call edit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#.to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language search. Examples: 'http request', 'json parse', 'loop array'"
+                        "description": "Natural language catalog search for manual AddNode use. For FlowScript workflows, use get_declarations instead."
                     }
                 },
                 "required": ["query"]
@@ -551,12 +574,17 @@ impl Tool for EmitCommandsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "emit_commands".to_string(),
-            description: r#"Execute graph modifications. Commands are batched and applied atomically with undo support.
+            description: r#"Execute low-level graph modifications. Commands are batched and applied atomically with undo support.
 
-WORKFLOW:
+PRIMARY WORKFLOW EDIT PATH:
+Use get_declarations to search embedded .flow.d signatures, write the workflow as FlowScript, then call edit_flowscript so the text is reconciled into commands.
+
+LOW-LEVEL FALLBACK WORKFLOW:
 1. Use catalog_search to get exact node_type
 2. Use get_node_details for pin names
 3. Emit commands with ref_ids to chain operations
+
+Use this directly only for layout-only MoveNode changes, placeholders/comments/layers, variables, or changes that cannot be represented as FlowScript.
 
 COMMAND TYPES:
 - AddNode: Add a node (requires node_type from catalog)
@@ -564,7 +592,7 @@ COMMAND TYPES:
 - ConnectPins: Connect two pins (use pin NAME, not ID)
 - UpdateNodePin: Set a pin's value
 - RemoveNode: Delete a node
-- CreateVariable/DeleteVariable
+- CreateVariable/UpdateVariable/DeleteVariable
 - CreateComment/DeleteComment
 - CreateLayer/RemoveLayer
 
@@ -680,14 +708,45 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                                 {
                                     "properties": {
                                         "command_type": { "const": "CreateVariable" },
+                                        "variable_id": { "type": "string", "description": "Optional variable ID. Omit to let the frontend generate one." },
                                         "name": { "type": "string", "description": "Variable name" },
                                         "data_type": { "type": "string", "description": "Data type: String, Integer, Float, Boolean, Struct, etc." },
                                         "value_type": { "type": "string", "description": "Value type: Normal, Array, HashMap, HashSet" },
                                         "default_value": { "description": "Optional default value" },
                                         "description": { "type": "string", "description": "Optional description" },
+                                        "category": { "type": "string", "description": "Optional UI category" },
+                                        "schema": { "type": "string", "description": "Optional JSON Schema for Struct variables" },
+                                        "exposed": { "type": "boolean" },
+                                        "secret": { "type": "boolean" },
+                                        "editable": { "type": "boolean" },
+                                        "runtime_configured": { "type": "boolean" },
+                                        "target_layer": { "type": "string", "description": "Optional layer ID for local variables" },
                                         "summary": { "type": "string", "description": "Human-readable summary" }
                                     },
                                     "required": ["command_type", "name", "data_type", "value_type", "summary"]
+                                },
+                                {
+                                    "properties": {
+                                        "command_type": { "const": "UpdateVariable" },
+                                        "variable_id": { "type": "string", "description": "Variable ID from context" },
+                                        "name": { "type": "string", "description": "Optional new name" },
+                                        "data_type": { "type": "string", "description": "Optional new data type" },
+                                        "value_type": { "type": "string", "description": "Optional new value type" },
+                                        "default_value": { "description": "Optional new default value" },
+                                        "clear_default_value": { "type": "boolean", "description": "Set true to remove the default value" },
+                                        "description": { "type": "string", "description": "Optional new description" },
+                                        "clear_description": { "type": "boolean", "description": "Set true to remove the description" },
+                                        "category": { "type": "string", "description": "Optional new category" },
+                                        "clear_category": { "type": "boolean", "description": "Set true to remove the category" },
+                                        "schema": { "type": "string", "description": "Optional new JSON Schema" },
+                                        "clear_schema": { "type": "boolean", "description": "Set true to remove the schema" },
+                                        "exposed": { "type": "boolean" },
+                                        "secret": { "type": "boolean" },
+                                        "editable": { "type": "boolean" },
+                                        "runtime_configured": { "type": "boolean" },
+                                        "summary": { "type": "string", "description": "Human-readable summary" }
+                                    },
+                                    "required": ["command_type", "variable_id", "summary"]
                                 },
                                 {
                                     "properties": {
@@ -807,6 +866,15 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
                     node_id, pin_id, ..
                 } => {
                     format!("  - UpdatePin: {}.{}", node_id, pin_id)
+                }
+                BoardCommand::CreateVariable { name, .. } => {
+                    format!("  - CreateVariable: {}", name)
+                }
+                BoardCommand::UpdateVariable { variable_id, .. } => {
+                    format!("  - UpdateVariable: {}", variable_id)
+                }
+                BoardCommand::RemoveVariable { variable_id, .. } => {
+                    format!("  - DeleteVariable: {}", variable_id)
                 }
                 BoardCommand::AddComment {
                     content,
@@ -998,12 +1066,400 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
 }
 
 // ============================================================================
+// FlowScript Tools
+// ============================================================================
+
+/// Retrieve `.flow.d`-style FlowScript declarations for nodes matching a query.
+///
+/// This is the FlowScript counterpart to `catalog_search`/`get_node_details`: instead of
+/// per-pin JSON, it returns the exact `declare function …` signatures the agent should call when
+/// writing FlowScript, including third-party package nodes injected into the catalog.
+pub struct GetDeclarationsTool {
+    pub provider: Arc<dyn CatalogProvider>,
+}
+
+impl Tool for GetDeclarationsTool {
+    const NAME: &'static str = "get_declarations";
+
+    type Error = FlowScriptToolError;
+    type Args = GetDeclarationsArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "get_declarations".to_string(),
+            description: r#"Look up FlowScript node declarations (.flow.d) by intent.
+
+Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
+signatures for nodes matching your focused query, plus an `// impure` marker for side-effecting /
+control-flow nodes. Empty queries intentionally return guidance only, not the full catalog.
+
+Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
+typed arguments. This covers every package in the project's catalog, including third-party ones."#
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Focused declaration search. Do not leave blank. Good examples: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                    }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(self.provider.get_declarations(&args.query).await)
+    }
+}
+
+/// Apply an edited FlowScript document to the board via reconcile.
+///
+/// The agent edits the board's FlowScript (obtained from the system context) and submits the full
+/// document here. Reconcile diffs it against the live board — keyed on `//@n:<id>` anchors — and
+/// catalog declarations, then emits the minimal `BoardCommand`s. Anchored edits become pin
+/// updates/removals; new unanchored catalog calls become AddNode/ConnectPins/UpdateNodePin.
+/// The commands are surfaced in the same `<commands>…</commands>` envelope the `emit_commands`
+/// path consumes, so they flow through the existing validation/apply/undo pipeline.
+pub struct EditFlowScriptTool {
+    pub board: Arc<Board>,
+    pub provider: Arc<dyn CatalogProvider>,
+}
+
+pub fn board_has_no_nodes(board: &Board) -> bool {
+    board.nodes.is_empty() && board.layers.values().all(|layer| layer.nodes.is_empty())
+}
+
+pub fn flowscript_workspace_tag(flowscript: &str, status: &str) -> String {
+    let payload = json!({
+        "source": flowscript,
+        "status": status,
+    });
+    format!(
+        "<flowscript_workspace>{}</flowscript_workspace>",
+        serde_json::to_string(&payload).unwrap_or_default()
+    )
+}
+
+fn edit_flowscript_actionability_feedback(
+    flowscript: &str,
+    board_is_empty: bool,
+    diagnostics: &[String],
+) -> Option<String> {
+    let lower = flowscript.to_lowercase();
+    let stub_markers = [
+        "implementation plan",
+        "implementation notes",
+        "implementation should be wired",
+        "function stubs",
+        "fetcher stub",
+        "enricher stub",
+        "todo",
+        "replace with",
+        "when implemented",
+        "wire with",
+        "wire using",
+        "catalog nodes:",
+        "flowscript contains stubs",
+        "automated nodes added",
+        "clear wiring plan",
+    ];
+
+    if stub_markers.iter().any(|marker| lower.contains(marker)) {
+        return Some(
+            "This edit looks like a plan/stub, not actionable FlowScript. `edit_flowscript` only creates board changes from real catalog calls. Do not submit TODOs, stub comments, lists of node names, or \"replace with\" instructions; call `get_declarations` for the missing signatures and submit concrete calls inside a function/event block."
+                .to_string(),
+        );
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("expected `Colon`, found `Assign`"))
+    {
+        return Some(
+            "The submitted FlowScript used `=` where FlowScript expected an object/call-argument field separator. In FlowScript call arguments and object literals use colon syntax, e.g. `{ host: \"imap.gmail.com\", port: 993 }`, not `{ host = \"imap.gmail.com\" }`."
+                .to_string(),
+        );
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("`const` binding requires a call expression"))
+    {
+        return Some(
+            "Inside a function/event block, `const name = ...` can only bind the output of a node call. Do not bind literals, object literals, arrays, field access, or arithmetic with `const`; use local alias syntax like `let rows = []`, pass literals directly into a node call, or bind a real utility/catalog call."
+                .to_string(),
+        );
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("labelled branch requires a call condition"))
+    {
+        return Some(
+            "The submitted FlowScript used labelled branch syntax (`if (...) { // label ... }`) with a non-call condition. In FlowScript, labels after branch braces are reserved for call-based control nodes, so the condition must be a catalog/control-node call. For ordinary boolean checks, remove the trailing branch labels/comments and use plain `if (condition) { ... } else { ... }`, or use exact control-node declarations from `get_declarations`."
+                .to_string(),
+        );
+    }
+
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.contains("FlowScript parse error"))
+    {
+        return Some(
+            "The submitted FlowScript did not parse. A common cause is putting node calls at the top level: top-level `const name: type = ...` declarations can only hold literal defaults and do not create nodes. Put catalog calls inside a function/event block, for example `run() { const db = openLocalDb({ name: \"email_vectors\" }) }`, using exact signatures from `get_declarations`."
+                .to_string(),
+        );
+    }
+
+    if board_is_empty && !contains_probable_node_call(flowscript) {
+        return Some(
+            "The board is empty and this FlowScript contains no executable catalog calls, so there is nothing to translate into nodes. Placeholder variables/comments are fine as supporting context, but the draft must include at least one real node call inside a function/event block."
+                .to_string(),
+        );
+    }
+
+    None
+}
+
+fn contains_probable_node_call(flowscript: &str) -> bool {
+    flowscript.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('@')
+            || trimmed.starts_with("if ")
+            || trimmed.starts_with("for ")
+            || trimmed.starts_with("return ")
+            || trimmed.contains(") {")
+        {
+            return false;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("const ") {
+            return rest
+                .split_once('=')
+                .is_some_and(|(_, rhs)| starts_with_call_expr(rhs));
+        }
+
+        starts_with_call_expr(trimmed)
+    })
+}
+
+fn starts_with_call_expr(source: &str) -> bool {
+    let source = source.trim_start();
+    let Some(paren_idx) = source.find('(') else {
+        return false;
+    };
+    let name = source[..paren_idx].trim();
+    !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+pub fn render_edit_flowscript_result(
+    flowscript: &str,
+    result: &ReconcileResult,
+    board_is_empty: bool,
+) -> String {
+    let blocking_diagnostics: Vec<&String> = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| is_blocking_flowscript_diagnostic(diagnostic))
+        .collect();
+
+    if result.commands.is_empty() {
+        let actionability =
+            edit_flowscript_actionability_feedback(flowscript, board_is_empty, &result.diagnostics);
+        let status = if actionability.is_some() || !result.diagnostics.is_empty() {
+            "validation_errors"
+        } else {
+            "no_changes"
+        };
+
+        let mut msg = match actionability {
+            Some(feedback) => {
+                format!("{feedback}\n\nNo board changes were derived from the FlowScript.")
+            }
+            None => "No board changes were derived from the FlowScript.".to_string(),
+        };
+        if !result.diagnostics.is_empty() {
+            msg.push_str("\nDiagnostics:\n");
+            for d in &result.diagnostics {
+                msg.push_str("- ");
+                msg.push_str(d);
+                msg.push('\n');
+            }
+        }
+        return format!("{}\n{}", flowscript_workspace_tag(flowscript, status), msg);
+    }
+
+    if !blocking_diagnostics.is_empty() {
+        let mut msg = String::from(
+            "FlowScript validation failed before queueing board changes. The script produced partial commands, but at least one construct cannot be translated safely yet.",
+        );
+        msg.push_str("\nDiagnostics:\n");
+        for d in blocking_diagnostics {
+            msg.push_str("- ");
+            msg.push_str(d);
+            msg.push('\n');
+        }
+        msg.push_str(
+            "\nRewrite new control flow as concrete catalog/control-node calls, or use straight-line SSA-style node calls without mutable branch/loop side effects.",
+        );
+        return format!(
+            "{}\n{}",
+            flowscript_workspace_tag(flowscript, "validation_errors"),
+            msg
+        );
+    }
+
+    let commands_json = serde_json::to_string(&result.commands).unwrap_or_default();
+    let mut lines = vec![format!(
+        "✓ Reconciled {} change(s) from FlowScript:",
+        result.commands.len()
+    )];
+    for cmd in &result.commands {
+        match cmd {
+            BoardCommand::UpdateNodePin {
+                node_id, pin_id, ..
+            } => lines.push(format!("  - UpdatePin: {}.{}", node_id, pin_id)),
+            BoardCommand::RemoveNode { node_id, .. } => {
+                lines.push(format!("  - RemoveNode: {}", node_id))
+            }
+            BoardCommand::CreateVariable { name, .. } => {
+                lines.push(format!("  - CreateVariable: {}", name))
+            }
+            BoardCommand::UpdateVariable { variable_id, .. } => {
+                lines.push(format!("  - UpdateVariable: {}", variable_id))
+            }
+            BoardCommand::RemoveVariable { variable_id, .. } => {
+                lines.push(format!("  - DeleteVariable: {}", variable_id))
+            }
+            _ => lines.push("  - (change)".to_string()),
+        }
+    }
+    for d in &result.diagnostics {
+        lines.push(format!("  - Note: {}", d));
+    }
+    lines.push(
+        "\n⚠️ These changes are now queued. Do NOT submit the same FlowScript again.".to_string(),
+    );
+
+    format!(
+        "{}\n<commands>{}</commands>\n\n{}",
+        flowscript_workspace_tag(flowscript, "queued"),
+        commands_json,
+        lines.join("\n")
+    )
+}
+
+fn is_blocking_flowscript_diagnostic(diagnostic: &str) -> bool {
+    diagnostic.contains("not yet converted automatically")
+        || diagnostic.contains("skipped local alias")
+        || diagnostic.contains("skipped connection")
+        || diagnostic.contains("could not choose an output pin")
+        || diagnostic.contains("does not match a catalog declaration")
+        || diagnostic.contains("is ambiguous")
+}
+
+impl Tool for EditFlowScriptTool {
+    const NAME: &'static str = "edit_flowscript";
+
+    type Error = FlowScriptToolError;
+    type Args = EditFlowScriptArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "edit_flowscript".to_string(),
+            description: r#"Apply an edited FlowScript document to the board.
+
+This is the PRIMARY way to modify a workflow. Submit the FULL edited FlowScript source (the same
+document shown in the system context). Reconcile compares it to the live board using the
+`//@n:<id>` anchor comments and catalog declarations, then produces minimal changes:
+- A changed literal argument on an anchored call → updates that node's pin value.
+- An anchored statement you removed → deletes that node.
+- A new unanchored FlowScript call → adds that node, configures literal args, and connects
+  resolvable FlowScript references/nested calls.
+
+RULES:
+- PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
+- Do NOT invent anchors for brand-new nodes; write normal unanchored calls using declarations
+  from `get_declarations`.
+- New catalog calls must be inside a function/event block, e.g.
+  `run() { const db = openLocalDb({ name: "email_vectors" }) }`.
+- Top-level `const name: Type = literal` declarations are variables/defaults only; they must use
+  literal defaults and do not create node calls.
+- Inside a function/event block, `const name = ...` must bind a node-call expression. Use
+  local alias syntax like `let rows = []` / `rows = arrayPush(...)`, typed `let name: Type =
+  literal`, or direct literals for non-call values.
+- Do not rely on mutable assignments inside brand-new `if`/`for` blocks; new control-flow body
+  lowering is limited and unsafe partial graph edits are rejected.
+- FlowScript statement order maps to the normal execution path only when the previous node has one
+  execution output or an explicit continuation policy in the reconciler. Multi-output nodes are
+  not guessed by pin order; API Call/httpFetch continues from `exec_success`, never `exec_error`.
+  If no policy exists, validation reports a diagnostic instead of queueing an unsafe edge.
+- Existing multi-output execution graphs render back to FlowScript as labelled branch blocks, so
+  board -> FlowScript -> board preserves those branches rather than flattening them.
+- For loops, the body is the `exec_out` path and the next statement continues from `done` /
+  `exec_done`; make sure the loop's `array` input receives the array being iterated.
+- Object/call-argument fields use colon syntax (`{ host: "imap.gmail.com" }`), never assignment
+  syntax (`{ host = "imap.gmail.com" }`).
+- Do NOT submit implementation plans, TODOs, function stubs, comments-only FlowScript, or lists of
+  node names. If a signature is missing, call `get_declarations` again and submit concrete calls.
+- Always provide the complete edited document in the `flowscript` argument; never call this tool
+  with an empty string or only a summary.
+- To reposition nodes on the canvas, use `emit_commands` with MoveNode. Positions are visual and
+  not represented in FlowScript text."#
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "flowscript": {
+                        "type": "string",
+                        "description": "The full edited FlowScript source for the board, with anchors preserved."
+                    }
+                },
+                "required": ["flowscript"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if args.flowscript.trim().is_empty() {
+            return Ok(format!(
+                "{}\n{}",
+                flowscript_workspace_tag(&args.flowscript, "validation_errors"),
+                "FlowScript validation failed: edit_flowscript requires a non-empty `flowscript` string."
+            ));
+        }
+
+        let catalog = self.provider.get_all_metadata().await;
+        let result = reconcile_text_with_catalog(&self.board, &args.flowscript, &catalog);
+
+        Ok(render_edit_flowscript_result(
+            &args.flowscript,
+            &result,
+            board_has_no_nodes(&self.board),
+        ))
+    }
+}
+
+// ============================================================================
 // Tool Execution Helpers
 // ============================================================================
 
 pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
     if graph_context.nodes.is_empty() && graph_context.layers.is_empty() {
-        return "The board is empty - no nodes found. Use catalog_search to find nodes to add."
+        return "The board is empty - no nodes found. Use get_declarations to find FlowScript signatures, then call edit_flowscript with the new workflow."
             .to_string();
     }
 
@@ -1240,6 +1696,141 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
                 "Querying execution logs...".to_string()
             }
         }
+        "get_declarations" => {
+            if let Some(query) = arguments.get("query").and_then(|v| v.as_str()) {
+                format!("Looking up FlowScript declarations for \"{}\"", query)
+            } else {
+                "Looking up FlowScript declarations...".to_string()
+            }
+        }
+        "edit_flowscript" => "Applying FlowScript edits to the board...".to_string(),
         _ => format!("Running {}...", name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_flowscript_args_accept_common_source_aliases() {
+        for key in ["flowscript", "script", "source", "content"] {
+            let args: EditFlowScriptArgs =
+                serde_json::from_value(json!({ key: "const db = openLocalDb({ name: \"x\" });" }))
+                    .expect("alias should deserialize");
+            assert!(args.flowscript.contains("openLocalDb"));
+        }
+    }
+
+    #[test]
+    fn edit_flowscript_result_flags_comment_only_empty_board_drafts() {
+        let result = ReconcileResult::default();
+        let output = render_edit_flowscript_result(
+            "// Implementation plan: call openLocalDb later",
+            &result,
+            true,
+        );
+
+        assert!(output.contains("\"status\":\"validation_errors\""));
+        assert!(output.contains("plan/stub"));
+        assert!(output.contains("No board changes were derived"));
+    }
+
+    #[test]
+    fn edit_flowscript_result_includes_workspace_tag_for_preview() {
+        let result = ReconcileResult::default();
+        let output = render_edit_flowscript_result(
+            "run() {\n    const db = openLocalDb({ name: \"gmail_vectors\" })\n}",
+            &result,
+            false,
+        );
+
+        assert!(output.starts_with("<flowscript_workspace>"));
+        assert!(output.contains("\"source\""));
+        assert!(output.contains("openLocalDb"));
+    }
+
+    #[test]
+    fn edit_flowscript_result_flags_empty_function_shells() {
+        let result = ReconcileResult::default();
+        let output = render_edit_flowscript_result("run() {\n}", &result, true);
+
+        assert!(output.contains("\"status\":\"validation_errors\""));
+        assert!(output.contains("no executable catalog calls"));
+    }
+
+    #[test]
+    fn edit_flowscript_result_explains_colon_parse_errors() {
+        let result = ReconcileResult {
+            commands: Vec::new(),
+            diagnostics: vec![
+                "FlowScript parse error at line 31, col 21: expected `Colon`, found `Assign`"
+                    .to_string(),
+            ],
+        };
+        let output = render_edit_flowscript_result(
+            "run() {\n    emailImapConnect({ host = \"imap.gmail.com\" })\n}",
+            &result,
+            true,
+        );
+
+        assert!(output.contains("\"status\":\"validation_errors\""));
+        assert!(output.contains("colon syntax"));
+        assert!(output.contains("not `{ host ="));
+    }
+
+    #[test]
+    fn edit_flowscript_result_explains_const_binding_parse_errors() {
+        let result = ReconcileResult {
+            commands: Vec::new(),
+            diagnostics: vec![
+                "FlowScript parse error at line 45, col 9: `const` binding requires a call expression"
+                    .to_string(),
+            ],
+        };
+        let output = render_edit_flowscript_result(
+            "run() {\n    const row = { id: \"x\" }\n}",
+            &result,
+            true,
+        );
+
+        assert!(output.contains("\"status\":\"validation_errors\""));
+        assert!(output.contains("can only bind the output of a node call"));
+        assert!(output.contains("local alias syntax like `let rows = []`"));
+    }
+
+    #[test]
+    fn edit_flowscript_result_blocks_partial_control_flow_commands() {
+        let result = ReconcileResult {
+            commands: vec![BoardCommand::AddNode {
+                node_type: "control_for_each".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                target_layer: None,
+                summary: None,
+            }],
+            diagnostics: vec![
+                "new FlowScript loop statements are not yet converted automatically; use emit_commands for loop body wiring if needed"
+                    .to_string(),
+            ],
+        };
+        let output = render_edit_flowscript_result(
+            "run() {\n    for (const item of controlForEach({ array: rows })) {\n        log({ text: item.value })\n    }\n}",
+            &result,
+            true,
+        );
+
+        assert!(output.contains("\"status\":\"validation_errors\""));
+        assert!(output.contains("partial commands"));
+        assert!(!output.contains("<commands>"));
+    }
+
+    #[test]
+    fn edit_flowscript_result_keeps_true_no_changes_non_error() {
+        let result = ReconcileResult::default();
+        let output = render_edit_flowscript_result("run() {\n}", &result, false);
+
+        assert!(output.contains("\"status\":\"no_changes\""));
     }
 }

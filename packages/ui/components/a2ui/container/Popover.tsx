@@ -7,6 +7,7 @@ import {
 	PopoverTrigger,
 	Popover as ShadPopover,
 } from "../../ui/popover";
+import { useComponentActionTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -39,6 +40,7 @@ export function A2UIPopover({
 	onAction,
 	renderChild,
 }: ComponentProps<PopoverComponent>) {
+	const triggerAction = useComponentActionTrigger(componentId);
 	const open = useResolved<boolean>(component.open);
 	const side = useResolved<string>(component.side);
 	const { setByPath } = useData();
@@ -54,8 +56,9 @@ export function A2UIPopover({
 				surfaceId,
 				sourceComponentId: componentId,
 				timestamp: Date.now(),
-				context: {},
+				context: { open: false },
 			});
+			void triggerAction(component.actions, { open: false });
 		}
 	};
 

@@ -1,0 +1,115 @@
+{
+  "name": "flow-like",
+  "displayName": "Flow-Like",
+  "description": "Language support for FlowScript (.flow) and FlowScript declarations (.flow.d): syntax highlighting, completion, hover, signature help, outline and linting.",
+  "version": "0.0.1",
+  "publisher": "flow-like",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TM9657/flow-like.git",
+    "directory": "apps/extension"
+  },
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "icon": "icons/icon.png",
+  "activationEvents": [
+    "workspaceContains:**/*.flow",
+    "workspaceContains:**/*.flow.d"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "flowscript",
+        "aliases": ["FlowScript", "flow"],
+        "extensions": [".flow"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/flow.svg",
+          "dark": "./icons/flow.svg"
+        }
+      },
+      {
+        "id": "flowscript-declaration",
+        "aliases": ["FlowScript Declaration", "flow.d"],
+        "extensions": [".flow.d"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/flow-d.svg",
+          "dark": "./icons/flow-d.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flowscript",
+        "scopeName": "source.flow",
+        "path": "./syntaxes/flow.tmLanguage.json"
+      },
+      {
+        "language": "flowscript-declaration",
+        "scopeName": "source.flow.declaration",
+        "path": "./syntaxes/flow-declaration.tmLanguage.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "flow-like-icons",
+        "label": "Flow-Like Icons",
+        "path": "./icons/flow-icon-theme.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "flow-like.reloadDeclarations",
+        "title": "FlowScript: Reload Node Declarations"
+      }
+    ],
+    "configuration": {
+      "title": "Flow-Like",
+      "properties": {
+        "flowLike.lint.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable linting of FlowScript (.flow) files."
+        },
+        "flowLike.lint.unknownFunctions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when a .flow file calls a function that is not declared in any .flow.d file or locally."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "bun run package",
+    "compile": "bun run check-types && bun run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "bun run check-types && bun run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "bun run compile-tests && bun run compile && bun run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.120.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.56.1",
+    "eslint": "^9.39.3",
+    "esbuild": "^0.27.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}

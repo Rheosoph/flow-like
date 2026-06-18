@@ -1,6 +1,5 @@
 import { EllipsisVerticalIcon, GripIcon, ListIcon } from "lucide-react";
 import { IValueType, type IVariable, type IVariableType } from "../../../lib";
-import { parseUint8ArrayToJson } from "../../../lib/uint8";
 import { Badge, Label } from "../../ui";
 import { typeToColor } from "../utils";
 import { VariablesMenuEdit } from "./variables-menu-edit";
@@ -47,7 +46,6 @@ export function VariableConfigCard({
 						variable={variable}
 						refs={refs}
 						updateVariable={async (updatedVariable) => {
-							console.log(parseUint8ArrayToJson(updatedVariable.default_value));
 							await onUpdate(updatedVariable);
 						}}
 					/>

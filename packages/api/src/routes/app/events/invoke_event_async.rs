@@ -112,7 +112,8 @@ pub async fn invoke_event_async(
     Json(params): Json<InvokeEventAsyncRequest>,
 ) -> Result<Json<InvokeEventAsyncResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.sub()?;
+    let sub = permission.effective_user_id()?;
+    let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
 
     // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
@@ -179,18 +180,33 @@ pub async fn invoke_event_async(
         completed_at: Set(None),
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
+        technical_user_id: Set(technical_user_id.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
+    };
+    let execution_audit = crate::audit::ExecutionAudit {
+        run_id: run_id.clone(),
+        app_id: app_id.clone(),
+        board_id: board_id.clone(),
+        event_id: Some(event_id.clone()),
+        node_id: Some(event.id.clone()),
+        version: params.version.clone(),
+        mode: RunMode::Queue,
+        status: RunStatus::Pending,
+        input_payload_len,
+        technical_user_id: technical_user_id.clone(),
     };
 
     run.insert(&state.db).await.map_err(|e| {
         tracing::error!(error = %e, "Failed to create run record");
         ApiError::internal_error(anyhow!("Failed to create run record: {}", e))
     })?;
+    crate::audit::record_execution_start(&state, &user, execution_audit).await;
 
     let poll_token = sign_execution_jwt(ExecutionJwtParams {
         user_id: sub.clone(),
+        technical_user_id: technical_user_id.clone(),
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id: board_id.clone(),
@@ -218,6 +234,7 @@ pub async fn invoke_event_async(
 
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
         user_id: sub.clone(),
+        technical_user_id: technical_user_id.clone(),
         run_id: run_id.clone(),
         app_id: app_id.clone(),
         board_id: board_id.clone(),
@@ -251,6 +268,9 @@ pub async fn invoke_event_async(
         token: params.token,
         oauth_tokens: params.oauth_tokens,
         stream_state: false,
+        execution_mode: Some(flow_like::flow::execution::ExecutionMode::from_event(Some(
+            &event,
+        ))),
         runtime_variables: params.runtime_variables,
         user_context: Some(permission.to_user_context()),
         profile,

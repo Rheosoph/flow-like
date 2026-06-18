@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useBackend } from "../../state/backend-state";
 import {
+	compactWorkflowPayload,
 	useCollectEventElements,
 	useEventRelevantValues,
 	useMarkComponentTriggering,
@@ -161,12 +162,17 @@ export function WidgetActionProvider({
 							payload,
 						});
 
+						const compactPayload = compactWorkflowPayload(payload) as Record<
+							string,
+							unknown
+						>;
+
 						await backend.boardState.executeBoard(
 							appId,
 							flowId,
 							{
 								id: "widget_action",
-								payload,
+								payload: compactPayload,
 							},
 							false,
 							undefined,

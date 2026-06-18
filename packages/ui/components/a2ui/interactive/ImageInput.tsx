@@ -7,7 +7,11 @@ import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
-import { useOnAction } from "../ActionHandler";
+import {
+	useExecuteAction,
+	useIsComponentTriggering,
+	useOnAction,
+} from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -21,6 +25,25 @@ interface ImageData {
 	backendUrl?: string;
 	uploading?: boolean;
 	uploadError?: string;
+}
+
+type StoredImageData = Omit<ImageData, "dataUrl" | "uploading" | "uploadError">;
+
+function toStoredImage(image: ImageData): StoredImageData {
+	const {
+		dataUrl: _dataUrl,
+		uploading: _uploading,
+		uploadError: _uploadError,
+		...stored
+	} = image;
+	return stored;
+}
+
+function toStoredImageValue(
+	value: ImageData | ImageData[] | null,
+): StoredImageData | StoredImageData[] | null {
+	if (Array.isArray(value)) return value.map(toStoredImage);
+	return value ? toStoredImage(value) : null;
 }
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -51,6 +74,8 @@ export function A2UIImageInput({
 	surfaceId,
 }: ComponentProps<ImageInputComponent>) {
 	const onAction = useOnAction();
+	const { executeAction } = useExecuteAction();
+	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
 	const value = useResolved<ImageData | ImageData[]>(component.value);
@@ -70,6 +95,7 @@ export function A2UIImageInput({
 
 	const [localImages, setLocalImages] = useState<ImageData[]>([]);
 	const [isUploading, setIsUploading] = useState(false);
+	const isBusy = isUploading || isTriggering;
 
 	const images: ImageData[] = Array.isArray(value)
 		? value
@@ -195,8 +221,20 @@ export function A2UIImageInput({
 			surfaceId,
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
-			context: { value: actionValue },
+			context: {
+				value: toStoredImageValue(newValue),
+				signedUrls: actionValue,
+			},
 		});
+
+		if (successfulUploads.length > 0) {
+			const action = component.actions?.[0];
+			if (action) {
+				await executeAction(action, componentId, {
+					signedUrls: actionValue,
+				});
+			}
+		}
 
 		if (inputRef.current) inputRef.current.value = "";
 	};
@@ -221,7 +259,10 @@ export function A2UIImageInput({
 			surfaceId,
 			sourceComponentId: componentId,
 			timestamp: Date.now(),
-			context: { value: urls },
+			context: {
+				value: toStoredImageValue(newValue),
+				signedUrls: multiple ? urls : null,
+			},
 		});
 	};
 
@@ -229,14 +270,14 @@ export function A2UIImageInput({
 		<div
 			className={cn(
 				"relative border-2 border-dashed rounded-lg transition-colors overflow-hidden",
-				disabled || isUploading
+				disabled || isBusy
 					? "opacity-50 cursor-not-allowed"
 					: "cursor-pointer hover:border-primary",
 				error ? "border-destructive" : "border-muted-foreground/25",
 				aspectRatio ? "" : "aspect-video",
 			)}
 			style={aspectRatio ? { aspectRatio } : undefined}
-			onClick={() => !disabled && !isUploading && inputRef.current?.click()}
+			onClick={() => !disabled && !isBusy && inputRef.current?.click()}
 		>
 			{displayImages[0] && showPreview ? (
 				<>
@@ -245,9 +286,14 @@ export function A2UIImageInput({
 						alt={displayImages[0].name}
 						className="absolute inset-0 w-full h-full object-cover"
 					/>
-					{displayImages[0].uploading ? (
+					{displayImages[0].uploading || isTriggering ? (
 						<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-							<Loader2 className="h-8 w-8 text-white animate-spin" />
+							<div className="flex flex-col items-center gap-2 text-white">
+								<Loader2 className="h-8 w-8 animate-spin" />
+								{isTriggering && (
+									<span className="text-sm">Running action...</span>
+								)}
+							</div>
 						</div>
 					) : displayImages[0].uploadError ? (
 						<div className="absolute inset-0 bg-destructive/60 flex flex-col items-center justify-center gap-2">
@@ -274,7 +320,7 @@ export function A2UIImageInput({
 									e.stopPropagation();
 									handleRemove(0);
 								}}
-								disabled={disabled}
+								disabled={disabled || isBusy}
 							>
 								<X className="h-4 w-4 mr-1" /> Remove
 							</Button>
@@ -283,10 +329,12 @@ export function A2UIImageInput({
 				</>
 			) : (
 				<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-					{isUploading ? (
+					{isBusy ? (
 						<>
 							<Loader2 className="h-8 w-8 animate-spin" />
-							<span className="text-sm">Uploading...</span>
+							<span className="text-sm">
+								{isUploading ? "Uploading..." : "Running action..."}
+							</span>
 						</>
 					) : (
 						<>
@@ -330,6 +378,7 @@ export function A2UIImageInput({
 										size="icon"
 										className="h-6 w-6"
 										onClick={() => handleRemove(index)}
+										disabled={disabled || isBusy}
 									>
 										<X className="h-4 w-4" />
 									</Button>
@@ -341,7 +390,7 @@ export function A2UIImageInput({
 										size="icon"
 										className="h-8 w-8"
 										onClick={() => handleRemove(index)}
-										disabled={disabled}
+										disabled={disabled || isBusy}
 									>
 										<X className="h-4 w-4" />
 									</Button>
@@ -362,17 +411,20 @@ export function A2UIImageInput({
 					<div
 						className={cn(
 							"aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-1 transition-colors",
-							disabled || isUploading
+							disabled || isBusy
 								? "opacity-50 cursor-not-allowed"
 								: "cursor-pointer hover:border-primary",
 							error ? "border-destructive" : "border-muted-foreground/25",
 						)}
 						onClick={() =>
-							!disabled && !isUploading && inputRef.current?.click()
+							!disabled && !isBusy && inputRef.current?.click()
 						}
 					>
-						{isUploading ? (
-							<Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
+						{isBusy ? (
+							<div className="flex flex-col items-center gap-1 text-muted-foreground">
+								<Loader2 className="h-6 w-6 animate-spin" />
+								{isTriggering && <span className="text-xs">Running</span>}
+							</div>
 						) : (
 							<>
 								<ImagePlus className="h-6 w-6 text-muted-foreground" />
@@ -408,7 +460,7 @@ export function A2UIImageInput({
 				className="hidden"
 				accept={accept}
 				multiple={multiple}
-				disabled={disabled}
+				disabled={disabled || isBusy}
 				onChange={handleFileSelect}
 			/>
 

@@ -36,8 +36,6 @@ pub struct Model {
     pub compilation_status: WasmCompilationStatus,
     #[sea_orm(column_name = "compiledPlatforms")]
     pub compiled_platforms: Option<Vec<String>>,
-    #[sea_orm(column_name = "supportedWasmtimeVersions")]
-    pub supported_wasmtime_versions: Option<Vec<String>>,
     #[sea_orm(column_name = "duplicateFlagged")]
     pub duplicate_flagged: bool,
     #[sea_orm(column_name = "duplicateOfPackageId", column_type = "Text", nullable)]
@@ -46,6 +44,8 @@ pub struct Model {
     pub duplicate_of_version: Option<String>,
     #[sea_orm(column_type = "JsonBinary")]
     pub nodes: Json,
+    #[sea_orm(column_name = "supportedWasmtimeVersions")]
+    pub supported_wasmtime_versions: Option<Vec<String>>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

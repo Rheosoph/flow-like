@@ -1,10 +1,9 @@
-import { getApiOrigin } from "../../../lib/api-url";
+import { getApiUrl } from "../../../lib/api-url";
 import type { IProfile } from "../../../types";
 import type { IApiState } from "../api-state";
 
 function constructUrl(profile: IProfile, path: string): string {
-	const cleanPath = path.replace(/^\/+/, "");
-	return `${getApiOrigin(profile)}/api/v1/${cleanPath}`;
+	return getApiUrl(profile, path);
 }
 
 /**

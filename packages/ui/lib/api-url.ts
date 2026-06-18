@@ -14,9 +14,7 @@ export function getApiOrigin(profile?: Partial<IProfile> | null): string {
 	const envOverride =
 		typeof process !== "undefined" ? process.env?.NEXT_PUBLIC_API_URL : null;
 	let raw =
-		envOverride ??
-		(profile?.hub as string | undefined) ??
-		"api.flow-like.com";
+		envOverride ?? (profile?.hub as string | undefined) ?? "api.flow-like.com";
 
 	while (raw.endsWith("/")) {
 		raw = raw.slice(0, -1);
@@ -26,4 +24,18 @@ export function getApiOrigin(profile?: Partial<IProfile> | null): string {
 	}
 	const protocol = profile?.secure === false ? "http" : "https";
 	return `${protocol}://${raw}`;
+}
+
+/**
+ * Build a full backend API URL (`<origin>/api/v1/<path>`). Single source of
+ * truth for constructing request URLs — all platform API states must use this
+ * instead of rolling their own resolution. Origin precedence is delegated to
+ * {@link getApiOrigin} (NEXT_PUBLIC_API_URL → profile.hub → default).
+ */
+export function getApiUrl(
+	profile: Partial<IProfile> | null | undefined,
+	path: string,
+): string {
+	const cleanPath = path.replace(/^\/+/, "");
+	return `${getApiOrigin(profile)}/api/v1/${cleanPath}`;
 }

@@ -1,0 +1,15 @@
+---
+import CompareLandingPage from "../../components/compare/CompareLandingPage.astro";
+import { comparisonLandingPages } from "../../data/comparison-landing-pages";
+
+export function getStaticPaths() {
+	return comparisonLandingPages.map((page) => ({
+		params: { slug: page.slug },
+		props: { page },
+	}));
+}
+
+const { page } = Astro.props;
+---
+
+<CompareLandingPage page={page} />

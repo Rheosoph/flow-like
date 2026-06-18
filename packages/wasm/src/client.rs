@@ -26,6 +26,18 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
+    fn target_platform_for_download() -> Option<String> {
+        Some(crate::aot_cache::host_platform_key())
+    }
+
+    fn cwasm_sidecar_path(wasm_path: &Path) -> PathBuf {
+        if cfg!(target_os = "ios") {
+            wasm_path.with_extension(format!("{}.cwasm", crate::aot_cache::host_platform_key()))
+        } else {
+            wasm_path.with_extension("cwasm")
+        }
+    }
+
     fn compact_error_body(body: &str) -> Option<String> {
         let trimmed = body.trim();
         if trimmed.is_empty() {
@@ -223,12 +235,8 @@ impl RegistryClient {
     ) -> Result<CachedPackage> {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
-            let has_platform_artifact = !cfg!(target_os = "ios")
-                || installed.wasm_path.with_extension("cwasm").exists();
-
             if (version.is_none() || version == Some(&installed.version))
                 && installed.wasm_path.exists()
-                && has_platform_artifact
             {
                 let wasm_data = tokio::fs::read(&installed.wasm_path).await?;
                 return Ok(CachedPackage {
@@ -264,7 +272,7 @@ impl RegistryClient {
         let request = DownloadRequest {
             package_id: package_id.to_string(),
             version: version.map(String::from),
-            target_platform: Some(crate::aot_cache::host_platform_key()),
+            target_platform: Self::target_platform_for_download(),
         };
 
         let url = format!("{}/download", self.config.default_registry);
@@ -912,7 +920,7 @@ impl RegistryClient {
             }
         }
 
-        let cwasm_path = wasm_path.with_extension("cwasm");
+        let cwasm_path = Self::cwasm_sidecar_path(wasm_path);
         tokio::fs::write(&cwasm_path, &cwasm_bytes).await?;
 
         Ok(())
@@ -925,7 +933,7 @@ impl RegistryClient {
         wasm_path: &Path,
         engine: &crate::WasmEngine,
     ) {
-        let cwasm_path = wasm_path.with_extension("cwasm");
+        let cwasm_path = Self::cwasm_sidecar_path(wasm_path);
         let cwasm_bytes = match std::fs::read(&cwasm_path) {
             Ok(b) => b,
             Err(_) => return,

@@ -58,8 +58,14 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(has_many = "super::ai_act_assessment::Entity")]
+    AiActAssessment,
+    #[sea_orm(has_many = "super::ai_act_model_observation::Entity")]
+    AiActModelObservation,
     #[sea_orm(has_many = "super::app_analytics_daily::Entity")]
     AppAnalyticsDaily,
+    #[sea_orm(has_many = "super::app_board_score::Entity")]
+    AppBoardScore,
     #[sea_orm(has_many = "super::app_discount::Entity")]
     AppDiscount,
     #[sea_orm(has_many = "super::app_package::Entity")]
@@ -138,9 +144,27 @@ pub enum Relation {
     Widget,
 }
 
+impl Related<super::ai_act_assessment::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AiActAssessment.def()
+    }
+}
+
+impl Related<super::ai_act_model_observation::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AiActModelObservation.def()
+    }
+}
+
 impl Related<super::app_analytics_daily::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::AppAnalyticsDaily.def()
+    }
+}
+
+impl Related<super::app_board_score::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppBoardScore.def()
     }
 }
 

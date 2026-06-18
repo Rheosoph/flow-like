@@ -28,6 +28,7 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 pub mod credentials;
+mod db_backfills;
 pub mod error;
 pub mod mail;
 pub mod permission;
@@ -149,12 +150,17 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .layer(inbound_layers);
 
     Router::new()
-        .merge(
-            SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
-        )
+        .merge(openapi_routes())
         .nest("/r", inbound_rest)
         .nest("/m", inbound_mcp)
         .nest("/api/v1", router)
+}
+
+fn openapi_routes() -> Router {
+    Router::from(
+        SwaggerUi::new("/swagger-ui").url("/api-doc/openapi.json", openapi::ApiDoc::openapi()),
+    )
+    .layer(CorsLayer::permissive())
 }
 
 #[tracing::instrument(name = "GET /", skip(state))]

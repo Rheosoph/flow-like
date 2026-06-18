@@ -31,6 +31,7 @@ impl NodeLogic for ReadImagePathNode {
             "Read image from path",
             "Image/Content",
         );
+        node.set_version(1);
         node.add_icon("/flow/icons/image.svg");
 
         node.add_input_pin(

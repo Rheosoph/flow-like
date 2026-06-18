@@ -24,14 +24,16 @@ export class PageState implements IPageState {
 	private async fetchRemotePage(
 		appId: string,
 		pageId: string,
+		boardId?: string,
 	): Promise<IPage | null> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || !this.backend.profile || !this.backend.auth) return null;
 
 		try {
+			const params = boardId ? `?board_id=${encodeURIComponent(boardId)}` : "";
 			return await fetcher<IPage>(
 				this.backend.profile,
-				`apps/${appId}/pages/${pageId}`,
+				`apps/${appId}/pages/${pageId}${params}`,
 				{ method: "GET" },
 				this.backend.auth,
 			);
@@ -83,6 +85,7 @@ export class PageState implements IPageState {
 							const fullPage = await this.fetchRemotePage(
 								appId,
 								remotePage.pageId,
+								remotePage.boardId,
 							);
 							if (fullPage) {
 								await invoke("update_page", { appId, page: fullPage });
@@ -114,7 +117,7 @@ export class PageState implements IPageState {
 				boardId,
 			});
 		} catch {
-			const remotePage = await this.fetchRemotePage(appId, pageId);
+			const remotePage = await this.fetchRemotePage(appId, pageId, boardId);
 			if (remotePage) {
 				await invoke("update_page", { appId, page: remotePage }).catch(
 					() => {},
@@ -124,22 +127,24 @@ export class PageState implements IPageState {
 			throw new Error(`Page not found: ${pageId}`);
 		}
 
-		const syncTask = (async () => {
-			const remotePage = await this.fetchRemotePage(appId, pageId);
-			if (!remotePage) return;
+		const remotePage = await this.fetchRemotePage(appId, pageId, boardId);
+		if (!remotePage) return localPage;
 
-			const remoteUpdated = new Date(remotePage.updatedAt ?? 0).getTime();
-			const localUpdated = new Date(localPage!.updatedAt ?? 0).getTime();
+		const remoteUpdated = new Date(remotePage.updatedAt ?? 0).getTime();
+		const localUpdated = new Date(localPage.updatedAt ?? 0).getTime();
+		const shouldUseRemote =
+			Number.isNaN(localUpdated) ||
+			Number.isNaN(remoteUpdated) ||
+			remoteUpdated >= localUpdated;
 
-			if (remoteUpdated > localUpdated) {
-				const merged = {
-					...remotePage,
-					boardId: remotePage.boardId || localPage!.boardId,
-				};
-				await invoke("update_page", { appId, page: merged });
-			}
-		})();
-		this.backend.backgroundTaskHandler(syncTask);
+		if (shouldUseRemote) {
+			const merged = {
+				...remotePage,
+				boardId: remotePage.boardId || localPage.boardId,
+			};
+			await invoke("update_page", { appId, page: merged }).catch(() => {});
+			return merged;
+		}
 
 		return localPage;
 	}

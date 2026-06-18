@@ -34,6 +34,7 @@ import { useRunExecutionStore } from "../../state/run-execution-state";
 import { AutoResizeText } from "./auto-resize-text";
 import { CommentDialog } from "./comment-dialog";
 import { FlowPin } from "./flow-pin";
+import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { LayerNodeToolbar } from "./layer-node/layer-node-toolbar";
 import { NameDialog } from "./name-dialog";
@@ -46,6 +47,8 @@ export type LayerNode = Node<
 		hash: string;
 		appId: string;
 		boardRef?: RefObject<IBoard | undefined>;
+		selectorDataRef?: FlowSelectorDataRef;
+		selectorDataVersion?: number;
 		pushLayer(layer: ILayer): Promise<void>;
 		onLayerUpdate(layer: ILayer): Promise<void>;
 		onLayerRemove(layer: ILayer, preserve_nodes: boolean): Promise<void>;
@@ -332,6 +335,8 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								key={pin.id}
 								skipOffset={true}
 								onPinRemove={async () => {}}
+								selectorDataRef={props.data.selectorDataRef}
+								selectorDataVersion={props.data.selectorDataVersion}
 							/>
 						))}
 					{Object.values(props.data.layer.pins)
@@ -346,6 +351,8 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								key={pin.id}
 								skipOffset={true}
 								onPinRemove={async () => {}}
+								selectorDataRef={props.data.selectorDataRef}
+								selectorDataVersion={props.data.selectorDataVersion}
 							/>
 						))}
 				</div>
