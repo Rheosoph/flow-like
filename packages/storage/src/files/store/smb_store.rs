@@ -6,9 +6,14 @@ use object_store::{
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
-use smb2::{ClientConfig, DirectoryEntry, ErrorKind, FileInfo, SmbClient, Tree};
+use smb2::auth::kerberos::ccache::load_ccache;
+use smb2::client::{Cipher, Connection, Session};
+use smb2::{
+    ClientConfig, DirectoryEntry, ErrorKind, FileInfo, KerberosCredentials, SmbClient, Tree,
+};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,10 +26,26 @@ pub struct SmbConfig {
     pub username: String,
     pub password: String,
     pub domain: String,
+    pub auth: SmbAuth,
     pub timeout: Duration,
     pub auto_reconnect: bool,
     pub compression: bool,
     pub dfs_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum SmbAuth {
+    Credentials,
+    KerberosCcache(SmbKerberosCcacheConfig),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SmbKerberosCcacheConfig {
+    pub username: String,
+    pub realm: String,
+    pub kdc_address: String,
+    pub ccache_path: String,
+    pub server_hostname: String,
 }
 
 impl SmbConfig {
@@ -40,6 +61,7 @@ impl SmbConfig {
             username: username.into(),
             password: password.into(),
             domain: String::new(),
+            auth: SmbAuth::Credentials,
             timeout: Duration::from_secs(5),
             auto_reconnect: false,
             compression: true,
@@ -56,6 +78,7 @@ impl Debug for SmbConfig {
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
             .field("domain", &self.domain)
+            .field("auth", &self.auth)
             .field("timeout", &self.timeout)
             .field("auto_reconnect", &self.auto_reconnect)
             .field("compression", &self.compression)
@@ -64,9 +87,16 @@ impl Debug for SmbConfig {
     }
 }
 
-struct SmbSession {
-    client: SmbClient,
-    tree: Tree,
+enum SmbSession {
+    Client {
+        client: SmbClient,
+        tree: Tree,
+    },
+    Kerberos {
+        conn: Connection,
+        _session: Session,
+        tree: Tree,
+    },
 }
 
 #[derive(Clone)]
@@ -101,37 +131,25 @@ impl SmbObjectStore {
             return Err(generic_error("SMB share is required"));
         }
 
-        let client_config = ClientConfig {
-            addr: config.addr.clone(),
-            timeout: config.timeout,
-            username: config.username.clone(),
-            password: config.password.clone(),
-            domain: config.domain.clone(),
-            auto_reconnect: config.auto_reconnect,
-            compression: config.compression,
-            dfs_enabled: config.dfs_enabled,
-            dfs_target_overrides: HashMap::new(),
-        };
-
-        let mut client = SmbClient::connect(client_config)
-            .await
-            .map_err(|err| map_smb_error(err, format!("//{}", config.addr)))?;
-        let tree = client
-            .connect_share(&config.share)
-            .await
-            .map_err(|err| map_smb_error(err, config.share.clone()))?;
+        let connect_path = format!("//{}/{}", config.addr, config.share);
+        let session = match &config.auth {
+            SmbAuth::Credentials => connect_credentials_session(&config).await,
+            SmbAuth::KerberosCcache(kerberos) => {
+                connect_kerberos_ccache_session(&config, kerberos).await
+            }
+        }
+        .map_err(|err| map_smb_error(err, connect_path))?;
 
         Ok(Self {
             config,
-            session: Arc::new(Mutex::new(SmbSession { client, tree })),
+            session: Arc::new(Mutex::new(session)),
         })
     }
 
     async fn stat_info(&self, path: &str) -> Result<FileInfo> {
         let mut session = self.session.lock().await;
-        let SmbSession { client, tree } = &mut *session;
-        client
-            .stat(tree, path)
+        session
+            .stat(path)
             .await
             .map_err(|err| map_smb_error(err, path.to_string()))
     }
@@ -139,8 +157,7 @@ impl SmbObjectStore {
     async fn ensure_parent_directories(&self, path: &str) -> Result<()> {
         for parent in parent_paths(path) {
             let mut session = self.session.lock().await;
-            let SmbSession { client, tree } = &mut *session;
-            match client.create_directory(tree, &parent).await {
+            match session.create_directory(&parent).await {
                 Ok(_) => {}
                 Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(map_smb_error(err, parent)),
@@ -166,9 +183,8 @@ impl SmbObjectStore {
         while let Some(dir) = dirs.pop() {
             let entries = {
                 let mut session = self.session.lock().await;
-                let SmbSession { client, tree } = &mut *session;
-                client
-                    .list_directory(tree, &dir)
+                session
+                    .list_directory(&dir)
                     .await
                     .map_err(|err| map_smb_error(err, dir.clone()))?
             };
@@ -188,6 +204,183 @@ impl SmbObjectStore {
 
         Ok(objects)
     }
+}
+
+impl SmbSession {
+    async fn stat(&mut self, path: &str) -> smb2::Result<FileInfo> {
+        match self {
+            SmbSession::Client { client, tree } => client.stat(tree, path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.stat(conn, path).await,
+        }
+    }
+
+    async fn create_directory(&mut self, path: &str) -> smb2::Result<()> {
+        match self {
+            SmbSession::Client { client, tree } => client.create_directory(tree, path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.create_directory(conn, path).await,
+        }
+    }
+
+    async fn list_directory(&mut self, path: &str) -> smb2::Result<Vec<DirectoryEntry>> {
+        match self {
+            SmbSession::Client { client, tree } => client.list_directory(tree, path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.list_directory(conn, path).await,
+        }
+    }
+
+    async fn write_file_pipelined(&mut self, path: &str, data: &[u8]) -> smb2::Result<u64> {
+        match self {
+            SmbSession::Client { client, tree } => {
+                client.write_file_pipelined(tree, path, data).await
+            }
+            SmbSession::Kerberos { conn, tree, .. } => {
+                tree.write_file_pipelined(conn, path, data).await
+            }
+        }
+    }
+
+    async fn read_file_pipelined(&mut self, path: &str) -> smb2::Result<Vec<u8>> {
+        match self {
+            SmbSession::Client { client, tree } => client.read_file_pipelined(tree, path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.read_file_pipelined(conn, path).await,
+        }
+    }
+
+    async fn delete_directory(&mut self, path: &str) -> smb2::Result<()> {
+        match self {
+            SmbSession::Client { client, tree } => client.delete_directory(tree, path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.delete_directory(conn, path).await,
+        }
+    }
+
+    async fn delete_file(&mut self, path: &str) -> smb2::Result<()> {
+        match self {
+            SmbSession::Client { client, tree } => client.delete_file(tree, path).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.delete_file(conn, path).await,
+        }
+    }
+
+    async fn rename(&mut self, from: &str, to: &str) -> smb2::Result<()> {
+        match self {
+            SmbSession::Client { client, tree } => client.rename(tree, from, to).await,
+            SmbSession::Kerberos { conn, tree, .. } => tree.rename(conn, from, to).await,
+        }
+    }
+}
+
+async fn connect_credentials_session(config: &SmbConfig) -> smb2::Result<SmbSession> {
+    let client_config = ClientConfig {
+        addr: config.addr.clone(),
+        timeout: config.timeout,
+        username: config.username.clone(),
+        password: config.password.clone(),
+        domain: config.domain.clone(),
+        auto_reconnect: config.auto_reconnect,
+        compression: config.compression,
+        dfs_enabled: config.dfs_enabled,
+        dfs_target_overrides: HashMap::new(),
+    };
+
+    let mut client = SmbClient::connect(client_config).await?;
+    let tree = client.connect_share(&config.share).await?;
+
+    Ok(SmbSession::Client { client, tree })
+}
+
+async fn connect_kerberos_ccache_session(
+    config: &SmbConfig,
+    kerberos: &SmbKerberosCcacheConfig,
+) -> smb2::Result<SmbSession> {
+    let ccache_path = kerberos_ccache_path(&kerberos.ccache_path);
+    let ccache = load_ccache(ccache_path.as_deref())?;
+    let username = trimmed_or_default(
+        &kerberos.username,
+        ccache.default_principal.components.first().cloned(),
+        "Kerberos username is required when the ccache default principal has no name component",
+    )?;
+    let realm = trimmed_or_default(
+        &kerberos.realm,
+        Some(ccache.default_principal.realm.clone()),
+        "Kerberos realm is required when the ccache default principal has no realm",
+    )?;
+    let server_hostname = trimmed_or_else(&kerberos.server_hostname, || {
+        host_without_port(&config.addr).to_string()
+    });
+
+    let credentials = KerberosCredentials {
+        username,
+        password: String::new(),
+        realm,
+        kdc_address: kerberos.kdc_address.trim().to_string(),
+    };
+
+    let mut conn = Connection::connect(&config.addr, config.timeout).await?;
+    conn.set_compression_requested(config.compression);
+    conn.negotiate().await?;
+
+    let session =
+        Session::setup_kerberos_from_ccache(&mut conn, &credentials, &server_hostname, &ccache)
+            .await?;
+    let tree = Tree::connect(&mut conn, &config.share).await?;
+    activate_share_encryption(&mut conn, &session, &tree);
+
+    Ok(SmbSession::Kerberos {
+        conn,
+        _session: session,
+        tree,
+    })
+}
+
+fn activate_share_encryption(conn: &mut Connection, session: &Session, tree: &Tree) {
+    if !tree.encrypt_data || conn.should_encrypt() {
+        return;
+    }
+
+    if let (Some(enc_key), Some(dec_key)) = (&session.encryption_key, &session.decryption_key) {
+        let cipher = conn
+            .params()
+            .and_then(|params| params.cipher)
+            .unwrap_or(Cipher::Aes128Ccm);
+        conn.activate_encryption(enc_key.clone(), dec_key.clone(), cipher);
+    }
+}
+
+fn kerberos_ccache_path(path: &str) -> Option<PathBuf> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(path.strip_prefix("FILE:").unwrap_or(path)))
+}
+
+fn trimmed_or_default(
+    value: &str,
+    default: Option<String>,
+    missing_message: &str,
+) -> smb2::Result<String> {
+    let value = trimmed_option(value).or_else(|| default.and_then(|value| trimmed_option(&value)));
+    value.ok_or_else(|| smb2::Error::invalid_data(missing_message))
+}
+
+fn trimmed_or_else(value: &str, default: impl FnOnce() -> String) -> String {
+    trimmed_option(value).unwrap_or_else(default)
+}
+
+fn trimmed_option(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn host_without_port(address: &str) -> &str {
+    address
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(address)
 }
 
 #[async_trait]
@@ -234,9 +427,8 @@ impl ObjectStore for SmbObjectStore {
         let bytes = payload_to_bytes(payload);
         {
             let mut session = self.session.lock().await;
-            let SmbSession { client, tree } = &mut *session;
-            client
-                .write_file_pipelined(tree, &path, &bytes)
+            session
+                .write_file_pipelined(&path, &bytes)
                 .await
                 .map_err(|err| map_smb_error(err, path.clone()))?;
         }
@@ -295,9 +487,8 @@ impl ObjectStore for SmbObjectStore {
 
         let data = {
             let mut session = self.session.lock().await;
-            let SmbSession { client, tree } = &mut *session;
-            client
-                .read_file_pipelined(tree, &path)
+            session
+                .read_file_pipelined(&path)
                 .await
                 .map_err(|err| map_smb_error(err, path.clone()))?
         };
@@ -335,16 +526,15 @@ impl ObjectStore for SmbObjectStore {
         let path = object_path(location);
         let info = self.stat_info(&path).await?;
         let mut session = self.session.lock().await;
-        let SmbSession { client, tree } = &mut *session;
 
         if info.is_directory {
-            client
-                .delete_directory(tree, &path)
+            session
+                .delete_directory(&path)
                 .await
                 .map_err(|err| map_smb_error(err, path))
         } else {
-            client
-                .delete_file(tree, &path)
+            session
+                .delete_file(&path)
                 .await
                 .map_err(|err| map_smb_error(err, path))
         }
@@ -387,9 +577,8 @@ impl ObjectStore for SmbObjectStore {
 
         let entries = {
             let mut session = self.session.lock().await;
-            let SmbSession { client, tree } = &mut *session;
-            client
-                .list_directory(tree, &prefix)
+            session
+                .list_directory(&prefix)
                 .await
                 .map_err(|err| map_smb_error(err, prefix.clone()))?
         };
@@ -432,9 +621,8 @@ impl ObjectStore for SmbObjectStore {
         self.ensure_parent_directories(&to_path).await?;
 
         let mut session = self.session.lock().await;
-        let SmbSession { client, tree } = &mut *session;
-        client
-            .rename(tree, &from_path, &to_path)
+        session
+            .rename(&from_path, &to_path)
             .await
             .map_err(|err| map_smb_error(err, from_path))
     }
@@ -472,9 +660,8 @@ impl ObjectStore for SmbObjectStore {
         let from_path = object_path(from);
         let to_path = object_path(to);
         let mut session = self.session.lock().await;
-        let SmbSession { client, tree } = &mut *session;
-        client
-            .rename(tree, &from_path, &to_path)
+        session
+            .rename(&from_path, &to_path)
             .await
             .map_err(|err| map_smb_error(err, from_path))
     }

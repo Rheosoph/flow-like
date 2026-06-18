@@ -12,7 +12,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::files::store::FlowLikeStore;
-use flow_like_storage::files::store::smb_store::{SmbConfig, SmbObjectStore};
+use flow_like_storage::files::store::smb_store::{
+    SmbAuth, SmbConfig, SmbKerberosCcacheConfig, SmbObjectStore,
+};
 use flow_like_storage::object_store::{
     aws::AmazonS3Builder, azure::MicrosoftAzureBuilder, gcp::GoogleCloudStorageBuilder,
 };
@@ -564,7 +566,8 @@ impl NodeLogic for CloudflareR2StoreNode {
 
 const SMB_CREDENTIALS: &str = "credentials";
 const SMB_GUEST: &str = "guest";
-const SMB_AUTH_MODES: &[&str] = &[SMB_CREDENTIALS, SMB_GUEST];
+const SMB_KERBEROS_CCACHE: &str = "kerberos_ccache";
+const SMB_AUTH_MODES: &[&str] = &[SMB_CREDENTIALS, SMB_GUEST, SMB_KERBEROS_CCACHE];
 
 #[crate::register_node]
 #[derive(Default)]
@@ -677,20 +680,20 @@ impl NodeLogic for SmbStoreNode {
             ));
         }
 
-        let (username, password, domain) = if auth_mode == SMB_GUEST {
-            (String::new(), String::new(), String::new())
-        } else {
+        let address = normalize_smb_address(&address)?;
+        if share.trim().is_empty() {
+            return Err(flow_like_types::anyhow!("SMB share name is required"));
+        }
+
+        let (username, password, domain) = if auth_mode == SMB_CREDENTIALS {
             (
                 context.evaluate_pin("username").await.unwrap_or_default(),
                 context.evaluate_pin("password").await.unwrap_or_default(),
                 context.evaluate_pin("domain").await.unwrap_or_default(),
             )
+        } else {
+            (String::new(), String::new(), String::new())
         };
-
-        let address = normalize_smb_address(&address)?;
-        if share.trim().is_empty() {
-            return Err(flow_like_types::anyhow!("SMB share name is required"));
-        }
 
         let mut config = SmbConfig::new(
             address.clone(),
@@ -702,12 +705,52 @@ impl NodeLogic for SmbStoreNode {
         config.timeout = Duration::from_secs(timeout_seconds.max(1) as u64);
         config.compression = compression;
         config.dfs_enabled = dfs_enabled;
+        let auth_key = if auth_mode == SMB_KERBEROS_CCACHE {
+            let kerberos_username: String = context
+                .evaluate_pin("kerberos_username")
+                .await
+                .unwrap_or_default();
+            let kerberos_realm: String = context
+                .evaluate_pin("kerberos_realm")
+                .await
+                .unwrap_or_default();
+            let kerberos_kdc_address: String = context
+                .evaluate_pin("kerberos_kdc_address")
+                .await
+                .unwrap_or_default();
+            let kerberos_ccache_path: String = context
+                .evaluate_pin("kerberos_ccache_path")
+                .await
+                .unwrap_or_default();
+            let kerberos_spn_host: String = context
+                .evaluate_pin("kerberos_spn_host")
+                .await
+                .unwrap_or_default();
+
+            config.auth = SmbAuth::KerberosCcache(SmbKerberosCcacheConfig {
+                username: kerberos_username.clone(),
+                realm: kerberos_realm.clone(),
+                kdc_address: kerberos_kdc_address.clone(),
+                ccache_path: kerberos_ccache_path.clone(),
+                server_hostname: kerberos_spn_host.clone(),
+            });
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                auth_mode,
+                kerberos_username,
+                kerberos_realm,
+                kerberos_kdc_address,
+                kerberos_ccache_path,
+                kerberos_spn_host
+            )
+        } else {
+            format!("{}:{}:{}", auth_mode, username, domain)
+        };
 
         let store = SmbObjectStore::connect(config)
             .await
             .map_err(|e| flow_like_types::anyhow!("Failed to connect SMB share: {}", e))?;
         let store = FlowLikeStore::Other(Arc::new(store));
-        let auth_key = format!("{}:{}:{}", auth_mode, username, domain);
         let share_key = format!("{}/{}", address, share.trim());
         let path =
             cache_and_wrap(context, "smb_store", &share_key, &prefix, &auth_key, store).await;
@@ -731,7 +774,7 @@ fn add_smb_auth_mode_pin(node: &mut Node) {
     node.add_input_pin(
         "auth_mode",
         "Auth Mode",
-        "How to authenticate: 'credentials' (username/password/domain) or 'guest' (anonymous/null session if the server allows it)",
+        "How to authenticate: 'credentials' (username/password/domain), 'guest', or 'kerberos_ccache' (local FILE ccache/kinit)",
         VariableType::String,
     )
     .set_options(
@@ -775,10 +818,86 @@ fn add_smb_credential_pins(node: &mut Node) {
     }
 }
 
+fn add_smb_kerberos_username_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_username",
+        "Principal",
+        "Optional Kerberos username. Defaults to the ccache principal.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_realm_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_realm",
+        "Realm",
+        "Optional Kerberos realm. Defaults to the ccache principal realm.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_kdc_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_kdc_address",
+        "KDC",
+        "Optional KDC address. Required if the ccache has only a TGT and needs a service ticket.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_ccache_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_ccache_path",
+        "CCache",
+        "Optional FILE ccache path. Empty uses KRB5CCNAME.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_spn_pin(node: &mut Node) {
+    node.add_input_pin(
+        "kerberos_spn_host",
+        "SPN Host",
+        "Optional hostname used for the cifs/<host> service principal. Defaults to the SMB address host.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
+fn add_smb_kerberos_pins(node: &mut Node) {
+    if node.get_pin_by_name("kerberos_username").is_none() {
+        add_smb_kerberos_username_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_realm").is_none() {
+        add_smb_kerberos_realm_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_kdc_address").is_none() {
+        add_smb_kerberos_kdc_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_ccache_path").is_none() {
+        add_smb_kerberos_ccache_pin(node);
+    }
+    if node.get_pin_by_name("kerberos_spn_host").is_none() {
+        add_smb_kerberos_spn_pin(node);
+    }
+}
+
 fn remove_smb_credential_pins(node: &mut Node) {
     remove_pin_by_name(node, "username");
     remove_pin_by_name(node, "password");
     remove_pin_by_name(node, "domain");
+}
+
+fn remove_smb_kerberos_pins(node: &mut Node) {
+    remove_pin_by_name(node, "kerberos_username");
+    remove_pin_by_name(node, "kerberos_realm");
+    remove_pin_by_name(node, "kerberos_kdc_address");
+    remove_pin_by_name(node, "kerberos_ccache_path");
+    remove_pin_by_name(node, "kerberos_spn_host");
 }
 
 fn sync_smb_auth_mode_pins(node: &mut Node, auth_mode: &str) {
@@ -788,14 +907,26 @@ fn sync_smb_auth_mode_pins(node: &mut Node, auth_mode: &str) {
         auth_mode
     };
     let want_credentials = mode == SMB_CREDENTIALS;
+    let want_kerberos = mode == SMB_KERBEROS_CCACHE;
     let has_credentials = node.get_pin_by_name("username").is_some()
         || node.get_pin_by_name("password").is_some()
         || node.get_pin_by_name("domain").is_some();
+    let has_kerberos = node.get_pin_by_name("kerberos_username").is_some()
+        || node.get_pin_by_name("kerberos_realm").is_some()
+        || node.get_pin_by_name("kerberos_kdc_address").is_some()
+        || node.get_pin_by_name("kerberos_ccache_path").is_some()
+        || node.get_pin_by_name("kerberos_spn_host").is_some();
 
     if want_credentials {
         add_smb_credential_pins(node);
     } else if has_credentials {
         remove_smb_credential_pins(node);
+    }
+
+    if want_kerberos {
+        add_smb_kerberos_pins(node);
+    } else if has_kerberos {
+        remove_smb_kerberos_pins(node);
     }
 }
 
@@ -929,6 +1060,15 @@ mod tests {
             let pin = find_pin(&node, pin, PinType::Input).expect("input pin");
             assert_eq!(pin.data_type, VariableType::String);
         }
+        for pin in [
+            "kerberos_username",
+            "kerberos_realm",
+            "kerberos_kdc_address",
+            "kerberos_ccache_path",
+            "kerberos_spn_host",
+        ] {
+            assert!(find_pin(&node, pin, PinType::Input).is_none());
+        }
         assert_eq!(
             find_pin(&node, "timeout_seconds", PinType::Input)
                 .expect("timeout input")
@@ -948,7 +1088,11 @@ mod tests {
             .expect("auth_mode valid values");
         assert_eq!(
             values,
-            vec![SMB_CREDENTIALS.to_string(), SMB_GUEST.to_string()]
+            vec![
+                SMB_CREDENTIALS.to_string(),
+                SMB_GUEST.to_string(),
+                SMB_KERBEROS_CCACHE.to_string()
+            ]
         );
     }
 
@@ -969,6 +1113,7 @@ mod tests {
         assert!(node.get_pin_by_name("username").is_none());
         assert!(node.get_pin_by_name("password").is_none());
         assert!(node.get_pin_by_name("domain").is_none());
+        assert!(node.get_pin_by_name("kerberos_username").is_none());
 
         let pin_count_after_guest = node.pins.len();
         sync_smb_auth_mode_pins(&mut node, SMB_GUEST);
@@ -978,10 +1123,37 @@ mod tests {
             "guest sync should be stable when repeated"
         );
 
+        sync_smb_auth_mode_pins(&mut node, SMB_KERBEROS_CCACHE);
+        assert!(node.get_pin_by_name("username").is_none());
+        assert!(node.get_pin_by_name("password").is_none());
+        assert!(node.get_pin_by_name("domain").is_none());
+        assert!(node.get_pin_by_name("kerberos_username").is_some());
+        assert!(node.get_pin_by_name("kerberos_realm").is_some());
+        assert!(node.get_pin_by_name("kerberos_kdc_address").is_some());
+        assert!(node.get_pin_by_name("kerberos_ccache_path").is_some());
+        assert!(node.get_pin_by_name("kerberos_spn_host").is_some());
+
+        let kerberos_username_id = node
+            .get_pin_by_name("kerberos_username")
+            .unwrap()
+            .id
+            .clone();
+        sync_smb_auth_mode_pins(&mut node, SMB_KERBEROS_CCACHE);
+        assert_eq!(
+            kerberos_username_id,
+            node.get_pin_by_name("kerberos_username").unwrap().id,
+            "kerberos sync should not recreate existing kerberos pins"
+        );
+
         sync_smb_auth_mode_pins(&mut node, SMB_CREDENTIALS);
         assert!(node.get_pin_by_name("username").is_some());
         assert!(node.get_pin_by_name("password").is_some());
         assert!(node.get_pin_by_name("domain").is_some());
+        assert!(node.get_pin_by_name("kerberos_username").is_none());
+        assert!(node.get_pin_by_name("kerberos_realm").is_none());
+        assert!(node.get_pin_by_name("kerberos_kdc_address").is_none());
+        assert!(node.get_pin_by_name("kerberos_ccache_path").is_none());
+        assert!(node.get_pin_by_name("kerberos_spn_host").is_none());
     }
 
     #[test]
