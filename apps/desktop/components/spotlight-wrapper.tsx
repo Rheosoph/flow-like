@@ -79,6 +79,23 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		return shortcuts.some((s) => s.path === fullPath || s.path === pathname);
 	}, [shortcuts, pathname, searchParams]);
 
+	const syncProfileShortcuts = useCallback(async () => {
+		if (!currentProfile.data?.hub_profile.id) return;
+
+		try {
+			const nextShortcuts = await appsDB.shortcuts
+				.where("profileId")
+				.equals(currentProfile.data.hub_profile.id)
+				.sortBy("order");
+			await backend.userState.updateProfileShortcuts(
+				currentProfile.data,
+				nextShortcuts,
+			);
+		} catch (error) {
+			console.warn("Failed to sync shortcuts:", error);
+		}
+	}, [backend.userState, currentProfile.data]);
+
 	const projects = useMemo<ProjectQuickLink[]>(() => {
 		if (!appMetadata.data || !currentProfile.data) return [];
 
@@ -228,22 +245,22 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			.equals(currentProfile.data.hub_profile.id)
 			.toArray();
 
+		const fullPath = searchParams.toString()
+			? `${pathname}?${searchParams.toString()}`
+			: pathname;
+
 		const pageTitle =
 			document.title.replace(" | Flow-Like", "").trim() || "Current Page";
 
-		// Extract appId from URL params (id=xxx&app=yyy or just id=xxx)
-		const appId = searchParams.get("app") || searchParams.get("id");
+		const appId =
+			searchParams.get("app") ||
+			(pathname === "/flow" ? null : searchParams.get("id"));
 
-		// Try to get icon from app metadata if we have an appId
 		let icon: string | undefined;
 		if (appId && appMetadata.data) {
 			const appData = appMetadata.data.find(([app]) => app.id === appId);
 			icon = appData?.[1]?.icon || appData?.[1]?.preview_media?.[0]?.toString();
 		}
-
-		const fullPath = searchParams.toString()
-			? `${pathname}?${searchParams.toString()}`
-			: pathname;
 
 		const newShortcut: IShortcut = {
 			id: crypto.randomUUID(),
@@ -256,24 +273,45 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			createdAt: new Date().toISOString(),
 		};
 
-		await appsDB.shortcuts.add(newShortcut);
+		const existingShortcut = existingShortcuts.find(
+			(shortcut) => shortcut.path === fullPath,
+		);
+		if (existingShortcut) {
+			await appsDB.shortcuts.update(existingShortcut.id, {
+				label: pageTitle,
+				appId: appId || undefined,
+				icon,
+			});
+		} else {
+			await appsDB.shortcuts.add(newShortcut);
+		}
+		await syncProfileShortcuts();
 		toast.success("Page added to shortcuts");
 	}, [
 		currentProfile.data?.hub_profile.id,
+		currentProfile.data,
 		pathname,
 		searchParams,
 		appMetadata.data,
+		syncProfileShortcuts,
+		backend.userState,
 	]);
 
 	const handleRemoveShortcut = useCallback(async () => {
 		if (!shortcuts) return;
 
-		const shortcut = shortcuts.find((s) => s.path === pathname);
+		const fullPath = searchParams.toString()
+			? `${pathname}?${searchParams.toString()}`
+			: pathname;
+		const shortcut = shortcuts.find(
+			(s) => s.path === fullPath || s.path === pathname,
+		);
 		if (shortcut) {
 			await appsDB.shortcuts.delete(shortcut.id);
+			await syncProfileShortcuts();
 			toast.success("Page removed from shortcuts");
 		}
-	}, [shortcuts, pathname]);
+	}, [shortcuts, pathname, searchParams, syncProfileShortcuts]);
 
 	const additionalItems = useMemo<SpotlightItem[]>(() => {
 		const items: SpotlightItem[] = [...openBoardItems];

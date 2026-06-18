@@ -2,6 +2,7 @@ import type {
 	IMetadata,
 	IProfile,
 	IProfileApp,
+	IProfileShortcut,
 	ISettingsProfile,
 	IUserState,
 } from "@flow-like/flow-like-ui";
@@ -443,6 +444,34 @@ export class UserState implements IUserState {
 			app,
 			operation,
 		});
+	}
+
+	async updateProfileShortcuts(
+		profile: ISettingsProfile,
+		shortcuts: IProfileShortcut[],
+	): Promise<void> {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
+			return;
+		}
+
+		const profileId = profile.hub_profile.id;
+		if (!profileId) {
+			throw new Error("Profile ID is required");
+		}
+
+		await fetcher(
+			this.backend.profile,
+			`profile/${profileId}`,
+			{
+				method: "POST",
+				body: JSON.stringify({ shortcuts }),
+			},
+			this.backend.auth,
+		);
 	}
 
 	async createPAT(

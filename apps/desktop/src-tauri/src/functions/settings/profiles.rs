@@ -451,6 +451,27 @@ pub enum ProfileAppUpdateOperation {
     Remove,
 }
 
+fn merge_profile_app(existing: Option<&ProfileApp>, app: ProfileApp) -> ProfileApp {
+    let favorite_order = if app.favorite {
+        app.favorite_order
+            .or_else(|| existing.and_then(|existing| existing.favorite_order))
+    } else {
+        app.favorite_order
+    };
+    let pinned_order = if app.pinned {
+        app.pinned_order
+            .or_else(|| existing.and_then(|existing| existing.pinned_order))
+    } else {
+        app.pinned_order
+    };
+
+    ProfileApp {
+        favorite_order,
+        pinned_order,
+        ..app
+    }
+}
+
 #[instrument(skip_all)]
 #[tauri::command(async)]
 pub async fn profile_update_app(
@@ -467,11 +488,13 @@ pub async fn profile_update_app(
         .ok_or(anyhow::anyhow!("Profile not found"))?;
     match operation {
         ProfileAppUpdateOperation::Upsert => {
-            if let Some(apps) = profile.hub_profile.apps.as_mut() {
-                apps.retain(|a| a.app_id != app.app_id);
+            let apps = profile.hub_profile.apps.get_or_insert(vec![]);
+            if let Some(existing_index) = apps.iter().position(|a| a.app_id == app.app_id) {
+                let merged = merge_profile_app(apps.get(existing_index), app);
+                apps[existing_index] = merged;
+            } else {
+                apps.push(app);
             }
-
-            profile.hub_profile.apps.get_or_insert(vec![]).push(app);
         }
         ProfileAppUpdateOperation::Remove => {
             if let Some(apps) = profile.hub_profile.apps.as_mut() {
