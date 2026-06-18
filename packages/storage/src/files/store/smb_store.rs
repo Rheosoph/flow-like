@@ -396,8 +396,12 @@ fn trimmed_option(value: &str) -> Option<String> {
 
 fn host_without_port(address: &str) -> &str {
     if let Some(rest) = address.strip_prefix('[') {
-        if let Some((host, _)) = rest.split_once(']') {
-            return host;
+        if let Some((host, suffix)) = rest.split_once(']') {
+            let host = host.trim();
+            let suffix = suffix.trim();
+            if !host.is_empty() && (suffix.is_empty() || suffix.starts_with(':')) {
+                return host;
+            }
         }
     }
 
@@ -851,6 +855,10 @@ mod tests {
     fn test_host_without_port_handles_ipv6() {
         assert_eq!(host_without_port("server:445"), "server");
         assert_eq!(host_without_port("[::1]:445"), "::1");
+        assert_eq!(host_without_port("[ ::1 ] :445"), "::1");
+        assert_eq!(host_without_port("[]:445"), "[]");
+        assert_eq!(host_without_port("[ ]:445"), "[ ]");
+        assert_eq!(host_without_port("[server]suffix:445"), "[server]suffix");
         assert_eq!(host_without_port("fe80::1"), "fe80::1");
     }
 

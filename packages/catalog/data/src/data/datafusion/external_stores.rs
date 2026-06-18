@@ -936,8 +936,19 @@ fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
         return Err(flow_like_types::anyhow!("SMB server address is required"));
     }
 
-    if smb_address_has_port(address)? {
-        Ok(address.to_string())
+    if let Some(port) = smb_address_port(address)? {
+        if address.starts_with('[') {
+            let (host, _) = split_bracketed_smb_address(address)?;
+            Ok(format!("[{host}]:{port}"))
+        } else {
+            let (host, _) = address.rsplit_once(':').ok_or_else(|| {
+                flow_like_types::anyhow!("Invalid SMB server address: '{}'", address)
+            })?;
+            Ok(format!("{}:{port}", host.trim()))
+        }
+    } else if address.starts_with('[') {
+        let (host, _) = split_bracketed_smb_address(address)?;
+        Ok(format!("[{host}]:445"))
     } else if address.contains(':') && !address.starts_with('[') {
         Ok(format!("[{address}]:445"))
     } else {
@@ -945,19 +956,11 @@ fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
     }
 }
 
-fn smb_address_has_port(address: &str) -> flow_like_types::Result<bool> {
+fn smb_address_port(address: &str) -> flow_like_types::Result<Option<u16>> {
     if address.starts_with('[') {
-        let Some((host, suffix)) = address.rsplit_once(']') else {
-            return Err(flow_like_types::anyhow!(
-                "Invalid bracketed IPv6 SMB address: missing closing ']'"
-            ));
-        };
-        let host = host.trim_start_matches('[').trim();
-        if host.is_empty() {
-            return Err(flow_like_types::anyhow!("SMB server host is required"));
-        }
+        let (_, suffix) = split_bracketed_smb_address(address)?;
         if suffix.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(port) = suffix.strip_prefix(':') else {
             return Err(flow_like_types::anyhow!(
@@ -965,27 +968,41 @@ fn smb_address_has_port(address: &str) -> flow_like_types::Result<bool> {
                 suffix
             ));
         };
-        return parse_smb_port(port).map(|_| true);
+        return parse_smb_port(port).map(Some);
     }
 
     let colon_count = address.chars().filter(|&c| c == ':').count();
     if colon_count == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     if colon_count > 1 {
-        return Ok(false);
+        return Ok(None);
     }
 
     let Some((host, port)) = address.rsplit_once(':') else {
-        return Ok(false);
+        return Ok(None);
     };
     if host.trim().is_empty() {
         return Err(flow_like_types::anyhow!("SMB server host is required"));
     }
-    parse_smb_port(port).map(|_| true)
+    parse_smb_port(port).map(Some)
+}
+
+fn split_bracketed_smb_address(address: &str) -> flow_like_types::Result<(&str, &str)> {
+    let Some((host, suffix)) = address.rsplit_once(']') else {
+        return Err(flow_like_types::anyhow!(
+            "Invalid bracketed IPv6 SMB address: missing closing ']'"
+        ));
+    };
+    let host = host.trim_start_matches('[').trim();
+    if host.is_empty() {
+        return Err(flow_like_types::anyhow!("SMB server host is required"));
+    }
+    Ok((host, suffix.trim()))
 }
 
 fn parse_smb_port(port: &str) -> flow_like_types::Result<u16> {
+    let port = port.trim();
     let port = port
         .parse::<u16>()
         .map_err(|_| flow_like_types::anyhow!("Invalid SMB port: '{}'", port))?;
@@ -1218,9 +1235,14 @@ mod tests {
             normalize_smb_address("fileserver:1445").unwrap(),
             "fileserver:1445"
         );
+        assert_eq!(
+            normalize_smb_address("fileserver: 1445").unwrap(),
+            "fileserver:1445"
+        );
         assert_eq!(normalize_smb_address("fe80::1").unwrap(), "[fe80::1]:445");
         assert_eq!(normalize_smb_address("[::1]").unwrap(), "[::1]:445");
         assert_eq!(normalize_smb_address("[::1]:1445").unwrap(), "[::1]:1445");
+        assert_eq!(normalize_smb_address("[::1] :1445").unwrap(), "[::1]:1445");
     }
 
     #[test]
