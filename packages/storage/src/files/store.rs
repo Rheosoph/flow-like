@@ -12,6 +12,7 @@ use std::{sync::Arc, time::Duration};
 use urlencoding::{decode, encode};
 mod helper;
 pub mod local_store;
+pub mod smb_store;
 
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StorageItem {
