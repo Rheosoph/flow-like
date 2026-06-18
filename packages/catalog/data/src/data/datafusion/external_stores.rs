@@ -936,11 +936,51 @@ fn normalize_smb_address(address: &str) -> flow_like_types::Result<String> {
         return Err(flow_like_types::anyhow!("SMB server address is required"));
     }
 
-    if address.contains(':') {
+    if smb_address_has_port(address)? {
         Ok(address.to_string())
+    } else if address.contains(':') && !address.starts_with('[') {
+        Ok(format!("[{address}]:445"))
     } else {
         Ok(format!("{address}:445"))
     }
+}
+
+fn smb_address_has_port(address: &str) -> flow_like_types::Result<bool> {
+    if address.starts_with('[') {
+        let Some((_, suffix)) = address.rsplit_once(']') else {
+            return Err(flow_like_types::anyhow!(
+                "Invalid bracketed IPv6 SMB address: missing closing ']'"
+            ));
+        };
+        if suffix.is_empty() {
+            return Ok(false);
+        }
+        let Some(port) = suffix.strip_prefix(':') else {
+            return Err(flow_like_types::anyhow!(
+                "Invalid bracketed IPv6 SMB address suffix: '{}'",
+                suffix
+            ));
+        };
+        return parse_smb_port(port).map(|_| true);
+    }
+
+    let colon_count = address.chars().filter(|&c| c == ':').count();
+    if colon_count == 0 {
+        return Ok(false);
+    }
+    if colon_count > 1 {
+        return Ok(false);
+    }
+
+    let Some((_, port)) = address.rsplit_once(':') else {
+        return Ok(false);
+    };
+    parse_smb_port(port).map(|_| true)
+}
+
+fn parse_smb_port(port: &str) -> flow_like_types::Result<u16> {
+    port.parse::<u16>()
+        .map_err(|_| flow_like_types::anyhow!("Invalid SMB port: '{}'", port))
 }
 
 async fn cache_and_wrap(
@@ -1154,6 +1194,29 @@ mod tests {
         assert!(node.get_pin_by_name("kerberos_kdc_address").is_none());
         assert!(node.get_pin_by_name("kerberos_ccache_path").is_none());
         assert!(node.get_pin_by_name("kerberos_spn_host").is_none());
+    }
+
+    #[test]
+    fn test_normalize_smb_address_handles_ipv4_hostnames_and_ipv6() {
+        assert_eq!(
+            normalize_smb_address("10.50.0.33").unwrap(),
+            "10.50.0.33:445"
+        );
+        assert_eq!(
+            normalize_smb_address("fileserver:1445").unwrap(),
+            "fileserver:1445"
+        );
+        assert_eq!(normalize_smb_address("fe80::1").unwrap(), "[fe80::1]:445");
+        assert_eq!(normalize_smb_address("[::1]").unwrap(), "[::1]:445");
+        assert_eq!(normalize_smb_address("[::1]:1445").unwrap(), "[::1]:1445");
+    }
+
+    #[test]
+    fn test_normalize_smb_address_rejects_invalid_ports() {
+        assert!(normalize_smb_address("").is_err());
+        assert!(normalize_smb_address("fileserver:notaport").is_err());
+        assert!(normalize_smb_address("[::1]:notaport").is_err());
+        assert!(normalize_smb_address("[::1").is_err());
     }
 
     #[test]
