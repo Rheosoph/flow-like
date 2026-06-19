@@ -6,7 +6,7 @@ use crate::{
 use flow_like::{
     bit::Bit,
     hub::Hub,
-    profile::{Profile, ProfileApp},
+    profile::{Profile, ProfileApp, ProfileShortcut},
     utils::{cache::get_cache_dir, hash::hash_file, http::HTTPClient},
 };
 use flow_like_types::tokio::task::JoinHandle;
@@ -503,6 +503,28 @@ pub async fn profile_update_app(
         }
     }
 
+    let now = now_iso();
+    profile.hub_profile.updated = now.clone();
+    profile.updated = now;
+    settings.serialize();
+    Ok(())
+}
+
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn profile_update_shortcuts(
+    app_handle: AppHandle,
+    profile_id: String,
+    shortcuts: Vec<ProfileShortcut>,
+) -> Result<(), TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+    let profile = settings
+        .profiles
+        .get_mut(&profile_id)
+        .ok_or(anyhow::anyhow!("Profile not found"))?;
+
+    profile.hub_profile.shortcuts = Some(shortcuts);
     let now = now_iso();
     profile.hub_profile.updated = now.clone();
     profile.updated = now;
