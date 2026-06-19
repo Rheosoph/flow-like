@@ -129,6 +129,27 @@ export default function TemplatesPage() {
 		});
 	}, [appId, newTemplate, backend, selectedWorkflow, templates.refetch]);
 
+	const openTemplate = useCallback(
+		(templateId: string) => {
+			setQueryParams("templateId", templateId);
+		},
+		[setQueryParams],
+	);
+
+	const handleDeleteTemplate = useCallback(
+		async (templateAppId: string, templateId: string) => {
+			try {
+				await backend.templateState.deleteTemplate(templateAppId, templateId);
+				await templates.refetch();
+				toast.success("Template deleted");
+			} catch (error) {
+				console.error("Failed to delete template:", error);
+				toast.error("Failed to delete template");
+			}
+		},
+		[backend.templateState, templates.refetch],
+	);
+
 	if (templateId && templateId !== "")
 		return (
 			<TemplatePreview appId={appId} templateId={templateId} canEdit={true} />
@@ -322,80 +343,92 @@ export default function TemplatesPage() {
 			{/* Templates Grid */}
 			<div className="flex-1 overflow-auto md:overflow-visible">
 				<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-					{filteredTemplates.map(([appId, templateId, meta]) => (
-						<button
+					{filteredTemplates.map(([templateAppId, templateId, meta]) => (
+						<Card
 							key={templateId}
-							onClick={(e) => {
-								e.preventDefault();
-								setQueryParams("templateId", templateId);
+							role="button"
+							tabIndex={0}
+							onClick={() => openTemplate(templateId)}
+							onKeyDown={(event) => {
+								if (event.key !== "Enter" && event.key !== " ") return;
+								event.preventDefault();
+								openTemplate(templateId);
 							}}
-							className="h-full"
+							className="group hover:shadow-xl transition-all duration-300 h-full flex flex-col cursor-pointer text-left"
 						>
-							<Card className="group hover:shadow-xl transition-all duration-300 h-full flex flex-col">
-								<CardHeader className="space-y-4">
-									<div className="flex items-start justify-between">
-										<div className="flex items-center gap-3">
-											<div className="p-2 bg-primary/10 group-hover:bg-primary/30 rounded-lg">
-												<CopyIcon className="w-5 h-5 text-primary" />
-											</div>
-											<div className="flex-1 min-w-0">
-												<CardTitle className="text-lg font-semibold text-foreground group-hover:text-primary transition-colors truncate">
-													{meta?.name}
-												</CardTitle>
-											</div>
+							<CardHeader className="space-y-4">
+								<div className="flex items-start justify-between">
+									<div className="flex items-center gap-3">
+										<div className="p-2 bg-primary/10 group-hover:bg-primary/30 rounded-lg">
+											<CopyIcon className="w-5 h-5 text-primary" />
 										</div>
-										<DropdownMenu>
-											<DropdownMenuTrigger asChild>
-												<Button
-													variant="ghost"
-													size="sm"
-													className="opacity-0 group-hover:opacity-100 transition-opacity"
-												>
-													<MoreVertical className="w-4 h-4" />
-												</Button>
-											</DropdownMenuTrigger>
-											<DropdownMenuContent align="end">
-												<DropdownMenuItem>
-													<Edit className="w-4 h-4 mr-2" />
-													Edit
-												</DropdownMenuItem>
-												<DropdownMenuSeparator />
-												<DropdownMenuItem className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-													<Trash2 className="w-4 h-4 mr-2" />
-													Delete
-												</DropdownMenuItem>
-											</DropdownMenuContent>
-										</DropdownMenu>
-									</div>
-								</CardHeader>
-								<CardContent className="space-y-4 flex-1 flex flex-col">
-									<p className="text-muted-foreground text-sm leading-relaxed line-clamp-2 text-start flex-1">
-										{meta?.description}
-									</p>
-
-									<div className="flex flex-wrap gap-1">
-										{meta?.tags.map((tag) => (
-											<Badge key={tag} variant="outline" className="text-xs">
-												{tag}
-											</Badge>
-										))}
-									</div>
-
-									<div className="pt-4 border-t mt-auto">
-										<div className="flex items-center justify-between text-xs text-muted-foreground">
-											<div className="flex items-center gap-1">
-												<Calendar className="w-3 h-3" />
-												{meta?.created_at && (
-													<span>
-														{formatRelativeTime(meta?.created_at as IDate)}
-													</span>
-												)}
-											</div>
+										<div className="flex-1 min-w-0">
+											<CardTitle className="text-lg font-semibold text-foreground group-hover:text-primary transition-colors truncate">
+												{meta?.name}
+											</CardTitle>
 										</div>
 									</div>
-								</CardContent>
-							</Card>
-						</button>
+									<DropdownMenu>
+										<DropdownMenuTrigger asChild>
+											<Button
+												variant="ghost"
+												size="sm"
+												className="opacity-0 group-hover:opacity-100 transition-opacity"
+												onClick={(event) => event.stopPropagation()}
+											>
+												<MoreVertical className="w-4 h-4" />
+											</Button>
+										</DropdownMenuTrigger>
+										<DropdownMenuContent
+											align="end"
+											onClick={(event) => event.stopPropagation()}
+										>
+											<DropdownMenuItem onClick={() => openTemplate(templateId)}>
+												<Edit className="w-4 h-4 mr-2" />
+												Edit
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
+											<DropdownMenuItem
+												className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+												onClick={(event) => {
+													event.stopPropagation();
+													void handleDeleteTemplate(templateAppId, templateId);
+												}}
+											>
+												<Trash2 className="w-4 h-4 mr-2" />
+												Delete
+											</DropdownMenuItem>
+										</DropdownMenuContent>
+									</DropdownMenu>
+								</div>
+							</CardHeader>
+							<CardContent className="space-y-4 flex-1 flex flex-col">
+								<p className="text-muted-foreground text-sm leading-relaxed line-clamp-2 text-start flex-1">
+									{meta?.description}
+								</p>
+
+								<div className="flex flex-wrap gap-1">
+									{meta?.tags.map((tag) => (
+										<Badge key={tag} variant="outline" className="text-xs">
+											{tag}
+										</Badge>
+									))}
+								</div>
+
+								<div className="pt-4 border-t mt-auto">
+									<div className="flex items-center justify-between text-xs text-muted-foreground">
+										<div className="flex items-center gap-1">
+											<Calendar className="w-3 h-3" />
+											{meta?.created_at && (
+												<span>
+													{formatRelativeTime(meta?.created_at as IDate)}
+												</span>
+											)}
+										</div>
+									</div>
+								</div>
+							</CardContent>
+						</Card>
 					))}
 				</div>
 			</div>
