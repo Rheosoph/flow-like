@@ -74,12 +74,16 @@ targets:
       - framework: libapp.a
         embed: false
       - sdk: Accelerate.framework
+      - sdk: CoreFoundation.framework
       - sdk: CoreGraphics.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
+      - sdk: VideoToolbox.framework
       - sdk: WebKit.framework
     preBuildScripts:
       - script: bun tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
