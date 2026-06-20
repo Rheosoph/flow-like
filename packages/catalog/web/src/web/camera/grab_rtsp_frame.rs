@@ -1614,19 +1614,16 @@ mod platform_hevc {
         format: &MediaFormat,
         fallback_dimensions: HevcDimensions,
     ) -> flow_like_types::Result<DynamicImage> {
-        let offset = usize::try_from(output.info().offset())
-            .map_err(|_| anyhow!("Android HEVC MediaCodec returned negative output offset"))?;
         let size = usize::try_from(output.info().size())
             .map_err(|_| anyhow!("Android HEVC MediaCodec returned negative output size"))?;
         let buffer = output.buffer();
-        let end = offset
-            .checked_add(size)
-            .ok_or_else(|| anyhow!("Android HEVC output offset overflowed"))?;
-        if end > buffer.len() {
-            bail!("Android HEVC MediaCodec output buffer range exceeds buffer length");
+        if size > buffer.len() {
+            bail!("Android HEVC MediaCodec output buffer size exceeds buffer length");
         }
 
-        let payload = &buffer[offset..end];
+        // Android's NDK docs mark AMediaCodecBufferInfo.offset invalid before/at API 35.
+        // The returned output buffer already points at the image payload; size remains valid.
+        let payload = &buffer[..size];
         let layout = AndroidYuvLayout::from_format(format, fallback_dimensions)?;
         android_yuv420_to_image(payload, layout)
     }
@@ -1848,12 +1845,13 @@ mod platform_hevc {
             Media::MediaFoundation::{
                 IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform,
                 MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_ALL_SAMPLES_INDEPENDENT,
-                MF_MT_FIXED_SIZE_SAMPLES, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SAMPLE_SIZE,
-                MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-                MFMediaType_Video, MFSTARTUP_FULL, MFShutdown, MFStartup,
-                MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-                MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO,
-                MFTEnumEx, MFVideoFormat_HEVC_ES, MFVideoFormat_RGB32,
+                MF_MT_DEFAULT_STRIDE, MF_MT_FIXED_SIZE_SAMPLES, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
+                MF_MT_SAMPLE_SIZE, MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType,
+                MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFSTARTUP_FULL,
+                MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL,
+                MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+                MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO, MFT_REGISTER_TYPE_INFO, MFTEnumEx,
+                MFVideoFormat_HEVC_ES, MFVideoFormat_NV12, MFVideoFormat_P010,
             },
             System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
         },
@@ -1916,6 +1914,7 @@ mod platform_hevc {
         input_stream_id: u32,
         output_stream_id: u32,
         dimensions: HevcDimensions,
+        output_format: WindowsHevcOutputFormat,
         output_buffer_len: u32,
     }
 
@@ -1930,24 +1929,13 @@ mod platform_hevc {
 
             unsafe {
                 let input_type =
-                    create_video_media_type(MFVideoFormat_HEVC_ES, width, height, None)?;
+                    create_video_media_type(MFVideoFormat_HEVC_ES, width, height, None, None)?;
                 transform
                     .SetInputType(input_stream_id, &input_type, 0)
                     .map_err(|e| anyhow!("Media Foundation HEVC SetInputType failed: {e}"))?;
 
-                let output_buffer_len = width
-                    .checked_mul(height)
-                    .and_then(|pixels| pixels.checked_mul(4))
-                    .ok_or_else(|| anyhow!("Media Foundation HEVC output size overflowed"))?;
-                let output_type = create_video_media_type(
-                    MFVideoFormat_RGB32,
-                    width,
-                    height,
-                    Some(output_buffer_len),
-                )?;
-                transform
-                    .SetOutputType(output_stream_id, &output_type, 0)
-                    .map_err(|e| anyhow!("Media Foundation HEVC SetOutputType failed: {e}"))?;
+                let (output_format, output_buffer_len) =
+                    set_windows_hevc_output_type(&transform, output_stream_id, width, height)?;
                 transform
                     .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
                     .map_err(|e| {
@@ -1965,10 +1953,8 @@ mod platform_hevc {
                     input_stream_id,
                     output_stream_id,
                     dimensions,
-                    output_buffer_len: checked_u32(
-                        output_buffer_len as usize,
-                        "HEVC RGB output size",
-                    )?,
+                    output_format,
+                    output_buffer_len,
                 })
             }
         }
@@ -2013,7 +1999,12 @@ mod platform_hevc {
 
             match output_result {
                 Ok(()) => unsafe {
-                    rgb32_sample_to_image(&output_sample, self.dimensions).map(Some)
+                    windows_hevc_sample_to_image(
+                        &output_sample,
+                        self.dimensions,
+                        self.output_format,
+                    )
+                    .map(Some)
                 },
                 Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(None),
                 Err(error) => Err(anyhow!(
@@ -2059,10 +2050,6 @@ mod platform_hevc {
             guidMajorType: MFMediaType_Video,
             guidSubtype: MFVideoFormat_HEVC_ES,
         };
-        let output_type = MFT_REGISTER_TYPE_INFO {
-            guidMajorType: MFMediaType_Video,
-            guidSubtype: MFVideoFormat_RGB32,
-        };
         let mut activates: *mut Option<IMFActivate> = ptr::null_mut();
         let mut count = 0u32;
 
@@ -2071,7 +2058,7 @@ mod platform_hevc {
                 MFT_CATEGORY_VIDEO_DECODER,
                 MFT_ENUM_FLAG_ALL,
                 Some(&input_type),
-                Some(&output_type),
+                None,
                 &mut activates,
                 &mut count,
             )
@@ -2128,6 +2115,7 @@ mod platform_hevc {
         width: u32,
         height: u32,
         sample_size: Option<u32>,
+        default_stride: Option<u32>,
     ) -> flow_like_types::Result<IMFMediaType> {
         let media_type = unsafe { MFCreateMediaType() }
             .map_err(|e| anyhow!("Media Foundation MFCreateMediaType failed: {e}"))?;
@@ -2144,6 +2132,11 @@ mod platform_hevc {
                     (u64::from(width) << 32) | u64::from(height),
                 )
                 .map_err(|e| anyhow!("Media Foundation media type frame size failed: {e}"))?;
+            if let Some(default_stride) = default_stride {
+                media_type
+                    .SetUINT32(&MF_MT_DEFAULT_STRIDE, default_stride)
+                    .map_err(|e| anyhow!("Media Foundation default stride failed: {e}"))?;
+            }
             if let Some(sample_size) = sample_size {
                 media_type
                     .SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)
@@ -2192,9 +2185,92 @@ mod platform_hevc {
         Ok(sample)
     }
 
-    unsafe fn rgb32_sample_to_image(
+    #[derive(Clone, Copy)]
+    enum WindowsHevcOutputFormat {
+        Nv12,
+        P010,
+    }
+
+    impl WindowsHevcOutputFormat {
+        fn subtype(self) -> GUID {
+            match self {
+                Self::Nv12 => MFVideoFormat_NV12,
+                Self::P010 => MFVideoFormat_P010,
+            }
+        }
+
+        fn name(self) -> &'static str {
+            match self {
+                Self::Nv12 => "NV12",
+                Self::P010 => "P010",
+            }
+        }
+
+        fn sample_size(self, width: u32, height: u32) -> flow_like_types::Result<u32> {
+            let pixels = width
+                .checked_mul(height)
+                .ok_or_else(|| anyhow!("Media Foundation HEVC output size overflowed"))?;
+            let size = match self {
+                Self::Nv12 => pixels
+                    .checked_mul(3)
+                    .and_then(|value| value.checked_div(2))
+                    .ok_or_else(|| anyhow!("Media Foundation NV12 output size overflowed"))?,
+                Self::P010 => pixels
+                    .checked_mul(3)
+                    .ok_or_else(|| anyhow!("Media Foundation P010 output size overflowed"))?,
+            };
+            Ok(size)
+        }
+    }
+
+    fn set_windows_hevc_output_type(
+        transform: &IMFTransform,
+        output_stream_id: u32,
+        width: u32,
+        height: u32,
+    ) -> flow_like_types::Result<(WindowsHevcOutputFormat, u32)> {
+        let mut last_error = None;
+
+        for output_format in [WindowsHevcOutputFormat::Nv12, WindowsHevcOutputFormat::P010] {
+            let sample_size = output_format.sample_size(width, height)?;
+            let output_type = unsafe {
+                create_video_media_type(
+                    output_format.subtype(),
+                    width,
+                    height,
+                    Some(sample_size),
+                    Some(width),
+                )?
+            };
+
+            let set_type_result =
+                unsafe { transform.SetOutputType(output_stream_id, &output_type, 0) };
+            if let Err(error) = set_type_result {
+                last_error = Some(format!(
+                    "{} output was rejected: {error}",
+                    output_format.name()
+                ));
+                continue;
+            }
+
+            let mut output_info = MFT_OUTPUT_STREAM_INFO::default();
+            unsafe { transform.GetOutputStreamInfo(output_stream_id, &mut output_info) }
+                .map_err(|e| anyhow!("Media Foundation HEVC GetOutputStreamInfo failed: {e}"))?;
+            return Ok((output_format, output_info.cbSize.max(sample_size)));
+        }
+
+        bail!(
+            "Media Foundation HEVC decoder did not accept NV12 or P010 output{}",
+            last_error
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default()
+        )
+    }
+
+    unsafe fn windows_hevc_sample_to_image(
         sample: &IMFSample,
         dimensions: HevcDimensions,
+        output_format: WindowsHevcOutputFormat,
     ) -> flow_like_types::Result<DynamicImage> {
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }
             .map_err(|e| anyhow!("Media Foundation output contiguous buffer failed: {e}"))?;
@@ -2203,12 +2279,10 @@ mod platform_hevc {
             as usize;
         let width = dimensions.display_width as usize;
         let height = dimensions.display_height as usize;
-        let row_len = width
-            .checked_mul(4)
-            .ok_or_else(|| anyhow!("Media Foundation RGB row size overflowed"))?;
-        let required_len = row_len
-            .checked_mul(height)
-            .ok_or_else(|| anyhow!("Media Foundation RGB frame size overflowed"))?;
+        let required_len = usize::try_from(
+            output_format.sample_size(dimensions.display_width, dimensions.display_height)?,
+        )
+        .map_err(|_| anyhow!("Media Foundation HEVC output size is too large"))?;
         if current_len < required_len {
             bail!("Media Foundation HEVC RGB output is shorter than expected");
         }
@@ -2221,7 +2295,7 @@ mod platform_hevc {
         }
         let image_result = unsafe {
             let bytes = std::slice::from_raw_parts(ptr, required_len);
-            rgb32_bytes_to_image(bytes, width, height)
+            windows_hevc_bytes_to_image(bytes, width, height, output_format)
         };
         unsafe {
             buffer
@@ -2232,11 +2306,34 @@ mod platform_hevc {
         image_result
     }
 
-    fn rgb32_bytes_to_image(
+    fn windows_hevc_bytes_to_image(
+        bytes: &[u8],
+        width: usize,
+        height: usize,
+        output_format: WindowsHevcOutputFormat,
+    ) -> flow_like_types::Result<DynamicImage> {
+        match output_format {
+            WindowsHevcOutputFormat::Nv12 => nv12_bytes_to_image(bytes, width, height),
+            WindowsHevcOutputFormat::P010 => p010_bytes_to_image(bytes, width, height),
+        }
+    }
+
+    fn nv12_bytes_to_image(
         bytes: &[u8],
         width: usize,
         height: usize,
     ) -> flow_like_types::Result<DynamicImage> {
+        let y_plane_len = width
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("Media Foundation NV12 luma size overflowed"))?;
+        let uv_plane_len = y_plane_len / 2;
+        let required_len = y_plane_len
+            .checked_add(uv_plane_len)
+            .ok_or_else(|| anyhow!("Media Foundation NV12 frame size overflowed"))?;
+        if bytes.len() < required_len {
+            bail!("Media Foundation NV12 output is shorter than expected");
+        }
+
         let mut rgb = Vec::with_capacity(
             width
                 .checked_mul(height)
@@ -2244,15 +2341,82 @@ mod platform_hevc {
                 .ok_or_else(|| anyhow!("Media Foundation RGB image size overflowed"))?,
         );
 
-        for bgra in bytes.chunks_exact(4) {
-            rgb.push(bgra[2]);
-            rgb.push(bgra[1]);
-            rgb.push(bgra[0]);
+        for y in 0..height {
+            for x in 0..width {
+                let y_value = bytes[y * width + x];
+                let uv_index = y_plane_len + (y / 2) * width + (x / 2) * 2;
+                let u = bytes[uv_index];
+                let v = bytes[uv_index + 1];
+                rgb.extend_from_slice(&windows_yuv_to_rgb(y_value, u, v));
+            }
         }
 
         let image = RgbImage::from_raw(width as u32, height as u32, rgb)
             .ok_or_else(|| anyhow!("Media Foundation HEVC frame had invalid RGB dimensions"))?;
         Ok(DynamicImage::ImageRgb8(image))
+    }
+
+    fn p010_bytes_to_image(
+        bytes: &[u8],
+        width: usize,
+        height: usize,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let y_plane_len = width
+            .checked_mul(height)
+            .and_then(|samples| samples.checked_mul(2))
+            .ok_or_else(|| anyhow!("Media Foundation P010 luma size overflowed"))?;
+        let uv_plane_len = width
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("Media Foundation P010 chroma size overflowed"))?;
+        let required_len = y_plane_len
+            .checked_add(uv_plane_len)
+            .ok_or_else(|| anyhow!("Media Foundation P010 frame size overflowed"))?;
+        if bytes.len() < required_len {
+            bail!("Media Foundation P010 output is shorter than expected");
+        }
+
+        let mut rgb = Vec::with_capacity(
+            width
+                .checked_mul(height)
+                .and_then(|pixels| pixels.checked_mul(3))
+                .ok_or_else(|| anyhow!("Media Foundation RGB image size overflowed"))?,
+        );
+
+        for y in 0..height {
+            for x in 0..width {
+                let y_value = p010_sample_to_u8(bytes, (y * width + x) * 2)?;
+                let uv_index = y_plane_len + ((y / 2) * width + (x / 2) * 2) * 2;
+                let u = p010_sample_to_u8(bytes, uv_index)?;
+                let v = p010_sample_to_u8(bytes, uv_index + 2)?;
+                rgb.extend_from_slice(&windows_yuv_to_rgb(y_value, u, v));
+            }
+        }
+
+        let image = RgbImage::from_raw(width as u32, height as u32, rgb)
+            .ok_or_else(|| anyhow!("Media Foundation HEVC frame had invalid RGB dimensions"))?;
+        Ok(DynamicImage::ImageRgb8(image))
+    }
+
+    fn p010_sample_to_u8(bytes: &[u8], offset: usize) -> flow_like_types::Result<u8> {
+        let sample = bytes
+            .get(offset..offset + 2)
+            .ok_or_else(|| anyhow!("Media Foundation P010 sample exceeded output buffer"))?;
+        Ok((u16::from_le_bytes([sample[0], sample[1]]) >> 8) as u8)
+    }
+
+    fn windows_yuv_to_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
+        let c = i32::from(y).saturating_sub(16);
+        let d = i32::from(u).saturating_sub(128);
+        let e = i32::from(v).saturating_sub(128);
+        [
+            clamp_u8((298 * c + 409 * e + 128) >> 8),
+            clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8),
+            clamp_u8((298 * c + 516 * d + 128) >> 8),
+        ]
+    }
+
+    fn clamp_u8(value: i32) -> u8 {
+        value.clamp(0, 255) as u8
     }
 
     fn checked_u32(value: usize, name: &str) -> flow_like_types::Result<u32> {
