@@ -1827,20 +1827,20 @@ mod platform_hevc {
 #[cfg(all(feature = "execute", target_os = "windows"))]
 mod platform_hevc {
     use super::*;
-    use std::{mem::ManuallyDrop, ptr};
+    use std::{mem::ManuallyDrop, ptr, sync::mpsc, thread};
     use windows::{
         Win32::{
             Foundation::{RPC_E_CHANGED_MODE, S_FALSE, S_OK},
             Media::MediaFoundation::{
-                IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform,
-                MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_ALL_SAMPLES_INDEPENDENT,
-                MF_MT_DEFAULT_STRIDE, MF_MT_FIXED_SIZE_SAMPLES, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
-                MF_MT_SAMPLE_SIZE, MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType,
-                MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video, MFSTARTUP_FULL,
-                MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL,
-                MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-                MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO, MFT_REGISTER_TYPE_INFO, MFTEnumEx,
-                MFVideoFormat_HEVC_ES, MFVideoFormat_NV12, MFVideoFormat_P010,
+                IMFActivate, IMFMediaType, IMFSample, IMFTransform, MF_E_TRANSFORM_NEED_MORE_INPUT,
+                MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_DEFAULT_STRIDE, MF_MT_FIXED_SIZE_SAMPLES,
+                MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SAMPLE_SIZE, MF_MT_SUBTYPE, MF_VERSION,
+                MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
+                MFSTARTUP_FULL, MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER,
+                MFT_ENUM_FLAG_ALL, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+                MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO,
+                MFT_REGISTER_TYPE_INFO, MFTEnumEx, MFVideoFormat_HEVC_ES, MFVideoFormat_NV12,
+                MFVideoFormat_P010,
             },
             System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
         },
@@ -1848,21 +1848,79 @@ mod platform_hevc {
     };
 
     pub struct Decoder {
+        requests: Option<mpsc::Sender<DecodeRequest>>,
+        worker: Option<thread::JoinHandle<()>>,
+    }
+
+    struct DecodeRequest {
+        data: Vec<u8>,
+        response: mpsc::Sender<flow_like_types::Result<Option<DynamicImage>>>,
+    }
+
+    impl Decoder {
+        pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
+            let (requests, request_rx) = mpsc::channel();
+            let worker = thread::Builder::new()
+                .name("flow-like-hevc-decoder".to_string())
+                .spawn(move || {
+                    let mut decoder = WindowsHevcDecoderCore::new(parameter_sets);
+                    while let Ok(request) = request_rx.recv() {
+                        let result = decoder.decode(&request.data);
+                        let _ = request.response.send(result);
+                    }
+                })
+                .map_err(|e| anyhow!("Failed to start Windows HEVC decoder worker: {e}"))?;
+
+            Ok(Self {
+                requests: Some(requests),
+                worker: Some(worker),
+            })
+        }
+
+        pub fn decode(&mut self, data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
+            let requests = self
+                .requests
+                .as_ref()
+                .ok_or_else(|| anyhow!("Windows HEVC decoder worker has stopped"))?;
+            let (response, response_rx) = mpsc::channel();
+            requests
+                .send(DecodeRequest {
+                    data: data.to_vec(),
+                    response,
+                })
+                .map_err(|_| anyhow!("Windows HEVC decoder worker has stopped"))?;
+
+            response_rx
+                .recv()
+                .map_err(|_| anyhow!("Windows HEVC decoder worker stopped before decoding"))?
+        }
+    }
+
+    impl Drop for Decoder {
+        fn drop(&mut self) {
+            self.requests.take();
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    struct WindowsHevcDecoderCore {
         parameter_sets: HevcParameterSets,
         session: Option<WindowsHevcSession>,
         frame_index: u64,
     }
 
-    impl Decoder {
-        pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
-            Ok(Self {
+    impl WindowsHevcDecoderCore {
+        fn new(parameter_sets: Vec<Vec<u8>>) -> Self {
+            Self {
                 parameter_sets: HevcParameterSets::from_parameter_sets(parameter_sets),
                 session: None,
                 frame_index: 0,
-            })
+            }
         }
 
-        pub fn decode(&mut self, data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
+        fn decode(&mut self, data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
             let annex_b = h26x_payload_to_annex_b(data)?;
             let nals = annex_b_nals(&annex_b);
             if nals.is_empty() {
@@ -1956,7 +2014,7 @@ mod platform_hevc {
             let input_sample = unsafe { create_input_sample(sample, sample_time)? };
             unsafe {
                 self.transform
-                    .ProcessInput(self.input_stream_id, input_sample, 0)
+                    .ProcessInput(self.input_stream_id, &input_sample, 0)
                     .map_err(|e| anyhow!("Media Foundation HEVC ProcessInput failed: {e}"))?;
             }
 
@@ -2242,8 +2300,7 @@ mod platform_hevc {
                 continue;
             }
 
-            let mut output_info = MFT_OUTPUT_STREAM_INFO::default();
-            unsafe { transform.GetOutputStreamInfo(output_stream_id, &mut output_info) }
+            let output_info = unsafe { transform.GetOutputStreamInfo(output_stream_id) }
                 .map_err(|e| anyhow!("Media Foundation HEVC GetOutputStreamInfo failed: {e}"))?;
             return Ok((output_format, output_info.cbSize.max(sample_size)));
         }
