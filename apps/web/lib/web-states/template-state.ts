@@ -34,7 +34,7 @@ export class WebTemplateState implements ITemplateState {
 		templateId: string,
 		version?: [number, number, number],
 	): Promise<IBoard> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		const params = version ? `?version=${version.join("_")}` : "";
 		return apiGet<IBoard>(
 			`apps/${appId}/templates/${templateId}${params}`,
 			this.backend.auth,

@@ -864,6 +864,7 @@ pub fn run() {
             functions::settings::profiles::read_profile_icon,
             functions::settings::profiles::get_profile_icon_path,
             functions::settings::profiles::profile_update_app,
+            functions::settings::profiles::profile_update_shortcuts,
             functions::app::app_configured,
             functions::app::upsert_board,
             functions::app::delete_app_board,

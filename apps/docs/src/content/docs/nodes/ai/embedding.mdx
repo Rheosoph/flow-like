@@ -1,0 +1,30 @@
+---
+title: "Embedding Node Catalog"
+description: "AI/Embedding Flow-Like node category with 4 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Embedding"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Embedding nodes, AI/Embedding, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/Embedding"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Embedding Node Catalog\",\"description\":\"AI/Embedding Flow-Like node category with 4 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/ai/embedding/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/Embedding\",\"keywords\":\"Embedding nodes, AI/Embedding, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"AI/Embedding"}
+	label="Embedding"
+	nodes={nodesByCategory["AI/Embedding"] ?? []}
+	client:load
+/>

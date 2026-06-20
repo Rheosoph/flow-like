@@ -1,0 +1,30 @@
+---
+title: "Graph Node Catalog"
+description: "Data/Database/Graph Flow-Like node category with 11 generated node references."
+sidebar:
+  order: 0
+  label: "Graph"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Graph nodes, Data/Database/Graph, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Database/Graph"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Graph Node Catalog\",\"description\":\"Data/Database/Graph Flow-Like node category with 11 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/data/database/graph/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Database/Graph\",\"keywords\":\"Graph nodes, Data/Database/Graph, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/Database/Graph"}
+	label="Graph"
+	nodes={nodesByCategory["Data/Database/Graph"] ?? []}
+	client:load
+/>

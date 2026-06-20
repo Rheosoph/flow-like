@@ -114,6 +114,10 @@ interface ShortcutsProps<TBackend, TAppMetadata> {
 		isAuthenticated?: boolean;
 	};
 	onCreateProject?: (projectName: string, isOnline: boolean) => Promise<void>;
+	onShortcutsChanged?: (
+		profileId: string,
+		shortcuts: IShortcut[],
+	) => Promise<void>;
 	bits?: Array<{ id: string }>;
 }
 
@@ -130,10 +134,25 @@ export function Shortcuts<TBackend, TAppMetadata>({
 	toast,
 	auth,
 	onCreateProject,
+	onShortcutsChanged,
 	bits,
 }: ShortcutsProps<TBackend, TAppMetadata>) {
 	const { state: sidebarState } = useSidebar();
 	const [startCodingOpen, setStartCodingOpen] = useState(false);
+
+	const syncShortcuts = useCallback(async () => {
+		if (!currentProfileId || !onShortcutsChanged) return;
+
+		try {
+			const nextShortcuts = await db.shortcuts
+				.where("profileId")
+				.equals(currentProfileId)
+				.sortBy("order");
+			await onShortcutsChanged(currentProfileId, nextShortcuts);
+		} catch (error) {
+			console.warn("Failed to sync shortcuts:", error);
+		}
+	}, [currentProfileId, db, onShortcutsChanged]);
 
 	// Helper to get page type from path
 	const getPageType = (
@@ -174,16 +193,17 @@ export function Shortcuts<TBackend, TAppMetadata>({
 				? window.location.pathname + window.location.search
 				: pathname;
 
-		// Extract appId from various URL patterns
+		// Extract appId from URL patterns. On /flow, id is a board id, not an app id.
 		let appId: string | null = null;
-		const appMatch = fullPath.match(/[?&]app=([^&]+)/);
-		const idMatch = fullPath.match(/[?&]id=([^&]+)/);
-		appId = appMatch?.[1] || idMatch?.[1] || null;
+		const queryString = fullPath.split("?")[1] ?? "";
+		const searchParams = new URLSearchParams(queryString);
+		const appParam = searchParams.get("app");
+		const idParam = searchParams.get("id");
+		appId = appParam || (pathname === "/flow" ? null : idParam);
 
 		// If no app ID found, check if this is a flow page and find the app by board ID
 		if (!appId && pathname === "/flow" && appMetadata) {
-			const boardIdMatch = fullPath.match(/[?&]id=([^&]+)/);
-			const boardId = boardIdMatch?.[1];
+			const boardId = idParam;
 
 			if (boardId) {
 				// Search through all apps to find which one contains this board
@@ -224,8 +244,22 @@ export function Shortcuts<TBackend, TAppMetadata>({
 		};
 
 		try {
-			await db.shortcuts.add(shortcut);
-			toast.success("Shortcut added");
+			const existingShortcut = shortcuts?.find(
+				(shortcut) =>
+					shortcut.profileId === currentProfileId && shortcut.path === fullPath,
+			);
+			if (existingShortcut) {
+				await db.shortcuts.update(existingShortcut.id, {
+					label,
+					appId: appId || undefined,
+				});
+				await syncShortcuts();
+				toast.success("Shortcut updated");
+			} else {
+				await db.shortcuts.add(shortcut);
+				await syncShortcuts();
+				toast.success("Shortcut added");
+			}
 		} catch (error) {
 			console.error("Failed to add shortcut:", error);
 			toast.error("Failed to add shortcut");
@@ -239,6 +273,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 		backend,
 		getBoardsByAppId,
 		db,
+		syncShortcuts,
 		toast,
 	]);
 
@@ -297,13 +332,14 @@ export function Shortcuts<TBackend, TAppMetadata>({
 						await db.shortcuts.update(update.id, { order: update.order });
 					}
 				});
+				await syncShortcuts();
 				toast.success("Shortcuts reordered");
 			} catch (error) {
 				console.error("Failed to reorder shortcuts:", error);
 				toast.error("Failed to reorder shortcuts");
 			}
 		},
-		[shortcuts, db, toast],
+		[shortcuts, db, syncShortcuts, toast],
 	);
 
 	if (predefinedShortcuts.length === 0 && (shortcuts?.length || 0) === 0) {
@@ -350,6 +386,7 @@ export function Shortcuts<TBackend, TAppMetadata>({
 									toast={toast}
 									getAppMetadata={getAppMetadata}
 									getPageType={getPageType}
+									onShortcutDeleted={syncShortcuts}
 								/>
 							))}
 						</SortableContext>
@@ -396,6 +433,7 @@ interface SortableShortcutItemProps {
 	};
 	getAppMetadata: (appId: string) => { name?: string; icon?: string } | null;
 	getPageType: (path: string) => { type: string; icon: LucideIcon } | null;
+	onShortcutDeleted?: () => Promise<void>;
 }
 
 function SortableShortcutItem({
@@ -406,6 +444,7 @@ function SortableShortcutItem({
 	toast,
 	getAppMetadata,
 	getPageType,
+	onShortcutDeleted,
 }: SortableShortcutItemProps) {
 	const {
 		attributes,
@@ -488,6 +527,7 @@ function SortableShortcutItem({
 							e.stopPropagation();
 							try {
 								await db.shortcuts.delete(shortcut.id);
+								await onShortcutDeleted?.();
 								toast.success("Shortcut removed");
 							} catch (error) {
 								console.error("Failed to delete shortcut:", error);

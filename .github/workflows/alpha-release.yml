@@ -185,6 +185,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ env.CERT_ID }}
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C link-arg=/STACK:8388608' || '' }}
+          # libduckdb-sys 1.3.0's vendored fmt trips over MSVC's removed stdext::checked_array_iterator.
+          CXXFLAGS_x86_64_pc_windows_msvc: ${{ runner.os == 'Windows' && '/std:c++17 /U_SECURE_SCL' || '' }}
         with:
           tagName: beta-v__VERSION__
           releaseName: "Flow Like - Beta v__VERSION__"

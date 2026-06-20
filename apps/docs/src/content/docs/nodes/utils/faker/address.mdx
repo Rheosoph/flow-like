@@ -1,0 +1,30 @@
+---
+title: "Address Node Catalog"
+description: "Utils/Faker/Address Flow-Like node category with 9 generated node references."
+sidebar:
+  order: 0
+  label: "Address"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Address nodes, Utils/Faker/Address, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Utils/Faker/Address"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Address Node Catalog\",\"description\":\"Utils/Faker/Address Flow-Like node category with 9 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/utils/faker/address/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Utils/Faker/Address\",\"keywords\":\"Address nodes, Utils/Faker/Address, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Utils/Faker/Address"}
+	label="Address"
+	nodes={nodesByCategory["Utils/Faker/Address"] ?? []}
+	client:load
+/>

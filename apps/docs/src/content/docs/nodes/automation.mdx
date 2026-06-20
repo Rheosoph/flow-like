@@ -1,0 +1,30 @@
+---
+title: "Automation Node Catalog"
+description: "Automation Flow-Like node category with 135 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Automation"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Automation nodes, Automation, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Automation Node Catalog\",\"description\":\"Automation Flow-Like node category with 135 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/automation/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation\",\"keywords\":\"Automation nodes, Automation, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation"}
+	label="Automation"
+	nodes={nodesByCategory["Automation"] ?? []}
+	client:load
+/>

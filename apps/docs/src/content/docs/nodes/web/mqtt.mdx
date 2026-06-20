@@ -1,0 +1,30 @@
+---
+title: "MQTT Node Catalog"
+description: "Web/MQTT Flow-Like node category with 5 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "MQTT"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "MQTT nodes, Web/MQTT, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Web/MQTT"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"MQTT Node Catalog\",\"description\":\"Web/MQTT Flow-Like node category with 5 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/web/mqtt/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Web/MQTT\",\"keywords\":\"MQTT nodes, Web/MQTT, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Web/MQTT"}
+	label="MQTT"
+	nodes={nodesByCategory["Web/MQTT"] ?? []}
+	client:load
+/>

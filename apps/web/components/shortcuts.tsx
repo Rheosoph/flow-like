@@ -116,6 +116,13 @@ export function Shortcuts() {
 			toast={toast}
 			auth={auth}
 			onCreateProject={handleCreateProject}
+			onShortcutsChanged={async (_profileId, nextShortcuts) => {
+				if (!currentProfile.data) return;
+				await backend.userState.updateProfileShortcuts(
+					currentProfile.data,
+					nextShortcuts,
+				);
+			}}
 			bits={bits.data}
 		/>
 	);

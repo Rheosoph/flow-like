@@ -1,6 +1,4 @@
 ---
-import { Image } from "astro:assets";
-
 const title = "Design. Compose. Ship.";
 const subtitle =
     "Build powerful flows — fast. Visual design meets portable, composable processes.";
@@ -132,19 +130,19 @@ const links = {
 
             <nav class="pills" aria-label="Docs sections">
                 <a href="#zero-to-prod" class="pill">
-                    <span class="pill-icon">⚡</span>Zero‑to‑Prod
+                    <span class="pill-icon"><img src="/flow/icons/sparkles.svg" alt="" loading="lazy" /></span>Zero‑to‑Prod
                 </a>
                 <a href="#visual-design" class="pill">
-                    <span class="pill-icon">🎨</span>Design visually
+                    <span class="pill-icon"><img src="/flow/icons/palette.svg" alt="" loading="lazy" /></span>Design visually
                 </a>
                 <a href="#composable" class="pill">
-                    <span class="pill-icon">🔧</span>Composable
+                    <span class="pill-icon"><img src="/flow/icons/layers.svg" alt="" loading="lazy" /></span>Composable
                 </a>
                 <a href="#performance" class="pill">
-                    <span class="pill-icon">🚀</span>Performance
+                    <span class="pill-icon"><img src="/flow/icons/play.svg" alt="" loading="lazy" /></span>Performance
                 </a>
                 <a href="#portability" class="pill">
-                    <span class="pill-icon">📦</span>Portability
+                    <span class="pill-icon"><img src="/flow/icons/cloud.svg" alt="" loading="lazy" /></span>Portability
                 </a>
             </nav>
         </div>
@@ -618,7 +616,7 @@ const links = {
         align-items: center;
         gap: 0.6rem;
         padding: 0.9rem var(--pad-x);
-        border-radius: 1rem;
+        border-radius: 8px;
         font-weight: 650;
         text-decoration: none;
         line-height: 1;
@@ -735,8 +733,18 @@ const links = {
     }
 
     .pill-icon {
-        font-size: 0.7rem;
-        opacity: 0.8;
+        display: inline-grid;
+        width: 1.1rem;
+        height: 1.1rem;
+        place-items: center;
+        opacity: 0.9;
+    }
+
+    .pill-icon img {
+        width: 0.85rem;
+        height: 0.85rem;
+        object-fit: contain;
+        filter: brightness(0) saturate(100%) invert(54%) sepia(97%) saturate(2344%) hue-rotate(338deg) brightness(101%) contrast(101%);
     }
 
     .pill:hover {

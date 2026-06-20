@@ -1,4 +1,4 @@
-import type { IProfile, IProfileApp } from "../../lib";
+import type { IProfile, IProfileApp, IProfileShortcut } from "../../lib";
 import type { ISettingsProfile } from "../../types";
 import type {
 	INotification,
@@ -133,6 +133,10 @@ export interface IUserState {
 		profile: ISettingsProfile,
 		app: IProfileApp,
 		operation: "Upsert" | "Remove",
+	): Promise<void>;
+	updateProfileShortcuts(
+		profile: ISettingsProfile,
+		shortcuts: IProfileShortcut[],
 	): Promise<void>;
 	getInfo(): Promise<IUserInfo>;
 	createPAT(

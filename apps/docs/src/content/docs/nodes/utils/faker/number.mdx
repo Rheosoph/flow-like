@@ -1,0 +1,30 @@
+---
+title: "Number Node Catalog"
+description: "Utils/Faker/Number Flow-Like node category with 4 generated node references."
+sidebar:
+  order: 0
+  label: "Number"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Number nodes, Utils/Faker/Number, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Utils/Faker/Number"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Number Node Catalog\",\"description\":\"Utils/Faker/Number Flow-Like node category with 4 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/utils/faker/number/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Utils/Faker/Number\",\"keywords\":\"Number nodes, Utils/Faker/Number, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Utils/Faker/Number"}
+	label="Number"
+	nodes={nodesByCategory["Utils/Faker/Number"] ?? []}
+	client:load
+/>

@@ -1,0 +1,30 @@
+---
+title: "Processing Node Catalog"
+description: "AI/Processing Flow-Like node category with 11 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Processing"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Processing nodes, AI/Processing, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/Processing"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Processing Node Catalog\",\"description\":\"AI/Processing Flow-Like node category with 11 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/ai/processing/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/Processing\",\"keywords\":\"Processing nodes, AI/Processing, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"AI/Processing"}
+	label="Processing"
+	nodes={nodesByCategory["AI/Processing"] ?? []}
+	client:load
+/>

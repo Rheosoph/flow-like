@@ -236,9 +236,24 @@ export function FlowBoard({
 	const { refetchLogs, setCurrentMetadata, currentMetadata } =
 		useLogAggregation();
 	const flowRef = useRef<any>(null);
+	const initialVersionKey = initialVersion?.join(".");
 	const [version, setVersion] = useState<[number, number, number] | undefined>(
 		initialVersion,
 	);
+	useEffect(() => {
+		if (!initialVersionKey) {
+			setVersion(undefined);
+			return;
+		}
+
+		const parts = initialVersionKey.split(".").map(Number);
+		if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+			setVersion(undefined);
+			return;
+		}
+
+		setVersion([parts[0], parts[1], parts[2]]);
+	}, [appId, boardId, initialVersionKey]);
 	const [initialized, setInitialized] = useState(false);
 	const flowPanelRef = useRef<ImperativePanelHandle>(null);
 	const logPanelRef = useRef<ImperativePanelHandle>(null);

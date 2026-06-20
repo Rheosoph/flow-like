@@ -1,0 +1,30 @@
+---
+title: "Overlay Node Catalog"
+description: "UI/Elements/Overlay Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Overlay"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Overlay nodes, UI/Elements/Overlay, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "UI/Elements/Overlay"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Overlay Node Catalog\",\"description\":\"UI/Elements/Overlay Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/ui/elements/overlay/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"UI/Elements/Overlay\",\"keywords\":\"Overlay nodes, UI/Elements/Overlay, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"UI/Elements/Overlay"}
+	label="Overlay"
+	nodes={nodesByCategory["UI/Elements/Overlay"] ?? []}
+	client:load
+/>

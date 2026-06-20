@@ -2,6 +2,7 @@ import type {
 	IMetadata,
 	IProfile,
 	IProfileApp,
+	IProfileShortcut,
 	ISettings,
 	IUserState,
 } from "@flow-like/flow-like-ui";
@@ -23,7 +24,7 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { createId } from "@paralleldrive/cuid2";
-import { appsDB } from "../apps-db";
+import { appsDB, type IShortcut } from "../apps-db";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -44,6 +45,7 @@ interface ApiProfile {
 	theme?: unknown;
 	settings?: unknown;
 	apps?: unknown;
+	shortcuts?: unknown;
 	bit_ids?: string[] | null;
 	hub: string;
 	hubs?: string[] | null;
@@ -69,11 +71,36 @@ function transformApiProfile(apiProfile: ApiProfile): IProfile {
 		theme: apiProfile.theme,
 		settings: apiProfile.settings as ISettings | undefined,
 		apps: apiProfile.apps as IProfileApp[] | undefined,
+		shortcuts: apiProfile.shortcuts as IProfileShortcut[] | undefined,
 		bits: apiProfile.bit_ids ?? [],
 		hub: apiProfile.hub,
 		hubs: apiProfile.hubs ?? undefined,
 		created: apiProfile.created_at,
 		updated: apiProfile.updated_at,
+	};
+}
+
+function mergeProfileAppEntry(
+	existing: IProfileApp | undefined,
+	update: IProfileApp,
+): IProfileApp {
+	return {
+		...existing,
+		...update,
+		favorite_order: update.favorite
+			? (update.favorite_order ?? existing?.favorite_order ?? null)
+			: (update.favorite_order ?? null),
+		pinned_order: update.pinned
+			? (update.pinned_order ?? existing?.pinned_order ?? null)
+			: (update.pinned_order ?? null),
+	};
+}
+
+function normalizeProfileShortcut(shortcut: IProfileShortcut): IShortcut {
+	return {
+		...shortcut,
+		appId: shortcut.appId ?? undefined,
+		icon: shortcut.icon ?? undefined,
 	};
 }
 
@@ -170,40 +197,79 @@ export class WebUserState implements IUserState {
 		if (typeof window === "undefined") return profile;
 
 		try {
-			// Get offline apps from local IndexedDB
 			const visibilityRecords = await appsDB.visibility.toArray();
-			const offlineAppIds = visibilityRecords
-				.filter((v) => v.visibility === IAppVisibility.Offline)
-				.map((v) => v.appId);
+			const offlineAppIds = new Set(
+				visibilityRecords
+					.filter((v) => v.visibility === IAppVisibility.Offline)
+					.map((v) => v.appId),
+			);
 
-			if (offlineAppIds.length === 0) return profile;
+			if (offlineAppIds.size === 0) return profile;
 
-			// Find apps that are marked as offline locally but not in the server profile
-			const serverAppIds = new Set(profile.apps?.map((a) => a.app_id) || []);
-
-			// Get local storage data for offline apps that need to be merged
 			const localAppsKey = `flow-like-offline-apps-${profile.id}`;
 			const localAppsJson = localStorage.getItem(localAppsKey);
 			const localApps: IProfileApp[] = localAppsJson
 				? JSON.parse(localAppsJson)
 				: [];
 
-			// Filter to only offline apps that aren't already in the server profile
-			const missingOfflineApps = localApps.filter(
-				(app) =>
-					offlineAppIds.includes(app.app_id) && !serverAppIds.has(app.app_id),
+			const localOfflineApps = localApps.filter((app) =>
+				offlineAppIds.has(app.app_id),
 			);
 
-			if (missingOfflineApps.length === 0) return profile;
+			if (localOfflineApps.length === 0) return profile;
 
-			// Merge offline apps back into the profile
+			const appsById = new Map(
+				(profile.apps ?? []).map((app) => [app.app_id, app]),
+			);
+			for (const localApp of localOfflineApps) {
+				appsById.set(
+					localApp.app_id,
+					mergeProfileAppEntry(appsById.get(localApp.app_id), localApp),
+				);
+			}
+
 			return {
 				...profile,
-				apps: [...(profile.apps || []), ...missingOfflineApps],
+				apps: Array.from(appsById.values()),
 			};
 		} catch {
 			return profile;
 		}
+	}
+
+	private async syncRemoteShortcuts(profile: IProfile): Promise<IProfile> {
+		if (typeof window === "undefined" || !profile.id) return profile;
+		if (!Array.isArray(profile.shortcuts)) return profile;
+
+		try {
+			const localShortcuts = await appsDB.shortcuts
+				.where("profileId")
+				.equals(profile.id)
+				.toArray();
+			const remoteShortcutIds = new Set(
+				profile.shortcuts.map((shortcut) => shortcut.id),
+			);
+
+			await appsDB.transaction("rw", appsDB.shortcuts, async () => {
+				for (const shortcut of profile.shortcuts ?? []) {
+					await appsDB.shortcuts.put(normalizeProfileShortcut(shortcut));
+				}
+				for (const localShortcut of localShortcuts) {
+					if (!remoteShortcutIds.has(localShortcut.id)) {
+						await appsDB.shortcuts.delete(localShortcut.id);
+					}
+				}
+			});
+		} catch {
+			return profile;
+		}
+
+		return profile;
+	}
+
+	private async prepareProfile(apiProfile: ApiProfile): Promise<IProfile> {
+		const profile = await this.mergeOfflineApps(transformApiProfile(apiProfile));
+		return this.syncRemoteShortcuts(profile);
 	}
 
 	async getProfile(): Promise<IProfile> {
@@ -231,8 +297,7 @@ export class WebUserState implements IUserState {
 				const savedApiProfile = apiProfiles.find(
 					(p) => p.id === savedProfileId,
 				);
-				if (savedApiProfile)
-					return this.mergeOfflineApps(transformApiProfile(savedApiProfile));
+				if (savedApiProfile) return this.prepareProfile(savedApiProfile);
 			}
 
 			// Fall back to first profile and save it
@@ -240,7 +305,7 @@ export class WebUserState implements IUserState {
 			if (typeof window !== "undefined" && firstApiProfile.id) {
 				localStorage.setItem("flow-like-profile-id", firstApiProfile.id);
 			}
-			return this.mergeOfflineApps(transformApiProfile(firstApiProfile));
+			return this.prepareProfile(firstApiProfile);
 		}
 
 		// No profiles exist - create a default one using upsert endpoint
@@ -264,7 +329,7 @@ export class WebUserState implements IUserState {
 			localStorage.setItem("flow-like-profile-id", newApiProfile.id);
 		}
 
-		return transformApiProfile(newApiProfile);
+		return this.prepareProfile(newApiProfile);
 	}
 
 	async getProfiles(): Promise<IProfile[]> {
@@ -343,45 +408,60 @@ export class WebUserState implements IUserState {
 			throw new Error("Profile ID is required");
 		}
 
-		// Check if this app is offline
-		const visibility = await appsDB.visibility.get(app.app_id);
-		const isOffline = visibility?.visibility === IAppVisibility.Offline;
+		const visibilityRecords = await appsDB.visibility.toArray();
+		const offlineAppIds = new Set(
+			visibilityRecords
+				.filter((v) => v.visibility === IAppVisibility.Offline)
+				.map((v) => v.appId),
+		);
+		const isOffline = offlineAppIds.has(app.app_id);
 
-		// Get current apps from the profile
-		let currentApps = profile.hub_profile.apps || [];
+		let currentApps = [...(profile.hub_profile.apps || [])];
 
 		if (operation === "Remove") {
-			// Remove the app from the array
 			currentApps = currentApps.filter((a) => a.app_id !== app.app_id);
-			// Also remove from offline storage
 			await this.removeFromOfflineStorage(profileId, app.app_id);
 		} else {
-			// Upsert: find existing app or add new one
 			const existingIndex = currentApps.findIndex(
 				(a) => a.app_id === app.app_id,
 			);
+			const mergedApp = mergeProfileAppEntry(
+				existingIndex >= 0 ? currentApps[existingIndex] : undefined,
+				app,
+			);
 			if (existingIndex >= 0) {
-				currentApps[existingIndex] = app;
+				currentApps[existingIndex] = mergedApp;
 			} else {
-				currentApps.push(app);
+				currentApps.push(mergedApp);
 			}
 
-			// Save to offline storage if app is offline
 			if (isOffline) {
-				await this.saveToOfflineStorage(profileId, app);
+				await this.saveToOfflineStorage(profileId, mergedApp);
 			}
 		}
 
-		// Only sync non-offline apps to server
-		const appsToSync = currentApps.filter((a) => {
-			const vis = a.app_id === app.app_id ? visibility : undefined;
-			return vis?.visibility !== IAppVisibility.Offline;
-		});
+		const appsToSync = currentApps.filter((a) => !offlineAppIds.has(a.app_id));
+		profile.hub_profile.apps = currentApps;
 
-		// Update the profile with apps (excluding offline ones)
 		await apiPost(
 			`profile/${profileId}`,
 			{ apps: appsToSync },
+			this.backend.auth,
+		);
+	}
+
+	async updateProfileShortcuts(
+		profile: ISettingsProfile,
+		shortcuts: IProfileShortcut[],
+	): Promise<void> {
+		const profileId = profile.hub_profile.id;
+		if (!profileId) {
+			throw new Error("Profile ID is required");
+		}
+
+		await apiPost(
+			`profile/${profileId}`,
+			{ shortcuts },
 			this.backend.auth,
 		);
 	}

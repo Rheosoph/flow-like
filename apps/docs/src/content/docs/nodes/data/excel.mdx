@@ -1,0 +1,30 @@
+---
+title: "Excel Node Catalog"
+description: "Data/Excel Flow-Like node category with 13 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation."
+sidebar:
+  order: 0
+  label: "Excel"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Excel nodes, Data/Excel, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Excel"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Excel Node Catalog\",\"description\":\"Data/Excel Flow-Like node category with 13 generated node references. Browse pins, schemas, package metadata, and security ratings for workflow automation.\",\"url\":\"https://docs.flow-like.com/nodes/data/excel/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Excel\",\"keywords\":\"Excel nodes, Data/Excel, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/Excel"}
+	label="Excel"
+	nodes={nodesByCategory["Data/Excel"] ?? []}
+	client:load
+/>

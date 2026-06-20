@@ -1,0 +1,30 @@
+---
+title: "Time Node Catalog"
+description: "Data/DataFusion/Time Flow-Like node category with 2 generated node references."
+sidebar:
+  order: 0
+  label: "Time"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Time nodes, Data/DataFusion/Time, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/DataFusion/Time"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Time Node Catalog\",\"description\":\"Data/DataFusion/Time Flow-Like node category with 2 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/data/datafusion/time/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/DataFusion/Time\",\"keywords\":\"Time nodes, Data/DataFusion/Time, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Data/DataFusion/Time"}
+	label="Time"
+	nodes={nodesByCategory["Data/DataFusion/Time"] ?? []}
+	client:load
+/>

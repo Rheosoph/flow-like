@@ -1,0 +1,30 @@
+---
+title: "Interact Node Catalog"
+description: "Automation/Browser/Interact Flow-Like node category with 4 generated node references."
+sidebar:
+  order: 0
+  label: "Interact"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Interact nodes, Automation/Browser/Interact, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Automation/Browser/Interact"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Interact Node Catalog\",\"description\":\"Automation/Browser/Interact Flow-Like node category with 4 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/automation/browser/interact/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Automation/Browser/Interact\",\"keywords\":\"Interact nodes, Automation/Browser/Interact, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Automation/Browser/Interact"}
+	label="Interact"
+	nodes={nodesByCategory["Automation/Browser/Interact"] ?? []}
+	client:load
+/>
