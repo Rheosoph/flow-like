@@ -1838,9 +1838,8 @@ mod platform_hevc {
                 MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Video,
                 MFSTARTUP_FULL, MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER,
                 MFT_ENUM_FLAG_ALL, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-                MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO,
-                MFT_REGISTER_TYPE_INFO, MFTEnumEx, MFVideoFormat_HEVC_ES, MFVideoFormat_NV12,
-                MFVideoFormat_P010,
+                MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO,
+                MFTEnumEx, MFVideoFormat_HEVC_ES, MFVideoFormat_NV12, MFVideoFormat_P010,
             },
             System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
         },
@@ -1859,7 +1858,7 @@ mod platform_hevc {
 
     impl Decoder {
         pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
-            let (requests, request_rx) = mpsc::channel();
+            let (requests, request_rx) = mpsc::channel::<DecodeRequest>();
             let worker = thread::Builder::new()
                 .name("flow-like-hevc-decoder".to_string())
                 .spawn(move || {
