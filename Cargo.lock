@@ -8289,13 +8289,13 @@ dependencies = [
  "icalendar",
  "jsonwebtoken 10.3.0",
  "mail-parser",
+ "ndk",
  "openh264",
  "rcgen",
  "regex",
  "reqwest 0.12.28",
  "retina",
  "rumqttc",
- "rust_h265",
  "rustls-pki-types",
  "schemars 1.2.1",
  "scraper",
@@ -8311,6 +8311,7 @@ dependencies = [
  "urlencoding",
  "uuid 1.23.1",
  "webpki-roots 0.26.11",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -20181,12 +20182,6 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
 ]
-
-[[package]]
-name = "rust_h265"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dde60f5842f27ed06f1d84844cacd93d1a159f606365b30a5594c771e6b4eb17"
 
 [[package]]
 name = "rustautogui"

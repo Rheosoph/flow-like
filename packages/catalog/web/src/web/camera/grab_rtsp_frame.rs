@@ -1,3 +1,4 @@
+#[cfg(feature = "execute")]
 use std::{borrow::Cow, time::Duration};
 
 use flow_like::flow::{
@@ -7,13 +8,19 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::NodeImage;
+#[cfg(all(feature = "execute", any(target_os = "macos", target_os = "ios")))]
+use flow_like_types::image::RgbaImage;
+#[cfg(feature = "execute")]
 use flow_like_types::{
-    anyhow, async_trait, bail,
+    anyhow, bail,
     image::{DynamicImage, RgbImage, load_from_memory},
-    json::json,
 };
+use flow_like_types::{async_trait, json::json};
+#[cfg(feature = "execute")]
 use futures::StreamExt;
+#[cfg(feature = "execute")]
 use openh264::{decoder::Decoder as H264Decoder, formats::YUVSource, nal_units};
+#[cfg(feature = "execute")]
 use retina::{
     client::{
         Credentials, PlayOptions, Session, SessionOptions, SetupOptions, TcpTransportOptions,
@@ -21,10 +28,9 @@ use retina::{
     },
     codec::{CodecItem, ParametersRef, VideoFrame, VideoParametersCodec},
 };
-use rust_h265::{
-    Decoder as H265Decoder, Frame as H265Frame, PixelData as H265PixelData, parse_annex_b,
-};
+#[cfg(feature = "execute")]
 use tokio::{runtime::Builder as TokioRuntimeBuilder, task::spawn_blocking, time::timeout};
+#[cfg(feature = "execute")]
 use url::Url;
 
 const DEFAULT_TIMEOUT_MS: u64 = 20_000;
@@ -34,6 +40,7 @@ const DEFAULT_MAX_FRAMES: usize = 300;
 const MIN_MAX_FRAMES: usize = 1;
 const MAX_MAX_FRAMES: usize = 10_000;
 
+#[cfg(feature = "execute")]
 struct CaptureConfig {
     rtsp_url: String,
     transport: String,
@@ -143,6 +150,7 @@ impl NodeLogic for GrabRtspFrameNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_success").await?;
         context.deactivate_exec_pin("exec_error").await?;
@@ -178,8 +186,16 @@ impl NodeLogic for GrabRtspFrameNode {
 
         Ok(())
     }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "RTSP frame capture requires the 'execute' feature"
+        ))
+    }
 }
 
+#[cfg(feature = "execute")]
 async fn capture_frame(
     rtsp_url: &str,
     transport: &str,
@@ -198,6 +214,7 @@ async fn capture_frame(
         .map_err(|e| anyhow!("RTSP frame capture task failed: {e}"))?
 }
 
+#[cfg(feature = "execute")]
 fn run_capture_blocking(config: CaptureConfig) -> flow_like_types::Result<DynamicImage> {
     let runtime = TokioRuntimeBuilder::new_current_thread()
         .enable_all()
@@ -218,6 +235,7 @@ fn run_capture_blocking(config: CaptureConfig) -> flow_like_types::Result<Dynami
     })
 }
 
+#[cfg(feature = "execute")]
 async fn capture_frame_inner(
     rtsp_url: &str,
     transport: Transport,
@@ -294,6 +312,7 @@ async fn capture_frame_inner(
     bail!("RTSP stream ended before a decodable video frame was received")
 }
 
+#[cfg(feature = "execute")]
 fn normalize_rtsp_url(value: &str) -> flow_like_types::Result<&str> {
     let trimmed = value.trim();
     let lower = trimmed.to_ascii_lowercase();
@@ -305,6 +324,7 @@ fn normalize_rtsp_url(value: &str) -> flow_like_types::Result<&str> {
     bail!("RTSP URL must start with rtsp:// or rtsps://")
 }
 
+#[cfg(feature = "execute")]
 fn normalize_transport(value: &str) -> flow_like_types::Result<Transport> {
     match value.trim().to_ascii_lowercase().as_str() {
         "" | "tcp" => Ok(Transport::Tcp(TcpTransportOptions::default())),
@@ -313,6 +333,7 @@ fn normalize_transport(value: &str) -> flow_like_types::Result<Transport> {
     }
 }
 
+#[cfg(feature = "execute")]
 fn normalize_timeout_ms(value: i64) -> u64 {
     if value <= 0 {
         return DEFAULT_TIMEOUT_MS;
@@ -321,6 +342,7 @@ fn normalize_timeout_ms(value: i64) -> u64 {
     (value as u64).clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
 }
 
+#[cfg(feature = "execute")]
 fn normalize_max_frames(value: i64) -> usize {
     if value <= 0 {
         return DEFAULT_MAX_FRAMES;
@@ -329,6 +351,7 @@ fn normalize_max_frames(value: i64) -> usize {
     (value as usize).clamp(MIN_MAX_FRAMES, MAX_MAX_FRAMES)
 }
 
+#[cfg(feature = "execute")]
 fn parse_rtsp_url(value: &str) -> flow_like_types::Result<(Url, Option<Credentials>)> {
     let mut url = Url::parse(value)?;
     let credentials = if url.username().is_empty() {
@@ -350,20 +373,24 @@ fn parse_rtsp_url(value: &str) -> flow_like_types::Result<(Url, Option<Credentia
     Ok((url, credentials))
 }
 
+#[cfg(feature = "execute")]
 enum FrameDecoder {
     H264(H264FrameDecoder),
-    H265(H265FrameDecoder),
+    Hevc(PlatformHevcFrameDecoder),
     Jpeg,
 }
 
+#[cfg(feature = "execute")]
 struct H264FrameDecoder {
     decoder: H264Decoder,
 }
 
-struct H265FrameDecoder {
-    decoder: H265Decoder,
+#[cfg(feature = "execute")]
+struct PlatformHevcFrameDecoder {
+    decoder: platform_hevc::Decoder,
 }
 
+#[cfg(feature = "execute")]
 impl FrameDecoder {
     fn for_stream(stream: &retina::client::Stream) -> flow_like_types::Result<Self> {
         if let Some(ParametersRef::Video(parameters)) = stream.parameters() {
@@ -375,11 +402,11 @@ impl FrameDecoder {
                     ])?))
                 }
                 VideoParametersCodec::H265 { vps, sps, pps } => {
-                    Ok(Self::H265(H265FrameDecoder::new(vec![
+                    Ok(Self::Hevc(PlatformHevcFrameDecoder::new(vec![
                         vps.to_vec(),
                         sps.to_vec(),
                         pps.to_vec(),
-                    ])))
+                    ])?))
                 }
                 VideoParametersCodec::Jpeg => Ok(Self::Jpeg),
                 _ => bail!(
@@ -391,7 +418,7 @@ impl FrameDecoder {
 
         match stream.encoding_name().trim().to_ascii_lowercase().as_str() {
             "h264" => Ok(Self::H264(H264FrameDecoder::new(Vec::new())?)),
-            "h265" | "hevc" => Ok(Self::H265(H265FrameDecoder::new(Vec::new()))),
+            "h265" | "hevc" => Ok(Self::Hevc(PlatformHevcFrameDecoder::new(Vec::new())?)),
             "jpeg" | "mjpeg" => Ok(Self::Jpeg),
             encoding => bail!("Unsupported RTSP video encoding: {encoding}"),
         }
@@ -400,7 +427,7 @@ impl FrameDecoder {
     fn codec_name(&self) -> &'static str {
         match self {
             Self::H264(_) => "H.264",
-            Self::H265(_) => "H.265",
+            Self::Hevc(_) => "H.265/HEVC",
             Self::Jpeg => "JPEG",
         }
     }
@@ -408,7 +435,7 @@ impl FrameDecoder {
     fn decode(&mut self, frame: VideoFrame) -> flow_like_types::Result<Option<DynamicImage>> {
         match self {
             Self::H264(decoder) => decode_h264_frame(decoder, frame.data()),
-            Self::H265(decoder) => decode_h265_frame(decoder, frame.data()),
+            Self::Hevc(decoder) => decode_platform_hevc_frame(decoder, frame.data()),
             Self::Jpeg => {
                 Ok(Some(load_from_memory(frame.data()).map_err(|e| {
                     anyhow!("Failed to decode RTSP JPEG frame: {e}")
@@ -418,6 +445,7 @@ impl FrameDecoder {
     }
 }
 
+#[cfg(feature = "execute")]
 impl H264FrameDecoder {
     fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
         let mut decoder = H264Decoder::new()?;
@@ -428,16 +456,15 @@ impl H264FrameDecoder {
     }
 }
 
-impl H265FrameDecoder {
-    fn new(parameter_sets: Vec<Vec<u8>>) -> Self {
-        let mut decoder = H265Decoder::new();
-        for parameter_set in parameter_sets {
-            decode_h265_parameter_set(&mut decoder, &parameter_set);
-        }
-        Self { decoder }
+#[cfg(feature = "execute")]
+impl PlatformHevcFrameDecoder {
+    fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
+        let decoder = platform_hevc::Decoder::new(parameter_sets)?;
+        Ok(Self { decoder })
     }
 }
 
+#[cfg(feature = "execute")]
 fn decode_h264_frame(
     decoder: &mut H264FrameDecoder,
     data: &[u8],
@@ -455,38 +482,1816 @@ fn decode_h264_frame(
     Ok(None)
 }
 
-fn decode_h265_frame(
-    decoder: &mut H265FrameDecoder,
+#[cfg(feature = "execute")]
+fn decode_platform_hevc_frame(
+    decoder: &mut PlatformHevcFrameDecoder,
     data: &[u8],
 ) -> flow_like_types::Result<Option<DynamicImage>> {
-    let annex_b = h26x_payload_to_annex_b(data)?;
-    let nals = parse_annex_b(&annex_b);
+    decoder.decoder.decode(data)
+}
 
-    if nals.is_empty() {
-        return Ok(None);
+#[cfg(feature = "execute")]
+#[derive(Clone, Debug, Default)]
+struct HevcParameterSets {
+    vps: Option<Vec<u8>>,
+    sps: Option<Vec<u8>>,
+    pps: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "execute")]
+impl HevcParameterSets {
+    fn from_parameter_sets(parameter_sets: Vec<Vec<u8>>) -> Self {
+        let mut sets = Self::default();
+        for parameter_set in parameter_sets {
+            if parameter_set.is_empty() {
+                continue;
+            }
+
+            if starts_with_annex_b_start_code(&parameter_set) {
+                if let Ok(annex_b) = h26x_payload_to_annex_b(&parameter_set) {
+                    sets.update_from_nals(&annex_b_nals(&annex_b));
+                }
+            } else {
+                sets.update_from_nal(parameter_set);
+            }
+        }
+        sets
     }
 
-    for nal in nals {
-        match decoder.decoder.decode_nal(&nal) {
-            Ok(Some(frame)) => return h265_frame_to_image(&frame).map(Some),
-            Ok(None) => {}
-            Err(_) => {}
+    fn update_from_nals(&mut self, nals: &[&[u8]]) {
+        for nal in nals {
+            self.update_from_nal((*nal).to_vec());
         }
     }
 
-    Ok(None)
-}
+    fn update_from_nal(&mut self, nal: Vec<u8>) {
+        match hevc_nal_unit_type(&nal) {
+            Some(32) => self.vps = Some(nal),
+            Some(33) => self.sps = Some(nal),
+            Some(34) => self.pps = Some(nal),
+            _ => {}
+        }
+    }
 
-fn decode_h265_parameter_set(decoder: &mut H265Decoder, parameter_set: &[u8]) {
-    let mut annex_b = Vec::with_capacity(parameter_set.len() + 4);
-    annex_b.extend_from_slice(&[0, 0, 0, 1]);
-    annex_b.extend_from_slice(parameter_set);
+    fn complete(&self) -> bool {
+        self.vps.is_some() && self.sps.is_some() && self.pps.is_some()
+    }
 
-    for nal in parse_annex_b(&annex_b) {
-        let _ = decoder.decode_nal(&nal);
+    #[cfg(any(target_os = "android", target_os = "windows"))]
+    fn to_annex_b(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for nal in [&self.vps, &self.sps, &self.pps].into_iter().flatten() {
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(nal);
+        }
+        out
+    }
+
+    #[cfg(any(target_os = "android", target_os = "windows"))]
+    fn dimensions(&self) -> flow_like_types::Result<Option<HevcDimensions>> {
+        self.sps
+            .as_deref()
+            .map(parse_hevc_sps_dimensions)
+            .transpose()
     }
 }
 
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HevcDimensions {
+    coded_width: u32,
+    coded_height: u32,
+    display_width: u32,
+    display_height: u32,
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+fn has_decodable_hevc_nal(nals: &[&[u8]]) -> bool {
+    nals.iter().any(|nal| {
+        !matches!(
+            hevc_nal_unit_type(nal),
+            Some(32 | 33 | 34 | 35 | 39 | 40) | None
+        )
+    })
+}
+
+#[cfg(all(feature = "execute", any(target_os = "macos", target_os = "ios")))]
+fn hevc_nal_is_parameter_set(nal: &[u8]) -> bool {
+    matches!(hevc_nal_unit_type(nal), Some(32 | 33 | 34))
+}
+
+#[cfg(feature = "execute")]
+fn hevc_nal_unit_type(nal: &[u8]) -> Option<u8> {
+    nal.first().map(|byte| (byte >> 1) & 0x3f)
+}
+
+#[cfg(all(feature = "execute", any(target_os = "macos", target_os = "ios")))]
+fn nals_to_four_byte_length_prefixed(nals: &[&[u8]]) -> flow_like_types::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for nal in nals {
+        if nal.is_empty() || hevc_nal_is_parameter_set(nal) {
+            continue;
+        }
+
+        let len = u32::try_from(nal.len())
+            .map_err(|_| anyhow!("HEVC NAL unit is too large for platform decoder"))?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(nal);
+    }
+    Ok(out)
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+fn parse_hevc_sps_dimensions(nal: &[u8]) -> flow_like_types::Result<HevcDimensions> {
+    let rbsp = hevc_nal_rbsp(nal)?;
+    let mut bits = BitReader::new(&rbsp);
+
+    bits.skip_bits(4)?;
+    let sps_max_sub_layers_minus1 = bits.read_bits(3)? as u8;
+    bits.skip_bits(1)?;
+    skip_hevc_profile_tier_level(&mut bits, true, sps_max_sub_layers_minus1)?;
+    bits.read_ue()?;
+    let chroma_format_idc = bits.read_ue()?;
+    let separate_colour_plane_flag = if chroma_format_idc == 3 {
+        bits.read_bool()?
+    } else {
+        false
+    };
+    let coded_width = bits.read_ue()?;
+    let coded_height = bits.read_ue()?;
+
+    let mut display_width = coded_width;
+    let mut display_height = coded_height;
+    if bits.read_bool()? {
+        let conf_win_left_offset = bits.read_ue()?;
+        let conf_win_right_offset = bits.read_ue()?;
+        let conf_win_top_offset = bits.read_ue()?;
+        let conf_win_bottom_offset = bits.read_ue()?;
+        let (sub_width_c, sub_height_c) =
+            hevc_chroma_subsampling(chroma_format_idc, separate_colour_plane_flag)?;
+        let crop_width = conf_win_left_offset
+            .checked_add(conf_win_right_offset)
+            .and_then(|value| value.checked_mul(sub_width_c))
+            .ok_or_else(|| anyhow!("HEVC SPS conformance window width overflowed"))?;
+        let crop_height = conf_win_top_offset
+            .checked_add(conf_win_bottom_offset)
+            .and_then(|value| value.checked_mul(sub_height_c))
+            .ok_or_else(|| anyhow!("HEVC SPS conformance window height overflowed"))?;
+        display_width = display_width
+            .checked_sub(crop_width)
+            .ok_or_else(|| anyhow!("HEVC SPS conformance window exceeds coded width"))?;
+        display_height = display_height
+            .checked_sub(crop_height)
+            .ok_or_else(|| anyhow!("HEVC SPS conformance window exceeds coded height"))?;
+    }
+
+    if coded_width == 0 || coded_height == 0 || display_width == 0 || display_height == 0 {
+        bail!("HEVC SPS advertised an empty frame size");
+    }
+
+    Ok(HevcDimensions {
+        coded_width,
+        coded_height,
+        display_width,
+        display_height,
+    })
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+fn hevc_nal_rbsp(nal: &[u8]) -> flow_like_types::Result<Vec<u8>> {
+    let nals = if starts_with_annex_b_start_code(nal) {
+        annex_b_nals(nal)
+    } else {
+        vec![nal]
+    };
+    let sps = nals
+        .into_iter()
+        .find(|candidate| hevc_nal_unit_type(candidate) == Some(33))
+        .ok_or_else(|| anyhow!("HEVC SPS parameter set was not present"))?;
+
+    if sps.len() < 3 {
+        bail!("HEVC SPS parameter set is too short");
+    }
+
+    Ok(remove_emulation_prevention_bytes(&sps[2..]))
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+fn remove_emulation_prevention_bytes(data: &[u8]) -> Vec<u8> {
+    let mut rbsp = Vec::with_capacity(data.len());
+    let mut i = 0usize;
+    while i < data.len() {
+        if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 3 {
+            rbsp.extend_from_slice(&[0, 0]);
+            i += 3;
+        } else {
+            rbsp.push(data[i]);
+            i += 1;
+        }
+    }
+    rbsp
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+fn skip_hevc_profile_tier_level(
+    bits: &mut BitReader<'_>,
+    profile_present_flag: bool,
+    max_sub_layers_minus1: u8,
+) -> flow_like_types::Result<()> {
+    if profile_present_flag {
+        bits.skip_bits(88)?;
+    }
+    bits.skip_bits(8)?;
+
+    let mut sub_layer_profile_present = [false; 8];
+    let mut sub_layer_level_present = [false; 8];
+    for i in 0..max_sub_layers_minus1 as usize {
+        sub_layer_profile_present[i] = bits.read_bool()?;
+        sub_layer_level_present[i] = bits.read_bool()?;
+    }
+    if max_sub_layers_minus1 > 0 {
+        for _ in max_sub_layers_minus1..8 {
+            bits.skip_bits(2)?;
+        }
+    }
+
+    for i in 0..max_sub_layers_minus1 as usize {
+        if sub_layer_profile_present[i] {
+            bits.skip_bits(88)?;
+        }
+        if sub_layer_level_present[i] {
+            bits.skip_bits(8)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+fn hevc_chroma_subsampling(
+    chroma_format_idc: u32,
+    separate_colour_plane_flag: bool,
+) -> flow_like_types::Result<(u32, u32)> {
+    if separate_colour_plane_flag {
+        return Ok((1, 1));
+    }
+
+    match chroma_format_idc {
+        0 => Ok((1, 1)),
+        1 => Ok((2, 2)),
+        2 => Ok((2, 1)),
+        3 => Ok((1, 1)),
+        _ => bail!("Unsupported HEVC chroma_format_idc: {chroma_format_idc}"),
+    }
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+struct BitReader<'a> {
+    data: &'a [u8],
+    bit_offset: usize,
+}
+
+#[cfg(all(feature = "execute", any(target_os = "android", target_os = "windows")))]
+impl<'a> BitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self {
+            data,
+            bit_offset: 0,
+        }
+    }
+
+    fn read_bool(&mut self) -> flow_like_types::Result<bool> {
+        Ok(self.read_bits(1)? != 0)
+    }
+
+    fn read_bits(&mut self, count: usize) -> flow_like_types::Result<u32> {
+        if count > 32 {
+            bail!("HEVC bit reader cannot read more than 32 bits at once");
+        }
+
+        let mut value = 0u32;
+        for _ in 0..count {
+            let byte = self
+                .data
+                .get(self.bit_offset / 8)
+                .ok_or_else(|| anyhow!("Unexpected end of HEVC SPS bitstream"))?;
+            let bit = (byte >> (7 - (self.bit_offset % 8))) & 1;
+            value = (value << 1) | u32::from(bit);
+            self.bit_offset += 1;
+        }
+        Ok(value)
+    }
+
+    fn skip_bits(&mut self, count: usize) -> flow_like_types::Result<()> {
+        let new_offset = self
+            .bit_offset
+            .checked_add(count)
+            .ok_or_else(|| anyhow!("HEVC bit reader offset overflowed"))?;
+        if new_offset > self.data.len() * 8 {
+            bail!("Unexpected end of HEVC SPS bitstream");
+        }
+        self.bit_offset = new_offset;
+        Ok(())
+    }
+
+    fn read_ue(&mut self) -> flow_like_types::Result<u32> {
+        let mut leading_zero_bits = 0usize;
+        while !self.read_bool()? {
+            leading_zero_bits += 1;
+            if leading_zero_bits > 31 {
+                bail!("HEVC exponential-Golomb value is too large");
+            }
+        }
+
+        let suffix = if leading_zero_bits == 0 {
+            0
+        } else {
+            self.read_bits(leading_zero_bits)?
+        };
+
+        Ok(((1u32 << leading_zero_bits) - 1) + suffix)
+    }
+}
+
+#[cfg(all(feature = "execute", target_os = "linux"))]
+fn platform_target_name() -> &'static str {
+    "Linux"
+}
+
+#[cfg(all(
+    feature = "execute",
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "android",
+        target_os = "linux"
+    ))
+))]
+fn platform_target_name() -> &'static str {
+    "this platform"
+}
+
+#[cfg(all(feature = "execute", target_os = "linux"))]
+fn platform_hevc_backend_name() -> &'static str {
+    "VA-API/NVDEC"
+}
+
+#[cfg(all(
+    feature = "execute",
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "windows",
+        target_os = "android",
+        target_os = "linux"
+    ))
+))]
+fn platform_hevc_backend_name() -> &'static str {
+    "no known platform HEVC backend"
+}
+
+#[cfg(all(feature = "execute", any(target_os = "macos", target_os = "ios")))]
+mod platform_hevc {
+    use super::*;
+    use std::{
+        ffi::c_void,
+        panic::{AssertUnwindSafe, catch_unwind},
+        ptr,
+    };
+
+    type CFAllocatorRef = *const c_void;
+    type CFDictionaryRef = *const c_void;
+    type CFIndex = isize;
+    type CFNumberRef = *const c_void;
+    type CFNumberType = CFIndex;
+    type CFStringRef = *const c_void;
+    type CFTypeRef = *const c_void;
+    type CMBlockBufferRef = *mut c_void;
+    type CMFormatDescriptionRef = *mut c_void;
+    type CMItemCount = isize;
+    type CMSampleBufferRef = *mut c_void;
+    type CMVideoFormatDescriptionRef = *mut c_void;
+    type CVOptionFlags = u64;
+    type CVPixelBufferRef = *mut c_void;
+    type OSStatus = i32;
+    type VTDecodeFrameFlags = u32;
+    type VTDecodeInfoFlags = u32;
+    type VTDecompressionSessionRef = *mut c_void;
+
+    const K_CF_NUMBER_SINT32_TYPE: CFNumberType = 3;
+    const K_CV_PIXEL_BUFFER_LOCK_READ_ONLY: CVOptionFlags = 1;
+    const K_CV_PIXEL_FORMAT_TYPE_32_BGRA: u32 = 0x4247_5241;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CMTime {
+        value: i64,
+        timescale: i32,
+        flags: u32,
+        epoch: i64,
+    }
+
+    impl CMTime {
+        const INVALID: Self = Self {
+            value: 0,
+            timescale: 0,
+            flags: 0,
+            epoch: 0,
+        };
+
+        const ZERO: Self = Self {
+            value: 0,
+            timescale: 1,
+            flags: 1,
+            epoch: 0,
+        };
+    }
+
+    #[repr(C)]
+    struct CMSampleTimingInfo {
+        duration: CMTime,
+        presentation_time_stamp: CMTime,
+        decode_time_stamp: CMTime,
+    }
+
+    #[repr(C)]
+    struct VTDecompressionOutputCallbackRecord {
+        decompression_output_callback: Option<
+            extern "C" fn(
+                decompression_output_ref_con: *mut c_void,
+                source_frame_ref_con: *mut c_void,
+                status: OSStatus,
+                info_flags: VTDecodeInfoFlags,
+                image_buffer: CVPixelBufferRef,
+                presentation_time_stamp: CMTime,
+                presentation_duration: CMTime,
+            ),
+        >,
+        decompression_output_ref_con: *mut c_void,
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    #[link(name = "CoreMedia", kind = "framework")]
+    #[link(name = "CoreVideo", kind = "framework")]
+    #[link(name = "VideoToolbox", kind = "framework")]
+    unsafe extern "C" {
+        static kCVPixelBufferPixelFormatTypeKey: CFStringRef;
+
+        fn CFDictionaryCreate(
+            allocator: CFAllocatorRef,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: CFIndex,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> CFDictionaryRef;
+        fn CFNumberCreate(
+            allocator: CFAllocatorRef,
+            the_type: CFNumberType,
+            value_ptr: *const c_void,
+        ) -> CFNumberRef;
+        fn CFRelease(cf: CFTypeRef);
+
+        fn CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+            allocator: CFAllocatorRef,
+            parameter_set_count: usize,
+            parameter_set_pointers: *const *const u8,
+            parameter_set_sizes: *const usize,
+            nal_unit_header_length: i32,
+            extensions: CFDictionaryRef,
+            format_description_out: *mut CMVideoFormatDescriptionRef,
+        ) -> OSStatus;
+        fn CMBlockBufferCreateWithMemoryBlock(
+            structure_allocator: CFAllocatorRef,
+            memory_block: *mut c_void,
+            block_length: usize,
+            block_allocator: CFAllocatorRef,
+            custom_block_source: *const c_void,
+            offset_to_data: usize,
+            data_length: usize,
+            flags: u32,
+            block_buffer_out: *mut CMBlockBufferRef,
+        ) -> OSStatus;
+        fn CMBlockBufferReplaceDataBytes(
+            source_bytes: *const c_void,
+            destination_buffer: CMBlockBufferRef,
+            offset_into_destination: usize,
+            data_length: usize,
+        ) -> OSStatus;
+        fn CMSampleBufferCreateReady(
+            allocator: CFAllocatorRef,
+            data_buffer: CMBlockBufferRef,
+            format_description: CMFormatDescriptionRef,
+            num_samples: CMItemCount,
+            num_sample_timing_entries: CMItemCount,
+            sample_timing_array: *const CMSampleTimingInfo,
+            num_sample_size_entries: CMItemCount,
+            sample_size_array: *const usize,
+            sample_buffer_out: *mut CMSampleBufferRef,
+        ) -> OSStatus;
+
+        fn CVPixelBufferLockBaseAddress(
+            pixel_buffer: CVPixelBufferRef,
+            lock_flags: CVOptionFlags,
+        ) -> OSStatus;
+        fn CVPixelBufferUnlockBaseAddress(
+            pixel_buffer: CVPixelBufferRef,
+            unlock_flags: CVOptionFlags,
+        ) -> OSStatus;
+        fn CVPixelBufferGetPixelFormatType(pixel_buffer: CVPixelBufferRef) -> u32;
+        fn CVPixelBufferGetWidth(pixel_buffer: CVPixelBufferRef) -> usize;
+        fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
+        fn CVPixelBufferGetBytesPerRow(pixel_buffer: CVPixelBufferRef) -> usize;
+        fn CVPixelBufferGetBaseAddress(pixel_buffer: CVPixelBufferRef) -> *mut c_void;
+
+        fn VTDecompressionSessionCreate(
+            allocator: CFAllocatorRef,
+            video_format_description: CMVideoFormatDescriptionRef,
+            video_decoder_specification: CFDictionaryRef,
+            destination_image_buffer_attributes: CFDictionaryRef,
+            output_callback: *const VTDecompressionOutputCallbackRecord,
+            decompression_session_out: *mut VTDecompressionSessionRef,
+        ) -> OSStatus;
+        fn VTDecompressionSessionDecodeFrame(
+            session: VTDecompressionSessionRef,
+            sample_buffer: CMSampleBufferRef,
+            decode_flags: VTDecodeFrameFlags,
+            source_frame_ref_con: *mut c_void,
+            info_flags_out: *mut VTDecodeInfoFlags,
+        ) -> OSStatus;
+        fn VTDecompressionSessionWaitForAsynchronousFrames(
+            session: VTDecompressionSessionRef,
+        ) -> OSStatus;
+        fn VTDecompressionSessionInvalidate(session: VTDecompressionSessionRef);
+    }
+
+    pub struct Decoder {
+        parameter_sets: HevcParameterSets,
+        session: Option<AppleHevcSession>,
+    }
+
+    impl Decoder {
+        pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
+            Ok(Self {
+                parameter_sets: HevcParameterSets::from_parameter_sets(parameter_sets),
+                session: None,
+            })
+        }
+
+        pub fn decode(&mut self, data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
+            let annex_b = h26x_payload_to_annex_b(data)?;
+            let nals = annex_b_nals(&annex_b);
+            if nals.is_empty() {
+                return Ok(None);
+            }
+
+            self.parameter_sets.update_from_nals(&nals);
+
+            let sample = nals_to_four_byte_length_prefixed(&nals)?;
+            if sample.is_empty() {
+                return Ok(None);
+            }
+
+            if self.session.is_none() {
+                self.session = Some(AppleHevcSession::new(&self.parameter_sets)?);
+            }
+
+            self.session
+                .as_mut()
+                .expect("session was just initialized")
+                .decode_sample(&sample)
+        }
+    }
+
+    struct AppleHevcSession {
+        session: VTDecompressionSessionRef,
+        format_description: CMVideoFormatDescriptionRef,
+        image_buffer_attrs: CFDictionaryRef,
+        pixel_format_number: CFNumberRef,
+    }
+
+    impl AppleHevcSession {
+        fn new(parameter_sets: &HevcParameterSets) -> flow_like_types::Result<Self> {
+            if !parameter_sets.complete() {
+                bail!(
+                    "H.265/HEVC stream detected, but VideoToolbox needs VPS/SPS/PPS parameter sets before decoding. \
+                     Use an RTSP stream that advertises HEVC parameter sets in SDP or emits them before the first frame."
+                );
+            }
+
+            let vps = parameter_sets.vps.as_ref().expect("checked complete");
+            let sps = parameter_sets.sps.as_ref().expect("checked complete");
+            let pps = parameter_sets.pps.as_ref().expect("checked complete");
+            let parameter_set_pointers = [vps.as_ptr(), sps.as_ptr(), pps.as_ptr()];
+            let parameter_set_sizes = [vps.len(), sps.len(), pps.len()];
+            let mut format_description = ptr::null_mut();
+
+            let status = unsafe {
+                CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                    ptr::null(),
+                    parameter_set_pointers.len(),
+                    parameter_set_pointers.as_ptr(),
+                    parameter_set_sizes.as_ptr(),
+                    4,
+                    ptr::null(),
+                    &mut format_description,
+                )
+            };
+            check_os_status(
+                status,
+                "CMVideoFormatDescriptionCreateFromHEVCParameterSets",
+            )?;
+            if format_description.is_null() {
+                bail!("VideoToolbox did not create an HEVC format description");
+            }
+
+            let mut pixel_format_value = K_CV_PIXEL_FORMAT_TYPE_32_BGRA as i32;
+            let pixel_format_number = unsafe {
+                CFNumberCreate(
+                    ptr::null(),
+                    K_CF_NUMBER_SINT32_TYPE,
+                    (&mut pixel_format_value as *mut i32).cast(),
+                )
+            };
+            if pixel_format_number.is_null() {
+                unsafe {
+                    CFRelease(format_description.cast());
+                }
+                bail!("Failed to create CoreFoundation pixel format number");
+            }
+
+            let keys = [unsafe { kCVPixelBufferPixelFormatTypeKey }.cast()];
+            let values = [pixel_format_number.cast()];
+            let image_buffer_attrs = unsafe {
+                CFDictionaryCreate(
+                    ptr::null(),
+                    keys.as_ptr(),
+                    values.as_ptr(),
+                    keys.len() as CFIndex,
+                    ptr::null(),
+                    ptr::null(),
+                )
+            };
+            if image_buffer_attrs.is_null() {
+                unsafe {
+                    CFRelease(pixel_format_number.cast());
+                    CFRelease(format_description.cast());
+                }
+                bail!("Failed to create VideoToolbox image buffer attributes");
+            }
+
+            let output_callback = VTDecompressionOutputCallbackRecord {
+                decompression_output_callback: Some(video_toolbox_output_callback),
+                decompression_output_ref_con: ptr::null_mut(),
+            };
+            let mut session = ptr::null_mut();
+            let status = unsafe {
+                VTDecompressionSessionCreate(
+                    ptr::null(),
+                    format_description,
+                    ptr::null(),
+                    image_buffer_attrs,
+                    &output_callback,
+                    &mut session,
+                )
+            };
+            if let Err(error) = check_os_status(status, "VTDecompressionSessionCreate") {
+                unsafe {
+                    CFRelease(image_buffer_attrs.cast());
+                    CFRelease(pixel_format_number.cast());
+                    CFRelease(format_description.cast());
+                }
+                return Err(error);
+            }
+            if session.is_null() {
+                unsafe {
+                    CFRelease(image_buffer_attrs.cast());
+                    CFRelease(pixel_format_number.cast());
+                    CFRelease(format_description.cast());
+                }
+                bail!("VideoToolbox did not create an HEVC decompression session");
+            }
+
+            Ok(Self {
+                session,
+                format_description,
+                image_buffer_attrs,
+                pixel_format_number,
+            })
+        }
+
+        fn decode_sample(
+            &mut self,
+            sample: &[u8],
+        ) -> flow_like_types::Result<Option<DynamicImage>> {
+            let mut block_buffer = ptr::null_mut();
+            let status = unsafe {
+                CMBlockBufferCreateWithMemoryBlock(
+                    ptr::null(),
+                    ptr::null_mut(),
+                    sample.len(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    sample.len(),
+                    0,
+                    &mut block_buffer,
+                )
+            };
+            check_os_status(status, "CMBlockBufferCreateWithMemoryBlock")?;
+            if block_buffer.is_null() {
+                bail!("CoreMedia did not create a block buffer for HEVC sample data");
+            }
+
+            let decode_result = self.decode_sample_with_block_buffer(sample, block_buffer);
+            unsafe {
+                CFRelease(block_buffer.cast());
+            }
+            decode_result
+        }
+
+        fn decode_sample_with_block_buffer(
+            &mut self,
+            sample: &[u8],
+            block_buffer: CMBlockBufferRef,
+        ) -> flow_like_types::Result<Option<DynamicImage>> {
+            let status = unsafe {
+                CMBlockBufferReplaceDataBytes(sample.as_ptr().cast(), block_buffer, 0, sample.len())
+            };
+            check_os_status(status, "CMBlockBufferReplaceDataBytes")?;
+
+            let timing = CMSampleTimingInfo {
+                duration: CMTime::INVALID,
+                presentation_time_stamp: CMTime::ZERO,
+                decode_time_stamp: CMTime::INVALID,
+            };
+            let sample_size = sample.len();
+            let mut sample_buffer = ptr::null_mut();
+            let status = unsafe {
+                CMSampleBufferCreateReady(
+                    ptr::null(),
+                    block_buffer,
+                    self.format_description.cast(),
+                    1,
+                    1,
+                    &timing,
+                    1,
+                    &sample_size,
+                    &mut sample_buffer,
+                )
+            };
+            check_os_status(status, "CMSampleBufferCreateReady")?;
+            if sample_buffer.is_null() {
+                bail!("CoreMedia did not create a sample buffer for HEVC sample data");
+            }
+
+            let mut callback_state = DecodeCallbackState::default();
+            let mut info_flags = 0;
+            let status = unsafe {
+                VTDecompressionSessionDecodeFrame(
+                    self.session,
+                    sample_buffer,
+                    0,
+                    (&mut callback_state as *mut DecodeCallbackState).cast(),
+                    &mut info_flags,
+                )
+            };
+            let wait_status =
+                unsafe { VTDecompressionSessionWaitForAsynchronousFrames(self.session) };
+            unsafe {
+                CFRelease(sample_buffer.cast());
+            }
+
+            if status != 0 || wait_status != 0 {
+                return Ok(None);
+            }
+
+            if let Some(error) = callback_state.error {
+                bail!("{error}");
+            }
+
+            Ok(callback_state.image)
+        }
+    }
+
+    impl Drop for AppleHevcSession {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.session.is_null() {
+                    VTDecompressionSessionInvalidate(self.session);
+                    CFRelease(self.session.cast());
+                }
+                if !self.image_buffer_attrs.is_null() {
+                    CFRelease(self.image_buffer_attrs.cast());
+                }
+                if !self.pixel_format_number.is_null() {
+                    CFRelease(self.pixel_format_number.cast());
+                }
+                if !self.format_description.is_null() {
+                    CFRelease(self.format_description.cast());
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct DecodeCallbackState {
+        image: Option<DynamicImage>,
+        error: Option<String>,
+    }
+
+    extern "C" fn video_toolbox_output_callback(
+        _decompression_output_ref_con: *mut c_void,
+        source_frame_ref_con: *mut c_void,
+        status: OSStatus,
+        _info_flags: VTDecodeInfoFlags,
+        image_buffer: CVPixelBufferRef,
+        _presentation_time_stamp: CMTime,
+        _presentation_duration: CMTime,
+    ) {
+        if source_frame_ref_con.is_null() {
+            return;
+        }
+
+        let callback_state = unsafe { &mut *(source_frame_ref_con.cast::<DecodeCallbackState>()) };
+
+        if status != 0 {
+            callback_state.error = Some(format!(
+                "VideoToolbox HEVC decode failed: OSStatus {status}"
+            ));
+            return;
+        }
+
+        if image_buffer.is_null() {
+            return;
+        }
+
+        let result = catch_unwind(AssertUnwindSafe(|| unsafe {
+            cv_pixel_buffer_to_dynamic_image(image_buffer)
+        }));
+
+        match result {
+            Ok(Ok(image)) => callback_state.image = Some(image),
+            Ok(Err(error)) => callback_state.error = Some(error.to_string()),
+            Err(_) => {
+                callback_state.error = Some("VideoToolbox HEVC callback panicked".to_string());
+            }
+        }
+    }
+
+    unsafe fn cv_pixel_buffer_to_dynamic_image(
+        pixel_buffer: CVPixelBufferRef,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let status =
+            unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY) };
+        check_os_status(status, "CVPixelBufferLockBaseAddress")?;
+
+        let image_result = unsafe { locked_cv_pixel_buffer_to_dynamic_image(pixel_buffer) };
+        let unlock_status = unsafe {
+            CVPixelBufferUnlockBaseAddress(pixel_buffer, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY)
+        };
+        check_os_status(unlock_status, "CVPixelBufferUnlockBaseAddress")?;
+
+        image_result
+    }
+
+    unsafe fn locked_cv_pixel_buffer_to_dynamic_image(
+        pixel_buffer: CVPixelBufferRef,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let pixel_format = unsafe { CVPixelBufferGetPixelFormatType(pixel_buffer) };
+        if pixel_format != K_CV_PIXEL_FORMAT_TYPE_32_BGRA {
+            bail!("VideoToolbox returned unsupported pixel format: 0x{pixel_format:08x}");
+        }
+
+        let width = unsafe { CVPixelBufferGetWidth(pixel_buffer) };
+        let height = unsafe { CVPixelBufferGetHeight(pixel_buffer) };
+        let bytes_per_row = unsafe { CVPixelBufferGetBytesPerRow(pixel_buffer) };
+        let base_address = unsafe { CVPixelBufferGetBaseAddress(pixel_buffer) };
+
+        if width == 0 || height == 0 || base_address.is_null() {
+            bail!("VideoToolbox returned an empty HEVC pixel buffer");
+        }
+
+        let row_len = width
+            .checked_mul(4)
+            .ok_or_else(|| anyhow!("VideoToolbox HEVC frame width overflowed"))?;
+        if bytes_per_row < row_len {
+            bail!("VideoToolbox HEVC pixel buffer row stride is smaller than frame width");
+        }
+
+        let mut rgba = Vec::with_capacity(
+            width
+                .checked_mul(height)
+                .and_then(|pixels| pixels.checked_mul(4))
+                .ok_or_else(|| anyhow!("VideoToolbox HEVC frame dimensions overflowed"))?,
+        );
+        let base = base_address.cast::<u8>();
+
+        for y in 0..height {
+            let row = unsafe { std::slice::from_raw_parts(base.add(y * bytes_per_row), row_len) };
+            for bgra in row.chunks_exact(4) {
+                rgba.push(bgra[2]);
+                rgba.push(bgra[1]);
+                rgba.push(bgra[0]);
+                rgba.push(bgra[3]);
+            }
+        }
+
+        let image = RgbaImage::from_raw(width as u32, height as u32, rgba)
+            .ok_or_else(|| anyhow!("VideoToolbox HEVC frame had invalid RGBA dimensions"))?;
+        Ok(DynamicImage::ImageRgba8(image))
+    }
+
+    fn check_os_status(status: OSStatus, operation: &str) -> flow_like_types::Result<()> {
+        if status == 0 {
+            Ok(())
+        } else {
+            bail!("{operation} failed: OSStatus {status}")
+        }
+    }
+}
+
+#[cfg(all(feature = "execute", target_os = "android"))]
+mod platform_hevc {
+    use super::*;
+    use ndk::media::{
+        media_codec::{
+            DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, MediaCodec,
+            MediaCodecDirection, OutputBuffer,
+        },
+        media_format::MediaFormat,
+    };
+    use std::time::Duration;
+
+    const HEVC_MIME: &str = "video/hevc";
+    const COLOR_FORMAT_YUV420_PLANAR: i32 = 19;
+    const COLOR_FORMAT_YUV420_SEMIPLANAR: i32 = 21;
+    const COLOR_FORMAT_YUV420_PACKED_SEMIPLANAR: i32 = 39;
+    const COLOR_FORMAT_YUV420_FLEXIBLE: i32 = 0x7f42_0888;
+    const BUFFER_FLAG_CODEC_CONFIG: u32 = 2;
+
+    pub struct Decoder {
+        parameter_sets: HevcParameterSets,
+        codec: Option<AndroidHevcCodec>,
+        frame_index: u64,
+    }
+
+    impl Decoder {
+        pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
+            Ok(Self {
+                parameter_sets: HevcParameterSets::from_parameter_sets(parameter_sets),
+                codec: None,
+                frame_index: 0,
+            })
+        }
+
+        pub fn decode(&mut self, data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
+            let annex_b = h26x_payload_to_annex_b(data)?;
+            let nals = annex_b_nals(&annex_b);
+            if nals.is_empty() {
+                return Ok(None);
+            }
+
+            self.parameter_sets.update_from_nals(&nals);
+            if !has_decodable_hevc_nal(&nals) {
+                return Ok(None);
+            }
+
+            if self.codec.is_none() {
+                let dimensions = self
+                    .parameter_sets
+                    .dimensions()?
+                    .ok_or_else(|| anyhow!("MediaCodec needs HEVC SPS dimensions before decode"))?;
+                self.codec = Some(AndroidHevcCodec::new(&self.parameter_sets, dimensions)?);
+            }
+
+            let sample = annex_b.as_ref();
+            let pts_us = self.frame_index.saturating_mul(33_333);
+            self.frame_index = self.frame_index.saturating_add(1);
+            self.codec
+                .as_mut()
+                .expect("codec was just initialized")
+                .decode_sample(sample, pts_us)
+        }
+    }
+
+    struct AndroidHevcCodec {
+        codec: MediaCodec,
+        output_format: MediaFormat,
+        dimensions: HevcDimensions,
+    }
+
+    impl AndroidHevcCodec {
+        fn new(
+            parameter_sets: &HevcParameterSets,
+            dimensions: HevcDimensions,
+        ) -> flow_like_types::Result<Self> {
+            if !parameter_sets.complete() {
+                bail!(
+                    "H.265/HEVC stream detected, but MediaCodec needs VPS/SPS/PPS parameter sets before decoding. \
+                     Use an RTSP stream that advertises HEVC parameter sets in SDP or emits them before the first frame."
+                );
+            }
+
+            let mut format = MediaFormat::new();
+            format.set_str("mime", HEVC_MIME);
+            format.set_i32("width", checked_i32(dimensions.coded_width, "HEVC width")?);
+            format.set_i32(
+                "height",
+                checked_i32(dimensions.coded_height, "HEVC height")?,
+            );
+            format.set_buffer("csd-0", &parameter_sets.to_annex_b());
+            format.set_i32("color-format", COLOR_FORMAT_YUV420_FLEXIBLE);
+
+            let codec = MediaCodec::from_decoder_type(HEVC_MIME)
+                .ok_or_else(|| anyhow!("Android MediaCodec did not provide an HEVC decoder"))?;
+            codec
+                .configure(&format, None, MediaCodecDirection::Decoder)
+                .map_err(|e| anyhow!("Failed to configure Android HEVC MediaCodec: {e}"))?;
+            codec
+                .start()
+                .map_err(|e| anyhow!("Failed to start Android HEVC MediaCodec: {e}"))?;
+            let output_format = codec.output_format();
+
+            Ok(Self {
+                codec,
+                output_format,
+                dimensions,
+            })
+        }
+
+        fn decode_sample(
+            &mut self,
+            sample: &[u8],
+            pts_us: u64,
+        ) -> flow_like_types::Result<Option<DynamicImage>> {
+            self.queue_input(sample, pts_us)?;
+            self.drain_output()
+        }
+
+        fn queue_input(&self, sample: &[u8], pts_us: u64) -> flow_like_types::Result<()> {
+            let mut input = match self
+                .codec
+                .dequeue_input_buffer(Duration::from_millis(20))
+                .map_err(|e| anyhow!("Android HEVC MediaCodec input dequeue failed: {e}"))?
+            {
+                DequeuedInputBufferResult::Buffer(input) => input,
+                DequeuedInputBufferResult::TryAgainLater => return Ok(()),
+            };
+
+            {
+                let buffer = input.buffer_mut();
+                if sample.len() > buffer.len() {
+                    bail!(
+                        "Android HEVC MediaCodec input buffer too small: {} < {}",
+                        buffer.len(),
+                        sample.len()
+                    );
+                }
+
+                for (dst, src) in buffer.iter_mut().zip(sample.iter()) {
+                    dst.write(*src);
+                }
+            }
+
+            self.codec
+                .queue_input_buffer(input, 0, sample.len(), pts_us, 0)
+                .map_err(|e| anyhow!("Android HEVC MediaCodec input queue failed: {e}"))
+        }
+
+        fn drain_output(&mut self) -> flow_like_types::Result<Option<DynamicImage>> {
+            for _ in 0..8 {
+                match self
+                    .codec
+                    .dequeue_output_buffer(Duration::from_millis(20))
+                    .map_err(|e| anyhow!("Android HEVC MediaCodec output dequeue failed: {e}"))?
+                {
+                    DequeuedOutputBufferInfoResult::Buffer(output) => {
+                        if output.info().flags() & BUFFER_FLAG_CODEC_CONFIG != 0
+                            || output.info().size() <= 0
+                        {
+                            self.codec
+                                .release_output_buffer(output, false)
+                                .map_err(|e| {
+                                    anyhow!("Android HEVC MediaCodec output release failed: {e}")
+                                })?;
+                            continue;
+                        }
+
+                        let image = android_output_buffer_to_image(
+                            &output,
+                            &self.output_format,
+                            self.dimensions,
+                        );
+                        self.codec
+                            .release_output_buffer(output, false)
+                            .map_err(|e| {
+                                anyhow!("Android HEVC MediaCodec output release failed: {e}")
+                            })?;
+                        return image.map(Some);
+                    }
+                    DequeuedOutputBufferInfoResult::OutputFormatChanged => {
+                        self.output_format = self.codec.output_format();
+                    }
+                    DequeuedOutputBufferInfoResult::OutputBuffersChanged => {}
+                    DequeuedOutputBufferInfoResult::TryAgainLater => return Ok(None),
+                }
+            }
+
+            Ok(None)
+        }
+    }
+
+    impl Drop for AndroidHevcCodec {
+        fn drop(&mut self) {
+            let _ = self.codec.stop();
+        }
+    }
+
+    fn android_output_buffer_to_image(
+        output: &OutputBuffer<'_>,
+        format: &MediaFormat,
+        fallback_dimensions: HevcDimensions,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let offset = usize::try_from(output.info().offset())
+            .map_err(|_| anyhow!("Android HEVC MediaCodec returned negative output offset"))?;
+        let size = usize::try_from(output.info().size())
+            .map_err(|_| anyhow!("Android HEVC MediaCodec returned negative output size"))?;
+        let buffer = output.buffer();
+        let end = offset
+            .checked_add(size)
+            .ok_or_else(|| anyhow!("Android HEVC output offset overflowed"))?;
+        if end > buffer.len() {
+            bail!("Android HEVC MediaCodec output buffer range exceeds buffer length");
+        }
+
+        let payload = &buffer[offset..end];
+        let layout = AndroidYuvLayout::from_format(format, fallback_dimensions)?;
+        android_yuv420_to_image(payload, layout)
+    }
+
+    #[derive(Clone, Copy)]
+    struct AndroidYuvLayout {
+        crop_left: usize,
+        crop_top: usize,
+        crop_width: usize,
+        crop_height: usize,
+        stride: usize,
+        slice_height: usize,
+        color_format: i32,
+    }
+
+    impl AndroidYuvLayout {
+        fn from_format(
+            format: &MediaFormat,
+            fallback_dimensions: HevcDimensions,
+        ) -> flow_like_types::Result<Self> {
+            let coded_width = format
+                .i32("width")
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(fallback_dimensions.coded_width as usize);
+            let coded_height = format
+                .i32("height")
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(fallback_dimensions.coded_height as usize);
+            let stride = format
+                .i32("stride")
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(coded_width);
+            let slice_height = format
+                .i32("slice-height")
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(coded_height);
+            let color_format = format
+                .i32("color-format")
+                .unwrap_or(COLOR_FORMAT_YUV420_FLEXIBLE);
+
+            let crop_left = format
+                .i32("crop-left")
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0);
+            let crop_top = format
+                .i32("crop-top")
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0);
+            let crop_right = format
+                .i32("crop-right")
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or_else(|| fallback_dimensions.display_width.saturating_sub(1) as usize);
+            let crop_bottom = format
+                .i32("crop-bottom")
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or_else(|| fallback_dimensions.display_height.saturating_sub(1) as usize);
+
+            if crop_right < crop_left || crop_bottom < crop_top {
+                bail!("Android HEVC MediaCodec output crop rectangle is invalid");
+            }
+
+            let crop_width = crop_right - crop_left + 1;
+            let crop_height = crop_bottom - crop_top + 1;
+            if crop_left + crop_width > coded_width || crop_top + crop_height > coded_height {
+                bail!("Android HEVC MediaCodec output crop exceeds coded dimensions");
+            }
+
+            Ok(Self {
+                crop_left,
+                crop_top,
+                crop_width,
+                crop_height,
+                stride,
+                slice_height,
+                color_format,
+            })
+        }
+    }
+
+    fn android_yuv420_to_image(
+        payload: &[u8],
+        layout: AndroidYuvLayout,
+    ) -> flow_like_types::Result<DynamicImage> {
+        match layout.color_format {
+            COLOR_FORMAT_YUV420_PLANAR => android_planar_yuv420_to_image(payload, layout),
+            COLOR_FORMAT_YUV420_SEMIPLANAR | COLOR_FORMAT_YUV420_PACKED_SEMIPLANAR => {
+                android_semiplanar_yuv420_to_image(payload, layout)
+            }
+            COLOR_FORMAT_YUV420_FLEXIBLE => android_semiplanar_yuv420_to_image(payload, layout)
+                .or_else(|_| android_planar_yuv420_to_image(payload, layout)),
+            color_format => bail!(
+                "Android HEVC MediaCodec returned unsupported YUV color format: {color_format}"
+            ),
+        }
+    }
+
+    fn android_planar_yuv420_to_image(
+        payload: &[u8],
+        layout: AndroidYuvLayout,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let y_plane_len = layout
+            .stride
+            .checked_mul(layout.slice_height)
+            .ok_or_else(|| anyhow!("Android HEVC Y plane size overflowed"))?;
+        let chroma_stride = layout.stride.div_ceil(2);
+        let chroma_height = layout.slice_height.div_ceil(2);
+        let chroma_plane_len = chroma_stride
+            .checked_mul(chroma_height)
+            .ok_or_else(|| anyhow!("Android HEVC chroma plane size overflowed"))?;
+        let u_offset = y_plane_len;
+        let v_offset = u_offset
+            .checked_add(chroma_plane_len)
+            .ok_or_else(|| anyhow!("Android HEVC V plane offset overflowed"))?;
+        let required_len = v_offset
+            .checked_add(chroma_plane_len)
+            .ok_or_else(|| anyhow!("Android HEVC planar buffer size overflowed"))?;
+        if payload.len() < required_len {
+            bail!("Android HEVC planar YUV buffer is shorter than expected");
+        }
+
+        yuv420_to_rgb_image(layout, |x, y| {
+            let source_x = layout.crop_left + x;
+            let source_y = layout.crop_top + y;
+            let y_value = payload[source_y * layout.stride + source_x];
+            let chroma_x = source_x / 2;
+            let chroma_y = source_y / 2;
+            let u = payload[u_offset + chroma_y * chroma_stride + chroma_x];
+            let v = payload[v_offset + chroma_y * chroma_stride + chroma_x];
+            (y_value, u, v)
+        })
+    }
+
+    fn android_semiplanar_yuv420_to_image(
+        payload: &[u8],
+        layout: AndroidYuvLayout,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let y_plane_len = layout
+            .stride
+            .checked_mul(layout.slice_height)
+            .ok_or_else(|| anyhow!("Android HEVC Y plane size overflowed"))?;
+        let chroma_height = layout.slice_height.div_ceil(2);
+        let uv_plane_len = layout
+            .stride
+            .checked_mul(chroma_height)
+            .ok_or_else(|| anyhow!("Android HEVC UV plane size overflowed"))?;
+        let required_len = y_plane_len
+            .checked_add(uv_plane_len)
+            .ok_or_else(|| anyhow!("Android HEVC semiplanar buffer size overflowed"))?;
+        if payload.len() < required_len {
+            bail!("Android HEVC semiplanar YUV buffer is shorter than expected");
+        }
+
+        yuv420_to_rgb_image(layout, |x, y| {
+            let source_x = layout.crop_left + x;
+            let source_y = layout.crop_top + y;
+            let y_value = payload[source_y * layout.stride + source_x];
+            let uv_index = y_plane_len + (source_y / 2) * layout.stride + (source_x / 2) * 2;
+            let u = payload[uv_index];
+            let v = payload[uv_index + 1];
+            (y_value, u, v)
+        })
+    }
+
+    fn yuv420_to_rgb_image(
+        layout: AndroidYuvLayout,
+        mut pixel: impl FnMut(usize, usize) -> (u8, u8, u8),
+    ) -> flow_like_types::Result<DynamicImage> {
+        let mut rgb = Vec::with_capacity(
+            layout
+                .crop_width
+                .checked_mul(layout.crop_height)
+                .and_then(|pixels| pixels.checked_mul(3))
+                .ok_or_else(|| anyhow!("Android HEVC RGB buffer size overflowed"))?,
+        );
+
+        for y in 0..layout.crop_height {
+            for x in 0..layout.crop_width {
+                let (y_value, u, v) = pixel(x, y);
+                rgb.extend_from_slice(&yuv_to_rgb(y_value, u, v));
+            }
+        }
+
+        let image = RgbImage::from_raw(layout.crop_width as u32, layout.crop_height as u32, rgb)
+            .ok_or_else(|| anyhow!("Android HEVC frame had invalid RGB dimensions"))?;
+        Ok(DynamicImage::ImageRgb8(image))
+    }
+
+    fn yuv_to_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
+        let c = i32::from(y).saturating_sub(16);
+        let d = i32::from(u).saturating_sub(128);
+        let e = i32::from(v).saturating_sub(128);
+        [
+            clamp_u8((298 * c + 409 * e + 128) >> 8),
+            clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8),
+            clamp_u8((298 * c + 516 * d + 128) >> 8),
+        ]
+    }
+
+    fn clamp_u8(value: i32) -> u8 {
+        value.clamp(0, 255) as u8
+    }
+
+    fn checked_i32(value: u32, name: &str) -> flow_like_types::Result<i32> {
+        i32::try_from(value).map_err(|_| anyhow!("{name} is too large for MediaCodec"))
+    }
+}
+
+#[cfg(all(feature = "execute", target_os = "windows"))]
+mod platform_hevc {
+    use super::*;
+    use std::{mem::ManuallyDrop, ptr};
+    use windows::{
+        Win32::{
+            Foundation::{RPC_E_CHANGED_MODE, S_FALSE, S_OK},
+            Media::MediaFoundation::{
+                IMFActivate, IMFMediaBuffer, IMFMediaType, IMFSample, IMFTransform,
+                MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_ALL_SAMPLES_INDEPENDENT,
+                MF_MT_FIXED_SIZE_SAMPLES, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SAMPLE_SIZE,
+                MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
+                MFMediaType_Video, MFSTARTUP_FULL, MFShutdown, MFStartup,
+                MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_ALL, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+                MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_REGISTER_TYPE_INFO,
+                MFTEnumEx, MFVideoFormat_HEVC_ES, MFVideoFormat_RGB32,
+            },
+            System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
+        },
+        core::GUID,
+    };
+
+    pub struct Decoder {
+        parameter_sets: HevcParameterSets,
+        session: Option<WindowsHevcSession>,
+        frame_index: u64,
+    }
+
+    impl Decoder {
+        pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
+            Ok(Self {
+                parameter_sets: HevcParameterSets::from_parameter_sets(parameter_sets),
+                session: None,
+                frame_index: 0,
+            })
+        }
+
+        pub fn decode(&mut self, data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
+            let annex_b = h26x_payload_to_annex_b(data)?;
+            let nals = annex_b_nals(&annex_b);
+            if nals.is_empty() {
+                return Ok(None);
+            }
+
+            self.parameter_sets.update_from_nals(&nals);
+            if !has_decodable_hevc_nal(&nals) {
+                return Ok(None);
+            }
+
+            if self.session.is_none() {
+                let dimensions = self.parameter_sets.dimensions()?.ok_or_else(|| {
+                    anyhow!("Media Foundation needs HEVC SPS dimensions before decode")
+                })?;
+                self.session = Some(WindowsHevcSession::new(dimensions)?);
+            }
+
+            let mut sample = self.parameter_sets.to_annex_b();
+            sample.extend_from_slice(annex_b.as_ref());
+            let sample_time = self
+                .frame_index
+                .saturating_mul(333_333)
+                .try_into()
+                .unwrap_or(i64::MAX);
+            self.frame_index = self.frame_index.saturating_add(1);
+
+            self.session
+                .as_mut()
+                .expect("session was just initialized")
+                .decode_sample(&sample, sample_time)
+        }
+    }
+
+    struct WindowsHevcSession {
+        _guard: MediaFoundationGuard,
+        transform: IMFTransform,
+        input_stream_id: u32,
+        output_stream_id: u32,
+        dimensions: HevcDimensions,
+        output_buffer_len: u32,
+    }
+
+    impl WindowsHevcSession {
+        fn new(dimensions: HevcDimensions) -> flow_like_types::Result<Self> {
+            let guard = MediaFoundationGuard::new()?;
+            let transform = create_hevc_decoder_transform()?;
+            let input_stream_id = 0;
+            let output_stream_id = 0;
+            let width = dimensions.display_width;
+            let height = dimensions.display_height;
+
+            unsafe {
+                let input_type =
+                    create_video_media_type(MFVideoFormat_HEVC_ES, width, height, None)?;
+                transform
+                    .SetInputType(input_stream_id, &input_type, 0)
+                    .map_err(|e| anyhow!("Media Foundation HEVC SetInputType failed: {e}"))?;
+
+                let output_buffer_len = width
+                    .checked_mul(height)
+                    .and_then(|pixels| pixels.checked_mul(4))
+                    .ok_or_else(|| anyhow!("Media Foundation HEVC output size overflowed"))?;
+                let output_type = create_video_media_type(
+                    MFVideoFormat_RGB32,
+                    width,
+                    height,
+                    Some(output_buffer_len),
+                )?;
+                transform
+                    .SetOutputType(output_stream_id, &output_type, 0)
+                    .map_err(|e| anyhow!("Media Foundation HEVC SetOutputType failed: {e}"))?;
+                transform
+                    .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+                    .map_err(|e| {
+                        anyhow!("Media Foundation HEVC begin streaming message failed: {e}")
+                    })?;
+                transform
+                    .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+                    .map_err(|e| {
+                        anyhow!("Media Foundation HEVC start stream message failed: {e}")
+                    })?;
+
+                Ok(Self {
+                    _guard: guard,
+                    transform,
+                    input_stream_id,
+                    output_stream_id,
+                    dimensions,
+                    output_buffer_len: checked_u32(
+                        output_buffer_len as usize,
+                        "HEVC RGB output size",
+                    )?,
+                })
+            }
+        }
+
+        fn decode_sample(
+            &mut self,
+            sample: &[u8],
+            sample_time: i64,
+        ) -> flow_like_types::Result<Option<DynamicImage>> {
+            let input_sample = unsafe { create_input_sample(sample, sample_time)? };
+            unsafe {
+                self.transform
+                    .ProcessInput(self.input_stream_id, input_sample, 0)
+                    .map_err(|e| anyhow!("Media Foundation HEVC ProcessInput failed: {e}"))?;
+            }
+
+            self.process_output()
+        }
+
+        fn process_output(&mut self) -> flow_like_types::Result<Option<DynamicImage>> {
+            let output_sample = unsafe { MFCreateSample() }
+                .map_err(|e| anyhow!("Media Foundation MFCreateSample failed: {e}"))?;
+            let output_buffer = unsafe { MFCreateMemoryBuffer(self.output_buffer_len) }
+                .map_err(|e| anyhow!("Media Foundation MFCreateMemoryBuffer failed: {e}"))?;
+            unsafe {
+                output_sample
+                    .AddBuffer(&output_buffer)
+                    .map_err(|e| anyhow!("Media Foundation output AddBuffer failed: {e}"))?;
+            }
+
+            let mut data_buffer = MFT_OUTPUT_DATA_BUFFER {
+                dwStreamID: self.output_stream_id,
+                pSample: ManuallyDrop::new(Some(output_sample.clone())),
+                dwStatus: 0,
+                pEvents: ManuallyDrop::new(None),
+            };
+            let mut status = 0u32;
+            let output_result = unsafe {
+                self.transform
+                    .ProcessOutput(0, std::slice::from_mut(&mut data_buffer), &mut status)
+            };
+
+            match output_result {
+                Ok(()) => unsafe {
+                    rgb32_sample_to_image(&output_sample, self.dimensions).map(Some)
+                },
+                Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(None),
+                Err(error) => Err(anyhow!(
+                    "Media Foundation HEVC ProcessOutput failed: {error}"
+                )),
+            }
+        }
+    }
+
+    struct MediaFoundationGuard {
+        co_initialized: bool,
+    }
+
+    impl MediaFoundationGuard {
+        fn new() -> flow_like_types::Result<Self> {
+            let co_init = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            if co_init != S_OK && co_init != S_FALSE && co_init != RPC_E_CHANGED_MODE {
+                return Err(anyhow!("Windows COM initialization failed: {co_init:?}"));
+            }
+
+            unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }
+                .map_err(|e| anyhow!("Media Foundation startup failed: {e}"))?;
+
+            Ok(Self {
+                co_initialized: co_init == S_OK || co_init == S_FALSE,
+            })
+        }
+    }
+
+    impl Drop for MediaFoundationGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = MFShutdown();
+                if self.co_initialized {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+
+    fn create_hevc_decoder_transform() -> flow_like_types::Result<IMFTransform> {
+        let input_type = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_HEVC_ES,
+        };
+        let output_type = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_RGB32,
+        };
+        let mut activates: *mut Option<IMFActivate> = ptr::null_mut();
+        let mut count = 0u32;
+
+        unsafe {
+            MFTEnumEx(
+                MFT_CATEGORY_VIDEO_DECODER,
+                MFT_ENUM_FLAG_ALL,
+                Some(&input_type),
+                Some(&output_type),
+                &mut activates,
+                &mut count,
+            )
+        }
+        .map_err(|e| anyhow!("Media Foundation HEVC decoder enumeration failed: {e}"))?;
+
+        if activates.is_null() || count == 0 {
+            bail!(
+                "Windows Media Foundation did not find an HEVC decoder. Install/enable the platform HEVC video extension or use an H.264 camera profile."
+            );
+        }
+
+        let result = unsafe { activate_first_transform(activates, count) };
+        unsafe {
+            CoTaskMemFree(Some(activates.cast()));
+        }
+        result
+    }
+
+    unsafe fn activate_first_transform(
+        activates: *mut Option<IMFActivate>,
+        count: u32,
+    ) -> flow_like_types::Result<IMFTransform> {
+        let activate_slice = unsafe { std::slice::from_raw_parts_mut(activates, count as usize) };
+        let mut last_error = None;
+
+        for activate_slot in activate_slice {
+            let Some(activate) = activate_slot.take() else {
+                continue;
+            };
+
+            match unsafe { activate.ActivateObject::<IMFTransform>() } {
+                Ok(transform) => {
+                    let _ = unsafe { activate.ShutdownObject() };
+                    return Ok(transform);
+                }
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    let _ = unsafe { activate.ShutdownObject() };
+                }
+            }
+        }
+
+        bail!(
+            "Media Foundation found HEVC decoder transforms but could not activate one{}",
+            last_error
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default()
+        )
+    }
+
+    unsafe fn create_video_media_type(
+        subtype: GUID,
+        width: u32,
+        height: u32,
+        sample_size: Option<u32>,
+    ) -> flow_like_types::Result<IMFMediaType> {
+        let media_type = unsafe { MFCreateMediaType() }
+            .map_err(|e| anyhow!("Media Foundation MFCreateMediaType failed: {e}"))?;
+        unsafe {
+            media_type
+                .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+                .map_err(|e| anyhow!("Media Foundation media type major failed: {e}"))?;
+            media_type
+                .SetGUID(&MF_MT_SUBTYPE, &subtype)
+                .map_err(|e| anyhow!("Media Foundation media type subtype failed: {e}"))?;
+            media_type
+                .SetUINT64(
+                    &MF_MT_FRAME_SIZE,
+                    (u64::from(width) << 32) | u64::from(height),
+                )
+                .map_err(|e| anyhow!("Media Foundation media type frame size failed: {e}"))?;
+            if let Some(sample_size) = sample_size {
+                media_type
+                    .SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)
+                    .map_err(|e| anyhow!("Media Foundation fixed sample flag failed: {e}"))?;
+                media_type
+                    .SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)
+                    .map_err(|e| anyhow!("Media Foundation independent sample flag failed: {e}"))?;
+                media_type
+                    .SetUINT32(&MF_MT_SAMPLE_SIZE, sample_size)
+                    .map_err(|e| anyhow!("Media Foundation sample size failed: {e}"))?;
+            }
+        }
+        Ok(media_type)
+    }
+
+    unsafe fn create_input_sample(
+        data: &[u8],
+        sample_time: i64,
+    ) -> flow_like_types::Result<IMFSample> {
+        let buffer_len = checked_u32(data.len(), "HEVC input sample size")?;
+        let sample = unsafe { MFCreateSample() }
+            .map_err(|e| anyhow!("Media Foundation MFCreateSample failed: {e}"))?;
+        let buffer = unsafe { MFCreateMemoryBuffer(buffer_len) }
+            .map_err(|e| anyhow!("Media Foundation MFCreateMemoryBuffer failed: {e}"))?;
+
+        let mut dst = ptr::null_mut();
+        unsafe {
+            buffer
+                .Lock(&mut dst, None, None)
+                .map_err(|e| anyhow!("Media Foundation input buffer lock failed: {e}"))?;
+            ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+            buffer
+                .Unlock()
+                .map_err(|e| anyhow!("Media Foundation input buffer unlock failed: {e}"))?;
+            buffer
+                .SetCurrentLength(buffer_len)
+                .map_err(|e| anyhow!("Media Foundation input buffer length failed: {e}"))?;
+            sample
+                .AddBuffer(&buffer)
+                .map_err(|e| anyhow!("Media Foundation input AddBuffer failed: {e}"))?;
+            sample
+                .SetSampleTime(sample_time)
+                .map_err(|e| anyhow!("Media Foundation input sample time failed: {e}"))?;
+        }
+
+        Ok(sample)
+    }
+
+    unsafe fn rgb32_sample_to_image(
+        sample: &IMFSample,
+        dimensions: HevcDimensions,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let buffer = unsafe { sample.ConvertToContiguousBuffer() }
+            .map_err(|e| anyhow!("Media Foundation output contiguous buffer failed: {e}"))?;
+        let current_len = unsafe { buffer.GetCurrentLength() }
+            .map_err(|e| anyhow!("Media Foundation output buffer length failed: {e}"))?
+            as usize;
+        let width = dimensions.display_width as usize;
+        let height = dimensions.display_height as usize;
+        let row_len = width
+            .checked_mul(4)
+            .ok_or_else(|| anyhow!("Media Foundation RGB row size overflowed"))?;
+        let required_len = row_len
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("Media Foundation RGB frame size overflowed"))?;
+        if current_len < required_len {
+            bail!("Media Foundation HEVC RGB output is shorter than expected");
+        }
+
+        let mut ptr = ptr::null_mut();
+        unsafe {
+            buffer
+                .Lock(&mut ptr, None, None)
+                .map_err(|e| anyhow!("Media Foundation output buffer lock failed: {e}"))?;
+        }
+        let image_result = unsafe {
+            let bytes = std::slice::from_raw_parts(ptr, required_len);
+            rgb32_bytes_to_image(bytes, width, height)
+        };
+        unsafe {
+            buffer
+                .Unlock()
+                .map_err(|e| anyhow!("Media Foundation output buffer unlock failed: {e}"))?;
+        }
+
+        image_result
+    }
+
+    fn rgb32_bytes_to_image(
+        bytes: &[u8],
+        width: usize,
+        height: usize,
+    ) -> flow_like_types::Result<DynamicImage> {
+        let mut rgb = Vec::with_capacity(
+            width
+                .checked_mul(height)
+                .and_then(|pixels| pixels.checked_mul(3))
+                .ok_or_else(|| anyhow!("Media Foundation RGB image size overflowed"))?,
+        );
+
+        for bgra in bytes.chunks_exact(4) {
+            rgb.push(bgra[2]);
+            rgb.push(bgra[1]);
+            rgb.push(bgra[0]);
+        }
+
+        let image = RgbImage::from_raw(width as u32, height as u32, rgb)
+            .ok_or_else(|| anyhow!("Media Foundation HEVC frame had invalid RGB dimensions"))?;
+        Ok(DynamicImage::ImageRgb8(image))
+    }
+
+    fn checked_u32(value: usize, name: &str) -> flow_like_types::Result<u32> {
+        u32::try_from(value).map_err(|_| anyhow!("{name} is too large for Media Foundation"))
+    }
+}
+
+#[cfg(all(
+    feature = "execute",
+    not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android",
+        target_os = "windows"
+    ))
+))]
+mod platform_hevc {
+    use super::*;
+
+    pub struct Decoder {}
+
+    impl Decoder {
+        pub fn new(_parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
+            bail!(
+                "H.265/HEVC stream detected, but bundled software HEVC decoding is disabled. \
+                 This build must use the platform decoder backend for {} ({}), and that backend is not implemented for this target yet. \
+                 Use an H.264 camera profile/substream or a JPEG/MJPEG snapshot URL.",
+                platform_target_name(),
+                platform_hevc_backend_name()
+            )
+        }
+
+        pub fn decode(&mut self, _data: &[u8]) -> flow_like_types::Result<Option<DynamicImage>> {
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(feature = "execute")]
 fn h26x_payload_to_annex_b(data: &[u8]) -> flow_like_types::Result<Cow<'_, [u8]>> {
     if data.is_empty() {
         return Ok(Cow::Borrowed(data));
@@ -506,10 +2311,59 @@ fn h26x_payload_to_annex_b(data: &[u8]) -> flow_like_types::Result<Cow<'_, [u8]>
     Ok(Cow::Owned(single_nal))
 }
 
+#[cfg(feature = "execute")]
 fn starts_with_annex_b_start_code(data: &[u8]) -> bool {
     data.starts_with(&[0, 0, 1]) || data.starts_with(&[0, 0, 0, 1])
 }
 
+#[cfg(feature = "execute")]
+fn annex_b_nals(data: &[u8]) -> Vec<&[u8]> {
+    let Some((first_start, first_start_len)) = find_annex_b_start_code(data, 0) else {
+        return (!data.is_empty()).then_some(data).into_iter().collect();
+    };
+
+    let mut nals = Vec::new();
+    let mut nal_start = first_start + first_start_len;
+
+    while nal_start < data.len() {
+        let next_start = find_annex_b_start_code(data, nal_start).map(|(start, _)| start);
+        let nal_end = next_start.unwrap_or(data.len());
+
+        if nal_end > nal_start {
+            nals.push(&data[nal_start..nal_end]);
+        }
+
+        let Some((start, start_len)) = next_start.and_then(|start| {
+            find_annex_b_start_code(data, start).map(|(_, start_len)| (start, start_len))
+        }) else {
+            break;
+        };
+
+        nal_start = start + start_len;
+    }
+
+    nals
+}
+
+#[cfg(feature = "execute")]
+fn find_annex_b_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut offset = from;
+    while offset + 3 <= data.len() {
+        if data[offset..].starts_with(&[0, 0, 1]) {
+            return Some((offset, 3));
+        }
+
+        if offset + 4 <= data.len() && data[offset..].starts_with(&[0, 0, 0, 1]) {
+            return Some((offset, 4));
+        }
+
+        offset += 1;
+    }
+
+    None
+}
+
+#[cfg(feature = "execute")]
 fn four_byte_length_prefixed_to_annex_b(data: &[u8]) -> flow_like_types::Result<Option<Vec<u8>>> {
     let mut offset = 0usize;
     let mut out = Vec::with_capacity(data.len() + 16);
@@ -545,6 +2399,7 @@ fn four_byte_length_prefixed_to_annex_b(data: &[u8]) -> flow_like_types::Result<
     Ok((nal_count > 0).then_some(out))
 }
 
+#[cfg(feature = "execute")]
 fn decoded_yuv_to_image(
     decoded: &openh264::decoder::DecodedYUV<'_>,
 ) -> flow_like_types::Result<DynamicImage> {
@@ -558,83 +2413,7 @@ fn decoded_yuv_to_image(
     Ok(DynamicImage::ImageRgb8(image))
 }
 
-fn h265_frame_to_image(frame: &H265Frame) -> flow_like_types::Result<DynamicImage> {
-    match (&frame.y, &frame.u, &frame.v) {
-        (H265PixelData::U8(y), H265PixelData::U8(u), H265PixelData::U8(v)) => {
-            yuv420_to_rgb_image(frame.width, frame.height, 8, y, u, v)
-        }
-        (H265PixelData::U16(y), H265PixelData::U16(u), H265PixelData::U16(v)) => {
-            let y = scale_plane_u16_to_u8(y, frame.bit_depth);
-            let u = scale_plane_u16_to_u8(u, frame.bit_depth);
-            let v = scale_plane_u16_to_u8(v, frame.bit_depth);
-            yuv420_to_rgb_image(frame.width, frame.height, 8, &y, &u, &v)
-        }
-        _ => bail!("Decoded H.265 frame used mixed pixel plane types"),
-    }
-}
-
-fn scale_plane_u16_to_u8(plane: &[u16], bit_depth: u8) -> Vec<u8> {
-    let max_value = ((1u32 << bit_depth.min(16)) - 1).max(1);
-    plane
-        .iter()
-        .map(|sample| (((*sample as u32) * 255 + (max_value / 2)) / max_value) as u8)
-        .collect()
-}
-
-fn yuv420_to_rgb_image(
-    width: u32,
-    height: u32,
-    bit_depth: u8,
-    y_plane: &[u8],
-    u_plane: &[u8],
-    v_plane: &[u8],
-) -> flow_like_types::Result<DynamicImage> {
-    let width_usize = width as usize;
-    let height_usize = height as usize;
-    let luma_len = width_usize
-        .checked_mul(height_usize)
-        .ok_or_else(|| anyhow!("Decoded H.265 frame dimensions overflowed"))?;
-    let chroma_width = width_usize.div_ceil(2).max(1);
-    let chroma_height = height_usize.div_ceil(2).max(1);
-    let chroma_len = chroma_width
-        .checked_mul(chroma_height)
-        .ok_or_else(|| anyhow!("Decoded H.265 chroma dimensions overflowed"))?;
-
-    if y_plane.len() < luma_len || u_plane.len() < chroma_len || v_plane.len() < chroma_len {
-        bail!("Decoded H.265 frame had incomplete YUV420 planes");
-    }
-
-    let mut rgb = Vec::with_capacity(luma_len * 3);
-    let neutral_chroma = 1i32 << bit_depth.saturating_sub(1);
-
-    for y in 0..height_usize {
-        for x in 0..width_usize {
-            let y_sample = y_plane[y * width_usize + x] as i32;
-            let chroma_index = (y / 2) * chroma_width + (x / 2);
-            let cb = u_plane[chroma_index] as i32 - neutral_chroma;
-            let cr = v_plane[chroma_index] as i32 - neutral_chroma;
-
-            let r = y_sample + ((359 * cr) >> 8);
-            let g = y_sample - ((88 * cb + 183 * cr) >> 8);
-            let b = y_sample + ((454 * cb) >> 8);
-
-            rgb.push(clamp_u8(r));
-            rgb.push(clamp_u8(g));
-            rgb.push(clamp_u8(b));
-        }
-    }
-
-    let image = RgbImage::from_raw(width, height, rgb)
-        .ok_or_else(|| anyhow!("Decoded H.265 frame had invalid RGB dimensions"))?;
-
-    Ok(DynamicImage::ImageRgb8(image))
-}
-
-fn clamp_u8(value: i32) -> u8 {
-    value.clamp(0, 255) as u8
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "execute"))]
 mod tests {
     use super::*;
 
