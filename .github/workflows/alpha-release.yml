@@ -30,7 +30,9 @@ jobs:
             args: "--config src-tauri/configs/tauri.linux.x64.conf.json --verbose"
           - platform: "ubuntu-24.04-arm"
             args: "--verbose"
-          - platform: "windows-latest"
+          # windows-latest currently resolves to the VS 2026 image, which breaks
+          # libduckdb-sys 1.3.0's vendored fmt headers.
+          - platform: "windows-2022"
             args: "--config src-tauri/configs/tauri.win.x64.conf.json --verbose"
     runs-on: ${{ matrix.platform }}
     env:
@@ -185,8 +187,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ env.CERT_ID }}
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C link-arg=/STACK:8388608' || '' }}
-          # libduckdb-sys 1.3.0's vendored fmt trips over MSVC's removed stdext::checked_array_iterator.
-          CXXFLAGS_x86_64_pc_windows_msvc: ${{ runner.os == 'Windows' && '/std:c++17 /U_SECURE_SCL' || '' }}
+          CXXFLAGS_x86_64_pc_windows_msvc: ${{ runner.os == 'Windows' && '/std:c++17' || '' }}
         with:
           tagName: beta-v__VERSION__
           releaseName: "Flow Like - Beta v__VERSION__"
