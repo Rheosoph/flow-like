@@ -29,7 +29,7 @@ use retina::{
     codec::{CodecItem, ParametersRef, VideoFrame, VideoParametersCodec},
 };
 #[cfg(feature = "execute")]
-use tokio::{runtime::Builder as TokioRuntimeBuilder, task::spawn_blocking, time::timeout};
+use tokio::time::timeout;
 #[cfg(feature = "execute")]
 use url::Url;
 
@@ -39,14 +39,6 @@ const MAX_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_MAX_FRAMES: usize = 300;
 const MIN_MAX_FRAMES: usize = 1;
 const MAX_MAX_FRAMES: usize = 10_000;
-
-#[cfg(feature = "execute")]
-struct CaptureConfig {
-    rtsp_url: String,
-    transport: String,
-    timeout_ms: u64,
-    max_frames: usize,
-}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -202,37 +194,20 @@ async fn capture_frame(
     timeout_ms: i64,
     max_frames: i64,
 ) -> flow_like_types::Result<DynamicImage> {
-    let config = CaptureConfig {
-        rtsp_url: normalize_rtsp_url(rtsp_url)?.to_string(),
-        transport: transport.to_string(),
-        timeout_ms: normalize_timeout_ms(timeout_ms),
-        max_frames: normalize_max_frames(max_frames),
-    };
+    let transport = normalize_transport(transport)?;
+    let timeout_ms = normalize_timeout_ms(timeout_ms);
+    let max_frames = normalize_max_frames(max_frames);
+    let rtsp_url = normalize_rtsp_url(rtsp_url)?.to_string();
 
-    spawn_blocking(move || run_capture_blocking(config))
-        .await
-        .map_err(|e| anyhow!("RTSP frame capture task failed: {e}"))?
-}
-
-#[cfg(feature = "execute")]
-fn run_capture_blocking(config: CaptureConfig) -> flow_like_types::Result<DynamicImage> {
-    let runtime = TokioRuntimeBuilder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| anyhow!("Failed to start RTSP capture runtime: {e}"))?;
-
-    runtime.block_on(async move {
-        let transport = normalize_transport(&config.transport)?;
-        match timeout(
-            Duration::from_millis(config.timeout_ms),
-            capture_frame_inner(&config.rtsp_url, transport, config.max_frames),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => bail!("Timed out waiting for RTSP frame capture"),
-        }
-    })
+    match timeout(
+        Duration::from_millis(timeout_ms),
+        capture_frame_inner(&rtsp_url, transport, max_frames),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => bail!("Timed out waiting for RTSP frame capture"),
+    }
 }
 
 #[cfg(feature = "execute")]
@@ -357,10 +332,15 @@ fn parse_rtsp_url(value: &str) -> flow_like_types::Result<(Url, Option<Credentia
     let credentials = if url.username().is_empty() {
         None
     } else {
-        let credentials = Credentials {
-            username: url.username().to_string(),
-            password: url.password().unwrap_or_default().to_string(),
-        };
+        let username = urlencoding::decode(url.username())
+            .map(|value| value.into_owned())
+            .unwrap_or_else(|_| url.username().to_string());
+        let password = url.password().unwrap_or_default();
+        let password = urlencoding::decode(password)
+            .map(|value| value.into_owned())
+            .unwrap_or_else(|_| password.to_string());
+
+        let credentials = Credentials { username, password };
 
         url.set_username("")
             .map_err(|_| anyhow!("Failed to remove RTSP username from URL"))?;
@@ -1031,6 +1011,11 @@ mod platform_hevc {
         session: Option<AppleHevcSession>,
     }
 
+    // SAFETY: The decoder owns its CoreFoundation/VideoToolbox references and only
+    // exposes mutable decode access, so moving it between executor threads does not
+    // create concurrent access to the underlying session.
+    unsafe impl Send for Decoder {}
+
     impl Decoder {
         pub fn new(parameter_sets: Vec<Vec<u8>>) -> flow_like_types::Result<Self> {
             Ok(Self {
@@ -1070,6 +1055,10 @@ mod platform_hevc {
         image_buffer_attrs: CFDictionaryRef,
         pixel_format_number: CFNumberRef,
     }
+
+    // SAFETY: The session is owned by `AppleHevcSession`, released in `Drop`, and
+    // all operations require `&mut self`, preventing shared concurrent use.
+    unsafe impl Send for AppleHevcSession {}
 
     impl AppleHevcSession {
         fn new(parameter_sets: &HevcParameterSets) -> flow_like_types::Result<Self> {

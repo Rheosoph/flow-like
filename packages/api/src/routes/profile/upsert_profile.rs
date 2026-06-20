@@ -109,12 +109,12 @@ pub async fn upsert_profile(
             active_model.bit_ids = Set(Some(bit_ids));
         }
         if let Some(apps) = profile_body.apps {
-            let apps: Vec<Value> = apps.iter().map(|v| to_value(v).unwrap()).collect();
+            let apps: Vec<Value> = apps.iter().map(to_value).collect::<Result<_, _>>()?;
             let apps: Value = Value::Array(apps);
             active_model.apps = Set(Some(apps));
         }
         if let Some(shortcuts) = profile_body.shortcuts {
-            let shortcuts: Vec<Value> = shortcuts.iter().map(|v| to_value(v).unwrap()).collect();
+            let shortcuts: Vec<Value> = shortcuts.iter().map(to_value).collect::<Result<_, _>>()?;
             let shortcuts: Value = Value::Array(shortcuts);
             active_model.shortcuts = Set(Some(shortcuts));
         }

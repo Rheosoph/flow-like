@@ -202,7 +202,7 @@ export function LibraryPage({
 			allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
 			sortMode,
 		);
-		return sorted.toSorted((a, b) => {
+		return [...sorted].sort((a, b) => {
 			const orderA = profileAppMap.get(a.id)?.pinned_order ?? 999;
 			const orderB = profileAppMap.get(b.id)?.pinned_order ?? 999;
 			return orderA - orderB;
@@ -213,7 +213,7 @@ export function LibraryPage({
 		const favs = allItems.filter(
 			(item) => profileAppMap.get(item.id)?.favorite,
 		);
-		return favs.toSorted((a, b) => {
+		return [...favs].sort((a, b) => {
 			const orderA = profileAppMap.get(a.id)?.favorite_order ?? 999;
 			const orderB = profileAppMap.get(b.id)?.favorite_order ?? 999;
 			if (orderA !== orderB) return orderA - orderB;
@@ -239,7 +239,7 @@ export function LibraryPage({
 				label,
 				items: sortItems(sectionItems, sortMode),
 			}))
-			.toSorted((a, b) => a.label.localeCompare(b.label));
+			.sort((a, b) => a.label.localeCompare(b.label));
 	}, [itemsForDisplay, sortMode]);
 
 	const { addAll, removeAll, clearSearch, search, searchResults } =

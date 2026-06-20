@@ -375,6 +375,7 @@ export default function TemplatesPage() {
 												size="sm"
 												className="opacity-0 group-hover:opacity-100 transition-opacity"
 												onClick={(event) => event.stopPropagation()}
+												onKeyDown={(event) => event.stopPropagation()}
 											>
 												<MoreVertical className="w-4 h-4" />
 											</Button>
