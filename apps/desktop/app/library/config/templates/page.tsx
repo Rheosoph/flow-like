@@ -409,7 +409,7 @@ export default function TemplatesPage() {
 								</p>
 
 								<div className="flex flex-wrap gap-1">
-									{meta?.tags.map((tag) => (
+									{meta?.tags?.map((tag) => (
 										<Badge key={tag} variant="outline" className="text-xs">
 											{tag}
 										</Badge>
