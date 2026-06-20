@@ -426,7 +426,7 @@ function schemaFields(schema: JsonSchema, root: JsonSchema): SchemaField[] {
 	if (properties) {
 		const required = schemaRequired(resolved, root);
 		return Object.entries(properties)
-			.map(([name, value]) => {
+			.map(([name, value]): SchemaField | undefined => {
 				const child = asSchema(value);
 				if (!child) return undefined;
 				return { name, required: required.has(name), schema: child };

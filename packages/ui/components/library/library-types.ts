@@ -34,13 +34,13 @@ export const CATEGORY_COLORS: Record<string, string> = {
 
 export function sortItems(items: LibraryItem[], mode: SortMode): LibraryItem[] {
 	if (mode === "alpha") {
-		return items.toSorted((a, b) => {
+		return [...items].sort((a, b) => {
 			const byName = (a.name ?? "").localeCompare(b.name ?? "");
 			if (byName !== 0) return byName;
 			return a.id.localeCompare(b.id);
 		});
 	}
-	return items.toSorted((a, b) => {
+	return [...items].sort((a, b) => {
 		const bySecs =
 			(b.updated_at?.secs_since_epoch ?? 0) -
 			(a.updated_at?.secs_since_epoch ?? 0);

@@ -691,18 +691,20 @@ export class BoardState implements IBoardState {
 				{ method: "GET" },
 				this.backend.auth,
 			);
-			await invoke("upsert_board", {
-				appId: appId,
-				boardId: boardId,
-				name: remoteData.name,
-				description: remoteData.description,
-				logLevel: remoteData.log_level,
-				stage: remoteData.stage,
-				executionMode: remoteData.execution_mode,
-				boardData: remoteData,
-			}).catch((e: unknown) => {
-				console.warn("[BoardState] Failed to persist remote board locally:", e);
-			});
+			if (typeof version === "undefined") {
+				await invoke("upsert_board", {
+					appId: appId,
+					boardId: boardId,
+					name: remoteData.name,
+					description: remoteData.description,
+					logLevel: remoteData.log_level,
+					stage: remoteData.stage,
+					executionMode: remoteData.execution_mode,
+					boardData: remoteData,
+				}).catch((e: unknown) => {
+					console.warn("[BoardState] Failed to persist remote board locally:", e);
+				});
+			}
 			if (typeof version === "undefined") {
 				dispatchRemoteBoardApplied(appId, boardId);
 			}
@@ -713,6 +715,10 @@ export class BoardState implements IBoardState {
 
 		// Presign media comments for display
 		await this.presignMediaComments(appId, boardId, board, isOffline);
+
+		if (typeof version !== "undefined") {
+			return board;
+		}
 
 		if (
 			isOffline ||
@@ -728,10 +734,7 @@ export class BoardState implements IBoardState {
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
 			try {
-				let url = `apps/${appId}/board/${boardId}`;
-				if (version) {
-					url += `?version=${version.join("_")}`;
-				}
+				const url = `apps/${appId}/board/${boardId}`;
 				const remoteData = await fetcher<IBoard>(
 					this.backend.profile,
 					url,

@@ -132,7 +132,7 @@ export class WebBoardState implements IBoardState {
 		version?: [number, number, number],
 		_forceFresh?: boolean,
 	): Promise<IBoard> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		const params = version ? `?version=${version.join("_")}` : "";
 		const board = await apiGet<IBoard>(
 			`apps/${appId}/board/${boardId}${params}`,
 			this.backend.auth,
@@ -826,7 +826,7 @@ export class WebBoardState implements IBoardState {
 		boardId: string,
 		version?: [number, number, number],
 	): Promise<IPrerunBoardResponse> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		const params = version ? `?version=${version.join("_")}` : "";
 		return apiGet<IPrerunBoardResponse>(
 			`apps/${appId}/board/${boardId}/prerun${params}`,
 			this.backend.auth,

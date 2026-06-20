@@ -2,6 +2,7 @@ import type {
 	IMetadata,
 	IProfile,
 	IProfileApp,
+	IProfileShortcut,
 	ISettingsProfile,
 	IUserState,
 } from "@flow-like/flow-like-ui";
@@ -22,6 +23,7 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { appsDB, type IShortcut } from "../../lib/apps-db";
 import {
 	type ILocalNotification,
 	deleteLocalNotification,
@@ -57,6 +59,18 @@ function sortNotificationsByCreatedAtDesc(
 		(a, b) =>
 			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
 	);
+}
+
+function normalizeProfileShortcut(
+	shortcut: IProfileShortcut,
+	profileId: string,
+): IShortcut {
+	return {
+		...shortcut,
+		profileId,
+		appId: shortcut.appId ?? undefined,
+		icon: shortcut.icon ?? undefined,
+	};
 }
 
 export class UserState implements IUserState {
@@ -443,6 +457,62 @@ export class UserState implements IUserState {
 			app,
 			operation,
 		});
+	}
+
+	async updateProfileShortcuts(
+		profile: ISettingsProfile,
+		shortcuts: IProfileShortcut[],
+	): Promise<void> {
+		const profileId = profile.hub_profile.id;
+		if (!profileId) {
+			throw new Error("Profile ID is required");
+		}
+
+		const normalizedShortcuts = shortcuts.map((shortcut) =>
+			normalizeProfileShortcut(shortcut, profileId),
+		);
+		const nextShortcutIds = new Set(
+			normalizedShortcuts.map((shortcut) => shortcut.id),
+		);
+		const localShortcuts = await appsDB.shortcuts
+			.where("profileId")
+			.equals(profileId)
+			.toArray();
+
+		await appsDB.transaction("rw", appsDB.shortcuts, async () => {
+			for (const shortcut of normalizedShortcuts) {
+				await appsDB.shortcuts.put(shortcut);
+			}
+			for (const localShortcut of localShortcuts) {
+				if (!nextShortcutIds.has(localShortcut.id)) {
+					await appsDB.shortcuts.delete(localShortcut.id);
+				}
+			}
+		});
+
+		profile.hub_profile.shortcuts = normalizedShortcuts;
+		await invoke("profile_update_shortcuts", {
+			profileId,
+			shortcuts: normalizedShortcuts,
+		});
+
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
+			return;
+		}
+
+		await fetcher(
+			this.backend.profile,
+			`profile/${profileId}`,
+			{
+				method: "POST",
+				body: JSON.stringify({ shortcuts: normalizedShortcuts }),
+			},
+			this.backend.auth,
+		);
 	}
 
 	async createPAT(
