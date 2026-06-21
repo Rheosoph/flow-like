@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Label } from "../../../components/ui/label";
 import {
 	Select,
@@ -9,14 +9,28 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../../components/ui/select";
-import { type IVariable } from "../../../lib/schema/flow/variable";
+import type { IVariable } from "../../../lib/schema/flow/variable";
 import { parseUint8ArrayToJson } from "../../../lib/uint8";
 import { cn } from "../../../lib/utils";
+
+const shouldPrettyPrintDecodedJson = (decoded: string): boolean => {
+	const trimmed = decoded.trimStart();
+	return trimmed.startsWith("{") || trimmed.startsWith("[");
+};
 
 const decodeJsonBytes = (value: number[] | null | undefined): string => {
 	if (!value || value.length === 0) return "";
 	try {
-		return new TextDecoder("utf-8").decode(new Uint8Array(value));
+		const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
+			new Uint8Array(value),
+		);
+		if (!shouldPrettyPrintDecodedJson(decoded)) return decoded;
+
+		try {
+			return JSON.stringify(JSON.parse(decoded), null, 2) ?? decoded;
+		} catch {
+			return decoded;
+		}
 	} catch {
 		const parsed = parseUint8ArrayToJson(value);
 		if (parsed === undefined) return "";
@@ -75,6 +89,16 @@ export function GenericVariable({
 	const [template, setTemplate] = useState<GenericTemplate>("custom");
 	const [jsonError, setJsonError] = useState<string | null>(null);
 	const [isFocused, setIsFocused] = useState(false);
+
+	useEffect(() => {
+		if (isFocused) return;
+		const nextJsonValue = decodeJsonBytes(variable.default_value);
+		if (nextJsonValue === jsonValue) return;
+
+		setJsonValue(nextJsonValue);
+		setJsonError(null);
+		setTemplate("custom");
+	}, [isFocused, jsonValue, variable.default_value]);
 
 	const commitJsonText = useCallback(
 		(nextValue: string) => {

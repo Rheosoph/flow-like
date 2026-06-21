@@ -1,7 +1,7 @@
 "use client";
 
 import { BracesIcon, FormInputIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../../components/ui/button";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Input } from "../../../components/ui/input";
@@ -99,6 +99,28 @@ const schemaWithoutComposition = (schema: SchemaProperty): SchemaProperty => {
 	return rest;
 };
 
+const mergeSchemas = (
+	base: SchemaProperty,
+	override: SchemaProperty,
+): SchemaProperty => {
+	const merged: SchemaProperty = { ...base, ...override };
+
+	if (base.properties || override.properties) {
+		merged.properties = {
+			...(base.properties ?? {}),
+			...(override.properties ?? {}),
+		};
+	}
+
+	if (base.required || override.required) {
+		merged.required = Array.from(
+			new Set([...(base.required ?? []), ...(override.required ?? [])]),
+		);
+	}
+
+	return merged;
+};
+
 const rawSchemaType = (
 	schema: SchemaProperty | JsonSchema,
 ): string | undefined => {
@@ -123,10 +145,10 @@ const resolveSchema = (
 		if (target) {
 			const nextSeen = new Set(seen);
 			nextSeen.add(schema.$ref);
-			return {
-				...resolveSchema(target, root, nextSeen),
-				...schemaWithoutComposition(schema),
-			};
+			return mergeSchemas(
+				resolveSchema(target, root, nextSeen),
+				schemaWithoutComposition(schema),
+			);
 		}
 	}
 
@@ -137,18 +159,15 @@ const resolveSchema = (
 				const type = rawSchemaType(resolveSchema(candidate, root, seen));
 				return type && type !== "null";
 			}) ?? union[0];
-		return {
-			...resolveSchema(branch, root, seen),
-			...schemaWithoutComposition(schema),
-		};
+		return mergeSchemas(
+			resolveSchema(branch, root, seen),
+			schemaWithoutComposition(schema),
+		);
 	}
 
 	if (schema.allOf && schema.allOf.length > 0) {
 		return schema.allOf.reduce<SchemaProperty>(
-			(merged, part) => ({
-				...merged,
-				...resolveSchema(part, root, seen),
-			}),
+			(merged, part) => mergeSchemas(merged, resolveSchema(part, root, seen)),
 			schemaWithoutComposition(schema),
 		);
 	}
@@ -166,7 +185,14 @@ const schemaType = (
 const defaultForSchema = (
 	schema: SchemaProperty,
 	root: JsonSchema,
+	seenRefs = new Set<string>(),
 ): unknown => {
+	const nextSeenRefs = new Set(seenRefs);
+	if (schema.$ref) {
+		if (nextSeenRefs.has(schema.$ref)) return undefined;
+		nextSeenRefs.add(schema.$ref);
+	}
+
 	const resolved = resolveSchema(schema, root);
 	const type = schemaType(resolved, root);
 
@@ -178,7 +204,7 @@ const defaultForSchema = (
 	if (type === "object") {
 		const result: Record<string, unknown> = {};
 		for (const [key, prop] of Object.entries(resolved.properties ?? {})) {
-			result[key] = defaultForSchema(prop, root);
+			result[key] = defaultForSchema(prop, root, nextSeenRefs);
 		}
 		return result;
 	}
@@ -235,6 +261,32 @@ const formatJsonValue = (value: unknown): string => {
 	return JSON.stringify(value, null, 2) ?? "null";
 };
 
+const jsonValuesEqual = (left: unknown, right: unknown): boolean => {
+	try {
+		return JSON.stringify(left) === JSON.stringify(right);
+	} catch {
+		return left === right;
+	}
+};
+
+const parseJsonDraft = (draft: string): unknown => {
+	if (draft.trim() === "") return undefined;
+	return JSON.parse(draft);
+};
+
+const uint8ArraysEqual = (
+	left: number[] | null | undefined,
+	right: number[] | null | undefined,
+): boolean => {
+	if (left === right) return true;
+	const normalizedLeft = left ?? [];
+	const normalizedRight = right ?? [];
+	if (normalizedLeft.length !== normalizedRight.length) return false;
+	return normalizedLeft.every(
+		(value, index) => value === normalizedRight[index],
+	);
+};
+
 function JsonValueTextarea({
 	disabled,
 	value,
@@ -248,6 +300,23 @@ function JsonValueTextarea({
 }>) {
 	const [draft, setDraft] = useState(() => formatJsonValue(value));
 	const [error, setError] = useState<string | null>(null);
+	const previousValue = useRef(value);
+
+	useEffect(() => {
+		if (previousValue.current === value) return;
+		previousValue.current = value;
+
+		let parsedDraft: unknown;
+		try {
+			parsedDraft = parseJsonDraft(draft);
+		} catch {
+			parsedDraft = undefined;
+		}
+
+		if (jsonValuesEqual(parsedDraft, value)) return;
+		setDraft(formatJsonValue(value));
+		setError(null);
+	}, [draft, value]);
 
 	return (
 		<div className="space-y-1">
@@ -259,7 +328,7 @@ function JsonValueTextarea({
 					const nextDraft = e.target.value;
 					setDraft(nextDraft);
 					try {
-						const parsed = JSON.parse(nextDraft);
+						const parsed = parseJsonDraft(nextDraft);
 						setError(null);
 						onValidChange(parsed);
 					} catch {
@@ -303,54 +372,66 @@ export function StructVariable({
 	});
 	const [jsonError, setJsonError] = useState<string | null>(null);
 	const [isFocused, setIsFocused] = useState(false);
+	const defaultValueRef = useRef(variable.default_value);
 
 	const [formValues, setFormValues] = useState<Record<string, unknown>>(() => {
 		const parsed = parseUint8ArrayToJson(variable.default_value);
 		if (typeof parsed === "object" && parsed !== null) {
 			return parsed as Record<string, unknown>;
 		}
-		if (hasSchema) {
+		if (formSchema?.properties) {
 			return getDefaultFromSchema(formSchema);
 		}
 		return {};
 	});
 
+	useEffect(() => {
+		defaultValueRef.current = variable.default_value;
+	}, [variable.default_value]);
+
 	// Re-initialize form values and mode when schema changes
 	useEffect(() => {
-		const parsed = parseUint8ArrayToJson(variable.default_value);
-		if (hasSchema) {
+		const parsed = parseUint8ArrayToJson(defaultValueRef.current);
+		if (hasSchema && formSchema) {
 			setUseJsonMode(false);
-			const defaults = getDefaultFromSchema(formSchema!);
-			if (typeof parsed === "object" && parsed !== null) {
-				setFormValues({ ...defaults, ...parsed });
-			} else {
-				setFormValues(defaults);
-			}
+			const defaults = getDefaultFromSchema(formSchema);
+			const nextValues =
+				typeof parsed === "object" && parsed !== null
+					? { ...defaults, ...parsed }
+					: defaults;
+			setFormValues((previous) =>
+				jsonValuesEqual(previous, nextValues) ? previous : nextValues,
+			);
 		} else {
 			setUseJsonMode(true);
-			if (typeof parsed === "object" && parsed !== null) {
-				setFormValues(parsed as Record<string, unknown>);
-			} else {
-				setFormValues({});
-			}
+			const nextValues =
+				typeof parsed === "object" && parsed !== null
+					? (parsed as Record<string, unknown>)
+					: {};
+			setFormValues((previous) =>
+				jsonValuesEqual(previous, nextValues) ? previous : nextValues,
+			);
 		}
-	}, [variable.schema, refs]);
+	}, [formSchema, hasSchema]);
 
 	// Sync JSON value when switching modes
 	useEffect(() => {
 		if (useJsonMode) {
 			setJsonValue(JSON.stringify(formValues, null, 2));
 		}
-	}, [useJsonMode]);
+	}, [formValues, useJsonMode]);
 
 	// Update variable when form values change (non-JSON mode)
 	useEffect(() => {
 		if (useJsonMode) return;
+		const defaultValue = convertJsonToUint8Array(formValues);
+		if (uint8ArraysEqual(defaultValue, variable.default_value)) return;
+
 		onChange({
 			...variable,
-			default_value: convertJsonToUint8Array(formValues),
+			default_value: defaultValue,
 		});
-	}, [formValues]);
+	}, [formValues, onChange, useJsonMode, variable]);
 
 	const handleJsonChange = useCallback(
 		(newJson: string) => {
@@ -377,21 +458,44 @@ export function StructVariable({
 		fieldPath: string[],
 		prop: SchemaProperty,
 		required: boolean,
+		seenRefs = new Set<string>(),
 	) => {
 		if (!schema) return null;
 
-		const resolvedProp = resolveSchema(prop, schema);
 		const fieldName = fieldPath[fieldPath.length - 1];
 		const fieldId = `struct-${fieldPath.join("-")}`;
 		const value = valueAtPath(formValues, fieldPath);
-		const type = schemaType(resolvedProp, schema);
-		const properties = resolvedProp.properties ?? {};
-		const hasNestedProperties =
-			type === "object" && Object.keys(properties).length > 0;
 		const updateField = (nextValue: unknown) =>
 			handleFieldChange(fieldPath, nextValue);
 		const key = fieldPath.join(".");
 		const label = `${fieldName}${required ? " *" : ""}`;
+		const nextSeenRefs = new Set(seenRefs);
+
+		if (prop.$ref) {
+			if (nextSeenRefs.has(prop.$ref)) {
+				return (
+					<div key={key} className="space-y-1">
+						<Label className="text-xs">{label}</Label>
+						<JsonValueTextarea
+							disabled={disabled}
+							value={value}
+							onValidChange={updateField}
+							placeholder={`Enter ${fieldName} as JSON`}
+						/>
+						<p className="text-xs text-muted-foreground">
+							Circular schema reference. Edit this value as JSON.
+						</p>
+					</div>
+				);
+			}
+			nextSeenRefs.add(prop.$ref);
+		}
+
+		const resolvedProp = resolveSchema(prop, schema);
+		const type = schemaType(resolvedProp, schema);
+		const properties = resolvedProp.properties ?? {};
+		const hasNestedProperties =
+			type === "object" && Object.keys(properties).length > 0;
 
 		if (resolvedProp.enum && resolvedProp.enum.length > 0) {
 			return (
@@ -439,6 +543,7 @@ export function StructVariable({
 								[...fieldPath, childName],
 								childProp,
 								resolvedProp.required?.includes(childName) ?? false,
+								nextSeenRefs,
 							),
 						)}
 					</div>
@@ -454,7 +559,7 @@ export function StructVariable({
 							disabled={disabled}
 							id={fieldId}
 							checked={Boolean(value)}
-							onCheckedChange={(checked) => updateField(checked)}
+							onCheckedChange={(checked) => updateField(checked === true)}
 						/>
 						<Label htmlFor={fieldId} className="text-xs cursor-pointer">
 							{label}
@@ -634,12 +739,13 @@ export function StructVariable({
 							{formSchema.description}
 						</p>
 					)}
-					{Object.entries(formSchema.properties || {}).map(([fieldName, prop]) =>
-						renderSchemaField(
-							[fieldName],
-							prop,
-							formSchema.required?.includes(fieldName) ?? false,
-						),
+					{Object.entries(formSchema.properties || {}).map(
+						([fieldName, prop]) =>
+							renderSchemaField(
+								[fieldName],
+								prop,
+								formSchema.required?.includes(fieldName) ?? false,
+							),
 					)}
 				</div>
 			)}
