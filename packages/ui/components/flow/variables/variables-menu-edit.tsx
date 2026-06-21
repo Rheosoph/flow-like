@@ -13,6 +13,7 @@ import { DateVariable } from "./date-variable";
 import { FloatArrayVariable } from "./float-array-variable";
 import { FloatSetVariable } from "./float-set-variable";
 import { FloatVariable } from "./float-variable";
+import { GenericVariable } from "./generic-variable";
 import { IntegerArrayVariable } from "./integer-array-variable";
 import { IntegerSetVariable } from "./integer-set-variable";
 import { IntegerVariable } from "./integer-variable";
@@ -230,6 +231,16 @@ export function VariablesMenuEdit({
 	) {
 		return (
 			<IntegerSetVariable
+				disabled={disabled}
+				variable={intermediateValue}
+				onChange={setIntermediateValue}
+			/>
+		);
+	}
+
+	if (variable.data_type === IVariableType.Generic) {
+		return (
+			<GenericVariable
 				disabled={disabled}
 				variable={intermediateValue}
 				onChange={setIntermediateValue}
