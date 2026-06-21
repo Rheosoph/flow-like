@@ -27,7 +27,12 @@ import {
 import { cn } from "../../../lib/utils";
 
 interface SchemaProperty {
-	type?: string;
+	$ref?: string;
+	allOf?: SchemaProperty[];
+	anyOf?: SchemaProperty[];
+	oneOf?: SchemaProperty[];
+	type?: string | string[];
+	title?: string;
 	description?: string;
 	default?: unknown;
 	enum?: string[];
@@ -36,11 +41,9 @@ interface SchemaProperty {
 	required?: string[];
 }
 
-interface JsonSchema {
-	type?: string;
-	properties?: Record<string, SchemaProperty>;
-	required?: string[];
-	description?: string;
+interface JsonSchema extends SchemaProperty {
+	$defs?: Record<string, SchemaProperty>;
+	definitions?: Record<string, SchemaProperty>;
 }
 
 const EMPTY_STRING_HASH = "16248035215404677707";
@@ -69,26 +72,206 @@ const parseSchema = (
 	}
 };
 
+const unescapePointerSegment = (segment: string): string =>
+	segment.replace(/~1/g, "/").replace(/~0/g, "~");
+
+const resolvePointer = (
+	root: JsonSchema,
+	ref: string,
+): SchemaProperty | JsonSchema | null => {
+	if (ref === "#") return root;
+	if (!ref.startsWith("#/")) return null;
+
+	return ref
+		.slice(2)
+		.split("/")
+		.map(unescapePointerSegment)
+		.reduce<unknown>((current, segment) => {
+			if (current && typeof current === "object" && segment in current) {
+				return (current as Record<string, unknown>)[segment];
+			}
+			return null;
+		}, root) as SchemaProperty | JsonSchema | null;
+};
+
+const schemaWithoutComposition = (schema: SchemaProperty): SchemaProperty => {
+	const { $ref, anyOf, oneOf, allOf, ...rest } = schema;
+	return rest;
+};
+
+const rawSchemaType = (
+	schema: SchemaProperty | JsonSchema,
+): string | undefined => {
+	const type = Array.isArray(schema.type)
+		? schema.type.find((candidate) => candidate !== "null")
+		: schema.type;
+
+	if (type) return type;
+	if (schema.properties) return "object";
+	if (schema.items) return "array";
+	return undefined;
+};
+
+const resolveSchema = (
+	schema: SchemaProperty | JsonSchema,
+	root: JsonSchema,
+	seen = new Set<string>(),
+): SchemaProperty => {
+	if (schema.$ref) {
+		if (seen.has(schema.$ref)) return schemaWithoutComposition(schema);
+		const target = resolvePointer(root, schema.$ref);
+		if (target) {
+			const nextSeen = new Set(seen);
+			nextSeen.add(schema.$ref);
+			return {
+				...resolveSchema(target, root, nextSeen),
+				...schemaWithoutComposition(schema),
+			};
+		}
+	}
+
+	const union = schema.anyOf ?? schema.oneOf;
+	if (union && union.length > 0) {
+		const branch =
+			union.find((candidate) => {
+				const type = rawSchemaType(resolveSchema(candidate, root, seen));
+				return type && type !== "null";
+			}) ?? union[0];
+		return {
+			...resolveSchema(branch, root, seen),
+			...schemaWithoutComposition(schema),
+		};
+	}
+
+	if (schema.allOf && schema.allOf.length > 0) {
+		return schema.allOf.reduce<SchemaProperty>(
+			(merged, part) => ({
+				...merged,
+				...resolveSchema(part, root, seen),
+			}),
+			schemaWithoutComposition(schema),
+		);
+	}
+
+	return schemaWithoutComposition(schema);
+};
+
+const schemaType = (
+	schema: SchemaProperty | JsonSchema,
+	root: JsonSchema,
+): string | undefined => {
+	return rawSchemaType(resolveSchema(schema, root));
+};
+
+const defaultForSchema = (
+	schema: SchemaProperty,
+	root: JsonSchema,
+): unknown => {
+	const resolved = resolveSchema(schema, root);
+	const type = schemaType(resolved, root);
+
+	if (resolved.default !== undefined) return resolved.default;
+	if (type === "string") return "";
+	if (type === "number" || type === "integer") return 0;
+	if (type === "boolean") return false;
+	if (type === "array") return [];
+	if (type === "object") {
+		const result: Record<string, unknown> = {};
+		for (const [key, prop] of Object.entries(resolved.properties ?? {})) {
+			result[key] = defaultForSchema(prop, root);
+		}
+		return result;
+	}
+
+	return undefined;
+};
+
 const getDefaultFromSchema = (schema: JsonSchema): Record<string, unknown> => {
 	const result: Record<string, unknown> = {};
 	if (!schema.properties) return result;
 	for (const [key, prop] of Object.entries(schema.properties)) {
-		if (prop.default !== undefined) {
-			result[key] = prop.default;
-		} else if (prop.type === "string") {
-			result[key] = "";
-		} else if (prop.type === "number" || prop.type === "integer") {
-			result[key] = 0;
-		} else if (prop.type === "boolean") {
-			result[key] = false;
-		} else if (prop.type === "array") {
-			result[key] = [];
-		} else if (prop.type === "object") {
-			result[key] = {};
-		}
+		result[key] = defaultForSchema(prop, schema);
 	}
 	return result;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const valueAtPath = (
+	value: Record<string, unknown>,
+	path: string[],
+): unknown => {
+	return path.reduce<unknown>((current, key) => {
+		if (!isRecord(current)) return undefined;
+		return current[key];
+	}, value);
+};
+
+const setValueAtPath = (
+	value: Record<string, unknown>,
+	path: string[],
+	nextValue: unknown,
+): Record<string, unknown> => {
+	const [key, ...rest] = path;
+	if (!key) return value;
+
+	if (rest.length === 0) {
+		return { ...value, [key]: nextValue };
+	}
+
+	return {
+		...value,
+		[key]: setValueAtPath(
+			isRecord(value[key]) ? value[key] : {},
+			rest,
+			nextValue,
+		),
+	};
+};
+
+const formatJsonValue = (value: unknown): string => {
+	if (value === undefined) return "";
+	return JSON.stringify(value, null, 2) ?? "null";
+};
+
+function JsonValueTextarea({
+	disabled,
+	value,
+	onValidChange,
+	placeholder,
+}: Readonly<{
+	disabled?: boolean;
+	value: unknown;
+	onValidChange: (value: unknown) => void;
+	placeholder?: string;
+}>) {
+	const [draft, setDraft] = useState(() => formatJsonValue(value));
+	const [error, setError] = useState<string | null>(null);
+
+	return (
+		<div className="space-y-1">
+			<Textarea
+				disabled={disabled}
+				className="font-mono text-xs h-20"
+				value={draft}
+				onChange={(e) => {
+					const nextDraft = e.target.value;
+					setDraft(nextDraft);
+					try {
+						const parsed = JSON.parse(nextDraft);
+						setError(null);
+						onValidChange(parsed);
+					} catch {
+						setError("Invalid JSON");
+					}
+				}}
+				placeholder={placeholder}
+			/>
+			{error && <p className="text-xs text-destructive">{error}</p>}
+		</div>
+	);
+}
 
 export function StructVariable({
 	disabled,
@@ -106,7 +289,12 @@ export function StructVariable({
 		[variable.schema, refs],
 	);
 
-	const hasSchema = schema !== null && schema.properties !== undefined;
+	const formSchema = useMemo(
+		() => (schema ? (resolveSchema(schema, schema) as JsonSchema) : null),
+		[schema],
+	);
+
+	const hasSchema = formSchema !== null && formSchema.properties !== undefined;
 
 	const [useJsonMode, setUseJsonMode] = useState(!hasSchema);
 	const [jsonValue, setJsonValue] = useState<string>(() => {
@@ -122,7 +310,7 @@ export function StructVariable({
 			return parsed as Record<string, unknown>;
 		}
 		if (hasSchema) {
-			return getDefaultFromSchema(schema);
+			return getDefaultFromSchema(formSchema);
 		}
 		return {};
 	});
@@ -132,7 +320,7 @@ export function StructVariable({
 		const parsed = parseUint8ArrayToJson(variable.default_value);
 		if (hasSchema) {
 			setUseJsonMode(false);
-			const defaults = getDefaultFromSchema(schema!);
+			const defaults = getDefaultFromSchema(formSchema!);
 			if (typeof parsed === "object" && parsed !== null) {
 				setFormValues({ ...defaults, ...parsed });
 			} else {
@@ -181,156 +369,176 @@ export function StructVariable({
 		[onChange, variable],
 	);
 
-	const handleFieldChange = useCallback((fieldName: string, value: unknown) => {
-		setFormValues((prev) => ({ ...prev, [fieldName]: value }));
+	const handleFieldChange = useCallback((path: string[], value: unknown) => {
+		setFormValues((prev) => setValueAtPath(prev, path, value));
 	}, []);
 
-	const renderSchemaField = useCallback(
-		(fieldName: string, prop: SchemaProperty, required: boolean) => {
-			const value = formValues[fieldName];
-			const label = `${fieldName}${required ? " *" : ""}`;
+	const renderSchemaField = (
+		fieldPath: string[],
+		prop: SchemaProperty,
+		required: boolean,
+	) => {
+		if (!schema) return null;
 
-			if (prop.enum && prop.enum.length > 0) {
-				return (
-					<div key={fieldName} className="space-y-1">
+		const resolvedProp = resolveSchema(prop, schema);
+		const fieldName = fieldPath[fieldPath.length - 1];
+		const fieldId = `struct-${fieldPath.join("-")}`;
+		const value = valueAtPath(formValues, fieldPath);
+		const type = schemaType(resolvedProp, schema);
+		const properties = resolvedProp.properties ?? {};
+		const hasNestedProperties =
+			type === "object" && Object.keys(properties).length > 0;
+		const updateField = (nextValue: unknown) =>
+			handleFieldChange(fieldPath, nextValue);
+		const key = fieldPath.join(".");
+		const label = `${fieldName}${required ? " *" : ""}`;
+
+		if (resolvedProp.enum && resolvedProp.enum.length > 0) {
+			return (
+				<div key={key} className="space-y-1">
+					<Label className="text-xs">{label}</Label>
+					<Select
+						disabled={disabled}
+						value={String(value ?? "")}
+						onValueChange={(v) => updateField(v)}
+					>
+						<SelectTrigger className="h-8">
+							<SelectValue placeholder={`Select ${fieldName}`} />
+						</SelectTrigger>
+						<SelectContent>
+							{resolvedProp.enum.map((option) => (
+								<SelectItem key={option} value={option}>
+									{option}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					{resolvedProp.description && (
+						<p className="text-xs text-muted-foreground">
+							{resolvedProp.description}
+						</p>
+					)}
+				</div>
+			);
+		}
+
+		if (hasNestedProperties) {
+			return (
+				<div key={fieldPath.join(".")} className="space-y-2">
+					<div>
 						<Label className="text-xs">{label}</Label>
-						<Select
-							disabled={disabled}
-							value={String(value ?? "")}
-							onValueChange={(v) => handleFieldChange(fieldName, v)}
-						>
-							<SelectTrigger className="h-8">
-								<SelectValue placeholder={`Select ${fieldName}`} />
-							</SelectTrigger>
-							<SelectContent>
-								{prop.enum.map((option) => (
-									<SelectItem key={option} value={option}>
-										{option}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-						{prop.description && (
+						{resolvedProp.description && (
 							<p className="text-xs text-muted-foreground">
-								{prop.description}
+								{resolvedProp.description}
 							</p>
 						)}
 					</div>
+					<div className="space-y-3 rounded-md border border-border/70 p-3">
+						{Object.entries(properties).map(([childName, childProp]) =>
+							renderSchemaField(
+								[...fieldPath, childName],
+								childProp,
+								resolvedProp.required?.includes(childName) ?? false,
+							),
+						)}
+					</div>
+				</div>
+			);
+		}
+
+		switch (type) {
+			case "boolean":
+				return (
+					<div key={key} className="flex items-center space-x-2 py-1">
+						<Checkbox
+							disabled={disabled}
+							id={fieldId}
+							checked={Boolean(value)}
+							onCheckedChange={(checked) => updateField(checked)}
+						/>
+						<Label htmlFor={fieldId} className="text-xs cursor-pointer">
+							{label}
+						</Label>
+						{resolvedProp.description && (
+							<span className="text-xs text-muted-foreground ml-2">
+								{resolvedProp.description}
+							</span>
+						)}
+					</div>
 				);
-			}
 
-			switch (prop.type) {
-				case "boolean":
-					return (
-						<div key={fieldName} className="flex items-center space-x-2 py-1">
-							<Checkbox
-								disabled={disabled}
-								id={`struct-${fieldName}`}
-								checked={Boolean(value)}
-								onCheckedChange={(checked) =>
-									handleFieldChange(fieldName, checked)
-								}
-							/>
-							<Label
-								htmlFor={`struct-${fieldName}`}
-								className="text-xs cursor-pointer"
-							>
-								{label}
-							</Label>
-							{prop.description && (
-								<span className="text-xs text-muted-foreground ml-2">
-									{prop.description}
-								</span>
-							)}
-						</div>
-					);
+			case "integer":
+				return (
+					<div key={key} className="space-y-1">
+						<Label className="text-xs">{label}</Label>
+						<Input
+							disabled={disabled}
+							type="number"
+							step="1"
+							className="h-8"
+							value={String(value ?? "")}
+							onChange={(e) =>
+								updateField(
+									e.target.value ? Number.parseInt(e.target.value, 10) : "",
+								)
+							}
+							placeholder={resolvedProp.description || `Enter ${fieldName}`}
+						/>
+					</div>
+				);
 
-				case "integer":
-					return (
-						<div key={fieldName} className="space-y-1">
-							<Label className="text-xs">{label}</Label>
-							<Input
-								disabled={disabled}
-								type="number"
-								step="1"
-								className="h-8"
-								value={String(value ?? "")}
-								onChange={(e) =>
-									handleFieldChange(
-										fieldName,
-										e.target.value ? Number.parseInt(e.target.value, 10) : "",
-									)
-								}
-								placeholder={prop.description || `Enter ${fieldName}`}
-							/>
-						</div>
-					);
+			case "number":
+				return (
+					<div key={key} className="space-y-1">
+						<Label className="text-xs">{label}</Label>
+						<Input
+							disabled={disabled}
+							type="number"
+							step="0.1"
+							className="h-8"
+							value={String(value ?? "")}
+							onChange={(e) =>
+								updateField(
+									e.target.value ? Number.parseFloat(e.target.value) : "",
+								)
+							}
+							placeholder={resolvedProp.description || `Enter ${fieldName}`}
+						/>
+					</div>
+				);
 
-				case "number":
-					return (
-						<div key={fieldName} className="space-y-1">
-							<Label className="text-xs">{label}</Label>
-							<Input
-								disabled={disabled}
-								type="number"
-								step="0.1"
-								className="h-8"
-								value={String(value ?? "")}
-								onChange={(e) =>
-									handleFieldChange(
-										fieldName,
-										e.target.value ? Number.parseFloat(e.target.value) : "",
-									)
-								}
-								placeholder={prop.description || `Enter ${fieldName}`}
-							/>
-						</div>
-					);
+			case "array":
+			case "object":
+				return (
+					<div key={key} className="space-y-1">
+						<Label className="text-xs">{label}</Label>
+						<JsonValueTextarea
+							disabled={disabled}
+							value={value}
+							onValidChange={updateField}
+							placeholder={
+								resolvedProp.description || `Enter ${fieldName} as JSON`
+							}
+						/>
+					</div>
+				);
 
-				case "array":
-				case "object":
-					return (
-						<div key={fieldName} className="space-y-1">
-							<Label className="text-xs">{label}</Label>
-							<Textarea
-								disabled={disabled}
-								className="font-mono text-xs h-20"
-								value={
-									typeof value === "object"
-										? JSON.stringify(value, null, 2)
-										: String(value ?? "")
-								}
-								onChange={(e) => {
-									try {
-										const parsed = JSON.parse(e.target.value);
-										handleFieldChange(fieldName, parsed);
-									} catch {
-										// Keep raw text for partial edits
-									}
-								}}
-								placeholder={prop.description || `Enter ${fieldName} as JSON`}
-							/>
-						</div>
-					);
-
-				default:
-					return (
-						<div key={fieldName} className="space-y-1">
-							<Label className="text-xs">{label}</Label>
-							<Input
-								disabled={disabled}
-								type="text"
-								className="h-8"
-								value={String(value ?? "")}
-								onChange={(e) => handleFieldChange(fieldName, e.target.value)}
-								placeholder={prop.description || `Enter ${fieldName}`}
-							/>
-						</div>
-					);
-			}
-		},
-		[formValues, handleFieldChange, disabled],
-	);
+			default:
+				return (
+					<div key={key} className="space-y-1">
+						<Label className="text-xs">{label}</Label>
+						<Input
+							disabled={disabled}
+							type="text"
+							className="h-8"
+							value={String(value ?? "")}
+							onChange={(e) => updateField(e.target.value)}
+							placeholder={resolvedProp.description || `Enter ${fieldName}`}
+						/>
+					</div>
+				);
+		}
+	};
 
 	return (
 		<div className="grid w-full items-center gap-2">
@@ -421,16 +629,16 @@ export function StructVariable({
 				</div>
 			) : (
 				<div className="space-y-3 border rounded-md p-3">
-					{schema.description && (
+					{formSchema.description && (
 						<p className="text-xs text-muted-foreground mb-2">
-							{schema.description}
+							{formSchema.description}
 						</p>
 					)}
-					{Object.entries(schema.properties || {}).map(([fieldName, prop]) =>
+					{Object.entries(formSchema.properties || {}).map(([fieldName, prop]) =>
 						renderSchemaField(
-							fieldName,
+							[fieldName],
 							prop,
-							schema.required?.includes(fieldName) ?? false,
+							formSchema.required?.includes(fieldName) ?? false,
 						),
 					)}
 				</div>

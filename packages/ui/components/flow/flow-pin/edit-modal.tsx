@@ -9,6 +9,7 @@ import { useBackend } from "../../../state/backend-state";
 import useFlowControlState from "../../../state/flow-control-state";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogHeader,
@@ -185,14 +186,14 @@ export function PinEditModal({
 				}
 			}}
 		>
-			<DialogContent>
+			<DialogContent className="sm:max-w-4xl max-h-[90vh]">
 				<DialogHeader>
 					<DialogTitle>Set Default Value</DialogTitle>
 					<DialogDescription>
 						The default value will only be used if the pin is not connected.
 					</DialogDescription>
 				</DialogHeader>
-				<div className="w-full">
+				<DialogBody className="pr-2">
 					<VariablesMenuEdit
 						variable={{
 							data_type: editedPin.pin.data_type,
@@ -205,12 +206,14 @@ export function PinEditModal({
 							secret: editedPin.pin.secret,
 							category: editedPin.pin.category,
 							description: editedPin.pin.description,
+							schema: editedPin.pin.schema,
 						}}
+						refs={board.data?.refs}
 						updateVariable={async (variable) => {
 							setDefaultValueState(variable.default_value);
 						}}
 					/>
-				</div>
+				</DialogBody>
 			</DialogContent>
 		</Dialog>
 	);
