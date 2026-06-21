@@ -299,6 +299,63 @@ async fn register_wasm_flowpath_stores(
     Ok(())
 }
 
+fn collect_flow_path_store_refs(value: &Value, refs: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            let is_flow_path = object.get("path").and_then(Value::as_str).is_some()
+                && object.get("store_ref").and_then(Value::as_str).is_some();
+
+            if is_flow_path {
+                if let Some(store_ref) = object.get("store_ref").and_then(Value::as_str) {
+                    refs.insert(store_ref.to_string());
+                }
+
+                if let Some(cache_store_ref) = object.get("cache_store_ref").and_then(Value::as_str)
+                {
+                    refs.insert(cache_store_ref.to_string());
+                }
+            }
+
+            for child in object.values() {
+                collect_flow_path_store_refs(child, refs);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                collect_flow_path_store_refs(child, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn resolve_input_flowpath_stores(
+    context: &ExecutionContext,
+    inputs: &serde_json::Map<String, Value>,
+) -> HashMap<String, FlowLikeStore> {
+    let mut refs = BTreeSet::new();
+    for value in inputs.values() {
+        collect_flow_path_store_refs(value, &mut refs);
+    }
+
+    let mut stores = HashMap::new();
+    for store_ref in refs {
+        let Some(cacheable) = context.get_cache(&store_ref).await else {
+            tracing::debug!("[wasm] FlowPath input store_ref not found in cache: {store_ref}");
+            continue;
+        };
+
+        let Some(store) = cacheable.downcast_ref::<FlowLikeStore>() else {
+            tracing::debug!("[wasm] FlowPath input cache value is not a store: {store_ref}");
+            continue;
+        };
+
+        stores.insert(store_ref, store.clone());
+    }
+
+    stores
+}
+
 /// Convert a `WasmNodeDefinition` into a `PackageNodeEntry` suitable for storage
 /// in the `WasmPackageVersion.nodes` JSON column.
 pub fn definition_to_package_entry(
@@ -559,10 +616,15 @@ impl NodeLogic for WasmNodeLogic {
                 register_wasm_flowpath_stores(context, &exec_cache, credentials_store.clone())
                     .await?;
             }
+            let input_store_cache = if has_storage_capability {
+                resolve_input_flowpath_stores(context, &inputs).await
+            } else {
+                HashMap::new()
+            };
 
             host_state.storage_context = Some(StorageContext {
                 stores: exec_cache.stores.clone(),
-                store_cache: ParkingRwLock::new(HashMap::new()),
+                store_cache: ParkingRwLock::new(input_store_cache),
                 credentials_store,
                 app_id: exec_cache.app_id.clone(),
                 board_dir: exec_cache.board_dir.clone(),
@@ -685,6 +747,39 @@ mod tests {
             enforce_schema,
             enforce_generic_value_type: None,
         }
+    }
+
+    #[test]
+    fn test_collect_flow_path_store_refs_from_nested_inputs() {
+        let value = serde_json::json!({
+            "virtual": {
+                "path": "",
+                "store_ref": "virtual_dir_/virtual",
+                "cache_store_ref": null
+            },
+            "items": [
+                {
+                    "path": "nested/file.txt",
+                    "store_ref": "s3_store",
+                    "cache_store_ref": "cache_dirs__storage_app"
+                },
+                {
+                    "path": "not-a-flow-path"
+                }
+            ]
+        });
+
+        let mut refs = BTreeSet::new();
+        collect_flow_path_store_refs(&value, &mut refs);
+
+        assert_eq!(
+            refs,
+            BTreeSet::from([
+                "cache_dirs__storage_app".to_string(),
+                "s3_store".to_string(),
+                "virtual_dir_/virtual".to_string(),
+            ])
+        );
     }
 
     #[test]
