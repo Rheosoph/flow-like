@@ -331,6 +331,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								appId={props.data.appId}
 								node={props.data.pinLookup[pin.id] ?? props.data.layer}
 								boardId={props.data.boardId}
+								boardRef={props.data.boardRef}
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}
@@ -347,6 +348,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								appId={props.data.appId}
 								node={props.data.pinLookup[pin.id] ?? props.data.layer}
 								boardId={props.data.boardId}
+								boardRef={props.data.boardRef}
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}

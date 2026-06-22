@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-react";
+import type { RefObject } from "react";
 import { useMemo } from "react";
-import { useBackend, useInvoke } from "../../../..";
 import {
 	Select,
 	SelectContent,
@@ -9,7 +9,7 @@ import {
 	SelectLabel,
 	SelectTrigger,
 } from "../../../../components/ui/select";
-import type { IVariable } from "../../../../lib/schema/flow/board";
+import type { IBoard, IVariable } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
@@ -19,36 +19,31 @@ import {
 export function VarVariable({
 	pin,
 	value,
-	boardId,
-	appId,
+	boardRef,
 	currentLayerId,
 	setValue,
 }: Readonly<{
 	pin: IPin;
 	value: number[] | undefined | null;
-	boardId: string;
-	appId: string;
+	boardRef?: RefObject<IBoard | undefined>;
 	currentLayerId?: string;
-	setValue: (value: any) => void;
+	setValue: (value: unknown) => void;
 }>) {
-	const backend = useBackend();
-	const board = useInvoke(backend.boardState.getBoard, backend.boardState, [
-		appId,
-		boardId,
-	]);
+	const boardData = boardRef?.current;
 
 	const allVariables = useMemo<Record<string, IVariable>>(() => {
-		if (!board.data) return {};
+		if (!boardData) return {};
 		if (currentLayerId) {
-			const layer = board.data.layers?.[currentLayerId];
-			return { ...board.data.variables, ...layer?.variables };
+			const layer = boardData.layers?.[currentLayerId];
+			return { ...boardData.variables, ...layer?.variables };
 		}
-		return { ...board.data.variables };
-	}, [board.data, currentLayerId]);
+		return { ...boardData.variables };
+	}, [boardData, currentLayerId]);
 
 	return (
 		<div className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden">
 			<Select
+				disabled={!boardData}
 				defaultValue={parseUint8ArrayToJson(value)}
 				value={parseUint8ArrayToJson(value)}
 				onValueChange={(value) => setValue(convertJsonToUint8Array(value))}
@@ -59,8 +54,8 @@ export function VarVariable({
 					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
 				>
 					<small className="text-start text-[10px] m-0! truncate">
-						{!board.data && "Loading..."}
-						{board.data &&
+						{!boardData && "Board unavailable"}
+						{boardData &&
 							(allVariables[parseUint8ArrayToJson(value)]?.name ??
 								"No Variable Selected")}
 					</small>

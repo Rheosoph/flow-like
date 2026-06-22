@@ -73,13 +73,13 @@ import {
 import { DynamicImage } from "../ui";
 import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
-import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
 import { FlowPinAction } from "./flow-node/flow-node-pin-action";
 import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
 import { FlowPin } from "./flow-pin";
+import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
@@ -509,6 +509,7 @@ const FlowNodeInner = memo(
 								key={pin.id}
 								node={props.data.node}
 								boardId={props.data.boardId}
+								boardRef={props.data.boardRef}
 								pin={pin}
 								onPinRemove={pinRemoveCallback}
 								skipOffset={isReroute}
@@ -545,6 +546,7 @@ const FlowNodeInner = memo(
 							appId={props.data.appId}
 							node={props.data.node}
 							boardId={props.data.boardId}
+							boardRef={props.data.boardRef}
 							pin={pin}
 							key={pin.id}
 							onPinRemove={pinRemoveCallback}

@@ -151,6 +151,7 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 							appId={props.data.appId}
 							node={props.data.layer}
 							boardId={props.data.boardId}
+							boardRef={props.data.boardRef}
 							pin={pin}
 							key={pin.id}
 							skipOffset={true}
@@ -171,6 +172,7 @@ export function LayerInnerNode(props: NodeProps<ILayerInnerNode>) {
 							appId={props.data.appId}
 							node={props.data.layer}
 							boardId={props.data.boardId}
+							boardRef={props.data.boardRef}
 							pin={pin}
 							key={pin.id}
 							skipOffset={true}
