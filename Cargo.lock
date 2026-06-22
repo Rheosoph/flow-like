@@ -197,15 +197,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "adobe-cmap-parser"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8abfa9a4688de8fc9f42b3f013b6fffec18ed8a554f5f113577e0b9b3212a3"
-dependencies = [
- "pom",
-]
-
-[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3618,12 +3609,6 @@ dependencies = [
  "uuid 1.23.1",
  "web-time",
 ]
-
-[[package]]
-name = "cff-parser"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f5b6e9141c036f3ff4ce7b2f7e432b0f00dee416ddcd4f17741d189ddc2e9d"
 
 [[package]]
 name = "cfg-expr"
@@ -7287,15 +7272,6 @@ checksum = "ca81e6b4777c89fd810c25a4be2b1bd93ea034fbe58e6a75216a34c6b82c539b"
 
 [[package]]
 name = "euclid"
-version = "0.20.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bb7ef65b3777a325d1eeefefab5b6d4959da54747e33bd6258e789640f307ad"
-dependencies = [
- "num-traits 0.2.19",
-]
-
-[[package]]
-name = "euclid"
 version = "0.22.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
@@ -8118,7 +8094,7 @@ dependencies = [
  "google-cloud-auth",
  "hayro",
  "http 1.4.0",
- "lopdf 0.39.0",
+ "lopdf",
  "nalgebra 0.34.2",
  "pulldown-cmark 0.13.3",
  "quick-xml 0.39.2",
@@ -10028,7 +10004,7 @@ dependencies = [
  "hmac 0.12.1",
  "http 1.4.0",
  "jsonwebtoken 10.3.0",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "rustc_version",
  "rustls 0.23.38",
  "rustls-pki-types",
@@ -10081,7 +10057,7 @@ dependencies = [
  "opentelemetry_sdk 0.31.0",
  "percent-encoding",
  "pin-project",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "rustc_version",
  "serde",
  "serde_json",
@@ -12641,7 +12617,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce9729cc38c18d86123ab736fd2e7151763ba226ac2490ec092d1dd148825e32"
 dependencies = [
  "arrayvec",
- "euclid 0.22.14",
+ "euclid",
  "smallvec 1.15.1",
 ]
 
@@ -13806,7 +13782,7 @@ dependencies = [
  "once_cell",
  "rand 0.10.1",
  "regex",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "rkyv 0.8.16",
  "serde",
  "serde_json",
@@ -14085,6 +14061,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
+name = "liteparse"
+version = "2.0.6"
+source = "git+https://github.com/Rheosoph/liteparse-hayro?branch=main#17d6f6bf73c10762941fbf7ac1f9680ba8174b60"
+dependencies = [
+ "clap",
+ "hayro",
+ "image",
+ "infer 0.19.0",
+ "kurbo",
+ "ordered-float 5.3.0",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "web-time",
+]
+
+[[package]]
 name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14185,34 +14182,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
-]
-
-[[package]]
-name = "lopdf"
-version = "0.38.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7184fdea2bc3cd272a1acec4030c321a8f9875e877b3f92a53f2f6033fdc289"
-dependencies = [
- "aes 0.8.4",
- "bitflags 2.11.1",
- "cbc",
- "ecb",
- "encoding_rs",
- "flate2",
- "getrandom 0.3.4",
- "indexmap 2.14.0",
- "itoa",
- "log",
- "md-5 0.10.6",
- "nom 8.0.0",
- "nom_locate",
- "rand 0.9.3",
- "rangemap",
- "sha2 0.10.9",
- "stringprep",
- "thiserror 2.0.18",
- "ttf-parser",
- "weezl",
 ]
 
 [[package]]
@@ -14418,7 +14387,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 [[package]]
 name = "markitdown"
 version = "0.2.0"
-source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=1431d2f#1431d2f5037a4b6e046526b5c4b2c3ffcd6e3b0e"
+source = "git+https://github.com/Rheosoph/markitdown-rs.git?rev=56d4795#56d47955a9e988f58ebc395d9e1c8527fb99a588"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -14440,10 +14409,10 @@ dependencies = [
  "infer 0.19.0",
  "kamadak-exif",
  "liblzma",
+ "liteparse",
  "mail-parser",
  "mime_guess",
  "object_store",
- "pdf-extract",
  "quick-xml 0.39.2",
  "rbook",
  "regex",
@@ -17148,23 +17117,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pdf-extract"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e28ba1758a3d3f361459645780e09570b573fc3c82637449e9963174c813a98"
-dependencies = [
- "adobe-cmap-parser",
- "cff-parser",
- "encoding_rs",
- "euclid 0.20.14",
- "log",
- "lopdf 0.38.0",
- "postscript",
- "type1-encoding-parser",
- "unicode-normalization",
-]
-
-[[package]]
 name = "pem"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18148,12 +18100,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pom"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60f6ce597ecdcc9a098e7fddacb1065093a3d66446fa16c675e7e71d1b5c28e6"
-
-[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18222,12 +18168,6 @@ dependencies = [
  "serde_json",
  "uuid 1.23.1",
 ]
-
-[[package]]
-name = "postscript"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78451badbdaebaf17f053fd9152b3ffb33b516104eacb45e7864aaa9c712f306"
 
 [[package]]
 name = "potential_utf"
@@ -19656,9 +19596,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.13.2"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab3f43e3283ab1488b624b44b0e988d0acea0b3214e694730a055cb6b2efa801"
+checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -19833,7 +19773,7 @@ dependencies = [
  "nanoid",
  "ordered-float 5.3.0",
  "pin-project-lite",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -19963,7 +19903,7 @@ dependencies = [
  "pastey 0.2.1",
  "pin-project-lite",
  "rand 0.10.1",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "rmcp-macros",
  "schemars 1.2.1",
  "serde",
@@ -23109,7 +23049,7 @@ dependencies = [
  "percent-encoding",
  "plist",
  "raw-window-handle",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "serde_repr",
@@ -23483,7 +23423,7 @@ dependencies = [
  "minisign-verify",
  "osakit",
  "percent-encoding",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "rustls 0.23.38",
  "semver",
  "serde",
@@ -25174,15 +25114,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "type1-encoding-parser"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa10c302f5a53b7ad27fd42a3996e23d096ba39b5b8dd6d9e683a05b01bee749"
-dependencies = [
- "pom",
-]
-
-[[package]]
 name = "typed-builder"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25253,7 +25184,7 @@ dependencies = [
  "getrandom 0.3.4",
  "pin-project",
  "rand 0.9.3",
- "reqwest 0.13.2",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "time",
