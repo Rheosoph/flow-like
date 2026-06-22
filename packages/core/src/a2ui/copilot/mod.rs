@@ -23,10 +23,10 @@ pub use types::*;
 use std::sync::Arc;
 
 use flow_like_types::Result;
+use flow_like_model_provider::llm::CompletionClientDyn;
 use futures::StreamExt;
 use rig::{
     OneOrMany,
-    client::completion::CompletionClientDyn,
     completion::Completion,
     message::{
         AssistantContent, DocumentSourceKind, Image, ImageDetail, ImageMediaType, UserContent,
@@ -96,6 +96,7 @@ impl A2UICopilot {
 
         let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
             text: prompt.clone(),
+            additional_params: None,
         })];
 
         if let Some(images) = &current_images {
@@ -113,6 +114,7 @@ impl A2UICopilot {
             content: OneOrMany::many(prompt_contents).unwrap_or_else(|_| {
                 OneOrMany::one(UserContent::Text(rig::message::Text {
                     text: prompt.clone(),
+                    additional_params: None,
                 }))
             }),
         };
@@ -125,6 +127,7 @@ impl A2UICopilot {
                     let mut contents: Vec<UserContent> =
                         vec![UserContent::Text(rig::message::Text {
                             text: msg.content.clone(),
+                            additional_params: None,
                         })];
 
                     if let Some(images) = &msg.images {
@@ -147,6 +150,7 @@ impl A2UICopilot {
                     id: None,
                     content: OneOrMany::one(AssistantContent::Text(rig::message::Text {
                         text: msg.content.clone(),
+                        additional_params: None,
                     })),
                 }),
             })
@@ -323,6 +327,7 @@ impl A2UICopilot {
                 OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                     OneOrMany::one(AssistantContent::Text(rig::message::Text {
                         text: iteration_text.clone(),
+                        additional_params: None,
                     }))
                 });
 
@@ -355,7 +360,10 @@ impl A2UICopilot {
                     id: tool_call.id.clone(),
                     call_id: None,
                     content: OneOrMany::one(rig::message::ToolResultContent::Text(
-                        rig::message::Text { text: result },
+                        rig::message::Text {
+                            text: result,
+                            additional_params: None,
+                        },
                     )),
                 }));
             }

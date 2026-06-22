@@ -27,6 +27,13 @@
 	},
 	"devDependencies": {
 		"typescript": "^5.7.0",
-		"vitest": "^3.0.0"
+		"vitest": "3.2.6"
+	},
+	"overrides": {
+		"vite": "7.3.5",
+		"rollup": "4.60.3",
+		"postcss": "8.5.14",
+		"esbuild": "0.28.1",
+		"picomatch": "4.0.4"
 	}
 }

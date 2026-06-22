@@ -33,7 +33,7 @@ datafusion = { version = "=52.5.0", default-features = false, features = ["recur
 num_cpus = "1.16"
 percent-encoding.workspace = true
 infer = "0.19.0"
-rig-core.workspace = true
+rig.workspace = true
 rmcp.workspace = true
 
 # Graph query engine

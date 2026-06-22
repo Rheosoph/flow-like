@@ -1484,14 +1484,14 @@ impl FlowPilotMcpServer {
 
 impl rmcp::ServerHandler for FlowPilotMcpServer {
     fn get_info(&self) -> rmcp::model::ServerInfo {
-        rmcp::model::ServerInfo {
-            capabilities: rmcp::model::ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some(
-                "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. Use edit_flowscript/emit_commands for workflow changes and answer the user in text when no board/UI edit is required."
-                    .to_string(),
-            ),
-            ..Default::default()
-        }
+        rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+        .with_instructions(
+            "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. Use edit_flowscript/emit_commands for workflow changes and answer the user in text when no board/UI edit is required.",
+        )
     }
 
     fn list_tools(

@@ -269,7 +269,10 @@ impl TryFrom<HistoryMessage> for RigMessage {
             Role::User => {
                 let contents: Vec<RigUserContent> = match msg.content {
                     MessageContent::String(s) => {
-                        vec![RigUserContent::Text(RigText { text: s })]
+                        vec![RigUserContent::Text(RigText {
+                            text: s,
+                            additional_params: None,
+                        })]
                     }
                     MessageContent::Contents(contents) => {
                         contents.into_iter().map(|c| c.into()).collect()
@@ -279,6 +282,7 @@ impl TryFrom<HistoryMessage> for RigMessage {
                 let content = if contents.is_empty() {
                     OneOrMany::one(RigUserContent::Text(RigText {
                         text: String::new(),
+                        additional_params: None,
                     }))
                 } else if contents.len() == 1 {
                     OneOrMany::one(contents.into_iter().next().unwrap())
@@ -294,14 +298,20 @@ impl TryFrom<HistoryMessage> for RigMessage {
 
                 match msg.content {
                     MessageContent::String(s) if !s.is_empty() => {
-                        rig_contents.push(RigAssistantContent::Text(RigText { text: s }));
+                        rig_contents.push(RigAssistantContent::Text(RigText {
+                            text: s,
+                            additional_params: None,
+                        }));
                     }
                     MessageContent::Contents(contents) => {
                         for content in contents {
                             if let Content::Text { text, .. } = content
                                 && !text.is_empty()
                             {
-                                rig_contents.push(RigAssistantContent::Text(RigText { text }));
+                                rig_contents.push(RigAssistantContent::Text(RigText {
+                                    text,
+                                    additional_params: None,
+                                }));
                             }
                         }
                     }
@@ -327,6 +337,7 @@ impl TryFrom<HistoryMessage> for RigMessage {
                 let content = if rig_contents.is_empty() {
                     OneOrMany::one(RigAssistantContent::Text(RigText {
                         text: String::new(),
+                        additional_params: None,
                     }))
                 } else if rig_contents.len() == 1 {
                     OneOrMany::one(rig_contents.into_iter().next().unwrap())
@@ -355,7 +366,10 @@ impl TryFrom<HistoryMessage> for RigMessage {
             Role::System => {
                 let text = msg.as_str();
                 Ok(RigMessage::User {
-                    content: OneOrMany::one(RigUserContent::Text(RigText { text })),
+                    content: OneOrMany::one(RigUserContent::Text(RigText {
+                        text,
+                        additional_params: None,
+                    })),
                 })
             }
         }
@@ -479,7 +493,10 @@ impl From<RigUserContent> for Content {
 impl From<Content> for RigUserContent {
     fn from(content: Content) -> Self {
         match content {
-            Content::Text { text, .. } => RigUserContent::Text(RigText { text }),
+            Content::Text { text, .. } => RigUserContent::Text(RigText {
+                text,
+                additional_params: None,
+            }),
             Content::Image { image_url, .. } => {
                 // Detect media type from URL or default to PNG
                 let media_type = detect_image_media_type(&image_url.url);
@@ -908,6 +925,7 @@ impl History {
         let prompt = prompt.unwrap_or_else(|| RigMessage::User {
             content: OneOrMany::one(RigUserContent::Text(RigText {
                 text: String::new(),
+                additional_params: None,
             })),
         });
 

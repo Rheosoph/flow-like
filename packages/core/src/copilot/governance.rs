@@ -100,7 +100,7 @@ impl GovernanceCopilot {
         token: Option<String>,
     ) -> Result<(
         String,
-        Box<dyn rig::client::completion::CompletionClientDyn + Send + Sync>,
+        Box<dyn flow_like_model_provider::llm::CompletionClientDyn + Send + Sync>,
     )> {
         let bit = if let Some(profile) = &self.profile {
             if let Some(id) = model_id {
@@ -184,7 +184,10 @@ impl GovernanceCopilot {
             .preamble(&system_prompt)
             .build();
         let prompt_message = rig::message::Message::User {
-            content: OneOrMany::one(UserContent::Text(rig::message::Text { text: user_text })),
+            content: OneOrMany::one(UserContent::Text(rig::message::Text {
+                text: user_text,
+                additional_params: None,
+            })),
         };
 
         let request = agent

@@ -129,7 +129,9 @@ dependencies = [
 
 [[package]]
 name = "flow-like-wasm-sdk"
-version = "0.3.6"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd8825bde419d40bb808642db72d7d75573359223cbfa1c860416359dfe4102a"
 dependencies = [
  "base64",
  "flow-like-wasm-sdk-macros",
@@ -144,9 +146,9 @@ dependencies = [
 
 [[package]]
 name = "flow-like-wasm-sdk-macros"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2163b6d9311e04bd0bfbbc071ed83754c6ed8d610b646133b65b8fc198d3c63b"
+checksum = "ebb1b68e94b39c0c238ff437093dcb281207e72a6577777d39467e84782c1fe8"
 dependencies = [
  "proc-macro2",
  "quote",

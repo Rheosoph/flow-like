@@ -438,6 +438,7 @@ async fn transform_rig_message(msg: &mut RigMessage) {
             OneOrMany::many(transformed).unwrap_or_else(|_| {
                 OneOrMany::one(RigUserContent::Text(rig::message::Text {
                     text: String::new(),
+                    additional_params: None,
                 }))
             })
         };

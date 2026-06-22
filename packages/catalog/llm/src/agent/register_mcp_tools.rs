@@ -257,19 +257,9 @@ async fn refresh_manual_tool_pins(node: &mut Node, uri: &str) -> Result<(), Stri
 
 #[cfg(feature = "execute")]
 async fn list_all_tools(uri: &str) -> Result<Vec<Tool>, String> {
-    let client_info = ClientInfo {
-        meta: None,
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "Flow-Like".to_string(),
-            version: "alpha".to_string(),
-            title: None,
-            description: None,
-            icons: None,
-            website_url: Some("https://flow-like.com".to_string()),
-        },
-    };
+    let mut implementation = Implementation::new("Flow-Like", "alpha");
+    implementation.website_url = Some("https://flow-like.com".to_string());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
     let transport = StreamableHttpClientTransport::from_uri(uri);
     let client = client_info
@@ -289,10 +279,7 @@ async fn list_all_tools(uri: &str) -> Result<Vec<Tool>, String> {
         tools.extend(response.tools);
 
         if let Some(next_cursor) = response.next_cursor {
-            cursor = Some(PaginatedRequestParams {
-                meta: None,
-                cursor: Some(next_cursor),
-            });
+            cursor = Some(PaginatedRequestParams::default().with_cursor(Some(next_cursor)));
         } else {
             break;
         }

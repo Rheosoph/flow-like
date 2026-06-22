@@ -363,6 +363,7 @@ async fn summarize_history_to_budget(
     let summary_msg = rig::message::Message::User {
         content: OneOrMany::one(rig::message::UserContent::Text(rig::message::Text {
             text: format!("[Previous conversation summary: {}]", summary_text),
+            additional_params: None,
         })),
     };
 
@@ -1127,19 +1128,9 @@ pub async fn execute_agent_streaming(
     let mut mcp_tool_clients: HashMap<String, rmcp::service::ServerSink> = HashMap::new();
     let mut _mcp_clients = Vec::new();
 
-    let client_info = ClientInfo {
-        meta: None,
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "Flow-Like".to_string(),
-            version: "alpha".to_string(),
-            title: None,
-            description: None,
-            icons: None,
-            website_url: Some("https://flow-like.com".to_string()),
-        },
-    };
+    let mut implementation = Implementation::new("Flow-Like", "alpha");
+    implementation.website_url = Some("https://flow-like.com".to_string());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
     for mcp_config in &agent.mcp_servers {
         let transport =
@@ -1176,10 +1167,7 @@ pub async fn execute_agent_streaming(
 
             // Check if there are more pages
             if let Some(next_cursor) = response.next_cursor {
-                cursor = Some(PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(next_cursor),
-                });
+                cursor = Some(PaginatedRequestParams::default().with_cursor(Some(next_cursor)));
             } else {
                 break;
             }
@@ -1802,6 +1790,7 @@ pub async fn execute_agent_streaming(
             content: OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                 OneOrMany::one(AssistantContent::Text(rig::message::Text {
                     text: String::new(),
+                    additional_params: None,
                 }))
             }),
         };
@@ -1835,14 +1824,9 @@ pub async fn execute_agent_streaming(
                     );
 
                     let args_map = arguments.as_object().cloned();
-                    match mcp_peer
-                        .call_tool(CallToolRequestParams {
-                            meta: None,
-                            name: name.clone().into(),
-                            arguments: args_map,
-                            task: None,
-                        })
-                        .await
+                    let mut params = CallToolRequestParams::new(name.clone());
+                    params.arguments = args_map;
+                    match mcp_peer.call_tool(params).await
                     {
                         Ok(result) => {
                             context.log_message(

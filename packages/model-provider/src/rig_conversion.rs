@@ -20,20 +20,29 @@ pub fn history_message_to_rig(msg: &HistoryMessage) -> Result<RigMessage> {
         Role::User => {
             let content = extract_text_content(&msg.content);
             Ok(RigMessage::User {
-                content: OneOrMany::one(UserContent::Text(Text { text: content })),
+                content: OneOrMany::one(UserContent::Text(Text {
+                    text: content,
+                    additional_params: None,
+                })),
             })
         }
         Role::Assistant => {
             let content = extract_text_content(&msg.content);
             Ok(RigMessage::Assistant {
                 id: None,
-                content: OneOrMany::one(AssistantContent::Text(Text { text: content })),
+                content: OneOrMany::one(AssistantContent::Text(Text {
+                    text: content,
+                    additional_params: None,
+                })),
             })
         }
         Role::System | Role::Function | Role::Tool => {
             let content = extract_text_content(&msg.content);
             Ok(RigMessage::User {
-                content: OneOrMany::one(UserContent::Text(Text { text: content })),
+                content: OneOrMany::one(UserContent::Text(Text {
+                    text: content,
+                    additional_params: None,
+                })),
             })
         }
     }
