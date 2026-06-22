@@ -205,10 +205,18 @@ export class Bit implements IBit {
 	}
 
 	public async fetchSize(): Promise<number> {
-		const pack = await this.fetchDependencies();
+		if (this.backend?.bitState?.getBitSize) {
+			return await this.backend.bitState.getBitSize(this.toObject());
+		}
 
-		console.dir(pack, { depth: null });
-		return pack.bits.reduce((acc, bit) => acc + (bit.size ?? 0), 0);
+		const pack = await this.fetchDependencies();
+		const bits = [...pack.bits, this.toObject()];
+		const bitsConsidered = new Set<string>();
+		return bits.reduce((acc, bit) => {
+			if (bitsConsidered.has(bit.hash)) return acc;
+			bitsConsidered.add(bit.hash);
+			return acc + (bit.size ?? 0);
+		}, 0);
 	}
 
 	async download(cb?: (progress: Download) => void): Promise<IBit[]> {
