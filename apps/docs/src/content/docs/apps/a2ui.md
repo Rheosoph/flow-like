@@ -78,7 +78,7 @@ Flow-Like supports a comprehensive set of A2UI components:
 | Category | Components |
 |----------|------------|
 | **Layout** | Row, Column, Stack, Grid, ScrollArea, AspectRatio, Overlay, Absolute |
-| **Display** | Text, Image, Icon, Video, Markdown, Divider, Badge, Avatar, Progress, Spinner, Skeleton, Lottie, Iframe, PlotlyChart |
+| **Display** | Text, Image, Icon, Video, Markdown, Divider, Badge, Avatar, UserProfile, Progress, Spinner, Skeleton, Lottie, Iframe, PlotlyChart |
 | **Interactive** | Button, TextField, Select, Slider, Checkbox, Switch, RadioGroup, DateTimeInput, FileInput, ImageInput, Link |
 | **Container** | Card, Modal, Tabs, Accordion, Drawer, Tooltip, Popover |
 | **Game/Visual** | Canvas2D, Sprite, Shape, Scene3D, Model3D, Dialogue, CharacterPortrait, ChoiceMenu, InventoryGrid, HealthBar, MiniMap |

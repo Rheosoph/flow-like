@@ -45,6 +45,7 @@ Data can be bound using either literal values or data paths:
 - **divider**: Horizontal/vertical separator
 - **badge**: Status indicator
 - **avatar**: User avatar
+- **userProfile**: User lookup display by sub, with avatar/chip/row/detailed/card variants
 - **progress**: Progress bar
 - **spinner**: Loading indicator
 - **skeleton**: Loading placeholder

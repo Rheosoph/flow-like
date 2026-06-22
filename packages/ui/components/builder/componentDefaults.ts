@@ -105,6 +105,18 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 	divider: { orientation: str("horizontal"), thickness: str("1px") },
 	badge: { content: str("Badge"), variant: str("default") },
 	avatar: { src: str(""), fallback: str("AB"), size: str("md") },
+	userProfile: {
+		value: str(""),
+		variant: str("row"),
+		avatarSize: str("md"),
+		showHover: bool(true),
+		showEmail: bool(true),
+		showDescription: bool(true),
+		showUserId: bool(true),
+		showProfileLink: bool(true),
+		fallbackLabel: str("Unknown user"),
+		muted: bool(false),
+	},
 	progress: {
 		value: num(50),
 		max: num(100),

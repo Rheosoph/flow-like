@@ -374,6 +374,23 @@ export interface AvatarComponent extends ComponentBase {
 	size?: BoundValue; // "sm" | "md" | "lg" | "xl"
 }
 
+export interface UserProfileComponent extends ComponentBase {
+	type: "userProfile";
+	/** User subject/sub ID. Compatible with Set Element Value via component.value. */
+	value: BoundValue;
+	/** "avatar" | "chip" | "row" | "detailed" | "card" */
+	variant?: BoundValue;
+	/** "xs" | "sm" | "md" | "lg" | "xl" | "2xl" */
+	avatarSize?: BoundValue;
+	showHover?: BoundValue;
+	showEmail?: BoundValue;
+	showDescription?: BoundValue;
+	showUserId?: BoundValue;
+	showProfileLink?: BoundValue;
+	fallbackLabel?: BoundValue;
+	muted?: BoundValue;
+}
+
 export interface ProgressComponent extends ComponentBase {
 	type: "progress";
 	value: BoundValue;
@@ -1458,6 +1475,7 @@ export type A2UIComponent =
 	| DividerComponent
 	| BadgeComponent
 	| AvatarComponent
+	| UserProfileComponent
 	| ProgressComponent
 	| SpinnerComponent
 	| SkeletonComponent

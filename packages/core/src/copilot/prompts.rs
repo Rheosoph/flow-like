@@ -935,7 +935,7 @@ Every child ID MUST exist in the components array.
 
 ## Available Component Types (use get_component_schema for details)
 **Layout:** column, row, grid, stack, scrollArea, absolute, aspectRatio, overlay, box, center, spacer
-**Display:** text, image, icon, video, lottie, markdown, badge, avatar, progress, spinner, divider, skeleton
+**Display:** text, image, icon, video, lottie, markdown, badge, avatar, userProfile, progress, spinner, divider, skeleton
 **Interactive:** button, textField, select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, link
 **Container:** card, modal, tabs, accordion, drawer, tooltip, popover
 **Data:** table, iframe, filePreview, nivoChart, plotlyChart

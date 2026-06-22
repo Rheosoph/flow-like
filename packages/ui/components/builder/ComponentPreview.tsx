@@ -27,6 +27,7 @@ const COMPONENT_ICONS: Record<string, string> = {
 	divider: "—",
 	badge: "○",
 	avatar: "◉",
+	userProfile: "UP",
 	progress: "▰",
 	spinner: "↻",
 	skeleton: "▯",
@@ -135,6 +136,11 @@ const COMPONENT_COLORS: Record<
 		text: "text-green-600",
 	},
 	avatar: {
+		bg: "bg-green-50",
+		border: "border-green-200",
+		text: "text-green-600",
+	},
+	userProfile: {
 		bg: "bg-green-50",
 		border: "border-green-200",
 		text: "text-green-600",
@@ -313,7 +319,6 @@ export function ComponentPreview({
 				return "w-8 h-8 text-sm";
 			case "lg":
 				return "w-16 h-16 text-2xl";
-			case "md":
 			default:
 				return "w-12 h-12 text-lg";
 		}

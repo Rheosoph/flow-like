@@ -33,6 +33,7 @@ pub enum A2UIComponentType {
     Divider(DividerProps),
     Badge(BadgeProps),
     Avatar(AvatarProps),
+    UserProfile(UserProfileProps),
     Progress(ProgressProps),
     Spinner(SpinnerProps),
     Skeleton(SkeletonProps),
@@ -339,6 +340,31 @@ pub struct AvatarProps {
     pub fallback: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<BoundValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfileProps {
+    /// User subject/sub ID. Compatible with Set Element Value via component.value.
+    pub value: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_size: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_hover: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_email: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_description: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_user_id: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_profile_link: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
