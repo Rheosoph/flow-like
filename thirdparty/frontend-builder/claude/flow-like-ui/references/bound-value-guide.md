@@ -251,6 +251,50 @@ Form inputs require a `value` binding for two-way data flow.
 3. **Keep paths shallow** when possible for performance
 4. **Use literalOptions** for static lists, `path` for dynamic lists
 5. **Test bindings** with sample data before deployment
+6. **Initialize bindings in dataModel** so generated UIs render sensible content before live data arrives
+
+---
+
+## dataModel Section
+
+When using `path` bindings, always include a `dataModel` array at the top level to provide initial values:
+
+```json
+{
+  "rootComponentId": "root",
+  "components": [
+    {
+      "id": "root",
+      "component": {
+        "type": "column",
+        "children": { "explicitList": ["user-name"] }
+      }
+    },
+    {
+      "id": "user-name",
+      "component": {
+        "type": "text",
+        "content": { "path": "$.user.name", "defaultValue": "Guest" }
+      }
+    }
+  ],
+  "dataModel": [
+    { "path": "$.user.name", "value": "Jane Doe" },
+    { "path": "$.items", "value": [
+      { "id": 1, "name": "Item A" },
+      { "id": 2, "name": "Item B" }
+    ]},
+    { "path": "$.settings.darkMode", "value": true }
+  ]
+}
+```
+
+Rules:
+
+- Each entry has `path` (JSONPath starting with `$`) and `value` (any JSON value).
+- Paths should correspond to the `path` values used in BoundValue bindings.
+- Provide useful defaults so the UI renders correctly on first load.
+- Nested objects can be set as one entry (`$.user` with an object value) or as individual paths (`$.user.name`, `$.user.email`).
 
 ---
 
@@ -284,31 +328,3 @@ You can use static values for labels and dynamic values for content:
   }
 }
 ```
-
----
-
-## dataModel Section
-
-When using `path` bindings, always include a `dataModel` array at the top level to provide initial values:
-
-```json
-{
-  "rootComponentId": "...",
-  "components": [...],
-  "dataModel": [
-    { "path": "$.user.name", "value": "Jane Doe" },
-    { "path": "$.user.email", "value": "jane@example.com" },
-    { "path": "$.items", "value": [
-      { "id": 1, "name": "Item A" },
-      { "id": 2, "name": "Item B" }
-    ]},
-    { "path": "$.settings.darkMode", "value": true }
-  ]
-}
-```
-
-**Rules:**
-- Each entry has `path` (JSONPath starting with `$`) and `value` (any JSON value)
-- Paths correspond to the `path` values used in BoundValue bindings
-- Provide sensible defaults so the UI renders correctly on first load
-- Nested objects can be set as a single entry (`$.user` with an object value) or as individual paths (`$.user.name`, `$.user.email`)

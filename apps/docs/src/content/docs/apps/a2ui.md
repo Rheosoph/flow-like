@@ -77,11 +77,12 @@ Flow-Like supports a comprehensive set of A2UI components:
 
 | Category | Components |
 |----------|------------|
-| **Layout** | Row, Column, Stack, Grid, ScrollArea, AspectRatio, Overlay, Absolute |
-| **Display** | Text, Image, Icon, Video, Markdown, Divider, Badge, Avatar, UserProfile, Progress, Spinner, Skeleton, Lottie, Iframe, PlotlyChart |
-| **Interactive** | Button, TextField, Select, Slider, Checkbox, Switch, RadioGroup, DateTimeInput, FileInput, ImageInput, Link |
+| **Layout** | Row, Column, Stack, Grid, ScrollArea, AspectRatio, Overlay, Absolute, Box, Center, Spacer |
+| **Display** | Text, Image, Icon, Video, Markdown, Divider, Badge, Avatar, UserProfile, Progress, Spinner, Skeleton, Lottie, Iframe, Table, PlotlyChart, NivoChart, FilePreview, BoundingBoxOverlay, GeoMap |
+| **Interactive** | Button, Feedback, AppLink, TextField, Select, Slider, Checkbox, Switch, RadioGroup, DateTimeInput, FileInput, ImageInput, VoiceInput, Link, ImageLabeler, ImageHotspot |
 | **Container** | Card, Modal, Tabs, Accordion, Drawer, Tooltip, Popover |
 | **Game/Visual** | Canvas2D, Sprite, Shape, Scene3D, Model3D, Dialogue, CharacterPortrait, ChoiceMenu, InventoryGrid, HealthBar, MiniMap |
+| **Special** | WidgetInstance |
 
 For a complete reference, see **[A2UI Components](/reference/a2ui-components/)**.
 
@@ -158,11 +159,32 @@ We also provide a free [**FlowLike Frontend Builder GPT**](https://chatgpt.com/g
 
 The GPT outputs JSON that you can paste directly into Flow-Like's page builder.
 
+Generated A2UI should always use a single root component:
+
+```json
+{
+  "rootComponentId": "root",
+  "components": [
+    {
+      "id": "root",
+      "component": {
+        "type": "column",
+        "children": { "explicitList": ["content"] }
+      }
+    }
+  ]
+}
+```
+
+Use `root` as the only top-level component ID, then place all visible sections inside its `children`.
+
 ### Styling Rules
 
 The generator uses **shadcn/ui theme tokens** for automatic dark/light mode support:
 - **Preferred:** `bg-background`, `text-foreground`, `bg-primary`, `text-muted-foreground`
 - **Also allowed:** Hardcoded colors (`bg-red-500`) when you request specific colors
+
+For best results, ask for mobile-first layouts. Good generated UIs use `w-full`, `max-w-*`, responsive grid classes like `grid-cols-1 md:grid-cols-2 lg:grid-cols-3`, and stable heights or aspect ratios for charts, maps, media, and 3D scenes.
 
 :::tip[For Developers]
 Building A2UI programmatically? Check the **[Developer Guide](/dev/a2ui/overview/)** for the full specification, TypeScript interfaces, and code examples.

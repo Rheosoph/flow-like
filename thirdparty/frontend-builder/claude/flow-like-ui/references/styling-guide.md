@@ -221,6 +221,23 @@ A2UI follows mobile-first design. Base styles apply to mobile, then override for
 
 ---
 
+## Mobile-Ready UI Checklist
+
+Use these rules for every generated interface:
+
+1. **Start with the phone layout** - Base classes should produce a complete mobile UI. Add `sm:`, `md:`, `lg:`, `xl:`, and `2xl:` only to enhance larger screens.
+2. **Always include a root wrapper** - The top-level component must be `id: "root"` and usually needs `min-h-screen w-full bg-background text-foreground`.
+3. **Prevent horizontal overflow** - Use `w-full`, `max-w-full`, `min-w-0`, `overflow-hidden`, `break-words`, and responsive grid columns.
+4. **Avoid fixed desktop widths** - Prefer `max-w-* mx-auto` for centered content and `w-full` for forms, cards, charts, maps, images, and tables.
+5. **Use responsive grids** - Good defaults are `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` or `repeat(auto-fit, minmax(220px, 1fr))`.
+6. **Give complex content stable dimensions** - Charts, maps, iframes, videos, and 3D scenes should have `height`, `min-h-*`, or an aspect ratio.
+7. **Make controls touch-friendly** - Buttons, links, checkboxes, inputs, and select triggers should generally use `h-10`, `px-3`, or generous padding.
+8. **Keep text resilient** - Use `leading-snug`, `break-words`, `truncate`, `maxLines`, or `text-sm md:text-base` where labels or values can be long.
+9. **Design for scanning** - Put primary actions near the relevant content, use muted helper text, keep labels visible, and group repeated items consistently.
+10. **Respect theme tokens** - Use `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, and `border-border` so light and dark mode both work.
+
+---
+
 ## Typography
 
 ### Font Size
