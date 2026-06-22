@@ -1,6 +1,6 @@
 {
 	"productName": "Flow Like",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"identifier": "com.flow-like.app",
 	"build": {
 		"beforeDevCommand": "bun run dev",
