@@ -13257,7 +13257,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "datafusion-sql",
- "futures 0.1.31",
+ "futures 0.3.32",
  "half",
  "http 1.4.0",
  "lance",

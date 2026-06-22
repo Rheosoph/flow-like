@@ -123,10 +123,6 @@ impl BlobStore {
         let _ = self.load_ref_counts().await;
     }
 
-    pub async fn get_base_dir(&self) -> PathBuf {
-        self.base_dir.read().await.clone()
-    }
-
     async fn blob_path(&self, hash: &str) -> PathBuf {
         let base = self.base_dir.read().await;
         let prefix = &hash[..2.min(hash.len())];
