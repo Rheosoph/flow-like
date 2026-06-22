@@ -52,11 +52,18 @@ pub async fn user_info(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
 ) -> Result<Json<user::Model>, ApiError> {
-    let sub = user.sub()?;
-    let user_info = user.user_info(&state).await?;
-    let email = user_info.email.clone();
-    let username = user_info.username.clone();
-    let preferred_username = user_info.preferred_username.clone();
+    let sub = user.executor_scoped_sub()?;
+    let identity_info = match &user {
+        AppUser::OpenID(_) => Some(user.user_info(&state).await?),
+        _ => None,
+    };
+    let email = identity_info.as_ref().and_then(|info| info.email.clone());
+    let username = identity_info
+        .as_ref()
+        .and_then(|info| info.username.clone());
+    let preferred_username = identity_info
+        .as_ref()
+        .and_then(|info| info.preferred_username.clone());
     let user_info = user::Entity::find_by_id(&sub).one(&state.db).await?;
     if let Some(mut user_info) = user_info {
         let mut updated_user: Option<user::ActiveModel> = None;
@@ -78,7 +85,7 @@ pub async fn user_info(
             updated_user = Some(tmp_updated_user);
         }
 
-        if user_info.tracking_id.is_none() {
+        if identity_info.is_some() && user_info.tracking_id.is_none() {
             let tracking_id = create_id();
             let mut tmp_updated_user: user::ActiveModel =
                 updated_user.unwrap_or(user_info.clone().into());
@@ -110,7 +117,9 @@ pub async fn user_info(
             user_info = new_user;
         }
 
-        user_info = ensure_stripe_user(&state, user_info, email.clone()).await?;
+        if identity_info.is_some() {
+            user_info = ensure_stripe_user(&state, user_info, email.clone()).await?;
+        }
 
         if let Some(avatar) = &user_info.avatar {
             let signed_avatar_url = sign_avatar(&user_info.id, avatar, &state).await?;
@@ -118,6 +127,10 @@ pub async fn user_info(
         }
 
         return Ok(Json(user_info));
+    }
+
+    if identity_info.is_none() {
+        return Err(ApiError::NOT_FOUND);
     }
 
     let user = user::ActiveModel {
