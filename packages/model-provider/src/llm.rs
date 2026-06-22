@@ -301,7 +301,7 @@ pub trait CompletionModelDyn: WasmCompatSend + WasmCompatSync {
 
 impl<T, R> CompletionModelDyn for T
 where
-    T: CompletionModel<StreamingResponse = R> + 'static,
+    T: CompletionModel<StreamingResponse = R> + Clone + 'static,
     R: Clone
         + Unpin
         + GetTokenUsage
@@ -316,7 +316,7 @@ where
         request: CompletionRequest,
     ) -> WasmBoxedFuture<'_, std::result::Result<CompletionResponse<()>, CompletionError>> {
         Box::pin(async move {
-            self.completion(request)
+            CompletionModel::completion(self, request)
                 .await
                 .map(|resp| CompletionResponse {
                     choice: resp.choice,
@@ -335,15 +335,17 @@ where
         std::result::Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
     > {
         Box::pin(async move {
-            let stream = self.stream(request).await?.flat_map(|item| {
-                futures::stream::iter(match item {
-                    Ok(item) => dynamic_raw_stream_items(item)
-                        .into_iter()
-                        .map(Ok)
-                        .collect::<Vec<_>>(),
-                    Err(err) => vec![Err(err)],
-                })
-            });
+            let stream = CompletionModel::stream(self, request)
+                .await?
+                .flat_map(|item| {
+                    futures::stream::iter(match item {
+                        Ok(item) => dynamic_raw_stream_items(item)
+                            .into_iter()
+                            .map(Ok)
+                            .collect::<Vec<_>>(),
+                        Err(err) => vec![Err(err)],
+                    })
+                });
 
             Ok(StreamingCompletionResponse::stream(Box::pin(stream)))
         })
@@ -365,7 +367,7 @@ pub trait CompletionClientDyn {
 impl<T, M, R> CompletionClientDyn for T
 where
     T: rig::client::CompletionClient<CompletionModel = M>,
-    M: CompletionModel<StreamingResponse = R> + 'static,
+    M: CompletionModel<StreamingResponse = R> + Clone + 'static,
     R: Clone
         + Unpin
         + GetTokenUsage
