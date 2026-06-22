@@ -12,7 +12,7 @@ tauri = ["flow-like-catalog-core/tauri"]
 execute = [
     "flow-like-catalog-core/execute",
     "flow-like-catalog-data/execute",
-    "dep:rig-core",
+    "dep:rig",
     "dep:rmcp",
     "dep:jsonschema",
     "dep:copilot-sdk",
@@ -34,7 +34,7 @@ serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 uuid.workspace = true
 async-trait.workspace = true
-rig-core = { workspace = true, optional = true }
+rig = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true }
 jsonschema = { workspace = true, optional = true }
 copilot-sdk = { workspace = true, optional = true }

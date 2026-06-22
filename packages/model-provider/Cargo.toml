@@ -38,7 +38,7 @@ tiktoken-rs = "0.7.0"
 aws-config = { workspace = true, features = ["behavior-version-latest"] }
 aws-sdk-bedrockruntime = "1.101.0"
 ndarray.workspace = true
-rig-core.workspace = true
+rig.workspace = true
 rig-vertexai.workspace = true
 google-cloud-auth.workspace = true
 rmcp.workspace = true

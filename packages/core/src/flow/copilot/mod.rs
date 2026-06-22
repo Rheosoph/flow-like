@@ -37,10 +37,10 @@ pub use types::{
 use std::sync::Arc;
 
 use flow_like_types::Result;
+use flow_like_model_provider::llm::CompletionClientDyn;
 use futures::StreamExt;
 use rig::{
     OneOrMany,
-    client::completion::CompletionClientDyn,
     completion::Completion,
     message::{
         AssistantContent, DocumentSourceKind, Image, ImageDetail, ImageMediaType,
@@ -286,6 +286,7 @@ impl Copilot {
 
         let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
             text: prompt.clone(),
+            additional_params: None,
         })];
 
         if let Some(images) = &current_images {
@@ -303,6 +304,7 @@ impl Copilot {
             content: OneOrMany::many(prompt_contents).unwrap_or_else(|_| {
                 OneOrMany::one(UserContent::Text(rig::message::Text {
                     text: prompt.clone(),
+                    additional_params: None,
                 }))
             }),
         };
@@ -316,6 +318,7 @@ impl Copilot {
                         let mut contents: Vec<UserContent> =
                             vec![UserContent::Text(rig::message::Text {
                                 text: msg.content.clone(),
+                                additional_params: None,
                             })];
 
                         // Add images if present
@@ -340,6 +343,7 @@ impl Copilot {
                         id: None,
                         content: OneOrMany::one(AssistantContent::Text(rig::message::Text {
                             text: msg.content.clone(),
+                            additional_params: None,
                         })),
                     }),
                 }
@@ -707,6 +711,7 @@ impl Copilot {
                     content: OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                         OneOrMany::one(AssistantContent::Text(rig::message::Text {
                             text: String::new(),
+                            additional_params: None,
                         }))
                     }),
                 };
@@ -733,6 +738,7 @@ impl Copilot {
                     if force_emit_next {
                         tool_result_contents.push(UserContent::Text(rig::message::Text {
                             text: force_emit_instruction.to_string(),
+                            additional_params: None,
                         }));
                     }
 
@@ -768,12 +774,14 @@ impl Copilot {
                         content: OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                             OneOrMany::one(AssistantContent::Text(rig::message::Text {
                                 text: iteration_text.clone(),
+                                additional_params: None,
                             }))
                         }),
                     });
                     current_prompt = rig::message::Message::User {
                         content: OneOrMany::one(UserContent::Text(rig::message::Text {
                             text: force_emit_instruction.to_string(),
+                            additional_params: None,
                         })),
                     };
                     continue;

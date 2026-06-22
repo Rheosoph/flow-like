@@ -10,9 +10,9 @@ use crate::interop::{
 };
 use crate::Context;
 use futures::stream;
-use rig::client::FinalCompletionResponse;
 use rig::completion::{
-    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Message, Usage,
+    CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage,
+    Message, Usage,
 };
 use rig::message::{
     AssistantContent, Audio, Document, DocumentSourceKind, Image, MimeType, Reasoning, Text,
@@ -23,6 +23,13 @@ use rig::streaming::{
 };
 use rig::tool::Tool;
 use rig::OneOrMany;
+
+fn rig_text(text: impl Into<String>) -> Text {
+    Text {
+        text: text.into(),
+        additional_params: None,
+    }
+}
 
 // =============================================================================
 // Conversion: rig Message → SDK ChatMessage
@@ -321,6 +328,8 @@ fn usage_from_host_tokens(
         total_tokens: total_tokens.unwrap_or(input_tokens.saturating_add(output_tokens)),
         cached_input_tokens: 0,
         cache_creation_input_tokens: 0,
+        tool_use_prompt_tokens: 0,
+        reasoning_tokens: 0,
     }
 }
 
@@ -371,9 +380,7 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
 
         if let Some(content) = &resp.content {
             if !content.is_empty() {
-                items.push(AssistantContent::Text(Text {
-                    text: content.clone(),
-                }));
+                items.push(AssistantContent::Text(rig_text(content.clone())));
             }
         }
 
@@ -392,9 +399,7 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
 
         if !items.is_empty() {
             let choice = OneOrMany::many(items).unwrap_or_else(|_| {
-                OneOrMany::one(AssistantContent::Text(Text {
-                    text: String::new(),
-                }))
+                OneOrMany::one(AssistantContent::Text(rig_text(String::new())))
             });
             return ParsedLlmResponse {
                 choice,
@@ -406,9 +411,7 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
 
     // Fallback: treat the entire string as plain text
     ParsedLlmResponse {
-        choice: OneOrMany::one(AssistantContent::Text(Text {
-            text: text.to_string(),
-        })),
+        choice: OneOrMany::one(AssistantContent::Text(rig_text(text))),
         message_id: None,
         usage: None,
     }
@@ -420,7 +423,7 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
 
 fn content_part_to_user_content(part: &ContentPart) -> UserContent {
     match part {
-        ContentPart::Text { text } => UserContent::Text(Text { text: text.clone() }),
+        ContentPart::Text { text } => UserContent::Text(rig_text(text.clone())),
         ContentPart::Image { image } => UserContent::Image(Image {
             data: DocumentSourceKind::url(&image.url),
             media_type: None,
@@ -445,19 +448,17 @@ fn content_part_to_user_content(part: &ContentPart) -> UserContent {
         ContentPart::ToolResult { tool_result } => UserContent::ToolResult(ToolResult {
             id: tool_result.id.clone(),
             call_id: None,
-            content: OneOrMany::one(ToolResultContent::Text(Text {
-                text: tool_result.content.clone(),
-            })),
+            content: OneOrMany::one(ToolResultContent::Text(rig_text(
+                tool_result.content.clone(),
+            ))),
         }),
-        ContentPart::ToolCall { tool_call } => UserContent::Text(Text {
-            text: format!(
+        ContentPart::ToolCall { tool_call } => UserContent::Text(rig_text(format!(
                 "[tool_call: {} {}({})]",
                 tool_call.id, tool_call.name, tool_call.arguments
-            ),
-        }),
-        ContentPart::Reasoning { reasoning } => UserContent::Text(Text {
-            text: reasoning.text.join("\n"),
-        }),
+            ))),
+        ContentPart::Reasoning { reasoning } => UserContent::Text(rig_text(
+            reasoning.text.join("\n"),
+        )),
     }
 }
 
@@ -474,9 +475,7 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
             "user" => match &msg.content {
                 ChatContent::Text { content } => {
                     rig_messages.push(Message::User {
-                        content: OneOrMany::one(UserContent::Text(Text {
-                            text: content.clone(),
-                        })),
+                        content: OneOrMany::one(UserContent::Text(rig_text(content.clone()))),
                     });
                 }
                 ChatContent::Parts { parts } => {
@@ -494,17 +493,18 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                 match &msg.content {
                     ChatContent::Text { content } => {
                         if !content.is_empty() {
-                            assistant_contents.push(AssistantContent::Text(Text {
-                                text: content.clone(),
-                            }));
+                            assistant_contents.push(AssistantContent::Text(rig_text(
+                                content.clone(),
+                            )));
                         }
                     }
                     ChatContent::Parts { parts } => {
                         for part in parts {
                             match part {
                                 ContentPart::Text { text } => {
-                                    assistant_contents
-                                        .push(AssistantContent::Text(Text { text: text.clone() }));
+                                    assistant_contents.push(AssistantContent::Text(rig_text(
+                                        text.clone(),
+                                    )));
                                 }
                                 ContentPart::Image { image } => {
                                     assistant_contents.push(AssistantContent::Image(Image {
@@ -537,15 +537,11 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                 }
 
                 if assistant_contents.is_empty() {
-                    assistant_contents.push(AssistantContent::Text(Text {
-                        text: String::new(),
-                    }));
+                    assistant_contents.push(AssistantContent::Text(rig_text(String::new())));
                 }
 
                 let content = OneOrMany::many(assistant_contents).unwrap_or_else(|_| {
-                    OneOrMany::one(AssistantContent::Text(Text {
-                        text: String::new(),
-                    }))
+                    OneOrMany::one(AssistantContent::Text(rig_text(String::new())))
                 });
 
                 rig_messages.push(Message::Assistant { id: None, content });
@@ -557,9 +553,9 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                     content: OneOrMany::one(UserContent::ToolResult(ToolResult {
                         id: tool_call_id,
                         call_id: None,
-                        content: OneOrMany::one(ToolResultContent::Text(Text {
-                            text: msg.text_content(),
-                        })),
+                        content: OneOrMany::one(ToolResultContent::Text(rig_text(
+                            msg.text_content(),
+                        ))),
                     })),
                 });
             }
@@ -576,6 +572,17 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct FlowLikeResponse;
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct FlowLikeStreamingResponse {
+    pub usage: Option<Usage>,
+}
+
+impl GetTokenUsage for FlowLikeStreamingResponse {
+    fn token_usage(&self) -> Option<Usage> {
+        self.usage.clone()
+    }
+}
 
 /// A rig `CompletionModel` backed by the FlowLike WASM host.
 ///
@@ -599,7 +606,7 @@ impl FlowLikeCompletionModel {
 
 impl CompletionModel for FlowLikeCompletionModel {
     type Response = FlowLikeResponse;
-    type StreamingResponse = FinalCompletionResponse;
+    type StreamingResponse = FlowLikeStreamingResponse;
     type Client = ();
 
     fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
@@ -685,7 +692,7 @@ impl CompletionModel for FlowLikeCompletionModel {
 
             let parsed = parse_llm_response(&text);
             let mut items: Vec<
-                Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError>,
+                Result<RawStreamingChoice<FlowLikeStreamingResponse>, CompletionError>,
             > = Vec::new();
 
             if let Some(id) = parsed.message_id {
@@ -734,10 +741,10 @@ impl CompletionModel for FlowLikeCompletionModel {
             let final_usage = parsed.usage;
 
             items.push(Ok(RawStreamingChoice::FinalResponse(
-                FinalCompletionResponse { usage: final_usage },
+                FlowLikeStreamingResponse { usage: final_usage },
             )));
 
-            let raw_stream: StreamingResult<FinalCompletionResponse> =
+            let raw_stream: StreamingResult<FlowLikeStreamingResponse> =
                 Box::pin(stream::iter(items));
 
             Ok(StreamingCompletionResponse::stream(raw_stream))
@@ -1165,9 +1172,7 @@ mod tests {
     fn test_rig_to_sdk_preserves_multimodal() {
         let rig_msg = Message::User {
             content: OneOrMany::many(vec![
-                UserContent::Text(Text {
-                    text: "Look at this".into(),
-                }),
+                UserContent::Text(rig_text("Look at this")),
                 UserContent::Image(Image {
                     data: DocumentSourceKind::url("https://example.com/img.png"),
                     media_type: None,
@@ -1194,9 +1199,7 @@ mod tests {
         let request = CompletionRequest {
             preamble: Some("Be concise.".into()),
             chat_history: OneOrMany::one(Message::User {
-                content: OneOrMany::one(UserContent::Text(Text {
-                    text: "What is 2+2?".into(),
-                })),
+                content: OneOrMany::one(UserContent::Text(rig_text("What is 2+2?"))),
             }),
             documents: vec![],
             tools: vec![],
@@ -1219,9 +1222,7 @@ mod tests {
         let rig_msg = Message::Assistant {
             id: None,
             content: OneOrMany::many(vec![
-                AssistantContent::Text(Text {
-                    text: "Let me check.".into(),
-                }),
+                AssistantContent::Text(rig_text("Let me check.")),
                 AssistantContent::ToolCall(ToolCall::new(
                     "call_1".into(),
                     ToolFunction::new("get_weather".into(), json!({"city": "Berlin"})),
@@ -1274,9 +1275,9 @@ mod tests {
             content: OneOrMany::one(UserContent::ToolResult(ToolResult {
                 id: "call_1".into(),
                 call_id: None,
-                content: OneOrMany::one(ToolResultContent::Text(Text {
-                    text: "25°C, sunny".into(),
-                })),
+                content: OneOrMany::one(ToolResultContent::Text(rig_text(
+                    "25°C, sunny",
+                ))),
             })),
         };
 
@@ -1320,9 +1321,7 @@ mod tests {
                 AssistantContent::Reasoning(
                     Reasoning::multi(vec!["Step 1".into(), "Step 2".into()]).with_id("r1".into()),
                 ),
-                AssistantContent::Text(Text {
-                    text: "The answer is 4.".into(),
-                }),
+                AssistantContent::Text(rig_text("The answer is 4.")),
             ])
             .unwrap(),
         };

@@ -177,7 +177,10 @@ impl TryFrom<ResponseMessage> for RigMessage {
         if let Some(content) = msg.content
             && !content.is_empty()
         {
-            rig_contents.push(RigAssistantContent::Text(RigText { text: content }));
+            rig_contents.push(RigAssistantContent::Text(RigText {
+                text: content,
+                additional_params: None,
+            }));
         }
 
         for tool_call in msg.tool_calls {
@@ -197,6 +200,7 @@ impl TryFrom<ResponseMessage> for RigMessage {
         let content = if rig_contents.is_empty() {
             OneOrMany::one(RigAssistantContent::Text(RigText {
                 text: String::new(),
+                additional_params: None,
             }))
         } else if rig_contents.len() == 1 {
             OneOrMany::one(rig_contents.into_iter().next().unwrap())

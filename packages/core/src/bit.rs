@@ -3,6 +3,7 @@ use crate::state::FlowLikeState;
 use crate::utils::compression::{compress_to_file_json, from_compressed_json};
 use crate::utils::download::download_bit;
 use flow_like_model_provider::history::History;
+use flow_like_model_provider::llm::{CompletionClientDyn, CompletionModelHandle};
 use flow_like_model_provider::provider::{
     EmbeddingModelProvider, ImageEmbeddingModelProvider, ModelProvider,
 };
@@ -13,7 +14,6 @@ use flow_like_types::Value;
 use flow_like_types::intercom::InterComCallback;
 
 use rig::agent::AgentBuilder;
-use rig::client::completion::{CompletionClientDyn, CompletionModelHandle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

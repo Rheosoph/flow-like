@@ -89,7 +89,7 @@ impl EmbeddingFactory {
     pub async fn build_image(
         &mut self,
         bit: &Bit,
-        app_state: Arc<FlowLikeState>,
+        _app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn ImageEmbeddingModelLogic>> {
         let provider = bit.try_to_image_embedding();
         if provider.is_none() {
@@ -107,7 +107,7 @@ impl EmbeddingFactory {
                     return Ok(model.clone());
                 }
 
-                let local_model = LocalImageEmbeddingModel::new(bit, app_state, self).await?;
+                let local_model = LocalImageEmbeddingModel::new(bit, _app_state, self).await?;
                 self.ttl_list.insert(bit.id.clone(), SystemTime::now());
                 self.cached_image_models
                     .insert(bit.id.clone(), local_model.clone());

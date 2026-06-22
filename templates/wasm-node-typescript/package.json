@@ -17,15 +17,15 @@
 	"devDependencies": {
 		"@bytecodealliance/componentize-js": "^0.19.3",
 		"@bytecodealliance/jco": "^1.17.0",
-		"esbuild": "0.27.7",
+		"esbuild": "0.28.1",
 		"typescript": "^5.7.0",
-		"vitest": "^3.0.0"
+		"vitest": "3.2.6"
 	},
 	"overrides": {
-		"vite": "7.3.3",
+		"vite": "7.3.5",
 		"postcss": "8.5.14",
 		"rollup": "4.60.3",
-		"esbuild": "0.27.7",
+		"esbuild": "0.28.1",
 		"picomatch": "4.0.4"
 	},
 	"exports": {
