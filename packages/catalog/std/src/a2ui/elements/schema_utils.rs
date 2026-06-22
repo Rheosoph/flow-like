@@ -83,6 +83,10 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<AvatarProps>();
             true
         }
+        "userprofile" => {
+            pin.set_schema::<UserProfileProps>();
+            true
+        }
         "progress" => {
             pin.set_schema::<ProgressProps>();
             true
@@ -275,6 +279,7 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "divider",
         "badge",
         "avatar",
+        "userProfile",
         "progress",
         "spinner",
         "skeleton",

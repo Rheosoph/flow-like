@@ -212,6 +212,29 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		fallback: { type: "boundValue" },
 		size: { type: "boundValue", enum: ["xs", "sm", "md", "lg", "xl"] },
 	},
+	userProfile: {
+		type: { type: "string", required: true },
+		value: {
+			type: "boundValue",
+			required: true,
+			description: "User subject/sub ID",
+		},
+		variant: {
+			type: "boundValue",
+			enum: ["avatar", "chip", "row", "detailed", "card"],
+		},
+		avatarSize: {
+			type: "boundValue",
+			enum: ["xs", "sm", "md", "lg", "xl", "2xl"],
+		},
+		showHover: { type: "boundValue" },
+		showEmail: { type: "boundValue" },
+		showDescription: { type: "boundValue" },
+		showUserId: { type: "boundValue" },
+		showProfileLink: { type: "boundValue" },
+		fallbackLabel: { type: "boundValue" },
+		muted: { type: "boundValue" },
+	},
 	progress: {
 		type: { type: "string", required: true },
 		value: { type: "boundValue", required: true },
@@ -834,5 +857,7 @@ export function getValidProperties(type: string): string[] {
  */
 export function isValidProperty(type: string, propName: string): boolean {
 	const schema = COMPONENT_SCHEMAS[type];
-	return schema ? propName in schema || propName in COMMON_COMPONENT_SCHEMA : false;
+	return schema
+		? propName in schema || propName in COMMON_COMPONENT_SCHEMA
+		: false;
 }

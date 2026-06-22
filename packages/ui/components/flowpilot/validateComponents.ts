@@ -74,6 +74,18 @@ const KNOWN_PROPS: Record<string, Set<string>> = {
 	divider: new Set(["orientation", "thickness", "color"]),
 	badge: new Set(["content", "text", "variant", "color"]),
 	avatar: new Set(["src", "fallback", "size"]),
+	userProfile: new Set([
+		"value",
+		"variant",
+		"avatarSize",
+		"showHover",
+		"showEmail",
+		"showDescription",
+		"showUserId",
+		"showProfileLink",
+		"fallbackLabel",
+		"muted",
+	]),
 	progress: new Set(["value", "max", "showLabel", "variant", "color"]),
 	spinner: new Set(["size", "color"]),
 	skeleton: new Set(["width", "height", "rounded", "variant"]),
@@ -464,6 +476,7 @@ const REQUIRED_PROPS: Record<string, string[]> = {
 	lottie: ["src"],
 	markdown: ["content"],
 	badge: ["content"],
+	userProfile: ["value"],
 	progress: ["value"],
 	button: ["label"],
 	textField: ["value"],
@@ -813,7 +826,7 @@ export function validateComponents(
 		if (validatedChildren) {
 			component.children = validatedChildren;
 		} else if (component.children != null) {
-			delete component.children;
+			component.children = undefined;
 			warnings.push(
 				`${comp.id}: removed child references to skipped components`,
 			);

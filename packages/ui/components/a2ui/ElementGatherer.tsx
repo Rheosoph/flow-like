@@ -71,22 +71,25 @@ function extractComponentValue(component: A2UIComponent): unknown {
 	const comp = component as unknown as Record<string, unknown>;
 
 	if ("value" in comp) {
-		return resolveBoundValue(comp.value as BoundValue | undefined);
+		return resolveBoundValue(comp.value as BoundValue | string | undefined);
 	}
 
 	if ("checked" in comp) {
-		return resolveBoundValue(comp.checked as BoundValue | undefined);
+		return resolveBoundValue(comp.checked as BoundValue | boolean | undefined);
 	}
 
 	if ("content" in comp) {
-		return resolveBoundValue(comp.content as BoundValue | undefined);
+		return resolveBoundValue(comp.content as BoundValue | string | undefined);
 	}
 
 	return undefined;
 }
 
-function resolveBoundValue(bound: BoundValue | undefined): unknown {
-	if (!bound) return undefined;
+function resolveBoundValue(
+	bound: BoundValue | string | number | boolean | null | undefined,
+): unknown {
+	if (bound === null || bound === undefined) return undefined;
+	if (typeof bound !== "object") return bound;
 
 	if ("literalString" in bound) {
 		return bound.literalString;

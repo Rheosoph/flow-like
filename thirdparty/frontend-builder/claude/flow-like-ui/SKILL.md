@@ -13,34 +13,42 @@ Always respond with ONLY a JSON code block. No explanatory text before or after.
 
 ```json
 {
-  "rootComponentId": "root-id",
+  "rootComponentId": "root",
   "canvasSettings": {
     "backgroundColor": "bg-background",
     "padding": "1rem"
   },
   "components": [
     {
-      "id": "unique-id",
-      "style": { "className": "tailwind-classes" },
-      "component": { "type": "componentType", ...props }
+      "id": "root",
+      "style": {
+        "className": "min-h-screen w-full bg-background text-foreground"
+      },
+      "component": {
+        "type": "column",
+        "children": {
+          "explicitList": []
+        }
+      }
     }
   ],
-  "dataModel": [
-    { "path": "$.field", "value": "initial value" }
-  ]
+  "dataModel": []
 }
 ```
 
 ## Absolute Rules
 
 1. **JSON only** — No explanations, just the JSON code block
-2. **Flat component list** — All components are siblings in `components[]`; hierarchy is expressed via children references, NEVER by nesting
-3. **Unique IDs** — Every component gets a unique kebab-case ID (`header-row`, `submit-btn`)
-4. **BoundValue wrapper** — ALL prop values MUST use BoundValue format (see below)
-5. **Reference children by ID** — Use `{"explicitList": ["id1", "id2"]}`
-6. **Prefer theme tokens** — Use `bg-background`, `text-foreground`, etc. Hardcoded colors only if user requests them
-7. **Root component required** — `rootComponentId` must reference an existing component ID
-8. **Include dataModel** — When using data binding paths, always provide a `dataModel` array with initial values
+2. **Exactly one root component named root** — `rootComponentId` MUST be exactly `"root"`, and `components[]` MUST contain exactly one component with `"id": "root"`
+3. **Root wraps the whole UI** — Put every top-level section inside the root component's `children`
+4. **Flat component list** — All components are siblings in `components[]`; hierarchy is expressed via children references, NEVER by nesting
+5. **Unique IDs** — Every non-root component gets a unique kebab-case ID (`header-row`, `submit-btn`)
+6. **BoundValue wrapper** — ALL prop values MUST use BoundValue format unless the field is structural
+7. **Reference children by ID** — Use `{"explicitList": ["id1", "id2"]}`
+8. **Prefer theme tokens** — Use `bg-background`, `text-foreground`, etc. Hardcoded colors only if user requests them
+9. **Include dataModel** — When using data binding paths, always provide a `dataModel` array with initial values
+
+Structural fields that are not BoundValues: `id`, `style.className`, `component.type`, `children`, `actions`, `canvasSettings`, `dataModel`, and raw objects inside option/data arrays.
 
 ## BoundValue Format
 
@@ -80,6 +88,19 @@ For full styling guide with Tailwind utilities and responsive design, see [refer
 ## Responsive Breakpoints (Mobile-First)
 
 Base = mobile, `sm:` >=640px, `md:` >=768px, `lg:` >=1024px, `xl:` >=1280px, `2xl:` >=1536px
+
+## UI Quality Checklist
+
+- Build mobile-first. Base classes must work on phones, then use `sm:`, `md:`, `lg:`, `xl:`, and `2xl:` for larger screens.
+- Prevent horizontal overflow with `w-full`, `max-w-*`, `min-w-0`, `overflow-hidden`, `break-words`, and responsive grid columns.
+- Prefer responsive grids: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, or `repeat(auto-fit, minmax(220px, 1fr))` for card lists.
+- Keep touch targets comfortable. Buttons, links, and inputs should usually have at least `h-10`, `px-3`, or generous padding.
+- Use clean hierarchy: root wrapper, page sections, rows/grids, cards or controls, then content.
+- Avoid fixed desktop-only widths. Use `max-w-* mx-auto` for centered layouts and `w-full` for forms, charts, images, tables, and maps.
+- Give charts, media, maps, and 3D scenes stable dimensions with `aspectRatio`, `min-h-*`, or height props.
+- Make dashboards scannable with stat cards first, charts/tables below, clear labels, muted helper text, and consistent spacing.
+- Prefer icons for common actions when appropriate, but keep text labels for primary actions and navigation.
+- Use theme tokens so the UI remains readable in light and dark mode.
 
 ## Custom CSS
 
@@ -131,21 +152,27 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `markdown` | Rendered markdown | content*, allowHtml |
 | `badge` | Small label/tag | content*, variant |
 | `avatar` | User avatar | src, fallback, size |
+| `userProfile` | Flow-Like user lookup | value*, variant, avatarSize, showHover |
 | `progress` | Progress bar | value*, max, showLabel, variant |
 | `spinner` | Loading spinner | size, color |
 | `skeleton` | Loading placeholder | width, height, rounded |
 | `divider` | Separator line | orientation, thickness |
 | `iframe` | Embedded content / HTML preview | src, srcdoc, title, width, height, sandbox |
 | `table` | Data table | columns*, data*, striped, searchable, paginated |
+| `tableRow` | Manual table row | cells*, selected, disabled |
+| `tableCell` | Manual table cell | content*, isHeader, colSpan, rowSpan |
 | `plotlyChart` | Plotly.js charts | chartType, title, data, layout |
-| `nivoChart` | Nivo charts (14+ types) | chartType*, data, indexBy, keys |
-| `filePreview` | File preview | url*, mimeType |
+| `nivoChart` | Nivo charts (25+ types) | chartType*, data, indexBy, keys |
+| `filePreview` | File preview | src/url, mimeType, fileType |
 | `boundingBoxOverlay` | Boxes on image | src*, boxes*, showLabels |
+| `geoMap` | Interactive map | center, zoom, markers, mapStyle |
 
 ### Interactive
 | Component | Purpose | Key Props |
 |-----------|---------|-----------|
 | `button` | Clickable button | label*, variant, size, icon, disabled, loading |
+| `feedback` | User feedback control | mode, title, showComment, feedbackId |
+| `appLink` | Link into app shell | target, label, variant, icon |
 | `textField` | Text input | value*, label, placeholder, inputType, multiline |
 | `select` | Dropdown | value*, options*, label, multiple, searchable |
 | `slider` | Range slider | value*, min, max, step, label |
@@ -155,6 +182,7 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `dateTimeInput` | Date/time picker | value*, mode, label |
 | `fileInput` | File upload | value, label, accept, multiple |
 | `imageInput` | Image upload | value, label, showPreview |
+| `voiceInput` | Voice recording input | value*, label, maxDuration, visualizer |
 | `link` | Navigation link | href*, label, variant, external |
 | `imageLabeler` | Draw boxes on image | src*, labels*, boxes |
 | `imageHotspot` | Clickable hotspots | src*, hotspots*, markerStyle |
@@ -185,11 +213,6 @@ For complete prop documentation, see [references/components-reference.md](refere
 | `healthBar` | HP/resource bar | value*, maxValue*, variant, fillColor |
 | `miniMap` | Game mini-map | mapImage*, width*, height*, markers, playerX, playerY |
 
-### Geo
-| Component | Purpose | Key Props |
-|-----------|---------|-----------|
-| `geoMap` | Interactive map | center, zoom, markers, mapStyle, interactive |
-
 ### Special
 | Component | Purpose | Key Props |
 |-----------|---------|-----------|
@@ -207,63 +230,139 @@ User: "Login form with email, password, and submit button"
 
 ```json
 {
-  "rootComponentId": "login-card",
-  "canvasSettings": {"backgroundColor": "bg-background", "padding": "1rem"},
+  "rootComponentId": "root",
+  "canvasSettings": {
+    "backgroundColor": "bg-background",
+    "padding": "1rem"
+  },
   "components": [
     {
+      "id": "root",
+      "style": {
+        "className": "min-h-screen w-full bg-background text-foreground p-4"
+      },
+      "component": {
+        "type": "center",
+        "children": {
+          "explicitList": [
+            "login-card"
+          ]
+        }
+      }
+    },
+    {
       "id": "login-card",
-      "style": {"className": "w-full max-w-sm mx-auto"},
+      "style": {
+        "className": "w-full max-w-sm mx-auto"
+      },
       "component": {
         "type": "card",
-        "title": {"literalString": "Welcome Back"},
-        "description": {"literalString": "Enter your credentials to sign in"},
-        "children": {"explicitList": ["login-form"]}
+        "title": {
+          "literalString": "Welcome Back"
+        },
+        "description": {
+          "literalString": "Enter your credentials to sign in"
+        },
+        "children": {
+          "explicitList": [
+            "login-form"
+          ]
+        }
       }
     },
     {
       "id": "login-form",
       "component": {
         "type": "column",
-        "gap": {"literalString": "1rem"},
-        "children": {"explicitList": ["email-field", "password-field", "submit-btn"]}
+        "gap": {
+          "literalString": "1rem"
+        },
+        "children": {
+          "explicitList": [
+            "email-field",
+            "password-field",
+            "submit-btn"
+          ]
+        }
       }
     },
     {
       "id": "email-field",
       "component": {
         "type": "textField",
-        "value": {"path": "$.form.email", "defaultValue": ""},
-        "label": {"literalString": "Email"},
-        "placeholder": {"literalString": "you@example.com"},
-        "inputType": {"literalString": "email"},
-        "required": {"literalBool": true}
+        "value": {
+          "path": "$.form.email",
+          "defaultValue": ""
+        },
+        "label": {
+          "literalString": "Email"
+        },
+        "placeholder": {
+          "literalString": "you@example.com"
+        },
+        "inputType": {
+          "literalString": "email"
+        },
+        "required": {
+          "literalBool": true
+        }
       }
     },
     {
       "id": "password-field",
       "component": {
         "type": "textField",
-        "value": {"path": "$.form.password", "defaultValue": ""},
-        "label": {"literalString": "Password"},
-        "placeholder": {"literalString": "********"},
-        "inputType": {"literalString": "password"},
-        "required": {"literalBool": true}
+        "value": {
+          "path": "$.form.password",
+          "defaultValue": ""
+        },
+        "label": {
+          "literalString": "Password"
+        },
+        "placeholder": {
+          "literalString": "********"
+        },
+        "inputType": {
+          "literalString": "password"
+        },
+        "required": {
+          "literalBool": true
+        }
       }
     },
     {
       "id": "submit-btn",
-      "style": {"className": "w-full"},
+      "style": {
+        "className": "w-full"
+      },
       "component": {
         "type": "button",
-        "label": {"literalString": "Sign In"},
-        "variant": {"literalString": "default"},
-        "actions": [{"name": "login", "context": {"form": "login"}}]
+        "label": {
+          "literalString": "Sign In"
+        },
+        "variant": {
+          "literalString": "default"
+        },
+        "actions": [
+          {
+            "name": "login",
+            "context": {
+              "form": "login"
+            }
+          }
+        ]
       }
     }
   ],
   "dataModel": [
-    {"path": "$.form.email", "value": ""},
-    {"path": "$.form.password", "value": ""}
+    {
+      "path": "$.form.email",
+      "value": ""
+    },
+    {
+      "path": "$.form.password",
+      "value": ""
+    }
   ]
 }
 ```
@@ -274,156 +373,292 @@ User: "Dashboard with 3 stat cards and a chart"
 
 ```json
 {
-  "rootComponentId": "dashboard",
-  "canvasSettings": {"backgroundColor": "bg-background", "padding": "1.5rem"},
+  "rootComponentId": "root",
+  "canvasSettings": {
+    "backgroundColor": "bg-background",
+    "padding": "1.5rem"
+  },
   "components": [
     {
-      "id": "dashboard",
+      "id": "root",
+      "style": {
+        "className": "min-h-screen w-full bg-background text-foreground"
+      },
       "component": {
         "type": "column",
-        "gap": {"literalString": "1.5rem"},
-        "children": {"explicitList": ["stats-grid", "chart-card"]}
+        "gap": {
+          "literalString": "1.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stats-grid",
+            "chart-card"
+          ]
+        }
       }
     },
     {
       "id": "stats-grid",
       "component": {
         "type": "grid",
-        "columns": {"literalString": "repeat(auto-fit, minmax(200px, 1fr))"},
-        "gap": {"literalString": "1rem"},
-        "children": {"explicitList": ["stat-users", "stat-revenue", "stat-orders"]}
+        "columns": {
+          "literalString": "repeat(auto-fit, minmax(200px, 1fr))"
+        },
+        "gap": {
+          "literalString": "1rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-users",
+            "stat-revenue",
+            "stat-orders"
+          ]
+        }
       }
     },
     {
       "id": "stat-users",
       "component": {
         "type": "card",
-        "padding": {"literalString": "1.5rem"},
-        "children": {"explicitList": ["stat-users-content"]}
+        "padding": {
+          "literalString": "1.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-users-content"
+          ]
+        }
       }
     },
     {
       "id": "stat-users-content",
       "component": {
         "type": "column",
-        "gap": {"literalString": "0.5rem"},
-        "children": {"explicitList": ["stat-users-label", "stat-users-value"]}
+        "gap": {
+          "literalString": "0.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-users-label",
+            "stat-users-value"
+          ]
+        }
       }
     },
     {
       "id": "stat-users-label",
       "component": {
         "type": "text",
-        "content": {"literalString": "Total Users"},
-        "size": {"literalString": "sm"},
-        "color": {"literalString": "text-muted-foreground"}
+        "content": {
+          "literalString": "Total Users"
+        },
+        "size": {
+          "literalString": "sm"
+        },
+        "color": {
+          "literalString": "text-muted-foreground"
+        }
       }
     },
     {
       "id": "stat-users-value",
       "component": {
         "type": "text",
-        "content": {"path": "$.stats.users", "defaultValue": "0"},
-        "variant": {"literalString": "h3"},
-        "weight": {"literalString": "bold"}
+        "content": {
+          "path": "$.stats.users",
+          "defaultValue": "0"
+        },
+        "variant": {
+          "literalString": "h3"
+        },
+        "weight": {
+          "literalString": "bold"
+        }
       }
     },
     {
       "id": "stat-revenue",
       "component": {
         "type": "card",
-        "padding": {"literalString": "1.5rem"},
-        "children": {"explicitList": ["stat-revenue-content"]}
+        "padding": {
+          "literalString": "1.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-revenue-content"
+          ]
+        }
       }
     },
     {
       "id": "stat-revenue-content",
       "component": {
         "type": "column",
-        "gap": {"literalString": "0.5rem"},
-        "children": {"explicitList": ["stat-revenue-label", "stat-revenue-value"]}
+        "gap": {
+          "literalString": "0.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-revenue-label",
+            "stat-revenue-value"
+          ]
+        }
       }
     },
     {
       "id": "stat-revenue-label",
       "component": {
         "type": "text",
-        "content": {"literalString": "Revenue"},
-        "size": {"literalString": "sm"},
-        "color": {"literalString": "text-muted-foreground"}
+        "content": {
+          "literalString": "Revenue"
+        },
+        "size": {
+          "literalString": "sm"
+        },
+        "color": {
+          "literalString": "text-muted-foreground"
+        }
       }
     },
     {
       "id": "stat-revenue-value",
       "component": {
         "type": "text",
-        "content": {"path": "$.stats.revenue", "defaultValue": "$0"},
-        "variant": {"literalString": "h3"},
-        "weight": {"literalString": "bold"}
+        "content": {
+          "path": "$.stats.revenue",
+          "defaultValue": "$0"
+        },
+        "variant": {
+          "literalString": "h3"
+        },
+        "weight": {
+          "literalString": "bold"
+        }
       }
     },
     {
       "id": "stat-orders",
       "component": {
         "type": "card",
-        "padding": {"literalString": "1.5rem"},
-        "children": {"explicitList": ["stat-orders-content"]}
+        "padding": {
+          "literalString": "1.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-orders-content"
+          ]
+        }
       }
     },
     {
       "id": "stat-orders-content",
       "component": {
         "type": "column",
-        "gap": {"literalString": "0.5rem"},
-        "children": {"explicitList": ["stat-orders-label", "stat-orders-value"]}
+        "gap": {
+          "literalString": "0.5rem"
+        },
+        "children": {
+          "explicitList": [
+            "stat-orders-label",
+            "stat-orders-value"
+          ]
+        }
       }
     },
     {
       "id": "stat-orders-label",
       "component": {
         "type": "text",
-        "content": {"literalString": "Orders"},
-        "size": {"literalString": "sm"},
-        "color": {"literalString": "text-muted-foreground"}
+        "content": {
+          "literalString": "Orders"
+        },
+        "size": {
+          "literalString": "sm"
+        },
+        "color": {
+          "literalString": "text-muted-foreground"
+        }
       }
     },
     {
       "id": "stat-orders-value",
       "component": {
         "type": "text",
-        "content": {"path": "$.stats.orders", "defaultValue": "0"},
-        "variant": {"literalString": "h3"},
-        "weight": {"literalString": "bold"}
+        "content": {
+          "path": "$.stats.orders",
+          "defaultValue": "0"
+        },
+        "variant": {
+          "literalString": "h3"
+        },
+        "weight": {
+          "literalString": "bold"
+        }
       }
     },
     {
       "id": "chart-card",
       "component": {
         "type": "card",
-        "title": {"literalString": "Revenue Over Time"},
-        "children": {"explicitList": ["revenue-chart"]}
+        "title": {
+          "literalString": "Revenue Over Time"
+        },
+        "children": {
+          "explicitList": [
+            "revenue-chart"
+          ]
+        }
       }
     },
     {
       "id": "revenue-chart",
       "component": {
         "type": "nivoChart",
-        "chartType": {"literalString": "bar"},
-        "data": {"path": "$.charts.revenue"},
-        "height": {"literalString": "300px"},
-        "animate": {"literalBool": true}
+        "chartType": {
+          "literalString": "bar"
+        },
+        "data": {
+          "path": "$.charts.revenue"
+        },
+        "height": {
+          "literalString": "300px"
+        },
+        "animate": {
+          "literalBool": true
+        }
       }
     }
   ],
   "dataModel": [
-    {"path": "$.stats.users", "value": "12,458"},
-    {"path": "$.stats.revenue", "value": "$48,200"},
-    {"path": "$.stats.orders", "value": "384"},
-    {"path": "$.charts.revenue", "value": [
-      {"month": "Jan", "revenue": 4200},
-      {"month": "Feb", "revenue": 5800},
-      {"month": "Mar", "revenue": 4900}
-    ]}
+    {
+      "path": "$.stats.users",
+      "value": "12,458"
+    },
+    {
+      "path": "$.stats.revenue",
+      "value": "$48,200"
+    },
+    {
+      "path": "$.stats.orders",
+      "value": "384"
+    },
+    {
+      "path": "$.charts.revenue",
+      "value": [
+        {
+          "month": "Jan",
+          "revenue": 4200
+        },
+        {
+          "month": "Feb",
+          "revenue": 5800
+        },
+        {
+          "month": "Mar",
+          "revenue": 4900
+        }
+      ]
+    }
   ]
 }
 ```

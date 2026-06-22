@@ -204,6 +204,22 @@ User avatar display.
 | fallback | BoundValue | Fallback initials |
 | size | BoundValue | "sm", "md", "lg", "xl" |
 
+### userProfile
+Flow-Like user profile lookup and display by subject/sub ID.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| value | BoundValue | User subject/sub ID **(REQUIRED)** |
+| variant | BoundValue | "avatar", "chip", "row", "detailed", "card" |
+| avatarSize | BoundValue | "xs", "sm", "md", "lg", "xl", "2xl" |
+| showHover | BoundValue | boolean - show hover details |
+| showEmail | BoundValue | boolean |
+| showDescription | BoundValue | boolean |
+| showUserId | BoundValue | boolean |
+| showProfileLink | BoundValue | boolean |
+| fallbackLabel | BoundValue | Text to show when lookup is unavailable |
+| muted | BoundValue | boolean |
+
 ### progress
 Progress indicator.
 
@@ -275,6 +291,27 @@ Data table.
 | paginated | BoundValue | boolean |
 | pageSize | BoundValue | number |
 | selectable | BoundValue | boolean |
+| onRowClick | BoundValue | Row action config |
+
+### tableRow
+Manual table row. Prefer `table` for data-driven tables unless you need custom row composition.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| cells | BoundValue | Array of cell values **(REQUIRED)** |
+| selected | BoundValue | boolean |
+| disabled | BoundValue | boolean |
+
+### tableCell
+Manual table cell. Prefer `table` columns/data for normal data tables.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| content | BoundValue | Cell content **(REQUIRED)** |
+| isHeader | BoundValue | boolean |
+| colSpan | BoundValue | number |
+| rowSpan | BoundValue | number |
+| align | BoundValue | "left", "center", "right" |
 
 ### plotlyChart
 Interactive Plotly charts.
@@ -353,6 +390,51 @@ Clickable button.
 | icon | BoundValue | Lucide icon name |
 | iconPosition | BoundValue | "left", "right" |
 | tooltip | BoundValue | Hover tooltip |
+
+### feedback
+Built-in user feedback control for thumbs up/down, segmented, rating, or comment feedback.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| mode | BoundValue | "icon", "compact", "segmented", "rating", "extended" |
+| size | BoundValue | "sm", "md", "lg" |
+| title | BoundValue | Feedback prompt title |
+| description | BoundValue | Supporting text |
+| positiveLabel | BoundValue | Positive option label |
+| negativeLabel | BoundValue | Negative option label |
+| positiveRating | BoundValue | Positive rating value |
+| negativeRating | BoundValue | Negative rating value |
+| showComment | BoundValue | boolean |
+| commentMode | BoundValue | "none", "inline", "modal" |
+| commentLabel | BoundValue | Comment field label |
+| commentPlaceholder | BoundValue | Comment field placeholder |
+| commentTitle | BoundValue | Modal/inline comment title |
+| commentDescription | BoundValue | Comment helper text |
+| commentSubmitLabel | BoundValue | Submit button label |
+| commentCancelLabel | BoundValue | Cancel button label |
+| feedbackId | BoundValue | Stable feedback ID |
+| includeState | BoundValue | boolean - include component/page state in feedback context |
+| pageContextMode | BoundValue | "none", "path", "query" |
+| pageContextQueryParamAllowlist | BoundValue | Comma-separated query parameter names |
+| pageContextQueryParamDenylist | BoundValue | Comma-separated query parameter names |
+| includePageHash | BoundValue | boolean |
+| successMessage | BoundValue | Message after submission |
+| disabled | BoundValue | boolean |
+
+### appLink
+Built-in link button to Flow-Like app shell screens.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| target | BoundValue | "config", "settings", "overview" |
+| label | BoundValue | Button label |
+| variant | BoundValue | "default", "secondary", "outline", "ghost", "destructive", "link" |
+| size | BoundValue | "sm", "md", "lg", "icon" |
+| icon | BoundValue | Lucide icon name |
+| iconPosition | BoundValue | "left", "right" |
+| appId | BoundValue | Target app ID |
+| eventId | BoundValue | Target event ID |
+| disabled | BoundValue | boolean |
 
 ### textField
 Text input field.
@@ -467,6 +549,22 @@ Image upload with preview.
 | aspectRatio | BoundValue | Crop ratio |
 | showPreview | BoundValue | boolean |
 | disabled | BoundValue | boolean |
+
+### voiceInput
+Voice recording input.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| value | BoundValue | Audio/file data **(REQUIRED)** |
+| label | BoundValue | Field label |
+| helperText | BoundValue | Helper text |
+| maxDuration | BoundValue | Maximum recording duration in seconds |
+| autoStop | BoundValue | boolean - stop automatically after silence |
+| silenceThreshold | BoundValue | Silence detection threshold |
+| silenceDuration | BoundValue | Silence duration before auto-stop |
+| disabled | BoundValue | boolean |
+| error | BoundValue | Error message |
+| visualizer | BoundValue | boolean - show audio visualizer |
 
 ### link
 Navigation link.
@@ -703,7 +801,7 @@ Visual novel dialogue box.
 |----------|------|-------------|
 | text | BoundValue | Dialogue text **(REQUIRED)** |
 | speakerName | BoundValue | Speaker name |
-| typewriter | BoundValue | boolean (typewriter effect) |
+| typewriter | BoundValue | boolean - typewriter effect |
 | speed | BoundValue | Typing speed |
 | portrait | BoundValue | Speaker portrait URL |
 | children | Children | Additional content |
@@ -721,7 +819,7 @@ Character portrait display.
 | flip | BoundValue | boolean |
 
 ### choiceMenu
-Interactive choice selection (for games/VN).
+Interactive choice selection for games or visual novels.
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -742,7 +840,7 @@ Game-style item grid.
 | showTooltips | BoundValue | boolean |
 
 ### healthBar
-HP/resource bar display.
+HP or resource bar display.
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -793,7 +891,7 @@ Interactive map display.
 ## SPECIAL COMPONENTS
 
 ### widgetInstance
-Embed a reusable widget (defined in Flow-Like).
+Embed a reusable widget defined in Flow-Like.
 
 | Property | Type | Description |
 |----------|------|-------------|

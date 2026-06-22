@@ -195,6 +195,31 @@ Example:
 }"#
         .to_string(),
 
+        "userprofile" | "user_profile" => r#"UserProfile - Fetch and display a Flow-Like user by subject/sub ID
+Properties:
+- type: "userProfile" (required)
+- value: BoundValue - user subject/sub ID. Compatible with Set Element Value.
+- variant: BoundValue - "avatar" | "chip" | "row" | "detailed" | "card"
+- avatarSize: BoundValue - "xs" | "sm" | "md" | "lg" | "xl" | "2xl"
+- showHover: BoundValue (boolean) - enable hover details
+- showEmail: BoundValue (boolean)
+- showDescription: BoundValue (boolean)
+- showUserId: BoundValue (boolean)
+- showProfileLink: BoundValue (boolean)
+- fallbackLabel: BoundValue
+
+Example:
+{
+  "id": "assignee-profile",
+  "component": {
+    "type": "userProfile",
+    "value": { "path": "$.assigneeSub" },
+    "variant": { "literalString": "row" },
+    "showHover": { "literalBool": true }
+  }
+}"#
+        .to_string(),
+
         "textfield" | "text_field" => r#"TextField - Text input
 Properties:
 - type: "textField" (required)
@@ -371,7 +396,7 @@ Example:
         .to_string(),
 
         _ => format!(
-            "Unknown component type: {}. Available types: column, row, grid, stack, text, image, icon, button, textField, select, checkbox, switch, slider, card, modal, tabs, accordion, divider, badge, avatar, progress, spinner, skeleton",
+            "Unknown component type: {}. Available types: column, row, grid, stack, text, image, icon, button, textField, select, checkbox, switch, slider, card, modal, tabs, accordion, divider, badge, avatar, userProfile, progress, spinner, skeleton",
             component_type
         ),
     }

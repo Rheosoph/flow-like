@@ -29,6 +29,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `markdown` - Markdown renderer
 - `badge` - Small label/tag
 - `avatar` - User avatar
+- `userProfile` - User lookup display by sub with avatar, chip, row, detailed, and card variants
 - `progress` - Progress bar
 - `spinner` - Loading spinner
 - `divider` - Visual separator

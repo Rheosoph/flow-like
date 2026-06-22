@@ -31,6 +31,7 @@ import {
 	ToggleLeft,
 	Type,
 	Upload,
+	UserRound,
 	Video,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -205,6 +206,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Circle,
 		category: "Display",
 		description: "User avatar",
+	},
+	{
+		type: "userProfile",
+		label: "User Profile",
+		icon: UserRound,
+		category: "Display",
+		description: "Lookup and display a user by sub",
 	},
 	{
 		type: "progress",

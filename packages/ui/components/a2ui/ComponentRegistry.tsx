@@ -46,6 +46,7 @@ import {
 	A2UITableCell,
 	A2UITableRow,
 	A2UIText,
+	A2UIUserProfile,
 	A2UIVideo,
 } from "./display";
 
@@ -137,6 +138,7 @@ const registry: Record<string, ComponentRenderer> = {
 	divider: A2UIDivider as ComponentRenderer,
 	badge: A2UIBadge as ComponentRenderer,
 	avatar: A2UIAvatar as ComponentRenderer,
+	userProfile: A2UIUserProfile as ComponentRenderer,
 	progress: A2UIProgress as ComponentRenderer,
 	spinner: A2UISpinner as ComponentRenderer,
 	skeleton: A2UISkeleton as ComponentRenderer,

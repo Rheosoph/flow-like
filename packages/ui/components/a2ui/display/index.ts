@@ -6,6 +6,7 @@ export { A2UIMarkdown } from "./Markdown";
 export { A2UIDivider } from "./Divider";
 export { A2UIBadge } from "./Badge";
 export { A2UIAvatar } from "./Avatar";
+export { A2UIUserProfile } from "./UserProfile";
 export { A2UIProgress } from "./Progress";
 export { A2UISpinner } from "./Spinner";
 export { A2UISkeleton } from "./Skeleton";
