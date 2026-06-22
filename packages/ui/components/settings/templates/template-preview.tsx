@@ -346,6 +346,7 @@ export function TemplatePreview({
 						nodes={Object.values(template.data?.nodes)}
 						comments={template.data?.comments}
 						layers={template.data?.layers}
+						variables={template.data?.variables}
 					/>
 				</div>
 			)}

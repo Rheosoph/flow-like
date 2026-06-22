@@ -67,6 +67,10 @@ pub fn routes() -> Router<AppState> {
             "/publication/apps/{app_id}/board/{board_id}",
             get(publication::get_board::get_board),
         )
+        .route(
+            "/publication/apps/{app_id}/page/{page_id}",
+            get(publication::get_page::get_page),
+        )
         // Package management routes
         .route("/packages", get(packages::get_packages::get_packages))
         .route("/packages/stats", get(packages::get_stats::get_stats))

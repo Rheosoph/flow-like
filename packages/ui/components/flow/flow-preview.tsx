@@ -18,18 +18,21 @@ import {
 	type INode,
 	parseBoard,
 } from "../../lib";
-import type { ILayer } from "../../lib/schema/flow/board";
+import type { ILayer, IVariable } from "../../lib/schema/flow/board";
+import { CallFunctionNode } from "./call-function-node";
 import {
 	CommentNode,
 	type CommentNode as CommentNodeType,
 } from "./comment-node";
 import { FlowNode, type FlowNode as FlowNodeType } from "./flow-node";
+import { type ILayerInnerNode, LayerInnerNode } from "./layer-inner-node";
 import { LayerNode, type LayerNode as LayerNodeType } from "./layer-node";
 
 interface FlowPreviewProps {
 	nodes: INode[];
 	comments?: { [key: string]: IComment };
 	layers?: { [key: string]: ILayer };
+	variables?: { [key: string]: IVariable };
 }
 
 // Preview versions of nodes that don't show toolbars
@@ -47,6 +50,20 @@ const PreviewLayerNode = memo((props: NodeProps<LayerNodeType>) => (
 ));
 PreviewLayerNode.displayName = "PreviewLayerNode";
 
+const PreviewCallFunctionNode = memo((props: NodeProps<FlowNodeType>) => (
+	<div className="pointer-events-none">
+		<CallFunctionNode {...props} />
+	</div>
+));
+PreviewCallFunctionNode.displayName = "PreviewCallFunctionNode";
+
+const PreviewLayerInnerNode = memo((props: NodeProps<ILayerInnerNode>) => (
+	<div className="pointer-events-none">
+		<LayerInnerNode {...props} />
+	</div>
+));
+PreviewLayerInnerNode.displayName = "PreviewLayerInnerNode";
+
 const PreviewCommentNode = memo((props: NodeProps<CommentNodeType>) => (
 	<div className="pointer-events-none">
 		<CommentNode {...props} />
@@ -58,12 +75,24 @@ function FlowPreviewInner({
 	nodes,
 	comments,
 	layers,
+	variables,
 }: Readonly<FlowPreviewProps>) {
 	const { resolvedTheme } = useTheme();
 	const instanceRef = useRef<ReactFlowInstance | null>(null);
+	const boardRef = useRef<IBoard | undefined>(undefined);
 	const colorMode = useMemo(
 		() => (resolvedTheme === "dark" ? "dark" : "light"),
 		[resolvedTheme],
+	);
+	const layoutRevision = useMemo(
+		() =>
+			nodes
+				.map(
+					(node) =>
+						`${node.id}:${node.hash ?? ""}:${node.coordinates?.join(",") ?? ""}`,
+				)
+				.join("|"),
+		[nodes],
 	);
 
 	const handleInit = useCallback((instance: ReactFlowInstance) => {
@@ -74,19 +103,24 @@ function FlowPreviewInner({
 
 	// Re-fit view after mount and when nodes change (handles container resize)
 	useEffect(() => {
+		void layoutRevision;
 		const timers = [
 			setTimeout(() => instanceRef.current?.fitView({ padding: 0.3 }), 50),
 			setTimeout(() => instanceRef.current?.fitView({ padding: 0.3 }), 150),
 			setTimeout(() => instanceRef.current?.fitView({ padding: 0.3 }), 300),
 		];
-		return () => timers.forEach(clearTimeout);
-	}, [nodes]);
+		return () => {
+			for (const timer of timers) clearTimeout(timer);
+		};
+	}, [layoutRevision]);
 
 	const nodeTypes = useMemo(
 		() => ({
 			flowNode: PreviewFlowNode,
 			commentNode: PreviewCommentNode,
 			layerNode: PreviewLayerNode,
+			layerInnerNode: PreviewLayerInnerNode,
+			callFunctionNode: PreviewCallFunctionNode,
 			node: PreviewFlowNode,
 		}),
 		[],
@@ -94,9 +128,9 @@ function FlowPreviewInner({
 
 	const { boardNodes, edges } = useMemo(() => {
 		const parsed: { [key: string]: INode } = {};
-		nodes.forEach((node) => {
+		for (const node of nodes) {
 			parsed[node.id] = node;
-		});
+		}
 
 		const board: IBoard = {
 			comments: comments ?? {},
@@ -111,11 +145,13 @@ function FlowPreviewInner({
 			updated_at: { nanos_since_epoch: 0, secs_since_epoch: 0 },
 			layers: layers ?? {},
 			version: [0, 0, 0],
-			variables: {},
+			variables: variables ?? {},
 			viewport: [0, 0, 0, 0],
 			page_ids: [],
 			execution_mode: IExecutionMode.Hybrid,
 		};
+
+		boardRef.current = board;
 
 		const parsedBoard = parseBoard(
 			board,
@@ -125,10 +161,15 @@ function FlowPreviewInner({
 			async () => {},
 			async () => {},
 			new Set(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			boardRef,
 		);
 
 		return { boardNodes: parsedBoard.nodes, edges: parsedBoard.edges };
-	}, [nodes]);
+	}, [nodes, comments, layers, variables]);
 
 	return (
 		<ReactFlow
@@ -159,6 +200,7 @@ export function FlowPreview({
 	nodes,
 	comments,
 	layers,
+	variables,
 }: Readonly<FlowPreviewProps>) {
 	if (!nodes || nodes.length === 0) {
 		return (
@@ -171,7 +213,12 @@ export function FlowPreview({
 	return (
 		<main className="w-full h-full min-h-56 rounded-md flow-preview not-content">
 			<ReactFlowProvider>
-				<FlowPreviewInner nodes={nodes} comments={comments} layers={layers} />
+				<FlowPreviewInner
+					nodes={nodes}
+					comments={comments}
+					layers={layers}
+					variables={variables}
+				/>
 			</ReactFlowProvider>
 		</main>
 	);

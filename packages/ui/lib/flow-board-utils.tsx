@@ -47,6 +47,21 @@ export function normalizeSelectionNodes(value: unknown): string[] {
 	);
 }
 
+function boardDataVersion(board: IBoard): string {
+	const updatedAt = board.updated_at
+		? `${board.updated_at.secs_since_epoch}.${board.updated_at.nanos_since_epoch}`
+		: "";
+	return [
+		board.id,
+		board.version?.join(".") ?? "",
+		updatedAt,
+		Object.keys(board.nodes ?? {}).length,
+		Object.keys(board.layers ?? {}).length,
+		Object.keys(board.variables ?? {}).length,
+		Object.keys(board.refs ?? {}).length,
+	].join(":");
+}
+
 interface ISerializedPin {
 	id: string;
 	name: string;
@@ -412,6 +427,7 @@ export function parseBoard(
 	const oldNodesMap = new Map<number, any>();
 	const oldEdgesMap = new Map<string, any>();
 	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
+	const boardVersionToken = boardDataVersion(board);
 
 	// Compute a hash of all fn_refs to detect changes
 	const fnRefsHash = Object.values(board.nodes)
@@ -465,6 +481,7 @@ export function parseBoard(
 			oldNode.selected === sel &&
 			oldNode.data?.isUnavailable === isUnavailable &&
 			oldNode.data?.fnRefsHash === fnRefsHash &&
+			oldNode.data?.boardDataVersion === boardVersionToken &&
 			oldNode.data?.selectorDataRef === selectorDataRef &&
 			oldNode.data?.selectorDataVersion === selectorDataVersion
 		) {
@@ -484,6 +501,7 @@ export function parseBoard(
 					fnRefsHash,
 					node: nodeForData,
 					boardRef,
+					boardDataVersion: boardVersionToken,
 					selectorDataRef,
 					selectorDataVersion,
 				},
@@ -506,6 +524,7 @@ export function parseBoard(
 				data: {
 					label: node.name,
 					boardRef: boardRef,
+					boardDataVersion: boardVersionToken,
 					selectorDataRef,
 					selectorDataVersion,
 					fnRefsHash: fnRefsHash,
@@ -580,6 +599,7 @@ export function parseBoard(
 							boardId: board.id,
 							appId: appId,
 							boardRef: boardRef,
+							boardDataVersion: boardVersionToken,
 							selectorDataRef,
 							selectorDataVersion,
 							type: InnerLayerNodeType.INPUT,
@@ -626,6 +646,7 @@ export function parseBoard(
 							boardId: board.id,
 							appId: appId,
 							boardRef: boardRef,
+							boardDataVersion: boardVersionToken,
 							selectorDataRef,
 							selectorDataVersion,
 							type: InnerLayerNodeType.RETURN,
@@ -684,6 +705,7 @@ export function parseBoard(
 					appId: appId,
 					layer: layer,
 					boardRef: boardRef,
+					boardDataVersion: boardVersionToken,
 					selectorDataRef,
 					selectorDataVersion,
 					hash: layer.hash ?? -1,

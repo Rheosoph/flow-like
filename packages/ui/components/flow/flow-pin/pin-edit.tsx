@@ -1,9 +1,17 @@
 "use client";
 
 import { VariableIcon } from "lucide-react";
-import { type FC, memo, useCallback, useEffect, useState } from "react";
+import {
+	type FC,
+	type RefObject,
+	memo,
+	useCallback,
+	useEffect,
+	useState,
+} from "react";
 import { Button } from "../../../components/ui/button";
 import { IValueType } from "../../../lib";
+import type { IBoard } from "../../../lib/schema/flow/board";
 import {
 	type IPin,
 	IPinType,
@@ -21,15 +29,17 @@ import { ProjectUserSelect } from "./variable-types/project-user-select";
 import { VarVariable } from "./variable-types/var-select";
 import { WidgetVariable } from "./variable-types/widget-select";
 
+type PinDefaultValue = IPin["default_value"];
+
 interface PinEditProps {
 	readonly nodeId: string;
 	readonly nodeName?: string;
 	readonly pin: IPin;
-	readonly defaultValue: any;
+	readonly defaultValue: PinDefaultValue;
 	readonly appId: string;
-	readonly boardId: string;
-	readonly changeDefaultValue: (value: any) => void;
-	readonly saveDefaultValue: (value: any) => Promise<void>;
+	readonly boardRef?: RefObject<IBoard | undefined>;
+	readonly changeDefaultValue: (value: PinDefaultValue) => void;
+	readonly saveDefaultValue: (value: PinDefaultValue) => Promise<void>;
 	readonly currentLayerId?: string;
 	readonly selectorDataRef?: FlowSelectorDataRef;
 	readonly selectorDataVersion?: number;
@@ -41,7 +51,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	pin,
 	defaultValue,
 	appId,
-	boardId,
+	boardRef,
 	changeDefaultValue,
 	saveDefaultValue,
 	currentLayerId,
@@ -55,10 +65,11 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	}, [defaultValue]);
 
 	const updateDefaultValue = useCallback(
-		async (value: any) => {
-			setCachedDefaultValue(value);
-			changeDefaultValue(value);
-			await saveDefaultValue(value);
+		async (value: unknown) => {
+			const nextValue = value as PinDefaultValue;
+			setCachedDefaultValue(nextValue);
+			changeDefaultValue(nextValue);
+			await saveDefaultValue(nextValue);
 		},
 		[changeDefaultValue, saveDefaultValue],
 	);
@@ -139,10 +150,9 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	) {
 		return (
 			<FnVariable
-				boardId={boardId}
+				boardRef={boardRef}
 				pin={pin}
 				value={cachedDefaultValue}
-				appId={appId}
 				setValue={updateDefaultValue}
 			/>
 		);
@@ -155,10 +165,9 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	) {
 		return (
 			<VarVariable
-				boardId={boardId}
+				boardRef={boardRef}
 				pin={pin}
 				value={cachedDefaultValue}
-				appId={appId}
 				currentLayerId={currentLayerId}
 				setValue={updateDefaultValue}
 			/>
