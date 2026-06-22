@@ -95,6 +95,7 @@ type FlowPinInnerProps = Readonly<{
 	appId: string;
 	node: INode | ILayer;
 	boardRef?: RefObject<IBoard | undefined>;
+	boardDataVersion?: string;
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
@@ -356,6 +357,10 @@ function FlowPinInnerComponent({
 	);
 }
 
+function versionKey(version?: readonly number[]) {
+	return version?.join(".") ?? "";
+}
+
 function pinPropsAreEqual(
 	prevProps: FlowPinInnerProps,
 	nextProps: FlowPinInnerProps,
@@ -363,6 +368,9 @@ function pinPropsAreEqual(
 	if (
 		prevProps.boardId !== nextProps.boardId ||
 		prevProps.boardRef !== nextProps.boardRef ||
+		prevProps.boardRef?.current !== nextProps.boardRef?.current ||
+		prevProps.boardDataVersion !== nextProps.boardDataVersion ||
+		versionKey(prevProps.version) !== versionKey(nextProps.version) ||
 		prevProps.node?.id !== nextProps.node?.id ||
 		prevProps.pin.id !== nextProps.pin.id ||
 		prevProps.pin.index !== nextProps.pin.index ||
@@ -411,6 +419,7 @@ function FlowPin({
 	appId,
 	node,
 	boardRef,
+	boardDataVersion,
 	onPinRemove,
 	skipOffset,
 	version,
@@ -423,6 +432,7 @@ function FlowPin({
 	appId: string;
 	node: INode | ILayer;
 	boardRef?: RefObject<IBoard | undefined>;
+	boardDataVersion?: string;
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
@@ -438,6 +448,7 @@ function FlowPin({
 				pin={pin}
 				boardId={boardId}
 				boardRef={boardRef}
+				boardDataVersion={boardDataVersion}
 				node={node}
 				skipOffset={skipOffset}
 				onPinRemove={onPinRemove}
@@ -456,6 +467,7 @@ function FlowPin({
 			pin={pin}
 			boardId={boardId}
 			boardRef={boardRef}
+			boardDataVersion={boardDataVersion}
 			node={node}
 			skipOffset={skipOffset}
 			version={version}

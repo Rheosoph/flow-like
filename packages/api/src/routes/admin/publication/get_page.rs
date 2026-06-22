@@ -49,12 +49,13 @@ pub async fn get_page(
     let row = page::Entity::find_by_id(&page_id)
         .filter(page::Column::AppId.eq(&app_id))
         .one(&state.db)
-        .await?;
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
 
     let board_hint = query
         .board_id
         .filter(|board_id| !board_id.is_empty())
-        .or_else(|| row.and_then(|page| page.board_id));
+        .or(row.board_id);
 
     let app = state.master_app("admin", &app_id, &state).await?;
 
@@ -68,10 +69,10 @@ pub async fn get_page(
         }
     };
 
-    if let Some(board_id) = board_hint
-        && let Some(page) = try_board(board_id).await
-    {
-        return Ok(Json(page));
+    if let Some(board_id) = board_hint {
+        if let Some(page) = try_board(board_id).await {
+            return Ok(Json(page));
+        }
     }
 
     for board_id in app.boards.iter() {

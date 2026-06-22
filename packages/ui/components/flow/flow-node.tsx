@@ -113,6 +113,7 @@ export type FlowNode = Node<
 		appId: string;
 		transparent?: boolean;
 		boardRef: RefObject<IBoard | undefined>;
+		boardDataVersion?: string;
 		fnRefsHash?: string;
 		version?: [number, number, number];
 		onExecute: (node: INode, payload?: object) => Promise<void>;
@@ -510,6 +511,7 @@ const FlowNodeInner = memo(
 								node={props.data.node}
 								boardId={props.data.boardId}
 								boardRef={props.data.boardRef}
+								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
 								onPinRemove={pinRemoveCallback}
 								skipOffset={isReroute}
@@ -524,6 +526,7 @@ const FlowNodeInner = memo(
 				inputPins,
 				props.data.node,
 				props.data.boardId,
+				props.data.boardDataVersion,
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
@@ -547,6 +550,7 @@ const FlowNodeInner = memo(
 							node={props.data.node}
 							boardId={props.data.boardId}
 							boardRef={props.data.boardRef}
+							boardDataVersion={props.data.boardDataVersion}
 							pin={pin}
 							key={pin.id}
 							onPinRemove={pinRemoveCallback}
@@ -562,6 +566,7 @@ const FlowNodeInner = memo(
 				outputPins,
 				props.data.node,
 				props.data.boardId,
+				props.data.boardDataVersion,
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,

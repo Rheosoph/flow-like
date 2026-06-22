@@ -529,7 +529,7 @@ function scoresFromDetail(detail?: BoardScoreItem): BoardScores | undefined {
 }
 
 function worstScore(scores: BoardScores): number {
-	return Math.min(...SCORE_CATEGORIES.map((category) => scores[category]));
+	return Math.min(...SCORE_CATEGORIES.map((category) => scores[category] ?? 0));
 }
 
 function formatLogLevel(logLevel: number): string {

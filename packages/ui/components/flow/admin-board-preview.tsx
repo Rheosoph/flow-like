@@ -141,6 +141,10 @@ function getWorstScore(scores: Record<ScoreCategory, number>) {
 	})).sort((a, b) => a.value - b.value)[0];
 }
 
+function nodeSortLabel(node: INode) {
+	return node.friendly_name || node.name || node.id;
+}
+
 function buildNodeScoreSummary(node: INode): NodeScoreSummary | undefined {
 	if (!node.scores || node.name === "reroute") return undefined;
 	const worstScore = getWorstScore(node.scores);
@@ -721,8 +725,8 @@ function BoardPreviewInner({ board }: { board: IBoard }) {
 				.sort(
 					(a, b) =>
 						a.worstScore - b.worstScore ||
-						a.node.friendly_name.localeCompare(b.node.friendly_name) ||
-						a.node.name.localeCompare(b.node.name),
+						nodeSortLabel(a.node).localeCompare(nodeSortLabel(b.node)) ||
+						a.node.id.localeCompare(b.node.id),
 				)
 				.slice(0, 12),
 		[allNodes],

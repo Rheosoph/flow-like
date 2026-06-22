@@ -47,6 +47,7 @@ export type LayerNode = Node<
 		hash: string;
 		appId: string;
 		boardRef?: RefObject<IBoard | undefined>;
+		boardDataVersion?: string;
 		selectorDataRef?: FlowSelectorDataRef;
 		selectorDataVersion?: number;
 		pushLayer(layer: ILayer): Promise<void>;
@@ -332,6 +333,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								node={props.data.pinLookup[pin.id] ?? props.data.layer}
 								boardId={props.data.boardId}
 								boardRef={props.data.boardRef}
+								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}
@@ -349,6 +351,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								node={props.data.pinLookup[pin.id] ?? props.data.layer}
 								boardId={props.data.boardId}
 								boardRef={props.data.boardRef}
+								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}
