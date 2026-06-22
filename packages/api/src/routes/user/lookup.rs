@@ -1,5 +1,9 @@
 use crate::{
-    entity::user, error::ApiError, middleware::jwt::AppUser, routes::user::sign_avatar,
+    entity::{membership, user},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::user::sign_avatar,
     state::AppState,
 };
 use axum::{
@@ -89,7 +93,8 @@ pub async fn user_lookup(
     Extension(user): Extension<AppUser>,
     Path(sub): Path<String>,
 ) -> Result<Json<UserLookupResponse>, ApiError> {
-    user.sub()?;
+    user.executor_scoped_sub()?;
+    let sub = scoped_lookup_id(&state, &user, sub).await?;
     let lookup_config = state.platform_config.lookup.clone();
     let found_user = user::Entity::find()
         .filter(user::Column::Id.eq(&sub))
@@ -123,7 +128,7 @@ pub async fn user_batch_lookup(
     Extension(user): Extension<AppUser>,
     Json(body): Json<UserBatchLookupBody>,
 ) -> Result<Json<Vec<UserLookupResponse>>, ApiError> {
-    user.sub()?;
+    user.executor_scoped_sub()?;
     let lookup_config = state.platform_config.lookup.clone();
     let ids = body
         .user_ids
@@ -134,6 +139,11 @@ pub async fn user_batch_lookup(
         .into_iter()
         .collect::<Vec<_>>();
 
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let ids = scoped_lookup_ids(&state, &user, ids).await?;
     if ids.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -150,6 +160,63 @@ pub async fn user_batch_lookup(
     }
 
     Ok(Json(responses))
+}
+
+async fn scoped_lookup_id(
+    state: &AppState,
+    user: &AppUser,
+    sub: String,
+) -> Result<String, ApiError> {
+    if let AppUser::Executor(executor) = user {
+        ensure_executor_lookup_permission(state, user, &executor.app_id).await?;
+        let membership = membership::Entity::find()
+            .filter(membership::Column::AppId.eq(&executor.app_id))
+            .filter(membership::Column::UserId.eq(&sub))
+            .one(&state.db)
+            .await?;
+
+        if membership.is_none() {
+            return Err(ApiError::NOT_FOUND);
+        }
+    }
+
+    Ok(sub)
+}
+
+async fn scoped_lookup_ids(
+    state: &AppState,
+    user: &AppUser,
+    ids: Vec<String>,
+) -> Result<Vec<String>, ApiError> {
+    if let AppUser::Executor(executor) = user {
+        ensure_executor_lookup_permission(state, user, &executor.app_id).await?;
+        let ids = membership::Entity::find()
+            .filter(membership::Column::AppId.eq(&executor.app_id))
+            .filter(membership::Column::UserId.is_in(ids))
+            .limit(100)
+            .all(&state.db)
+            .await?
+            .into_iter()
+            .map(|membership| membership.user_id)
+            .collect();
+
+        return Ok(ids);
+    }
+
+    Ok(ids)
+}
+
+async fn ensure_executor_lookup_permission(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+) -> Result<(), ApiError> {
+    let permission = user.execution_app_permission(app_id, state).await?;
+    if !permission.has_permission(RolePermissions::ReadTeam) {
+        return Err(ApiError::FORBIDDEN);
+    }
+
+    Ok(())
 }
 
 #[utoipa::path(

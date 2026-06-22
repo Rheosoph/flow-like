@@ -8,7 +8,7 @@ use flow_like_types::{async_trait, json::json};
 
 /// Permission constants matching the API RolePermissions bitflags.
 /// These are used to populate the dropdown options.
-const PERMISSION_OPTIONS: &[(&str, i64)] = &[
+pub(crate) const PERMISSION_OPTIONS: &[(&str, i64)] = &[
     ("Owner", 0b00000000_00000000_00000000_00000001),
     ("Admin", 0b00000000_00000000_00000000_00000010),
     ("Read Team", 0b00000000_00000000_00000000_00000100),
