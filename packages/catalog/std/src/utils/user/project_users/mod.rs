@@ -7,7 +7,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{JsonSchema, Value, json::json, reqwest};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::OnceLock};
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 100;
@@ -133,8 +133,10 @@ impl HubClient {
         let base_url = api_base_url(&context.profile.hub, context.profile.secure)
             .ok_or_else(|| HubError::new(0, "No hub URL configured on the execution profile"))?;
 
+        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: CLIENT.get_or_init(reqwest::Client::new).clone(),
             token: token.to_string(),
             base_url,
         })
@@ -504,6 +506,7 @@ async fn find_project_user_by_email(
             return Ok(None);
         }
 
+        let len = memberships.len();
         let (users, status) = hydrate_project_users(client, memberships, roles).await?;
         if let Some(user) = users.into_iter().find(|user| {
             user.user
@@ -513,6 +516,10 @@ async fn find_project_user_by_email(
                 .unwrap_or(false)
         }) {
             return Ok(Some((user, status)));
+        }
+
+        if len < MEMBERSHIP_PAGE_SIZE as usize {
+            return Ok(None);
         }
 
         offset += MEMBERSHIP_PAGE_SIZE;
@@ -550,6 +557,7 @@ async fn search_project_users(
             break;
         }
 
+        let len = memberships.len();
         let (users, lookup_status) = hydrate_project_users(client, memberships, roles).await?;
         last_status = lookup_status;
 
@@ -571,9 +579,7 @@ async fn search_project_users(
             }
         }
 
-        if results.len() > limit as usize {
-            has_more = true;
-            results.truncate(limit as usize);
+        if len < MEMBERSHIP_PAGE_SIZE as usize {
             break;
         }
 
@@ -610,6 +616,7 @@ where
             break;
         }
 
+        let len = memberships.len();
         let (users, lookup_status) = hydrate_project_users(client, memberships, roles).await?;
         last_status = lookup_status;
 
@@ -629,6 +636,10 @@ where
                 has_more = true;
                 break 'scan;
             }
+        }
+
+        if len < MEMBERSHIP_PAGE_SIZE as usize {
+            break;
         }
 
         membership_offset += MEMBERSHIP_PAGE_SIZE;
