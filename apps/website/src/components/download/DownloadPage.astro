@@ -26,7 +26,108 @@ const canonical = new URL(Astro.url.pathname, siteUrl).toString();
 const alternateLinks = buildAlternateLinks(siteUrl, Astro.url.pathname);
 
 const ownerRepo = "Rheosoph/flow-like";
-const listUrl = `https://api.github.com/repos/${ownerRepo}/releases`;
+const apiBase = `https://api.github.com/repos/${ownerRepo}`;
+const listUrl = `${apiBase}/releases`;
+const tagsUrl = `${apiBase}/tags`;
+const releaseTagPattern = /^(?:(alpha|beta)-)?v?(\d+)\.(\d+)\.(\d+)$/i;
+const channelRank: Record<string, number> = { stable: 3, beta: 2, alpha: 1 };
+
+const parseReleaseTag = (tag?: string | null) => {
+  const match = tag?.match(releaseTagPattern);
+  if (!match) return null;
+
+  return {
+    channel: (match[1] ?? "stable").toLowerCase(),
+    major: Number(match[2]),
+    minor: Number(match[3]),
+    patch: Number(match[4]),
+  };
+};
+
+const compareReleaseTags = (a: string, b: string) => {
+  const left = parseReleaseTag(a);
+  const right = parseReleaseTag(b);
+  if (left && right) {
+    const versionDiff =
+      left.major - right.major ||
+      left.minor - right.minor ||
+      left.patch - right.patch;
+    if (versionDiff !== 0) return versionDiff;
+
+    return (channelRank[left.channel] ?? 0) - (channelRank[right.channel] ?? 0);
+  }
+
+  if (left) return 1;
+  if (right) return -1;
+  return a.localeCompare(b);
+};
+
+const releaseTag = (release: any) => release?.tag_name ?? release?.name ?? "";
+
+const hasDownloadableAssets = (release: any) =>
+  Array.isArray(release?.assets) &&
+  release.assets.some(
+    (asset: any) =>
+      asset?.browser_download_url &&
+      asset?.name &&
+      !/\.json$/i.test(asset.name) &&
+      !/\.sig$/i.test(asset.name),
+  );
+
+const pickNewestRelease = (releases: any[]) => {
+  const nonDraft = releases.filter((release: any) => !release.draft);
+  const candidates = nonDraft.some(hasDownloadableAssets)
+    ? nonDraft.filter(hasDownloadableAssets)
+    : nonDraft;
+
+  return (
+    candidates.sort((a: any, b: any) => {
+      const tagDiff = compareReleaseTags(releaseTag(b), releaseTag(a));
+      if (tagDiff !== 0) return tagDiff;
+
+      return (
+        Date.parse(b.published_at ?? b.created_at ?? "") -
+        Date.parse(a.published_at ?? a.created_at ?? "")
+      );
+    })[0] ?? null
+  );
+};
+
+const fetchJson = async (url: string, headers: Record<string, string>) => {
+  const res = await fetch(url, { headers });
+  if (!res.ok) return null;
+  return res.json();
+};
+
+const fetchLatestReleaseAllowingPrerelease = async (
+  headers: Record<string, string>,
+) => {
+  const tags = await fetchJson(`${tagsUrl}?per_page=30`, headers);
+  if (Array.isArray(tags)) {
+    const releaseTags = tags
+      .map((tag: any) => tag?.name)
+      .filter((tag: unknown): tag is string => typeof tag === "string")
+      .filter((tag: string) => parseReleaseTag(tag))
+      .sort((a: string, b: string) => compareReleaseTags(b, a));
+
+    for (const tag of releaseTags) {
+      const taggedRelease = await fetchJson(
+        `${listUrl}/tags/${encodeURIComponent(tag)}`,
+        headers,
+      );
+      if (
+        taggedRelease &&
+        !taggedRelease.draft &&
+        hasDownloadableAssets(taggedRelease)
+      ) {
+        return taggedRelease;
+      }
+    }
+  }
+
+  const releases = await fetchJson(`${listUrl}?per_page=10`, headers);
+  return Array.isArray(releases) ? pickNewestRelease(releases) : null;
+};
 
 // --- server-side fetch that also works when only prereleases exist -----------
 let release: any = null;
@@ -40,12 +141,7 @@ try {
     (import.meta as any).env?.PUBLIC_GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${listUrl}?per_page=5`, { headers });
-  if (res.ok) {
-    const releases = await res.json();
-    const nonDraft = releases.filter((r: any) => !r.draft);
-    release = nonDraft.find((r: any) => !r.prerelease) || nonDraft[0] || null;
-  }
+  release = await fetchLatestReleaseAllowingPrerelease(headers);
 } catch {
   /* client will refetch if needed */
 }
@@ -91,7 +187,7 @@ const i18n = {
 
   <script
     type="module"
-    define:vars={{ preloaded: release, listUrl, ownerRepo, canonical, title, description, i18n }}
+    define:vars={{ preloaded: release, listUrl, tagsUrl, ownerRepo, canonical, title, description, i18n }}
   >
     const $ = (s, r = document) => r.querySelector(s);
 
@@ -128,17 +224,107 @@ const i18n = {
       return "x64";
     };
 
+    const releaseTagPattern = /^(?:(alpha|beta)-)?v?(\d+)\.(\d+)\.(\d+)$/i;
+    const channelRank = { stable: 3, beta: 2, alpha: 1 };
+
+    const parseReleaseTag = (tag) => {
+      const match = tag?.match(releaseTagPattern);
+      if (!match) return null;
+
+      return {
+        channel: (match[1] ?? "stable").toLowerCase(),
+        major: Number(match[2]),
+        minor: Number(match[3]),
+        patch: Number(match[4]),
+      };
+    };
+
+    const compareReleaseTags = (a, b) => {
+      const left = parseReleaseTag(a);
+      const right = parseReleaseTag(b);
+      if (left && right) {
+        const versionDiff =
+          left.major - right.major ||
+          left.minor - right.minor ||
+          left.patch - right.patch;
+        if (versionDiff !== 0) return versionDiff;
+
+        return (channelRank[left.channel] ?? 0) - (channelRank[right.channel] ?? 0);
+      }
+
+      if (left) return 1;
+      if (right) return -1;
+      return a.localeCompare(b);
+    };
+
+    const releaseTag = (release) => release?.tag_name ?? release?.name ?? "";
+
+    const hasDownloadableAssets = (release) =>
+      Array.isArray(release?.assets) &&
+      release.assets.some(
+        (asset) =>
+          asset?.browser_download_url &&
+          asset?.name &&
+          !/\.json$/i.test(asset.name) &&
+          !/\.sig$/i.test(asset.name),
+      );
+
+    const pickNewestRelease = (releases) => {
+      const nonDraft = releases.filter((release) => !release.draft);
+      const candidates = nonDraft.some(hasDownloadableAssets)
+        ? nonDraft.filter(hasDownloadableAssets)
+        : nonDraft;
+
+      return (
+        candidates.sort((a, b) => {
+          const tagDiff = compareReleaseTags(releaseTag(b), releaseTag(a));
+          if (tagDiff !== 0) return tagDiff;
+
+          return (
+            Date.parse(b.published_at ?? b.created_at ?? "") -
+            Date.parse(a.published_at ?? a.created_at ?? "")
+          );
+        })[0] ?? null
+      );
+    };
+
+    const fetchJson = async (url) => {
+      const res = await fetch(url, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) return null;
+      return res.json();
+    };
+
     const fetchLatestReleaseAllowingPrerelease = async () => {
-      if (state.release) return state.release;
       try {
-        const res = await fetch(`${listUrl}?per_page=5`, {
-          headers: { Accept: "application/vnd.github+json" },
-        });
-        if (!res.ok) return null;
-        const releases = await res.json();
-        const nonDraft = releases.filter((r) => !r.draft);
-        state.release =
-          nonDraft.find((r) => !r.prerelease) || nonDraft[0] || null;
+        const tags = await fetchJson(`${tagsUrl}?per_page=30`);
+        if (Array.isArray(tags)) {
+          const releaseTags = tags
+            .map((tag) => tag?.name)
+            .filter((tag) => typeof tag === "string")
+            .filter((tag) => parseReleaseTag(tag))
+            .sort((a, b) => compareReleaseTags(b, a));
+
+          for (const tag of releaseTags) {
+            const taggedRelease = await fetchJson(
+              `${listUrl}/tags/${encodeURIComponent(tag)}`,
+            );
+            if (
+              taggedRelease &&
+              !taggedRelease.draft &&
+              hasDownloadableAssets(taggedRelease)
+            ) {
+              state.release = taggedRelease;
+              return state.release;
+            }
+          }
+        }
+
+        const releases = await fetchJson(`${listUrl}?per_page=10`);
+        if (Array.isArray(releases)) {
+          state.release = pickNewestRelease(releases) || state.release;
+        }
       } catch {}
       return state.release;
     };

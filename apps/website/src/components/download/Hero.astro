@@ -36,7 +36,7 @@ const studioName = "Flow-Like Studio";
 
     <p class="text-lg text-zinc-600 font-light leading-relaxed max-w-md border-l-2 border-zinc-200 pl-6">
       {description} <br/>
-      <span class="text-sm text-zinc-400 mt-2 block">{t("download.hero.version")} {version ?? "..."}</span>
+      <span class="text-sm text-zinc-400 mt-2 block">{t("download.hero.version")} <span id="release-tag">{version ?? "..."}</span></span>
     </p>
 
     <div class="flex flex-wrap gap-4">
