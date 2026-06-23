@@ -21,6 +21,7 @@ export default defineConfig({
 				"Documentation for Flow-Like, the open source local-first workflow engine. Build type-safe, self-hosted automation with Rust performance.",
 			components: {
 				Hero: "./src/components/docs/Hero.astro",
+				Search: "./src/components/docs/Search.astro",
 				SiteTitle: "./src/components/docs/SiteTitle.astro",
 			},
 			head: [
