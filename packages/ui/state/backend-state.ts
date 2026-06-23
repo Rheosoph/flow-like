@@ -141,6 +141,9 @@ export type {
 export * from "./backend-state/db-state";
 export * from "./backend-state/graph-state";
 export type {
+	IPushTargetStatus,
+	IRegisterPushTargetRequest,
+	IRegisterPushTargetResponse,
 	IUserWidgetInfo,
 	IUserTemplateInfo,
 } from "./backend-state/user-state";

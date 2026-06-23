@@ -12,7 +12,10 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import type {
 	IBillingSession,
+	IPushTargetStatus,
 	IPricingResponse,
+	IRegisterPushTargetRequest,
+	IRegisterPushTargetResponse,
 	ISubscribeRequest,
 	ISubscribeResponse,
 	IUserInfo,
@@ -116,6 +119,23 @@ export class EmptyUserState implements IUserState {
 	}
 
 	markAllNotificationsRead(): Promise<number> {
+		throw new Error("Method not implemented.");
+	}
+
+	registerPushTarget(
+		request: IRegisterPushTargetRequest,
+	): Promise<IRegisterPushTargetResponse> {
+		throw new Error("Method not implemented.");
+	}
+
+	getPushTargetStatus(deviceId: string): Promise<IPushTargetStatus> {
+		throw new Error("Method not implemented.");
+	}
+
+	setPushTargetEnabled(
+		deviceId: string,
+		enabled: boolean,
+	): Promise<IPushTargetStatus> {
 		throw new Error("Method not implemented.");
 	}
 

@@ -78,6 +78,40 @@ export interface IBillingSession {
 	url: string;
 }
 
+export type PushTargetPlatform = "IOS" | "ANDROID" | "DESKTOP";
+
+export interface IRegisterPushTargetRequest {
+	device_id: string;
+	platform: PushTargetPlatform;
+	token: string;
+	device_name?: string;
+	channel_id?: string | null;
+	metadata?: Record<string, unknown>;
+}
+
+export interface IRegisterPushTargetResponse {
+	id: string;
+	provider: string;
+	success: boolean;
+	push_enabled: boolean;
+}
+
+export interface IPushTargetStatus {
+	device_id: string;
+	provider?: string | null;
+	registered: boolean;
+	push_enabled: boolean;
+	platform?: PushTargetPlatform | null;
+	device_name?: string | null;
+	channel_id?: string | null;
+	failure_count?: number | null;
+	last_registered_at?: string | null;
+	last_seen_at?: string | null;
+	invalidated_at?: string | null;
+	invalidation_reason?: string | null;
+	updated_at?: string | null;
+}
+
 /** Widget info returned from the user widgets endpoint */
 export interface IUserWidgetInfo {
 	/** The app ID where the widget is defined */
@@ -124,6 +158,14 @@ export interface IUserState {
 	markNotificationRead(notificationId: string): Promise<void>;
 	deleteNotification(notificationId: string): Promise<void>;
 	markAllNotificationsRead(): Promise<number>;
+	registerPushTarget(
+		request: IRegisterPushTargetRequest,
+	): Promise<IRegisterPushTargetResponse>;
+	getPushTargetStatus(deviceId: string): Promise<IPushTargetStatus>;
+	setPushTargetEnabled(
+		deviceId: string,
+		enabled: boolean,
+	): Promise<IPushTargetStatus>;
 	getProfile(): Promise<IProfile>;
 	getProfiles(): Promise<IProfile[]>;
 	getSettingsProfile(): Promise<ISettingsProfile>;

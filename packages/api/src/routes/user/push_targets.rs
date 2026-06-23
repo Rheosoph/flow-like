@@ -24,6 +24,8 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+const USER_DISABLED_PUSH_REASON: &str = "User disabled push notifications";
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PushTargetPlatformDto {
@@ -47,11 +49,34 @@ pub struct RegisterPushTargetResponse {
     pub id: String,
     pub provider: String,
     pub success: bool,
+    pub push_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UnregisterPushTargetResponse {
     pub success: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PushTargetStatusResponse {
+    pub device_id: String,
+    pub provider: Option<String>,
+    pub registered: bool,
+    pub push_enabled: bool,
+    pub platform: Option<String>,
+    pub device_name: Option<String>,
+    pub channel_id: Option<String>,
+    pub failure_count: Option<i32>,
+    pub last_registered_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_seen_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub invalidated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub invalidation_reason: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct UpdatePushTargetRequest {
+    pub push_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -172,8 +197,11 @@ pub async fn register_push_target(
     .await
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
+    let mut push_enabled = true;
     let target_id = if let Some(existing) = existing {
+        push_enabled = should_auto_enable_target(&existing);
         let mut active: push_notification_target::ActiveModel = existing.into();
+        active.device_id = Set(body.device_id.clone());
         active.platform = Set(platform);
         active.token_encrypted = Set(token_encrypted);
         active.endpoint_arn = Set(provider_registration.endpoint_arn.clone());
@@ -181,10 +209,12 @@ pub async fn register_push_target(
         active.channel_id = Set(body.channel_id.clone());
         active.device_name = Set(body.device_name.clone());
         active.metadata = Set(body.metadata.clone());
-        active.push_enabled = Set(true);
+        active.push_enabled = Set(push_enabled);
         active.failure_count = Set(0);
-        active.invalidated_at = Set(None);
-        active.invalidation_reason = Set(None);
+        if push_enabled {
+            active.invalidated_at = Set(None);
+            active.invalidation_reason = Set(None);
+        }
         active.last_registered_at = Set(now);
         active.last_seen_at = Set(now);
         active.updated_at = Set(now);
@@ -221,7 +251,129 @@ pub async fn register_push_target(
         id: target_id,
         provider: provider_name(&provider).to_string(),
         success: true,
+        push_enabled,
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/user/push-targets/{device_id}",
+    tag = "user",
+    params(("device_id" = String, Path, description = "Device ID to inspect")),
+    responses(
+        (status = 200, description = "Push target status", body = PushTargetStatusResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "GET /user/push-targets/{device_id}", skip(state, user))]
+pub async fn get_push_target_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(device_id): Path<String>,
+) -> Result<Json<PushTargetStatusResponse>, ApiError> {
+    let sub = user.sub()?;
+    ensure_user_exists(&state, &sub).await?;
+
+    let provider = configured_provider(&state.platform_config.push_notifications);
+    let target = match &provider {
+        Some(provider) => find_push_target_by_device(&state, &sub, &device_id, provider).await?,
+        None => None,
+    };
+
+    Ok(Json(target_status_response(
+        device_id,
+        provider.as_ref(),
+        target,
+    )))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/user/push-targets/{device_id}",
+    tag = "user",
+    params(("device_id" = String, Path, description = "Device ID to update")),
+    request_body = UpdatePushTargetRequest,
+    responses(
+        (status = 200, description = "Push target updated", body = PushTargetStatusResponse),
+        (status = 400, description = "Push notifications are not enabled or provider is not configured"),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "PATCH /user/push-targets/{device_id}", skip(state, user, body))]
+pub async fn update_push_target_status(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(device_id): Path<String>,
+    Json(body): Json<UpdatePushTargetRequest>,
+) -> Result<Json<PushTargetStatusResponse>, ApiError> {
+    let sub = user.sub()?;
+    ensure_user_exists(&state, &sub).await?;
+
+    let config = &state.platform_config.push_notifications;
+    let provider = configured_provider(config).ok_or_else(|| {
+        ApiError::bad_request("Push notification provider is not configured".to_string())
+    })?;
+
+    if body.push_enabled && !config.enabled {
+        return Err(ApiError::bad_request(
+            "Push notifications are disabled".to_string(),
+        ));
+    }
+
+    let now = chrono::Utc::now().naive_utc();
+    let mut update = push_notification_target::Entity::update_many()
+        .col_expr(
+            push_notification_target::Column::PushEnabled,
+            Expr::value(body.push_enabled),
+        )
+        .col_expr(
+            push_notification_target::Column::LastSeenAt,
+            Expr::value(now),
+        )
+        .col_expr(
+            push_notification_target::Column::UpdatedAt,
+            Expr::value(now),
+        )
+        .filter(push_notification_target::Column::UserId.eq(sub.clone()))
+        .filter(push_notification_target::Column::DeviceId.eq(device_id.clone()))
+        .filter(push_notification_target::Column::Provider.eq(provider.clone()));
+
+    if body.push_enabled {
+        update = update
+            .col_expr(
+                push_notification_target::Column::FailureCount,
+                Expr::value(0),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidatedAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidationReason,
+                Expr::value(None::<String>),
+            );
+    } else {
+        update = update
+            .col_expr(
+                push_notification_target::Column::InvalidatedAt,
+                Expr::value(Some(now)),
+            )
+            .col_expr(
+                push_notification_target::Column::InvalidationReason,
+                Expr::value(Some(USER_DISABLED_PUSH_REASON.to_string())),
+            );
+    }
+
+    update.exec(&state.db).await?;
+
+    let target = find_push_target_by_device(&state, &sub, &device_id, &provider).await?;
+    Ok(Json(target_status_response(
+        device_id,
+        Some(&provider),
+        target,
+    )))
 }
 
 #[utoipa::path(
@@ -279,10 +431,14 @@ fn unregister_reason(reason: Option<&str>) -> String {
     }) {
         Some("permission_revoked") => "User revoked notification permission".to_string(),
         Some("sign_out") => "User signed out on this device".to_string(),
-        Some("user_disabled") => "User disabled push notifications".to_string(),
+        Some("user_disabled") => USER_DISABLED_PUSH_REASON.to_string(),
         Some(value) => format!("Client unregistered push target: {}", value),
         None => "Client unregistered push target".to_string(),
     }
+}
+
+fn should_auto_enable_target(target: &push_notification_target::Model) -> bool {
+    target.invalidation_reason.as_deref() != Some(USER_DISABLED_PUSH_REASON)
 }
 
 fn map_platform(platform: &PushTargetPlatformDto) -> PushNotificationTargetPlatform {
@@ -299,6 +455,71 @@ fn provider_name(provider: &PushNotificationTargetProvider) -> &'static str {
         PushNotificationTargetProvider::AwsSns => "AWS_SNS",
         PushNotificationTargetProvider::AzureNotificationHubs => "AZURE_NOTIFICATION_HUBS",
     }
+}
+
+fn platform_name(platform: &PushNotificationTargetPlatform) -> &'static str {
+    match platform {
+        PushNotificationTargetPlatform::Ios => "IOS",
+        PushNotificationTargetPlatform::Android => "ANDROID",
+        PushNotificationTargetPlatform::Desktop => "DESKTOP",
+    }
+}
+
+fn utc(dt: chrono::NaiveDateTime) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)
+}
+
+fn target_status_response(
+    device_id: String,
+    provider: Option<&PushNotificationTargetProvider>,
+    target: Option<push_notification_target::Model>,
+) -> PushTargetStatusResponse {
+    match target {
+        Some(target) => PushTargetStatusResponse {
+            device_id,
+            provider: Some(provider_name(&target.provider).to_string()),
+            registered: true,
+            push_enabled: target.push_enabled,
+            platform: Some(platform_name(&target.platform).to_string()),
+            device_name: target.device_name,
+            channel_id: target.channel_id,
+            failure_count: Some(target.failure_count),
+            last_registered_at: Some(utc(target.last_registered_at)),
+            last_seen_at: Some(utc(target.last_seen_at)),
+            invalidated_at: target.invalidated_at.map(utc),
+            invalidation_reason: target.invalidation_reason,
+            updated_at: Some(utc(target.updated_at)),
+        },
+        None => PushTargetStatusResponse {
+            device_id,
+            provider: provider.map(provider_name).map(str::to_string),
+            registered: false,
+            push_enabled: false,
+            platform: None,
+            device_name: None,
+            channel_id: None,
+            failure_count: None,
+            last_registered_at: None,
+            last_seen_at: None,
+            invalidated_at: None,
+            invalidation_reason: None,
+            updated_at: None,
+        },
+    }
+}
+
+async fn find_push_target_by_device(
+    state: &AppState,
+    user_id: &str,
+    device_id: &str,
+    provider: &PushNotificationTargetProvider,
+) -> Result<Option<push_notification_target::Model>, sea_orm::DbErr> {
+    push_notification_target::Entity::find()
+        .filter(push_notification_target::Column::UserId.eq(user_id.to_string()))
+        .filter(push_notification_target::Column::DeviceId.eq(device_id.to_string()))
+        .filter(push_notification_target::Column::Provider.eq(provider.clone()))
+        .one(&state.db)
+        .await
 }
 
 async fn find_existing_push_target(
@@ -430,5 +651,33 @@ mod tests {
         let found = find_matching_token_target(vec![other], "ios-token", &encryption_key);
 
         assert!(found.is_none());
+    }
+
+    #[test]
+    fn user_disabled_targets_are_not_auto_enabled_by_registration() {
+        let encryption_key = [4u8; 32];
+        let target = target(
+            "disabled-ios",
+            "ios-token",
+            &encryption_key,
+            false,
+            Some(USER_DISABLED_PUSH_REASON),
+        );
+
+        assert!(!should_auto_enable_target(&target));
+    }
+
+    #[test]
+    fn invalidated_targets_are_auto_enabled_by_registration() {
+        let encryption_key = [5u8; 32];
+        let target = target(
+            "invalidated-ios",
+            "ios-token",
+            &encryption_key,
+            false,
+            Some("15 consecutive invalidation-class failures"),
+        );
+
+        assert!(should_auto_enable_target(&target));
     }
 }

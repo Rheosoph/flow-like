@@ -100,7 +100,9 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/push-targets/{device_id}",
-            axum::routing::delete(push_targets::unregister_push_target),
+            get(push_targets::get_push_target_status)
+                .patch(push_targets::update_push_target_status)
+                .delete(push_targets::unregister_push_target),
         )
         .route(
             "/notifications/create",
