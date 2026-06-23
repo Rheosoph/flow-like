@@ -17,7 +17,7 @@ use crate::{
     state::{TauriFlowLikeState, TauriRegistryState},
 };
 
-async fn current_user_sub(app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
+pub(crate) async fn current_user_sub(app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
     if let Ok(state) = TauriRegistryState::construct(app_handle).await {
         let guard = state.lock().await;
         if let Some(token) = guard.as_ref().and_then(|c| c.auth_token().cloned())
