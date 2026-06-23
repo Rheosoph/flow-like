@@ -51,8 +51,8 @@ fn timestamp_micros(ts: u64) -> Option<i64> {
 }
 
 fn timestamp_datetime(ts: u64) -> Option<chrono::NaiveDateTime> {
-    let millis = timestamp_micros(ts)? / 1000;
-    chrono::DateTime::from_timestamp_millis(millis).map(|dt| dt.naive_utc())
+    let micros = timestamp_micros(ts)?;
+    chrono::DateTime::from_timestamp_micros(micros).map(|dt| dt.naive_utc())
 }
 
 fn reported_duration_us(start: u64, end: u64) -> i64 {
@@ -82,12 +82,12 @@ async fn track_reported_execution_usage(
     user_id: Option<&str>,
     app_id: &str,
     created_at: chrono::NaiveDateTime,
-) -> Result<(), ApiError> {
+) -> flow_like_types::Result<()> {
     let existing = execution_usage_tracking::Entity::find()
         .filter(execution_usage_tracking::Column::Version.eq(run_id))
         .one(&state.db)
         .await
-        .map_err(|e| ApiError::internal_error(anyhow!("Failed to query execution usage: {}", e)))?;
+        .map_err(|e| anyhow!("Failed to query execution usage: {}", e))?;
 
     if existing.is_some() {
         return Ok(());
@@ -110,7 +110,7 @@ async fn track_reported_execution_usage(
     }
     .insert(&state.db)
     .await
-    .map_err(|e| ApiError::internal_error(anyhow!("Failed to track execution usage: {}", e)))?;
+    .map_err(|e| anyhow!("Failed to track execution usage: {}", e))?;
 
     Ok(())
 }
@@ -227,7 +227,7 @@ pub async fn report_run(
         crate::audit::record_execution_start(&state, &user, execution_audit).await;
     }
 
-    track_reported_execution_usage(
+    if let Err(error) = track_reported_execution_usage(
         &state,
         &body.run_id,
         &board_id,
@@ -238,7 +238,14 @@ pub async fn report_run(
         &app_id,
         completed_at.or(started_at).unwrap_or(now),
     )
-    .await?;
+    .await
+    {
+        tracing::warn!(
+            run_id = %body.run_id,
+            error = %error,
+            "Failed to track reported execution usage"
+        );
+    }
 
     Ok(Json(ReportRunResponse {
         run_id: body.run_id,
