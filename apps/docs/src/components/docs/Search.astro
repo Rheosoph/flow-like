@@ -61,7 +61,7 @@ if (project.trailingSlash === "never") {
 		const shortcut = openBtn?.querySelector("kbd");
 		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
 		const platformKey = shortcut.querySelector("kbd");
-		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.userAgent)) {
 			platformKey.textContent = "⌘";
 			openBtn.setAttribute("aria-keyshortcuts", "Meta+K");
 		}
@@ -141,7 +141,7 @@ if (project.trailingSlash === "never") {
 				const run = () => {
 					void this.initSearch();
 				};
-				if ("requestIdleCallback" in window) {
+				if (typeof window.requestIdleCallback === "function") {
 					window.requestIdleCallback(run);
 				} else {
 					window.setTimeout(run, 1);
@@ -195,6 +195,7 @@ if (project.trailingSlash === "never") {
 								subResult.url = formatUrl(subResult.url);
 								return subResult;
 							});
+							return result;
 						},
 					});
 				})

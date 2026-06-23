@@ -221,7 +221,7 @@ const DocsPreview = memo(({ url }: { url: string }) => {
 				src={url}
 				className="h-full w-full"
 				loading="lazy"
-				sandbox="allow-same-origin allow-scripts"
+				sandbox="allow-scripts"
 			/>
 		</div>
 	);

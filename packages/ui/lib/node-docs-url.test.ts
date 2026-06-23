@@ -25,6 +25,16 @@ describe("buildNodeDocsUrl", () => {
 		).toBe("https://example.com/custom-node-docs");
 	});
 
+	test("rejects unsafe explicit docs urls", () => {
+		expect(
+			buildNodeDocsUrl(
+				node({
+					docs: "javascript:alert(1)",
+				}),
+			),
+		).toBe("https://docs.flow-like.com/nodes/ai/agents/agent-invoke/");
+	});
+
 	test("matches generated docs slug format for catalog nodes", () => {
 		expect(buildNodeDocsUrl(node({}))).toBe(
 			"https://docs.flow-like.com/nodes/ai/agents/agent-invoke/",
@@ -48,5 +58,16 @@ describe("buildNodeDocsUrl", () => {
 		expect(buildNodeDocsUrl(node({ category: " / ", name: "" }))).toBe(
 			"https://docs.flow-like.com/nodes/uncategorized/node/",
 		);
+	});
+
+	test("falls back safely when runtime node values are missing", () => {
+		expect(
+			buildNodeDocsUrl(
+				node({
+					category: null as unknown as string,
+					name: null as unknown as string,
+				}),
+			),
+		).toBe("https://docs.flow-like.com/nodes/uncategorized/node/");
 	});
 });
