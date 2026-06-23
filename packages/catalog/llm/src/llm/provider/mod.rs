@@ -1,4 +1,5 @@
 pub mod build_anthropic;
+pub mod build_atlascloud;
 pub mod build_bedrock;
 pub mod build_cohere;
 pub mod build_deepseek;
@@ -22,6 +23,7 @@ pub mod build_voyageai;
 pub mod build_xai;
 
 pub use build_anthropic::BuildAnthropicNode;
+pub use build_atlascloud::BuildAtlasCloudNode;
 pub use build_bedrock::BuildBedrockNode;
 pub use build_cohere::BuildCohereNode;
 pub use build_deepseek::BuildDeepseekNode;
