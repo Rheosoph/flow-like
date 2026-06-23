@@ -15,7 +15,10 @@ use flow_like::{
 };
 use tauri::AppHandle;
 
-use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
+use crate::{
+    functions::{TauriFunctionError, flow::storage::current_user_sub},
+    state::TauriFlowLikeState,
+};
 
 /// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
 fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
@@ -54,7 +57,7 @@ async fn db_connection_inner(
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
     let table_name = table_name.unwrap_or("default".to_string());
     validate_table_name(&table_name)?;
-    let board_dir = Path::from("apps")
+    let project_db_dir = Path::from("apps")
         .child(app_id.clone())
         .child("storage")
         .child("db");
@@ -70,6 +73,17 @@ async fn db_connection_inner(
             credentials.to_db(&app_id).await?
         }
     } else if user_scoped {
+        let sub = match sub {
+            Some(sub) => sub,
+            None => current_user_sub(app_handle)
+                .await
+                .map_err(|e| flow_like_types::anyhow!(e.to_string()))?,
+        };
+        let user_db_dir = Path::from("users")
+            .child(sub)
+            .child("apps")
+            .child(app_id.clone())
+            .child("db");
         flow_like_state
             .config
             .read()
@@ -77,7 +91,7 @@ async fn db_connection_inner(
             .callbacks
             .build_user_database
             .clone()
-            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(board_dir)
+            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(user_db_dir)
     } else {
         flow_like_state
             .config
@@ -86,7 +100,7 @@ async fn db_connection_inner(
             .callbacks
             .build_project_database
             .clone()
-            .ok_or(flow_like_types::anyhow!("No database builder found"))?(board_dir)
+            .ok_or(flow_like_types::anyhow!("No database builder found"))?(project_db_dir)
     };
 
     let db = db.execute().await?;

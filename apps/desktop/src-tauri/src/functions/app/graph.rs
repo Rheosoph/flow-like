@@ -14,7 +14,10 @@ use flow_like_types::create_id;
 use serde::Deserialize;
 use tauri::AppHandle;
 
-use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
+use crate::{
+    functions::{TauriFunctionError, flow::storage::current_user_sub},
+    state::TauriFlowLikeState,
+};
 
 async fn graph_connection(
     app_handle: &AppHandle,
@@ -22,12 +25,20 @@ async fn graph_connection(
     user_scoped: bool,
 ) -> flow_like_types::Result<Connection> {
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
-    let board_dir = Path::from("apps")
+    let project_db_dir = Path::from("apps")
         .child(app_id)
         .child("storage")
         .child("db");
 
     let builder = if user_scoped {
+        let sub = current_user_sub(app_handle)
+            .await
+            .map_err(|e| flow_like_types::anyhow!(e.to_string()))?;
+        let user_db_dir = Path::from("users")
+            .child(sub)
+            .child("apps")
+            .child(app_id)
+            .child("db");
         flow_like_state
             .config
             .read()
@@ -35,7 +46,7 @@ async fn graph_connection(
             .callbacks
             .build_user_database
             .clone()
-            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(board_dir)
+            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(user_db_dir)
     } else {
         flow_like_state
             .config
@@ -44,7 +55,7 @@ async fn graph_connection(
             .callbacks
             .build_project_database
             .clone()
-            .ok_or(flow_like_types::anyhow!("No database builder found"))?(board_dir)
+            .ok_or(flow_like_types::anyhow!("No database builder found"))?(project_db_dir)
     };
 
     builder

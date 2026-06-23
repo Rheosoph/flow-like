@@ -421,10 +421,8 @@ async fn execute_internal(
             .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
     }
 
-    // Report to backend for online apps when warnings or errors occurred
-    if let (Some(meta), Some(token)) = (&meta, &token_for_report)
-        && meta.log_level >= 2
-    {
+    // Report online local runs so backend analytics can count executions.
+    if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
         let app_handle = app_handle_for_report.clone();
         let token = token.clone();
         let meta = meta.clone();
