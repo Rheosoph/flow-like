@@ -840,7 +840,7 @@ fn add_users_output(node: &mut Node) {
         VariableType::Generic,
     )
     .set_value_type(ValueType::Array)
-    .set_schema::<Vec<ProjectUser>>();
+    .set_schema::<ProjectUser>();
     node.add_output_pin(
         "count",
         "Count",
