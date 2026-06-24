@@ -13,7 +13,10 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import type {
 	IBillingSession,
+	IPushTargetStatus,
 	IPricingResponse,
+	IRegisterPushTargetRequest,
+	IRegisterPushTargetResponse,
 	ISubscribeRequest,
 	ISubscribeResponse,
 	IUserInfo,
@@ -366,6 +369,68 @@ export class UserState implements IUserState {
 		}
 
 		return remoteResult + localCount;
+	}
+
+	async registerPushTarget(
+		request: IRegisterPushTargetRequest,
+	): Promise<IRegisterPushTargetResponse> {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		return fetcher<IRegisterPushTargetResponse>(
+			this.backend.profile,
+			"user/push-targets/register",
+			{
+				method: "POST",
+				body: JSON.stringify(request),
+			},
+			this.backend.auth,
+		);
+	}
+
+	async getPushTargetStatus(deviceId: string): Promise<IPushTargetStatus> {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		return fetcher<IPushTargetStatus>(
+			this.backend.profile,
+			`user/push-targets/${encodeURIComponent(deviceId)}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async setPushTargetEnabled(
+		deviceId: string,
+		enabled: boolean,
+	): Promise<IPushTargetStatus> {
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.hasRemoteAccessToken()
+		) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		return fetcher<IPushTargetStatus>(
+			this.backend.profile,
+			`user/push-targets/${encodeURIComponent(deviceId)}`,
+			{
+				method: "PATCH",
+				body: JSON.stringify({ push_enabled: enabled }),
+			},
+			this.backend.auth,
+		);
 	}
 
 	async getProfile(): Promise<IProfile> {

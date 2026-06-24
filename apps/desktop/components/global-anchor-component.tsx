@@ -1,7 +1,6 @@
 "use client";
 
 import { createId } from "@paralleldrive/cuid2";
-import { isTauri as isTauriRuntime } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openUrl as shellOpen } from "@tauri-apps/plugin-opener";
 import {
@@ -11,17 +10,9 @@ import {
 	DropdownMenuTrigger,
 } from "@flow-like/flow-like-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isIOSDevice, isTauriRuntime } from "../lib/platform";
 
-const isIosLike = () => {
-	if (typeof navigator === "undefined") return false;
-	// iPhone, iPad, iPod; also iPadOS reports MacIntel + touch
-	return (
-		/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-		(navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1)
-	);
-};
-
-const isTauri = () => typeof window !== "undefined" && isTauriRuntime();
+const isTauri = isTauriRuntime;
 
 const isHttpish = (href: string) => /^(https?:|mailto:|tel:)/i.test(href);
 
@@ -96,7 +87,7 @@ const GlobalAnchorHandler = () => {
 		active: false,
 	});
 
-	const IOS = useMemo(isIosLike, []);
+	const IOS = useMemo(isIOSDevice, []);
 	const TAURI = useMemo(isTauri, []);
 
 	const createNewWindow = useCallback(
@@ -440,7 +431,7 @@ const GlobalAnchorHandler = () => {
 										const title = contextMenuData.title;
 
 										// iOS: always open in browser; Desktop: spawn new window for same-origin/_blank, shell for true external
-										if (isIosLike()) {
+										if (isIOSDevice()) {
 											if (isHttpish(href)) {
 												await openInBrowser(href);
 											}

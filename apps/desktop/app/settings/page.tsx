@@ -9,6 +9,7 @@ import {
 import {
 	BarChart3,
 	Brain,
+	Bell,
 	ChevronRight,
 	Cpu,
 	ExternalLink,
@@ -42,6 +43,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 				description: "Name, avatar, interests, and theme",
 				href: "/settings/profiles",
 				icon: User,
+			},
+			{
+				title: "Notifications",
+				description: "Mobile push status and device registration",
+				href: "/settings/notifications",
+				icon: Bell,
 			},
 		],
 	},

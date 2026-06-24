@@ -49,6 +49,7 @@ import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
 import { scheduleIDBCleanup } from "../lib/idb-maintenance";
+import { isIOSDevice } from "../lib/platform";
 import { type OnlineProfile, toLocalProfile } from "../lib/profile-sync";
 import { AiState } from "./tauri-provider/ai-state";
 import { AnalyticsState } from "./tauri-provider/analytics-state";
@@ -142,7 +143,7 @@ export class TauriBackend implements IBackendState {
 	}
 
 	capabilities(): ICapabilities {
-		const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent);
+		const isIos = isIOSDevice();
 
 		return {
 			needsSignIn: isIos,
