@@ -114,6 +114,7 @@ import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
 import { appsDB } from "../lib/apps-db";
+import { isIosTauriRuntime } from "../lib/platform";
 import { CreateProfileDialog } from "./add-profile";
 import { Shortcuts } from "./shortcuts";
 import { useTauriInvoke } from "./useInvoke";
@@ -239,21 +240,7 @@ function IOSQuickMenuTrigger() {
 	const { isMobile, openMobile, toggleSidebar } = useSidebar();
 	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
-	const isIosTauri = useMemo(() => {
-		if (typeof window === "undefined" || typeof navigator === "undefined") {
-			return false;
-		}
-
-		const isTauri =
-			"__TAURI__" in (window as any) ||
-			"__TAURI_IPC__" in (window as any) ||
-			"__TAURI_INTERNALS__" in (window as any);
-		const isIOS =
-			/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-			(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
-		return isTauri && isIOS;
-	}, []);
+	const isIosTauri = useMemo(isIosTauriRuntime, []);
 
 	useEffect(() => {
 		if (!isIosTauri || !isMobile) return;

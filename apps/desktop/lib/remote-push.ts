@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { IPushNotificationsConfig } from "@flow-like/flow-like-ui";
+import { isAndroidDevice, isIOSDevice, isTauriRuntime } from "./platform";
 
 export type PushTargetPlatform = "IOS" | "ANDROID" | "DESKTOP";
 
@@ -123,22 +124,13 @@ export async function getPushDeviceId(): Promise<string> {
 }
 
 export function detectPushPlatform(): PushTargetPlatform | null {
-	if (typeof navigator === "undefined" || typeof window === "undefined") {
-		return null;
-	}
-
-	const userAgent = navigator.userAgent.toLowerCase();
-	if (userAgent.includes("android")) {
+	if (isAndroidDevice()) {
 		return "ANDROID";
 	}
-	if (
-		userAgent.includes("iphone") ||
-		userAgent.includes("ipad") ||
-		userAgent.includes("ipod")
-	) {
+	if (isIOSDevice()) {
 		return "IOS";
 	}
-	if ("__TAURI_INTERNALS__" in window) {
+	if (isTauriRuntime()) {
 		return "DESKTOP";
 	}
 

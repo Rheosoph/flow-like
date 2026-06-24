@@ -15,21 +15,30 @@ export function useHub() {
 	const [hub, setHub] = useState<IHub | undefined>();
 
 	const fetchHub = useCallback(async () => {
-		if (!profile.data?.hub) return;
+		if (!profile.data?.hub) {
+			setHub(undefined);
+			return;
+		}
 		let hubUrl = profile.data.hub;
 		if (!hubUrl.startsWith("http://") && !hubUrl.startsWith("https://")) {
 			const protocol = (profile.data?.secure ?? true) ? "https" : "http";
 			hubUrl = `${protocol}://${hubUrl}`;
 		}
-		// Strip any trailing slash so we control the suffix exactly. The hub
-		// root handler is `.route("/", ...)` nested under `/api/v1`, which
-		// in axum 0.8 only matches the trailing-slash form.
+		// Strip any trailing slash so we control the suffix exactly. The live
+		// API exposes the hub root at `/api/v1`; `/api/v1/` can 404 behind
+		// CloudFront/Lambda routing.
 		const base = hubUrl.replace(/\/+$/, "");
 		try {
-			const hubData = await fetch(`${base}/api/v1/`, {});
+			const hubData = await fetch(`${base}/api/v1`, {
+				cache: "no-store",
+				headers: {
+					"Cache-Control": "no-cache",
+					Pragma: "no-cache",
+				},
+			});
 			if (!hubData.ok) {
 				console.error(
-					`Hub config fetch returned ${hubData.status} from ${base}/api/v1/`,
+					`Hub config fetch returned ${hubData.status} from ${base}/api/v1`,
 				);
 				return;
 			}
@@ -42,7 +51,7 @@ export function useHub() {
 
 	useEffect(() => {
 		fetchHub();
-	}, [profile.data?.hub]);
+	}, [fetchHub]);
 
 	return { hub, refetch: fetchHub };
 }

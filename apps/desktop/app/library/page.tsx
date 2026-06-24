@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { appsDB } from "./../../lib/apps-db";
+import { isMobileDevice as detectMobileDevice } from "./../../lib/platform";
 import ImportEncryptedDialog from "./components/ImportEncryptedDialog";
 
 export default function DesktopLibraryPage() {
@@ -32,20 +33,7 @@ export default function DesktopLibraryPage() {
 		null,
 	);
 
-	const isMobileDevice = useMemo(() => {
-		if (typeof navigator === "undefined") return false;
-		if (
-			/Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(
-				navigator.userAgent,
-			)
-		)
-			return true;
-		const platform = navigator.platform?.toLowerCase() ?? "";
-		const maxTouchPoints =
-			(navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints ??
-			0;
-		return /mac/.test(platform) && maxTouchPoints > 1;
-	}, []);
+	const isMobileDevice = useMemo(detectMobileDevice, []);
 
 	const normalizePickerPath = useCallback((input: string): string => {
 		if (!input.startsWith("file://")) return input;

@@ -89,6 +89,7 @@ import {
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
 import { EVENT_CONFIG } from "../../../lib/event-config";
+import { isIosTauriRuntime } from "../../../lib/platform";
 
 const navigationItems: {
 	href: string;
@@ -313,21 +314,7 @@ export default function Id({
 		[publicationRequests.data],
 	);
 
-	const isIosTauri = useMemo(() => {
-		if (typeof window === "undefined" || typeof navigator === "undefined") {
-			return false;
-		}
-
-		const isTauri =
-			"__TAURI__" in (window as any) ||
-			"__TAURI_IPC__" in (window as any) ||
-			"__TAURI_INTERNALS__" in (window as any);
-		const isIOS =
-			/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-			(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
-		return isTauri && isIOS;
-	}, []);
+	const isIosTauri = useMemo(isIosTauriRuntime, []);
 
 	// Lock page scroll on desktop (md+) so only the right card scrolls
 	useEffect(() => {

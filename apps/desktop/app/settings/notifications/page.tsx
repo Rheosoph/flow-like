@@ -14,7 +14,10 @@ import {
 	useBackend,
 	useHub,
 } from "@flow-like/flow-like-ui";
-import type { IPushTargetStatus } from "@flow-like/flow-like-ui";
+import type {
+	IPushNotificationsConfig,
+	IPushTargetStatus,
+} from "@flow-like/flow-like-ui";
 import {
 	AlertTriangle,
 	Bell,
@@ -80,6 +83,16 @@ function statusBadge(status: IPushTargetStatus | null, localEnabled: boolean) {
 	return { label: "Disabled", variant: "destructive" as const };
 }
 
+function hubConfigLabel(
+	pushConfig: IPushNotificationsConfig | undefined,
+): string {
+	if (!pushConfig) return "Not loaded";
+	if (!pushConfig.enabled) return "Disabled";
+	if (pushConfig.provider !== "fcm") return "Not FCM";
+	if (pushConfig.allow_mobile !== true) return "Mobile off";
+	return "Enabled";
+}
+
 function StatusRow({
 	label,
 	value,
@@ -124,6 +137,22 @@ export default function NotificationsSettingsPage() {
 	const deliveryEnabled =
 		localEnabled &&
 		Boolean(status?.registered && status.push_enabled && !status.invalidated_at);
+	const switchDisabledReason = useMemo(() => {
+		if (saving) return "Saving push settings.";
+		if (loading) return "Checking push status.";
+		if (!isMobile) return "This device was not detected as iOS or Android.";
+		if (!pushConfig) return "Hub config has not loaded from this profile.";
+		if (!pushConfig.enabled) return "Push is disabled in the hub config.";
+		if (pushConfig.provider !== "fcm") return "Mobile push requires the FCM provider.";
+		if (pushConfig.allow_mobile !== true) {
+			return "Mobile push is not enabled in the hub config.";
+		}
+		if (pluginState !== "available") {
+			return "The native remote-push plugin is not available in this app build.";
+		}
+		if (!deviceId) return "No device id is available.";
+		return null;
+	}, [deviceId, isMobile, loading, pluginState, pushConfig, saving]);
 
 	const refreshStatus = useCallback(async () => {
 		setLoading(true);
@@ -153,6 +182,11 @@ export default function NotificationsSettingsPage() {
 			setLoading(false);
 		}
 	}, [backend.userState]);
+
+	const refreshAll = useCallback(async () => {
+		await hub.refetch();
+		await refreshStatus();
+	}, [hub.refetch, refreshStatus]);
 
 	useEffect(() => {
 		void refreshStatus();
@@ -269,16 +303,18 @@ export default function NotificationsSettingsPage() {
 								<Switch
 									checked={deliveryEnabled}
 									disabled={
-										saving ||
-										loading ||
-										!isMobile ||
-										!canUseRemotePush ||
-										pluginState !== "available" ||
-										!deviceId
+										switchDisabledReason !== null
 									}
 									onCheckedChange={setEnabled}
 								/>
 							</div>
+
+							{switchDisabledReason && (
+								<div className="flex gap-3 rounded-md border border-border/70 bg-muted/30 p-3 text-sm text-muted-foreground">
+									<AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+									<span>{switchDisabledReason}</span>
+								</div>
+							)}
 
 							{loadError && (
 								<div className="flex gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
@@ -297,7 +333,7 @@ export default function NotificationsSettingsPage() {
 								<StatusTile
 									icon={Server}
 									label="Hub config"
-									value={canUseRemotePush ? "Enabled" : "Unavailable"}
+									value={hubConfigLabel(pushConfig)}
 									ok={canUseRemotePush}
 								/>
 								<StatusTile
@@ -336,7 +372,7 @@ export default function NotificationsSettingsPage() {
 								<CardTitle className="text-xl">Target details</CardTitle>
 								<CardDescription>Server row for this device</CardDescription>
 							</div>
-							<Button variant="outline" size="sm" onClick={refreshStatus}>
+							<Button variant="outline" size="sm" onClick={refreshAll}>
 								<RefreshCw className="h-4 w-4" />
 								Refresh
 							</Button>
