@@ -240,7 +240,10 @@ function IOSQuickMenuTrigger() {
 	const { isMobile, openMobile, toggleSidebar } = useSidebar();
 	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
-	const isIosTauri = useMemo(isIosTauriRuntime, []);
+	const [isIosTauri, setIsIosTauri] = useState(false);
+	useEffect(() => {
+		setIsIosTauri(isIosTauriRuntime());
+	}, []);
 
 	useEffect(() => {
 		if (!isIosTauri || !isMobile) return;

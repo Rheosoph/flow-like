@@ -366,7 +366,10 @@ pub async fn update_push_target_status(
             );
     }
 
-    update.exec(&state.db).await?;
+    let update_result = update.exec(&state.db).await?;
+    if update_result.rows_affected == 0 {
+        return Err(ApiError::bad_request("Push target not found".to_string()));
+    }
 
     let target = find_push_target_by_device(&state, &sub, &device_id, &provider).await?;
     Ok(Json(target_status_response(

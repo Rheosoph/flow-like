@@ -314,7 +314,10 @@ export default function Id({
 		[publicationRequests.data],
 	);
 
-	const isIosTauri = useMemo(isIosTauriRuntime, []);
+	const [isIosTauri, setIsIosTauri] = useState(false);
+	useEffect(() => {
+		setIsIosTauri(isIosTauriRuntime());
+	}, []);
 
 	// Lock page scroll on desktop (md+) so only the right card scrolls
 	useEffect(() => {

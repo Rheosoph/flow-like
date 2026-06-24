@@ -40,6 +40,7 @@ export const REMOTE_PUSH_PREFERENCE_EVENT =
 	"flow-like:remote-push-preference-changed";
 
 export async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
+	if (!isTauriRuntime()) return null;
 	try {
 		const mod = await import("tauri-plugin-remote-push-api");
 		return {
@@ -98,7 +99,7 @@ export async function getPushDeviceId(): Promise<string> {
 		return "server-device";
 	}
 
-	const native = await loadNativeDeviceId();
+	const native = isTauriRuntime() ? await loadNativeDeviceId() : null;
 	if (native) {
 		window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, native);
 		await savePersistentDeviceId(native);
