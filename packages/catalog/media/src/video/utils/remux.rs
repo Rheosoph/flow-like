@@ -25,17 +25,12 @@ impl NodeLogic for RemuxVideoNode {
         add_flow_path_input(&mut node, "target", "Target", "Target media FlowPath");
         add_flow_path_output(&mut node, "result", "Result", "Written media FlowPath");
         node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "operation",
-            "Operation",
-            "Object-store remux operation used",
-            VariableType::String,
-        );
+            "report",
+            "Report",
+            "Remux operation report",
+            VariableType::Struct,
+        )
+        .set_schema::<VideoRemuxReport>();
         node
     }
 
@@ -46,7 +41,7 @@ impl NodeLogic for RemuxVideoNode {
         let target: FlowPath = context.evaluate_pin("target").await?;
         let (source_store, source_location) = flow_path_object(context, &source).await?;
         let (target_store, target_location) = flow_path_object(context, &target).await?;
-        let report = video_utils_rs::remux_object_between_stores(
+        let remux_report = video_utils_rs::remux_object_between_stores(
             source_store.as_ref(),
             &source_location,
             target_store.as_ref(),
@@ -54,14 +49,15 @@ impl NodeLogic for RemuxVideoNode {
             None,
         )
         .await?;
+        let report = VideoRemuxReport {
+            source: source_location.to_string(),
+            target: target_location.to_string(),
+            operation: format!("{:?}", remux_report.operation),
+            bytes_written: remux_report.bytes_written,
+        };
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("bytes_written", json!(report.bytes_written as i64))
-            .await?;
-        context
-            .set_pin_value("operation", json!(format!("{:?}", report.operation)))
-            .await?;
+        context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

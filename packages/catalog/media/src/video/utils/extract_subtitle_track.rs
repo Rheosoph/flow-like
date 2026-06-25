@@ -44,17 +44,12 @@ impl NodeLogic for ExtractSubtitleTrackNode {
         .set_default_value(Some(json!(0)));
         add_flow_path_output(&mut node, "result", "Result", "Written sidecar FlowPath");
         node.add_output_pin(
-            "event_count",
-            "Event Count",
-            "Extracted subtitle event count",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "subtitle_track_id",
-            "Subtitle Track",
-            "Extracted subtitle track id",
-            VariableType::Integer,
-        );
+            "report",
+            "Report",
+            "Subtitle extraction report",
+            VariableType::Struct,
+        )
+        .set_schema::<SubtitleTrackExtractReport>();
         node
     }
 
@@ -68,7 +63,7 @@ impl NodeLogic for ExtractSubtitleTrackNode {
         let format = subtitle_format(&format)?;
         let (source_store, source_location) = flow_path_object(context, &source).await?;
         let (target_store, target_location) = flow_path_object(context, &target).await?;
-        let report = video_utils_rs::extract_subtitle_track_to_sidecar_between_stores(
+        let subtitle_report = video_utils_rs::extract_subtitle_track_to_sidecar_between_stores(
             source_store.as_ref(),
             &source_location,
             target_store.as_ref(),
@@ -77,14 +72,15 @@ impl NodeLogic for ExtractSubtitleTrackNode {
             format,
         )
         .await?;
+        let report = SubtitleTrackExtractReport {
+            source: source_location.to_string(),
+            target: target_location.to_string(),
+            subtitle_track_id: subtitle_report.subtitle_track_id,
+            event_count: subtitle_report.event_count,
+        };
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("event_count", json!(report.event_count as i64))
-            .await?;
-        context
-            .set_pin_value("subtitle_track_id", json!(report.subtitle_track_id as i64))
-            .await?;
+        context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

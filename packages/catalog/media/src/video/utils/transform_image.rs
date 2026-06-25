@@ -81,12 +81,6 @@ impl NodeLogic for TransformImageNode {
             VariableType::Struct,
         )
         .set_schema::<ImageOperationReport>();
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
         node
     }
 
@@ -154,9 +148,6 @@ impl NodeLogic for TransformImageNode {
             bytes_written,
         };
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("bytes_written", json!(bytes_written as i64))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

@@ -66,18 +66,6 @@ impl NodeLogic for TranscodeVideoNode {
             VariableType::Struct,
         )
         .set_schema::<VideoTranscodeReport>();
-        node.add_output_pin(
-            "operation",
-            "Operation",
-            "Selected operation",
-            VariableType::String,
-        );
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
         node
     }
 
@@ -186,12 +174,6 @@ impl NodeLogic for TranscodeVideoNode {
         };
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("bytes_written", json!(report.bytes_written as i64))
-            .await?;
-        context
-            .set_pin_value("operation", json!(report.operation.clone()))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

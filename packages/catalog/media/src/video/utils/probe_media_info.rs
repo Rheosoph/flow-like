@@ -37,12 +37,6 @@ impl NodeLogic for ProbeMediaInfoNode {
         )
         .set_schema::<VideoStreamInfo>()
         .set_value_type(ValueType::Array);
-        node.add_output_pin(
-            "stream_count",
-            "Stream Count",
-            "Number of streams",
-            VariableType::Integer,
-        );
         node
     }
 
@@ -51,15 +45,16 @@ impl NodeLogic for ProbeMediaInfoNode {
         context.deactivate_exec_pin("exec_out").await?;
         let source: FlowPath = context.evaluate_pin("source").await?;
         let (store, location) = flow_path_object(context, &source).await?;
-        let media = video_utils_rs::probe_object_media_info(store.as_ref(), &location).await?;
-        let info = media_to_info(&media);
-        let stream_count = info.streams.len() as i64;
-
+        let info = match video_utils_rs::demux_object(store.as_ref(), &location).await {
+            Ok(demuxed) => media_to_info_with_packets(&demuxed.media, &demuxed.packets),
+            Err(_) => {
+                let media =
+                    video_utils_rs::probe_object_media_info(store.as_ref(), &location).await?;
+                media_to_info(&media)
+            }
+        };
         context
-            .set_pin_value("streams", json!(info.streams))
-            .await?;
-        context
-            .set_pin_value("stream_count", json!(stream_count))
+            .set_pin_value("streams", json!(info.streams.clone()))
             .await?;
         context.set_pin_value("media", json!(info)).await?;
         context.activate_exec_pin("exec_out").await?;

@@ -27,6 +27,10 @@ pub struct VideoStreamInfo {
     pub time_base_num: i32,
     pub time_base_den: i32,
     pub duration_seconds: Option<f64>,
+    pub fps: Option<f64>,
+    pub frame_count: Option<u64>,
+    pub packet_count: Option<u64>,
+    pub average_frame_duration_seconds: Option<f64>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub sample_rate: Option<u32>,
@@ -46,6 +50,15 @@ pub struct VideoMediaInfo {
 pub struct MediaTag {
     pub key: String,
     pub value: String,
+}
+
+#[cfg(feature = "execute")]
+#[derive(Debug, Clone, Copy, Default)]
+struct StreamTimingStats {
+    fps: Option<f64>,
+    frame_count: Option<u64>,
+    packet_count: Option<u64>,
+    average_frame_duration_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -210,6 +223,74 @@ pub struct ImageOperationReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VideoRemuxReport {
+    pub source: String,
+    pub target: String,
+    pub operation: String,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleTrackMuxReport {
+    pub source: String,
+    pub sidecar: String,
+    pub target: String,
+    pub event_count: usize,
+    pub subtitle_packets: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleTrackExtractReport {
+    pub source: String,
+    pub target: String,
+    pub subtitle_track_id: u32,
+    pub event_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct VideoFrameExtractionReport {
+    pub source: String,
+    pub target: String,
+    pub video_track_id: u32,
+    pub frame_index: usize,
+    pub decoded_frames: usize,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub output_format: String,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ContactSheetReport {
+    pub source: String,
+    pub target: String,
+    pub video_track_id: u32,
+    pub frame_count: usize,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub output_format: String,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HlsVodPackageReport {
+    pub init_segment: Option<FlowPath>,
+    pub segment_count: usize,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ContainerDetectionInfo {
+    pub format: String,
+    pub display_name: String,
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WaveformBucketInfo {
     pub start_sample: usize,
     pub end_sample: usize,
@@ -354,6 +435,14 @@ fn media_type_name(media_type: video_utils_rs::MediaType) -> String {
 
 #[cfg(feature = "execute")]
 fn stream_to_info(stream: &video_utils_rs::StreamInfo) -> VideoStreamInfo {
+    stream_to_info_with_stats(stream, StreamTimingStats::default())
+}
+
+#[cfg(feature = "execute")]
+fn stream_to_info_with_stats(
+    stream: &video_utils_rs::StreamInfo,
+    stats: StreamTimingStats,
+) -> VideoStreamInfo {
     VideoStreamInfo {
         track_id: stream.track_id,
         media_type: media_type_name(stream.media_type),
@@ -361,6 +450,10 @@ fn stream_to_info(stream: &video_utils_rs::StreamInfo) -> VideoStreamInfo {
         time_base_num: stream.time_base.num,
         time_base_den: stream.time_base.den,
         duration_seconds: stream.duration_seconds(),
+        fps: stats.fps,
+        frame_count: stats.frame_count,
+        packet_count: stats.packet_count,
+        average_frame_duration_seconds: stats.average_frame_duration_seconds,
         width: stream.width,
         height: stream.height,
         sample_rate: stream.sample_rate,
@@ -371,10 +464,105 @@ fn stream_to_info(stream: &video_utils_rs::StreamInfo) -> VideoStreamInfo {
 }
 
 #[cfg(feature = "execute")]
+fn stream_timing_stats(
+    stream: &video_utils_rs::StreamInfo,
+    packets: &[video_utils_rs::EncodedPacket],
+) -> StreamTimingStats {
+    let mut packet_count = 0_u64;
+    let mut first_packet_duration_seconds = None;
+    let mut first_pts_seconds = None;
+    let mut last_end_seconds = None;
+
+    for packet in packets
+        .iter()
+        .filter(|packet| packet.track_id == stream.track_id)
+    {
+        packet_count += 1;
+
+        let start_seconds = packet.time_base.ticks_to_seconds(packet.pts);
+        let end_seconds = packet.time_base.ticks_to_seconds(packet.end_pts());
+
+        first_pts_seconds = Some(
+            first_pts_seconds
+                .map(|current: f64| current.min(start_seconds))
+                .unwrap_or(start_seconds),
+        );
+        last_end_seconds = Some(
+            last_end_seconds
+                .map(|current: f64| current.max(end_seconds))
+                .unwrap_or(end_seconds),
+        );
+
+        if packet.duration > 0 && first_packet_duration_seconds.is_none() {
+            let duration_seconds = packet.duration_seconds();
+            if duration_seconds.is_finite() && duration_seconds > 0.0 {
+                first_packet_duration_seconds = Some(duration_seconds);
+            }
+        }
+    }
+
+    let packet_count = Some(packet_count);
+    if stream.media_type != video_utils_rs::MediaType::Video {
+        return StreamTimingStats {
+            packet_count,
+            ..Default::default()
+        };
+    }
+
+    let frame_count = packet_count.filter(|count| *count > 0);
+    let span_seconds = first_pts_seconds
+        .zip(last_end_seconds)
+        .map(|(first, last)| last - first)
+        .filter(|duration| duration.is_finite() && *duration > 0.0);
+    let duration_seconds = stream
+        .duration_seconds()
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .or(span_seconds);
+
+    let fps = frame_count.and_then(|count| {
+        duration_seconds
+            .map(|duration| count as f64 / duration)
+            .or_else(|| first_packet_duration_seconds.map(|duration| 1.0 / duration))
+            .filter(|fps| fps.is_finite() && *fps > 0.0)
+    });
+    let average_frame_duration_seconds = fps.map(|fps| 1.0 / fps);
+
+    StreamTimingStats {
+        fps,
+        frame_count,
+        packet_count,
+        average_frame_duration_seconds,
+    }
+}
+
+#[cfg(feature = "execute")]
 fn media_to_info(media: &video_utils_rs::MediaInfo) -> VideoMediaInfo {
     VideoMediaInfo {
         duration_seconds: media.duration_seconds,
         streams: media.streams.iter().map(stream_to_info).collect(),
+        tags: media
+            .tags
+            .iter()
+            .map(|(key, value)| MediaTag {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn media_to_info_with_packets(
+    media: &video_utils_rs::MediaInfo,
+    packets: &[video_utils_rs::EncodedPacket],
+) -> VideoMediaInfo {
+    VideoMediaInfo {
+        duration_seconds: media.duration_seconds,
+        streams: media
+            .streams
+            .iter()
+            .map(|stream| stream_to_info_with_stats(stream, stream_timing_stats(stream, packets)))
+            .collect(),
         tags: media
             .tags
             .iter()
@@ -1212,3 +1400,46 @@ pub mod transform_image;
 pub mod transform_video;
 pub mod trim_keyframes;
 pub mod write_subtitles;
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_timing_stats_estimates_fps_from_packets() {
+        let time_base = video_utils_rs::TimeBase::new(1, 30).unwrap();
+        let stream = video_utils_rs::StreamInfo {
+            track_id: 1,
+            media_type: video_utils_rs::MediaType::Video,
+            codec: video_utils_rs::CodecId::RawVideo,
+            time_base,
+            duration: Some(90),
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+            language: None,
+            codec_config: None,
+            tags: Default::default(),
+        };
+        let packets = (0..90)
+            .map(|pts| {
+                video_utils_rs::EncodedPacket::new(
+                    1,
+                    video_utils_rs::CodecId::RawVideo,
+                    pts,
+                    1,
+                    time_base,
+                    Vec::<u8>::new(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let stats = stream_timing_stats(&stream, &packets);
+
+        assert_eq!(stats.frame_count, Some(90));
+        assert_eq!(stats.packet_count, Some(90));
+        assert_eq!(stats.fps, Some(30.0));
+        assert_eq!(stats.average_frame_duration_seconds, Some(1.0 / 30.0));
+    }
+}

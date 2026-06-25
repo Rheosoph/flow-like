@@ -52,17 +52,12 @@ impl NodeLogic for AddSubtitleTrackNode {
         .set_default_value(Some(json!("")));
         add_flow_path_output(&mut node, "result", "Result", "Written media FlowPath");
         node.add_output_pin(
-            "event_count",
-            "Event Count",
-            "Parsed subtitle event count",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "subtitle_packets",
-            "Subtitle Packets",
-            "Subtitle packets muxed",
-            VariableType::Integer,
-        );
+            "report",
+            "Report",
+            "Subtitle mux report",
+            VariableType::Struct,
+        )
+        .set_schema::<SubtitleTrackMuxReport>();
         node
     }
 
@@ -84,7 +79,7 @@ impl NodeLogic for AddSubtitleTrackNode {
         if let Some(language) = clean_optional(language) {
             job = job.with_language(language);
         }
-        let report = video_utils_rs::add_subtitle_sidecar_to_object_between_stores(
+        let subtitle_report = video_utils_rs::add_subtitle_sidecar_to_object_between_stores(
             source_store.as_ref(),
             &source_location,
             sidecar_store.as_ref(),
@@ -94,14 +89,16 @@ impl NodeLogic for AddSubtitleTrackNode {
             &job,
         )
         .await?;
+        let report = SubtitleTrackMuxReport {
+            source: source_location.to_string(),
+            sidecar: sidecar_location.to_string(),
+            target: target_location.to_string(),
+            event_count: subtitle_report.event_count,
+            subtitle_packets: subtitle_report.subtitle_packets,
+        };
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("event_count", json!(report.event_count as i64))
-            .await?;
-        context
-            .set_pin_value("subtitle_packets", json!(report.subtitle_packets as i64))
-            .await?;
+        context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

@@ -80,12 +80,6 @@ impl NodeLogic for TransformAudioNode {
             VariableType::Struct,
         )
         .set_schema::<AudioTransformReport>();
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
         node
     }
 
@@ -127,9 +121,6 @@ impl NodeLogic for TransformAudioNode {
         let report = audio_transform_report(report);
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("bytes_written", json!(report.bytes_written as i64))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

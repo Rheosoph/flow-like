@@ -84,19 +84,7 @@ impl NodeLogic for ContactSheetNode {
             "Contact sheet image report",
             VariableType::Struct,
         )
-        .set_schema::<ImageOperationReport>();
-        node.add_output_pin(
-            "frames",
-            "Frames",
-            "Frames written into the sheet",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
+        .set_schema::<ContactSheetReport>();
         node
     }
 
@@ -126,7 +114,7 @@ impl NodeLogic for ContactSheetNode {
         let input_width = stream.width.unwrap_or(0);
         let input_height = stream.height.unwrap_or(0);
         let output_format = image_format_for_target(&format, &target_location)?;
-        let (output, report, frame_count) = {
+        let (output, report) = {
             let mut decoder = platform_video_decoder(stream)?;
             let mut decoded_index = 0usize;
             let mut frames = Vec::new();
@@ -177,9 +165,11 @@ impl NodeLogic for ContactSheetNode {
             }
             let mut encoder = image_encoder(output_format);
             let output = encoder.encode(&sheet)?;
-            let report = ImageOperationReport {
+            let report = ContactSheetReport {
                 source: source_location.to_string(),
                 target: target_location.to_string(),
+                video_track_id: selected_track,
+                frame_count: frames.len(),
                 input_width,
                 input_height,
                 output_width: sheet.width,
@@ -187,9 +177,8 @@ impl NodeLogic for ContactSheetNode {
                 output_format: image_format_name(output_format).to_owned(),
                 bytes_written: output.len() as u64,
             };
-            (output, report, frames.len())
+            (output, report)
         };
-        let bytes_written = output.len() as u64;
         video_utils_rs::write_object_bytes(
             target_store.as_ref(),
             &target_location,
@@ -198,12 +187,6 @@ impl NodeLogic for ContactSheetNode {
         .await?;
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("frames", json!(frame_count as i64))
-            .await?;
-        context
-            .set_pin_value("bytes_written", json!(bytes_written as i64))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

@@ -43,18 +43,6 @@ impl NodeLogic for PickCodecBackendNode {
         )
         .set_schema::<BackendSelectionInfo>();
         node.add_output_pin(
-            "backend",
-            "Backend",
-            "Preferred backend name",
-            VariableType::String,
-        );
-        node.add_output_pin(
-            "found",
-            "Found",
-            "True when a preferred backend exists",
-            VariableType::Boolean,
-        );
-        node.add_output_pin(
             "support",
             "Support",
             "Compiled codec support registry",
@@ -81,12 +69,6 @@ impl NodeLogic for PickCodecBackendNode {
             backend: backend.clone(),
         };
 
-        context
-            .set_pin_value("found", json!(selection.found))
-            .await?;
-        context
-            .set_pin_value("backend", json!(backend.unwrap_or_default()))
-            .await?;
         context.set_pin_value("selection", json!(selection)).await?;
         context
             .set_pin_value("support", json!(codec_support_info()))

@@ -92,24 +92,12 @@ impl NodeLogic for PackageHlsVodNode {
         .set_schema::<FlowPath>()
         .set_value_type(ValueType::Array);
         node.add_output_pin(
-            "init_segment",
-            "Init Segment",
-            "Written fMP4 init segment FlowPath when present",
+            "report",
+            "Report",
+            "Written HLS package details",
             VariableType::Struct,
         )
-        .set_schema::<FlowPath>();
-        node.add_output_pin(
-            "segment_count",
-            "Segment Count",
-            "Number of media segments",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Total bytes written",
-            VariableType::Integer,
-        );
+        .set_schema::<HlsVodPackageReport>();
         node
     }
 
@@ -156,7 +144,7 @@ impl NodeLogic for PackageHlsVodNode {
             job = job.with_uri_prefix(uri_prefix);
         }
 
-        let report = video_utils_rs::package_object_hls_vod_between_stores(
+        let package_report = video_utils_rs::package_object_hls_vod_between_stores(
             source_store.as_ref(),
             &source_location,
             playlist_store.as_ref(),
@@ -164,29 +152,26 @@ impl NodeLogic for PackageHlsVodNode {
             &job,
         )
         .await?;
-        let segments = report
+        let segments = package_report
             .segments
             .iter()
             .map(|path| flow_path_from_object_path(path, &playlist))
             .collect::<Vec<_>>();
-        let init_segment = report
+        let init_segment = package_report
             .init_segment
             .as_ref()
             .map(|path| flow_path_from_object_path(path, &playlist));
+        let report = HlsVodPackageReport {
+            init_segment: init_segment.clone(),
+            segment_count: package_report.segment_count,
+            bytes_written: package_report.bytes_written,
+        };
 
         context
             .set_pin_value("playlist_out", json!(playlist))
             .await?;
         context.set_pin_value("segments", json!(segments)).await?;
-        context
-            .set_pin_value("init_segment", json!(init_segment))
-            .await?;
-        context
-            .set_pin_value("segment_count", json!(report.segment_count as i64))
-            .await?;
-        context
-            .set_pin_value("bytes_written", json!(report.bytes_written as i64))
-            .await?;
+        context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

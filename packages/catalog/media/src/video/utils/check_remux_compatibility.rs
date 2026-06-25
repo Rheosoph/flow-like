@@ -29,18 +29,6 @@ impl NodeLogic for CheckRemuxCompatibilityNode {
             "Target FlowPath with desired extension",
         );
         node.add_output_pin(
-            "compatible",
-            "Compatible",
-            "True when every stream can be packet-copied",
-            VariableType::Boolean,
-        );
-        node.add_output_pin(
-            "requires_transcode",
-            "Requires Transcode",
-            "True when one or more streams need transcoding",
-            VariableType::Boolean,
-        );
-        node.add_output_pin(
             "report",
             "Report",
             "Detailed remux compatibility report",
@@ -78,12 +66,6 @@ impl NodeLogic for CheckRemuxCompatibilityNode {
             },
         };
 
-        context
-            .set_pin_value("compatible", json!(report.compatible))
-            .await?;
-        context
-            .set_pin_value("requires_transcode", json!(report.requires_transcode))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

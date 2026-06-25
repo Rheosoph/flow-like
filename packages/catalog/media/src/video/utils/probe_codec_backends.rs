@@ -36,23 +36,15 @@ impl NodeLogic for ProbeCodecBackendsNode {
             VariableType::Struct,
         )
         .set_schema::<VideoUtilsFeatureSet>();
-        node.add_output_pin(
-            "backend_count",
-            "Backend Count",
-            "Number of backend lanes",
-            VariableType::Integer,
-        );
         node
     }
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
-        let backends = backend_info();
         context
-            .set_pin_value("backend_count", json!(backends.len() as i64))
+            .set_pin_value("backends", json!(backend_info()))
             .await?;
-        context.set_pin_value("backends", json!(backends)).await?;
         context
             .set_pin_value("features", json!(feature_set()))
             .await?;

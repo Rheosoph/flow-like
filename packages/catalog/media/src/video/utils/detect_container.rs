@@ -23,24 +23,12 @@ impl NodeLogic for DetectVideoContainerNode {
         add_exec_pins(&mut node);
         add_flow_path_input(&mut node, "source", "Source", "Media FlowPath to inspect");
         node.add_output_pin(
-            "format",
-            "Format",
-            "Stable container identifier",
-            VariableType::String,
-        );
-        node.add_output_pin(
-            "display_name",
-            "Display Name",
-            "Human readable container name",
-            VariableType::String,
-        );
-        node.add_output_pin(
-            "extensions",
-            "Extensions",
-            "Common file extensions",
-            VariableType::String,
+            "container",
+            "Container",
+            "Detected media container",
+            VariableType::Struct,
         )
-        .set_value_type(ValueType::Array);
+        .set_schema::<ContainerDetectionInfo>();
         node
     }
 
@@ -51,16 +39,17 @@ impl NodeLogic for DetectVideoContainerNode {
         let (store, location) = flow_path_object(context, &source).await?;
         let format =
             video_utils_rs::detect_object_container_format(store.as_ref(), &location).await?;
+        let container = ContainerDetectionInfo {
+            format: format.as_str().to_owned(),
+            display_name: format.display_name().to_owned(),
+            extensions: format
+                .extensions()
+                .iter()
+                .map(|extension| (*extension).to_owned())
+                .collect(),
+        };
 
-        context
-            .set_pin_value("format", json!(format.as_str()))
-            .await?;
-        context
-            .set_pin_value("display_name", json!(format.display_name()))
-            .await?;
-        context
-            .set_pin_value("extensions", json!(format.extensions()))
-            .await?;
+        context.set_pin_value("container", json!(container)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }

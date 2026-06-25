@@ -60,19 +60,7 @@ impl NodeLogic for ExtractThumbnailNode {
         .set_default_value(Some(json!(0)));
         add_flow_path_output(&mut node, "result", "Result", "Written image FlowPath");
         node.add_output_pin("report", "Report", "Thumbnail report", VariableType::Struct)
-            .set_schema::<ImageOperationReport>();
-        node.add_output_pin(
-            "decoded_frames",
-            "Decoded Frames",
-            "Frames decoded before export",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
+            .set_schema::<VideoFrameExtractionReport>();
         node
     }
 
@@ -94,7 +82,7 @@ impl NodeLogic for ExtractThumbnailNode {
         let stream = selected_video_stream(&demuxed.media, requested_track)?;
         let selected_track = stream.track_id;
         let output_format = image_format_for_target(&format, &target_location)?;
-        let (output, report, decoded_count) = {
+        let (output, report) = {
             let mut decoder = platform_video_decoder(stream)?;
             let mut decoded_count = 0usize;
             let mut selected = None;
@@ -135,9 +123,12 @@ impl NodeLogic for ExtractThumbnailNode {
             };
             let mut encoder = image_encoder(output_format);
             let output = encoder.encode(&output_frame)?;
-            let report = ImageOperationReport {
+            let report = VideoFrameExtractionReport {
                 source: source_location.to_string(),
                 target: target_location.to_string(),
+                video_track_id: selected_track,
+                frame_index,
+                decoded_frames: decoded_count + 1,
                 input_width,
                 input_height,
                 output_width: output_frame.width,
@@ -145,9 +136,8 @@ impl NodeLogic for ExtractThumbnailNode {
                 output_format: image_format_name(output_format).to_owned(),
                 bytes_written: output.len() as u64,
             };
-            (output, report, decoded_count)
+            (output, report)
         };
-        let bytes_written = output.len() as u64;
         video_utils_rs::write_object_bytes(
             target_store.as_ref(),
             &target_location,
@@ -156,12 +146,6 @@ impl NodeLogic for ExtractThumbnailNode {
         .await?;
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("decoded_frames", json!((decoded_count + 1) as i64))
-            .await?;
-        context
-            .set_pin_value("bytes_written", json!(bytes_written as i64))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

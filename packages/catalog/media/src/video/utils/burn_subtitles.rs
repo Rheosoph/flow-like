@@ -76,18 +76,6 @@ impl NodeLogic for BurnSubtitlesNode {
             VariableType::Struct,
         )
         .set_schema::<SubtitleBurnInReport>();
-        node.add_output_pin(
-            "event_count",
-            "Events",
-            "Parsed subtitle event count",
-            VariableType::Integer,
-        );
-        node.add_output_pin(
-            "bytes_written",
-            "Bytes Written",
-            "Bytes written to the target",
-            VariableType::Integer,
-        );
         node
     }
 
@@ -172,12 +160,6 @@ impl NodeLogic for BurnSubtitlesNode {
         };
 
         context.set_pin_value("result", json!(target)).await?;
-        context
-            .set_pin_value("event_count", json!(report.event_count as i64))
-            .await?;
-        context
-            .set_pin_value("bytes_written", json!(report.bytes_written as i64))
-            .await?;
         context.set_pin_value("report", json!(report)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())

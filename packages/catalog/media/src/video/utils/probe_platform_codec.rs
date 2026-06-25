@@ -42,18 +42,6 @@ impl NodeLogic for ProbePlatformCodecNode {
             VariableType::Struct,
         )
         .set_schema::<PlatformCodecProbeInfo>();
-        node.add_output_pin(
-            "supported",
-            "Supported",
-            "True when a matching native backend is available",
-            VariableType::Boolean,
-        );
-        node.add_output_pin(
-            "backend",
-            "Backend",
-            "Selected backend name when available",
-            VariableType::String,
-        );
         node
     }
 
@@ -68,12 +56,6 @@ impl NodeLogic for ProbePlatformCodecNode {
             direction,
         ));
 
-        context
-            .set_pin_value("supported", json!(probe.supported))
-            .await?;
-        context
-            .set_pin_value("backend", json!(probe.backend.clone().unwrap_or_default()))
-            .await?;
         context.set_pin_value("probe", json!(probe)).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
