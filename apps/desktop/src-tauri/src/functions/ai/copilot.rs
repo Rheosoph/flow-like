@@ -1490,7 +1490,7 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
                 .build(),
         )
         .with_instructions(
-            "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. Use edit_flowscript/emit_commands for workflow changes and answer the user in text when no board/UI edit is required.",
+            "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. For workflow changes on an existing board, call get_current_flowscript first, then edit_flowscript with the full edited document. Create workflow functions as FlowScript `function ... { ... }` declarations, not manual command JSON. Use emit_commands only for layout/non-FlowScript changes and answer the user in text when no board/UI edit is required.",
         )
     }
 
@@ -1800,7 +1800,7 @@ fn build_external_agent_prompt(system_content: &str, user_prompt: &str) -> Strin
         r#"SYSTEM INSTRUCTIONS
 {system_content}
 
-You are running through an external code-agent CLI connected to FlowPilot's shared MCP tools. Do not use shell/file-edit tools for workflow or UI edits. Use the FlowPilot MCP tools. For workflow changes, prefer FlowScript through get_declarations and edit_flowscript. If the user asks for explanation or no edit is needed, answer in normal text.
+You are running through an external code-agent CLI connected to FlowPilot's shared MCP tools. Do not use shell/file-edit tools for workflow or UI edits. Use the FlowPilot MCP tools. For workflow changes on an existing board, first call get_current_flowscript, then call get_declarations as needed, then call edit_flowscript with the full edited FlowScript document. Preserve all kept `//@n:<id>` anchors, and leave allow_deletions false unless the user explicitly asked to delete existing board items. Create workflow functions as FlowScript `function ... {{ ... }}` declarations, not manual command JSON. If the user asks for explanation or no edit is needed, answer in normal text.
 
 USER REQUEST
 {user_prompt}"#

@@ -1,4 +1,5 @@
 import type {
+	IApplyFlowScriptResponse,
 	IBoard,
 	IBoardState,
 	IConnectionMode,
@@ -140,6 +141,17 @@ export class EmptyBoardState implements IBoardState {
 		boardId: string,
 		commands: IGenericCommand[],
 	): Promise<IGenericCommand[]> {
+		throw new Error("Method not implemented.");
+	}
+
+	applyFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		currentLayer?: string,
+		catalogNodes?: INode[],
+		allowDeletions?: boolean,
+	): Promise<IApplyFlowScriptResponse> {
 		throw new Error("Method not implemented.");
 	}
 

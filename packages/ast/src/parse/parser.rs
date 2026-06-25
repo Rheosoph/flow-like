@@ -466,6 +466,12 @@ impl Parser<'_> {
             if self.at_eof() {
                 return Err(self.err("unexpected end of input inside block"));
             }
+            if matches!(self.cur(), Tok::LBrace) {
+                self.bump();
+                let nested = self.block_body()?;
+                stmts.extend(nested.stmts);
+                continue;
+            }
             stmts.push(self.stmt()?);
         }
         self.bump(); // }

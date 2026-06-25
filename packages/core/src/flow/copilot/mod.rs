@@ -14,7 +14,7 @@ mod validation;
 pub use context::{
     EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, prepare_context,
 };
-pub use provider::CatalogProvider;
+pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 pub use search::{
     SearchQueryAnalysis, analyze_search_query, enrich_node_metadata, score_catalog_metadata,
     search_result_hint_lines,
@@ -22,10 +22,11 @@ pub use search::{
 pub use tools::{
     CatalogTool, EditFlowScriptArgs, EditFlowScriptTool, EmitCommandsArgs, EmitCommandsTool,
     FilterCategoryArgs, FilterCategoryTool, FindConnectableNodesArgs, FindConnectableNodesTool,
-    GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsArgs, GetNodeDetailsTool,
-    GetUnconfiguredNodesTool, ListBoardNodesTool, QueryLogsArgs, QueryLogsTool, SearchArgs,
-    SearchByPinArgs, SearchByPinTool, SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs,
-    board_has_no_nodes, build_find_connectable_nodes_output, build_list_board_nodes_output,
+    GetCurrentFlowScriptArgs, GetCurrentFlowScriptTool, GetDeclarationsArgs, GetDeclarationsTool,
+    GetNodeDetailsArgs, GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool,
+    QueryLogsArgs, QueryLogsTool, SearchArgs, SearchByPinArgs, SearchByPinTool,
+    SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs, board_has_no_nodes,
+    build_find_connectable_nodes_output, build_list_board_nodes_output,
     build_unconfigured_nodes_output, get_tool_description, render_edit_flowscript_result,
 };
 pub use types::{
@@ -36,8 +37,8 @@ pub use types::{
 
 use std::sync::Arc;
 
-use flow_like_types::Result;
 use flow_like_model_provider::llm::CompletionClientDyn;
+use flow_like_types::Result;
 use futures::StreamExt;
 use rig::{
     OneOrMany,
@@ -233,6 +234,9 @@ impl Copilot {
             .tool(CatalogTool {
                 provider: self.catalog_provider.clone(),
             })
+            .tool(GetCurrentFlowScriptTool {
+                board: board_for_tools.clone(),
+            })
             .tool(GetDeclarationsTool {
                 provider: self.catalog_provider.clone(),
             })
@@ -354,7 +358,7 @@ impl Copilot {
         let mut all_commands: Vec<BoardCommand> = Vec::new();
         let max_iterations = 10u64;
         let max_discovery_rounds_before_emit = 4u64;
-        let force_emit_instruction = "You have enough context. Stop searching or planning. In your next response, call edit_flowscript with the full edited FlowScript document. Preserve all existing //@n anchors you keep. Write new workflow nodes as concrete unanchored FlowScript calls inside a function/event block using declarations from get_declarations, and let edit_flowscript translate the text into commands. Do not submit TODOs, function stubs, implementation-plan comments, lists of node names, or top-level node-call assignments. Use emit_commands only for layout-only MoveNode or non-FlowScript visual/modeling changes. If edit_flowscript returns validation errors, fix the FlowScript and call edit_flowscript again; do not answer in text instead.";
+        let force_emit_instruction = "You have enough context. Stop searching or planning. In your next response, call edit_flowscript with the full edited FlowScript document. Preserve all existing //@n anchors you keep. Leave allow_deletions false unless the user explicitly asked to delete existing board items. Write new workflow nodes as concrete unanchored FlowScript calls inside a function/event block using declarations from get_declarations, and let edit_flowscript translate the text into commands. Do not submit TODOs, function stubs, implementation-plan comments, lists of node names, or top-level node-call assignments. Use emit_commands only for layout-only MoveNode or non-FlowScript visual/modeling changes. If edit_flowscript returns validation errors, fix the FlowScript and call edit_flowscript again; do not answer in text instead.";
         let mut plan_step_counter = 0u32;
         let mut invalid_emit_attempts = 0u8;
         let mut discovery_rounds_without_emit = 0u64;
@@ -1003,6 +1007,13 @@ impl Copilot {
                 Ok(args) => self.catalog_provider.get_declarations(&args.query).await,
                 Err(e) => format!("Failed to parse declarations query: {}", e),
             },
+            "get_current_flowscript" => crate::flow::ast::board_to_flowscript(
+                board,
+                &crate::flow::ast::RenderOptions {
+                    anchors: true,
+                    ..Default::default()
+                },
+            ),
             "edit_flowscript" => match serde_json::from_value::<EditFlowScriptArgs>(arguments) {
                 Ok(args) => {
                     let catalog = self.catalog_provider.get_all_metadata().await;
@@ -1015,6 +1026,7 @@ impl Copilot {
                         &args.flowscript,
                         &result,
                         board_has_no_nodes(board),
+                        args.allow_deletions,
                     )
                 }
                 Err(e) => format!("Failed to parse FlowScript edit: {}", e),

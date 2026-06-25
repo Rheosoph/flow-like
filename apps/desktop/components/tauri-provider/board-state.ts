@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	type ChatImage,
 	type CopilotScope,
+	type IApplyFlowScriptResponse,
 	type IBoard,
 	type IBoardState,
 	ICommentType,
@@ -702,7 +703,10 @@ export class BoardState implements IBoardState {
 					executionMode: remoteData.execution_mode,
 					boardData: remoteData,
 				}).catch((e: unknown) => {
-					console.warn("[BoardState] Failed to persist remote board locally:", e);
+					console.warn(
+						"[BoardState] Failed to persist remote board locally:",
+						e,
+					);
 				});
 			}
 			if (typeof version === "undefined") {
@@ -1834,6 +1838,69 @@ export class BoardState implements IBoardState {
 		}
 
 		return executedCommands;
+	}
+
+	async applyFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		currentLayer?: string,
+		catalogNodes?: INode[],
+		allowDeletions = false,
+	): Promise<IApplyFlowScriptResponse> {
+		const result = await invoke<IApplyFlowScriptResponse>("apply_flowscript", {
+			appId,
+			boardId,
+			flowscript,
+			currentLayer,
+			catalogNodes: getAppPackageCatalogNodes(catalogNodes),
+			allowDeletions,
+		});
+
+		if (result.commands.length === 0) {
+			return result;
+		}
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline) {
+			return result;
+		}
+
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.backend.queryClient
+		) {
+			await this.backend.pushOfflineSyncCommand(
+				appId,
+				boardId,
+				result.commands,
+			);
+			return result;
+		}
+
+		try {
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						commands: result.commands,
+					}),
+				},
+				this.backend.auth,
+			);
+		} catch (error) {
+			console.error("Failed to push FlowScript commands to server:", error);
+			await this.backend.pushOfflineSyncCommand(
+				appId,
+				boardId,
+				result.commands,
+			);
+		}
+
+		return result;
 	}
 
 	async getExecutionElements(

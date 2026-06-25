@@ -164,8 +164,12 @@ export type BoardCommand =
 	| {
 			command_type: "CreateLayer";
 			name: string;
+			ref_id?: string;
+			layer_type?: "Collapsed" | "Function" | "Macro";
 			color?: string;
 			node_ids?: string[];
+			pins?: PlaceholderPinDef[];
+			position?: { x: number; y: number };
 			/** Parent layer ID for nesting. If undefined, creates at current layer. */
 			target_layer?: string;
 			summary?: string;

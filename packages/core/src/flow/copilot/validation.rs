@@ -298,7 +298,7 @@ pub async fn validate_emit_commands(
                     continue;
                 };
 
-                if source_pin.direction != PinDirection::Output {
+                if source_pin.direction != PinDirection::Output && !from_entity.is_layer {
                     errors.push(issue(
                         "error",
                         "invalid-source-direction",
@@ -310,7 +310,7 @@ pub async fn validate_emit_commands(
                     ));
                 }
 
-                if target_pin.direction != PinDirection::Input {
+                if target_pin.direction != PinDirection::Input && !to_entity.is_layer {
                     errors.push(issue(
                         "error",
                         "invalid-target-direction",
@@ -460,7 +460,10 @@ pub async fn validate_emit_commands(
             }
             BoardCommand::CreateLayer {
                 name,
+                ref_id,
+                layer_type,
                 node_ids,
+                pins,
                 position,
                 target_layer,
                 summary,
@@ -499,6 +502,26 @@ pub async fn validate_emit_commands(
                     }
                 }
                 validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
+                validate_placeholder_pins(index, pins.as_deref(), &mut errors);
+
+                let key = ref_id
+                    .clone()
+                    .unwrap_or_else(|| format!("__new_layer_{}", index));
+                if entities.contains_key(&key) {
+                    errors.push(issue(
+                        "error",
+                        "duplicate-ref",
+                        Some(index),
+                        format!("Reference '{}' is already in use", key),
+                    ));
+                } else {
+                    entities.insert(key.clone(), entity_from_layer(&key, name, pins));
+                    known_layer_refs.insert(key.clone());
+                    known_layer_refs.insert(name.clone());
+                    if matches!(layer_type.as_deref(), Some("Function")) {
+                        entities_to_check.insert(key);
+                    }
+                }
             }
             BoardCommand::RemoveLayer { layer_id, .. } => {
                 if !known_layer_refs.contains(layer_id) {
@@ -919,6 +942,31 @@ fn entity_from_placeholder(
         display_name: name.to_string(),
         is_layer: true,
         pins: known_pins,
+    }
+}
+
+fn entity_from_layer(key: &str, name: &str, pins: &Option<Vec<PlaceholderPinDef>>) -> KnownEntity {
+    KnownEntity {
+        key: key.to_string(),
+        display_name: name.to_string(),
+        is_layer: true,
+        pins: pins
+            .as_ref()
+            .map(|pins| {
+                pins.iter()
+                    .map(|pin| KnownPin {
+                        name: pin.name.clone(),
+                        data_type: pin.data_type.clone(),
+                        direction: if pin.pin_type == "Input" {
+                            PinDirection::Input
+                        } else {
+                            PinDirection::Output
+                        },
+                        has_default_value: false,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 

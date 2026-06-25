@@ -949,6 +949,7 @@ pub fn run() {
             functions::flow::board::redo_board,
             functions::flow::board::execute_command,
             functions::flow::board::execute_commands,
+            functions::flow::board::apply_flowscript,
             functions::flow::board::get_execution_elements,
             functions::flow::board::save_board,
             functions::flow::run::execute_board,

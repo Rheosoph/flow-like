@@ -6,11 +6,16 @@
 //!
 //! See `todo/ast.md`.
 
+mod apply;
 mod lower;
 mod reconcile;
 mod signatures;
 mod types;
 
+pub use apply::{
+    ApplyFlowScriptResult, apply_flowscript_to_board, blocked_destructive_flowscript_message,
+    destructive_flowscript_command_summaries,
+};
 pub use flow_like_ast::{
     BoardAst, DeclarationFile, NodeSchemas, RenderOptions, Signature, SignatureSet,
     declarations_by_category, declarations_by_package, render, schema_sidecar,
