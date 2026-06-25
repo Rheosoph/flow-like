@@ -315,6 +315,43 @@ Example:
 }"#
         .to_string(),
 
+        "diffview" | "diff_view" => r#"DiffView - Side-by-side, unified or inline diff for text, code, markdown & documents
+Properties:
+- type: "diffView" (required)
+- original: BoundValue (required) - Left/old content or document URL
+- modified: BoundValue (required) - Right/new content or document URL
+- mode: "split" | "unified" | "inline" (default "split")
+- kind: "auto" | "text" | "code" | "markdown" | "json" | "document" (default "auto")
+- language: BoundValue (string) - Syntax language e.g. "typescript", "rust", "json", "markdown", "python" (default "plaintext")
+- markdownMode: "source" | "rendered" (default "source")
+- showLineNumbers: BoundValue (boolean, default true)
+- wordWrap: BoundValue (boolean, default false)
+- wordLevel: BoundValue (boolean, default true)
+- collapseUnchanged: BoundValue (boolean, default false)
+- contextLines: BoundValue (number, default 3)
+- showStats: BoundValue (boolean, default true)
+- originalLabel: BoundValue (string, default "Original")
+- modifiedLabel: BoundValue (string, default "Modified")
+- ignoreWhitespace: BoundValue (boolean, default false)
+- ignoreCase: BoundValue (boolean, default false)
+- trimTrailingWhitespace: BoundValue (boolean, default false)
+- swapSides: BoundValue (boolean, default false)
+
+Example:
+{
+  "id": "config-diff",
+  "component": {
+    "type": "diffView",
+    "original": { "literalString": "const port = 3000" },
+    "modified": { "literalString": "const port = 8080" },
+    "mode": { "literalString": "split" },
+    "kind": { "literalString": "code" },
+    "language": { "literalString": "typescript" },
+    "showLineNumbers": { "literalBool": true }
+  }
+}"#
+        .to_string(),
+
         "checkbox" => r#"Checkbox - Boolean toggle with label
 Properties:
 - type: "checkbox" (required)

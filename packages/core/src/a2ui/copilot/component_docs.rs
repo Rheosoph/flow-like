@@ -27,6 +27,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `video` - Video player
 - `lottie` - Lottie animations
 - `markdown` - Markdown renderer
+- `diffView` - Side-by-side, unified or inline diff for text, code, markdown & documents (props: original, modified, mode, kind, language, ...)
 - `badge` - Small label/tag
 - `avatar` - User avatar
 - `userProfile` - User lookup display by sub with avatar, chip, row, detailed, and card variants

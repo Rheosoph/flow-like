@@ -1048,6 +1048,28 @@ export interface FilePreviewComponent extends ComponentBase {
 	loading?: BoundValue; // "lazy" | "eager"
 }
 
+export interface DiffViewComponent extends ComponentBase {
+	type: "diffView";
+	original: BoundValue; // left / old content (text or document URL)
+	modified: BoundValue; // right / new content (text or document URL)
+	mode?: BoundValue; // "split" | "unified" | "inline"
+	kind?: BoundValue; // "auto" | "text" | "code" | "markdown" | "json" | "document"
+	language?: BoundValue; // syntax language for code/json
+	markdownMode?: BoundValue; // "source" | "rendered"
+	showLineNumbers?: BoundValue;
+	wordWrap?: BoundValue;
+	wordLevel?: BoundValue; // intra-line word-level highlighting
+	collapseUnchanged?: BoundValue;
+	contextLines?: BoundValue; // context lines kept around changes when collapsing
+	showStats?: BoundValue;
+	originalLabel?: BoundValue;
+	modifiedLabel?: BoundValue;
+	ignoreWhitespace?: BoundValue;
+	ignoreCase?: BoundValue;
+	trimTrailingWhitespace?: BoundValue;
+	swapSides?: BoundValue;
+}
+
 // NivoChart - Nivo chart library component
 // Install: bun add @nivo/core @nivo/bar @nivo/line @nivo/pie @nivo/radar @nivo/heatmap @nivo/scatterplot @nivo/funnel @nivo/treemap @nivo/sunburst @nivo/calendar @nivo/bump @nivo/circle-packing @nivo/network @nivo/sankey @nivo/stream @nivo/swarmplot @nivo/voronoi @nivo/waffle @nivo/marimekko @nivo/parallel-coordinates @nivo/radial-bar @nivo/boxplot @nivo/bullet @nivo/chord
 export type NivoChartType =
@@ -1517,6 +1539,7 @@ export type A2UIComponent =
 	| IframeComponent
 	| PlotlyChartComponent
 	| FilePreviewComponent
+	| DiffViewComponent
 	| NivoChartComponent
 	| BoundingBoxOverlayComponent
 	| ImageLabelerComponent

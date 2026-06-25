@@ -71,6 +71,10 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<MarkdownProps>();
             true
         }
+        "diffview" => {
+            pin.set_schema::<DiffViewProps>();
+            true
+        }
         "divider" => {
             pin.set_schema::<DividerProps>();
             true
@@ -276,6 +280,7 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "video",
         "lottie",
         "markdown",
+        "diffView",
         "divider",
         "badge",
         "avatar",

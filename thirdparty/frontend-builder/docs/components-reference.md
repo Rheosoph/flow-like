@@ -357,6 +357,30 @@ Generic file preview.
 | fit | BoundValue | "contain", "cover", "fill", "none", "scaleDown" |
 | fallbackText | BoundValue | Fallback text |
 
+### diffView
+Beautiful diff viewer for text, code, markdown and documents — split, unified or inline, with syntax highlighting and word-level changes.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| original | BoundValue | Left / old content, or a document URL **(REQUIRED)** |
+| modified | BoundValue | Right / new content, or a document URL **(REQUIRED)** |
+| mode | BoundValue | "split" \| "unified" \| "inline" (default "split") |
+| kind | BoundValue | "auto" \| "text" \| "code" \| "markdown" \| "json" \| "document" (default "auto") |
+| language | BoundValue | Syntax language for code/json (e.g. "typescript", "rust", "python"); default "plaintext" |
+| markdownMode | BoundValue | "source" (diff raw markdown) \| "rendered" (side-by-side preview); default "source" |
+| showLineNumbers | BoundValue | boolean (default true) |
+| wordWrap | BoundValue | boolean (default false) |
+| wordLevel | BoundValue | boolean — intra-line word-level highlighting (default true) |
+| collapseUnchanged | BoundValue | boolean — collapse long unchanged regions (default false) |
+| contextLines | BoundValue | number — context kept around changes when collapsing (default 3) |
+| showStats | BoundValue | boolean — show +adds/−dels header (default true) |
+| originalLabel | BoundValue | string (default "Original") |
+| modifiedLabel | BoundValue | string (default "Modified") |
+| ignoreWhitespace | BoundValue | boolean (default false) |
+| ignoreCase | BoundValue | boolean (default false) |
+| trimTrailingWhitespace | BoundValue | boolean (default false) |
+| swapSides | BoundValue | boolean (default false) |
+
 ### boundingBoxOverlay
 Display bounding boxes on an image.
 
