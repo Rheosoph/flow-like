@@ -25,6 +25,63 @@ export interface PeerPresence {
 	activeNodeTs?: number;
 }
 
+/** High-frequency cursor data, kept out of React state so cursor motion does not
+ *  re-render the board. Consumed via useSyncExternalStore by the cursor overlay. */
+export interface PeerCursor {
+	clientId: number;
+	cursor: { x: number; y: number };
+	sub?: string;
+	layerPath: string;
+}
+
+export interface CursorStore {
+	subscribe: (listener: () => void) => () => void;
+	getSnapshot: () => PeerCursor[];
+}
+
+const EMPTY_CURSORS: PeerCursor[] = [];
+
+function cursorsEqual(a: PeerCursor[], b: PeerCursor[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		const p = a[i];
+		const n = b[i];
+		if (
+			p.clientId !== n.clientId ||
+			p.cursor.x !== n.cursor.x ||
+			p.cursor.y !== n.cursor.y ||
+			p.layerPath !== n.layerPath ||
+			p.sub !== n.sub
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function presenceEqual(a: PeerPresence[], b: PeerPresence[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		const p = a[i];
+		const n = b[i];
+		if (
+			p.clientId !== n.clientId ||
+			p.sub !== n.sub ||
+			p.layerPath !== n.layerPath ||
+			p.activeNodeId !== n.activeNodeId
+		) {
+			return false;
+		}
+		const ps = p.selection.nodes;
+		const ns = n.selection.nodes;
+		if (ps.length !== ns.length) return false;
+		for (let j = 0; j < ps.length; j++) {
+			if (ps[j] !== ns[j]) return false;
+		}
+	}
+	return true;
+}
+
 interface UseRealtimeCollaborationProps {
 	appId: string;
 	boardId: string;
@@ -68,6 +125,22 @@ export function useRealtimeCollaboration({
 	const remoteSelectionsRef = useRef<Map<string, RemoteSelectionParticipant[]>>(
 		new Map(),
 	);
+
+	// External store for high-frequency cursor data so cursor motion re-renders
+	// only the cursor overlay (via useSyncExternalStore), never the whole board.
+	const cursorDataRef = useRef<{
+		snapshot: PeerCursor[];
+		listeners: Set<() => void>;
+	}>({ snapshot: EMPTY_CURSORS, listeners: new Set() });
+	const cursorStore = useRef<CursorStore>({
+		subscribe: (listener: () => void) => {
+			cursorDataRef.current.listeners.add(listener);
+			return () => {
+				cursorDataRef.current.listeners.delete(listener);
+			};
+		},
+		getSnapshot: () => cursorDataRef.current.snapshot,
+	}).current;
 
 	// Stable ref for board.refetch so the boardUpdate listener doesn't reinstall every render
 	const boardRefetchRef = useRef(board.refetch);
@@ -175,6 +248,10 @@ export function useRealtimeCollaboration({
 	useEffect(() => {
 		if (!awareness) {
 			setPeerStates([]);
+			if (cursorDataRef.current.snapshot.length > 0) {
+				cursorDataRef.current.snapshot = EMPTY_CURSORS;
+				for (const listener of cursorDataRef.current.listeners) listener();
+			}
 			return;
 		}
 
@@ -184,18 +261,27 @@ export function useRealtimeCollaboration({
 				?.__invalidPeers;
 			const now = Date.now();
 			const next: PeerPresence[] = [];
+			const nextCursors: PeerCursor[] = [];
 			states.forEach((state, clientId) => {
 				const isSelf = clientId === awareness.clientID;
 				const isInvalid = invalidPeers?.has(clientId) ?? false;
 				if (isSelf || isInvalid) return;
 				const cursor = state?.cursor;
+				const layerPath = state?.layerPath ?? "root";
+				if (cursor) {
+					nextCursors.push({
+						clientId,
+						cursor: { x: cursor.x, y: cursor.y },
+						sub: state?.sub,
+						layerPath,
+					});
+				}
 				const activeNodeTs = state?.activeNodeTs as number | undefined;
 				const activeNodeFresh = activeNodeTs && now - activeNodeTs < 3000;
 				next.push({
 					clientId,
-					cursor: cursor ? { x: cursor.x, y: cursor.y } : undefined,
 					sub: state?.sub,
-					layerPath: state?.layerPath ?? "root",
+					layerPath,
 					selection: {
 						nodes: normalizeSelectionNodes(state?.selection?.nodes),
 					},
@@ -205,16 +291,39 @@ export function useRealtimeCollaboration({
 					activeNodeTs: activeNodeFresh ? activeNodeTs : undefined,
 				});
 			});
-			setPeerStates(next);
+
+			// Cursors: publish to the external store (consumed only by the cursor
+			// overlay, which re-renders itself without touching the board). Skip when
+			// nothing moved so idle 20Hz cursor broadcasts don't re-render the overlay.
+			if (!cursorsEqual(cursorDataRef.current.snapshot, nextCursors)) {
+				cursorDataRef.current.snapshot = nextCursors;
+				for (const listener of cursorDataRef.current.listeners) listener();
+			}
+
+			// Presence: only re-render the board when low-frequency presence actually
+			// changes (selection, layer, active node, peer set) — not on cursor ticks.
+			setPeerStates((prev) => (presenceEqual(prev, next) ? prev : next));
 		};
 
-		const handleChange = () => updatePeers();
-		awareness.on("change", handleChange);
+		// Remote peers broadcast cursors at ~20Hz each. Coalesce the resulting
+		// burst of awareness "change" events into a single state update per frame
+		// so peer presence no longer re-renders the whole board on every tick.
+		let rafId: number | null = null;
+		const scheduleUpdate = () => {
+			if (rafId !== null) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				updatePeers();
+			});
+		};
+
+		awareness.on("change", scheduleUpdate);
 		updatePeers();
 
 		return () => {
+			if (rafId !== null) cancelAnimationFrame(rafId);
 			try {
-				awareness.off("change", handleChange);
+				awareness.off("change", scheduleUpdate);
 			} catch {}
 		};
 	}, [awareness]);
@@ -389,6 +498,7 @@ export function useRealtimeCollaboration({
 		awareness,
 		connectionStatus,
 		peerStates,
+		cursorStore,
 		reconnect,
 		broadcastActiveNode,
 	};

@@ -1,5 +1,6 @@
 "use client";
 import { InfoCircledIcon } from "@radix-ui/react-icons";
+import { useStore } from "@xyflow/react";
 import {
 	AlignCenterVerticalIcon,
 	AlignEndVerticalIcon,
@@ -36,7 +37,6 @@ interface FlowNodeToolbarProps {
 	node: INode;
 	appId: string;
 	boardId: string;
-	selectedCount: number;
 	isReadOnly: boolean;
 	onCopy: () => Promise<void>;
 	onDelete: () => Promise<void>;
@@ -163,7 +163,6 @@ Divider.displayName = "Divider";
 const FlowNodeToolbar = memo(
 	({
 		node,
-		selectedCount,
 		isReadOnly,
 		onCopy,
 		onDelete,
@@ -176,8 +175,20 @@ const FlowNodeToolbar = memo(
 		onAlign,
 		onExplain,
 	}: FlowNodeToolbarProps) => {
-		const isSingleSelection = selectedCount <= 1;
-		const isMultiSelection = selectedCount > 1;
+		// Subscribe to selection only from the (rarely mounted) toolbar, narrowed to
+		// a boolean that flips at the 1<->2 boundary so it re-renders far less often
+		// than the old per-node global count subscription.
+		const isMultiSelection = useStore((s) => {
+			let count = 0;
+			for (const n of s.nodeLookup.values()) {
+				if (n.selected) {
+					count++;
+					if (count > 1) return true;
+				}
+			}
+			return false;
+		});
+		const isSingleSelection = !isMultiSelection;
 
 		const isExec = useMemo(
 			() =>

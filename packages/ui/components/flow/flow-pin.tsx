@@ -33,6 +33,19 @@ type SmallDotHandleProps = React.ComponentProps<typeof Handle> & {
 	isExecution?: boolean;
 };
 
+function defaultValuesEqual(
+	a: number[] | null | undefined,
+	b: number[] | null | undefined,
+): boolean {
+	if (a === b) return true;
+	if (a == null || b == null) return a == null && b == null;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
 const SmallDotHandle = memo(function SmallDotHandle({
 	dotColor,
 	showBorderWhenTransparent = true,
@@ -229,8 +242,13 @@ function FlowPinInnerComponent({
 	);
 
 	useEffect(() => {
-		setDefaultValue(pin.default_value);
-	}, [pin]);
+		// pin.default_value is a fresh array reference on every board re-parse even
+		// when the bytes are unchanged; guard by value so React bails out instead of
+		// scheduling a redundant render.
+		setDefaultValue((prev) =>
+			defaultValuesEqual(prev, pin.default_value) ? prev : pin.default_value,
+		);
+	}, [pin.default_value]);
 
 	const pinTypeProps = useMemo(
 		() => ({

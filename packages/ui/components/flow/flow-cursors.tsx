@@ -1,12 +1,13 @@
 "use client";
 import { useStore } from "@xyflow/react";
 import { ArrowRight } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useMemo, useSyncExternalStore } from "react";
 import {
 	type PeerUserInfo,
 	colorFromSub,
 	truncateName,
 } from "../../hooks/use-peer-users";
+import type { CursorStore } from "../../hooks/use-realtime-collaboration";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 
 interface CursorPeer {
@@ -292,6 +293,37 @@ const RemoteCursor = memo(function RemoteCursor({
 		</div>
 	);
 });
+
+/**
+ * Subscribes to the high-frequency cursor store via useSyncExternalStore so that
+ * remote cursor motion re-renders only this overlay — never the parent FlowBoard.
+ */
+export function FlowCursorsLayer({
+	store,
+	currentLayerPath,
+	peerUsers,
+	className,
+}: {
+	store: CursorStore;
+	currentLayerPath: string;
+	peerUsers: Map<string, PeerUserInfo>;
+	className?: string;
+}) {
+	const peers = useSyncExternalStore(
+		store.subscribe,
+		store.getSnapshot,
+		store.getSnapshot,
+	);
+	if (peers.length === 0) return null;
+	return (
+		<FlowCursors
+			peers={peers}
+			currentLayerPath={currentLayerPath}
+			peerUsers={peerUsers}
+			className={className}
+		/>
+	);
+}
 
 const CursorPointer = memo(function CursorPointer({
 	color,

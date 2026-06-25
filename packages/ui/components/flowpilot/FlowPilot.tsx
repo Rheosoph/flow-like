@@ -698,7 +698,7 @@ function buildFlowScriptDiff(
 	);
 }
 
-export function FlowPilot({
+function FlowPilotImpl({
 	agentMode,
 	title = "FlowPilot",
 	className,
@@ -3380,6 +3380,8 @@ ${userMsg}`;
 		</motion.div>
 	);
 }
+
+export const FlowPilot = memo(FlowPilotImpl);
 
 interface FrontendToolRequestDialogProps {
 	dialog: FrontendToolDialogState | null;

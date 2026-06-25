@@ -7,7 +7,6 @@ import {
 	type NodeProps,
 	Position,
 	useReactFlow,
-	useStore,
 	useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
@@ -83,13 +82,6 @@ import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
-const selectSelectedCount = (s: any) => {
-	let count = 0;
-	for (const n of s.nodeLookup.values()) {
-		if (n.selected) count++;
-	}
-	return count;
-};
 
 export interface RemoteSelectionParticipant {
 	clientId: number;
@@ -152,9 +144,6 @@ const FlowNodeInner = memo(
 			payload: "",
 		});
 		const [executing, setExecuting] = useState(false);
-		const [isExec, setIsExec] = useState(false);
-		const [inputPins, setInputPins] = useState<(IPin | IPinAction)[]>([]);
-		const [outputPins, setOutputPins] = useState<(IPin | IPinAction)[]>([]);
 
 		// Use separate selectors returning primitives to avoid infinite re-renders
 		const executionStatus = useRunExecutionStore((state) => {
@@ -214,22 +203,17 @@ const FlowNodeInner = memo(
 			[props.data.node.wasm],
 		);
 
+		const firstPinType =
+			Object.values(props.data.node.pins)?.[0]?.data_type ??
+			IVariableType.Generic;
 		const nodeStyle = useMemo(
 			() => ({
-				backgroundColor: props.selected
-					? typeToColor(
-							Object.values(props.data.node.pins)?.[0]?.data_type ??
-								IVariableType.Generic,
-						)
-					: undefined,
-				borderColor: typeToColor(
-					Object.values(props.data.node.pins)?.[0]?.data_type ??
-						IVariableType.Generic,
-				),
+				backgroundColor: props.selected ? typeToColor(firstPinType) : undefined,
+				borderColor: typeToColor(firstPinType),
 				borderWidth: "1px",
 				borderStyle: "solid",
 			}),
-			[isReroute, props.selected],
+			[props.selected, firstPinType],
 		);
 
 		const sortPins = useCallback((a: IPin, b: IPin) => {
@@ -240,15 +224,6 @@ const FlowNodeInner = memo(
 			// Step 2: If types are the same, compare by index
 			return a.index - b.index;
 		}, []);
-
-		useEffect(() => {
-			const height = Math.max(inputPins.length, outputPins.length);
-			if (isReroute) {
-				return;
-			}
-			if (div.current)
-				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
-		}, [isReroute, inputPins, outputPins]);
 
 		// Execution state is now computed directly from the selector above
 
@@ -383,7 +358,7 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[inputPins, outputPins, getNode, props.data.version],
+			[getNode, sortPins, pushCommand, invalidate, props.id, props.data.version],
 		);
 
 		const parsePins = useCallback(
@@ -457,11 +432,9 @@ const FlowNodeInner = memo(
 					}
 				}
 
-				setInputPins(inputPins);
-				setOutputPins(outputPins);
-				setIsExec(isExec);
+				return { inputPins, outputPins, isExec };
 			},
-			[addPin, sortPins, props.data.node, props.data.node.hash],
+			[addPin, sortPins, props.data.node],
 		);
 
 		// Parse pins when node pins change
@@ -481,11 +454,23 @@ const FlowNodeInner = memo(
 				});
 		}, [props.data.node?.pins, props.data.node?.name]);
 
+		// Derive pins synchronously (avoids the extra render pass of effect+setState)
+		const { inputPins, outputPins, isExec } = useMemo(
+			() => parsePins(visiblePins),
+			[parsePins, visiblePins],
+		);
+
 		useEffect(() => {
-			parsePins(visiblePins);
 			// Update React Flow internals when pins change (handles may have changed)
 			updateNodeInternals(props.id);
-		}, [visiblePins, props.data.node.hash, props.id]);
+		}, [visiblePins, props.id, updateNodeInternals]);
+
+		useEffect(() => {
+			if (isReroute) return;
+			const height = Math.max(inputPins.length, outputPins.length);
+			if (div.current)
+				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
+		}, [isReroute, inputPins, outputPins]);
 
 		function isPinAction(pin: IPin | IPinAction): pin is IPinAction {
 			return typeof (pin as IPinAction).onAction === "function";
@@ -1003,6 +988,8 @@ const FlowNodeInner = memo(
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
+		prev.props.data.remoteSelections === next.props.data.remoteSelections &&
+		prev.props.data.peerUsers === next.props.data.peerUsers &&
 		prev.props.data.selectorDataVersion === next.props.data.selectorDataVersion,
 );
 
@@ -1322,8 +1309,6 @@ function FlowNode(props: NodeProps<FlowNode>) {
 		[props.data.node, invalidate, pushCommands, flow],
 	);
 
-	const selectedCount = useStore(selectSelectedCount);
-
 	const isReadOnly = typeof props.data.version !== "undefined";
 
 	const handleOpenInfo = useCallback(() => {
@@ -1410,7 +1395,6 @@ function FlowNode(props: NodeProps<FlowNode>) {
 						node={props.data.node}
 						appId={props.data.appId}
 						boardId={props.data.boardId}
-						selectedCount={selectedCount}
 						isReadOnly={isReadOnly}
 						onCopy={copy}
 						onDelete={deleteNodes}
