@@ -359,7 +359,7 @@ export function useCopilotCommands({
 				resolveNode(ref)?.id ?? nodeReferenceMap.get(ref)?.id ?? ref;
 
 			const resolveLayerId = (ref?: string | null): string | undefined => {
-				if (!ref) return ref ?? undefined;
+				if (!ref) return undefined;
 				if (latestBoardLayers[ref]) return ref;
 				return nodeReferenceMap.get(ref)?.id ?? ref;
 			};

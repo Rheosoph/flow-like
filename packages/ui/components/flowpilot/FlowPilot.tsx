@@ -3014,9 +3014,7 @@ ${userMsg}`;
 		!flowscriptWorkspaceBlocksApply &&
 		flowscriptWorkspace !== appliedFlowScriptWorkspace;
 	const showFlowScriptWorkspace = hasFlowScriptWorkspace && showWorkspace;
-	const flowScriptWorkspaceIsPending =
-		hasFlowScriptWorkspace && flowscriptWorkspace !== appliedFlowScriptWorkspace;
-	const visiblePendingCommands = flowScriptWorkspaceIsPending
+	const visiblePendingCommands = hasUnappliedFlowScriptWorkspace
 		? []
 		: pendingCommands;
 
