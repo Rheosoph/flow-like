@@ -88,7 +88,8 @@ impl NodeLogic for AnalyzeAudioNode {
         let frames = decode_audio_file(store.as_ref(), &location).await?;
         let decoded_frames = frames.len();
         let audio = concat_audio_frames(&frames)?;
-        let waveform = video_utils_rs::waveform_peaks(&audio, waveform_buckets.max(1) as usize)?
+        let waveform_bucket_count = usize::try_from(waveform_buckets.max(1))?;
+        let waveform = video_utils_rs::waveform_peaks(&audio, waveform_bucket_count)?
             .into_iter()
             .map(|bucket| waveform_bucket_info(bucket, audio.sample_rate))
             .collect::<Vec<_>>();
