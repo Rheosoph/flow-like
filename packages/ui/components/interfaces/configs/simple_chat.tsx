@@ -4,7 +4,18 @@ import { useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
-import { Checkbox, Input, Label, ScrollArea, Switch } from "../../ui";
+import {
+	Checkbox,
+	Input,
+	Label,
+	ScrollArea,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+	Switch,
+} from "../../ui";
 import type { IConfigInterfaceProps } from "../interfaces";
 
 export function SimpleChatConfig({
@@ -54,6 +65,33 @@ export function SimpleChatConfig({
 			.filter((r) => !!r);
 		return Array.from(new Set(normalized));
 	}, [config]);
+
+	const voice = ((config as any)?.voice ?? {}) as Record<string, any>;
+	const setVoice = (key: string, value: any) => {
+		setValue("voice", { ...voice, [key]: value });
+	};
+	const voiceMode: string =
+		voice.mode ?? ((config as any)?.allow_voice_input ? "record" : "disabled");
+
+	const renderVoiceSelect = (
+		id: string,
+		current: string,
+		onChange: (value: string) => void,
+		options: { value: string; label: string }[],
+	) => (
+		<Select value={current} onValueChange={onChange} disabled={!isEditing}>
+			<SelectTrigger id={id} className="w-full">
+				<SelectValue />
+			</SelectTrigger>
+			<SelectContent>
+				{options.map((o) => (
+					<SelectItem key={o.value} value={o.value}>
+						{o.label}
+					</SelectItem>
+				))}
+			</SelectContent>
+		</Select>
+	);
 
 	return (
 		<div className="w-full space-y-6">
@@ -148,38 +186,137 @@ export function SimpleChatConfig({
 			</div>
 
 			<div className="space-y-4">
-				<div className="flex items-center space-x-2">
-					<Switch
-						disabled={!isEditing}
-						id="allow_voice_input"
-						checked={config?.allow_voice_input ?? false}
-						onCheckedChange={(checked) => {
-							setValue("allow_voice_input", checked);
-						}}
-					/>
-					<Label htmlFor="allow_voice_input">Allow Voice Input</Label>
+				<div className="space-y-3">
+					<Label htmlFor="voice_mode">Voice Input</Label>
+					{renderVoiceSelect(
+						"voice_mode",
+						voiceMode,
+						(v) => setVoice("mode", v),
+						[
+							{ value: "disabled", label: "Disabled" },
+							{ value: "record", label: "Record audio (send recording)" },
+							{
+								value: "stt",
+								label: "Platform speech-to-text (send text)",
+							},
+						],
+					)}
+					<p className="text-sm text-muted-foreground">
+						How users speak to the chat. Speech-to-text uses the browser engine
+						when available and falls back to recording.
+					</p>
 				</div>
-				<p className="text-sm text-muted-foreground">
-					Enable users to use voice input for chat messages
-				</p>
-			</div>
 
-			<div className="space-y-4">
-				<div className="flex items-center space-x-2">
-					<Switch
-						disabled={!isEditing}
-						id="allow_voice_mode"
-						checked={config?.allow_voice_mode ?? false}
-						onCheckedChange={(checked) => {
-							setValue("allow_voice_mode", checked);
-						}}
-					/>
-					<Label htmlFor="allow_voice_mode">Allow Voice Mode</Label>
-				</div>
-				<p className="text-sm text-muted-foreground">
-					Enable voice mode with auto silence detection, similar to OpenAI voice
-					mode
-				</p>
+				{voiceMode !== "disabled" && (
+					<div className="space-y-4">
+						<div className="grid gap-4 md:grid-cols-2">
+							<div className="space-y-2">
+								<Label htmlFor="voice_invoke">Invoke Mode</Label>
+								{renderVoiceSelect(
+									"voice_invoke",
+									voice.invoke ?? "manual",
+									(v) => setVoice("invoke", v),
+									[
+										{ value: "manual", label: "Manual (tap to start/stop)" },
+										{ value: "hold", label: "Hold to record" },
+										{ value: "auto", label: "Automatic (pause detection)" },
+									],
+								)}
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="voice_playback">Answer Playback</Label>
+								{renderVoiceSelect(
+									"voice_playback",
+									voice.playback ?? "text",
+									(v) => setVoice("playback", v),
+									[
+										{ value: "text", label: "Text only" },
+										{ value: "audio", label: "Audio only" },
+										{ value: "both", label: "Text + audio" },
+									],
+								)}
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="voice_variant">Visual Style</Label>
+								{renderVoiceSelect(
+									"voice_variant",
+									voice.variant ?? "conservative",
+									(v) => setVoice("variant", v),
+									[
+										{ value: "conservative", label: "Conservative (mic icon)" },
+										{ value: "waveform", label: "Waveform" },
+										{ value: "orb", label: "Orb" },
+										{ value: "vortex", label: "Vortex" },
+										{ value: "shader", label: "Shader" },
+									],
+								)}
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="voice_size">Size</Label>
+								{renderVoiceSelect(
+									"voice_size",
+									voice.size ?? "md",
+									(v) => setVoice("size", v),
+									[
+										{ value: "sm", label: "Small" },
+										{ value: "md", label: "Medium" },
+										{ value: "lg", label: "Large" },
+									],
+								)}
+							</div>
+						</div>
+
+						<div className="grid gap-4 md:grid-cols-2">
+							<div className="space-y-2">
+								<Label htmlFor="voice_color">Accent Color</Label>
+								<Input
+									id="voice_color"
+									type="color"
+									disabled={!isEditing}
+									value={voice.color ?? "#8b5cf6"}
+									onChange={(e) => setVoice("color", e.target.value)}
+								/>
+							</div>
+							<div className="space-y-2">
+								<Label htmlFor="voice_recording_color">Recording Color</Label>
+								<Input
+									id="voice_recording_color"
+									type="color"
+									disabled={!isEditing}
+									value={voice.recording_color ?? "#ef4444"}
+									onChange={(e) => setVoice("recording_color", e.target.value)}
+								/>
+							</div>
+						</div>
+
+						<div className="space-y-2">
+							<Label htmlFor="voice_max_duration">Max Duration (seconds)</Label>
+							<Input
+								id="voice_max_duration"
+								type="number"
+								min={0}
+								disabled={!isEditing}
+								value={voice.max_duration ?? 300}
+								onChange={(e) =>
+									setVoice(
+										"max_duration",
+										e.target.value ? Number.parseInt(e.target.value, 10) : 0,
+									)
+								}
+							/>
+						</div>
+
+						<div className="flex items-center space-x-2">
+							<Switch
+								disabled={!isEditing}
+								id="voice_auto_stop"
+								checked={voice.auto_stop ?? false}
+								onCheckedChange={(checked) => setVoice("auto_stop", checked)}
+							/>
+							<Label htmlFor="voice_auto_stop">Auto-stop on silence</Label>
+						</div>
+					</div>
+				)}
 			</div>
 
 			<div className="space-y-3">

@@ -311,6 +311,17 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		disabled: bool(false),
 		showPreview: bool(true),
 	},
+	voiceInput: {
+		value: str(""),
+		label: str("Record"),
+		mode: str("record"),
+		invoke: str("manual"),
+		variant: str("conservative"),
+		size: str("md"),
+		maxDuration: num(300),
+		autoStop: bool(false),
+		disabled: bool(false),
+	},
 	link: {
 		label: str("Click here"),
 		variant: str("default"),

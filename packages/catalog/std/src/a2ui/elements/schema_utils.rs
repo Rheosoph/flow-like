@@ -153,6 +153,10 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<ImageInputProps>();
             true
         }
+        "voiceinput" => {
+            pin.set_schema::<VoiceInputProps>();
+            true
+        }
         "link" => {
             pin.set_schema::<LinkProps>();
             true
@@ -301,6 +305,7 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "dateTimeInput",
         "fileInput",
         "imageInput",
+        "voiceInput",
         "link",
         // Container
         "card",

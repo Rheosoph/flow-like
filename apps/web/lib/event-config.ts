@@ -30,6 +30,15 @@ export const EVENT_CONFIG: IEventMapping = {
 			simple_chat: {
 				allow_file_upload: true,
 				allow_voice_input: false,
+				voice: {
+					mode: "disabled",
+					invoke: "manual",
+					variant: "conservative",
+					size: "md",
+					playback: "text",
+					max_duration: 300,
+					auto_stop: false,
+				},
 				history_elements: 5,
 				tools: [],
 				default_tools: [],

@@ -18,6 +18,7 @@ import {
 	List,
 	Loader2,
 	MessageSquare,
+	Mic,
 	MousePointer,
 	PanelLeft,
 	Rows3,
@@ -378,6 +379,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: ImagePlus,
 		category: "Interactive",
 		description: "Image upload with preview",
+	},
+	{
+		type: "voiceInput",
+		label: "Voice Input",
+		icon: Mic,
+		category: "Interactive",
+		description: "Record audio or speech-to-text",
 	},
 	{
 		type: "link",

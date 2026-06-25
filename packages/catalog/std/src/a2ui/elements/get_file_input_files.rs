@@ -293,7 +293,7 @@ impl NodeLogic for GetFileInputFiles {
         let mut node = Node::new(
             "a2ui_get_file_input_files",
             "Get File Input Files",
-            "Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput element",
+            "Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element",
             "UI/Elements/Files",
         );
         node.add_icon("/flow/icons/a2ui.svg");
@@ -301,7 +301,7 @@ impl NodeLogic for GetFileInputFiles {
         node.add_input_pin(
             "element_ref",
             "Element",
-            "File input element ID or element object from Get Element",
+            "File or voice input element ID or element object from Get Element",
             VariableType::Struct,
         )
         .set_options(PinOptions::new().set_enforce_schema(false).build());

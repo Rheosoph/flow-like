@@ -622,7 +622,18 @@ export interface VoiceInputComponent extends ComponentBase {
 	silenceDuration?: BoundValue;
 	disabled?: BoundValue;
 	error?: BoundValue;
+	/** Deprecated alias for `variant`. */
 	visualizer?: BoundValue;
+	/** "conservative" | "waveform" | "orb" | "vortex" | "shader" */
+	variant?: BoundValue;
+	/** "sm" | "md" | "lg" */
+	size?: BoundValue;
+	/** "record" (send audio) | "stt" (send transcript text) */
+	mode?: BoundValue;
+	/** "manual" | "hold" | "auto" */
+	invoke?: BoundValue;
+	color?: BoundValue;
+	recordingColor?: BoundValue;
 }
 
 export interface LinkComponent extends ComponentBase {

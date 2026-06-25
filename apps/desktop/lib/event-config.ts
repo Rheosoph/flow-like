@@ -1,4 +1,3 @@
-import { createId } from "@paralleldrive/cuid2";
 import {
 	ChatInterface,
 	CronJobConfig,
@@ -15,6 +14,7 @@ import {
 	TelegramConfig,
 	UserMailConfig,
 } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
 
 export const EVENT_CONFIG: IEventMapping = {
 	events_chat: {
@@ -30,6 +30,15 @@ export const EVENT_CONFIG: IEventMapping = {
 			simple_chat: {
 				allow_file_upload: true,
 				allow_voice_input: false,
+				voice: {
+					mode: "disabled",
+					invoke: "manual",
+					variant: "conservative",
+					size: "md",
+					playback: "text",
+					max_duration: 300,
+					auto_stop: false,
+				},
 				history_elements: 5,
 				tools: [],
 				default_tools: [],
@@ -177,8 +186,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 			rest: {
 				availability: "remote",
-				description:
-					"Multi-endpoint REST API server with auth - remote only",
+				description: "Multi-endpoint REST API server with auth - remote only",
 			},
 			mcp: {
 				availability: "remote",

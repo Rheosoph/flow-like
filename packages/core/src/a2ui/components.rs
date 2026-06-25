@@ -754,8 +754,27 @@ pub struct VoiceInputProps {
     pub disabled: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<BoundValue>,
+    /// Deprecated alias for `variant` ("waveform" | "bars").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visualizer: Option<BoundValue>,
+    /// Visual style: "conservative" | "waveform" | "orb" | "vortex" | "shader".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<BoundValue>,
+    /// Element size: "sm" | "md" | "lg".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<BoundValue>,
+    /// Capture mode: "record" (send audio) | "stt" (send transcript text).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<BoundValue>,
+    /// Invoke mode: "manual" (click) | "hold" (press-and-hold) | "auto" (pause detection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invoke: Option<BoundValue>,
+    /// Base accent color (CSS color string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<BoundValue>,
+    /// Accent color while recording (CSS color string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_color: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
