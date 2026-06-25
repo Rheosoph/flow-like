@@ -15,10 +15,24 @@ function splitLines(value: string): string[] {
 	return lines;
 }
 
+const isSpaceOrTab = (code: number) => code === 32 || code === 9;
+const isNewline = (code: number) => code === 10;
+
+// Linear trailing-character trim, avoiding the backtracking of an anchored
+// `+$` regex on large, repetitive inputs (polynomial-regex ReDoS).
+function trimTrailingWhere(
+	value: string,
+	match: (code: number) => boolean,
+): string {
+	let end = value.length;
+	while (end > 0 && match(value.charCodeAt(end - 1))) end--;
+	return end === value.length ? value : value.slice(0, end);
+}
+
 export function trimTrailingLines(value: string): string {
 	return value
 		.split("\n")
-		.map((line) => line.replace(/[ \t]+$/, ""))
+		.map((line) => trimTrailingWhere(line, isSpaceOrTab))
 		.join("\n");
 }
 
@@ -30,14 +44,30 @@ function wordSegments(
 	const parts = diffWordsWithSpace(original, modified, { ignoreCase });
 	const left: DiffSegment[] = [];
 	const right: DiffSegment[] = [];
+	let oldPos = 0;
+	let newPos = 0;
+	// Slice from the source strings instead of using `part.value`: with
+	// `ignoreCase`, common parts return one side's casing, which would
+	// otherwise overwrite the original casing on the left.
 	for (const part of parts) {
+		const len = part.value.length;
 		if (part.added) {
-			right.push({ text: part.value, kind: "added" });
+			right.push({ text: modified.slice(newPos, newPos + len), kind: "added" });
+			newPos += len;
 		} else if (part.removed) {
-			left.push({ text: part.value, kind: "removed" });
+			left.push({
+				text: original.slice(oldPos, oldPos + len),
+				kind: "removed",
+			});
+			oldPos += len;
 		} else {
-			left.push({ text: part.value, kind: "common" });
-			right.push({ text: part.value, kind: "common" });
+			left.push({ text: original.slice(oldPos, oldPos + len), kind: "common" });
+			right.push({
+				text: modified.slice(newPos, newPos + len),
+				kind: "common",
+			});
+			oldPos += len;
+			newPos += len;
 		}
 	}
 	return { left, right };
@@ -71,10 +101,9 @@ export function computeDiff(
 		? trimTrailingLines(modifiedInput)
 		: modifiedInput;
 
-	const changes = diffLines(original, modified, {
-		ignoreWhitespace,
-		ignoreCase,
-	});
+	// `diffLines` has no `ignoreCase` option in diff@8; case-insensitivity is
+	// applied at the word level below via `wordSegments`.
+	const changes = diffLines(original, modified, { ignoreWhitespace });
 
 	const rows: DiffRow[] = [];
 	let leftNo = 1;
@@ -213,7 +242,7 @@ export function splitMarkdownBlocks(value: string): string[] {
 	let fence: string | null = null;
 
 	const flush = () => {
-		const text = current.join("\n").replace(/\n+$/, "");
+		const text = trimTrailingWhere(current.join("\n"), isNewline);
 		if (text.trim().length > 0) blocks.push(text);
 		current = [];
 	};

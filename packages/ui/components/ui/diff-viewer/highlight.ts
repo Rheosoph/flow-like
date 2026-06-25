@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { BundledLanguage } from "shiki";
 import type { DiffSegment } from "./types";
 
 export interface HighlightToken {
@@ -45,7 +46,7 @@ export function useHighlightedLines(
 		import("shiki")
 			.then(({ codeToTokens }) =>
 				codeToTokens(code, {
-					lang: normalized,
+					lang: normalized as BundledLanguage,
 					theme: theme === "dark" ? "github-dark" : "github-light",
 				}),
 			)

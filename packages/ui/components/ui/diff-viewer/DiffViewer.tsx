@@ -79,11 +79,9 @@ const WORD_DEL = "bg-red-500/30 dark:bg-red-400/25 rounded-[2px]";
 function looksLikeUrl(value: string): boolean {
 	const trimmed = value.trim();
 	if (!trimmed || /\s/.test(trimmed)) return false;
-	if (/^(https?:|data:|blob:|asset:|file:|storage:)/i.test(trimmed))
-		return true;
-	return /^[\w./-]+\.(pdf|docx?|xlsx?|pptx?|csv|html?|md|txt|png|jpe?g|gif|svg|webp)$/i.test(
-		trimmed,
-	);
+	// Require an explicit protocol or absolute path so bare filenames like
+	// "README.md" are diffed as text instead of loaded into an iframe.
+	return /^(https?:|data:|blob:|asset:|file:|storage:|\/)/i.test(trimmed);
 }
 
 function isJson(value: string): boolean {
@@ -155,6 +153,8 @@ export function DiffViewer({
 	useEffect(() => setWordWrap(wordWrapProp), [wordWrapProp]);
 	useEffect(() => setCollapse(collapseProp), [collapseProp]);
 	useEffect(() => setMdMode(markdownModeProp), [markdownModeProp]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset expanded gaps when the diffed content changes
+	useEffect(() => setExpandedGaps(new Set()), [original, modified]);
 
 	const effectiveKind = resolveKind(kind, original, modified, language);
 
@@ -466,6 +466,7 @@ export function DiffViewer({
 							<iframe
 								src={side.url}
 								title={side.label}
+								sandbox="allow-scripts allow-same-origin allow-popups"
 								className="h-full min-h-[20rem] w-full border-0"
 							/>
 						</div>
