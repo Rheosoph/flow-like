@@ -29,6 +29,11 @@ pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>,
             .await?;
 
         let Some(version_record) = version_record else {
+            tracing::warn!(
+                package_id = %pkg.package_id,
+                version = %pkg.version,
+                "app catalog: pinned WASM package version not found; skipping its nodes"
+            );
             continue;
         };
 

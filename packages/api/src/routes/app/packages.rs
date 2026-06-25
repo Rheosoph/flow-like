@@ -12,6 +12,7 @@ use crate::{
     ensure_permission,
     entity::{
         app_package, membership, meta, sea_orm_active_enums::WasmPackageVisibility, wasm_package,
+        wasm_package_version,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -441,15 +442,33 @@ pub async fn get_patch_info(
         .await?
         .ok_or(ApiError::not_found("Package not in app"))?;
 
-    let wasm_pkg = wasm_package::Entity::find_by_id(&package_id)
+    // Return the node definitions for the PINNED version, not the package's
+    // latest snapshot (wasm_package.nodes). Patching a board against the latest
+    // nodes when the app is pinned to an older version would apply the wrong
+    // pin signatures. This mirrors how execution (wasm_resolve.rs) and the app
+    // catalog (wasm_catalog.rs) resolve per-version node definitions.
+    let version_record = wasm_package_version::Entity::find()
+        .filter(wasm_package_version::Column::PackageId.eq(&package_id))
+        .filter(wasm_package_version::Column::Version.eq(&app_pkg.version))
         .one(&state.db)
-        .await?
-        .ok_or(ApiError::not_found("Package not found"))?;
+        .await?;
+
+    let nodes = match version_record {
+        Some(record) => record.nodes,
+        None => {
+            tracing::warn!(
+                package_id = %package_id,
+                version = %app_pkg.version,
+                "patch-info: pinned WASM package version not found; returning empty node set"
+            );
+            serde_json::json!([])
+        }
+    };
 
     Ok(Json(PatchInfo {
         package_id,
         version: app_pkg.version,
-        nodes: wasm_pkg.nodes,
+        nodes,
     }))
 }
 
