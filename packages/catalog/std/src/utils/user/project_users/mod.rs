@@ -837,10 +837,11 @@ fn add_users_output(node: &mut Node) {
         "users",
         "Users",
         "Matching project users.",
-        VariableType::Generic,
+        VariableType::Struct,
     )
     .set_value_type(ValueType::Array)
-    .set_schema::<Vec<ProjectUser>>();
+    .set_schema::<ProjectUser>()
+    .set_options(PinOptions::new().set_enforce_schema(true).build());
     node.add_output_pin(
         "count",
         "Count",
