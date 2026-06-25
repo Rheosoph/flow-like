@@ -41,6 +41,7 @@ pub enum A2UIComponentType {
     TableRow(TableRowProps),
     TableCell(TableCellProps),
     FilePreview(FilePreviewProps),
+    DiffView(DiffViewProps),
     BoundingBoxOverlay(BoundingBoxOverlayProps),
 
     // Interactive components
@@ -1536,4 +1537,52 @@ pub struct FilePreviewProps {
     /// Show download button
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_download: Option<BoundValue>,
+}
+
+/// Diff viewer component for text, code, markdown and documents
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffViewProps {
+    /// Left / old content, or a document URL
+    pub original: BoundValue,
+    /// Right / new content, or a document URL
+    pub modified: BoundValue,
+    /// Layout: "split" | "unified" | "inline"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<BoundValue>,
+    /// Content kind: "auto" | "text" | "code" | "markdown" | "json" | "document"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<BoundValue>,
+    /// Syntax language for code/json (e.g. "typescript", "rust")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<BoundValue>,
+    /// Markdown rendering: "source" | "rendered"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown_mode: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_line_numbers: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_wrap: Option<BoundValue>,
+    /// Intra-line word-level highlighting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_level: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collapse_unchanged: Option<BoundValue>,
+    /// Context lines kept around changes when collapsing
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_lines: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_stats: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified_label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_whitespace: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_case: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trim_trailing_whitespace: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swap_sides: Option<BoundValue>,
 }

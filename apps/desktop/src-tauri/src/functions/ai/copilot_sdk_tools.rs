@@ -1744,7 +1744,7 @@ CHILDREN FORMAT:
 
 AVAILABLE COMPONENTS:
 Layout: column, row, grid, stack, scrollArea, box, center, spacer
-Display: text, image, icon, badge, avatar, progress, spinner, divider, markdown
+Display: text, image, icon, badge, avatar, progress, spinner, divider, markdown, diffView
 Interactive: button, textField, select, slider, checkbox, switch, link
 Container: card, modal, tabs, accordion, drawer, tooltip
 
@@ -1933,6 +1933,26 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         ]),
         "lottie" => Some(&["src", "autoplay", "loop", "speed", "width", "height"]),
         "markdown" => Some(&["content", "allowHtml"]),
+        "diffView" => Some(&[
+            "original",
+            "modified",
+            "mode",
+            "kind",
+            "language",
+            "markdownMode",
+            "showLineNumbers",
+            "wordWrap",
+            "wordLevel",
+            "collapseUnchanged",
+            "contextLines",
+            "showStats",
+            "originalLabel",
+            "modifiedLabel",
+            "ignoreWhitespace",
+            "ignoreCase",
+            "trimTrailingWhitespace",
+            "swapSides",
+        ]),
         "divider" => Some(&["orientation", "thickness", "color"]),
         "badge" => Some(&["content", "text", "variant", "color"]),
         "avatar" => Some(&["src", "fallback", "size"]),
@@ -2260,6 +2280,7 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "video" => &["src"],
         "lottie" => &["src"],
         "markdown" => &["content"],
+        "diffView" => &["original", "modified"],
         "badge" => &["content"],
         "progress" => &["value"],
         "button" => &["label"],

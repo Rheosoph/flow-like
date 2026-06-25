@@ -27,6 +27,7 @@ export * from "./dynamic-image";
 export * from "./empty-state";
 export * from "./event-card";
 export * from "./event-form";
+export * from "./diff-viewer";
 export * from "./file-previewer";
 export * from "./flow-background";
 // graph components use sigma.js (WebGL) — import from ./graph directly with ssr:false

@@ -37,6 +37,7 @@ pub mod set_badge_content;
 pub mod set_button_label;
 pub mod set_chart_layout;
 pub mod set_chart_style;
+pub mod set_diff_content;
 pub mod set_element_action;
 pub mod set_element_disabled;
 pub mod set_element_loading;

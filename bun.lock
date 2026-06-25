@@ -559,6 +559,7 @@
         "date-fns": "^4.1.0",
         "dexie": "^4.0.11",
         "dexie-react-hooks": "^1.1.7",
+        "diff": "8.0.3",
         "dompurify": "^3.3.1",
         "dropdown-menu": "^0.1.1",
         "embla-carousel-react": "^8.5.2",
@@ -619,6 +620,7 @@
         "remark-math": "^6.0.0",
         "remark-rehype": "^11.1.1",
         "shadcn-ui": "latest",
+        "shiki": "^1.26.1",
         "sigma": "^3.0.2",
         "sonner": "^1.7.1",
         "tailwind-merge": "^3.3.1",
@@ -4764,7 +4766,7 @@
 
     "tar-stream": ["tar-stream@3.1.7", "", { "dependencies": { "b4a": "^1.6.4", "fast-fifo": "^1.2.0", "streamx": "^2.15.0" } }, "sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ=="],
 
-    "tauri-plugin-remote-push-api": ["tauri-plugin-remote-push-api@github:Rheosoph/tauri-plugin-remote-push#7bdd8df", { "dependencies": { "@tauri-apps/api": ">=2.0.0-beta.6" } }, "Rheosoph-tauri-plugin-remote-push-7bdd8df"],
+    "tauri-plugin-remote-push-api": ["tauri-plugin-remote-push-api@github:Rheosoph/tauri-plugin-remote-push#7bdd8df", { "dependencies": { "@tauri-apps/api": ">=2.0.0-beta.6" } }, "Rheosoph-tauri-plugin-remote-push-7bdd8df", "sha512-l6ojw/c2FJeGry6meNLaSipdDmG9XZncqQ06jT+Nks5ElmOYJMoXrey6OkXxJHTjMP8AXdyMlt17b8XHitAIHQ=="],
 
     "terser": ["terser@5.42.0", "", { "dependencies": { "@jridgewell/source-map": "^0.3.3", "acorn": "^8.14.0", "commander": "^2.20.0", "source-map-support": "~0.5.20" }, "bin": { "terser": "bin/terser" } }, "sha512-UYCvU9YQW2f/Vwl+P0GfhxJxbUGLwd+5QrrGgLajzWAtC/23AX0vcise32kkP7Eu0Wu9VlzzHAXkLObgjQfFlQ=="],
 

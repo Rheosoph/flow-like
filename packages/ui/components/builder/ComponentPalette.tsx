@@ -9,6 +9,7 @@ import {
 	Circle,
 	Columns3,
 	CreditCard,
+	FileDiff,
 	Image,
 	ImagePlus,
 	Layers,
@@ -269,6 +270,14 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Image,
 		category: "Display",
 		description: "Preview files (PDF, images, etc)",
+	},
+	{
+		type: "diffView",
+		label: "Diff View",
+		icon: FileDiff,
+		category: "Display",
+		description:
+			"Side-by-side, unified or inline diff for text, code, markdown & documents",
 	},
 	{
 		type: "nivoChart",
