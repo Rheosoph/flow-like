@@ -21,19 +21,22 @@ import type { BoardCommand } from "../../lib/schema/flow/copilot";
 
 interface PendingCommandsViewProps {
 	commands: BoardCommand[];
-	onExecute: () => void;
-	onExecuteSingle: (index: number) => void;
+	flowscriptReady?: boolean;
+	onExecute: () => void | Promise<void>;
+	onExecuteSingle: (index: number) => void | Promise<void>;
 	onDismiss: () => void;
 }
 
 export const PendingCommandsView = memo(function PendingCommandsView({
 	commands,
+	flowscriptReady = false,
 	onExecute,
 	onExecuteSingle,
 	onDismiss,
 }: PendingCommandsViewProps) {
 	const [expanded, setExpanded] = useState(false);
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+	const hasCommandDetails = commands.length > 0;
 
 	const toggleExpanded = useCallback(() => setExpanded((prev) => !prev), []);
 
@@ -48,7 +51,7 @@ export const PendingCommandsView = memo(function PendingCommandsView({
 		[commands],
 	);
 
-	if (commands.length === 0) return null;
+	if (commands.length === 0 && !flowscriptReady) return null;
 
 	return (
 		<motion.div
@@ -84,30 +87,33 @@ export const PendingCommandsView = memo(function PendingCommandsView({
 									Ready to Apply
 								</div>
 								<div className="text-[11px] text-muted-foreground">
-									{commands.length} change{commands.length > 1 ? "s" : ""}{" "}
-									pending
+									{flowscriptReady && commands.length === 0
+										? "FlowScript workspace pending"
+										: `${commands.length} change${commands.length > 1 ? "s" : ""} pending`}
 								</div>
 							</div>
 						</div>
 
 						<div className="flex items-center gap-1.5">
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button
-										size="sm"
-										variant="ghost"
-										className="h-8 w-8 p-0 rounded-lg hover:bg-background/60"
-										onClick={toggleExpanded}
-									>
-										<ChevronDown
-											className={`w-4 h-4 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
-										/>
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent side="top" className="text-xs">
-									{expanded ? "Collapse" : "Expand"} details
-								</TooltipContent>
-							</Tooltip>
+							{hasCommandDetails && (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											size="sm"
+											variant="ghost"
+											className="h-8 w-8 p-0 rounded-lg hover:bg-background/60"
+											onClick={toggleExpanded}
+										>
+											<ChevronDown
+												className={`w-4 h-4 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+											/>
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent side="top" className="text-xs">
+										{expanded ? "Collapse" : "Expand"} details
+									</TooltipContent>
+								</Tooltip>
+							)}
 
 							<Button
 								size="sm"
@@ -138,6 +144,16 @@ export const PendingCommandsView = memo(function PendingCommandsView({
 
 					{/* Command type badges */}
 					<div className="flex flex-wrap gap-1.5">
+						{flowscriptReady && (
+							<motion.span
+								initial={{ scale: 0 }}
+								animate={{ scale: 1 }}
+								className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20"
+							>
+								<PencilIcon className="w-3 h-3" />
+								FlowScript
+							</motion.span>
+						)}
 						{commandCounts.add > 0 && (
 							<motion.span
 								initial={{ scale: 0 }}
@@ -190,7 +206,7 @@ export const PendingCommandsView = memo(function PendingCommandsView({
 
 			{/* Expanded command list */}
 			<AnimatePresence>
-				{expanded && (
+				{expanded && hasCommandDetails && (
 					<motion.div
 						initial={{ height: 0, opacity: 0 }}
 						animate={{ height: "auto", opacity: 1 }}

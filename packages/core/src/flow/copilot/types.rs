@@ -402,7 +402,17 @@ pub enum BoardCommand {
     // Layer/grouping management
     CreateLayer {
         name: String,
+        /// Reference ID like "$0" for same-batch references. FlowScript reconcile uses this when
+        /// creating a new function layer and placing its body nodes inside it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ref_id: Option<String>,
+        /// Layer kind. Omitted/default means "Collapsed"; FlowScript functions use "Function".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_type: Option<String>,
+        #[serde(default)]
         node_ids: Vec<String>, // Nodes to include in the layer
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pins: Option<Vec<PlaceholderPinDef>>,
         position: Option<NodePosition>,
         color: Option<String>,
         /// Parent layer ID. If None, creates at root or current layer.

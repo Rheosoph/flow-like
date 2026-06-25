@@ -1826,8 +1826,7 @@ pub async fn execute_agent_streaming(
                     let args_map = arguments.as_object().cloned();
                     let mut params = CallToolRequestParams::new(name.clone());
                     params.arguments = args_map;
-                    match mcp_peer.call_tool(params).await
-                    {
+                    match mcp_peer.call_tool(params).await {
                         Ok(result) => {
                             context.log_message(
                                 &format!(

@@ -27,7 +27,9 @@ use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
 use crate::flow::board::Board;
-use crate::flow::copilot::{BoardCommand, NodeMetadata, NodePosition, PinMetadata};
+use crate::flow::copilot::{
+    BoardCommand, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, node_to_metadata,
+};
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
 use crate::flow::variable::VariableType;
@@ -73,6 +75,7 @@ fn reconcile_inner(
 ) -> ReconcileResult {
     let mut result = ReconcileResult::default();
     let board_ast = super::lower_to_ast(existing);
+    let variable_refs = VariableRefLookup::from_board_and_ast(existing, new);
 
     let variable_changes = reconcile_variables(&board_ast, new);
     result.commands.extend(variable_changes.commands);
@@ -92,7 +95,7 @@ fn reconcile_inner(
             continue;
         };
         for arg in &call.args {
-            let Expr::Literal(lit) = &arg.value else {
+            let Some(mut new_value) = literal_expr_to_value(&arg.value) else {
                 // References / nested calls describe wiring, which v1 does not rewrite.
                 continue;
             };
@@ -103,7 +106,7 @@ fn reconcile_inner(
                 ));
                 continue;
             };
-            let new_value = literal_to_value(lit);
+            normalize_variable_ref_value_for_pin(&mut new_value, &pin.name, &variable_refs);
             let current = pin
                 .default_value
                 .as_deref()
@@ -124,7 +127,7 @@ fn reconcile_inner(
     //    "text-visible" from the board's own lowered AST so sugared/inlined nodes (reroutes,
     //    struct_make, pure helpers) are never removed just for lacking an anchor in the text.
     let mut visible: HashMap<String, &Call> = HashMap::new();
-    collect_calls(&board_ast, &mut visible);
+    collect_statement_calls(&board_ast, &mut visible);
     let new_anchors: HashSet<&String> = new_calls.keys().collect();
     for anchor in visible.keys() {
         if new_anchors.contains(anchor) {
@@ -202,12 +205,6 @@ fn reconcile_variables(existing: &BoardAst, new: &BoardAst) -> ReconcileResult {
                 if let Some(command) = update_variable_command(existing, new, old, var) {
                     result.commands.push(command);
                 }
-            }
-            None if var.anchor.is_some() => {
-                result.diagnostics.push(format!(
-                    "variable anchor {} no longer resolves to a board variable; skipped",
-                    var.anchor.as_deref().unwrap_or_default()
-                ));
             }
             None => {
                 result.commands.push(create_variable_command(new, var));
@@ -409,6 +406,53 @@ fn variable_value_type(var: &VarDecl) -> &'static str {
     }
 }
 
+fn function_layer_pins(func: &FnDecl) -> Vec<LayerPinMetadata> {
+    func.params
+        .iter()
+        .map(|param| layer_pin_from_param(param, "Input"))
+        .chain(
+            func.returns
+                .iter()
+                .map(|param| layer_pin_from_param(param, "Output")),
+        )
+        .collect()
+}
+
+fn layer_pin_from_param(param: &Param, pin_type: &str) -> LayerPinMetadata {
+    LayerPinMetadata {
+        name: param.name.clone(),
+        friendly_name: param.name.clone(),
+        data_type: type_ref_data_type(&param.ty).to_string(),
+        value_type: type_ref_value_type(&param.ty).to_string(),
+        pin_type: pin_type.to_string(),
+    }
+}
+
+fn type_ref_data_type(ty: &TypeRef) -> &'static str {
+    match ty.base.as_str() {
+        "exec" | "Execution" => "Execution",
+        "string" | "String" => "String",
+        "int" | "Integer" => "Integer",
+        "float" | "Float" => "Float",
+        "bool" | "Boolean" => "Boolean",
+        "Date" => "Date",
+        "Path" | "PathBuf" => "PathBuf",
+        "any" | "Generic" => "Generic",
+        "Struct" => "Struct",
+        "bytes" | "Byte" => "Byte",
+        _ => "Struct",
+    }
+}
+
+fn type_ref_value_type(ty: &TypeRef) -> &'static str {
+    match ty.container {
+        Container::Normal => "Normal",
+        Container::Array => "Array",
+        Container::Map => "HashMap",
+        Container::Set => "HashSet",
+    }
+}
+
 fn visible_variable_schema(ast: &BoardAst, var: &VarDecl) -> Option<String> {
     let schema = var.schema.as_deref()?;
     let interface_name = flow_like_ast::interface_name_for_schema(&ast.interfaces, schema)?;
@@ -476,6 +520,96 @@ fn literal_expr_to_value(expr: &Expr) -> Option<flow_like_types::Value> {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct VariableRefLookup {
+    by_ref: HashMap<String, String>,
+}
+
+impl VariableRefLookup {
+    fn from_board(board: &Board) -> Self {
+        let mut lookup = Self::default();
+        for variable in board.variables.values() {
+            lookup.insert(&variable.id, &variable.name);
+        }
+        for layer in board.layers.values() {
+            for variable in layer.variables.values() {
+                lookup.insert(&variable.id, &variable.name);
+            }
+        }
+        lookup
+    }
+
+    fn from_board_and_ast(board: &Board, ast: &BoardAst) -> Self {
+        let mut lookup = Self::from_board(board);
+        for variable in &ast.variables {
+            let id = variable_id_for_decl_against_board(board, variable);
+            lookup.insert(&id, &variable.name);
+        }
+        lookup
+    }
+
+    fn insert(&mut self, id: &str, name: &str) {
+        self.by_ref.insert(id.to_string(), id.to_string());
+        self.by_ref.insert(name.to_string(), id.to_string());
+        self.by_ref.insert(to_camel_case(name), id.to_string());
+    }
+
+    fn resolve(&self, value: &str) -> Option<String> {
+        self.by_ref
+            .get(value)
+            .cloned()
+            .or_else(|| self.by_ref.get(&to_camel_case(value)).cloned())
+    }
+}
+
+fn variable_id_for_decl_against_board(board: &Board, var: &VarDecl) -> String {
+    if let Some(anchor) = var.anchor.as_deref() {
+        return anchor.to_string();
+    }
+
+    if let Some(existing) = board
+        .variables
+        .values()
+        .find(|existing| existing.name == var.name)
+    {
+        return existing.id.clone();
+    }
+
+    for layer in board.layers.values() {
+        if let Some(existing) = layer
+            .variables
+            .values()
+            .find(|existing| existing.name == var.name)
+        {
+            return existing.id.clone();
+        }
+    }
+
+    variable_id_for_decl(var)
+}
+
+fn is_variable_ref_pin_name(name: &str) -> bool {
+    pin_name_matches(name, "var_ref") || pin_name_matches(name, "varRef")
+}
+
+fn normalize_variable_ref_value_for_pin(
+    value: &mut flow_like_types::Value,
+    pin_name: &str,
+    lookup: &VariableRefLookup,
+) {
+    if !is_variable_ref_pin_name(pin_name) {
+        return;
+    }
+
+    let flow_like_types::Value::String(raw) = value else {
+        return;
+    };
+
+    if let Some(variable_id) = lookup.resolve(raw) {
+        *raw = variable_id;
+    }
+}
+
 fn find_input_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
     node.pins
         .values()
@@ -498,6 +632,15 @@ fn node_pin_name_matches(pin: &Pin, requested: &str) -> bool {
 
 fn metadata_pin_name_matches(pin: &PinMetadata, requested: &str) -> bool {
     pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
+}
+
+fn call_matches_node(call: &Call, node: &Node) -> bool {
+    if !call.node_type.trim().is_empty() {
+        return call.node_type == node.name;
+    }
+
+    pin_name_matches(&node.name, &call.display)
+        || pin_name_matches(&node.friendly_name, &call.display)
 }
 
 fn is_exec_pin(pin: &Pin) -> bool {
@@ -640,13 +783,17 @@ fn default_exec_output_by_policy(
             {
                 return selector(many);
             }
-            None
+            select_exec_done(many)
         }
     }
 }
 
 fn select_exec_success(candidates: &[ExecPinCandidate]) -> Option<String> {
     select_named_exec_pin(candidates, &["exec_success"])
+}
+
+fn select_exec_done(candidates: &[ExecPinCandidate]) -> Option<String> {
+    select_named_exec_pin(candidates, &["exec_done", "done"])
 }
 
 fn select_named_exec_pin(candidates: &[ExecPinCandidate], names: &[&str]) -> Option<String> {
@@ -658,10 +805,24 @@ fn select_named_exec_pin(candidates: &[ExecPinCandidate], names: &[&str]) -> Opt
     })
 }
 
+fn is_streaming_data_output_pin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "chunk" | "token" | "delta" | "stream_chunk" | "streamed_chunk"
+    )
+}
+
 #[derive(Debug, Clone)]
 enum NodeEntity {
     Existing(String),
-    New { ref_id: String, meta: NodeMetadata },
+    New {
+        ref_id: String,
+        meta: NodeMetadata,
+    },
+    Layer {
+        ref_id: String,
+        pins: Vec<LayerPinMetadata>,
+    },
 }
 
 impl NodeEntity {
@@ -669,8 +830,18 @@ impl NodeEntity {
         match self {
             Self::Existing(id) => id.clone(),
             Self::New { ref_id, .. } => ref_id.clone(),
+            Self::Layer { ref_id, .. } => ref_id.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct LayerPinMetadata {
+    name: String,
+    friendly_name: String,
+    data_type: String,
+    value_type: String,
+    pin_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -696,6 +867,7 @@ impl ExecCursor {
 struct PlannedStmt {
     entity: NodeEntity,
     next_exec_pin: Option<String>,
+    input_sources: Vec<ValueSource>,
 }
 
 impl PlannedStmt {
@@ -703,6 +875,7 @@ impl PlannedStmt {
         Self {
             entity,
             next_exec_pin: None,
+            input_sources: Vec::new(),
         }
     }
 
@@ -710,6 +883,15 @@ impl PlannedStmt {
         Self {
             entity,
             next_exec_pin,
+            input_sources: Vec::new(),
+        }
+    }
+
+    fn with_input_sources(entity: NodeEntity, input_sources: Vec<ValueSource>) -> Self {
+        Self {
+            entity,
+            next_exec_pin: None,
+            input_sources,
         }
     }
 
@@ -847,6 +1029,19 @@ impl<'a> BoardIndex<'a> {
             })
             .collect()
     }
+
+    fn data_source_for_input(&self, node: &Node, input_pin_name: &str) -> Option<ValueSource> {
+        let input = find_input_pin(node, input_pin_name)?;
+        if is_exec_pin(input) {
+            return None;
+        }
+        let source_pin_id = input.depends_on.iter().next()?;
+        let (source_node, source_pin) = self.pin_owner.get(source_pin_id.as_str())?;
+        Some(ValueSource {
+            node: NodeEntity::Existing(source_node.id.clone()),
+            output_pin: Some(source_pin.name.clone()),
+        })
+    }
 }
 
 struct StructuralPlanner<'a> {
@@ -859,6 +1054,9 @@ struct StructuralPlanner<'a> {
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
     symbols: Vec<HashMap<String, SymbolValue>>,
+    variable_refs: VariableRefLookup,
+    function_return_targets: Vec<(NodeEntity, Vec<String>)>,
+    unresolved_variable_refs: HashSet<String>,
     next_ref: usize,
     next_position: usize,
 }
@@ -875,6 +1073,9 @@ impl<'a> StructuralPlanner<'a> {
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
             symbols: Vec::new(),
+            variable_refs: VariableRefLookup::from_board(existing),
+            function_return_targets: Vec::new(),
+            unresolved_variable_refs: HashSet::new(),
             next_ref: 0,
             next_position: 0,
         }
@@ -917,9 +1118,19 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn plan_function(&mut self, func: &FnDecl) {
-        let target_layer = func.anchor.clone();
+        let layer = self.function_layer_entity(func);
+        let target_layer = Some(layer.node_ref());
         self.push_scope();
+        self.seed_function_params(&func.params, &layer);
+        self.function_return_targets.push((
+            layer.clone(),
+            func.returns
+                .iter()
+                .map(|param| param.name.clone())
+                .collect(),
+        ));
         self.plan_block(&func.body, None, target_layer);
+        self.function_return_targets.pop();
         self.pop_scope();
     }
 
@@ -952,8 +1163,25 @@ impl<'a> StructuralPlanner<'a> {
 
             if accepts_exec {
                 if let Some(previous) = &previous_exec {
-                    if self.connect_exec(previous, &current.entity, inserted_since_existing) {
+                    let preferred_output = self.preferred_exec_output_for_input_sources(
+                        &previous.entity,
+                        &current.input_sources,
+                    );
+                    let previous = match preferred_output {
+                        Some(output_pin) => {
+                            ExecCursor::with_output(previous.entity.clone(), Some(output_pin))
+                        }
+                        None => previous.clone(),
+                    };
+                    let used_branch_output = previous.output_pin.is_some()
+                        && self.entity_exec_output_pin(&previous.entity) != previous.output_pin;
+                    if self.connect_exec(&previous, &current.entity, inserted_since_existing)
+                        && !used_branch_output
+                    {
                         inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
+                    }
+                    if used_branch_output {
+                        continue;
                     }
                 } else {
                     inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
@@ -979,40 +1207,63 @@ impl<'a> StructuralPlanner<'a> {
     ) -> Option<PlannedStmt> {
         match stmt {
             Stmt::Let { name, call, anchor } => {
-                let entity = self.plan_call_statement(call, anchor.as_deref(), target_layer);
-                if let Some(entity) = &entity {
-                    self.insert_symbol(
-                        name.clone(),
-                        SymbolValue::Source(ValueSource {
-                            node: entity.clone(),
-                            output_pin: None,
-                        }),
-                    );
-                }
-                entity.map(PlannedStmt::new)
+                let planned_call =
+                    self.plan_call_statement_with_sources(call, anchor.as_deref(), target_layer);
+                let (entity, input_sources) = planned_call?;
+                self.insert_symbol(
+                    name.clone(),
+                    SymbolValue::Source(ValueSource {
+                        node: entity.clone(),
+                        output_pin: None,
+                    }),
+                );
+                Some(PlannedStmt::with_input_sources(entity, input_sources))
             }
-            Stmt::Call { call, anchor } => self
-                .plan_call_statement(call, anchor.as_deref(), target_layer)
-                .map(PlannedStmt::new),
+            Stmt::Call { call, anchor } => {
+                let (entity, input_sources) =
+                    self.plan_call_statement_with_sources(call, anchor.as_deref(), target_layer)?;
+                Some(PlannedStmt::with_input_sources(entity, input_sources))
+            }
             Stmt::Assign {
                 target,
                 value,
                 anchor,
             } => {
                 if let Some(anchor) = anchor {
-                    let entity = NodeEntity::Existing(anchor.clone());
-                    if let Some(output_pin) = assigned_call_output_pin(value)
-                        && find_board_node(self.existing, anchor).is_some()
-                    {
+                    if let Some(variable_id) = self.variable_id_for_assignment_target(target) {
+                        let entity = NodeEntity::Existing(anchor.clone());
+                        self.plan_existing_variable_set_node(
+                            &entity,
+                            &variable_id,
+                            value,
+                            target_layer,
+                        );
+                        self.assign_symbol(
+                            target.clone(),
+                            SymbolValue::VariableRef {
+                                variable_id: variable_id.clone(),
+                            },
+                        );
+                        return Some(PlannedStmt::new(entity));
+                    }
+
+                    if let Some((call, output_pin)) = assigned_call_expr(value) {
+                        let entity = self
+                            .plan_call_statement(call, Some(anchor), target_layer)
+                            .unwrap_or_else(|| NodeEntity::Existing(anchor.clone()));
+                        let output_pin = output_pin
+                            .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)));
                         self.insert_symbol(
                             target.clone(),
                             SymbolValue::Source(ValueSource {
                                 node: entity.clone(),
-                                output_pin: Some(output_pin.to_string()),
+                                output_pin,
                             }),
                         );
+                        return Some(PlannedStmt::new(entity));
                     }
-                    return Some(PlannedStmt::new(entity));
+
+                    return Some(PlannedStmt::new(NodeEntity::Existing(anchor.clone())));
                 }
 
                 if let Some(variable_id) = self.variable_id_for_assignment_target(target) {
@@ -1051,19 +1302,23 @@ impl<'a> StructuralPlanner<'a> {
                 anchor,
             } => {
                 if let Some(anchor) = anchor {
-                    let entity = NodeEntity::Existing(anchor.clone());
-                    if let Some(output_pin) = assigned_call_output_pin(value)
-                        && find_board_node(self.existing, anchor).is_some()
-                    {
+                    if let Some((call, output_pin)) = assigned_call_expr(value) {
+                        let entity = self
+                            .plan_call_statement(call, Some(anchor), target_layer)
+                            .unwrap_or_else(|| NodeEntity::Existing(anchor.clone()));
+                        let output_pin = output_pin
+                            .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)));
                         self.insert_symbol(
                             name.clone(),
                             SymbolValue::Source(ValueSource {
                                 node: entity.clone(),
-                                output_pin: Some(output_pin.to_string()),
+                                output_pin,
                             }),
                         );
+                        return Some(PlannedStmt::new(entity));
                     }
-                    return Some(PlannedStmt::new(entity));
+
+                    return Some(PlannedStmt::new(NodeEntity::Existing(anchor.clone())));
                 }
 
                 if promote_local_alias {
@@ -1187,7 +1442,102 @@ impl<'a> StructuralPlanner<'a> {
                 self.plan_event(event);
                 None
             }
-            Stmt::Local(_) | Stmt::Return { .. } | Stmt::Comment(_) => None,
+            Stmt::Return { values } => {
+                self.plan_return(values, target_layer);
+                None
+            }
+            Stmt::Local(_) | Stmt::Comment(_) => None,
+        }
+    }
+
+    fn function_layer_entity(&mut self, func: &FnDecl) -> NodeEntity {
+        if let Some(anchor) = &func.anchor {
+            return NodeEntity::Existing(anchor.clone());
+        }
+
+        let ref_id = format!("${}", self.next_ref);
+        self.next_ref += 1;
+        let pins = function_layer_pins(func);
+        let position = self.next_position();
+        self.add_commands.push(BoardCommand::CreateLayer {
+            name: func.name.clone(),
+            ref_id: Some(ref_id.clone()),
+            layer_type: Some("Function".to_string()),
+            node_ids: Vec::new(),
+            pins: Some(
+                pins.iter()
+                    .map(|pin| PlaceholderPinDef {
+                        name: pin.name.clone(),
+                        friendly_name: pin.friendly_name.clone(),
+                        description: None,
+                        pin_type: pin.pin_type.clone(),
+                        data_type: pin.data_type.clone(),
+                        value_type: Some(pin.value_type.clone()),
+                    })
+                    .collect(),
+            ),
+            position: Some(position),
+            color: None,
+            target_layer: None,
+            summary: Some(format!("Create function {}", func.name)),
+        });
+        NodeEntity::Layer { ref_id, pins }
+    }
+
+    fn seed_function_params(&mut self, params: &[Param], layer: &NodeEntity) {
+        for param in params {
+            self.insert_symbol(
+                param.name.clone(),
+                SymbolValue::Source(ValueSource {
+                    node: layer.clone(),
+                    output_pin: Some(param.name.clone()),
+                }),
+            );
+        }
+    }
+
+    fn plan_return(&mut self, values: &[Expr], target_layer: Option<String>) {
+        let Some((layer, return_pins)) = self.function_return_targets.last().cloned() else {
+            if !values.is_empty() {
+                self.result.diagnostics.push(
+                    "return statements are only supported inside FlowScript functions".to_string(),
+                );
+            }
+            return;
+        };
+
+        for (index, value) in values.iter().enumerate() {
+            let Some(return_pin) = return_pins.get(index).cloned() else {
+                self.result.diagnostics.push(format!(
+                    "return value {} has no matching function return pin",
+                    index + 1
+                ));
+                continue;
+            };
+            let Some(source) = self
+                .resolve_expr(value, target_layer.clone())
+                .and_then(|symbol| self.symbol_to_source(symbol, target_layer.clone()))
+            else {
+                self.result.diagnostics.push(format!(
+                    "return value {} is not a resolvable FlowScript value",
+                    index + 1
+                ));
+                continue;
+            };
+            let Some(output_pin) = self.resolve_source_output_pin(&source) else {
+                self.result.diagnostics.push(format!(
+                    "could not choose output pin for return value {}",
+                    index + 1
+                ));
+                continue;
+            };
+            self.connect_commands.push(BoardCommand::ConnectPins {
+                from_node: source.node.node_ref(),
+                from_pin: output_pin,
+                to_node: layer.node_ref(),
+                to_pin: return_pin,
+                summary: Some("Connect FlowScript function return".to_string()),
+            });
         }
     }
 
@@ -1197,16 +1547,28 @@ impl<'a> StructuralPlanner<'a> {
         anchor: Option<&str>,
         target_layer: Option<String>,
     ) -> Option<NodeEntity> {
+        self.plan_call_statement_with_sources(call, anchor, target_layer)
+            .map(|(entity, _)| entity)
+    }
+
+    fn plan_call_statement_with_sources(
+        &mut self,
+        call: &Call,
+        anchor: Option<&str>,
+        target_layer: Option<String>,
+    ) -> Option<(NodeEntity, Vec<ValueSource>)> {
         if let Some(anchor) = anchor {
-            return find_board_node(self.existing, anchor)
-                .map(|_| NodeEntity::Existing(anchor.to_string()));
+            let meta = find_board_node(self.existing, anchor).map(node_to_metadata)?;
+            let entity = NodeEntity::Existing(anchor.to_string());
+            let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, false);
+            return Some((entity, input_sources));
         }
 
         if call.display.trim().is_empty() {
             return None;
         }
 
-        self.add_call_node(call, target_layer)
+        self.add_call_node_with_sources(call, target_layer)
     }
 
     fn add_entry_node(&mut self, display: &str) -> Option<NodeEntity> {
@@ -1225,6 +1587,15 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn add_call_node(&mut self, call: &Call, target_layer: Option<String>) -> Option<NodeEntity> {
+        self.add_call_node_with_sources(call, target_layer)
+            .map(|(entity, _)| entity)
+    }
+
+    fn add_call_node_with_sources(
+        &mut self,
+        call: &Call,
+        target_layer: Option<String>,
+    ) -> Option<(NodeEntity, Vec<ValueSource>)> {
         let meta = match self.catalog.resolve_call(call) {
             Ok(meta) => meta,
             Err(err) => {
@@ -1234,26 +1605,40 @@ impl<'a> StructuralPlanner<'a> {
         };
         let entity = self.queue_add_node(meta.clone(), target_layer.clone());
 
+        let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
+
+        Some((entity, input_sources))
+    }
+
+    fn plan_call_arguments(
+        &mut self,
+        call: &Call,
+        entity: &NodeEntity,
+        meta: &NodeMetadata,
+        target_layer: Option<String>,
+        include_direct_literals: bool,
+    ) -> Vec<ValueSource> {
+        let mut input_sources = Vec::new();
         for arg in &call.args {
             let Some(input) = metadata_input_pin(&meta, &arg.name) else {
                 self.result.diagnostics.push(format!(
-                    "new node `{}` has no input pin named `{}`; skipped that argument",
+                    "node `{}` has no input pin named `{}`; skipped that argument",
                     call.display, arg.name
                 ));
                 continue;
             };
 
-            if let Some(value) = literal_expr_to_value(&arg.value) {
-                self.update_commands.push(BoardCommand::UpdateNodePin {
-                    node_id: entity.node_ref(),
-                    pin_id: input.name.clone(),
-                    value,
-                    summary: Some(format!("Set {} on {}", input.name, meta.friendly_name)),
-                });
+            if let Some(mut value) = literal_expr_to_value(&arg.value) {
+                self.normalize_input_value(input, &mut value);
+                if include_direct_literals {
+                    self.queue_update_input(entity, input, value, meta);
+                }
                 continue;
             }
 
-            let Some(source) = self.resolve_expr(&arg.value, target_layer.clone()) else {
+            let Some(source) =
+                self.resolve_expr_for_argument(&arg.value, entity, input, target_layer.clone())
+            else {
                 self.result.diagnostics.push(format!(
                     "argument `{}` on `{}` is not a literal or resolvable node output; skipped connection",
                     arg.name, call.display
@@ -1261,13 +1646,20 @@ impl<'a> StructuralPlanner<'a> {
                 continue;
             };
             let source = match source {
-                SymbolValue::Literal(value) => {
-                    self.update_commands.push(BoardCommand::UpdateNodePin {
-                        node_id: entity.node_ref(),
-                        pin_id: input.name.clone(),
-                        value,
-                        summary: Some(format!("Set {} on {}", input.name, meta.friendly_name)),
-                    });
+                SymbolValue::Literal(mut value) => {
+                    self.normalize_input_value(input, &mut value);
+                    self.queue_update_input(entity, input, value, meta);
+                    continue;
+                }
+                SymbolValue::VariableRef { variable_id }
+                    if is_variable_ref_pin_name(&input.name) =>
+                {
+                    self.queue_update_input(
+                        entity,
+                        input,
+                        flow_like_types::Value::String(variable_id),
+                        meta,
+                    );
                     continue;
                 }
                 SymbolValue::Source(source) => source,
@@ -1293,14 +1685,147 @@ impl<'a> StructuralPlanner<'a> {
             };
             self.connect_commands.push(BoardCommand::ConnectPins {
                 from_node: source.node.node_ref(),
-                from_pin: output_pin,
+                from_pin: output_pin.clone(),
                 to_node: entity.node_ref(),
                 to_pin: input.name.clone(),
                 summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
             });
+            input_sources.push(ValueSource {
+                node: source.node,
+                output_pin: Some(output_pin),
+            });
+        }
+        input_sources
+    }
+
+    fn resolve_expr_for_argument(
+        &mut self,
+        expr: &Expr,
+        target_entity: &NodeEntity,
+        input: &PinMetadata,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        if let Some(source) = self.existing_source_for_input(target_entity, input)
+            && let Some(symbol) =
+                self.resolve_expr_using_existing_source(expr, source, target_layer.clone())
+        {
+            return Some(symbol);
         }
 
-        Some(entity)
+        self.resolve_expr(expr, target_layer)
+    }
+
+    fn existing_source_for_input(
+        &self,
+        target_entity: &NodeEntity,
+        input: &PinMetadata,
+    ) -> Option<ValueSource> {
+        let NodeEntity::Existing(node_id) = target_entity else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        self.board_index.data_source_for_input(node, &input.name)
+    }
+
+    fn resolve_expr_using_existing_source(
+        &mut self,
+        expr: &Expr,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        match expr {
+            Expr::Call(call) => self.reuse_existing_call_source(call, source, None, target_layer),
+            Expr::Field { base, pin } => {
+                if let Expr::Call(call) = base.as_ref() {
+                    self.reuse_existing_call_source(call, source, Some(pin), target_layer)
+                } else {
+                    None
+                }
+            }
+            Expr::Member { base, .. } | Expr::Index { base, .. } => {
+                self.resolve_expr_using_existing_source(base, source, target_layer)
+            }
+            _ => None,
+        }
+    }
+
+    fn reuse_existing_call_source(
+        &mut self,
+        call: &Call,
+        source: ValueSource,
+        requested_output: Option<&str>,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(source_node_id) = &source.node else {
+            return None;
+        };
+        let source_node = find_board_node(self.existing, source_node_id)?;
+        let meta = match self.catalog.resolve_call(call) {
+            Ok(meta) if meta.name == source_node.name => meta,
+            Ok(_) => return None,
+            Err(_) if call_matches_node(call, source_node) => node_to_metadata(source_node),
+            Err(_) => return None,
+        };
+        let entity = NodeEntity::Existing(source_node_id.clone());
+        self.plan_call_arguments(call, &entity, &meta, target_layer, true);
+
+        let output_pin = requested_output
+            .and_then(|pin| self.resolve_entity_output_pin(&entity, Some(pin)))
+            .or(source.output_pin)
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin,
+        }))
+    }
+
+    fn normalize_input_value(&mut self, input: &PinMetadata, value: &mut flow_like_types::Value) {
+        if !is_variable_ref_pin_name(&input.name) {
+            return;
+        }
+
+        let flow_like_types::Value::String(raw) = value else {
+            return;
+        };
+
+        if let Some(variable_id) = self.variable_refs.resolve(raw) {
+            *raw = variable_id;
+            return;
+        }
+
+        if self.unresolved_variable_refs.insert(raw.clone()) {
+            self.result.diagnostics.push(format!(
+                "variable reference `{raw}` does not resolve to a board or FlowScript variable; declare it as a top-level FlowScript variable so it can be created"
+            ));
+        }
+    }
+
+    fn queue_update_input(
+        &mut self,
+        entity: &NodeEntity,
+        input: &PinMetadata,
+        value: flow_like_types::Value,
+        meta: &NodeMetadata,
+    ) {
+        if let NodeEntity::Existing(node_id) = entity
+            && let Some(node) = find_board_node(self.existing, node_id)
+            && let Some(pin) = find_input_pin(node, &input.name)
+        {
+            let current = pin.default_value.as_deref().and_then(|bytes| {
+                flow_like_types::json::from_slice::<flow_like_types::Value>(bytes).ok()
+            });
+            if current.as_ref() == Some(&value) {
+                return;
+            }
+        }
+
+        self.update_commands.push(BoardCommand::UpdateNodePin {
+            node_id: entity.node_ref(),
+            pin_id: input.name.clone(),
+            value,
+            summary: Some(format!("Set {} on {}", input.name, meta.friendly_name)),
+        });
     }
 
     fn queue_add_node(&mut self, meta: NodeMetadata, target_layer: Option<String>) -> NodeEntity {
@@ -1398,10 +1923,36 @@ impl<'a> StructuralPlanner<'a> {
         true
     }
 
+    fn preferred_exec_output_for_input_sources(
+        &self,
+        previous: &NodeEntity,
+        input_sources: &[ValueSource],
+    ) -> Option<String> {
+        let previous_ref = previous.node_ref();
+        input_sources.iter().find_map(|source| {
+            if source.node.node_ref() != previous_ref {
+                return None;
+            }
+            let output_pin = source.output_pin.as_deref()?;
+            self.exec_output_for_data_output(previous, output_pin)
+        })
+    }
+
+    fn exec_output_for_data_output(&self, entity: &NodeEntity, output_pin: &str) -> Option<String> {
+        if !is_streaming_data_output_pin_name(output_pin) {
+            return None;
+        }
+        self.entity_exec_output_pin_named(
+            entity,
+            &["on_stream", "on_chunk", "for_chunk", "on_delta", "on_token"],
+        )
+    }
+
     fn entity_exec_input_pin(&self, entity: &NodeEntity) -> Option<String> {
         match entity {
             NodeEntity::Existing(id) => find_board_node(self.existing, id).and_then(exec_input_pin),
             NodeEntity::New { meta, .. } => metadata_exec_input_pin(meta),
+            NodeEntity::Layer { .. } => None,
         }
     }
 
@@ -1411,6 +1962,7 @@ impl<'a> StructuralPlanner<'a> {
                 find_board_node(self.existing, id).and_then(exec_output_pin)
             }
             NodeEntity::New { meta, .. } => metadata_exec_output_pin(meta),
+            NodeEntity::Layer { .. } => None,
         }
     }
 
@@ -1433,6 +1985,7 @@ impl<'a> StructuralPlanner<'a> {
                 .filter(|p| p.data_type == "Execution")
                 .map(|p| p.name.clone())
                 .collect(),
+            NodeEntity::Layer { .. } => Vec::new(),
         }
     }
 
@@ -1453,6 +2006,7 @@ impl<'a> StructuralPlanner<'a> {
                     })
                 })
                 .map(|pin| pin.name.clone()),
+            NodeEntity::Layer { .. } => None,
         }
     }
 
@@ -1582,6 +2136,67 @@ impl<'a> StructuralPlanner<'a> {
         Some(entity)
     }
 
+    fn plan_existing_variable_set_node(
+        &mut self,
+        entity: &NodeEntity,
+        variable_id: &str,
+        value: &Expr,
+        target_layer: Option<String>,
+    ) {
+        let NodeEntity::Existing(node_id) = entity else {
+            return;
+        };
+        let Some(node) = find_board_node(self.existing, node_id) else {
+            return;
+        };
+        let meta = node_to_metadata(node);
+
+        if let Some(input) = metadata_input_pin(&meta, "var_ref") {
+            self.queue_update_input(
+                entity,
+                input,
+                flow_like_types::Value::String(variable_id.to_string()),
+                &meta,
+            );
+        }
+
+        let Some(input) = metadata_input_pin(&meta, "value_in")
+            .or_else(|| metadata_input_pin(&meta, "new_value"))
+            .or_else(|| metadata_input_pin(&meta, "value"))
+        else {
+            self.result.diagnostics.push(format!(
+                "variable set node `{node_id}` has no value input pin"
+            ));
+            return;
+        };
+
+        if let Some(mut literal) = literal_expr_to_value(value) {
+            self.normalize_input_value(input, &mut literal);
+            self.queue_update_input(entity, input, literal, &meta);
+            return;
+        }
+
+        let Some(source) = self
+            .resolve_expr_for_argument(value, entity, input, target_layer.clone())
+            .and_then(|symbol| self.symbol_to_source(symbol, target_layer))
+        else {
+            self.result.diagnostics.push(format!(
+                "assignment to variable `{variable_id}` is not a resolvable value"
+            ));
+            return;
+        };
+
+        if let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) {
+            self.connect_commands.push(BoardCommand::ConnectPins {
+                from_node: source.node.node_ref(),
+                from_pin: output_pin,
+                to_node: entity.node_ref(),
+                to_pin: input.name.clone(),
+                summary: Some("Set FlowScript variable value".to_string()),
+            });
+        }
+    }
+
     fn resolve_variable_node(&mut self, node_type: &str, display: &str) -> Option<NodeMetadata> {
         if let Some(meta) = self.catalog.by_type.get(node_type) {
             return Some(meta.clone());
@@ -1602,6 +2217,7 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> String {
         let variable_id = generated_variable_id(name);
+        self.variable_refs.insert(&variable_id, name);
         let default_value = literal_expr_to_value(value);
         let (data_type, value_type) = infer_variable_types(default_value.as_ref());
         self.add_commands.push(BoardCommand::CreateVariable {
@@ -1665,7 +2281,9 @@ impl<'a> StructuralPlanner<'a> {
                         .or_else(|| self.resolve_entity_output_pin(&source.node, None)),
                 }
             }
-            NodeEntity::Existing(_) => self.resolve_source_output_pin(source),
+            NodeEntity::Existing(_) | NodeEntity::Layer { .. } => {
+                self.resolve_source_output_pin(source)
+            }
         }
     }
 
@@ -1688,6 +2306,17 @@ impl<'a> StructuralPlanner<'a> {
                 }
                 default_metadata_output_pin(meta)
             }
+            NodeEntity::Layer { pins, .. } => {
+                if let Some(requested) = requested {
+                    return pins
+                        .iter()
+                        .find(|pin| pin_name_matches(&pin.name, requested))
+                        .map(|pin| pin.name.clone());
+                }
+                pins.iter()
+                    .find(|pin| pin.pin_type == "Output")
+                    .map(|pin| pin.name.clone())
+            }
         }
     }
 
@@ -1707,12 +2336,9 @@ impl<'a> StructuralPlanner<'a> {
 
     fn seed_top_level_variables(&mut self, ast: &BoardAst) {
         for var in &ast.variables {
-            self.insert_symbol(
-                var.name.clone(),
-                SymbolValue::VariableRef {
-                    variable_id: self.variable_id_for_decl(var),
-                },
-            );
+            let variable_id = self.variable_id_for_decl(var);
+            self.variable_refs.insert(&variable_id, &var.name);
+            self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
         }
     }
 
@@ -1788,6 +2414,9 @@ fn ast_has_unanchored_calls(ast: &BoardAst) -> bool {
         }
     }
     for f in &ast.functions {
+        if f.anchor.is_none() {
+            return true;
+        }
         if block_has_unanchored_calls(&f.body) {
             return true;
         }
@@ -1877,6 +2506,67 @@ fn collect_calls<'a>(ast: &'a BoardAst, out: &mut HashMap<String, &'a Call>) {
 fn collect_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a Call>) {
     for stmt in &block.stmts {
         collect_stmt(stmt, out);
+    }
+}
+
+/// Walk only statement-owned calls. This is intentionally shallower than [`collect_calls`]:
+/// inlined helper expressions are render conveniences, not standalone text-visible statements,
+/// and must not be removed just because their anchors are absent from edited FlowScript.
+fn collect_statement_calls<'a>(ast: &'a BoardAst, out: &mut HashMap<String, &'a Call>) {
+    for ev in &ast.events {
+        collect_statement_block(&ev.body, out);
+    }
+    for f in &ast.functions {
+        collect_statement_block(&f.body, out);
+    }
+}
+
+fn collect_statement_block<'a>(block: &'a Block, out: &mut HashMap<String, &'a Call>) {
+    for stmt in &block.stmts {
+        collect_statement_stmt(stmt, out);
+    }
+}
+
+fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
+    match stmt {
+        Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
+            collect_call_anchor_only(call, anchor.as_deref(), out)
+        }
+        Stmt::Branch {
+            call, arms, anchor, ..
+        } => {
+            if !is_placeholder_call(call) {
+                collect_call_anchor_only(call, anchor.as_deref(), out);
+            }
+            for arm in arms {
+                collect_statement_block(&arm.body, out);
+            }
+        }
+        Stmt::Loop {
+            call, body, anchor, ..
+        } => {
+            collect_call_anchor_only(call, anchor.as_deref(), out);
+            collect_statement_block(body, out);
+        }
+        Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
+            if let Some(anchor) = anchor.as_deref()
+                && let Some((call, _)) = assigned_call_expr(value)
+            {
+                collect_call_anchor_only(call, Some(anchor), out);
+            }
+        }
+        Stmt::Handler(event) => collect_statement_block(&event.body, out),
+        Stmt::Return { .. } | Stmt::Local(_) | Stmt::Comment(_) => {}
+    }
+}
+
+fn collect_call_anchor_only<'a>(
+    call: &'a Call,
+    fallback_anchor: Option<&str>,
+    out: &mut HashMap<String, &'a Call>,
+) {
+    if let Some(anchor) = call.anchor.as_deref().or(fallback_anchor) {
+        out.insert(anchor.to_string(), call);
     }
 }
 
@@ -1997,9 +2687,15 @@ fn collect_assigned_call_with_anchor<'a>(
     }
 }
 
-fn assigned_call_output_pin(expr: &Expr) -> Option<&str> {
+fn assigned_call_expr(expr: &Expr) -> Option<(&Call, Option<&str>)> {
     match expr {
-        Expr::Field { base, pin } if matches!(base.as_ref(), Expr::Call(_)) => Some(pin),
+        Expr::Call(call) => Some((call, None)),
+        Expr::Field { base, pin } => {
+            let Expr::Call(call) = base.as_ref() else {
+                return None;
+            };
+            Some((call, Some(pin.as_str())))
+        }
         _ => None,
     }
 }
@@ -2585,6 +3281,77 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn catalog_aware_reconcile_creates_function_layers_from_functions() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "string_format",
+            "String Format",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("format_string", "String", PinType::Input),
+                pin_meta("name", "String", PinType::Input),
+            ],
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("value", "String", PinType::Output),
+            ],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::CreateLayer {
+                name,
+                ref_id,
+                layer_type,
+                pins: Some(pins),
+                ..
+            } if name == "greet"
+                && ref_id.as_deref() == Some("$0")
+                && layer_type.as_deref() == Some("Function")
+                && pins.iter().any(|pin| pin.name == "name" && pin.pin_type == "Input")
+                && pins.iter().any(|pin| pin.name == "message" && pin.pin_type == "Output")
+        ));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, target_layer, .. }
+                    if node_type == "string_format" && target_layer.as_deref() == Some("$0")
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "$0"
+                        && from_pin == "name"
+                        && to_node == "$1"
+                        && to_pin == "name"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "$1"
+                        && from_pin == "value"
+                        && to_node == "$0"
+                        && to_pin == "message"
+            )
+        }));
+    }
+
     fn accumulator_catalog() -> Vec<NodeMetadata> {
         vec![
             catalog_meta(
@@ -2694,6 +3461,450 @@ mod tests {
             } if id == ref_id => Some(node_type.clone()),
             _ => None,
         })
+    }
+
+    fn by_ref_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "array_clear_ref",
+                "Clear (By Ref)",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("var_ref", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "array_push_ref",
+                "Push (By Ref)",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("var_ref", "String", PinType::Input),
+                    pin_meta("value", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "batch_upsert_local_db",
+                "Batch Upsert",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("database", "Struct", PinType::Input),
+                    pin_meta_friendly("id_row", "ID Column", "String", "Normal", PinType::Input),
+                    pin_meta_friendly("value", "Value", "Generic", "Array", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_normalizes_by_ref_variable_names_to_ids() {
+        let board = empty_board();
+        let catalog = by_ref_catalog();
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"const rows: Struct[] = []   //@v:var_rows
+
+eventsSimple() {
+    arrayClearRef({ varRef: "rows" })
+    arrayPushRef({ varRef: "rows", value: {} })
+    batchUpsertLocalDb({ database: {}, idRow: "id", value: rows })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("array_clear_ref")
+                        && pin_id == "var_ref"
+                        && value == &flow_like_types::Value::String("var_rows".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("array_push_ref")
+                        && pin_id == "var_ref"
+                        && value == &flow_like_types::Value::String("var_rows".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("batch_upsert_local_db")
+                        && pin_id == "id_row"
+                        && value == &flow_like_types::Value::String("id".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("variable_get")
+                        && from_pin == "value_ref"
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("batch_upsert_local_db")
+                        && to_pin == "value"
+            )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_wires_existing_anchored_variable_argument() {
+        let mut board = empty_board();
+        let mut variable = Variable::new("rows", VariableType::Struct, ValueType::Array);
+        variable.id = "var_rows".to_string();
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut batch = Node::new("batch_upsert_local_db", "Batch Upsert", "", "data");
+        batch.id = "batch".to_string();
+        batch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        batch.add_input_pin("database", "Database", "", VariableType::Struct);
+        batch.add_input_pin("id_row", "ID Column", "", VariableType::String);
+        let value_pin = batch.add_input_pin("value", "Value", "", VariableType::Generic);
+        value_pin.value_type = ValueType::Array;
+        batch.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(batch.id.clone(), batch);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"const rows: Struct[] = []   //@v:var_rows
+
+eventsSimple() {   //@n:event
+    batchUpsertLocalDb({ database: {}, idRow: "id", value: rows })   //@n:batch
+}
+"#,
+            &by_ref_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "variable_get"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("variable_get")
+                        && pin_id == "var_ref"
+                        && value == &flow_like_types::Value::String("var_rows".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("variable_get")
+                        && from_pin == "value_ref"
+                        && to_node == "batch"
+                        && to_pin == "value"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "batch"
+                        && pin_id == "id_row"
+                        && value == &flow_like_types::Value::String("id".to_string())
+            )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_recreates_missing_inline_request_chain_for_anchored_call() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut fetch = Node::new("http_fetch", "API Call", "", "http");
+        fetch.id = "fetch".to_string();
+        fetch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        fetch.add_input_pin("request", "Request", "", VariableType::Struct);
+        fetch.add_output_pin("exec_success", "Success", "", VariableType::Execution);
+        fetch.add_output_pin("response", "Response", "", VariableType::Struct);
+        board.nodes.insert(fetch.id.clone(), fetch);
+
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "http_make_request",
+                "Make Request",
+                vec![
+                    pin_meta("method", "String", PinType::Input),
+                    pin_meta("url", "String", PinType::Input),
+                ],
+                vec![pin_meta("request", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "http_set_header",
+                "Set Header",
+                vec![
+                    pin_meta("request", "Struct", PinType::Input),
+                    pin_meta("name", "String", PinType::Input),
+                    pin_meta("value", "String", PinType::Input),
+                ],
+                vec![pin_meta("request", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "http_fetch",
+                "API Call",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("request", "Struct", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_success", "Execution", PinType::Output),
+                    pin_meta("response", "Struct", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"simpleEvent() {   //@n:event
+    const aPICall = httpFetch({ request: httpSetHeader({ request: httpMakeRequest({ method: "GET", url: "https://www.reddit.com/r/rust/.rss" }), name: "User-Agent", value: "FlowLikeRedditRSS/1.0" }) })   //@n:fetch
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "http_make_request"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "http_set_header"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("http_make_request")
+                        && pin_id == "method"
+                        && value == &flow_like_types::Value::String("GET".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("http_make_request")
+                        && from_pin == "request"
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("http_set_header")
+                        && to_pin == "request"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("http_set_header")
+                        && from_pin == "request"
+                        && to_node == "fetch"
+                        && to_pin == "request"
+            )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_does_not_remove_unanchored_inline_helpers() {
+        let mut board = empty_board();
+
+        let mut request = Node::new("http_make_request", "Make Request", "", "http");
+        request.id = "request".to_string();
+        request
+            .add_input_pin("method", "Method", "", VariableType::String)
+            .default_value = Some(flow_like_types::json::to_vec("GET").unwrap());
+        request
+            .add_input_pin("url", "URL", "", VariableType::String)
+            .default_value =
+            Some(flow_like_types::json::to_vec("https://www.reddit.com/r/rust/.rss").unwrap());
+        let request_out = request
+            .add_output_pin("request", "Request", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(request.id.clone(), request);
+
+        let mut fetch = Node::new("http_fetch", "API Call", "", "http");
+        fetch.id = "fetch".to_string();
+        fetch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        let fetch_request = fetch
+            .add_input_pin("request", "Request", "", VariableType::Struct)
+            .id
+            .clone();
+        fetch.add_output_pin("exec_success", "Success", "", VariableType::Execution);
+        fetch.add_output_pin("response", "Response", "", VariableType::Struct);
+        board.nodes.insert(fetch.id.clone(), fetch);
+
+        connect(&mut board, "request", &request_out, "fetch", &fetch_request);
+
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "http_make_request",
+                "Make Request",
+                vec![
+                    pin_meta("method", "String", PinType::Input),
+                    pin_meta("url", "String", PinType::Input),
+                ],
+                vec![pin_meta("request", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "http_fetch",
+                "API Call",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("request", "Struct", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_success", "Execution", PinType::Output),
+                    pin_meta("response", "Struct", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"simpleEvent() {
+    const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: "https://www.reddit.com/r/rust/.rss" }) })   //@n:fetch
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::RemoveNode { node_id, .. } if node_id == "request"
+            )
+        }));
+        assert!(!result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "http_make_request"
+            )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_repairs_anchored_variable_set_assignment() {
+        let mut board = empty_board();
+        let mut variable = Variable::new("rows", VariableType::Struct, ValueType::Array);
+        variable.id = "var_rows".to_string();
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut push = Node::new("array_push", "Push", "", "array");
+        push.id = "push".to_string();
+        push.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        push.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        push.add_output_pin("array_out", "Array", "", VariableType::Struct)
+            .value_type = ValueType::Array;
+        board.nodes.insert(push.id.clone(), push);
+
+        let mut set_rows = Node::new("variable_set", "Set rows", "", "variables");
+        set_rows.id = "set_rows".to_string();
+        set_rows.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        set_rows.add_input_pin("var_ref", "rows", "", VariableType::String);
+        let value_pin = set_rows.add_input_pin("value_in", "Value", "", VariableType::Struct);
+        value_pin.value_type = ValueType::Array;
+        set_rows.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        set_rows
+            .add_output_pin("value_ref", "New Value", "", VariableType::Struct)
+            .value_type = ValueType::Array;
+        board.nodes.insert(set_rows.id.clone(), set_rows);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"const rows: Struct[] = []   //@v:var_rows
+
+push(arrayOut: Struct[]) {   //@n:push
+    rows = arrayOut   //@n:set_rows
+}
+"#,
+            &accumulator_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "set_rows"
+                        && pin_id == "var_ref"
+                        && value == &flow_like_types::Value::String("var_rows".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "push"
+                        && from_pin == "array_out"
+                        && to_node == "set_rows"
+                        && to_pin == "value_in"
+            )
+        }));
     }
 
     #[test]
@@ -3454,5 +4665,212 @@ eventsSimple() {
                     if from_node == "$1" && to_node == "$2"
             )
         }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_continues_unknown_streaming_nodes_from_exec_done() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "custom_stream",
+                "Custom Stream",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("on_stream", "Execution", PinType::Output),
+                    pin_meta("exec_done", "Execution", PinType::Output),
+                    pin_meta("result", "String", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                Vec::new(),
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const streamed = customStream()
+    logInfo({ message: streamed.result })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "$1"
+                        && from_pin == "exec_done"
+                        && to_node == "$2"
+                        && to_pin == "exec_in"
+            )
+        }));
+        assert!(!result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                    if from_node == "$1" && from_pin == "on_stream" && to_node == "$2"
+            )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_wires_stream_chunk_consumers_from_on_stream_only() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_stream_invoke",
+                "Stream Invoke Agent",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("on_stream", "Execution", PinType::Output),
+                    pin_meta("chunk", "Struct", PinType::Output),
+                    pin_meta("exec_done", "Execution", PinType::Output),
+                    pin_meta("response", "Struct", PinType::Output),
+                    pin_meta("stats", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "events_chat_push_response_chunk",
+                "Push Chunk",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("chunk", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_chat_push_response",
+                "Push Response",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("response", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_chat_push_stat",
+                "Push Stat",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("stat", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const invokeAgent = agentStreamInvoke()
+    eventsChatPushResponseChunk({ chunk: invokeAgent.chunk })
+    eventsChatPushResponse({ response: invokeAgent.response })
+    eventsChatPushStat({ stat: invokeAgent.stats })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for (from_node, from_pin, to_node, to_pin) in [
+            ("$0", "exec_out", "$1", "exec_in"),
+            ("$1", "on_stream", "$2", "exec_in"),
+            ("$1", "exec_done", "$3", "exec_in"),
+            ("$3", "exec_out", "$4", "exec_in"),
+        ] {
+            assert!(
+                result.commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        BoardCommand::ConnectPins {
+                            from_node: actual_from_node,
+                            from_pin: actual_from_pin,
+                            to_node: actual_to_node,
+                            to_pin: actual_to_pin,
+                            ..
+                        } if actual_from_node == from_node
+                            && actual_from_pin == from_pin
+                            && actual_to_node == to_node
+                            && actual_to_pin == to_pin
+                    )
+                }),
+                "missing exec edge {from_node}.{from_pin} -> {to_node}.{to_pin}; commands: {:?}",
+                result.commands
+            );
+        }
+
+        for (from_node, from_pin, to_node) in [
+            ("$1", "exec_done", "$2"),
+            ("$2", "exec_out", "$3"),
+            ("$1", "on_stream", "$3"),
+        ] {
+            assert!(!result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node: actual_from_node, from_pin: actual_from_pin, to_node: actual_to_node, .. }
+                        if actual_from_node == from_node
+                            && actual_from_pin == from_pin
+                            && actual_to_node == to_node
+                )
+            }));
+        }
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_reports_missing_variable_refs() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "String", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    variableGet({ varRef: "GMAIL_ADDRESS" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("GMAIL_ADDRESS")
+                    && diagnostic.contains("top-level FlowScript variable")),
+            "{:?}",
+            result.diagnostics
+        );
     }
 }

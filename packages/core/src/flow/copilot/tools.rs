@@ -7,7 +7,10 @@ use serde_json::json;
 use super::provider::CatalogProvider;
 use super::search::score_catalog_metadata;
 use super::types::{BoardCommand, RunContext, TemplateInfo};
-use crate::flow::ast::{ReconcileResult, reconcile_text_with_catalog};
+use crate::flow::ast::{
+    ReconcileResult, RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
+    destructive_flowscript_command_summaries, reconcile_text_with_catalog,
+};
 use crate::flow::board::Board;
 use crate::state::FlowLikeState;
 
@@ -108,12 +111,19 @@ pub struct GetDeclarationsArgs {
 }
 
 #[derive(Deserialize)]
+pub struct GetCurrentFlowScriptArgs {}
+
+#[derive(Deserialize)]
 pub struct EditFlowScriptArgs {
     /// The full edited FlowScript source for the board. Preserve the `//@n:<id>` anchor comments
     /// on existing statements so identities are matched; literal argument changes become pin
-    /// updates and removed anchored statements become node deletions.
+    /// updates. Removed anchored statements are blocked unless `allow_deletions` is true.
     #[serde(alias = "script", alias = "source", alias = "content")]
     pub flowscript: String,
+    /// Explicit opt-in for destructive FlowScript edits. Leave false unless the user asked to
+    /// remove existing board items.
+    #[serde(default)]
+    pub allow_deletions: bool,
 }
 
 // ============================================================================
@@ -1069,6 +1079,49 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
 // FlowScript Tools
 // ============================================================================
 
+/// Return the live board rendered as anchored FlowScript.
+///
+/// This is intentionally a tool, even though the system prompt also includes the board source,
+/// because long multi-step agents can lose the inline copy. Calling this immediately before
+/// `edit_flowscript` gives the model the exact current document to edit.
+pub struct GetCurrentFlowScriptTool {
+    pub board: Arc<Board>,
+}
+
+impl Tool for GetCurrentFlowScriptTool {
+    const NAME: &'static str = "get_current_flowscript";
+
+    type Error = FlowScriptToolError;
+    type Args = GetCurrentFlowScriptArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "get_current_flowscript".to_string(),
+            description: r#"Return the current live board as anchored FlowScript.
+
+Use this before editing an existing board, especially after prior tool calls or after validation
+failed. The returned document is the source you must edit and submit in full to
+`edit_flowscript`; preserve all `//@n:<id>` anchors on statements you keep."#
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {}
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(board_to_flowscript(
+            &self.board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        ))
+    }
+}
+
 /// Retrieve `.flow.d`-style FlowScript declarations for nodes matching a query.
 ///
 /// This is the FlowScript counterpart to `catalog_search`/`get_node_details`: instead of
@@ -1268,6 +1321,7 @@ pub fn render_edit_flowscript_result(
     flowscript: &str,
     result: &ReconcileResult,
     board_is_empty: bool,
+    allow_deletions: bool,
 ) -> String {
     let blocking_diagnostics: Vec<&String> = result
         .diagnostics
@@ -1319,6 +1373,26 @@ pub fn render_edit_flowscript_result(
             flowscript_workspace_tag(flowscript, "validation_errors"),
             msg
         );
+    }
+
+    if !allow_deletions {
+        let destructive = destructive_flowscript_command_summaries(&result.commands);
+        if !destructive.is_empty() {
+            let mut msg = blocked_destructive_flowscript_message(&destructive);
+            if !result.diagnostics.is_empty() {
+                msg.push_str("\nDiagnostics:\n");
+                for d in &result.diagnostics {
+                    msg.push_str("- ");
+                    msg.push_str(d);
+                    msg.push('\n');
+                }
+            }
+            return format!(
+                "{}\n{}",
+                flowscript_workspace_tag(flowscript, "validation_errors"),
+                msg
+            );
+        }
     }
 
     let commands_json = serde_json::to_string(&result.commands).unwrap_or_default();
@@ -1382,33 +1456,44 @@ impl Tool for EditFlowScriptTool {
             name: "edit_flowscript".to_string(),
             description: r#"Apply an edited FlowScript document to the board.
 
-This is the PRIMARY way to modify a workflow. Submit the FULL edited FlowScript source (the same
-document shown in the system context). Reconcile compares it to the live board using the
-`//@n:<id>` anchor comments and catalog declarations, then produces minimal changes:
+This is the PRIMARY way to modify a workflow. For existing-board edits, call
+`get_current_flowscript` first, edit that exact returned document, and submit the FULL edited
+FlowScript source. Reconcile compares it to the live board using the `//@n:<id>` anchor comments
+and catalog declarations, then produces minimal changes:
 - A changed literal argument on an anchored call → updates that node's pin value.
-- An anchored statement you removed → deletes that node.
+- An anchored statement you removed → deletes that node only when `allow_deletions` is true.
 - A new unanchored FlowScript call → adds that node, configures literal args, and connects
   resolvable FlowScript references/nested calls.
+- A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
+  body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
 
 RULES:
 - PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
+- Leave `allow_deletions` false unless the user explicitly asked to delete existing board items.
 - Do NOT invent anchors for brand-new nodes; write normal unanchored calls using declarations
   from `get_declarations`.
 - New catalog calls must be inside a function/event block, e.g.
   `run() { const db = openLocalDb({ name: "email_vectors" }) }`.
 - Top-level `const name: Type = literal` declarations are variables/defaults only; they must use
   literal defaults and do not create node calls.
+- If you use `variableGet({ varRef: "NAME" })` or any `varRef`, `NAME` must resolve to an
+  existing variable or a top-level FlowScript variable declaration such as
+  `const NAME: string = ""`; missing varRefs are validation errors.
 - Inside a function/event block, `const name = ...` must bind a node-call expression. Use
   local alias syntax like `let rows = []` / `rows = arrayPush(...)`, typed `let name: Type =
   literal`, or direct literals for non-call values.
 - Do not rely on mutable assignments inside brand-new `if`/`for` blocks; new control-flow body
   lowering is limited and unsafe partial graph edits are rejected.
 - FlowScript statement order maps to the normal execution path only when the previous node has one
-  execution output or an explicit continuation policy in the reconciler. Multi-output nodes are
-  not guessed by pin order; API Call/httpFetch continues from `exec_success`, never `exec_error`.
-  If no policy exists, validation reports a diagnostic instead of queueing an unsafe edge.
+  execution output, a `done` / `exec_done` output, or an explicit continuation policy in the
+  reconciler. Multi-output nodes are not guessed by pin order; API Call/httpFetch continues from
+  `exec_success`, never `exec_error`. If no policy exists, validation reports a diagnostic instead
+  of queueing an unsafe edge.
 - Existing multi-output execution graphs render back to FlowScript as labelled branch blocks, so
   board -> FlowScript -> board preserves those branches rather than flattening them.
+- Streaming calls with `on_stream` plus `exec_done` may place `.chunk` consumers immediately after
+  the call; those consumers wire from `on_stream`, while later `.response` / `.stats` consumers
+  continue from `exec_done`.
 - For loops, the body is the `exec_out` path and the next statement continues from `done` /
   `exec_done`; make sure the loop's `array` input receives the array being iterated.
 - Object/call-argument fields use colon syntax (`{ host: "imap.gmail.com" }`), never assignment
@@ -1426,6 +1511,10 @@ RULES:
                     "flowscript": {
                         "type": "string",
                         "description": "The full edited FlowScript source for the board, with anchors preserved."
+                    },
+                    "allow_deletions": {
+                        "type": "boolean",
+                        "description": "Set true only when the user explicitly requested deletion of existing board items. Defaults false to prevent incomplete FlowScript from deleting nodes."
                     }
                 },
                 "required": ["flowscript"]
@@ -1449,6 +1538,7 @@ RULES:
             &args.flowscript,
             &result,
             board_has_no_nodes(&self.board),
+            args.allow_deletions,
         ))
     }
 }
@@ -1703,6 +1793,7 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
                 "Looking up FlowScript declarations...".to_string()
             }
         }
+        "get_current_flowscript" => "Reading current board FlowScript...".to_string(),
         "edit_flowscript" => "Applying FlowScript edits to the board...".to_string(),
         _ => format!("Running {}...", name),
     }
@@ -1729,6 +1820,7 @@ mod tests {
             "// Implementation plan: call openLocalDb later",
             &result,
             true,
+            false,
         );
 
         assert!(output.contains("\"status\":\"validation_errors\""));
@@ -1743,6 +1835,7 @@ mod tests {
             "run() {\n    const db = openLocalDb({ name: \"gmail_vectors\" })\n}",
             &result,
             false,
+            false,
         );
 
         assert!(output.starts_with("<flowscript_workspace>"));
@@ -1753,7 +1846,7 @@ mod tests {
     #[test]
     fn edit_flowscript_result_flags_empty_function_shells() {
         let result = ReconcileResult::default();
-        let output = render_edit_flowscript_result("run() {\n}", &result, true);
+        let output = render_edit_flowscript_result("run() {\n}", &result, true, false);
 
         assert!(output.contains("\"status\":\"validation_errors\""));
         assert!(output.contains("no executable catalog calls"));
@@ -1772,6 +1865,7 @@ mod tests {
             "run() {\n    emailImapConnect({ host = \"imap.gmail.com\" })\n}",
             &result,
             true,
+            false,
         );
 
         assert!(output.contains("\"status\":\"validation_errors\""));
@@ -1792,6 +1886,7 @@ mod tests {
             "run() {\n    const row = { id: \"x\" }\n}",
             &result,
             true,
+            false,
         );
 
         assert!(output.contains("\"status\":\"validation_errors\""));
@@ -1819,6 +1914,7 @@ mod tests {
             "run() {\n    for (const item of controlForEach({ array: rows })) {\n        log({ text: item.value })\n    }\n}",
             &result,
             true,
+            false,
         );
 
         assert!(output.contains("\"status\":\"validation_errors\""));
@@ -1827,9 +1923,25 @@ mod tests {
     }
 
     #[test]
+    fn edit_flowscript_result_blocks_deletions_by_default() {
+        let result = ReconcileResult {
+            commands: vec![BoardCommand::RemoveNode {
+                node_id: "old_node".to_string(),
+                summary: None,
+            }],
+            diagnostics: Vec::new(),
+        };
+        let output = render_edit_flowscript_result("run() {\n}", &result, false, false);
+
+        assert!(output.contains("\"status\":\"validation_errors\""));
+        assert!(output.contains("Deletions are blocked by default"));
+        assert!(!output.contains("<commands>"));
+    }
+
+    #[test]
     fn edit_flowscript_result_keeps_true_no_changes_non_error() {
         let result = ReconcileResult::default();
-        let output = render_edit_flowscript_result("run() {\n}", &result, false);
+        let output = render_edit_flowscript_result("run() {\n}", &result, false, false);
 
         assert!(output.contains("\"status\":\"no_changes\""));
     }

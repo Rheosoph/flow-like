@@ -5,7 +5,14 @@ import { getErrorMessage } from "../lib/error-message";
 import { toastError } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { IBoard } from "../lib/schema/flow/board";
+import type { INode } from "../lib/schema/flow/node";
 import { useBackendStore } from "../state/backend-state";
+
+interface ExecuteCommandsOptions {
+	refetch?: boolean;
+	allowDeletions?: boolean;
+	suppressBlockedToast?: boolean;
+}
 
 interface UseCommandExecutionProps {
 	appId: string;
@@ -70,7 +77,10 @@ export function useCommandExecution({
 	);
 
 	const executeCommands = useCallback(
-		async (commands: IGenericCommand[]) => {
+		async (
+			commands: IGenericCommand[],
+			options: ExecuteCommandsOptions = {},
+		) => {
 			const backend = useBackendStore.getState().backend;
 			if (!backend) {
 				console.error("[executeCommands] No backend available");
@@ -91,7 +101,9 @@ export function useCommandExecution({
 					commands,
 				);
 				await pushCommands(result);
-				await board.refetch();
+				if (options.refetch !== false) {
+					await board.refetch();
+				}
 
 				if (awarenessRef.current) {
 					awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
@@ -110,9 +122,73 @@ export function useCommandExecution({
 		[board.refetch, appId, boardId, pushCommands, version],
 	);
 
+	const applyFlowScript = useCallback(
+		async (
+			flowscript: string,
+			currentLayer?: string,
+			catalogNodes?: INode[],
+			options: ExecuteCommandsOptions = {},
+		) => {
+			const backend = useBackendStore.getState().backend;
+			if (!backend) {
+				console.error("[applyFlowScript] No backend available");
+				toastError("Backend not initialized", <XIcon />);
+				return;
+			}
+			if (typeof version !== "undefined") {
+				console.error("[applyFlowScript] Cannot modify old version:", version);
+				toastError("Cannot change old version", <XIcon />);
+				return;
+			}
+			if (!flowscript.trim()) return;
+
+			try {
+				const result = await backend.boardState.applyFlowScript(
+					appId,
+					boardId,
+					flowscript,
+					currentLayer,
+					catalogNodes,
+					options.allowDeletions === true,
+				);
+
+				if (result.commands.length > 0) {
+					await pushCommands(result.commands);
+					if (options.refetch !== false) {
+						await board.refetch();
+					}
+
+					if (awarenessRef.current) {
+						awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
+					}
+				} else if (result.diagnostics.length > 0) {
+					const suppressToast =
+						options.suppressBlockedToast === true &&
+						result.diagnostics[0]?.startsWith("FlowScript edit would delete ");
+					if (suppressToast) return result;
+					toastError(
+						`FlowScript apply blocked: ${result.diagnostics[0]}`,
+						<XIcon />,
+					);
+				}
+
+				return result;
+			} catch (error) {
+				console.error("[applyFlowScript] Failed:", error);
+				toastError(
+					`FlowScript apply failed: ${getErrorMessage(error, "Unknown error")}`,
+					<XIcon />,
+				);
+				throw error;
+			}
+		},
+		[board.refetch, appId, boardId, pushCommands, version],
+	);
+
 	return {
 		executeCommand,
 		executeCommands,
+		applyFlowScript,
 		awarenessRef,
 	};
 }

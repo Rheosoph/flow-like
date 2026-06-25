@@ -14,7 +14,10 @@ import type {
 	UpsertAppCommentResponse,
 } from "./backend-state/app-state";
 import type { IBitState } from "./backend-state/bit-state";
-import type { IBoardState } from "./backend-state/board-state";
+import type {
+	IApplyFlowScriptResponse,
+	IBoardState,
+} from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
 	EmptyAIState,
@@ -78,6 +81,7 @@ export type {
 	IAppRouteState,
 	IBitState,
 	IBoardState,
+	IApplyFlowScriptResponse,
 	IEventState,
 	IHelperState,
 	IPageState,

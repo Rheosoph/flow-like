@@ -62,6 +62,10 @@ function boardDataVersion(board: IBoard): string {
 	].join(":");
 }
 
+function renderedNodeCacheKey(id: string, hash: unknown): string {
+	return `${id}:${String(hash)}`;
+}
+
 interface ISerializedPin {
 	id: string;
 	name: string;
@@ -424,7 +428,7 @@ export function parseBoard(
 	const nodes: any[] = [];
 	const edges: any[] = [];
 	const cache = new Map<string, [IPin, INode | ILayer, boolean]>();
-	const oldNodesMap = new Map<number, any>();
+	const oldNodesMap = new Map<string, any>();
 	const oldEdgesMap = new Map<string, any>();
 	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
 	const boardVersionToken = boardDataVersion(board);
@@ -435,9 +439,9 @@ export function parseBoard(
 		.join(";");
 
 	for (const oldNode of oldNodes ?? []) {
-		// Only add to oldNodesMap if we haven't seen this hash before (prevents duplicate hash collisions)
-		if (oldNode.data?.hash && !oldNodesMap.has(oldNode.data.hash)) {
-			oldNodesMap.set(oldNode.data.hash, oldNode);
+		const hash = oldNode.data?.hash;
+		if (typeof oldNode.id === "string" && hash !== undefined && hash !== null) {
+			oldNodesMap.set(renderedNodeCacheKey(oldNode.id, hash), oldNode);
 		}
 	}
 
@@ -474,7 +478,10 @@ export function parseBoard(
 					)
 				: !catalogLookup.nodeNames.has(node.name)
 			: false;
-		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
+		const oldNode =
+			hash === -1
+				? undefined
+				: oldNodesMap.get(renderedNodeCacheKey(node.id, hash));
 		const sel = selected.has(node.id);
 		if (
 			oldNode &&
@@ -895,7 +902,10 @@ export function parseBoard(
 			(comment.layer ?? "") === "" ? undefined : comment.layer;
 		if (commentLayer !== currentLayer) continue;
 		const hash = comment.hash ?? -1;
-		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
+		const oldNode =
+			hash === -1
+				? undefined
+				: oldNodesMap.get(renderedNodeCacheKey(comment.id, hash));
 		if (oldNode) {
 			nodes.push(oldNode);
 			continue;

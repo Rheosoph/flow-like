@@ -13,7 +13,10 @@ use std::{
 use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
 pub use copilot_sdk::ToolHandler;
 use copilot_sdk::{Tool, ToolResultObject};
-use flow_like::flow::ast::reconcile_text_with_catalog;
+use flow_like::flow::ast::{
+    RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
+    destructive_flowscript_command_summaries, reconcile_text_with_catalog,
+};
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::{
     BoardCommand, CatalogProvider, GraphContext, NodeMetadata, search_result_hint_lines,
@@ -44,6 +47,7 @@ pub fn create_board_tools(
     }
 
     if let Some(board) = board {
+        tools.push(create_get_current_flowscript_tool(board.clone()));
         tools.push(create_edit_flowscript_tool(
             board,
             catalog_provider,
@@ -682,6 +686,7 @@ const MAX_EMIT_COMMANDS: usize = 20;
 struct KnownPins {
     inputs: HashSet<String>,
     outputs: HashSet<String>,
+    is_layer: bool,
 }
 
 fn create_validate_commands_tool(graph_context: Option<Arc<GraphContext>>) -> (Tool, ToolHandler) {
@@ -961,6 +966,39 @@ typed arguments. Covers every package in the project's catalog."#,
 /// Always validates first: parse errors and reconcile diagnostics are reported back to the agent
 /// and NOTHING is queued. Only a clean parse that yields commands queues them (status "queued"),
 /// where the main chat loop turns them into a reviewable `<commands>` envelope.
+fn create_get_current_flowscript_tool(board: Arc<Board>) -> (Tool, ToolHandler) {
+    let tool = Tool::new("get_current_flowscript")
+        .description(
+            r#"Return the current live board as anchored FlowScript.
+
+Use this before editing an existing board, especially after prior tool calls or validation errors.
+The returned document is the source you must edit and submit in full to `edit_flowscript`; preserve
+all `//@n:<id>` anchors on statements you keep."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {}
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, _args| {
+        let flowscript = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let payload = json!({
+            "status": "ok",
+            "flowscript": flowscript,
+            "message": "Edit this exact FlowScript document and submit the full edited source to edit_flowscript."
+        });
+        ToolResultObject::text(serde_json::to_string_pretty(&payload).unwrap_or_default())
+    });
+
+    (tool, handler)
+}
+
 fn create_edit_flowscript_tool(
     board: Arc<Board>,
     provider: Option<Arc<dyn CatalogProvider>>,
@@ -970,27 +1008,37 @@ fn create_edit_flowscript_tool(
         .description(
             r#"Apply an edited FlowScript document to the board (PRIMARY way to modify a workflow).
 
-Submit the FULL edited FlowScript source (the same document shown in the system context).
-Reconcile compares it to the live board using the `//@n:<id>` anchor comments and catalog
-declarations, then produces minimal changes:
+For existing-board edits, call `get_current_flowscript` first, edit that exact returned document,
+and submit the FULL edited FlowScript source. Reconcile compares it to the live board using the
+`//@n:<id>` anchor comments and catalog declarations, then produces minimal changes:
 - A changed literal argument on an anchored call → updates that node's pin value.
-- An anchored statement you removed → deletes that node.
+- An anchored statement you removed → deletes that node only when `allow_deletions` is true.
 - A new unanchored FlowScript call → adds that node, configures literal args, and connects
   resolvable FlowScript references/nested calls.
+- A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
+  body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
 
 VALIDATION: This tool validates before queueing. If it reports parse errors or diagnostics,
 nothing was queued — fix the FlowScript and resubmit. Only a clean parse queues commands.
 
 RULES:
 - PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
+- Leave `allow_deletions` false unless the user explicitly asked to delete existing board items.
 - Do NOT invent anchors for brand-new nodes; write normal unanchored calls using declarations
   from `get_declarations`.
+- If you use `variableGet({ varRef: "NAME" })` or any `varRef`, `NAME` must resolve to an
+  existing variable or a top-level FlowScript variable declaration such as
+  `const NAME: string = ""`; missing varRefs are validation errors.
 - FlowScript statement order maps to the normal execution path only when the previous node has one
-  execution output or an explicit continuation policy in the reconciler. Multi-output nodes are
-  not guessed by pin order; API Call/httpFetch continues from `exec_success`, never `exec_error`.
-  If no policy exists, validation reports a diagnostic instead of queueing an unsafe edge.
+  execution output, a `done` / `exec_done` output, or an explicit continuation policy in the
+  reconciler. Multi-output nodes are not guessed by pin order; API Call/httpFetch continues from
+  `exec_success`, never `exec_error`. If no policy exists, validation reports a diagnostic instead
+  of queueing an unsafe edge.
 - Existing multi-output execution graphs render back to FlowScript as labelled branch blocks, so
   board -> FlowScript -> board preserves those branches rather than flattening them.
+- Streaming calls with `on_stream` plus `exec_done` may place `.chunk` consumers immediately after
+  the call; those consumers wire from `on_stream`, while later `.response` / `.stats` consumers
+  continue from `exec_done`.
 - For loops, the body is the `exec_out` path and the next statement continues from `done` /
   `exec_done`; make sure the loop's `array` input receives the array being iterated.
 - To reposition nodes on the canvas, use `emit_commands` with MoveNode."#,
@@ -1001,6 +1049,10 @@ RULES:
                 "flowscript": {
                     "type": "string",
                     "description": "The full edited FlowScript source for the board, with anchors preserved."
+                },
+                "allow_deletions": {
+                    "type": "boolean",
+                    "description": "Set true only when the user explicitly requested deletion of existing board items. Defaults false to prevent incomplete FlowScript from deleting nodes."
                 }
             },
             "required": ["flowscript"]
@@ -1014,6 +1066,11 @@ RULES:
             .or_else(|| args.get("content"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let allow_deletions = args
+            .get("allow_deletions")
+            .or_else(|| args.get("allowDeletions"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         if flowscript.trim().is_empty() {
             let payload = json!({
@@ -1064,6 +1121,23 @@ RULES:
             );
         }
 
+        if !allow_deletions {
+            let destructive = destructive_flowscript_command_summaries(&result.commands);
+            if !destructive.is_empty() {
+                let message = blocked_destructive_flowscript_message(&destructive);
+                let payload = json!({
+                    "status": "validation_errors",
+                    "errors": [message],
+                    "diagnostics": result.diagnostics,
+                    "flowscript_workspace_summary": flowscript_summary(flowscript),
+                    "message": "FlowScript validation failed. Deletions require an explicit allow_deletions=true opt-in."
+                });
+                return ToolResultObject::text(
+                    serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                );
+            }
+        }
+
         // Clean parse with derived commands → queue them for review.
         let commands_value = serde_json::to_value(&result.commands).unwrap_or(json!([]));
         if let Some(store) = &side_effect_commands
@@ -1110,6 +1184,7 @@ fn validate_sdk_emit_commands(
                 KnownPins {
                     inputs: node.inputs.iter().map(|pin| pin.name.clone()).collect(),
                     outputs: node.outputs.iter().map(|pin| pin.name.clone()).collect(),
+                    is_layer: false,
                 },
             );
         }
@@ -1120,6 +1195,7 @@ fn validate_sdk_emit_commands(
                 KnownPins {
                     inputs: layer.inputs.iter().map(|pin| pin.name.clone()).collect(),
                     outputs: layer.outputs.iter().map(|pin| pin.name.clone()).collect(),
+                    is_layer: true,
                 },
             );
         }
@@ -1192,6 +1268,7 @@ fn validate_sdk_emit_commands(
                                     .filter(|pin| pin.pin_type == PinType::Output)
                                     .map(|pin| pin.name.clone())
                                     .collect(),
+                                is_layer: false,
                             },
                         );
                     }
@@ -1230,6 +1307,7 @@ fn validate_sdk_emit_commands(
                         let mut entity = KnownPins {
                             inputs: HashSet::from(["exec_in".to_string()]),
                             outputs: HashSet::from(["exec_out".to_string()]),
+                            is_layer: true,
                         };
                         let mut seen_pins = HashSet::new();
                         for pin in pins.as_deref().unwrap_or(&[]) {
@@ -1274,7 +1352,9 @@ fn validate_sdk_emit_commands(
                     ));
                 }
                 match known_entities.get(from_node) {
-                    Some(entity) if entity.outputs.contains(from_pin) => {}
+                    Some(entity)
+                        if entity.outputs.contains(from_pin)
+                            || (entity.is_layer && entity.inputs.contains(from_pin)) => {}
                     Some(entity) => errors.push(pin_lookup_error(
                         index,
                         from_node,
@@ -1287,7 +1367,9 @@ fn validate_sdk_emit_commands(
                     )),
                 }
                 match known_entities.get(to_node) {
-                    Some(entity) if entity.inputs.contains(to_pin) => {}
+                    Some(entity)
+                        if entity.inputs.contains(to_pin)
+                            || (entity.is_layer && entity.outputs.contains(to_pin)) => {}
                     Some(entity) => errors.push(pin_lookup_error(
                         index,
                         to_node,
@@ -1356,6 +1438,9 @@ fn validate_sdk_emit_commands(
                 }
             }
             BoardCommand::CreateLayer {
+                name,
+                ref_id,
+                pins,
                 node_ids,
                 position,
                 target_layer,
@@ -1379,6 +1464,59 @@ fn validate_sdk_emit_commands(
                     errors.push(format!(
                         "Command {index}: target_layer '{layer_id}' is unknown"
                     ));
+                }
+                if let Some(pins) = pins {
+                    let mut seen_pins = HashSet::new();
+                    for pin in pins {
+                        if pin.name.trim().is_empty() {
+                            errors
+                                .push(format!("Command {index}: layer pin names cannot be empty"));
+                            continue;
+                        }
+                        if !seen_pins.insert(pin.name.clone()) {
+                            errors.push(format!(
+                                "Command {index}: duplicate layer pin '{}'",
+                                pin.name
+                            ));
+                        }
+                        if !matches!(pin.pin_type.as_str(), "Input" | "Output") {
+                            errors.push(format!(
+                                "Command {index}: layer pin '{}' has invalid pin_type '{}'",
+                                pin.name, pin.pin_type
+                            ));
+                        }
+                    }
+                }
+                let key = ref_id
+                    .clone()
+                    .unwrap_or_else(|| format!("__new_layer_{index}"));
+                if !known_entities.contains_key(&key) {
+                    known_entities.insert(
+                        key.clone(),
+                        KnownPins {
+                            inputs: pins
+                                .as_ref()
+                                .map(|pins| {
+                                    pins.iter()
+                                        .filter(|pin| pin.pin_type == "Input")
+                                        .map(|pin| pin.name.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            outputs: pins
+                                .as_ref()
+                                .map(|pins| {
+                                    pins.iter()
+                                        .filter(|pin| pin.pin_type == "Output")
+                                        .map(|pin| pin.name.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            is_layer: true,
+                        },
+                    );
+                    known_layers.insert(key);
+                    known_layers.insert(name.clone());
                 }
             }
             BoardCommand::RemoveLayer { layer_id, .. } => {

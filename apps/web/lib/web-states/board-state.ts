@@ -1,4 +1,5 @@
 import {
+	type IApplyFlowScriptResponse,
 	type IBoard,
 	type IBoardState,
 	ICommentType,
@@ -652,6 +653,21 @@ export class WebBoardState implements IBoardState {
 		return apiPost<IGenericCommand[]>(
 			`apps/${appId}/board/${boardId}`,
 			{ commands },
+			this.backend.auth,
+		);
+	}
+
+	async applyFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		currentLayer?: string,
+		catalogNodes?: INode[],
+		allowDeletions = false,
+	): Promise<IApplyFlowScriptResponse> {
+		return apiPost<IApplyFlowScriptResponse>(
+			`apps/${appId}/board/${boardId}/flowscript/apply`,
+			{ flowscript, current_layer: currentLayer, allow_deletions: allowDeletions },
 			this.backend.auth,
 		);
 	}

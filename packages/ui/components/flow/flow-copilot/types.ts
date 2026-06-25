@@ -31,13 +31,31 @@ export interface CopilotMessage {
 	planSteps?: PlanStep[];
 }
 
+export interface FlowScriptApplyResultLike {
+	commands?: unknown[];
+	board_commands?: BoardCommand[];
+	diagnostics?: string[];
+}
+
+export interface FlowScriptApplyOptions {
+	allowDeletions?: boolean;
+	suppressBlockedToast?: boolean;
+}
+
 export interface FlowCopilotProps {
 	appId?: string;
 	board: IBoard | null | undefined;
 	catalogNodes?: INode[];
 	selectedNodeIds: string[];
 	onAcceptSuggestion: (suggestion: Suggestion) => void;
-	onExecuteCommands?: (commands: BoardCommand[]) => void;
+	onExecuteCommands?: (commands: BoardCommand[]) => void | Promise<void>;
+	onApplyFlowScript?: (
+		flowscript: string,
+		options?: FlowScriptApplyOptions,
+	) =>
+		| undefined
+		| FlowScriptApplyResultLike
+		| Promise<undefined | FlowScriptApplyResultLike>;
 	onGhostNodesChange?: (suggestions: Suggestion[]) => void;
 	onClearRunContext?: () => void;
 	onClose?: () => void;

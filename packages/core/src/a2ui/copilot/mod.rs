@@ -22,8 +22,8 @@ pub use types::*;
 
 use std::sync::Arc;
 
-use flow_like_types::Result;
 use flow_like_model_provider::llm::CompletionClientDyn;
+use flow_like_types::Result;
 use futures::StreamExt;
 use rig::{
     OneOrMany,

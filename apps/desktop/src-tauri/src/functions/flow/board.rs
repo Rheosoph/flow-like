@@ -4,9 +4,13 @@ use crate::{
 };
 use flow_like::{
     app::App,
-    flow::board::{Board, VersionType, commands::GenericCommand},
+    flow::{
+        ast::ApplyFlowScriptResult,
+        board::{Board, VersionType, commands::GenericCommand},
+        node::Node,
+    },
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 
@@ -223,6 +227,67 @@ pub async fn execute_commands(
 
     board.save(Some(store)).await?;
     Ok(commands)
+}
+
+#[tauri::command(async)]
+pub async fn apply_flowscript(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    flowscript: String,
+    current_layer: Option<String>,
+    catalog_nodes: Option<Vec<Node>>,
+    allow_deletions: Option<bool>,
+) -> Result<ApplyFlowScriptResult, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
+    let board = flow_like_state.get_board(&board_id, None)?;
+
+    let all_nodes = flow_like_state.node_registry.read().await.get_nodes()?;
+    let app = App::load(app_id, flow_like_state.clone()).await?;
+    let allowed_packages: HashSet<String> = app.packages.keys().cloned().collect();
+
+    let mut catalog_nodes_for_app = all_nodes
+        .into_iter()
+        .filter(|node| match &node.wasm {
+            None => true,
+            Some(wasm) => allowed_packages.contains(&wasm.package_id),
+        })
+        .collect::<Vec<_>>();
+
+    let mut catalog_keys = catalog_nodes_for_app
+        .iter()
+        .map(catalog_node_key)
+        .collect::<HashSet<_>>();
+    for node in catalog_nodes.unwrap_or_default() {
+        if catalog_keys.insert(catalog_node_key(&node)) {
+            catalog_nodes_for_app.push(node);
+        }
+    }
+
+    let mut board = board.lock().await;
+    let result = flow_like::flow::ast::apply_flowscript_to_board(
+        &mut board,
+        &flowscript,
+        &catalog_nodes_for_app,
+        flow_like_state,
+        current_layer,
+        allow_deletions.unwrap_or(false),
+    )
+    .await?;
+
+    if !result.commands.is_empty() {
+        board.save(Some(store)).await?;
+    }
+
+    Ok(result)
+}
+
+fn catalog_node_key(node: &Node) -> (Option<String>, String) {
+    (
+        node.wasm.as_ref().map(|wasm| wasm.package_id.clone()),
+        node.name.clone(),
+    )
 }
 
 /// Gets the elements required for executing a workflow on a specific page.

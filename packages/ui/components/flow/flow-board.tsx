@@ -660,6 +660,7 @@ export function FlowBoard({
 	const {
 		executeCommand,
 		executeCommands,
+		applyFlowScript,
 		awarenessRef: commandAwarenessRef,
 	} = useCommandExecution({
 		appId,
@@ -2884,9 +2885,16 @@ export function FlowBoard({
 	const { handleExecuteCommands } = useCopilotCommands({
 		board,
 		catalog,
-		executeCommand,
+		executeCommands,
 		currentLayer,
 	});
+	const handleApplyFlowScript = useCallback(
+		(
+			flowscript: string,
+			options?: { allowDeletions?: boolean; suppressBlockedToast?: boolean },
+		) => applyFlowScript(flowscript, currentLayer, catalog.data, options),
+		[applyFlowScript, currentLayer, catalog.data],
+	);
 
 	return (
 		<div className="w-full flex flex-1 grow flex-col min-h-0 relative overflow-hidden">
@@ -2911,6 +2919,7 @@ export function FlowBoard({
 							onSelectNodes={selectNodes}
 							onGhostNodesChange={handleGhostNodesChange}
 							onExecuteCommands={handleExecuteCommands}
+							onApplyFlowScript={handleApplyFlowScript}
 							runContext={currentMetadata}
 							onClearRunContext={() => setCurrentMetadata(undefined)}
 							onClose={() => {
@@ -3531,6 +3540,7 @@ export function FlowBoard({
 								onSelectNodes={selectNodes}
 								onGhostNodesChange={handleGhostNodesChange}
 								onExecuteCommands={handleExecuteCommands}
+								onApplyFlowScript={handleApplyFlowScript}
 								runContext={currentMetadata}
 								onClearRunContext={() => setCurrentMetadata(undefined)}
 								onClose={() => {

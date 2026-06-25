@@ -6,6 +6,9 @@ use std::collections::HashSet;
 use super::declarations::{render_declaration_matches, search_declarations};
 use super::search::score_catalog_metadata;
 use super::types::{NodeMetadata, PinMetadata};
+use crate::flow::node::Node;
+use crate::flow::pin::{Pin, PinType};
+use crate::flow::variable::VariableType;
 
 /// Trait for providing catalog search functionality
 #[async_trait]
@@ -182,6 +185,79 @@ fn pin_to_sig_param(pin: &PinMetadata) -> SigParam {
         doc,
         schema: pin.schema.clone(),
     }
+}
+
+/// Convert a board/catalog pin into the metadata shape FlowPilot and FlowScript use.
+pub fn pin_to_metadata(pin: &Pin) -> PinMetadata {
+    let is_generic = pin.data_type == VariableType::Generic;
+    let enforce_schema = pin
+        .options
+        .as_ref()
+        .and_then(|options| options.enforce_schema)
+        .unwrap_or(false);
+    let valid_values = pin
+        .options
+        .as_ref()
+        .and_then(|options| options.valid_values.clone());
+
+    PinMetadata {
+        name: pin.name.clone(),
+        friendly_name: pin.friendly_name.clone(),
+        description: pin.description.clone(),
+        data_type: format!("{:?}", pin.data_type),
+        value_type: format!("{:?}", pin.value_type),
+        default_value: pin
+            .default_value
+            .as_ref()
+            .map(|value| String::from_utf8_lossy(value).to_string())
+            .filter(|value| !value.is_empty() && value != "null"),
+        schema: pin.schema.clone(),
+        is_generic,
+        valid_values,
+        enforce_schema,
+    }
+}
+
+/// Convert a board/catalog node into the metadata shape FlowPilot and FlowScript use.
+pub fn node_to_metadata(node: &Node) -> NodeMetadata {
+    let derived_category = node
+        .name
+        .to_lowercase()
+        .split("::")
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
+    let category = if derived_category.is_empty() {
+        node.category.clone()
+    } else {
+        derived_category
+    };
+
+    let mut inputs: Vec<&Pin> = node
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Input)
+        .collect();
+    inputs.sort_by_key(|pin| (pin.index, pin.name.clone()));
+
+    let mut outputs: Vec<&Pin> = node
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Output)
+        .collect();
+    outputs.sort_by_key(|pin| (pin.index, pin.name.clone()));
+
+    super::search::enrich_node_metadata(NodeMetadata {
+        name: node.name.clone(),
+        friendly_name: node.friendly_name.clone(),
+        description: node.description.clone(),
+        inputs: inputs.into_iter().map(pin_to_metadata).collect(),
+        outputs: outputs.into_iter().map(pin_to_metadata).collect(),
+        category: Some(category),
+        required_inputs: Vec::new(),
+        companion_nodes: Vec::new(),
+        capability_tags: Vec::new(),
+    })
 }
 
 /// Build a FlowScript [`Signature`] from catalog [`NodeMetadata`].

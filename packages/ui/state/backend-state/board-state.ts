@@ -22,7 +22,14 @@ import type {
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "../../lib/schema/copilot";
+import type { BoardCommand } from "../../lib/schema/flow/copilot";
 import type { IPrerunBoardResponse } from "./types";
+
+export interface IApplyFlowScriptResponse {
+	commands: IGenericCommand[];
+	board_commands: BoardCommand[];
+	diagnostics: string[];
+}
 
 export interface IBoardState {
 	getBoards(appId: string): Promise<IBoard[]>;
@@ -124,6 +131,15 @@ export interface IBoardState {
 		boardId: string,
 		commands: IGenericCommand[],
 	): Promise<IGenericCommand[]>;
+
+	applyFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		currentLayer?: string,
+		catalogNodes?: INode[],
+		allowDeletions?: boolean,
+	): Promise<IApplyFlowScriptResponse>;
 
 	getExecutionElements(
 		appId: string,

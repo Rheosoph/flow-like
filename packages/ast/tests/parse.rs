@@ -199,6 +199,17 @@ fn parses_untyped_let_assignment_sugar() {
 }
 
 #[test]
+fn parses_bare_group_blocks_inside_event_body() {
+    let text = "onStart() {\n    {\n        const request = httpMakeRequest({ method: \"GET\", url: \"https://example.com\" })\n        const response = httpFetch({ request: request.request })\n    }\n}\n";
+    let ast = parse(text).expect("parse should accept grouped statement blocks");
+
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "onStart() {\n    const request = httpMakeRequest({ method: \"GET\", url: \"https://example.com\" })\n    const response = httpFetch({ request: request.request })\n}\n"
+    );
+}
+
+#[test]
 fn parses_model_authored_gmail_ingest_shape() {
     let text = r#"@category("Gmail")
 const GMAIL_ADDRESS: string = "GMAIL_ADDRESS"

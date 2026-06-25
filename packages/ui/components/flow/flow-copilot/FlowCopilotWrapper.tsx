@@ -20,6 +20,7 @@ export function FlowCopilotWrapper({
 	selectedNodeIds,
 	onAcceptSuggestion,
 	onExecuteCommands,
+	onApplyFlowScript,
 	onFocusNode,
 	onSelectNodes,
 	runContext,
@@ -41,6 +42,7 @@ export function FlowCopilotWrapper({
 			selectedNodeIds={selectedNodeIds}
 			onAcceptSuggestion={onAcceptSuggestion}
 			onExecuteCommands={onExecuteCommands}
+			onApplyFlowScript={onApplyFlowScript}
 			onFocusNode={onFocusNode}
 			onSelectNodes={onSelectNodes}
 			runContext={

@@ -1,3 +1,4 @@
+pub mod apply_flowscript;
 pub mod delete_board;
 pub mod execute_commands;
 pub mod get_board;
@@ -41,6 +42,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{board_id}/version",
             get(get_board_versions::get_board_versions),
+        )
+        .route(
+            "/{board_id}/flowscript/apply",
+            post(apply_flowscript::apply_flowscript),
         )
         .route(
             "/{board_id}/realtime",

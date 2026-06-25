@@ -218,6 +218,17 @@ export interface FlowPilotProcessEvent {
 	updatedAt?: number;
 }
 
+export interface FlowScriptApplyResultLike {
+	commands?: unknown[];
+	board_commands?: BoardCommand[];
+	diagnostics?: string[];
+}
+
+export interface FlowScriptApplyOptions {
+	allowDeletions?: boolean;
+	suppressBlockedToast?: boolean;
+}
+
 /**
  * Unified message format for the copilot chat
  */
@@ -284,7 +295,16 @@ export interface FlowPilotProps {
 	onAcceptSuggestion?: (suggestion: Suggestion) => void;
 
 	/** Callback when commands should be executed (board mode) */
-	onExecuteCommands?: (commands: BoardCommand[]) => void;
+	onExecuteCommands?: (commands: BoardCommand[]) => void | Promise<void>;
+
+	/** Callback when the FlowScript workspace should be reconciled and applied server-side. */
+	onApplyFlowScript?: (
+		flowscript: string,
+		options?: FlowScriptApplyOptions,
+	) =>
+		| undefined
+		| FlowScriptApplyResultLike
+		| Promise<undefined | FlowScriptApplyResultLike>;
 
 	/** Callback to focus on a specific node (board mode) */
 	onFocusNode?: (nodeId: string) => void;
