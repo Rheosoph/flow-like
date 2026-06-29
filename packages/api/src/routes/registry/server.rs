@@ -250,6 +250,7 @@ pub struct PackageReview {
 
 /// Request to submit a review
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewRequest {
     pub action: String, // "approve", "reject", "request_changes", "comment", "flag"
     pub comment: Option<String>,

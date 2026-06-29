@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { IIndexType } from "@flow-like/flow-like-ui";
 import type {
 	IAddColumnPayload,
 	IDatabaseState,
 	IIndexConfig,
-	IIndexType,
 	IQueryTablePayload,
 } from "@flow-like/flow-like-ui";
 import { fetcher } from "../../lib/api";
@@ -24,6 +24,18 @@ function appendScope(url: string, userScoped?: boolean): string {
 
 export class DatabaseState implements IDatabaseState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private indexTypeToString(indexType: IIndexType): string {
+		const map: Record<IIndexType, string> = {
+			[IIndexType.FullText]: "FullText",
+			[IIndexType.BTree]: "BTree",
+			[IIndexType.Bitmap]: "Bitmap",
+			[IIndexType.LabelList]: "LabelList",
+			[IIndexType.Auto]: "Auto",
+		};
+		return map[indexType] ?? "Auto";
+	}
+
 	async buildIndex(
 		appId: string,
 		tableName: string,
@@ -45,8 +57,8 @@ export class DatabaseState implements IDatabaseState {
 					method: "POST",
 					body: JSON.stringify({
 						column,
-						indexType,
-						optimize,
+						index_type: this.indexTypeToString(indexType),
+						optimize: optimize ?? false,
 					}),
 				},
 				this.backend.auth,
@@ -362,7 +374,7 @@ export class DatabaseState implements IDatabaseState {
 				),
 				{
 					method: "POST",
-					body: JSON.stringify({ keepVersions: keepVersions ?? false }),
+					body: JSON.stringify({ keep_versions: keepVersions ?? false }),
 				},
 				this.backend.auth,
 			);
