@@ -215,14 +215,38 @@ export function usePeerUserInfo(
 		}
 	}, [subs.join(","), prefetchUsers]);
 
-	// Return a map of sub -> user info
+	// Return a map of sub -> user info with a STABLE identity: only swap the
+	// reference when the relevant content (peer set or a sub's resolved name/avatar/
+	// loading state) actually changes. This prevents downstream consumers (e.g. the
+	// node peerUsers injection) from re-rendering on every unrelated render.
+	const mapRef = useRef<Map<string, PeerUserInfo>>(new Map());
 	const peerUsers = useMemo(() => {
-		const map = new Map<string, PeerUserInfo>();
+		const next = new Map<string, PeerUserInfo>();
 		for (const sub of subs) {
 			if (!sub) continue;
-			map.set(sub, getCachedUser(sub));
+			next.set(sub, getCachedUser(sub));
 		}
-		return map;
+		const prev = mapRef.current;
+		let changed = next.size !== prev.size;
+		if (!changed) {
+			for (const [k, v] of next) {
+				const p = prev.get(k);
+				if (
+					!p ||
+					p.loading !== v.loading ||
+					p.name !== v.name ||
+					p.truncatedName !== v.truncatedName ||
+					p.avatarUrl !== v.avatarUrl ||
+					p.color !== v.color
+				) {
+					changed = true;
+					break;
+				}
+			}
+		}
+		if (!changed) return prev;
+		mapRef.current = next;
+		return next;
 	}, [subs, getCachedUser, users]);
 
 	return peerUsers;

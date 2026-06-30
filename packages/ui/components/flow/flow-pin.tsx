@@ -12,6 +12,7 @@ import {
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../hooks";
 import { updateNodeCommand } from "../../lib";
+import { isWebkitLite } from "../../lib/platform";
 import type { IBoard, ILayer } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
 import { type IPin, IPinType, IValueType } from "../../lib/schema/flow/pin";
@@ -33,6 +34,19 @@ type SmallDotHandleProps = React.ComponentProps<typeof Handle> & {
 	isExecution?: boolean;
 };
 
+function defaultValuesEqual(
+	a: number[] | null | undefined,
+	b: number[] | null | undefined,
+): boolean {
+	if (a === b) return true;
+	if (a == null || b == null) return a == null && b == null;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
 const SmallDotHandle = memo(function SmallDotHandle({
 	dotColor,
 	showBorderWhenTransparent = true,
@@ -46,6 +60,10 @@ const SmallDotHandle = memo(function SmallDotHandle({
 	const size = dotSize;
 	const isTransparent = dotColor === "transparent";
 	const visualSize = 7; // Data pins size
+	// WebKit rasterizes the radial-gradient + oklch color-mix + blurred glow per
+	// pin very slowly; on WebKit fall back to a flat fill + 0-blur ring (cheap),
+	// keeping the data-type color identity. Chromium keeps the glossy look.
+	const lite = isWebkitLite();
 
 	return (
 		<Handle
@@ -69,15 +87,21 @@ const SmallDotHandle = memo(function SmallDotHandle({
 						height: visualSize,
 						background: isTransparent
 							? "transparent"
-							: `
+							: lite
+								? dotColor
+								: `
 								radial-gradient(
 									circle at 35% 35%,
 									color-mix(in oklch, ${dotColor} 100%, white 25%),
 									${dotColor} 70%
 								)
 							`,
-						border: `1px solid ${dotColor}`,
-						boxShadow: `
+						border: lite ? "none" : `1px solid ${dotColor}`,
+						boxShadow: isTransparent
+							? "none"
+							: lite
+								? "0 0 0 1px var(--background)"
+								: `
 							0 0 4px color-mix(in oklch, ${dotColor} 25%, transparent),
 							inset 0 0.5px 1px color-mix(in oklch, white 20%, transparent)
 						`,
@@ -229,8 +253,13 @@ function FlowPinInnerComponent({
 	);
 
 	useEffect(() => {
-		setDefaultValue(pin.default_value);
-	}, [pin]);
+		// pin.default_value is a fresh array reference on every board re-parse even
+		// when the bytes are unchanged; guard by value so React bails out instead of
+		// scheduling a redundant render.
+		setDefaultValue((prev) =>
+			defaultValuesEqual(prev, pin.default_value) ? prev : pin.default_value,
+		);
+	}, [pin.default_value]);
 
 	const pinTypeProps = useMemo(
 		() => ({
@@ -251,7 +280,9 @@ function FlowPinInnerComponent({
 							width: 8,
 							height: 8,
 							transform: "translate(-50%, -50%) rotate(45deg)",
-							background: `
+							background: isWebkitLite()
+								? "var(--foreground)"
+								: `
 								linear-gradient(
 									135deg,
 									color-mix(in oklch, var(--foreground) 100%, white 15%),
@@ -260,7 +291,9 @@ function FlowPinInnerComponent({
 							`,
 							border: "1.5px solid var(--foreground)",
 							borderRadius: "1.5px",
-							boxShadow: `
+							boxShadow: isWebkitLite()
+								? "none"
+								: `
 								0 0 5px color-mix(in oklch, var(--foreground) 25%, transparent),
 								inset 0 0.5px 1px color-mix(in oklch, white 15%, transparent)
 							`,

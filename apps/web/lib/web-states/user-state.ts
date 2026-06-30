@@ -15,6 +15,9 @@ import type {
 import type {
 	IBillingSession,
 	IPricingResponse,
+	IPushTargetStatus,
+	IRegisterPushTargetRequest,
+	IRegisterPushTargetResponse,
 	ISubscribeRequest,
 	ISubscribeResponse,
 	IUserInfo,
@@ -29,6 +32,7 @@ import {
 	type WebBackendRef,
 	apiDelete,
 	apiGet,
+	apiPatch,
 	apiPost,
 	apiPut,
 } from "./api-utils";
@@ -191,6 +195,34 @@ export class WebUserState implements IUserState {
 		}
 
 		return result?.count ?? 0;
+	}
+
+	async registerPushTarget(
+		request: IRegisterPushTargetRequest,
+	): Promise<IRegisterPushTargetResponse> {
+		return apiPost<IRegisterPushTargetResponse>(
+			"user/push-targets/register",
+			request,
+			this.backend.auth,
+		);
+	}
+
+	async getPushTargetStatus(deviceId: string): Promise<IPushTargetStatus> {
+		return apiGet<IPushTargetStatus>(
+			`user/push-targets/${encodeURIComponent(deviceId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async setPushTargetEnabled(
+		deviceId: string,
+		enabled: boolean,
+	): Promise<IPushTargetStatus> {
+		return apiPatch<IPushTargetStatus>(
+			`user/push-targets/${encodeURIComponent(deviceId)}`,
+			{ push_enabled: enabled },
+			this.backend.auth,
+		);
 	}
 
 	private async mergeOfflineApps(profile: IProfile): Promise<IProfile> {

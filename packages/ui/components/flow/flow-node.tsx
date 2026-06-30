@@ -7,7 +7,6 @@ import {
 	type NodeProps,
 	Position,
 	useReactFlow,
-	useStore,
 	useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
@@ -56,6 +55,7 @@ import {
 } from "../../lib";
 import type { INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
+import { isWebkitLite } from "../../lib/platform";
 import type { IBoard, IComment, ILayer } from "../../lib/schema/flow/board";
 import { ILayerType } from "../../lib/schema/flow/board/commands/upsert-layer";
 import { type IPin, IVariableType } from "../../lib/schema/flow/pin";
@@ -83,13 +83,6 @@ import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
-const selectSelectedCount = (s: any) => {
-	let count = 0;
-	for (const n of s.nodeLookup.values()) {
-		if (n.selected) count++;
-	}
-	return count;
-};
 
 export interface RemoteSelectionParticipant {
 	clientId: number;
@@ -152,9 +145,6 @@ const FlowNodeInner = memo(
 			payload: "",
 		});
 		const [executing, setExecuting] = useState(false);
-		const [isExec, setIsExec] = useState(false);
-		const [inputPins, setInputPins] = useState<(IPin | IPinAction)[]>([]);
-		const [outputPins, setOutputPins] = useState<(IPin | IPinAction)[]>([]);
 
 		// Use separate selectors returning primitives to avoid infinite re-renders
 		const executionStatus = useRunExecutionStore((state) => {
@@ -214,22 +204,17 @@ const FlowNodeInner = memo(
 			[props.data.node.wasm],
 		);
 
+		const firstPinType =
+			Object.values(props.data.node.pins)?.[0]?.data_type ??
+			IVariableType.Generic;
 		const nodeStyle = useMemo(
 			() => ({
-				backgroundColor: props.selected
-					? typeToColor(
-							Object.values(props.data.node.pins)?.[0]?.data_type ??
-								IVariableType.Generic,
-						)
-					: undefined,
-				borderColor: typeToColor(
-					Object.values(props.data.node.pins)?.[0]?.data_type ??
-						IVariableType.Generic,
-				),
+				backgroundColor: props.selected ? typeToColor(firstPinType) : undefined,
+				borderColor: typeToColor(firstPinType),
 				borderWidth: "1px",
 				borderStyle: "solid",
 			}),
-			[isReroute, props.selected],
+			[props.selected, firstPinType],
 		);
 
 		const sortPins = useCallback((a: IPin, b: IPin) => {
@@ -240,15 +225,6 @@ const FlowNodeInner = memo(
 			// Step 2: If types are the same, compare by index
 			return a.index - b.index;
 		}, []);
-
-		useEffect(() => {
-			const height = Math.max(inputPins.length, outputPins.length);
-			if (isReroute) {
-				return;
-			}
-			if (div.current)
-				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
-		}, [isReroute, inputPins, outputPins]);
 
 		// Execution state is now computed directly from the selector above
 
@@ -328,7 +304,16 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[reactFlow, sortPins, pushCommand, invalidate, props.data.version],
+			[
+				reactFlow,
+				sortPins,
+				pushCommand,
+				invalidate,
+				props.id,
+				props.data.version,
+				props.data.appId,
+				props.data.boardId,
+			],
 		);
 		const pinRemoveCallback = useCallback(
 			async (pinToRemove: IPin) => {
@@ -383,7 +368,16 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[inputPins, outputPins, getNode, props.data.version],
+			[
+				getNode,
+				sortPins,
+				pushCommand,
+				invalidate,
+				props.id,
+				props.data.version,
+				props.data.appId,
+				props.data.boardId,
+			],
 		);
 
 		const parsePins = useCallback(
@@ -457,11 +451,9 @@ const FlowNodeInner = memo(
 					}
 				}
 
-				setInputPins(inputPins);
-				setOutputPins(outputPins);
-				setIsExec(isExec);
+				return { inputPins, outputPins, isExec };
 			},
-			[addPin, sortPins, props.data.node, props.data.node.hash],
+			[addPin, sortPins, props.data.node],
 		);
 
 		// Parse pins when node pins change
@@ -481,11 +473,23 @@ const FlowNodeInner = memo(
 				});
 		}, [props.data.node?.pins, props.data.node?.name]);
 
+		// Derive pins synchronously (avoids the extra render pass of effect+setState)
+		const { inputPins, outputPins, isExec } = useMemo(
+			() => parsePins(visiblePins),
+			[parsePins, visiblePins],
+		);
+
 		useEffect(() => {
-			parsePins(visiblePins);
 			// Update React Flow internals when pins change (handles may have changed)
 			updateNodeInternals(props.id);
-		}, [visiblePins, props.data.node.hash, props.id]);
+		}, [visiblePins, props.id, updateNodeInternals]);
+
+		useEffect(() => {
+			if (isReroute) return;
+			const height = Math.max(inputPins.length, outputPins.length);
+			if (div.current)
+				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
+		}, [isReroute, inputPins, outputPins]);
 
 		function isPinAction(pin: IPin | IPinAction): pin is IPinAction {
 			return typeof (pin as IPinAction).onAction === "function";
@@ -605,7 +609,9 @@ const FlowNodeInner = memo(
 						height: 12,
 						borderRadius: 2,
 						background: refInConnected
-							? `
+							? isWebkitLite()
+								? "var(--pin-fn-ref)"
+								: `
 				linear-gradient(
 					135deg,
 					var(--pin-fn-ref) 0%,
@@ -616,12 +622,13 @@ const FlowNodeInner = memo(
 							: "var(--background)",
 						border: "1px solid var(--pin-fn-ref)",
 						padding: 0,
-						boxShadow: refInConnected
-							? `
+						boxShadow:
+							refInConnected && !isWebkitLite()
+								? `
 		0 0 6px color-mix(in oklch, var(--pin-fn-ref) 30%, transparent),
 		inset 0 1px 1px color-mix(in oklch, white 15%, transparent)
 	`
-							: "none",
+								: "none",
 					}}
 				/>
 			);
@@ -646,7 +653,9 @@ const FlowNodeInner = memo(
 						height: 12,
 						borderRadius: 2,
 						background: refOutConnected
-							? `
+							? isWebkitLite()
+								? "var(--pin-fn-ref)"
+								: `
 			radial-gradient(
 				circle at 30% 30%,
 				color-mix(in oklch, var(--pin-fn-ref) 100%, white 20%),
@@ -656,13 +665,14 @@ const FlowNodeInner = memo(
 							: "var(--background)",
 						border: "1px solid var(--pin-fn-ref)",
 						padding: 0,
-						boxShadow: refOutConnected
-							? `
+						boxShadow:
+							refOutConnected && !isWebkitLite()
+								? `
 			0 0 8px color-mix(in oklch, var(--pin-fn-ref) 40%, transparent),
 			0 1px 2px color-mix(in oklch, black 20%, transparent),
 			inset 0 1px 1px color-mix(in oklch, white 20%, transparent)
 		`
-							: "none",
+								: "none",
 					}}
 				/>
 			);
@@ -1003,6 +1013,8 @@ const FlowNodeInner = memo(
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
+		prev.props.data.remoteSelections === next.props.data.remoteSelections &&
+		prev.props.data.peerUsers === next.props.data.peerUsers &&
 		prev.props.data.selectorDataVersion === next.props.data.selectorDataVersion,
 );
 
@@ -1322,8 +1334,6 @@ function FlowNode(props: NodeProps<FlowNode>) {
 		[props.data.node, invalidate, pushCommands, flow],
 	);
 
-	const selectedCount = useStore(selectSelectedCount);
-
 	const isReadOnly = typeof props.data.version !== "undefined";
 
 	const handleOpenInfo = useCallback(() => {
@@ -1338,6 +1348,13 @@ function FlowNode(props: NodeProps<FlowNode>) {
 				: [props.data.node.id];
 		props.data.onExplain?.(nodeIds);
 	}, [flow, props.data.node.id, props.data.onExplain]);
+
+	// Stable callbacks for the toolbar so the memoized ToolbarButtons (and their
+	// Radix Tooltip/Popper subtrees, which measure the DOM on render) don't
+	// re-render every time this node re-renders (e.g. after a drag/drop).
+	const handleOpenComment = useCallback(() => setCommentMenu(true), []);
+	const handleOpenRename = useCallback(() => setRenameMenu(true), []);
+	const handleOpenEdit = useCallback(() => setEditingMenu(true), []);
 
 	return (
 		<>
@@ -1410,13 +1427,12 @@ function FlowNode(props: NodeProps<FlowNode>) {
 						node={props.data.node}
 						appId={props.data.appId}
 						boardId={props.data.boardId}
-						selectedCount={selectedCount}
 						isReadOnly={isReadOnly}
 						onCopy={copy}
 						onDelete={deleteNodes}
-						onComment={() => setCommentMenu(true)}
-						onRename={() => setRenameMenu(true)}
-						onEdit={() => setEditingMenu(true)}
+						onComment={handleOpenComment}
+						onRename={handleOpenRename}
+						onEdit={handleOpenEdit}
 						onInfo={handleOpenInfo}
 						onHandleError={handleError}
 						onCollapse={handleCollapse}

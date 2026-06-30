@@ -56,6 +56,8 @@ import {
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import {
+	type ComponentProps,
+	memo,
 	type ReactElement,
 	useCallback,
 	useEffect,
@@ -168,8 +170,8 @@ import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
 import { BoardMeta } from "./board-meta";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
-import { FlowCopilot, type Suggestion } from "./flow-copilot";
-import { FlowCursors } from "./flow-cursors";
+import { FlowCopilot } from "./flow-copilot";
+import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
@@ -192,6 +194,128 @@ import { RuntimeVariablesPrompt } from "./runtime-variables-prompt";
 import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
+
+type ReactFlowProps = ComponentProps<typeof ReactFlow>;
+
+interface FlowCanvasProps {
+	flowRef: ReactFlowProps["ref"];
+	nodes: ReactFlowProps["nodes"];
+	edges: ReactFlowProps["edges"];
+	nodeTypes: ReactFlowProps["nodeTypes"];
+	edgeTypes: ReactFlowProps["edgeTypes"];
+	colorMode: ReactFlowProps["colorMode"];
+	nodesInteractive: boolean;
+	onlyRenderVisible: boolean;
+	currentLayer: string | undefined;
+	onContextMenu: ReactFlowProps["onContextMenu"];
+	onInit: ReactFlowProps["onInit"];
+	onNodeDoubleClick: ReactFlowProps["onNodeDoubleClick"];
+	onNodesChange: ReactFlowProps["onNodesChange"];
+	onEdgesChange: ReactFlowProps["onEdgesChange"];
+	onNodeDragStop: ReactFlowProps["onNodeDragStop"];
+	onNodeDrag: ReactFlowProps["onNodeDrag"];
+	isValidConnection: ReactFlowProps["isValidConnection"];
+	onConnect: ReactFlowProps["onConnect"];
+	onSelectionChange: ReactFlowProps["onSelectionChange"];
+	onReconnect: ReactFlowProps["onReconnect"];
+	onReconnectStart: ReactFlowProps["onReconnectStart"];
+	onMoveEnd: ReactFlowProps["onMoveEnd"];
+	onReconnectEnd: ReactFlowProps["onReconnectEnd"];
+	onConnectEnd: ReactFlowProps["onConnectEnd"];
+	onScreenshot: () => void;
+	miniMapNodeColor: (node: Node) => string;
+}
+
+// Memoized so unrelated FlowBoard re-renders (presence, dialogs, copilot toggles,
+// menus) skip reconciling the entire React Flow canvas. All props passed in are
+// referentially stable (state arrays + useCallback handlers), so the memo holds.
+const FlowCanvas = memo(function FlowCanvas({
+	flowRef,
+	nodes,
+	edges,
+	nodeTypes,
+	edgeTypes,
+	colorMode,
+	nodesInteractive,
+	onlyRenderVisible,
+	currentLayer,
+	onContextMenu,
+	onInit,
+	onNodeDoubleClick,
+	onNodesChange,
+	onEdgesChange,
+	onNodeDragStop,
+	onNodeDrag,
+	isValidConnection,
+	onConnect,
+	onSelectionChange,
+	onReconnect,
+	onReconnectStart,
+	onMoveEnd,
+	onReconnectEnd,
+	onConnectEnd,
+	onScreenshot,
+	miniMapNodeColor,
+}: FlowCanvasProps) {
+	return (
+		<ReactFlow
+			suppressHydrationWarning
+			deleteKeyCode={null}
+			onContextMenu={onContextMenu}
+			nodesDraggable={nodesInteractive}
+			nodesConnectable={nodesInteractive}
+			onlyRenderVisibleElements={onlyRenderVisible}
+			onInit={onInit}
+			ref={flowRef}
+			colorMode={colorMode}
+			nodes={nodes}
+			nodeTypes={nodeTypes}
+			edges={edges}
+			edgeTypes={edgeTypes}
+			maxZoom={3}
+			minZoom={0.1}
+			onNodeDoubleClick={onNodeDoubleClick}
+			onNodesChange={onNodesChange}
+			onEdgesChange={onEdgesChange}
+			onNodeDragStop={onNodeDragStop}
+			onNodeDrag={onNodeDrag}
+			isValidConnection={isValidConnection}
+			onConnect={onConnect}
+			onSelectionChange={onSelectionChange}
+			onReconnect={onReconnect}
+			onReconnectStart={onReconnectStart}
+			onMoveEnd={onMoveEnd}
+			onReconnectEnd={onReconnectEnd}
+			onConnectEnd={onConnectEnd}
+			fitView
+			proOptions={{ hideAttribution: true }}
+		>
+			<Controls>
+				<ControlButton onClick={onScreenshot}>
+					<ShareIcon className="size-4" />
+				</ControlButton>
+			</Controls>
+			<MiniMap
+				pannable
+				zoomable
+				bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
+				maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
+				nodeColor={miniMapNodeColor}
+			/>
+			<Background
+				variant={currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+				color={
+					currentLayer
+						? "color-mix(in oklch, var(--foreground) 5%, transparent)"
+						: "color-mix(in oklch, var(--foreground) 20%, transparent)"
+				}
+				bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
+				gap={12}
+				size={1}
+			/>
+		</ReactFlow>
+	);
+});
 
 export function FlowBoard({
 	appId,
@@ -676,6 +800,7 @@ export function FlowBoard({
 		awareness,
 		connectionStatus,
 		peerStates,
+		cursorStore,
 		reconnect,
 		broadcastActiveNode,
 	} = useRealtimeCollaboration({
@@ -804,6 +929,7 @@ export function FlowBoard({
 
 	// Realtime chat
 	const [chatOpen, setChatOpen] = useState(false);
+	const handleToggleChat = useCallback(() => setChatOpen((v) => !v), []);
 	const {
 		messages: chatMessages,
 		sendMessage,
@@ -939,6 +1065,20 @@ export function FlowBoard({
 	const [copilotInitialPrompt, setCopilotInitialPrompt] = useState<
 		string | undefined
 	>();
+	// Stable snapshot of the selected flow-node ids handed to FlowPilot. Kept as
+	// state (updated only on real selection changes) so the copilot subtree is not
+	// re-rendered on every unrelated FlowBoard render.
+	const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+
+	const handleCopilotClose = useCallback(() => {
+		setCopilotOpen(false);
+		setCopilotInitialPrompt(undefined);
+		setCopilotWorkspaceVisible(false);
+	}, []);
+	const handleClearRunContext = useCallback(
+		() => setCurrentMetadata(undefined),
+		[setCurrentMetadata],
+	);
 
 	useEffect(() => {
 		if (!copilotOpen) {
@@ -2125,21 +2265,26 @@ export function FlowBoard({
 		});
 	}, [remoteExecutingNodeIds, setNodes]);
 
-	// Inject peerUsers map into node data so nodes can display avatars for remote selections
+	// Inject peerUsers map into node data so nodes can display avatars for remote
+	// selections. peerUsers now has a stable identity (see usePeerUserInfo), so this
+	// runs only when peer user content actually changes — not on every render — and
+	// returns the same nodes array when nothing changed so ReactFlow doesn't reconcile.
 	const peerUsersRef = useRef(peerUsers);
 	peerUsersRef.current = peerUsers;
 	useEffect(() => {
-		if (peerStates.length === 0) return;
 		setNodes((nds: any) => {
 			if (nds.length === 0) return nds;
-			return nds.map((node: any) => {
+			let changed = false;
+			const next = nds.map((node: any) => {
 				if (node.type !== "node" && node.type !== "callFunctionNode")
 					return node;
 				if (node.data.peerUsers === peerUsers) return node;
+				changed = true;
 				return { ...node, data: { ...node.data, peerUsers } };
 			});
+			return changed ? next : nds;
 		});
-	}, [peerUsers, peerStates.length, setNodes]);
+	}, [peerUsers, setNodes]);
 
 	const nodeTypes = useMemo(
 		() => ({
@@ -2215,7 +2360,6 @@ export function FlowBoard({
 
 	const onSelectionChange = useCallback<OnSelectionChangeFunc<Node, Edge>>(
 		({ nodes: selectedNodes }) => {
-			if (!awareness) return;
 			const nodeIds = selectedNodes
 				.filter(
 					(selectedNode) =>
@@ -2223,6 +2367,12 @@ export function FlowBoard({
 						selectedNode.type === "callFunctionNode",
 				)
 				.map((selectedNode) => selectedNode.id);
+			setSelectedNodeIds((prev) => {
+				if (prev.length !== nodeIds.length) return nodeIds;
+				const prevSet = new Set(prev);
+				return nodeIds.every((id) => prevSet.has(id)) ? prev : nodeIds;
+			});
+			if (!awareness) return;
 			awareness.setLocalStateField("selection", { nodes: nodeIds });
 			// Broadcast active node when user clicks a single node
 			if (nodeIds.length === 1) {
@@ -2861,26 +3011,6 @@ export function FlowBoard({
 		[board.data, currentLayer, executeCommands, fitView, version],
 	);
 
-	const [ghostNodes, setGhostNodes] = useState<
-		{
-			id: string;
-			node_type: string;
-			position: { x: number; y: number };
-			reason: string;
-		}[]
-	>([]);
-
-	const handleGhostNodesChange = useCallback((suggestions: Suggestion[]) => {
-		setGhostNodes(
-			suggestions.map((s, i) => ({
-				id: `ghost-${i}`,
-				node_type: s.node_type,
-				position: s.position || { x: 0, y: 0 },
-				reason: s.reason,
-			})),
-		);
-	}, []);
-
 	// Use the copilot commands hook for executing AI-generated commands
 	const { handleExecuteCommands } = useCopilotCommands({
 		board,
@@ -2913,20 +3043,15 @@ export function FlowBoard({
 							appId={appId}
 							board={board.data}
 							catalogNodes={catalog.data}
-							selectedNodeIds={Array.from(selected.current)}
+							selectedNodeIds={selectedNodeIds}
 							onAcceptSuggestion={onAcceptSuggestion}
 							onFocusNode={focusNode}
 							onSelectNodes={selectNodes}
-							onGhostNodesChange={handleGhostNodesChange}
 							onExecuteCommands={handleExecuteCommands}
 							onApplyFlowScript={handleApplyFlowScript}
 							runContext={currentMetadata}
-							onClearRunContext={() => setCurrentMetadata(undefined)}
-							onClose={() => {
-								setCopilotOpen(false);
-								setCopilotInitialPrompt(undefined);
-								setCopilotWorkspaceVisible(false);
-							}}
+							onClearRunContext={handleClearRunContext}
+							onClose={handleCopilotClose}
 							onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 							mode="panel"
 							initialPrompt={copilotInitialPrompt}
@@ -2938,13 +3063,13 @@ export function FlowBoard({
 			<div className="fixed right-3 top-16 z-50 flex items-center gap-2 sm:right-4 sm:top-16 md:right-6 md:top-6">
 				{/* Connection status indicator */}
 				{awareness && connectionStatus === "connected" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-primary animate-pulse" />
 						<span className="text-xs font-medium text-primary">Live</span>
 					</div>
 				)}
 				{awareness && connectionStatus === "reconnecting" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-yellow-500 animate-pulse" />
 						<span className="text-xs font-medium text-yellow-500">
 							Reconnecting...
@@ -2955,7 +3080,7 @@ export function FlowBoard({
 					<button
 						type="button"
 						onClick={() => reconnect()}
-						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
+						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
 					>
 						<WifiOffIcon className="h-3.5 w-3.5 text-destructive" />
 						<span className="text-xs font-medium text-destructive">
@@ -2964,7 +3089,7 @@ export function FlowBoard({
 					</button>
 				)}
 				{!awareness && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiOffIcon className="h-3.5 w-3.5 text-muted-foreground" />
 						<span className="text-xs font-medium text-muted-foreground">
 							Offline
@@ -2982,7 +3107,7 @@ export function FlowBoard({
 						onToggleFollow={toggleFollow}
 						onJumpToUser={jumpToUser}
 						onJumpToLayer={jumpToLayer}
-						onOpenChat={() => setChatOpen((v) => !v)}
+						onOpenChat={handleToggleChat}
 						unreadCount={unreadCount}
 					/>
 				)}
@@ -3275,21 +3400,18 @@ export function FlowBoard({
 											Version {version[0]}.{version[1]}.{version[2]} - Read-Only
 										</h3>
 									)}
-									<ReactFlow
-										suppressHydrationWarning
-										deleteKeyCode={null}
-										onContextMenu={onContextMenuCB}
-										nodesDraggable={typeof version === "undefined"}
-										nodesConnectable={typeof version === "undefined"}
-										onInit={initializeFlow}
-										ref={flowRef}
-										colorMode={colorMode}
+									<FlowCanvas
+										flowRef={flowRef}
 										nodes={nodes}
-										nodeTypes={nodeTypes}
 										edges={edges}
+										nodeTypes={nodeTypes}
 										edgeTypes={edgeTypes}
-										maxZoom={3}
-										minZoom={0.1}
+										colorMode={colorMode}
+										nodesInteractive={typeof version === "undefined"}
+										onlyRenderVisible={nodes.length > 65}
+										currentLayer={currentLayer}
+										onContextMenu={onContextMenuCB}
+										onInit={initializeFlow}
 										onNodeDoubleClick={onNodeDoubleClick}
 										onNodesChange={onNodesChangeIntercept}
 										onEdgesChange={onEdgesChange}
@@ -3301,49 +3423,16 @@ export function FlowBoard({
 										onReconnect={onReconnect}
 										onReconnectStart={onReconnectStart}
 										onMoveEnd={onMoveEnd}
-										// onEdgeDoubleClick={(e, edge) => {
-										// 	console.dir({e, edge})
-										// }}
 										onReconnectEnd={onReconnectEnd}
 										onConnectEnd={onConnectEnd}
-										fitView
-										proOptions={{ hideAttribution: true }}
-									>
-										<Controls>
-											<ControlButton onClick={onScreenshot}>
-												<ShareIcon className="size-4" />
-											</ControlButton>
-										</Controls>
-										<MiniMap
-											pannable
-											zoomable
-											bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
-											maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
-											nodeColor={miniMapNodeColor}
-										/>
-										<Background
-											variant={
-												currentLayer
-													? BackgroundVariant.Lines
-													: BackgroundVariant.Dots
-											}
-											color={
-												currentLayer
-													? "color-mix(in oklch, var(--foreground) 5%, transparent)"
-													: "color-mix(in oklch, var(--foreground) 20%, transparent)"
-											}
-											bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
-											gap={12}
-											size={1}
-										/>
-									</ReactFlow>
-									{peerStates.length > 0 && (
-										<FlowCursors
-											peers={peerStates}
-											currentLayerPath={layerPath ?? "root"}
-											peerUsers={peerUsers}
-										/>
-									)}
+										onScreenshot={onScreenshot}
+										miniMapNodeColor={miniMapNodeColor}
+									/>
+									<FlowCursorsLayer
+										store={cursorStore}
+										currentLayerPath={layerPath ?? "root"}
+										peerUsers={peerUsers}
+									/>
 									{peerStates.length > 0 && (
 										<FlowLayerIndicators
 											peers={peerStates}
@@ -3534,20 +3623,15 @@ export function FlowBoard({
 								appId={appId}
 								board={board.data}
 								catalogNodes={catalog.data}
-								selectedNodeIds={Array.from(selected.current)}
+								selectedNodeIds={selectedNodeIds}
 								onAcceptSuggestion={onAcceptSuggestion}
 								onFocusNode={focusNode}
 								onSelectNodes={selectNodes}
-								onGhostNodesChange={handleGhostNodesChange}
 								onExecuteCommands={handleExecuteCommands}
 								onApplyFlowScript={handleApplyFlowScript}
 								runContext={currentMetadata}
-								onClearRunContext={() => setCurrentMetadata(undefined)}
-								onClose={() => {
-									setCopilotOpen(false);
-									setCopilotInitialPrompt(undefined);
-									setCopilotWorkspaceVisible(false);
-								}}
+								onClearRunContext={handleClearRunContext}
+								onClose={handleCopilotClose}
 								onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 								mode="panel"
 								initialPrompt={copilotInitialPrompt}

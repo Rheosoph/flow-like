@@ -16,6 +16,7 @@ import { translateDify } from "./importer/dify-translator";
 import { translateN8n } from "./importer/n8n-translator";
 import type { DifyWorkflow, N8nWorkflow } from "./importer/types";
 import { toastSuccess } from "./messages";
+import { isWebkitLite } from "./platform";
 import type { IGenericCommand, IValueType, IVariable } from "./schema";
 import {
 	type IBoard,
@@ -834,7 +835,7 @@ export function parseBoard(
 						pathType: connectionMode,
 						data_type: pin.data_type,
 					},
-					animated: pin.data_type !== "Execution",
+					animated: !isWebkitLite() && pin.data_type !== "Execution",
 					reconnectable: true,
 					target: targetNodeId,
 					targetHandle: conntectedPin.id,
@@ -885,7 +886,7 @@ export function parseBoard(
 							isFnRef: true,
 							pathType: connectionMode,
 						},
-						animated: true,
+						animated: !isWebkitLite(),
 						reconnectable: true,
 						style: {
 							stroke: "var(--pin-fn-ref)",
