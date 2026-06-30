@@ -360,6 +360,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 				"pulse",
 			],
 		},
+		autoPlay: { type: "boundValue" },
 	},
 	diffView: {
 		type: { type: "string", required: true },

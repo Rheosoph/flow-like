@@ -96,6 +96,7 @@ export function A2UIFilePreview({
 	const showControls = useResolved<boolean>(component.showControls) ?? true;
 	const showDownload = useResolved<boolean>(component.showDownload) ?? false;
 	const audioVariant = useResolved<string>(component.variant);
+	const audioAutoPlay = useResolved<boolean>(component.autoPlay) ?? false;
 	const fit = useResolved<string>(component.fit) ?? "contain";
 	const loading = useResolved<"lazy" | "eager">(component.loading);
 	const fallbackText =
@@ -238,6 +239,7 @@ export function A2UIFilePreview({
 							src={src}
 							variant={audioVariant as VoiceVariant}
 							title={rawFileName(src, filename)}
+							autoPlay={audioAutoPlay}
 							downloadName={
 								showDownload ? rawFileName(src, filename) : undefined
 							}

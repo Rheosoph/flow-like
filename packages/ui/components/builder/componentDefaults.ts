@@ -526,6 +526,7 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		fallbackText: str("Cannot preview this file"),
 		showDownload: bool(false),
 		loading: str("lazy"),
+		autoPlay: bool(false),
 	},
 	diffView: {
 		original: str('function greet(name) {\n  return "Hi " + name;\n}'),

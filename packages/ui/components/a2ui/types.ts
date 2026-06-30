@@ -1065,6 +1065,8 @@ export interface FilePreviewComponent extends ComponentBase {
 	loading?: BoundValue; // "lazy" | "eager"
 	/** Audio only: when set, render an animated visualizer player instead of the default controls. "conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse" */
 	variant?: BoundValue;
+	/** Audio (animated `variant`) only: auto-play when the source is set, e.g. for a conversation reply. Default false. */
+	autoPlay?: BoundValue;
 }
 
 export interface DiffViewComponent extends ComponentBase {

@@ -1562,6 +1562,9 @@ pub struct FilePreviewProps {
     /// Audio only: animated visualizer style ("conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse"). When set, renders an animated player instead of the default controls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<BoundValue>,
+    /// Audio (animated `variant`) only: auto-play when the source is set, e.g. a conversation reply. Default false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_play: Option<BoundValue>,
 }
 
 /// Diff viewer component for text, code, markdown and documents
