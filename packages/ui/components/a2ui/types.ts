@@ -624,7 +624,7 @@ export interface VoiceInputComponent extends ComponentBase {
 	error?: BoundValue;
 	/** Deprecated alias for `variant`. */
 	visualizer?: BoundValue;
-	/** "conservative" | "waveform" | "orb" | "vortex" | "shader" */
+	/** "conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse" */
 	variant?: BoundValue;
 	/** "sm" | "md" | "lg" */
 	size?: BoundValue;
@@ -634,6 +634,12 @@ export interface VoiceInputComponent extends ComponentBase {
 	invoke?: BoundValue;
 	color?: BoundValue;
 	recordingColor?: BoundValue;
+	/** Post-input look: "player" (animated playback) | "autoplay" (play the backend-set response media immediately, for conversations) | "summary" (compact info + delete). Default "player". */
+	resultMode?: BoundValue;
+	/** Backend-set response media URL (e.g. via Set Media Source). In "autoplay" mode this is what plays — until it arrives the element shows a loading state. */
+	src?: BoundValue;
+	/** Alias for `src` (Set Media Source writes both). */
+	url?: BoundValue;
 }
 
 export interface LinkComponent extends ComponentBase {
@@ -1057,6 +1063,8 @@ export interface FilePreviewComponent extends ComponentBase {
 	height?: BoundValue;
 	showDownload?: BoundValue;
 	loading?: BoundValue; // "lazy" | "eager"
+	/** Audio only: when set, render an animated visualizer player instead of the default controls. "conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse" */
+	variant?: BoundValue;
 }
 
 export interface DiffViewComponent extends ComponentBase {

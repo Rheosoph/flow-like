@@ -13,6 +13,7 @@ use flow_like_types::{
     reqwest,
 };
 use schemars::JsonSchema;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -173,6 +174,36 @@ fn sanitize_path_segment(value: &str) -> String {
     }
 }
 
+/// Decodes a desktop "local file" URL (Tauri `convertFileSrc`: `asset://localhost/…`
+/// or `http://asset.localhost/…`) back to its absolute on-disk path. Returns `None`
+/// for regular http(s) URLs, which are downloaded instead.
+fn decode_local_file_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str().unwrap_or("");
+    let is_local = parsed.scheme() == "file"
+        || (parsed.scheme() == "asset" && host == "localhost")
+        || ((parsed.scheme() == "http" || parsed.scheme() == "https")
+            && host == "asset.localhost");
+    if !is_local {
+        return None;
+    }
+
+    let decoded = urlencoding::decode(parsed.path().trim_start_matches('/'))
+        .ok()?
+        .into_owned();
+    if decoded.is_empty() {
+        return None;
+    }
+
+    // Windows drive paths (C:/…) are already absolute; POSIX paths need the slash back.
+    let is_windows_drive = decoded.as_bytes().get(1) == Some(&b':');
+    Some(if is_windows_drive {
+        decoded
+    } else {
+        format!("/{decoded}")
+    })
+}
+
 fn file_name_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segment = parsed
@@ -266,6 +297,19 @@ async fn materialize_missing_flow_paths(
             );
             continue;
         };
+
+        // Desktop "local file" URLs (Tauri convertFileSrc) can't be HTTP-fetched by
+        // the engine. Resolve them to their on-disk path and register a store for
+        // that file instead of downloading.
+        if let Some(local_path) = decode_local_file_url(&url) {
+            let local_path = PathBuf::from(local_path);
+            if local_path.is_file() {
+                let flow_path = FlowPath::from_pathbuf(local_path, context).await?;
+                file.flow_path = Some(flow_path.clone());
+                flow_paths.push(flow_path);
+                continue;
+            }
+        }
 
         let file_name = flow_path_file_name(file, index);
         let object_path = Path::from("files").child(file_name.as_str());

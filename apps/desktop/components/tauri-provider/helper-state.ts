@@ -49,7 +49,11 @@ export class HelperState implements IHelperState {
 		);
 	}
 
-	async fileToUrl(file: File, offline = false, appId?: string): Promise<string> {
+	async fileToUrl(
+		file: File,
+		offline = false,
+		appId?: string,
+	): Promise<string> {
 		return (await this.fileToTemporaryFile(file, offline, appId)).url;
 	}
 
@@ -119,9 +123,10 @@ export class HelperState implements IHelperState {
 
 			await writeFile(tmpPath, file.stream());
 
-			const postProcessedPath = await invoke<string>("post_process_local_file", {
-				file: tmpPath,
-			});
+			const postProcessedPath = await invoke<string>(
+				"post_process_local_file",
+				{ file: tmpPath },
+			);
 
 			const hash = postProcessedPath.split("/").pop() || fileId;
 

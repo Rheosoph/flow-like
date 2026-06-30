@@ -757,7 +757,7 @@ pub struct VoiceInputProps {
     /// Deprecated alias for `variant` ("waveform" | "bars").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visualizer: Option<BoundValue>,
-    /// Visual style: "conservative" | "waveform" | "orb" | "vortex" | "shader".
+    /// Visual style: "conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<BoundValue>,
     /// Element size: "sm" | "md" | "lg".
@@ -775,6 +775,9 @@ pub struct VoiceInputProps {
     /// Accent color while recording (CSS color string).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recording_color: Option<BoundValue>,
+    /// Post-input look: "player" (animated playback) | "autoplay" (player that plays the result immediately, for conversations) | "summary" (compact info + delete). Default "player".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_mode: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1556,6 +1559,9 @@ pub struct FilePreviewProps {
     /// Show download button
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_download: Option<BoundValue>,
+    /// Audio only: animated visualizer style ("conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse"). When set, renders an animated player instead of the default controls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<BoundValue>,
 }
 
 /// Diff viewer component for text, code, markdown and documents

@@ -24,6 +24,8 @@ interface VoiceModeProps {
 	speaking?: boolean;
 	/** Analyser over the answer audio, so the orb reacts to the spoken reply. */
 	speakingAnalyser?: AnalyserNode | null;
+	/** Stop the playing answer when the user taps the orb to talk again (barge-in). */
+	onInterrupt?: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -40,12 +42,15 @@ export function VoiceMode({
 	busy = false,
 	speaking = false,
 	speakingAnalyser = null,
+	onInterrupt,
 }: VoiceModeProps) {
 	const [sent, setSent] = useState(false);
+	const [hover, setHover] = useState(false);
 	const sawBusyRef = useRef(false);
 
 	const recorder = useVoiceRecorder({
 		maxDuration: voice?.maxDuration ?? 0,
+		stopDelay: 700,
 		onComplete: (file) => {
 			setSent(true);
 			onSend(file);
@@ -74,6 +79,17 @@ export function VoiceMode({
 		sawBusyRef.current = false;
 		onClose();
 	}, [recorder, onClose]);
+
+	const handleOrbTap = useCallback(() => {
+		if (recorder.isRecording) {
+			recorder.stop();
+			return;
+		}
+		onInterrupt?.();
+		setSent(false);
+		sawBusyRef.current = false;
+		void recorder.start();
+	}, [recorder, onInterrupt]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only react to open transitions; recorder handles are stable.
 	useEffect(() => {
@@ -120,10 +136,15 @@ export function VoiceMode({
 		? "recording"
 		: speaking
 			? "speaking"
-			: sent
+			: sent || recorder.isArming
 				? "processing"
 				: "idle";
 	const vizAnalyser = speaking ? speakingAnalyser : recorder.analyser;
+	const orbHint = recorder.isRecording
+		? "Tap to send"
+		: speaking
+			? "Tap to interrupt"
+			: "Tap to talk";
 
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-xl animate-in fade-in duration-300">
@@ -139,13 +160,29 @@ export function VoiceMode({
 			</Button>
 
 			<div className="relative flex flex-col items-center gap-8">
-				<Visualizer
-					analyser={vizAnalyser}
-					state={visualState}
-					size="lg"
-					color={color}
-					recordingColor={recordingColor}
-				/>
+				<button
+					type="button"
+					onClick={handleOrbTap}
+					onMouseEnter={() => {
+						setHover(true);
+						recorder.prewarm();
+					}}
+					onMouseLeave={() => setHover(false)}
+					aria-label={orbHint}
+					className="group flex select-none flex-col items-center gap-3 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					<Visualizer
+						analyser={vizAnalyser}
+						state={visualState}
+						size="lg"
+						color={color}
+						recordingColor={recordingColor}
+						hover={hover}
+					/>
+					<span className="text-xs text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+						{orbHint}
+					</span>
+				</button>
 
 				<div className="flex flex-col items-center gap-2">
 					{recorder.isRecording ? (

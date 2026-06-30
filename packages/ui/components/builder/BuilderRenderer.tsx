@@ -926,7 +926,9 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					boardId={actionContext?.boardId}
 					eventId={actionContext?.eventId}
 					components={Object.fromEntries(allComponents)}
-					isPreviewMode={!!actionContext?.appId && !!actionContext?.boardId}
+					// Edit canvas: never fire actions / trigger workflows. Live
+					// interaction happens in preview and /use, not while editing.
+					isPreviewMode={false}
 				>
 					<div className={cn("min-h-full w-full", className)}>
 						<BuilderComponent

@@ -1,12 +1,16 @@
 "use client";
 
 import { Loader2, Mic, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
+import {
+	type ITemporaryFlowPath,
+	useBackend,
+} from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
 import {
+	AudioPlayback,
 	VOICE_DEFAULT_COLOR,
 	VOICE_DEFAULT_RECORDING_COLOR,
 	type VoiceInvokeMode,
@@ -20,6 +24,7 @@ import {
 	useVoiceRecorder,
 } from "../../voice";
 import {
+	useActionContext,
 	useComponentActionTrigger,
 	useIsComponentTriggering,
 	useOnAction,
@@ -34,11 +39,16 @@ interface VoiceData {
 	size: number;
 	type: string;
 	duration: number;
+	url?: string;
 	backendUrl?: string;
+	flowPath?: ITemporaryFlowPath;
 	transcript?: string;
 	uploading?: boolean;
 	uploadError?: string;
 }
+
+/** Trailing buffer so a manual/hold stop doesn't clip the user's last words. */
+const STOP_DELAY_MS = 700;
 
 function toStoredVoice(voice: VoiceData): VoiceData {
 	const { uploading: _u, uploadError: _e, ...stored } = voice;
@@ -73,6 +83,7 @@ export function A2UIVoiceInput({
 	const triggerAction = useComponentActionTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 	const backend = useBackend();
+	const { appId } = useActionContext();
 	const { setByPath } = useData();
 
 	const value = useResolved<VoiceData>(component.value);
@@ -100,12 +111,51 @@ export function A2UIVoiceInput({
 	const recordingColor =
 		useResolved<string>(component.recordingColor) ??
 		VOICE_DEFAULT_RECORDING_COLOR;
+	const resultModeRaw = useResolved<string>(component.resultMode) ?? "player";
+	const resultMode =
+		resultModeRaw === "summary"
+			? "summary"
+			: resultModeRaw === "autoplay"
+				? "autoplay"
+				: "player";
 
 	const [localVoice, setLocalVoice] = useState<VoiceData | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
 	const [hover, setHover] = useState(false);
+	const [localUrl, setLocalUrl] = useState<string | null>(null);
+	const localUrlRef = useRef<string | null>(null);
+	const [dismissedResponse, setDismissedResponse] = useState<string | null>(
+		null,
+	);
+
+	const replaceLocalUrl = useCallback((file: File | null) => {
+		if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
+		const url = file ? URL.createObjectURL(file) : null;
+		localUrlRef.current = url;
+		setLocalUrl(url);
+	}, []);
+
+	useEffect(
+		() => () => {
+			if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
+		},
+		[],
+	);
 
 	const display = localVoice || value || null;
+	// The user's own recording.
+	const recordingSrc = localUrl ?? display?.backendUrl ?? null;
+	// A response the backend pushed onto this element (e.g. via Set Media Source).
+	const responseMedia =
+		(useResolved<string>(component.src) ??
+			useResolved<string>(component.url) ??
+			null) ||
+		null;
+	const responseMediaRef = useRef<string | null>(null);
+	responseMediaRef.current = responseMedia;
+	// Ignore a stale response once the user records again, until a new one arrives.
+	const activeResponse =
+		responseMedia && responseMedia !== dismissedResponse ? responseMedia : null;
 
 	const handleRecorded = useCallback(
 		async (file: File, duration: number) => {
@@ -116,13 +166,20 @@ export function A2UIVoiceInput({
 				duration,
 				uploading: true,
 			};
+			replaceLocalUrl(file);
 			setLocalVoice(voiceData);
 			setIsUploading(true);
 			try {
-				const backendUrl = await backend.helperState.fileToUrl(file, false);
+				const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
+					file,
+					false,
+					appId,
+				)) ?? { url: await backend.helperState.fileToUrl(file, false, appId) };
 				const uploaded: VoiceData = {
 					...voiceData,
-					backendUrl,
+					url: temporaryFile.url,
+					backendUrl: temporaryFile.url,
+					flowPath: temporaryFile.flowPath,
 					uploading: false,
 				};
 				setLocalVoice(uploaded);
@@ -138,12 +195,12 @@ export function A2UIVoiceInput({
 					timestamp: Date.now(),
 					context: {
 						value: toStoredVoice(uploaded),
-						signedUrls: backendUrl,
+						signedUrls: temporaryFile.url,
 						duration,
 					},
 				});
 				await triggerAction(component.actions, {
-					signedUrls: backendUrl,
+					signedUrls: temporaryFile.url,
 					duration,
 				});
 			} catch {
@@ -156,11 +213,13 @@ export function A2UIVoiceInput({
 			}
 		},
 		[
+			appId,
 			backend.helperState,
 			component.actions,
 			component.value,
 			componentId,
 			onAction,
+			replaceLocalUrl,
 			setByPath,
 			surfaceId,
 			triggerAction,
@@ -205,6 +264,7 @@ export function A2UIVoiceInput({
 
 	const recorder = useVoiceRecorder({
 		maxDuration,
+		stopDelay: STOP_DELAY_MS,
 		onComplete: (file, duration) => {
 			void handleRecorded(file, duration);
 		},
@@ -217,19 +277,43 @@ export function A2UIVoiceInput({
 
 	const effectiveMode: VoiceMode =
 		mode === "stt" && speech.isSupported ? "stt" : "record";
+
+	useEffect(() => {
+		if (mode === "stt" && !speech.isSupported) {
+			console.warn(
+				"[voiceInput] STT requested but the Web Speech API is unavailable here " +
+					"(common in desktop/Tauri webviews); falling back to audio recording. " +
+					"Transcribe the recording in the flow instead.",
+			);
+		}
+	}, [mode, speech.isSupported]);
+
 	const capturing =
 		effectiveMode === "stt" ? speech.isListening : recorder.isRecording;
+	const arming = effectiveMode === "record" && recorder.isArming;
+	const autoplayMode = resultMode === "autoplay";
+	// In autoplay mode we wait for the backend to push a response before playing —
+	// the user's own recording is never auto-played back.
+	const awaitingResponse =
+		autoplayMode &&
+		!activeResponse &&
+		!capturing &&
+		!arming &&
+		!display?.uploadError &&
+		(display != null || isTriggering);
 
 	const beginCapture = useCallback(() => {
 		if (disabled) return;
 		setLocalVoice(null);
+		replaceLocalUrl(null);
+		setDismissedResponse(responseMediaRef.current);
 		if (effectiveMode === "stt") {
 			speech.reset();
 			speech.start();
 		} else {
 			void recorder.start();
 		}
-	}, [disabled, effectiveMode, speech, recorder]);
+	}, [disabled, effectiveMode, speech, recorder, replaceLocalUrl]);
 
 	const endCapture = useCallback(() => {
 		if (effectiveMode === "stt") speech.stop();
@@ -249,6 +333,8 @@ export function A2UIVoiceInput({
 
 	const clearRecording = useCallback(() => {
 		setLocalVoice(null);
+		replaceLocalUrl(null);
+		setDismissedResponse(responseMediaRef.current);
 		if (component.value && "path" in component.value) {
 			setByPath(component.value.path, null);
 		}
@@ -260,7 +346,14 @@ export function A2UIVoiceInput({
 			timestamp: Date.now(),
 			context: { value: null },
 		});
-	}, [component.value, componentId, onAction, setByPath, surfaceId]);
+	}, [
+		component.value,
+		componentId,
+		onAction,
+		replaceLocalUrl,
+		setByPath,
+		surfaceId,
+	]);
 
 	useEffect(() => {
 		const handleClear = (
@@ -291,7 +384,7 @@ export function A2UIVoiceInput({
 
 	const visualState: VoiceVisualState = capturing
 		? "recording"
-		: isUploading || isTriggering
+		: arming || isUploading || isTriggering
 			? "processing"
 			: "idle";
 
@@ -300,6 +393,7 @@ export function A2UIVoiceInput({
 	const interactionProps =
 		invoke === "hold"
 			? {
+					onPointerEnter: () => recorder.prewarm(),
 					onPointerDown: () => beginCapture(),
 					onPointerUp: () => endCapture(),
 					onPointerLeave: () => {
@@ -307,20 +401,26 @@ export function A2UIVoiceInput({
 					},
 				}
 			: {
+					onPointerEnter: () => recorder.prewarm(),
 					onClick: () => (capturing ? endCapture() : beginCapture()),
 				};
 
-	const hint = capturing
-		? effectiveMode === "stt"
-			? speech.transcript || "Listening…"
-			: formatDuration(recorder.recordingTime)
-		: invoke === "hold"
-			? "Hold to record"
-			: effectiveMode === "stt"
-				? "Tap to dictate"
-				: invoke === "auto"
-					? "Tap to start — stops when you pause"
-					: "Tap to start recording";
+	const recordAgainHint =
+		invoke === "hold" ? "Hold to record again" : "Tap to record again";
+
+	const hint = arming
+		? "Starting…"
+		: capturing
+			? effectiveMode === "stt"
+				? speech.transcript || "Listening…"
+				: formatDuration(recorder.recordingTime)
+			: invoke === "hold"
+				? "Hold to record"
+				: effectiveMode === "stt"
+					? "Tap to dictate"
+					: invoke === "auto"
+						? "Tap to start — stops when you pause"
+						: "Tap to start recording";
 
 	const containerStyle = resolveStyle(style);
 	const inlineStyle = resolveInlineStyle(style);
@@ -332,7 +432,7 @@ export function A2UIVoiceInput({
 			<div
 				className={cn(
 					"relative overflow-hidden rounded-xl border transition-all duration-300",
-					capturing
+					capturing || arming
 						? "border-primary/40 bg-linear-to-b from-primary/5 to-transparent"
 						: display
 							? "border-primary/30 bg-linear-to-b from-primary/5 to-transparent"
@@ -342,7 +442,79 @@ export function A2UIVoiceInput({
 				)}
 			>
 				<div className="flex min-h-40 flex-col items-center justify-center p-6">
-					{display && !capturing ? (
+					{autoplayMode && activeResponse && !capturing && !arming ? (
+						<AudioPlayback
+							src={activeResponse}
+							variant={variant}
+							size={size}
+							color={color}
+							recordingColor={recordingColor}
+							autoPlay
+							recordControl={blocked ? undefined : interactionProps}
+							recordHint={recordAgainHint}
+							onDelete={clearRecording}
+						/>
+					) : awaitingResponse ? (
+						<div className="flex w-full flex-col items-center gap-3">
+							<div className="flex w-full justify-center">
+								<Visualizer
+									analyser={null}
+									state="processing"
+									size={size}
+									color={color}
+									recordingColor={recordingColor}
+								/>
+							</div>
+							<p className="animate-pulse text-sm text-muted-foreground">
+								Processing…
+							</p>
+							<div className="flex items-center gap-3">
+								{!blocked && (
+									<Button
+										type="button"
+										size="icon"
+										variant="outline"
+										className="size-9 rounded-full"
+										style={{
+											borderColor: recordingColor,
+											color: recordingColor,
+										}}
+										{...interactionProps}
+									>
+										<Mic className="size-4" />
+										<span className="sr-only">{recordAgainHint}</span>
+									</Button>
+								)}
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									className="size-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
+									onClick={clearRecording}
+								>
+									<Trash2 className="size-4" />
+								</Button>
+							</div>
+						</div>
+					) : !autoplayMode &&
+						display &&
+						!capturing &&
+						resultMode !== "summary" &&
+						recordingSrc &&
+						!display.uploadError ? (
+						<AudioPlayback
+							src={recordingSrc}
+							variant={variant}
+							size={size}
+							color={color}
+							recordingColor={recordingColor}
+							title={display.transcript ?? display.name}
+							busy={display.uploading || isTriggering}
+							recordControl={blocked ? undefined : interactionProps}
+							recordHint={recordAgainHint}
+							onDelete={clearRecording}
+						/>
+					) : display && !capturing ? (
 						<div className="flex w-full items-center gap-4">
 							<div
 								className="flex size-12 shrink-0 items-center justify-center rounded-full shadow-md"

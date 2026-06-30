@@ -547,6 +547,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					busy={isStreamActive || playback.isPlaying}
 					speaking={playback.isPlaying}
 					speakingAnalyser={playback.analyser}
+					onInterrupt={() => playback.stop()}
 				/>
 			</main>
 		);

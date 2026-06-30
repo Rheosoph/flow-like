@@ -9,7 +9,9 @@ export type VoiceVariant =
 	| "waveform"
 	| "orb"
 	| "vortex"
-	| "shader";
+	| "shader"
+	| "aurora"
+	| "pulse";
 export type VoiceSize = "sm" | "md" | "lg";
 export type VoicePlaybackMode = "text" | "audio" | "both";
 export type VoiceVisualState = "idle" | "recording" | "processing" | "speaking";
@@ -42,6 +44,8 @@ export const VOICE_VARIANTS_LIST: VoiceVariant[] = [
 	"orb",
 	"vortex",
 	"shader",
+	"aurora",
+	"pulse",
 ];
 export const VOICE_SIZES_LIST: VoiceSize[] = ["sm", "md", "lg"];
 

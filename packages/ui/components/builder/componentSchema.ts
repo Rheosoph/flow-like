@@ -348,6 +348,18 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		height: { type: "boundValue" },
 		showDownload: { type: "boundValue" },
 		loading: { type: "boundValue", enum: ["lazy", "eager"] },
+		variant: {
+			type: "boundValue",
+			enum: [
+				"conservative",
+				"waveform",
+				"orb",
+				"vortex",
+				"shader",
+				"aurora",
+				"pulse",
+			],
+		},
 	},
 	diffView: {
 		type: { type: "string", required: true },
@@ -560,11 +572,23 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		invoke: { type: "boundValue", enum: ["manual", "hold", "auto"] },
 		variant: {
 			type: "boundValue",
-			enum: ["conservative", "waveform", "orb", "vortex", "shader"],
+			enum: [
+				"conservative",
+				"waveform",
+				"orb",
+				"vortex",
+				"shader",
+				"aurora",
+				"pulse",
+			],
 		},
 		size: { type: "boundValue", enum: ["sm", "md", "lg"] },
 		color: { type: "boundValue" },
 		recordingColor: { type: "boundValue" },
+		resultMode: {
+			type: "boundValue",
+			enum: ["player", "autoplay", "summary"],
+		},
 		maxDuration: { type: "boundValue" },
 		autoStop: { type: "boundValue" },
 		silenceThreshold: { type: "boundValue" },
