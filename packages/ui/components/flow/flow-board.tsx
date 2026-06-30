@@ -205,6 +205,7 @@ interface FlowCanvasProps {
 	edgeTypes: ReactFlowProps["edgeTypes"];
 	colorMode: ReactFlowProps["colorMode"];
 	nodesInteractive: boolean;
+	onlyRenderVisible: boolean;
 	currentLayer: string | undefined;
 	onContextMenu: ReactFlowProps["onContextMenu"];
 	onInit: ReactFlowProps["onInit"];
@@ -236,6 +237,7 @@ const FlowCanvas = memo(function FlowCanvas({
 	edgeTypes,
 	colorMode,
 	nodesInteractive,
+	onlyRenderVisible,
 	currentLayer,
 	onContextMenu,
 	onInit,
@@ -262,6 +264,7 @@ const FlowCanvas = memo(function FlowCanvas({
 			onContextMenu={onContextMenu}
 			nodesDraggable={nodesInteractive}
 			nodesConnectable={nodesInteractive}
+			onlyRenderVisibleElements={onlyRenderVisible}
 			onInit={onInit}
 			ref={flowRef}
 			colorMode={colorMode}
@@ -926,6 +929,7 @@ export function FlowBoard({
 
 	// Realtime chat
 	const [chatOpen, setChatOpen] = useState(false);
+	const handleToggleChat = useCallback(() => setChatOpen((v) => !v), []);
 	const {
 		messages: chatMessages,
 		sendMessage,
@@ -2261,21 +2265,26 @@ export function FlowBoard({
 		});
 	}, [remoteExecutingNodeIds, setNodes]);
 
-	// Inject peerUsers map into node data so nodes can display avatars for remote selections
+	// Inject peerUsers map into node data so nodes can display avatars for remote
+	// selections. peerUsers now has a stable identity (see usePeerUserInfo), so this
+	// runs only when peer user content actually changes — not on every render — and
+	// returns the same nodes array when nothing changed so ReactFlow doesn't reconcile.
 	const peerUsersRef = useRef(peerUsers);
 	peerUsersRef.current = peerUsers;
 	useEffect(() => {
-		if (peerStates.length === 0) return;
 		setNodes((nds: any) => {
 			if (nds.length === 0) return nds;
-			return nds.map((node: any) => {
+			let changed = false;
+			const next = nds.map((node: any) => {
 				if (node.type !== "node" && node.type !== "callFunctionNode")
 					return node;
 				if (node.data.peerUsers === peerUsers) return node;
+				changed = true;
 				return { ...node, data: { ...node.data, peerUsers } };
 			});
+			return changed ? next : nds;
 		});
-	}, [peerUsers, peerStates.length, setNodes]);
+	}, [peerUsers, setNodes]);
 
 	const nodeTypes = useMemo(
 		() => ({
@@ -3055,13 +3064,13 @@ export function FlowBoard({
 			<div className="fixed right-3 top-16 z-50 flex items-center gap-2 sm:right-4 sm:top-16 md:right-6 md:top-6">
 				{/* Connection status indicator */}
 				{awareness && connectionStatus === "connected" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-primary animate-pulse" />
 						<span className="text-xs font-medium text-primary">Live</span>
 					</div>
 				)}
 				{awareness && connectionStatus === "reconnecting" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-yellow-500 animate-pulse" />
 						<span className="text-xs font-medium text-yellow-500">
 							Reconnecting...
@@ -3072,7 +3081,7 @@ export function FlowBoard({
 					<button
 						type="button"
 						onClick={() => reconnect()}
-						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
+						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
 					>
 						<WifiOffIcon className="h-3.5 w-3.5 text-destructive" />
 						<span className="text-xs font-medium text-destructive">
@@ -3081,7 +3090,7 @@ export function FlowBoard({
 					</button>
 				)}
 				{!awareness && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiOffIcon className="h-3.5 w-3.5 text-muted-foreground" />
 						<span className="text-xs font-medium text-muted-foreground">
 							Offline
@@ -3099,7 +3108,7 @@ export function FlowBoard({
 						onToggleFollow={toggleFollow}
 						onJumpToUser={jumpToUser}
 						onJumpToLayer={jumpToLayer}
-						onOpenChat={() => setChatOpen((v) => !v)}
+						onOpenChat={handleToggleChat}
 						unreadCount={unreadCount}
 					/>
 				)}
@@ -3400,6 +3409,7 @@ export function FlowBoard({
 										edgeTypes={edgeTypes}
 										colorMode={colorMode}
 										nodesInteractive={typeof version === "undefined"}
+										onlyRenderVisible={nodes.length > 65}
 										currentLayer={currentLayer}
 										onContextMenu={onContextMenuCB}
 										onInit={initializeFlow}

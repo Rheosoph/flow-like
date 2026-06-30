@@ -733,8 +733,6 @@ function FlowPilotImpl({
 	const [loading, setLoading] = useState(false);
 	const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("idle");
 	const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
-	const [elapsedSeconds, setElapsedSeconds] = useState(0);
-	const [tokenCount, setTokenCount] = useState(0);
 	const [planSteps, setPlanSteps] = useState<UnifiedPlanStep[]>([]);
 	const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
 	const [userScrolledUp, setUserScrolledUp] = useState(false);
@@ -808,18 +806,6 @@ function FlowPilotImpl({
 
 	// Agent backend hook
 	const copilotSDK = useCopilotSDK(activeAgentBackend);
-
-	// Elapsed time tracking
-	useEffect(() => {
-		if (!loading || !loadingStartTime) {
-			setElapsedSeconds(0);
-			return;
-		}
-		const interval = setInterval(() => {
-			setElapsedSeconds(Math.floor((Date.now() - loadingStartTime) / 1000));
-		}, 1000);
-		return () => clearInterval(interval);
-	}, [loading, loadingStartTime]);
 
 	// Fetch user profile
 	const profile = useInvoke(
@@ -2064,7 +2050,6 @@ function FlowPilotImpl({
 			setLoading(true);
 			setLoadingPhase("initializing");
 			setLoadingStartTime(Date.now());
-			setTokenCount(0);
 			setPlanSteps([]);
 			setProcessEvents([]);
 			setUserScrolledUp(false);
@@ -2269,8 +2254,6 @@ function FlowPilotImpl({
 				};
 
 				const onToken = (rawToken: string) => {
-					setTokenCount((prev) => prev + 1);
-
 					// Combine with buffer for partial tags
 					let token = tagBuffer + rawToken;
 					tagBuffer = "";
@@ -3039,7 +3022,7 @@ ${userMsg}`;
 				title={title}
 				loading={loading}
 				loadingPhase={loadingPhase}
-				elapsedSeconds={elapsedSeconds}
+				loadingStartTime={loadingStartTime}
 				runContext={runContext}
 				onNewChat={handleNewChat}
 				onClose={onClose}
@@ -3088,8 +3071,23 @@ ${userMsg}`;
 							) : (
 								messages.map((message, index) => {
 									const isLastMessage = index === messages.length - 1;
+									// Completed (non-last) bubbles get only stable props so their
+									// React.memo holds and they don't reconcile (re-parsing markdown)
+									// on every streaming flush. Only the live last bubble takes the
+									// per-flush loading/step props.
+									if (!isLastMessage) {
+										return (
+											<MessageBubble
+												key={index}
+												message={message}
+												agentMode={agentMode}
+												board={board}
+												onFocusNode={onFocusNode}
+												onSelectNodes={onSelectNodes}
+											/>
+										);
+									}
 									const renderedMessage =
-										isLastMessage &&
 										processEvents.length > 0 &&
 										(!message.processEvents ||
 											message.processEvents.length < processEvents.length)
@@ -3099,11 +3097,11 @@ ${userMsg}`;
 										<MessageBubble
 											key={index}
 											message={renderedMessage}
-											isLoading={loading && isLastMessage}
+											isLoading={loading}
 											loadingPhase={loadingPhase}
 											currentToolCall={currentToolCall}
 											currentStep={
-												loading && isLastMessage
+												loading
 													? planSteps.find((s) => s.status === "InProgress")
 													: undefined
 											}
@@ -3700,12 +3698,40 @@ const FlowScriptWorkspacePanel = memo(function FlowScriptWorkspacePanel({
 	);
 });
 
+// Self-contained elapsed-time pill: owns the 1s tick so it does NOT re-render the
+// whole FlowPilot tree every second during loading.
+const ElapsedStatusPill = memo(function ElapsedStatusPill({
+	phase,
+	loadingStartTime,
+	compact,
+}: {
+	phase: LoadingPhase;
+	loadingStartTime: number | null;
+	compact?: boolean;
+}) {
+	const [elapsed, setElapsed] = useState(() =>
+		loadingStartTime ? Math.floor((Date.now() - loadingStartTime) / 1000) : 0,
+	);
+	useEffect(() => {
+		if (!loadingStartTime) {
+			setElapsed(0);
+			return;
+		}
+		setElapsed(Math.floor((Date.now() - loadingStartTime) / 1000));
+		const interval = setInterval(() => {
+			setElapsed(Math.floor((Date.now() - loadingStartTime) / 1000));
+		}, 1000);
+		return () => clearInterval(interval);
+	}, [loadingStartTime]);
+	return <StatusPill phase={phase} elapsed={elapsed} compact={compact} />;
+});
+
 // Header component
 interface HeaderProps {
 	title: string;
 	loading: boolean;
 	loadingPhase: LoadingPhase;
-	elapsedSeconds: number;
+	loadingStartTime: number | null;
 	runContext?: { run_id: string };
 	onNewChat: () => void;
 	onClose?: () => void;
@@ -3735,7 +3761,7 @@ const Header = memo(function Header({
 	title,
 	loading,
 	loadingPhase,
-	elapsedSeconds,
+	loadingStartTime,
 	runContext,
 	onNewChat,
 	onClose,
@@ -3795,9 +3821,9 @@ const Header = memo(function Header({
 					<div>
 						<h3 className="text-sm font-bold">{title}</h3>
 						{loading ? (
-							<StatusPill
+							<ElapsedStatusPill
 								phase={loadingPhase}
-								elapsed={elapsedSeconds}
+								loadingStartTime={loadingStartTime}
 								compact
 							/>
 						) : (
@@ -4538,7 +4564,9 @@ const MessageBubble = memo(function MessageBubble({
 						/>
 					)}
 
-				{/* Content */}
+				{/* Content. While this bubble is actively streaming, render plain text
+				    to avoid re-parsing the full markdown/Slate document on every 100ms
+				    flush; the formatted markdown mounts once when streaming completes. */}
 				{message.content ? (
 					<MessageContent
 						content={message.content}
@@ -4546,7 +4574,7 @@ const MessageBubble = memo(function MessageBubble({
 						board={
 							agentMode === "board" || agentMode === "both" ? board : undefined
 						}
-						enableMarkdown={true}
+						enableMarkdown={!isLoading}
 					/>
 				) : isLoading ? null : (
 					<p className="text-muted-foreground italic text-xs">No response</p>

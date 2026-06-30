@@ -55,6 +55,7 @@ import {
 } from "../../lib";
 import type { INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
+import { isWebkitLite } from "../../lib/platform";
 import type { IBoard, IComment, ILayer } from "../../lib/schema/flow/board";
 import { ILayerType } from "../../lib/schema/flow/board/commands/upsert-layer";
 import { type IPin, IVariableType } from "../../lib/schema/flow/pin";
@@ -590,7 +591,9 @@ const FlowNodeInner = memo(
 						height: 12,
 						borderRadius: 2,
 						background: refInConnected
-							? `
+							? isWebkitLite()
+								? "var(--pin-fn-ref)"
+								: `
 				linear-gradient(
 					135deg,
 					var(--pin-fn-ref) 0%,
@@ -601,12 +604,13 @@ const FlowNodeInner = memo(
 							: "var(--background)",
 						border: "1px solid var(--pin-fn-ref)",
 						padding: 0,
-						boxShadow: refInConnected
-							? `
+						boxShadow:
+							refInConnected && !isWebkitLite()
+								? `
 		0 0 6px color-mix(in oklch, var(--pin-fn-ref) 30%, transparent),
 		inset 0 1px 1px color-mix(in oklch, white 15%, transparent)
 	`
-							: "none",
+								: "none",
 					}}
 				/>
 			);
@@ -631,7 +635,9 @@ const FlowNodeInner = memo(
 						height: 12,
 						borderRadius: 2,
 						background: refOutConnected
-							? `
+							? isWebkitLite()
+								? "var(--pin-fn-ref)"
+								: `
 			radial-gradient(
 				circle at 30% 30%,
 				color-mix(in oklch, var(--pin-fn-ref) 100%, white 20%),
@@ -641,13 +647,14 @@ const FlowNodeInner = memo(
 							: "var(--background)",
 						border: "1px solid var(--pin-fn-ref)",
 						padding: 0,
-						boxShadow: refOutConnected
-							? `
+						boxShadow:
+							refOutConnected && !isWebkitLite()
+								? `
 			0 0 8px color-mix(in oklch, var(--pin-fn-ref) 40%, transparent),
 			0 1px 2px color-mix(in oklch, black 20%, transparent),
 			inset 0 1px 1px color-mix(in oklch, white 20%, transparent)
 		`
-							: "none",
+								: "none",
 					}}
 				/>
 			);
@@ -1324,6 +1331,13 @@ function FlowNode(props: NodeProps<FlowNode>) {
 		props.data.onExplain?.(nodeIds);
 	}, [flow, props.data.node.id, props.data.onExplain]);
 
+	// Stable callbacks for the toolbar so the memoized ToolbarButtons (and their
+	// Radix Tooltip/Popper subtrees, which measure the DOM on render) don't
+	// re-render every time this node re-renders (e.g. after a drag/drop).
+	const handleOpenComment = useCallback(() => setCommentMenu(true), []);
+	const handleOpenRename = useCallback(() => setRenameMenu(true), []);
+	const handleOpenEdit = useCallback(() => setEditingMenu(true), []);
+
 	return (
 		<>
 			{commentMenu && (
@@ -1398,9 +1412,9 @@ function FlowNode(props: NodeProps<FlowNode>) {
 						isReadOnly={isReadOnly}
 						onCopy={copy}
 						onDelete={deleteNodes}
-						onComment={() => setCommentMenu(true)}
-						onRename={() => setRenameMenu(true)}
-						onEdit={() => setEditingMenu(true)}
+						onComment={handleOpenComment}
+						onRename={handleOpenRename}
+						onEdit={handleOpenEdit}
 						onInfo={handleOpenInfo}
 						onHandleError={handleError}
 						onCollapse={handleCollapse}

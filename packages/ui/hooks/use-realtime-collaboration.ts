@@ -362,11 +362,18 @@ export function useRealtimeCollaboration({
 		};
 	}, [awareness]);
 
-	// Broadcast cursor position via throttled interval (avoids 60fps rerenders)
+	// Broadcast cursor position via throttled interval (avoids 60fps rerenders).
+	// Skip when the pointer hasn't moved since the last tick so idle peers don't
+	// force every other client into a 20Hz no-op awareness change.
 	useEffect(() => {
 		if (!awareness) return;
+		let lastX = Number.NaN;
+		let lastY = Number.NaN;
 		const interval = setInterval(() => {
 			const pos = mousePositionRef.current;
+			if (pos.x === lastX && pos.y === lastY) return;
+			lastX = pos.x;
+			lastY = pos.y;
 			const flowPoint = screenToFlowPosition({
 				x: pos.x,
 				y: pos.y,

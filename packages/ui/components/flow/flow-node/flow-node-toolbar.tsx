@@ -19,7 +19,7 @@ import {
 	SquarePenIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { IPinType, IVariableType } from "../../../lib";
 import type { INode } from "../../../lib/schema/flow/node";
 import {
@@ -211,6 +211,22 @@ const FlowNodeToolbar = memo(
 		const isGenericEvent = node.name === "events_generic";
 		const isStartNode = node.start ?? false;
 
+		// Stable onClick so the memoized ToolbarButton (and its Radix Tooltip/Popper,
+		// which measures the DOM on render) doesn't re-render on every toolbar render.
+		const handleCollapseClick = useCallback(
+			(e: Event | undefined) => {
+				const rect = (
+					e?.currentTarget as HTMLElement
+				)?.getBoundingClientRect?.();
+				if (rect) {
+					onCollapse(rect.x + rect.width / 2, rect.y + rect.height / 2);
+				} else {
+					onCollapse(0, 0);
+				}
+			},
+			[onCollapse],
+		);
+
 		if (isReadOnly) return null;
 
 		return (
@@ -267,19 +283,7 @@ const FlowNodeToolbar = memo(
 					{isMultiSelection && (
 						<>
 							<ToolbarButton
-								onClick={(e) => {
-									const rect = (
-										e?.currentTarget as HTMLElement
-									)?.getBoundingClientRect?.();
-									if (rect) {
-										onCollapse(
-											rect.x + rect.width / 2,
-											rect.y + rect.height / 2,
-										);
-									} else {
-										onCollapse(0, 0);
-									}
-								}}
+								onClick={handleCollapseClick}
 								icon={FoldVerticalIcon}
 								tooltip="Collapse"
 							/>

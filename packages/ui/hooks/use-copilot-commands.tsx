@@ -881,8 +881,11 @@ export function useCopilotCommands({
 						executedAnyCommands = true;
 						refreshedAfterLastExecution = false;
 					}
-					await refreshBoardSnapshot();
-					refreshedAfterLastExecution = true;
+					// No per-pass board.refetch(): executeInBatches already updates the
+					// optimistic snapshot that resolveNode/resolvePinId read from, so the
+					// next pass resolves correctly. The single visible refetch happens once
+					// at end-of-generation (fallback below), avoiding a full parseBoard of
+					// all nodes on every pass.
 				}
 
 				remainingPinUpdates = remainingPinUpdates.filter(

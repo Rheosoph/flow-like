@@ -249,16 +249,16 @@ const RemoteCursor = memo(function RemoteCursor({
 }) {
 	return (
 		<div
-			className="absolute transition-transform duration-75 ease-out"
-			style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }}
+			className="absolute transition-transform duration-75 ease-out will-change-transform"
+			style={{ transform: `translate3d(${cursor.x}px, ${cursor.y}px, 0)` }}
 		>
 			<div className="flex items-start gap-0.5 select-none">
 				<CursorPointer color={cursor.color} />
 				<div
-					className="flex items-center gap-2 rounded-full border-2 bg-background/90 pl-1 pr-2.5 py-1 shadow-xl backdrop-blur-md ring-1 ring-white/20 transition-all duration-150"
+					className="flex items-center gap-2 rounded-full border-2 bg-background pl-1 pr-2.5 py-1 ring-1 ring-border"
 					style={{
 						borderColor: cursor.color,
-						boxShadow: `0 4px 20px -4px ${cursor.color}40, 0 8px 16px -8px rgba(0,0,0,0.3)`,
+						boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
 					}}
 				>
 					<Avatar
@@ -335,8 +335,6 @@ const CursorPointer = memo(function CursorPointer({
 			viewBox="0 0 24 24"
 			fill="none"
 			xmlns="http://www.w3.org/2000/svg"
-			className="drop-shadow-lg"
-			style={{ filter: `drop-shadow(0 2px 4px ${color}50)` }}
 		>
 			<path
 				d="M4 3L19 12L11 13.5L7 21L4 3Z"

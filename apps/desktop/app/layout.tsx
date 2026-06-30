@@ -13,6 +13,7 @@ import "@flow-like/flow-like-ui/global.css";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
 import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
+import { isWebkitLite } from "@flow-like/flow-like-ui/lib/platform";
 import {
 	Architects_Daughter,
 	DM_Sans,
@@ -61,6 +62,7 @@ import { UpdateProvider } from "../components/update-provider";
 import { initBlobOffload } from "../lib/init-blob-offload";
 import PostHogPageView from "./PostHogPageView";
 import { PHProvider } from "./provider";
+import { ReactScan } from "./ReactScanComponent";
 
 initBlobOffload();
 
@@ -139,6 +141,14 @@ const architectsDaughter = Architects_Daughter({
 
 function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 	const isOnline = useNetworkStatus();
+
+	useEffect(() => {
+		// Tag the document so CSS can disable WebKit-expensive effects (backdrop
+		// filters etc.) on WKWebView/Safari while Chromium keeps the full look.
+		document.documentElement.dataset.engine = isWebkitLite()
+			? "webkit"
+			: "blink";
+	}, []);
 
 	useEffect(() => {
 		// When network comes back online, refetch all active queries

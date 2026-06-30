@@ -385,6 +385,27 @@ async function streamFetcherEventSource<T>(
 	});
 }
 
+// --- Dev request stats: count HTTP-plugin calls per normalized endpoint so we can
+// see which backend endpoint dominates the IPC traffic for online apps.
+// In the app console: `__apiStats()` for a ranked list, `__apiStatsReset()` to clear.
+const __apiCallStats = new Map<string, number>();
+function normalizeApiPath(method: string, path: string): string {
+	const base = path
+		.split("?")[0]
+		.replace(/[0-9a-f-]{16,}/gi, ":id")
+		.replace(/\/\d+(?=\/|$)/g, "/:n");
+	return `${method} ${base}`;
+}
+if (typeof window !== "undefined") {
+	(window as unknown as Record<string, unknown>).__apiStats = () =>
+		[...__apiCallStats.entries()]
+			.sort((a, b) => b[1] - a[1])
+			.map(([k, v]) => `${v}\t${k}`)
+			.join("\n");
+	(window as unknown as Record<string, unknown>).__apiStatsReset = () =>
+		__apiCallStats.clear();
+}
+
 export async function fetcher<T>(
 	profile: IProfile,
 	path: string,
@@ -392,6 +413,8 @@ export async function fetcher<T>(
 	auth?: AuthContextProps,
 ): Promise<T> {
 	ensureProtectedAppRouteAuth(path, auth, methodOf(options));
+	const __statKey = normalizeApiPath(methodOf(options) ?? "GET", path);
+	__apiCallStats.set(__statKey, (__apiCallStats.get(__statKey) ?? 0) + 1);
 	const headers: HeadersInit = {};
 	if (auth?.user?.access_token) {
 		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;

@@ -1024,3 +1024,14 @@
 	color: var(--shiki-dark);
 	background-color: var(--shiki-dark-bg);
 }
+
+/*
+ * WebKit (WKWebView / Safari) performance gate.
+ * A runtime script sets data-engine="webkit" on <html> for WebKit engines, which
+ * paint backdrop-filter far slower than Blink. Disable it there (backgrounds are
+ * already near-opaque, so the visual loss is minimal) while Chromium keeps it.
+ */
+html[data-engine="webkit"] [class*="backdrop-blur"] {
+	-webkit-backdrop-filter: none !important;
+	backdrop-filter: none !important;
+}

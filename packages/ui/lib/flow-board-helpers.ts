@@ -9,6 +9,7 @@ import {
 	updateNodeCommand,
 	upsertLayerCommand,
 } from ".";
+import { isWebkitLite } from "./platform";
 import { ILayerType } from "./schema/flow/board/commands/upsert-layer";
 import type { INode } from "./schema/flow/node";
 import type { IPin } from "./schema/flow/pin";
@@ -867,7 +868,9 @@ export function handleEdgesChange({
 
 		if (selectedEdge?.data_type !== "Execution") {
 			edges = edges.map((edge) =>
-				edge.id === selectedId ? { ...edge, animated: !change.selected } : edge,
+				edge.id === selectedId
+					? { ...edge, animated: !isWebkitLite() && !change.selected }
+					: edge,
 			);
 		}
 	}
