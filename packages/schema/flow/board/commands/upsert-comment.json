@@ -1,112 +1,154 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "UpsertCommentCommand",
-	"type": "object",
-	"required": ["comment"],
-	"properties": {
-		"comment": {
-			"$ref": "#/definitions/Comment"
-		},
-		"old_comment": {
-			"anyOf": [
-				{
-					"$ref": "#/definitions/Comment"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"current_layer": {
-			"type": ["string", "null"]
-		}
-	},
-	"definitions": {
-		"Comment": {
-			"type": "object",
-			"required": ["comment_type", "content", "coordinates", "id", "timestamp"],
-			"properties": {
-				"id": {
-					"type": "string"
-				},
-				"author": {
-					"type": ["string", "null"]
-				},
-				"content": {
-					"type": "string"
-				},
-				"comment_type": {
-					"$ref": "#/definitions/CommentType"
-				},
-				"timestamp": {
-					"$ref": "#/definitions/SystemTime"
-				},
-				"coordinates": {
-					"type": "array",
-					"items": [
-						{
-							"type": "number",
-							"format": "float"
-						},
-						{
-							"type": "number",
-							"format": "float"
-						},
-						{
-							"type": "number",
-							"format": "float"
-						}
-					],
-					"maxItems": 3,
-					"minItems": 3
-				},
-				"width": {
-					"type": ["number", "null"],
-					"format": "float"
-				},
-				"height": {
-					"type": ["number", "null"],
-					"format": "float"
-				},
-				"layer": {
-					"type": ["string", "null"]
-				},
-				"color": {
-					"type": ["string", "null"]
-				},
-				"z_index": {
-					"type": ["integer", "null"],
-					"format": "int32"
-				},
-				"hash": {
-					"type": ["integer", "null"],
-					"format": "uint64",
-					"minimum": 0.0
-				},
-				"is_locked": {
-					"type": ["boolean", "null"]
-				}
-			}
-		},
-		"CommentType": {
-			"type": "string",
-			"enum": ["Text", "Image", "Video"]
-		},
-		"SystemTime": {
-			"type": "object",
-			"required": ["nanos_since_epoch", "secs_since_epoch"],
-			"properties": {
-				"secs_since_epoch": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0.0
-				},
-				"nanos_since_epoch": {
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			}
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UpsertCommentCommand",
+  "type": "object",
+  "properties": {
+    "comment": {
+      "$ref": "#/$defs/Comment"
+    },
+    "old_comment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Comment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "current_layer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "comment"
+  ],
+  "$defs": {
+    "Comment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "comment_type": {
+          "$ref": "#/$defs/CommentType"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/SystemTime"
+        },
+        "coordinates": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "format": "float"
+            },
+            {
+              "type": "number",
+              "format": "float"
+            },
+            {
+              "type": "number",
+              "format": "float"
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "width": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "height": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "layer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "z_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "hash": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "is_locked": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "content",
+        "comment_type",
+        "timestamp",
+        "coordinates"
+      ]
+    },
+    "CommentType": {
+      "type": "string",
+      "enum": [
+        "Text",
+        "Image",
+        "Video"
+      ]
+    },
+    "SystemTime": {
+      "type": "object",
+      "properties": {
+        "secs_since_epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nanos_since_epoch": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "secs_since_epoch",
+        "nanos_since_epoch"
+      ]
+    }
+  }
 }

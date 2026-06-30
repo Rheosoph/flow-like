@@ -24,6 +24,15 @@ export {
 	ITtsModelType,
 	ITtsRuntimePreference,
 } from "./bit/bit/tts-parameters";
+export type {
+	ISttAssetRef,
+	ISttModelParameters,
+} from "./bit/bit/stt-parameters";
+export {
+	ISttDTypePreference,
+	ISttModelType,
+	ISttRuntimePreference,
+} from "./bit/bit/stt-parameters";
 export type { IVlmParameters } from "./bit/bit/vlm-parameters";
 export type { IProvider } from "./bit/bit/provider";
 export * from "./storage/storage-item";

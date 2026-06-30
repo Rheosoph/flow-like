@@ -481,6 +481,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "any-speech-to-text"
+version = "0.1.0"
+source = "git+https://github.com/Rheosoph/any-speech-to-text?rev=e043cec6935003ad746454d7df5a1d932f6c8ac5#e043cec6935003ad746454d7df5a1d932f6c8ac5"
+dependencies = [
+ "candle-core",
+ "candle-metal-kernels",
+ "candle-nn",
+ "candle-transformers",
+ "flate2",
+ "opusic-sys",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "thiserror 2.0.18",
+ "tokenizers 0.22.2",
+ "tracing",
+]
+
+[[package]]
 name = "any-tts"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7722,6 +7742,7 @@ name = "flow-like"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.12",
+ "any-speech-to-text",
  "any-tts",
  "argon2",
  "async-trait",
@@ -16776,6 +16797,15 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "opusic-sys"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2804e694ef0de3b4cbb254de565053b7cb48d3398df7fd60c6c62bed40c5372a"
+dependencies = [
+ "cmake",
+]
 
 [[package]]
 name = "orbclient"

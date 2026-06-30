@@ -1,6 +1,5 @@
 "use client";
 
-import { createId } from "@paralleldrive/cuid2";
 import {
 	Badge,
 	Button,
@@ -16,6 +15,10 @@ import {
 	type IMetadata,
 	type IModelProvider,
 	IPooling,
+	ISttDTypePreference,
+	type ISttModelParameters,
+	ISttModelType,
+	ISttRuntimePreference,
 	ITtsDTypePreference,
 	type ITtsModelParameters,
 	ITtsModelType,
@@ -34,6 +37,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
 import {
 	AudioLines,
 	Binary,
@@ -69,6 +73,12 @@ import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
 import {
+	STTConfiguration,
+	type SttAssetDraft,
+	applySttModelPreset,
+	defaultSttAssetLayout,
+} from "./stt";
+import {
 	TTSConfiguration,
 	type TtsAssetDraft,
 	applyTtsModelPreset,
@@ -90,6 +100,7 @@ type BitMode =
 	| "local-llm"
 	| "hosted-llm"
 	| "hosted-stt"
+	| "local-stt"
 	| "vlm"
 	| "tts"
 	| "embedding"
@@ -159,6 +170,20 @@ const DEFAULT_TTS_PARAMETERS: ITtsModelParameters = {
 	},
 	runtime: ITtsRuntimePreference.Auto,
 	voices: [],
+};
+
+const DEFAULT_STT_PARAMETERS: ISttModelParameters = {
+	assets: [],
+	default_language: "auto",
+	dtype: ISttDTypePreference.Auto,
+	languages: [],
+	model_type: ISttModelType.WhisperLargeV3Turbo,
+	provider: {
+		provider_name: "local:any-speech-to-text",
+		model_id: null,
+		version: null,
+	},
+	runtime: ISttRuntimePreference.Auto,
 };
 
 const DEFAULT_BIT: IBit = {
@@ -637,7 +662,8 @@ const MODES: { id: BitMode; label: string; icon: React.ReactNode }[] = [
 	{ id: "hosted-llm", label: "Hosted LLM", icon: <Zap className="h-4 w-4" /> },
 	{ id: "vlm", label: "VLM", icon: <Eye className="h-4 w-4" /> },
 	{ id: "tts", label: "TTS", icon: <AudioLines className="h-4 w-4" /> },
-	{ id: "hosted-stt", label: "STT", icon: <Mic className="h-4 w-4" /> },
+	{ id: "hosted-stt", label: "Hosted STT", icon: <Mic className="h-4 w-4" /> },
+	{ id: "local-stt", label: "Local STT", icon: <Mic className="h-4 w-4" /> },
 	{ id: "embedding", label: "Embedding", icon: <Binary className="h-4 w-4" /> },
 	{
 		id: "image-embedding",
@@ -684,6 +710,7 @@ export default function Page() {
 		IBit | undefined
 	>(undefined);
 	const [ttsAssets, setTtsAssets] = useState<TtsAssetDraft[]>([]);
+	const [sttAssets, setSttAssets] = useState<SttAssetDraft[]>([]);
 	const [progress, setProgress] = useState(0);
 	const [progressDownloaded, setProgressDownloaded] = useState<number | null>(
 		null,
@@ -700,13 +727,14 @@ export default function Page() {
 		if (mode === "local-llm" || mode === "hosted-llm") return IBitTypes.Llm;
 		if (mode === "vlm") return IBitTypes.Vlm;
 		if (mode === "tts") return IBitTypes.Tts;
-		if (mode === "hosted-stt") return IBitTypes.Stt;
+		if (mode === "hosted-stt" || mode === "local-stt") return IBitTypes.Stt;
 		if (mode === "embedding") return IBitTypes.Embedding;
 		if (mode === "image-embedding") return IBitTypes.ImageEmbedding;
 		return IBitTypes.ObjectDetection;
 	})();
 
 	const isHostedMode = mode === "hosted-llm" || mode === "hosted-stt";
+	const isLocalStt = mode === "local-stt";
 
 	const isHostedModel =
 		(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Stt) &&
@@ -727,6 +755,15 @@ export default function Page() {
 	}
 
 	function getDefaultTtsAssetBit(): IBit {
+		return {
+			...getDefaultBit(IBitTypes.File),
+			download_link: "",
+			file_name: "",
+			parameters: {},
+		};
+	}
+
+	function getDefaultSttAssetBit(): IBit {
 		return {
 			...getDefaultBit(IBitTypes.File),
 			download_link: "",
@@ -1015,6 +1052,7 @@ export default function Page() {
 			setImageEmbeddingPreprocessor(undefined);
 			setImageEmbeddingConfig(undefined);
 			setTextEmbeddingModel(undefined);
+			setSttAssets([]);
 			return;
 		}
 		setProjection(undefined);
@@ -1026,6 +1064,7 @@ export default function Page() {
 		setImageEmbeddingConfig(undefined);
 		setTextEmbeddingModel(undefined);
 		setTtsAssets([]);
+		setSttAssets([]);
 	}
 
 	useEffect(() => {
@@ -1037,15 +1076,23 @@ export default function Page() {
 						getDefaultTtsAssetBit,
 					)
 				: [];
+		const sttAssetLayout = isLocalStt
+			? defaultSttAssetLayout(
+					DEFAULT_STT_PARAMETERS.model_type,
+					getDefaultSttAssetBit,
+				)
+			: [];
+		const isAssetMode = bitType === IBitTypes.Tts || isLocalStt;
 		setBit((old) => {
 			const nextBit = {
 				...old,
 				id: createId(),
 				type: bitType,
-				parameters:
-					bitType === IBitTypes.Llm ||
-					bitType === IBitTypes.Vlm ||
-					bitType === IBitTypes.Stt
+				parameters: isLocalStt
+					? DEFAULT_STT_PARAMETERS
+					: bitType === IBitTypes.Llm ||
+							bitType === IBitTypes.Vlm ||
+							bitType === IBitTypes.Stt
 						? createDefaultLlmParameters(providerName)
 						: bitType === IBitTypes.Tts
 							? DEFAULT_TTS_PARAMETERS
@@ -1053,11 +1100,9 @@ export default function Page() {
 									bitType === IBitTypes.ImageEmbedding
 								? { ...DEFAULT_EMBEDDING_PARAMETERS }
 								: {},
-				download_link:
-					isHostedMode || bitType === IBitTypes.Tts ? "" : old.download_link,
-				file_name:
-					isHostedMode || bitType === IBitTypes.Tts ? "" : old.file_name,
-				size: isHostedMode || bitType === IBitTypes.Tts ? 0 : old.size,
+				download_link: isHostedMode || isAssetMode ? "" : old.download_link,
+				file_name: isHostedMode || isAssetMode ? "" : old.file_name,
+				size: isHostedMode || isAssetMode ? 0 : old.size,
 				name: "",
 			};
 
@@ -1069,19 +1114,33 @@ export default function Page() {
 				);
 			}
 
+			if (isLocalStt) {
+				return applySttModelPreset(
+					nextBit,
+					DEFAULT_STT_PARAMETERS.model_type,
+					sttAssetLayout,
+				);
+			}
+
 			return nextBit;
 		});
 		if (bitType === IBitTypes.Tts) setTtsAssets(ttsAssetLayout);
+		if (isLocalStt) setSttAssets(sttAssetLayout);
 		setDefaultDependencies(bitType);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [mode]);
 
 	useEffect(() => {
+		const isLocalSttBit =
+			bit.type === IBitTypes.Stt &&
+			(bit.parameters as ILlmParameters | undefined)?.provider
+				?.provider_name === "local:any-speech-to-text";
 		if (
 			(bit.type === IBitTypes.Llm ||
 				bit.type === IBitTypes.Vlm ||
 				bit.type === IBitTypes.Stt) &&
-			!isHostedModel
+			!isHostedModel &&
+			!isLocalSttBit
 		) {
 			prefillLLM();
 		}
@@ -1108,6 +1167,10 @@ export default function Page() {
 		setLoading(true);
 		try {
 			let dependencies: IBit[] = [];
+			const isLocalSttBit =
+				bit.type === IBitTypes.Stt &&
+				(bit.parameters as ILlmParameters | undefined)?.provider
+					?.provider_name === "local:any-speech-to-text";
 
 			if (bit.type === IBitTypes.Embedding) {
 				if (!tokenizer || !tokenizerConfig || !specialTokensMap || !config) {
@@ -1251,10 +1314,56 @@ export default function Page() {
 				);
 			}
 
+			if (isLocalSttBit) {
+				if (sttAssets.length === 0) {
+					throw new Error("Local STT models require at least one asset");
+				}
+
+				const registeredAssets = [];
+				for (const asset of sttAssets) {
+					if (!asset.relativePath) {
+						throw new Error("Every STT asset needs a model-relative path");
+					}
+					if (asset.required && !asset.bit.download_link) {
+						throw new Error(
+							`Missing download link for required STT asset ${asset.relativePath}`,
+						);
+					}
+					if (!asset.required && !asset.bit.download_link) continue;
+
+					const registered = await uploadBit(
+						mergeTtsAssetParameters(asset.bit, bit),
+					);
+					dependencies.push(registered);
+					registeredAssets.push({
+						bit: `${registered.hub}:${registered.id}`,
+						relative_path: asset.relativePath,
+						required: asset.required,
+					});
+				}
+
+				const response = await uploadBit({
+					...bit,
+					download_link: null,
+					file_name: bit.file_name || null,
+					size: 0,
+					dependencies: dependencies.map((d) => `${d.hub}:${d.id}`),
+					parameters: {
+						...bit.parameters,
+						assets: registeredAssets,
+					},
+				});
+				await backend.apiState.put(
+					profile.data,
+					`admin/bit/${response.id}/en`,
+					bit.meta.en,
+				);
+			}
+
 			if (
 				bit.type === IBitTypes.Vlm ||
 				bit.type === IBitTypes.Llm ||
-				bit.type === IBitTypes.Stt
+				(bit.type === IBitTypes.Stt && !isLocalSttBit)
 			) {
 				const response = await uploadBit({
 					...bit,
@@ -1278,6 +1387,7 @@ export default function Page() {
 			setImageEmbeddingConfig(undefined);
 			setTextEmbeddingModel(undefined);
 			setTtsAssets([]);
+			setSttAssets([]);
 		} catch (error: unknown) {
 			toast.error(
 				`Failed to add bit: ${error instanceof Error ? error.message : error}`,
@@ -1296,6 +1406,7 @@ export default function Page() {
 		specialTokensMap,
 		textEmbeddingModel,
 		ttsAssets,
+		sttAssets,
 		tokenizer,
 		tokenizerConfig,
 		uploadBit,
@@ -1351,7 +1462,7 @@ export default function Page() {
 					) : (
 						<>
 							{/* download link for non-hosted file-backed models */}
-							{bit.type !== IBitTypes.Tts ? (
+							{bit.type !== IBitTypes.Tts && !isLocalStt ? (
 								<div className="flex flex-row items-center gap-2 max-w-3xl">
 									{loading ? (
 										<Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
@@ -1373,7 +1484,7 @@ export default function Page() {
 							{/* model-type-specific configuration */}
 							{bit.type === IBitTypes.Llm ||
 							bit.type === IBitTypes.Vlm ||
-							bit.type === IBitTypes.Stt ? (
+							(bit.type === IBitTypes.Stt && !isLocalStt) ? (
 								<>
 									<LLMConfiguration
 										bit={bit}
@@ -1402,6 +1513,18 @@ export default function Page() {
 										assetBits={ttsAssets}
 										setAssetBits={setTtsAssets}
 										createAssetBit={getDefaultTtsAssetBit}
+									/>
+									<Separator className="my-4" />
+								</>
+							) : null}
+							{isLocalStt ? (
+								<>
+									<STTConfiguration
+										bit={bit}
+										setBit={setBit}
+										assetBits={sttAssets}
+										setAssetBits={setSttAssets}
+										createAssetBit={getDefaultSttAssetBit}
 									/>
 									<Separator className="my-4" />
 								</>

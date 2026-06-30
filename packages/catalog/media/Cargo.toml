@@ -10,6 +10,10 @@ local-tts = ["flow-like/local-tts"]
 local-tts-metal = ["local-tts", "flow-like/local-tts-metal"]
 local-tts-cuda = ["local-tts", "flow-like/local-tts-cuda"]
 local-tts-accelerate = ["local-tts", "flow-like/local-tts-accelerate"]
+local-stt = ["flow-like/local-stt"]
+local-stt-metal = ["local-stt", "flow-like/local-stt-metal"]
+local-stt-cuda = ["local-stt", "flow-like/local-stt-cuda"]
+local-stt-accelerate = ["local-stt", "flow-like/local-stt-accelerate"]
 # Execution feature - enables heavy dependencies for node execution
 execute = [
     "flow-like-catalog-core/execute",
