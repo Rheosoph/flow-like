@@ -304,7 +304,16 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[reactFlow, sortPins, pushCommand, invalidate, props.data.version],
+			[
+				reactFlow,
+				sortPins,
+				pushCommand,
+				invalidate,
+				props.id,
+				props.data.version,
+				props.data.appId,
+				props.data.boardId,
+			],
 		);
 		const pinRemoveCallback = useCallback(
 			async (pinToRemove: IPin) => {
@@ -359,7 +368,16 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[getNode, sortPins, pushCommand, invalidate, props.id, props.data.version],
+			[
+				getNode,
+				sortPins,
+				pushCommand,
+				invalidate,
+				props.id,
+				props.data.version,
+				props.data.appId,
+				props.data.boardId,
+			],
 		);
 
 		const parsePins = useCallback(

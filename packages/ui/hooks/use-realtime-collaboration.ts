@@ -283,7 +283,9 @@ export function useRealtimeCollaboration({
 					sub: state?.sub,
 					layerPath,
 					selection: {
-						nodes: normalizeSelectionNodes(state?.selection?.nodes),
+						// sorted so presenceEqual is order-independent (getStates() order
+						// and node-id order are not guaranteed stable)
+						nodes: normalizeSelectionNodes(state?.selection?.nodes).sort(),
 					},
 					activeNodeId: activeNodeFresh
 						? (state?.activeNodeId as string | undefined)
@@ -291,6 +293,12 @@ export function useRealtimeCollaboration({
 					activeNodeTs: activeNodeFresh ? activeNodeTs : undefined,
 				});
 			});
+
+			// Sort both snapshots by clientId so the index-by-index equality checks
+			// (cursorsEqual/presenceEqual) don't see spurious changes when the Map
+			// iteration order shifts (e.g. a peer reconnects).
+			next.sort((a, b) => a.clientId - b.clientId);
+			nextCursors.sort((a, b) => a.clientId - b.clientId);
 
 			// Cursors: publish to the external store (consumed only by the cursor
 			// overlay, which re-renders itself without touching the board). Skip when

@@ -79,7 +79,9 @@ export function useExecutionPresence({
 		}
 
 		let rafId: number | null = null;
-		let lastKey = "";
+		// null (not "") so the FIRST compute after an awareness swap always commits,
+		// clearing any executing-node highlights left over from the previous session.
+		let lastKey: string | null = null;
 
 		const computeAndSet = () => {
 			const states = awareness.getStates() as Map<

@@ -62,7 +62,6 @@ import { UpdateProvider } from "../components/update-provider";
 import { initBlobOffload } from "../lib/init-blob-offload";
 import PostHogPageView from "./PostHogPageView";
 import { PHProvider } from "./provider";
-import { ReactScan } from "./ReactScanComponent";
 
 initBlobOffload();
 

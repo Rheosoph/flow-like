@@ -2367,12 +2367,11 @@ export function FlowBoard({
 						selectedNode.type === "callFunctionNode",
 				)
 				.map((selectedNode) => selectedNode.id);
-			setSelectedNodeIds((prev) =>
-				prev.length === nodeIds.length &&
-				prev.every((id, i) => id === nodeIds[i])
-					? prev
-					: nodeIds,
-			);
+			setSelectedNodeIds((prev) => {
+				if (prev.length !== nodeIds.length) return nodeIds;
+				const prevSet = new Set(prev);
+				return nodeIds.every((id) => prevSet.has(id)) ? prev : nodeIds;
+			});
 			if (!awareness) return;
 			awareness.setLocalStateField("selection", { nodes: nodeIds });
 			// Broadcast active node when user clicks a single node

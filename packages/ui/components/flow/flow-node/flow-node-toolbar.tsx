@@ -214,10 +214,8 @@ const FlowNodeToolbar = memo(
 		// Stable onClick so the memoized ToolbarButton (and its Radix Tooltip/Popper,
 		// which measures the DOM on render) doesn't re-render on every toolbar render.
 		const handleCollapseClick = useCallback(
-			(e: Event | undefined) => {
-				const rect = (
-					e?.currentTarget as HTMLElement
-				)?.getBoundingClientRect?.();
+			(e?: React.MouseEvent<HTMLButtonElement>) => {
+				const rect = e?.currentTarget?.getBoundingClientRect?.();
 				if (rect) {
 					onCollapse(rect.x + rect.width / 2, rect.y + rect.height / 2);
 				} else {
