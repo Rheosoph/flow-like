@@ -69,6 +69,10 @@ export interface ShaderCanvasProps extends VoiceVisualizerProps {
  * Reusable WebGL canvas for orb-style voice visualizers: handles audio energy
  * easing, hover flow, the standard uniform set, and a graceful Orb fallback
  * when WebGL is unavailable. A new shader variant only needs to supply `frag`.
+ *
+ * The GL program is compiled once (per `dim`/`frag`); state/colour/hover/audio
+ * are read from refs each frame so hovering or changing state never recompiles
+ * the shader.
  */
 export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 	const { analyser, state, size, color, recordingColor, hover } = props;
@@ -78,6 +82,19 @@ export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 	const [failed, setFailed] = useState(false);
 	const dim = VOICE_DIMENSIONS[size].orb;
 	const main = state === "recording" ? recordingColor : color;
+
+	// Per-frame inputs live in refs so the (expensive) GL setup effect doesn't
+	// recompile the shader program on every hover / state change.
+	const analyserRef = useRef(analyser);
+	const stateRef = useRef(state);
+	const mainRef = useRef(main);
+	const colorRef = useRef(color);
+	const hoverRef = useRef(hover);
+	analyserRef.current = analyser;
+	stateRef.current = state;
+	mainRef.current = main;
+	colorRef.current = color;
+	hoverRef.current = hover;
 
 	useEffect(() => {
 		if (failed) return;
@@ -102,6 +119,10 @@ export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 		const fragShader = compile(gl, gl.FRAGMENT_SHADER, frag);
 		const program = gl.createProgram();
 		if (!vert || !fragShader || !program) {
+			// Free any partially-created resources before bailing out.
+			if (vert) gl.deleteShader(vert);
+			if (fragShader) gl.deleteShader(fragShader);
+			if (program) gl.deleteProgram(program);
 			setFailed(true);
 			return;
 		}
@@ -109,6 +130,9 @@ export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 		gl.attachShader(program, fragShader);
 		gl.linkProgram(program);
 		if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+			gl.deleteShader(vert);
+			gl.deleteShader(fragShader);
+			gl.deleteProgram(program);
 			setFailed(true);
 			return;
 		}
@@ -142,26 +166,32 @@ export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 		canvas.height = dim * dpr;
 		gl.viewport(0, 0, canvas.width, canvas.height);
 
-		const [r1, g1, b1] = hexToRgbNorm(main);
-		const [r2, g2, b2] = hexToRgbNorm(state === "recording" ? color : main);
-
 		let t = 0;
 		let raf = 0;
-		const dataArray = analyser
-			? new Uint8Array(analyser.frequencyBinCount)
-			: null;
+		const dataArray = new Uint8Array(2048);
 
 		const render = () => {
 			raf = requestAnimationFrame(render);
 			if (!gl) return;
 
+			const state = stateRef.current;
+			const analyser = analyserRef.current;
+			const hover = hoverRef.current;
+			const main = mainRef.current;
+			const [r1, g1, b1] = hexToRgbNorm(main);
+			const [r2, g2, b2] = hexToRgbNorm(
+				state === "recording" ? colorRef.current : main,
+			);
+
+			// hover eases the plasma into flowing a little faster — a subtle
+			// "it noticed you" reaction rather than an instant glow.
 			const targetFlow = hover && state === "idle" ? 1 : 0;
 			flowRef.current += (targetFlow - flowRef.current) * 0.05;
 			t += 0.016 * (1 + flowRef.current * 0.9);
 
 			const active = state === "recording" || state === "speaking";
 			let target = 0.04 + flowRef.current * 0.07;
-			if (analyser && dataArray && active) {
+			if (analyser && active) {
 				analyser.getByteTimeDomainData(dataArray);
 				let sum = 0;
 				for (let i = 0; i < dataArray.length; i++) {
@@ -178,6 +208,7 @@ export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 			if (state === "speaking") {
 				target = Math.max(target, 0.4 + Math.sin(t * 3) * 0.18);
 			}
+			// ease the visible energy so nothing snaps on hover/state changes
 			ampRef.current += (target - ampRef.current) * 0.08;
 			const amplitude = ampRef.current;
 
@@ -200,7 +231,7 @@ export function ShaderCanvas({ frag, ...props }: ShaderCanvasProps) {
 			gl.deleteShader(fragShader);
 			gl.deleteBuffer(buffer);
 		};
-	}, [failed, analyser, state, main, color, dim, hover, frag]);
+	}, [failed, dim, frag]);
 
 	if (failed) return <Orb {...props} />;
 

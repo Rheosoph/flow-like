@@ -103,6 +103,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+		// Set when the user releases before getUserMedia resolves, so the
+		// in-flight startRecording aborts instead of leaving the mic recording.
+		const pendingStopRef = useRef(false);
 		const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 		const audioChunksRef = useRef<Blob[]>([]);
 		const recognitionRef = useRef<any>(null);
@@ -193,11 +196,18 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const startRecording = async () => {
 			if (!audioInput) return;
 			onInterrupt?.();
+			pendingStopRef.current = false;
 
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
 					audio: true,
 				});
+				if (pendingStopRef.current) {
+					// Released before the mic was ready — don't start a recording.
+					for (const track of stream.getTracks()) track.stop();
+					pendingStopRef.current = false;
+					return;
+				}
 				mediaRecorderRef.current = new MediaRecorder(stream);
 				audioChunksRef.current = [];
 
@@ -246,6 +256,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					clearInterval(recordingIntervalRef.current);
 					recordingIntervalRef.current = null;
 				}
+			} else {
+				// Released before the recorder actually started — make the in-flight
+				// startRecording abort once getUserMedia resolves.
+				pendingStopRef.current = true;
 			}
 		};
 
@@ -804,6 +818,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													onPointerLeave={() => {
 														if (isRecording) stopRecording();
 													}}
+													onContextMenu={(e) => e.preventDefault()}
 												>
 													<MicIcon className="w-4 h-4" />
 												</Button>

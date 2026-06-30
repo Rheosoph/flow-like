@@ -15,9 +15,21 @@ export function Orb({
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const animRef = useRef<number>(0);
 	const phaseRef = useRef(0);
-	const hoverRef = useRef(0);
+	const hoverEaseRef = useRef(0);
 	const dim = VOICE_DIMENSIONS[size].orb;
 	const main = state === "recording" ? recordingColor : color;
+
+	// Keep the per-frame inputs in refs so the canvas/animation effect doesn't
+	// tear down and re-initialize on every hover/state change — it only needs to
+	// re-run when the canvas size (`dim`) changes.
+	const analyserRef = useRef(analyser);
+	const stateRef = useRef(state);
+	const mainRef = useRef(main);
+	const hoverRef = useRef(hover);
+	analyserRef.current = analyser;
+	stateRef.current = state;
+	mainRef.current = main;
+	hoverRef.current = hover;
 
 	useEffect(() => {
 		const canvas = canvasRef.current;
@@ -40,6 +52,9 @@ export function Orb({
 
 		const draw = () => {
 			animRef.current = requestAnimationFrame(draw);
+			const state = stateRef.current;
+			const main = mainRef.current;
+			const analyser = analyserRef.current;
 			ctx.clearRect(0, 0, dim, dim);
 			phaseRef.current += 0.02;
 			const phase = phaseRef.current;
@@ -64,9 +79,9 @@ export function Orb({
 				);
 			}
 			// idle breathing (eased-in on hover) so it feels alive but never pops
-			const targetHover = hover && state === "idle" ? 1 : 0;
-			hoverRef.current += (targetHover - hoverRef.current) * 0.06;
-			const idleAmt = state === "idle" ? 0.16 + hoverRef.current * 0.18 : 0;
+			const targetHover = hoverRef.current && state === "idle" ? 1 : 0;
+			hoverEaseRef.current += (targetHover - hoverEaseRef.current) * 0.06;
+			const idleAmt = state === "idle" ? 0.16 + hoverEaseRef.current * 0.18 : 0;
 			const idle = (Math.sin(phase * 1.3) * 0.5 + 0.5) * idleAmt;
 			const scaled = Math.min(amplitude * 8 + idle, 1);
 
@@ -181,7 +196,7 @@ export function Orb({
 		draw();
 
 		return () => cancelAnimationFrame(animRef.current);
-	}, [analyser, state, main, dim, hover]);
+	}, [dim]);
 
 	return <canvas ref={canvasRef} style={{ width: dim, height: dim }} />;
 }

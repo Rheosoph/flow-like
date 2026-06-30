@@ -28,6 +28,7 @@ export type RecordControlProps = Pick<
 	| "onPointerUp"
 	| "onPointerLeave"
 	| "onPointerEnter"
+	| "onContextMenu"
 >;
 
 export interface AudioPlaybackProps {

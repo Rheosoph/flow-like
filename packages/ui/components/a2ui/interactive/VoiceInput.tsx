@@ -1,7 +1,14 @@
 "use client";
 
 import { Loader2, Mic, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { cn } from "../../../lib/utils";
 import {
 	type ITemporaryFlowPath,
@@ -399,6 +406,9 @@ export function A2UIVoiceInput({
 					onPointerLeave: () => {
 						if (capturing) endCapture();
 					},
+					// Suppress the mobile long-press context menu / selection magnifier,
+					// which otherwise interrupts the hold-to-record pointer flow.
+					onContextMenu: (e: ReactMouseEvent) => e.preventDefault(),
 				}
 			: {
 					onPointerEnter: () => recorder.prewarm(),

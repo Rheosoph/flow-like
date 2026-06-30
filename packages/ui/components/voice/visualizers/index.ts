@@ -24,7 +24,7 @@ export const VOICE_VARIANTS: Record<
 export function getVoiceVisualizer(
 	variant: VoiceVariant | string | undefined,
 ): ComponentType<VoiceVisualizerProps> {
-	if (variant && variant in VOICE_VARIANTS) {
+	if (variant && Object.hasOwn(VOICE_VARIANTS, variant)) {
 		return VOICE_VARIANTS[variant as VoiceVariant];
 	}
 	return VOICE_VARIANTS.waveform;

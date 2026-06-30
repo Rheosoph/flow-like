@@ -238,7 +238,6 @@ export function A2UIFilePreview({
 							src={src}
 							variant={audioVariant as VoiceVariant}
 							title={rawFileName(src, filename)}
-							autoPlay
 							downloadName={
 								showDownload ? rawFileName(src, filename) : undefined
 							}

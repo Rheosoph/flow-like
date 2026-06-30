@@ -43,12 +43,14 @@ export function useAnswerPlayback(
 		const audio = new Audio(latestAudioUrl);
 		audioRef.current = audio;
 
+		let source: MediaElementAudioSourceNode | null = null;
+		let node: AnalyserNode | null = null;
 		try {
 			if (!ctxRef.current) ctxRef.current = new AudioContext();
 			const ctx = ctxRef.current;
 			void ctx.resume().catch(() => {});
-			const source = ctx.createMediaElementSource(audio);
-			const node = ctx.createAnalyser();
+			source = ctx.createMediaElementSource(audio);
+			node = ctx.createAnalyser();
 			node.fftSize = 2048;
 			source.connect(node);
 			node.connect(ctx.destination);
@@ -70,6 +72,10 @@ export function useAnswerPlayback(
 			audio.removeEventListener("ended", onStop);
 			audio.removeEventListener("pause", onStop);
 			audio.pause();
+			// Disconnect the per-URL graph nodes so they don't accumulate on the
+			// reused AudioContext across answers.
+			source?.disconnect();
+			node?.disconnect();
 		};
 	}, [enabled, latestAudioUrl]);
 

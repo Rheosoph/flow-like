@@ -115,6 +115,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			if (!assistant) return null;
 			for (const file of assistant.files ?? []) {
 				if (
+					file &&
 					typeof file === "object" &&
 					file.url &&
 					file.type?.includes("audio")
