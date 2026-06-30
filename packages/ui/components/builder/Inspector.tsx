@@ -3364,6 +3364,29 @@ function BoundValueEditor({
 						))}
 					</SelectContent>
 				</Select>
+			) : mode === "literal" &&
+				originalType === "string" &&
+				/color$/i.test(name) ? (
+				<div className="flex items-center gap-2">
+					<Input
+						type="color"
+						value={
+							/^#[0-9a-fA-F]{6}$/.test(String(currentValue))
+								? String(currentValue)
+								: "#000000"
+						}
+						onChange={(e) => handleLiteralChange(e.target.value)}
+						className="h-8 w-10 shrink-0 cursor-pointer p-1"
+						aria-label={`${name} color`}
+					/>
+					<Input
+						type="text"
+						value={String(currentValue)}
+						onChange={(e) => handleLiteralChange(e.target.value)}
+						placeholder="#8b5cf6"
+						className="h-8 flex-1 text-sm"
+					/>
+				</div>
 			) : (
 				<Input
 					type={

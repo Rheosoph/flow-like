@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { AudioPreview } from "../../ui/audio-preview";
+import { AudioPlayback, type VoiceVariant } from "../../voice";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -94,6 +95,8 @@ export function A2UIFilePreview({
 	const fileTypeOverride = useResolved<string>(component.fileType);
 	const showControls = useResolved<boolean>(component.showControls) ?? true;
 	const showDownload = useResolved<boolean>(component.showDownload) ?? false;
+	const audioVariant = useResolved<string>(component.variant);
+	const audioAutoPlay = useResolved<boolean>(component.autoPlay) ?? false;
 	const fit = useResolved<string>(component.fit) ?? "contain";
 	const loading = useResolved<"lazy" | "eager">(component.loading);
 	const fallbackText =
@@ -222,6 +225,29 @@ export function A2UIFilePreview({
 	}
 
 	if (fileType === "audio") {
+		if (audioVariant) {
+			return (
+				<div
+					className={cn(
+						"flex h-full w-full items-center justify-center p-4",
+						resolveStyle(style),
+					)}
+					style={resolveInlineStyle(style)}
+				>
+					<div className="w-full max-w-2xl rounded-xl border bg-card p-5 shadow-sm">
+						<AudioPlayback
+							src={src}
+							variant={audioVariant as VoiceVariant}
+							title={rawFileName(src, filename)}
+							autoPlay={audioAutoPlay}
+							downloadName={
+								showDownload ? rawFileName(src, filename) : undefined
+							}
+						/>
+					</div>
+				</div>
+			);
+		}
 		return (
 			<AudioPreview
 				src={src}

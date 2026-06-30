@@ -311,6 +311,20 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		disabled: bool(false),
 		showPreview: bool(true),
 	},
+	voiceInput: {
+		value: str(""),
+		label: str("Record"),
+		mode: str("record"),
+		invoke: str("manual"),
+		variant: str("conservative"),
+		size: str("md"),
+		resultMode: str("player"),
+		color: str("#8b5cf6"),
+		recordingColor: str("#ef4444"),
+		maxDuration: num(300),
+		autoStop: bool(false),
+		disabled: bool(false),
+	},
 	link: {
 		label: str("Click here"),
 		variant: str("default"),
@@ -512,6 +526,7 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		fallbackText: str("Cannot preview this file"),
 		showDownload: bool(false),
 		loading: str("lazy"),
+		autoPlay: bool(false),
 	},
 	diffView: {
 		original: str('function greet(name) {\n  return "Hi " + name;\n}'),

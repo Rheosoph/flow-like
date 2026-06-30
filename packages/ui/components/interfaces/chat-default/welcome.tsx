@@ -5,6 +5,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
 import { VoiceMode } from "./VoiceMode";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
+import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
 interface ChatWelcomeProps {
 	onSendMessage: ISendMessageFunction;
@@ -34,6 +35,9 @@ export function ChatWelcome({
 	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 	const chatBox = useRef<ChatBoxRef>(null);
 	const { resolvedTheme } = useTheme();
+
+	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
+	const voiceEnabled = isVoiceEnabled(voiceConfig);
 
 	const handleVoiceModeSend = useCallback(
 		(audioFile: File) => {
@@ -178,6 +182,7 @@ export function ChatWelcome({
 					open={voiceModeOpen}
 					onClose={() => setVoiceModeOpen(false)}
 					onSend={handleVoiceModeSend}
+					voice={voiceConfig}
 				/>
 			)}
 			{/* Loading Overlay */}
@@ -252,9 +257,11 @@ export function ChatWelcome({
 								setCurrentMessage(content);
 							}}
 							fileUpload={config?.allow_file_upload ?? false}
-							audioInput={config?.allow_voice_input ?? true}
+							audioInput={voiceEnabled}
+							voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
+							voiceInvoke={voiceConfig.invoke}
 							onVoiceModeToggle={
-								(config?.allow_voice_mode ?? true)
+								voiceEnabled && voiceConfig.invoke === "auto"
 									? () => setVoiceModeOpen(true)
 									: undefined
 							}

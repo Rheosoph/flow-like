@@ -19,6 +19,8 @@ import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
+import { useAnswerPlayback } from "./use-answer-playback";
+import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
 type ChatItem =
 	| { type: "message"; data: IMessage; timestamp: number }
@@ -94,6 +96,40 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const pendingMessageRef = useRef<IMessage | null>(null);
 		const rafIdRef = useRef<number | null>(null);
 		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+
+		const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
+		const voiceEnabled = isVoiceEnabled(voiceConfig);
+
+		const latestAudioUrl = useMemo(() => {
+			let assistant: IMessage | null = null;
+			if (currentMessage?.inner.role === "assistant") {
+				assistant = currentMessage;
+			} else {
+				for (let i = localMessages.length - 1; i >= 0; i--) {
+					if (localMessages[i]?.inner.role === "assistant") {
+						assistant = localMessages[i];
+						break;
+					}
+				}
+			}
+			if (!assistant) return null;
+			for (const file of assistant.files ?? []) {
+				if (
+					file &&
+					typeof file === "object" &&
+					file.url &&
+					file.type?.includes("audio")
+				) {
+					return file.url;
+				}
+			}
+			return null;
+		}, [currentMessage, localMessages]);
+
+		const playback = useAnswerPlayback(
+			voiceConfig.playback === "audio" || voiceConfig.playback === "both",
+			latestAudioUrl,
+		);
 
 		// Cleanup RAF on unmount
 		useEffect(() => {
@@ -291,7 +327,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		const handleVoiceModeSend = useCallback(
 			async (audioFile: File) => {
-				setVoiceModeOpen(false);
+				// keep voice mode open so the orb can react to the spoken answer;
+				// VoiceMode closes itself once the answer has been delivered.
 				await handleSendMessage("", undefined, undefined, audioFile);
 			},
 			[handleSendMessage],
@@ -484,11 +521,17 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								defaultActiveTools={defaultActiveTools}
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
-								audioInput={config?.allow_voice_input ?? true}
+								audioInput={voiceEnabled}
+								voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
+								voiceInvoke={voiceConfig.invoke}
 								sendDisabled={isSending || isStreamActive}
+								onInterrupt={playback.stop}
 								onVoiceModeToggle={
-									(config?.allow_voice_mode ?? true)
-										? () => setVoiceModeOpen(true)
+									voiceEnabled && voiceConfig.invoke === "auto"
+										? () => {
+												playback.stop();
+												setVoiceModeOpen(true);
+											}
 										: undefined
 								}
 							/>
@@ -501,6 +544,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					open={voiceModeOpen}
 					onClose={() => setVoiceModeOpen(false)}
 					onSend={handleVoiceModeSend}
+					voice={voiceConfig}
+					busy={isStreamActive || playback.isPlaying}
+					speaking={playback.isPlaying}
+					speakingAnalyser={playback.analyser}
+					onInterrupt={() => playback.stop()}
 				/>
 			</main>
 		);

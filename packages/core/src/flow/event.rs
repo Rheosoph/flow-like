@@ -116,12 +116,33 @@ pub struct Event {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct ChatVoiceParameters {
+    /// Capture mode: "disabled" | "stt" (frontend transcript) | "record" (audio).
+    pub mode: Option<String>,
+    /// Invoke mode: "manual" | "hold" | "auto".
+    pub invoke: Option<String>,
+    /// Visual style: "conservative" | "waveform" | "orb" | "vortex" | "shader".
+    pub variant: Option<String>,
+    /// Element size: "sm" | "md" | "lg".
+    pub size: Option<String>,
+    /// Base accent color (CSS color string).
+    pub color: Option<String>,
+    /// Accent color while recording (CSS color string).
+    pub recording_color: Option<String>,
+    /// Answer playback: "text" | "audio" | "both".
+    pub playback: Option<String>,
+    pub max_duration: Option<u32>,
+    pub auto_stop: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct ChatEventParameters {
     pub history_elements: Option<u32>,
     pub allow_file_upload: Option<bool>,
     pub allow_voice_input: Option<bool>,
     pub allow_voice_output: Option<bool>,
     pub allow_voice_mode: Option<bool>,
+    pub voice: Option<ChatVoiceParameters>,
     pub tools: Option<Vec<String>>,
     pub default_tools: Option<Vec<String>>,
     pub example_messages: Option<Vec<String>>,

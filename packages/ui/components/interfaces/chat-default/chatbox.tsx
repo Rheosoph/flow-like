@@ -28,6 +28,7 @@ import {
 	PopoverTrigger,
 	Textarea,
 } from "../../ui";
+import type { VoiceInvokeMode, VoiceMode } from "../../voice";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 
 export type ISendMessageFunction = (
@@ -48,8 +49,12 @@ interface ChatBoxProps {
 	defaultActiveTools?: string[];
 	fileUpload: boolean;
 	audioInput: boolean;
+	voiceMode?: VoiceMode;
+	voiceInvoke?: VoiceInvokeMode;
 	sendDisabled?: boolean;
 	onVoiceModeToggle?: () => void;
+	/** Called when the user starts speaking/recording, to interrupt answer playback. */
+	onInterrupt?: () => void;
 }
 
 export interface ChatBoxRef {
@@ -75,10 +80,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onSendMessage,
 			fileUpload = true,
 			audioInput = false,
+			voiceMode = "record",
+			voiceInvoke = "manual",
 			availableTools = ["Reason"],
 			defaultActiveTools = ["Reason"],
 			sendDisabled = false,
 			onVoiceModeToggle,
+			onInterrupt,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -95,6 +103,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+		// Set when the user releases before getUserMedia resolves, so the
+		// in-flight startRecording aborts instead of leaving the mic recording.
+		const pendingStopRef = useRef(false);
 		const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 		const audioChunksRef = useRef<Blob[]>([]);
 		const recognitionRef = useRef<any>(null);
@@ -184,11 +195,19 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const startRecording = async () => {
 			if (!audioInput) return;
+			onInterrupt?.();
+			pendingStopRef.current = false;
 
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
 					audio: true,
 				});
+				if (pendingStopRef.current) {
+					// Released before the mic was ready — don't start a recording.
+					for (const track of stream.getTracks()) track.stop();
+					pendingStopRef.current = false;
+					return;
+				}
 				mediaRecorderRef.current = new MediaRecorder(stream);
 				audioChunksRef.current = [];
 
@@ -237,6 +256,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					clearInterval(recordingIntervalRef.current);
 					recordingIntervalRef.current = null;
 				}
+			} else {
+				// Released before the recorder actually started — make the in-flight
+				// startRecording abort once getUserMedia resolves.
+				pendingStopRef.current = true;
 			}
 		};
 
@@ -261,6 +284,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const startTranscription = () => {
 			if (!audioInput) return;
+			onInterrupt?.();
 			const SpeechRecognitionApi =
 				typeof window !== "undefined"
 					? (window as any).SpeechRecognition ||
@@ -747,8 +771,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 							{/* Send Button & Audio Controls */}
 							<div className="p-2 pt-0 flex items-center gap-2">
-								{/* Voice-to-text transcription button */}
+								{/* Voice-to-text transcription button (STT mode) */}
 								{audioInput &&
+									voiceMode === "stt" &&
 									typeof window !== "undefined" &&
 									((window as any).SpeechRecognition ||
 										(window as any).webkitSpeechRecognition) && (
@@ -769,10 +794,41 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										</Button>
 									)}
 
-								{/* Audio Recording Button */}
-								{audioInput && (
+								{/* Audio Recording Button (record mode) */}
+								{audioInput && voiceMode === "record" && (
 									<div className="flex items-center gap-1">
-										{isRecording ? (
+										{voiceInvoke === "hold" ? (
+											<>
+												<Button
+													type="button"
+													size="sm"
+													variant={isRecording ? "destructive" : "ghost"}
+													className={cn(
+														"h-8 w-8 p-0 rounded-full select-none transition-colors",
+														isRecording ? "animate-pulse" : "hover:bg-accent",
+													)}
+													disabled={
+														!!recordedAudio ||
+														sendDisabled ||
+														typeof navigator?.mediaDevices?.getUserMedia !==
+															"function"
+													}
+													onPointerDown={() => startRecording()}
+													onPointerUp={() => stopRecording()}
+													onPointerLeave={() => {
+														if (isRecording) stopRecording();
+													}}
+													onContextMenu={(e) => e.preventDefault()}
+												>
+													<MicIcon className="w-4 h-4" />
+												</Button>
+												{isRecording && (
+													<span className="text-xs text-muted-foreground font-mono">
+														{formatTime(recordingTime)}
+													</span>
+												)}
+											</>
+										) : isRecording ? (
 											<>
 												<Button
 													type="button"

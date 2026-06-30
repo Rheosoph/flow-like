@@ -3,11 +3,15 @@
 import { ImagePlus, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
+import {
+	type ITemporaryFlowPath,
+	useBackend,
+} from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import {
+	useActionContext,
 	useExecuteAction,
 	useIsComponentTriggering,
 	useOnAction,
@@ -22,7 +26,9 @@ interface ImageData {
 	size: number;
 	type: string;
 	dataUrl: string;
+	url?: string;
 	backendUrl?: string;
+	flowPath?: ITemporaryFlowPath;
 	uploading?: boolean;
 	uploadError?: string;
 }
@@ -78,6 +84,7 @@ export function A2UIImageInput({
 	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
+	const { appId } = useActionContext();
 	const value = useResolved<ImageData | ImageData[]>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const error = useResolved<boolean>(component.error);
@@ -172,13 +179,19 @@ export function A2UIImageInput({
 			async (file, index): Promise<ImageData> => {
 				const dataUrl = pendingImages[index].dataUrl;
 				try {
-					const backendUrl = await backend.helperState.fileToUrl(file, false);
+					const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
+						file,
+						false,
+						appId,
+					)) ?? { url: await backend.helperState.fileToUrl(file, false, appId) };
 					return {
 						name: file.name,
 						size: file.size,
 						type: file.type,
 						dataUrl,
-						backendUrl,
+						url: temporaryFile.url,
+						backendUrl: temporaryFile.url,
+						flowPath: temporaryFile.flowPath,
 						uploading: false,
 					};
 				} catch (err) {
