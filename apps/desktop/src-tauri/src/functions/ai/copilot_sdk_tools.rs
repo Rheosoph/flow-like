@@ -79,6 +79,7 @@ pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandle
         create_internet_search_tool(),
         create_database_tool(bridge.clone()),
         create_storage_tool(bridge.clone()),
+        create_ui_inspect_tool(bridge.clone()),
         create_execute_event_tool(bridge.clone()),
         create_ask_user_tool(bridge),
     ]
@@ -431,6 +432,47 @@ or create a small helper/config artifact in app/user storage."#,
             FrontendToolApproval::none()
         };
         frontend_tool_result(&bridge, "storage_tool", args.clone(), approval)
+    });
+
+    (tool, handler)
+}
+
+fn create_ui_inspect_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("ui_inspect")
+        .description(
+            r#"Inspect the app's A2UI pages and widgets so `a2ui*` workflow calls target real elements.
+
+This is a READ-ONLY tool and never asks for approval. Call it BEFORE writing or editing any
+`a2ui*` call (set/get element, instantiate widget, push/clear container, navigate) so element
+references and widget selectors are never guessed.
+
+Operations:
+- list (default): every page (id, name, route, onLoad event) and every widget (selector, description).
+- page: full element reference list for one page. An `elementRef` used by `a2uiSetElementText`,
+  `a2uiGetElement`, `a2uiGetElementValue`, `a2uiPushToContainer`, etc. is `"<page_id>/<component_id>"`.
+- widget: instantiation surface for one widget — the `widgetSelector` plus the `dynPath*`/`dynProp*`
+  (camelCase) input pins `a2uiInstantiateWidget` exposes for its bound data paths and exposed props,
+  and the action names usable for `fnRefs`."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "operation": { "type": "string", "enum": ["list", "page", "widget"] },
+                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+                "board_id": { "type": "string", "description": "Restrict pages to this board. Optional." },
+                "page_id": { "type": "string", "description": "Page id for operation 'page'." },
+                "widget_selector": { "type": "string", "description": "Widget id or name for operation 'widget'." }
+            },
+            "required": ["operation"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result(
+            &bridge,
+            "ui_inspect",
+            args.clone(),
+            FrontendToolApproval::none(),
+        )
     });
 
     (tool, handler)

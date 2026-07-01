@@ -64,9 +64,23 @@ mod generate_flowscript {
         }
     }
 
-    /// Decode every `tests/ast/*.board` fixture, lower it to FlowScript, and assert the rendered
-    /// text matches the committed `<name>.flow` / `<name>.anchored.flow` snapshots. Run with
-    /// `UPDATE_AST_SNAPSHOTS=1` to regenerate the snapshots after an intentional change.
+    /// Recursively collect every `.board` fixture under `dir`, descending into subdirectories
+    /// (e.g. `widgets-pages/`) so dashboard/widget-driven boards are exercised too.
+    fn collect_boards(dir: &FsPath, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read tests/ast").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_boards(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("board") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Decode every `tests/ast/**/*.board` fixture, lower it to FlowScript, and assert the rendered
+    /// text matches the committed `<name>.flow` / `<name>.anchored.flow` snapshots placed next to
+    /// each board. Run with `UPDATE_AST_SNAPSHOTS=1` to regenerate the snapshots after an
+    /// intentional change.
     #[tokio::test]
     async fn matches_flowscript_snapshots() {
         let update = std::env::var(UPDATE_ENV).is_ok_and(|v| !v.is_empty());
@@ -81,27 +95,24 @@ mod generate_flowscript {
                 .expect("local object store"),
         );
 
-        let mut boards: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .expect("read tests/ast")
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("board"))
-            .collect();
+        let mut boards: Vec<PathBuf> = Vec::new();
+        collect_boards(&dir, &mut boards);
         boards.sort();
         assert!(!boards.is_empty(), "no .board fixtures found in {dir:?}");
 
         let mut mismatches: Vec<String> = Vec::new();
 
         for board_path in boards {
-            let file_name = board_path
-                .file_name()
-                .unwrap()
+            let rel = board_path
+                .strip_prefix(&dir)
+                .expect("board path under tests/ast")
                 .to_string_lossy()
                 .to_string();
-            let store_path = flow_like_storage::Path::from(file_name.clone());
+            let store_path = flow_like_storage::Path::from(rel.clone());
             let proto: flow_like_types::proto::Board =
                 crate::utils::compression::from_compressed(store.clone(), store_path)
                     .await
-                    .unwrap_or_else(|e| panic!("decode {file_name}: {e}"));
+                    .unwrap_or_else(|e| panic!("decode {rel}: {e}"));
             let board = Board::from_proto(proto);
 
             let plain = board_to_flowscript(&board, &RenderOptions::default());
@@ -118,14 +129,15 @@ mod generate_flowscript {
                 .unwrap()
                 .to_string_lossy()
                 .to_string();
+            let parent = board_path.parent().unwrap_or(&dir);
             check_snapshot(
-                &dir.join(format!("{stem}.flow")),
+                &parent.join(format!("{stem}.flow")),
                 &plain,
                 update,
                 &mut mismatches,
             );
             check_snapshot(
-                &dir.join(format!("{stem}.anchored.flow")),
+                &parent.join(format!("{stem}.anchored.flow")),
                 &annotated,
                 update,
                 &mut mismatches,

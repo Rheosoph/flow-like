@@ -39,6 +39,8 @@ import {
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { IIndexType } from "../../state/backend-state/db-state";
+import type { IPage } from "../../state/backend-state/page-state";
+import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 
 import { Button } from "../ui/button";
@@ -381,6 +383,8 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Using database";
 		case "storage_tool":
 			return "Using storage";
+		case "ui_inspect":
+			return "Inspecting pages & widgets";
 		case "execute_event":
 			return "Executing event";
 		case "ask_user":
@@ -566,6 +570,73 @@ function resolveToolAppId(
 		);
 	}
 	return appId;
+}
+
+function snakeToCamel(value: string): string {
+	return value.replace(/_([a-z0-9])/g, (_, char: string) => char.toUpperCase());
+}
+
+/** Mirror of the catalog `a2ui_instantiate_widget` dynamic pin naming, camelCased for FlowScript. */
+function widgetInstantiatePin(kind: "path" | "prop" | "cust", key: string): string {
+	return snakeToCamel(`dyn_${kind}_${key.replace(/\//g, "_")}`);
+}
+
+/** Collect data-binding paths from a component tree, mirroring the catalog `visit_value_for_paths`. */
+function collectBoundPaths(components: SurfaceComponent[]): string[] {
+	const paths = new Set<string>();
+	const visit = (value: unknown) => {
+		if (Array.isArray(value)) {
+			for (const item of value) visit(item);
+			return;
+		}
+		if (value && typeof value === "object") {
+			const record = value as Record<string, unknown>;
+			if (typeof record.path === "string") {
+				if (record.path) paths.add(record.path);
+				return;
+			}
+			for (const item of Object.values(record)) visit(item);
+		}
+	};
+	for (const component of components ?? []) visit(component.component);
+	return [...paths];
+}
+
+/** Compact page descriptor: element refs are `"<page_id>/<component_id>"`. */
+function summarizePage(page: IPage) {
+	return {
+		page_id: page.id,
+		name: page.name,
+		route: page.route,
+		on_load_event_id: page.onLoadEventId,
+		on_interval_event_id: page.onIntervalEventId,
+		element_refs: (page.components ?? []).map(
+			(component) => `${page.id}/${component.id}`,
+		),
+	};
+}
+
+/** Compact widget descriptor: `selector` + the `a2uiInstantiateWidget` input pins and action names. */
+function summarizeWidget(widget: IWidget) {
+	return {
+		selector: widget.name,
+		widget_id: widget.id,
+		description: widget.description,
+		instantiate_pins: [
+			...collectBoundPaths(widget.components ?? []).map((path) => ({
+				pin: widgetInstantiatePin("path", path),
+				bound_path: path,
+			})),
+			...(widget.exposedProps ?? []).map((prop) => ({
+				pin: widgetInstantiatePin("prop", prop.id),
+				label: prop.label,
+				property_path: prop.propertyPath,
+			})),
+		],
+		actions: (widget.actions ?? [])
+			.map((action) => (action as { name?: string }).name)
+			.filter((name): name is string => typeof name === "string"),
+	};
 }
 
 function mapIndexType(value: unknown): IIndexType {
@@ -1356,6 +1427,80 @@ function FlowPilotImpl({
 		[activeAppId, backendContext.eventState, executionService],
 	);
 
+	const runUiInspectTool = useCallback(
+		async (args: Record<string, unknown>) => {
+			const operation = getArgString(args, "operation") ?? "list";
+			const toolAppId = resolveToolAppId(args, activeAppId);
+			const boardId = getArgString(args, "board_id", "boardId") ?? board?.id;
+			const pageState = backendContext.pageState;
+			const widgetState = backendContext.widgetState;
+
+			switch (operation) {
+				case "page": {
+					const pageId = getArgString(args, "page_id", "pageId");
+					if (!pageId)
+						throw new Error("ui_inspect operation 'page' requires page_id.");
+					const page = await pageState.getPage(toolAppId, pageId, boardId);
+					return { status: "ok", page: summarizePage(page) };
+				}
+				case "widget": {
+					const selector = getArgString(
+						args,
+						"widget_selector",
+						"widgetSelector",
+					);
+					if (!selector)
+						throw new Error(
+							"ui_inspect operation 'widget' requires widget_selector.",
+						);
+					const list = await widgetState.getWidgets(toolAppId);
+					const match = list.find(
+						([id, name]) => id === selector || name === selector,
+					);
+					if (!match) throw new Error(`Widget '${selector}' not found.`);
+					const widget = await widgetState.getWidget(toolAppId, match[0]);
+					return { status: "ok", widget: summarizeWidget(widget) };
+				}
+				default: {
+					const [pageList, widgetList] = await Promise.all([
+						pageState.getPages(toolAppId, boardId),
+						widgetState.getWidgets(toolAppId),
+					]);
+					const pages = await Promise.all(
+						pageList.map(async (item) => {
+							try {
+								const page = await pageState.getPage(
+									toolAppId,
+									item.pageId,
+									item.boardId ?? boardId,
+								);
+								return summarizePage(page);
+							} catch {
+								return {
+									page_id: item.pageId,
+									name: item.name,
+									element_refs: [],
+								};
+							}
+						}),
+					);
+					return {
+						status: "ok",
+						app_id: toolAppId,
+						board_id: boardId,
+						pages,
+						widgets: widgetList.map(([id, name, meta]) => ({
+							selector: name,
+							widget_id: id,
+							description: meta?.description,
+						})),
+					};
+				}
+			}
+		},
+		[activeAppId, board?.id, backendContext.pageState, backendContext.widgetState],
+	);
+
 	const executeFrontendToolRequest = useCallback(
 		async (request: FrontendToolRequest): Promise<FrontendToolResponse> => {
 			try {
@@ -1394,6 +1539,9 @@ function FlowPilotImpl({
 					case "storage_tool":
 						result = await runStorageTool(request.arguments);
 						break;
+					case "ui_inspect":
+						result = await runUiInspectTool(request.arguments);
+						break;
 					case "execute_event":
 						result = await runExecuteEventTool(request.arguments);
 						break;
@@ -1421,6 +1569,7 @@ function FlowPilotImpl({
 			runExecuteEventTool,
 			runInternetSearchTool,
 			runStorageTool,
+			runUiInspectTool,
 		],
 	);
 	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
