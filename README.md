@@ -17,7 +17,10 @@
   <a href="https://docs.flow-like.com"><img src="https://img.shields.io/badge/docs-read-0a7cff" alt="Docs" /></a>
   <a href="https://discord.com/invite/mdBA9kMjFJ"><img src="https://img.shields.io/discord/673169081704120334?label=Discord&color=5865F2" alt="Discord" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-BSL%201.1-blue" alt="License" /></a>
-  <a href="https://github.com/Rheosoph/flow-like/stargazers"><img src="https://img.shields.io/github/stars/Rheosoph/flow-like?style=flat&color=f5b400" alt="Stars" /></a>
+  <img
+    src="https://img.shields.io/github/stars/Rheosoph/flow-like.svg?style=flat&amp;label=stars&amp;color=f5b400&amp;cacheSeconds=3600"
+    alt="GitHub stars"
+  />
 </p>
 
 <p align="center">
