@@ -572,13 +572,39 @@ function resolveToolAppId(
 	return appId;
 }
 
-function snakeToCamel(value: string): string {
-	return value.replace(/_([a-z0-9])/g, (_, char: string) => char.toUpperCase());
+/**
+ * Mirror of `flow_like_ast::to_camel_case`: every run of non-alphanumeric
+ * characters (`_`, `-`, `:`, `/`, `.`, space, …) is a separator that is dropped
+ * and uppercases the next character. Must match the reconcile pin matcher
+ * exactly — otherwise `ui_inspect` returns pin names that never resolve against
+ * `a2uiInstantiateWidget` inputs (e.g. a `/inputs/title` path pin becomes
+ * `dyn_path__inputs_title` → `dynPathInputsTitle`).
+ */
+function toCamelCase(value: string): string {
+	let out = "";
+	let upcomingUpper = false;
+	let first = true;
+	for (const ch of value) {
+		if (/[\p{L}\p{N}]/u.test(ch)) {
+			if (first) {
+				out += ch.toLowerCase();
+				first = false;
+			} else if (upcomingUpper) {
+				out += ch.toUpperCase();
+			} else {
+				out += ch;
+			}
+			upcomingUpper = false;
+		} else if (!first) {
+			upcomingUpper = true;
+		}
+	}
+	return out || "node";
 }
 
 /** Mirror of the catalog `a2ui_instantiate_widget` dynamic pin naming, camelCased for FlowScript. */
 function widgetInstantiatePin(kind: "path" | "prop" | "cust", key: string): string {
-	return snakeToCamel(`dyn_${kind}_${key.replace(/\//g, "_")}`);
+	return toCamelCase(`dyn_${kind}_${key}`);
 }
 
 /** Collect data-binding paths from a component tree, mirroring the catalog `visit_value_for_paths`. */

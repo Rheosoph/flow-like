@@ -462,8 +462,7 @@ Operations:
                 "board_id": { "type": "string", "description": "Restrict pages to this board. Optional." },
                 "page_id": { "type": "string", "description": "Page id for operation 'page'." },
                 "widget_selector": { "type": "string", "description": "Widget id or name for operation 'widget'." }
-            },
-            "required": ["operation"]
+            }
         }));
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
