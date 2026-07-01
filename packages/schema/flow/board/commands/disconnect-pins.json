@@ -1,20 +1,25 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "DisconnectPinsCommand",
-	"type": "object",
-	"required": ["from_node", "from_pin", "to_node", "to_pin"],
-	"properties": {
-		"from_pin": {
-			"type": "string"
-		},
-		"to_pin": {
-			"type": "string"
-		},
-		"from_node": {
-			"type": "string"
-		},
-		"to_node": {
-			"type": "string"
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DisconnectPinsCommand",
+  "type": "object",
+  "properties": {
+    "from_pin": {
+      "type": "string"
+    },
+    "to_pin": {
+      "type": "string"
+    },
+    "from_node": {
+      "type": "string"
+    },
+    "to_node": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "from_pin",
+    "to_pin",
+    "from_node",
+    "to_node"
+  ]
 }

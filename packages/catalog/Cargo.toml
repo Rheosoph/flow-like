@@ -27,6 +27,10 @@ local-tts = ["flow-like-catalog-media/local-tts"]
 local-tts-metal = ["local-tts", "flow-like-catalog-media/local-tts-metal"]
 local-tts-cuda = ["local-tts", "flow-like-catalog-media/local-tts-cuda"]
 local-tts-accelerate = ["local-tts", "flow-like-catalog-media/local-tts-accelerate"]
+local-stt = ["flow-like-catalog-media/local-stt"]
+local-stt-metal = ["local-stt", "flow-like-catalog-media/local-stt-metal"]
+local-stt-cuda = ["local-stt", "flow-like-catalog-media/local-stt-cuda"]
+local-stt-accelerate = ["local-stt", "flow-like-catalog-media/local-stt-accelerate"]
 remote-ml = [
     "flow-like-catalog-core/remote-ml",
     "flow-like-catalog-llm/remote-ml",

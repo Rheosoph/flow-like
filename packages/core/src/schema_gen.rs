@@ -1,6 +1,9 @@
 use crate::{
     app::{App, AppSearchQuery},
-    bit::{Bit, BitModelPreference, BitPack, LLMParameters, TtsModelParameters, VLMParameters},
+    bit::{
+        Bit, BitModelPreference, BitPack, LLMParameters, SttModelParameters, TtsModelParameters,
+        VLMParameters,
+    },
     flow::{
         board::{
             Board, VersionType,
@@ -87,6 +90,7 @@ pub fn generate_schema(base_path: PathBuf) -> flow_like_types::Result<()> {
     generate_and_save_schema::<VLMParameters>(&base_path, "bit/bit/vlm-parameters.json")?;
     generate_and_save_schema::<LLMParameters>(&base_path, "bit/bit/llm-parameters.json")?;
     generate_and_save_schema::<TtsModelParameters>(&base_path, "bit/bit/tts-parameters.json")?;
+    generate_and_save_schema::<SttModelParameters>(&base_path, "bit/bit/stt-parameters.json")?;
 
     generate_and_save_schema::<Bit>(&base_path, "bit/bit.json")?;
     generate_and_save_schema::<BitModelPreference>(&base_path, "bit/preferences.json")?;

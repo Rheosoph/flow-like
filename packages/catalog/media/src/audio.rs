@@ -1,5 +1,7 @@
 use std::{collections::HashMap, path::Path, sync::OnceLock};
 
+#[cfg(feature = "local-stt")]
+use flow_like::models::stt::{LocalSttModel, LocalTranscriptionRequest};
 #[cfg(feature = "local-tts")]
 use flow_like::models::tts::{LocalTtsModel, LocalTtsSynthesisRequest};
 use flow_like::{
@@ -73,6 +75,34 @@ struct SpeechToTextRequest {
 struct TranscriptionResult {
     text: String,
     provider_metadata: Value,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
+pub struct SpeechToTextSegment {
+    pub start_s: f32,
+    pub end_s: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
+pub struct LocalSpeechToTextMetadata {
+    pub provider: String,
+    pub bit: String,
+    pub model_type: String,
+    pub backend: String,
+    pub display_name: String,
+    pub runtime: String,
+    pub dtype: String,
+    pub sample_rate: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    pub translate: bool,
+    pub duration_secs: f32,
+    pub audio_path: String,
+    pub supported_languages: Vec<String>,
+    pub segments: Vec<SpeechToTextSegment>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
@@ -2860,6 +2890,204 @@ impl NodeLogic for SpeechToTextNode {
         context.set_pin_value("metadata", metadata).await?;
         context.activate_exec_pin("exec_out").await?;
         Ok(())
+    }
+
+    async fn on_update(&self, _node: &mut Node, _board: &Board) {}
+}
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct LocalSpeechToTextNode {}
+
+impl LocalSpeechToTextNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for LocalSpeechToTextNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "ai_audio_local_speech_to_text",
+            "Local Speech to Text",
+            "Transcribes audio locally with an installed any-speech-to-text model bit. Decodes WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM, including browser MediaRecorder output (Chrome WebM/Opus, Safari MP4/AAC).",
+            "AI/Generative/Audio",
+        );
+        node.add_icon("/flow/icons/audio.svg");
+        node.set_version(1);
+        node.set_scores(media_scores());
+        node.set_long_running(true);
+
+        node.add_input_pin(
+            "exec_in",
+            "Input",
+            "Trigger local transcription",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "bit",
+            "STT Model",
+            "Installed local STT model Bit",
+            VariableType::Struct,
+        )
+        .set_schema::<Bit>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        node.add_input_pin(
+            "audio",
+            "Audio",
+            "Audio file path. WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM are decoded automatically, including browser MediaRecorder recordings.",
+            VariableType::Struct,
+        )
+        .set_schema::<FlowPath>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        add_text_input_pin(
+            &mut node,
+            "language",
+            "Language",
+            "Optional source language code. Use auto to detect.",
+            "auto",
+        );
+        add_select_pin(
+            &mut node,
+            "task",
+            "Task",
+            "Transcribe in the source language or translate to English",
+            &["transcribe", "translate"],
+            "transcribe",
+        );
+        node.add_input_pin(
+            "timestamps",
+            "Timestamps",
+            "Emit per-segment timestamps in the metadata",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+
+        node.add_output_pin("exec_out", "Output", "Done", VariableType::Execution);
+        node.add_output_pin("text", "Text", "Transcript text", VariableType::String);
+        node.add_output_pin(
+            "message",
+            "Message",
+            "Transcript as a user HistoryMessage",
+            VariableType::Struct,
+        )
+        .set_schema::<HistoryMessage>();
+        node.add_output_pin(
+            "history",
+            "History",
+            "Transcript wrapped in History",
+            VariableType::Struct,
+        )
+        .set_schema::<History>();
+        node.add_output_pin(
+            "metadata",
+            "Metadata",
+            "Local transcription metadata (model, runtime, detected language, duration, and segments)",
+            VariableType::Struct,
+        )
+        .set_schema::<LocalSpeechToTextMetadata>();
+        node
+    }
+
+    #[cfg(feature = "local-stt")]
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let bit: Bit = context.evaluate_pin("bit").await?;
+        if bit.try_to_stt().is_none() {
+            bail!("Local Speech to Text requires a local STT model bit");
+        }
+
+        let audio_path: FlowPath = context.evaluate_pin("audio").await?;
+        let audio_bytes = audio_path.get(context, false).await?;
+        let fallback_extension = Path::new(&audio_path.path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("wav")
+            .to_string();
+        let task = eval_string_pin(context, "task", "transcribe").await;
+        let translate = task.trim().eq_ignore_ascii_case("translate");
+        let timestamps: bool = context.evaluate_pin("timestamps").await.unwrap_or(false);
+
+        context.log_message(
+            &format!("Loading local STT model {}", bit.id),
+            LogLevel::Info,
+        );
+        let cache_key = LocalSttModel::load_into_cache(context, &bit).await?;
+        let model = LocalSttModel::from_cache(context, &cache_key).await?;
+
+        context.log_message("Transcribing local audio", LogLevel::Info);
+        let output = match model
+            .transcribe(LocalTranscriptionRequest {
+                audio_bytes,
+                file_name: file_name_from_path(&audio_path.path, &fallback_extension),
+                language: eval_optional_text_pin(context, "language").await,
+                translate,
+                timestamps,
+            })
+            .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                let message = error.to_string().to_ascii_lowercase();
+                if ["decode", "unsupported", "codec", "format", "track", "container"]
+                    .iter()
+                    .any(|needle| message.contains(needle))
+                {
+                    bail!(
+                        "{error}. Local Speech to Text decodes WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM; re-encode the input to one of these formats."
+                    );
+                }
+                return Err(error);
+            }
+        };
+
+        let message = HistoryMessage::from_string(Role::User, &output.text);
+        let history = History::new(
+            output.model_info.display_name.clone(),
+            vec![message.clone()],
+        );
+
+        let metadata = LocalSpeechToTextMetadata {
+            provider: "local:any-speech-to-text".to_string(),
+            bit: bit.id.clone(),
+            model_type: output.model_info.model_type.clone(),
+            backend: output.model_info.backend.clone(),
+            display_name: output.model_info.display_name.clone(),
+            runtime: model.runtime.clone(),
+            dtype: model.dtype.clone(),
+            sample_rate: output.model_info.sample_rate,
+            language: output.language.clone(),
+            translate,
+            duration_secs: output.duration_secs,
+            audio_path: audio_path.path.clone(),
+            supported_languages: output.model_info.supported_languages.clone(),
+            segments: output
+                .segments
+                .iter()
+                .map(|segment| SpeechToTextSegment {
+                    start_s: segment.start_s,
+                    end_s: segment.end_s,
+                    speaker: segment.speaker.clone(),
+                    text: segment.text.clone(),
+                })
+                .collect(),
+        };
+
+        context.set_pin_value("text", json!(output.text)).await?;
+        context.set_pin_value("message", json!(message)).await?;
+        context.set_pin_value("history", json!(history)).await?;
+        context.set_pin_value("metadata", json!(metadata)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "local-stt"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(anyhow!(
+            "Local Speech to Text requires the 'local-stt' feature"
+        ))
     }
 
     async fn on_update(&self, _node: &mut Node, _board: &Board) {}

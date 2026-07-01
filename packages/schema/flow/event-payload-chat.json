@@ -1,39 +1,66 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "ChatEventParameters",
-	"type": "object",
-	"properties": {
-		"history_elements": {
-			"type": ["integer", "null"],
-			"format": "uint32",
-			"minimum": 0.0
-		},
-		"allow_file_upload": {
-			"type": ["boolean", "null"]
-		},
-		"allow_voice_input": {
-			"type": ["boolean", "null"]
-		},
-		"allow_voice_output": {
-			"type": ["boolean", "null"]
-		},
-		"tools": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"default_tools": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"example_messages": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatEventParameters",
+  "type": "object",
+  "properties": {
+    "history_elements": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "allow_file_upload": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_voice_input": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_voice_output": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "allow_voice_mode": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "tools": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "default_tools": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "example_messages": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    }
+  }
 }

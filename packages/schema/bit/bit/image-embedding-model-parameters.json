@@ -1,77 +1,134 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "ImageEmbeddingModelProvider",
-	"type": "object",
-	"required": ["languages", "pooling", "provider", "vector_length"],
-	"properties": {
-		"languages": {
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"vector_length": {
-			"type": "integer",
-			"format": "uint32",
-			"minimum": 0.0
-		},
-		"pooling": {
-			"$ref": "#/definitions/Pooling"
-		},
-		"provider": {
-			"$ref": "#/definitions/ModelProvider"
-		},
-		"remote": {
-			"$ref": "#/definitions/RemoteExecutionConfig"
-		}
-	},
-	"definitions": {
-		"Pooling": {
-			"type": "string",
-			"enum": ["CLS", "Mean", "None"]
-		},
-		"ModelProvider": {
-			"type": "object",
-			"required": ["provider_name"],
-			"properties": {
-				"provider_name": {
-					"type": "string"
-				},
-				"model_id": {
-					"type": ["string", "null"]
-				},
-				"version": {
-					"type": ["string", "null"]
-				},
-				"params": {
-					"type": ["object", "null"],
-					"additionalProperties": true
-				}
-			}
-		},
-		"RemoteExecutionConfig": {
-			"type": "object",
-			"properties": {
-				"endpoint": {
-					"type": ["string", "null"],
-					"description": "Deprecated per-bit endpoint URL. Remote embeddings use the shared INTERNAL_EMBEDDING_ENDPOINT secret resolved by the API."
-				},
-				"secret_name": {
-					"type": ["string", "null"],
-					"description": "Optional API key secret override. Defaults to INTERNAL_EMBEDDING_SECRET."
-				},
-				"implementation": {
-					"$ref": "#/definitions/RemoteEmbeddingProvider"
-				},
-				"model_id": {
-					"type": ["string", "null"],
-					"description": "Deployed model ID for the shared internal gateway"
-				}
-			}
-		},
-		"RemoteEmbeddingProvider": {
-			"type": "string",
-			"enum": ["Internal"]
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImageEmbeddingModelProvider",
+  "type": "object",
+  "properties": {
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "vector_length": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "pooling": {
+      "$ref": "#/$defs/Pooling"
+    },
+    "provider": {
+      "$ref": "#/$defs/ModelProvider"
+    },
+    "remote": {
+      "description": "Remote execution configuration (for API proxy mode)",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RemoteExecutionConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "languages",
+    "vector_length",
+    "pooling",
+    "provider"
+  ],
+  "$defs": {
+    "Pooling": {
+      "type": "string",
+      "enum": [
+        "CLS",
+        "Mean",
+        "None"
+      ]
+    },
+    "ModelProvider": {
+      "type": "object",
+      "properties": {
+        "provider_name": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "params": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "provider_name"
+      ]
+    },
+    "RemoteExecutionConfig": {
+      "description": "Configuration for remote execution via API proxy",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "Deprecated per-bit endpoint URL. Remote embeddings now use the shared\nINTERNAL_EMBEDDING_ENDPOINT secret resolved by the API.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "secret_name": {
+          "description": "Optional API key secret override. Defaults to INTERNAL_EMBEDDING_SECRET.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "implementation": {
+          "description": "Which remote provider implementation to use",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteEmbeddingProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model_id": {
+          "description": "Deployed model ID for the upstream provider (e.g., Internal gateway model name)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "RemoteEmbeddingProvider": {
+      "description": "Remote embedding provider implementation",
+      "oneOf": [
+        {
+          "description": "Internal OpenAI-compatible embedding gateway.\n\nOlder bit configs serialized as `HuggingfaceEndpoint` or\n`CloudflareWorkersAI` are accepted as aliases so existing records can be\nmigrated by config alone.",
+          "type": "string",
+          "const": "Internal"
+        }
+      ]
+    }
+  }
 }
