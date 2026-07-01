@@ -98,11 +98,15 @@ const whisperAssets = (
 	asset("preprocessor_config.json", 340, { required: false }),
 ];
 
-// OLMoASR ships a single Whisper-style checkpoint per size in the shared repo.
-// TODO(any-speech-to-text): confirm the exact `*.pt` filenames in allenai/OLMoASR.
+// OLMoASR ships one Whisper-style `.pt` checkpoint per size under `models/` in the
+// shared repo (e.g. models/OLMoASR-large.en-v2.pt). The bundle relative path stays
+// flat (no slash) so the crate's discover_pt_weights() matches it.
 const OLMOASR_REPO = "allenai/OLMoASR";
 const olmoAsrAssets = (ptFile: string, size: number): SttPresetAsset[] => [
-	asset(ptFile, size, { sourceRepo: OLMOASR_REPO, sourcePath: ptFile }),
+	asset(ptFile, size, {
+		sourceRepo: OLMOASR_REPO,
+		sourcePath: `models/OLMoASR-${ptFile}`,
+	}),
 ];
 
 const whisperPreset = (
@@ -248,41 +252,42 @@ export const STT_MODEL_PRESETS: Record<ISttModelType, SttModelPreset> = {
 		ISttModelType.OlmoAsrTinyEn,
 		"OLMoASR Tiny (English)",
 		"tiny.en.pt",
-		75_000_000,
+		448_757_399,
 	),
 	[ISttModelType.OlmoAsrBaseEn]: olmoPreset(
 		ISttModelType.OlmoAsrBaseEn,
 		"OLMoASR Base (English)",
 		"base.en.pt",
-		145_000_000,
+		865_331_319,
 	),
 	[ISttModelType.OlmoAsrSmallEn]: olmoPreset(
 		ISttModelType.OlmoAsrSmallEn,
 		"OLMoASR Small (English)",
 		"small.en.pt",
-		483_000_000,
+		2_892_287_207,
 	),
 	[ISttModelType.OlmoAsrMediumEn]: olmoPreset(
 		ISttModelType.OlmoAsrMediumEn,
 		"OLMoASR Medium (English)",
 		"medium.en.pt",
-		1_530_000_000,
+		3_055_854_069,
 	),
 	[ISttModelType.OlmoAsrLargeEn]: olmoPreset(
 		ISttModelType.OlmoAsrLargeEn,
 		"OLMoASR Large (English)",
 		"large.en.pt",
-		2_880_000_000,
+		6_173_813_259,
 	),
 	[ISttModelType.OlmoAsrLargeEnV2]: olmoPreset(
 		ISttModelType.OlmoAsrLargeEnV2,
 		"OLMoASR Large v2 (English)",
 		"large.en-v2.pt",
-		2_880_000_000,
+		6_173_813_259,
 	),
 	[ISttModelType.Qwen3Asr17B]: {
 		assets: [
-			asset("model.safetensors", 3_400_000_000),
+			asset("model-00001-of-00002.safetensors", 4_220_300_000),
+			asset("model-00002-of-00002.safetensors", 478_200_000),
 			asset("vocab.json", 2_776_833),
 			asset("config.json", 1_400, { required: false }),
 			asset("tokenizer_config.json", 5_000, { required: false }),
