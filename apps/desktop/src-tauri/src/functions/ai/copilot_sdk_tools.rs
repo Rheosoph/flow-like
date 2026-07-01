@@ -1083,6 +1083,12 @@ RULES:
   continue from `exec_done`.
 - For loops, the body is the `exec_out` path and the next statement continues from `done` /
   `exec_done`; make sure the loop's `array` input receives the array being iterated.
+- Prefer writing impure/sequential logic INLINE in the event or loop body over extracting it into a
+  helper `function`. A called function's body does not yet receive an execution entry from its call
+  site, so impure nodes inside a helper (for example `cuid`, `structSet`, `arrayPushRef`) are created
+  but left with no incoming execution connection and never run. For per-iteration work inside
+  `controlForEach`, write the statements directly in the loop body instead of calling a `buildRow`-style
+  helper.
 - To reposition nodes on the canvas, use `emit_commands` with MoveNode."#,
         )
         .schema(json!({

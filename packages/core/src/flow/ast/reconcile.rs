@@ -698,6 +698,74 @@ fn metadata_output_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a Pin
         .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
 }
 
+/// Extract `{name}` placeholders (matching `\{([a-zA-Z0-9_]+)\}`) from a format string, preserving
+/// first-seen order and de-duplicating. Mirrors the parsing done by the `string_format` node's
+/// `on_update`, which turns each placeholder into a dynamic input pin.
+fn extract_format_placeholders(format: &str) -> Vec<String> {
+    let bytes = format.as_bytes();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
+            if j > start && j < bytes.len() && bytes[j] == b'}' {
+                let name = format[start..j].to_string();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Input pins a node's `on_update` will create dynamically, derived from the call's literal
+/// arguments — so the reconciler can wire them even though the static catalog metadata lacks them.
+///
+/// Currently handles `string_format`, whose placeholder pins come from the `format_string` literal.
+/// (Existing anchored nodes already surface their live pins via `node_to_metadata`; this covers new
+/// nodes planned from static catalog metadata.)
+fn dynamic_input_pins_for_call(meta: &NodeMetadata, call: &Call) -> Vec<PinMetadata> {
+    if meta.name != "string_format" {
+        return Vec::new();
+    }
+
+    let Some(format) = call.args.iter().find_map(|arg| {
+        if !pin_name_matches("format_string", &arg.name) {
+            return None;
+        }
+        match literal_expr_to_value(&arg.value) {
+            Some(flow_like_types::Value::String(value)) => Some(value),
+            _ => None,
+        }
+    }) else {
+        return Vec::new();
+    };
+
+    extract_format_placeholders(&format)
+        .into_iter()
+        .map(|name| PinMetadata {
+            friendly_name: name.clone(),
+            name,
+            description: String::new(),
+            data_type: "Generic".to_string(),
+            value_type: "Normal".to_string(),
+            default_value: None,
+            schema: None,
+            is_generic: true,
+            valid_values: None,
+            enforce_schema: false,
+        })
+        .collect()
+}
+
 fn metadata_pins_are_compatible(input: &PinMetadata, output: &PinMetadata) -> bool {
     let data_type_ok = input.is_generic
         || output.is_generic
@@ -1057,6 +1125,12 @@ struct StructuralPlanner<'a> {
     variable_refs: VariableRefLookup,
     function_return_targets: Vec<(NodeEntity, Vec<String>)>,
     unresolved_variable_refs: HashSet<String>,
+    /// Newly added impure nodes: (ref_id, execution input pin, friendly name). Checked at the end
+    /// for a missing incoming execution edge.
+    new_impure_nodes: Vec<(String, String, String)>,
+    /// Ref ids exempt from the dangling-execution check (a function body's first node, which has no
+    /// execution entry to wire from yet).
+    exec_check_exempt: HashSet<String>,
     next_ref: usize,
     next_position: usize,
 }
@@ -1076,6 +1150,8 @@ impl<'a> StructuralPlanner<'a> {
             variable_refs: VariableRefLookup::from_board(existing),
             function_return_targets: Vec::new(),
             unresolved_variable_refs: HashSet::new(),
+            new_impure_nodes: Vec::new(),
+            exec_check_exempt: HashSet::new(),
             next_ref: 0,
             next_position: 0,
         }
@@ -1091,6 +1167,8 @@ impl<'a> StructuralPlanner<'a> {
             self.plan_function(func);
         }
         self.pop_scope();
+
+        self.check_dangling_impure_execution();
 
         self.result.commands.extend(self.add_commands);
         // Literal/config updates can change node shape (for example format/schema/template
@@ -1167,14 +1245,21 @@ impl<'a> StructuralPlanner<'a> {
                         &previous.entity,
                         &current.input_sources,
                     );
+                    // Only a data-driven side-channel branch (e.g. a streaming `on_stream`/`chunk`
+                    // output selected because this node consumes the stream) suppresses linear
+                    // cursor advancement: later statements must continue from the producer's default
+                    // exec output. An exec output inherited from the block entry cursor — notably a
+                    // loop body pin — still advances, so body statements chain to one another instead
+                    // of all fanning out from the loop node.
+                    let used_branch_output = preferred_output.as_deref().is_some_and(|output_pin| {
+                        self.entity_exec_output_pin(&previous.entity).as_deref() != Some(output_pin)
+                    });
                     let previous = match preferred_output {
                         Some(output_pin) => {
                             ExecCursor::with_output(previous.entity.clone(), Some(output_pin))
                         }
                         None => previous.clone(),
                     };
-                    let used_branch_output = previous.output_pin.is_some()
-                        && self.entity_exec_output_pin(&previous.entity) != previous.output_pin;
                     if self.connect_exec(&previous, &current.entity, inserted_since_existing)
                         && !used_branch_output
                     {
@@ -1185,6 +1270,11 @@ impl<'a> StructuralPlanner<'a> {
                     }
                 } else {
                     inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
+                    // No execution predecessor to wire from (e.g. a function body's first node):
+                    // exempt it from the dangling-execution warning.
+                    if let NodeEntity::New { ref_id, .. } = &current.entity {
+                        self.exec_check_exempt.insert(ref_id.clone());
+                    }
                 }
             }
 
@@ -1618,17 +1708,36 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
         include_direct_literals: bool,
     ) -> Vec<ValueSource> {
+        let dynamic_inputs = dynamic_input_pins_for_call(meta, call);
         let mut input_sources = Vec::new();
         for arg in &call.args {
-            let Some(input) = metadata_input_pin(&meta, &arg.name) else {
+            let static_input = metadata_input_pin(meta, &arg.name);
+            let input = static_input.or_else(|| {
+                dynamic_inputs
+                    .iter()
+                    .find(|pin| metadata_pin_name_matches(pin, &arg.name))
+            });
+            let Some(input) = input else {
                 self.result.diagnostics.push(format!(
                     "node `{}` has no input pin named `{}`; skipped that argument",
                     call.display, arg.name
                 ));
                 continue;
             };
+            // A dynamically created pin (matched only via `dynamic_inputs`) does not exist during the
+            // setup phase where UpdateNodePin runs — it is created later by on_update — so a literal
+            // cannot be set on it in a single apply pass. Only a connection (resolved in the later
+            // phase) works; a literal is skipped non-fatally rather than hard-failing the apply.
+            let is_dynamic_pin = static_input.is_none();
 
             if let Some(mut value) = literal_expr_to_value(&arg.value) {
+                if is_dynamic_pin {
+                    self.result.diagnostics.push(format!(
+                        "argument `{}` on `{}` targets a pin created dynamically at apply time and cannot receive a literal; inline it into the format string or connect a value source",
+                        arg.name, call.display
+                    ));
+                    continue;
+                }
                 self.normalize_input_value(input, &mut value);
                 if include_direct_literals {
                     self.queue_update_input(entity, input, value, meta);
@@ -1647,6 +1756,13 @@ impl<'a> StructuralPlanner<'a> {
             };
             let source = match source {
                 SymbolValue::Literal(mut value) => {
+                    if is_dynamic_pin {
+                        self.result.diagnostics.push(format!(
+                            "argument `{}` on `{}` targets a pin created dynamically at apply time and cannot receive a literal; inline it into the format string or connect a value source",
+                            arg.name, call.display
+                        ));
+                        continue;
+                    }
                     self.normalize_input_value(input, &mut value);
                     self.queue_update_input(entity, input, value, meta);
                     continue;
@@ -1828,9 +1944,38 @@ impl<'a> StructuralPlanner<'a> {
         });
     }
 
+    /// Warn (non-blocking) about newly added impure nodes — nodes with an execution input — that end
+    /// up with no incoming execution edge and would therefore never run. Event/entry nodes have no
+    /// execution input and are skipped implicitly; a function body's first node is exempt (no entry
+    /// to wire from yet); existing anchored nodes are never recorded, so only new nodes are checked.
+    fn check_dangling_impure_execution(&mut self) {
+        let nodes = std::mem::take(&mut self.new_impure_nodes);
+        for (ref_id, exec_in, friendly_name) in &nodes {
+            if self.exec_check_exempt.contains(ref_id) {
+                continue;
+            }
+            let connected = self.connect_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { to_node, to_pin, .. }
+                        if to_node == ref_id && to_pin == exec_in
+                )
+            });
+            if !connected {
+                self.result.diagnostics.push(format!(
+                    "node `{friendly_name}` has no incoming execution connection and will not run; wire its execution input from the previous statement's execution output"
+                ));
+            }
+        }
+    }
+
     fn queue_add_node(&mut self, meta: NodeMetadata, target_layer: Option<String>) -> NodeEntity {
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
+        if let Some(exec_in) = metadata_exec_input_pin(&meta) {
+            self.new_impure_nodes
+                .push((ref_id.clone(), exec_in, meta.friendly_name.clone()));
+        }
         let position = self.next_position();
         self.add_commands.push(BoardCommand::AddNode {
             node_type: meta.name.clone(),
@@ -2038,7 +2183,41 @@ impl<'a> StructuralPlanner<'a> {
             Expr::Member { base, .. } | Expr::Index { base, .. } => {
                 self.resolve_expr(base, target_layer)
             }
-            Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } | Expr::Binary { .. } => None,
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                // `cond ? then : otherwise` is sugar for a `utils_types_select` node (returns A when
+                // the condition is true, B when false). Lower it back to that node so the
+                // board -> FlowScript -> board round-trip is symmetric.
+                let call = Call {
+                    node_type: "utils_types_select".to_string(),
+                    display: "utilsTypesSelect".to_string(),
+                    args: vec![
+                        Arg {
+                            name: "condition".to_string(),
+                            value: (**cond).clone(),
+                        },
+                        Arg {
+                            name: "a".to_string(),
+                            value: (**then).clone(),
+                        },
+                        Arg {
+                            name: "b".to_string(),
+                            value: (**otherwise).clone(),
+                        },
+                    ],
+                    anchor: None,
+                };
+                self.add_call_node(&call, target_layer).map(|node| {
+                    SymbolValue::Source(ValueSource {
+                        node,
+                        output_pin: None,
+                    })
+                })
+            }
+            Expr::Object(_) | Expr::Array(_) | Expr::Binary { .. } => None,
             Expr::Literal(_) => None,
         }
     }
@@ -4068,6 +4247,401 @@ eventsSimple() {
                         && command_node_type(&result.commands, to_node).as_deref() == Some("batch_insert_local_db")
                         && to_pin == "value"
             )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_chains_impure_struct_set_chain_inside_loop_body() {
+        let board = empty_board();
+        let catalog = struct_accumulator_catalog();
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"const rows: Struct[] = []
+
+eventsSimple() {
+    for (const item of controlForEach({ array: rows })) {
+        let row = structMake()
+        row = structSet({ structIn: row, field: "id", value: cuid().cuid })
+        row = structSet({ structIn: row, field: "subject", value: "hello" })
+        row = structSet({ structIn: row, field: "body", value: "world" })
+        const push = arrayPush({ arrayIn: rows, value: row })
+        rows = push.arrayOut
+    }
+    batchInsertLocalDb({ database: {}, value: rows })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let exec_edges: Vec<(String, String, String, String)> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_node,
+                    to_pin,
+                    ..
+                } if from_pin.starts_with("exec") || to_pin.starts_with("exec") => Some((
+                    command_node_type(&result.commands, from_node)
+                        .unwrap_or_else(|| from_node.clone()),
+                    from_pin.clone(),
+                    command_node_type(&result.commands, to_node).unwrap_or_else(|| to_node.clone()),
+                    to_pin.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+
+        let has_edge = |from_type: &str, from_pin: &str, to_type: &str, to_pin: &str| {
+            exec_edges.iter().any(|(ft, fp, tt, tp)| {
+                ft == from_type && fp == from_pin && tt == to_type && tp == to_pin
+            })
+        };
+
+        // The loop body enters the first impure struct_set from the ForEach body pin...
+        assert!(
+            has_edge("control_for_each", "exec_out", "struct_set", "exec_in"),
+            "loop body should enter the first struct_set; edges: {exec_edges:?}"
+        );
+        // ...and the remaining struct_set nodes must chain to one another, not all fan out from
+        // the loop pin. Exactly one struct_set may hang directly off the loop body pin.
+        let loop_body_fanout = exec_edges
+            .iter()
+            .filter(|(ft, fp, tt, _)| {
+                ft == "control_for_each" && fp == "exec_out" && tt == "struct_set"
+            })
+            .count();
+        assert_eq!(
+            loop_body_fanout, 1,
+            "only the first struct_set may connect to the loop body pin; edges: {exec_edges:?}"
+        );
+        // struct_set -> struct_set exec chaining exists (two internal links for three set nodes).
+        let struct_chain_links = exec_edges
+            .iter()
+            .filter(|(ft, fp, tt, tp)| {
+                ft == "struct_set" && fp == "exec_out" && tt == "struct_set" && tp == "exec_in"
+            })
+            .count();
+        assert_eq!(
+            struct_chain_links, 2,
+            "struct_set chain should link consecutively; edges: {exec_edges:?}"
+        );
+        // The tail of the struct chain flows into the accumulator push.
+        assert!(
+            has_edge("struct_set", "exec_out", "array_push", "exec_in"),
+            "last struct_set should flow into array_push; edges: {exec_edges:?}"
+        );
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_warns_on_impure_node_without_incoming_execution() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "struct_make",
+                "Make Struct",
+                Vec::new(),
+                vec![pin_meta("struct", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "struct_set",
+                "Set Field",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("struct_in", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                    pin_meta("value", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("struct_out", "Struct", PinType::Output),
+                ],
+            ),
+            // Impure `cuid`, mirroring the real catalog node (it has exec pins).
+            catalog_meta(
+                "cuid",
+                "CUID v2",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("cuid", "String", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    let row = structMake()
+    row = structSet({ structIn: row, field: "id", value: cuid().cuid })
+}
+"#,
+            &catalog,
+        );
+
+        // The impure `cuid` used only as an inline data source never receives execution → warning.
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("CUID v2") && d.contains("no incoming execution")),
+            "expected a dangling-execution warning for cuid; diagnostics: {:?}",
+            result.diagnostics
+        );
+        // struct_set is the first impure statement, wired from the event entry → NOT flagged.
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("Set Field") && d.contains("no incoming execution")),
+            "struct_set should be execution-connected; diagnostics: {:?}",
+            result.diagnostics
+        );
+        // The warning is non-blocking: commands are still produced.
+        assert!(!result.commands.is_empty());
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_lowers_ternary_value_to_select_node() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "struct_make",
+                "Make Struct",
+                Vec::new(),
+                vec![pin_meta("struct", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "struct_set",
+                "Set Field",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("struct_in", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                    pin_meta("value", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("struct_out", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "random_bool",
+                "Random Bool",
+                vec![pin_meta("probability", "Float", PinType::Input)],
+                vec![pin_meta("value", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "utils_types_select",
+                "Select",
+                vec![
+                    pin_meta("a", "Generic", PinType::Input),
+                    pin_meta("b", "Generic", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("result", "Generic", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    let row = structMake()
+    row = structSet({ structIn: row, field: "visual_quality", value: randomBool({ probability: 0.95 }) ? "ok" : "nok" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // The ternary becomes a select node.
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "utils_types_select"
+            )
+        }));
+        // Literal branches land on a (true) and b (false).
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("utils_types_select")
+                        && pin_id == "a"
+                        && value == &flow_like_types::Value::String("ok".to_string())
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("utils_types_select")
+                        && pin_id == "b"
+                        && value == &flow_like_types::Value::String("nok".to_string())
+            )
+        }));
+        // The condition call feeds the select's condition input.
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("random_bool")
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("utils_types_select")
+                        && to_pin == "condition"
+            )
+        }));
+        // The select result feeds the struct_set value.
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("utils_types_select")
+                        && from_pin == "result"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "value"
+            )
+        }));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_wires_string_format_placeholder_pins() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            // Static metadata only knows `format_string`; the `{name}`/`{other}` pins are created by
+            // the node's on_update at apply time.
+            catalog_meta(
+                "string_format",
+                "Format String",
+                vec![pin_meta("format_string", "String", PinType::Input)],
+                vec![pin_meta("formatted_string", "String", PinType::Output)],
+            ),
+            catalog_meta(
+                "text_source",
+                "Text Source",
+                Vec::new(),
+                vec![pin_meta("text", "String", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const label = stringFormat({ formatString: "Hello {name} and {other}", name: textSource().text, other: textSource().text })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // The format string literal lands on format_string (driving the dynamic pins at apply time).
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref()
+                        == Some("string_format")
+                        && pin_id == "format_string"
+                        && value
+                            == &flow_like_types::Value::String(
+                                "Hello {name} and {other}".to_string(),
+                            )
+            )
+        }));
+        // Each placeholder becomes a wired input pin, even though it is absent from static metadata.
+        for placeholder in ["name", "other"] {
+            assert!(
+                result.commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                            if command_node_type(&result.commands, from_node).as_deref()
+                                == Some("text_source")
+                                && command_node_type(&result.commands, to_node).as_deref()
+                                    == Some("string_format")
+                                && to_pin == placeholder
+                    )
+                }),
+                "placeholder `{placeholder}` was not wired; commands: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_skips_literal_on_dynamic_format_pin() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "string_format",
+                "Format String",
+                vec![pin_meta("format_string", "String", PinType::Input)],
+                vec![pin_meta("formatted_string", "String", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const label = stringFormat({ formatString: "Hi {v}", v: "there" })
+}
+"#,
+            &catalog,
+        );
+
+        // A literal on a dynamic pin is skipped non-fatally with a diagnostic (setting it would
+        // hard-fail the apply, since `v` does not exist during the setup phase).
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("dynamically at apply time")),
+            "{:?}",
+            result.diagnostics
+        );
+        // No UpdateNodePin targets the dynamic `v` pin...
+        assert!(
+            !result.commands.iter().any(|command| {
+                matches!(command, BoardCommand::UpdateNodePin { pin_id, .. } if pin_id == "v")
+            }),
+            "must not emit UpdateNodePin for the dynamic pin; commands: {:?}",
+            result.commands
+        );
+        // ...but the format string itself is still set (it drives on_update at apply time).
+        assert!(result.commands.iter().any(|command| {
+            matches!(command, BoardCommand::UpdateNodePin { pin_id, .. } if pin_id == "format_string")
         }));
     }
 

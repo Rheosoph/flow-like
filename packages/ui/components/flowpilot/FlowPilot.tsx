@@ -1779,6 +1779,8 @@ function FlowPilotImpl({
 					appliedComponents: m.appliedComponents,
 					executedCommands: m.executedCommands,
 					flowscriptWorkspace: m.flowscriptWorkspace,
+					processEvents: m.processEvents,
+					planSteps: m.planSteps,
 				}));
 				const latestWorkspace = [...loadedMessages]
 					.reverse()
@@ -2883,12 +2885,29 @@ ${userMsg}`;
 					applyFlowScriptWorkspace(response.flowscript_workspace);
 				}
 
-				// Save final assistant message to DB
-				if (assistantMessageId && finalAssistantContent) {
+				// Save final assistant message to DB. Persist the process timeline and completed
+				// plan steps too, so a workflow-edit turn (whose visible output is the timeline, not
+				// prose) still renders when reloaded from history. Large string fields inside these
+				// are offloaded to disk by the Dexie blob-offload middleware.
+				const completedPlanSteps = currentPlanSteps.filter(
+					(s) => s.status === "Completed",
+				);
+				if (
+					assistantMessageId &&
+					(finalAssistantContent ||
+						currentProcessEvents.length > 0 ||
+						latestFlowScriptWorkspace)
+				) {
 					try {
 						await updateMessage(assistantMessageId, {
 							content: finalAssistantContent,
 							flowscriptWorkspace: latestFlowScriptWorkspace || undefined,
+							processEvents:
+								currentProcessEvents.length > 0
+									? currentProcessEvents
+									: undefined,
+							planSteps:
+								completedPlanSteps.length > 0 ? completedPlanSteps : undefined,
 						});
 					} catch (err) {
 						console.error("Failed to update assistant message:", err);
@@ -4725,7 +4744,7 @@ const MessageBubble = memo(function MessageBubble({
 						}
 						enableMarkdown={!isLoading}
 					/>
-				) : isLoading ? null : (
+				) : isLoading || hasProcessEvents ? null : (
 					<p className="text-muted-foreground italic text-xs">No response</p>
 				)}
 
