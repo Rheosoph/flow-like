@@ -116,7 +116,10 @@ export function A2UIGantt({
 
 	const [isNarrow, setIsNarrow] = useState(false);
 	useEffect(() => {
-		if (!responsive || typeof ResizeObserver === "undefined") return;
+		if (!responsive || typeof ResizeObserver === "undefined") {
+			setIsNarrow(false);
+			return;
+		}
 		const el = containerRef.current;
 		if (!el) return;
 		const obs = new ResizeObserver((entries) => {
@@ -124,7 +127,10 @@ export function A2UIGantt({
 				setIsNarrow(entry.contentRect.width < compactBreakpoint);
 		});
 		obs.observe(el);
-		return () => obs.disconnect();
+		return () => {
+			obs.disconnect();
+			setIsNarrow(false);
+		};
 	}, [responsive, compactBreakpoint]);
 	const effectiveView: GanttView = isNarrow ? "compact" : view;
 	const dayWidth = DAY_WIDTH[effectiveView];
@@ -139,13 +145,14 @@ export function A2UIGantt({
 	// Visible (non-collapsed-descendant) tasks in stable order.
 	const visibleTasks = useMemo(() => {
 		const collapsedIds = collapsed;
+		const taskMap = new Map(tasks.map((t) => [t.id, t]));
 		const isHidden = (task: GanttTask): boolean => {
 			let parent = task.parent;
 			const guard = new Set<string>();
 			while (parent && !guard.has(parent)) {
 				guard.add(parent);
 				if (collapsedIds.has(parent)) return true;
-				parent = tasks.find((t) => t.id === parent)?.parent;
+				parent = taskMap.get(parent)?.parent;
 			}
 			return false;
 		};
@@ -717,12 +724,14 @@ function buildMonthSegments(
 	const days = eachDayOfInterval({ start: range.start, end: range.end });
 	const segments: MonthSegment[] = [];
 	let startIndex = 0;
-	for (let i = 0; i <= days.length; i++) {
+	// Start at 1 so `prev` is always valid; guard `cur` against the tail index
+	// to avoid an out-of-bounds read at i === days.length.
+	for (let i = 1; i <= days.length; i++) {
 		const prev = days[i - 1];
-		const cur = days[i];
+		const cur = i < days.length ? days[i] : undefined;
 		const boundary =
-			i === days.length || (prev && cur && prev.getMonth() !== cur.getMonth());
-		if (boundary && prev) {
+			i === days.length || (cur && prev.getMonth() !== cur.getMonth());
+		if (boundary) {
 			const count = i - startIndex;
 			segments.push({
 				key: `${prev.getFullYear()}-${prev.getMonth()}`,

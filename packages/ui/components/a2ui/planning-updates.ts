@@ -19,7 +19,9 @@ function readItems(
 	componentData: Record<string, unknown>,
 	key: string,
 ): Item[] {
-	const bound = componentData[key] as
+	const val = componentData[key];
+	if (Array.isArray(val)) return [...val] as Item[];
+	const bound = val as
 		| { literalOptions?: unknown[]; literalJson?: string }
 		| undefined;
 	if (bound?.literalOptions && Array.isArray(bound.literalOptions)) {

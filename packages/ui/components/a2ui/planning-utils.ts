@@ -23,6 +23,17 @@ export function toDate(value: string | number | Date | undefined | null): Date {
 	if (value instanceof Date) return value;
 	if (typeof value === "number") return new Date(value);
 	if (typeof value === "string" && value) {
+		// Date-only strings ("YYYY-MM-DD") must be treated as a local calendar
+		// day, not UTC midnight — otherwise local display shifts them a day
+		// earlier for users west of UTC.
+		const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+		if (dateOnly) {
+			return new Date(
+				Number(dateOnly[1]),
+				Number(dateOnly[2]) - 1,
+				Number(dateOnly[3]),
+			);
+		}
 		const iso = parseISO(value);
 		if (!Number.isNaN(iso.getTime())) return iso;
 		const loose = new Date(value);
@@ -154,9 +165,13 @@ export function ganttRange(tasks: GanttTask[], padDays = 2): GanttRange {
 	}
 	let min = toDate(tasks[0].start);
 	let max = toDate(tasks[0].end);
+	if (max < min) [min, max] = [max, min];
 	for (const t of tasks) {
-		const s = toDate(t.start);
-		const e = toDate(t.end);
+		const a = toDate(t.start);
+		const b = toDate(t.end);
+		// Tolerate reversed start/end so eachDayOfInterval never gets start > end.
+		const s = a < b ? a : b;
+		const e = a < b ? b : a;
 		if (s < min) min = s;
 		if (e > max) max = e;
 	}

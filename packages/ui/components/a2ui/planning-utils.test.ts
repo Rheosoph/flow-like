@@ -31,6 +31,13 @@ describe("toDate", () => {
 		const d = new Date(2026, 0, 1);
 		expect(toDate(d)).toBe(d);
 	});
+	test("parses date-only strings as local midnight (no UTC shift)", () => {
+		const d = toDate("2026-01-06");
+		expect(d.getFullYear()).toBe(2026);
+		expect(d.getMonth()).toBe(0);
+		expect(d.getDate()).toBe(6);
+		expect(d.getHours()).toBe(0);
+	});
 });
 
 describe("normalizeCalendarEvents", () => {
@@ -149,5 +156,16 @@ describe("ganttRange / taskBarDays", () => {
 	test("empty task list yields a valid default range", () => {
 		const range = ganttRange([]);
 		expect(range.totalDays).toBeGreaterThan(0);
+	});
+
+	test("tolerates reversed task start/end without producing start > end", () => {
+		const reversed = normalizeGanttTasks([
+			{ id: "r", name: "R", start: "2026-01-20", end: "2026-01-10" },
+		]);
+		const range = ganttRange(reversed);
+		expect(range.start.getTime()).toBeLessThanOrEqual(range.end.getTime());
+		expect(range.totalDays).toBeGreaterThan(0);
+		// eachDayOfInterval would throw on an inverted range — assert it doesn't.
+		expect(() => taskBarDays(reversed[0], range)).not.toThrow();
 	});
 });

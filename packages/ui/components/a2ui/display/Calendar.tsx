@@ -126,7 +126,10 @@ export function A2UICalendar({
 	// Auto-collapse to the agenda view on narrow containers.
 	const [isNarrow, setIsNarrow] = useState(false);
 	useEffect(() => {
-		if (!responsive || typeof ResizeObserver === "undefined") return;
+		if (!responsive || typeof ResizeObserver === "undefined") {
+			setIsNarrow(false);
+			return;
+		}
 		const el = containerRef.current;
 		if (!el) return;
 		const obs = new ResizeObserver((entries) => {
@@ -135,7 +138,10 @@ export function A2UICalendar({
 			}
 		});
 		obs.observe(el);
-		return () => obs.disconnect();
+		return () => {
+			obs.disconnect();
+			setIsNarrow(false);
+		};
 	}, [responsive, compactBreakpoint]);
 	const effectiveView: CalendarView = isNarrow ? "agenda" : view;
 
@@ -183,8 +189,22 @@ export function A2UICalendar({
 		[fire],
 	);
 
+	// Cache Intl.DateTimeFormat instances — constructing them is expensive and
+	// dtf() is called in tight render loops.
+	const formattersRef = useRef<Map<string, Intl.DateTimeFormat>>(new Map());
+	useEffect(() => {
+		formattersRef.current.clear();
+	}, [locale]);
 	const dtf = useCallback(
-		(opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(locale, opts),
+		(opts: Intl.DateTimeFormatOptions) => {
+			const key = JSON.stringify(opts);
+			let formatter = formattersRef.current.get(key);
+			if (!formatter) {
+				formatter = new Intl.DateTimeFormat(locale, opts);
+				formattersRef.current.set(key, formatter);
+			}
+			return formatter;
+		},
 		[locale],
 	);
 
