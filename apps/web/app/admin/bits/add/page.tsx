@@ -921,7 +921,7 @@ export default function Page() {
 									),
 								});
 
-								const metaUpload = await backend.apiState.put(
+								await backend.apiState.put(
 									profile.data,
 									`admin/bit/${response.id}/en`,
 									bit.meta.en,
@@ -992,7 +992,7 @@ export default function Page() {
 									),
 								});
 
-								const metaUpload = await backend.apiState.put(
+								await backend.apiState.put(
 									profile.data,
 									`admin/bit/${response.id}/en`,
 									bit.meta.en,
@@ -1033,7 +1033,7 @@ export default function Page() {
 									if (!asset.required && !asset.bit.download_link) continue;
 
 									const registered = await uploadBit(
-										mergeTtsAssetParameters(asset.bit, bit),
+										mergeAssetParameters(asset.bit, bit),
 									);
 									dependencies.push(registered);
 									registeredAssets.push({
@@ -1056,7 +1056,7 @@ export default function Page() {
 										assets: registeredAssets,
 									},
 								});
-								const metaUpload = await backend.apiState.put(
+								await backend.apiState.put(
 									profile.data,
 									`admin/bit/${response.id}/en`,
 									bit.meta.en,
@@ -1085,7 +1085,7 @@ export default function Page() {
 									if (!asset.required && !asset.bit.download_link) continue;
 
 									const registered = await uploadBit(
-										mergeTtsAssetParameters(asset.bit, bit),
+										mergeAssetParameters(asset.bit, bit),
 									);
 									dependencies.push(registered);
 									registeredAssets.push({
@@ -1108,7 +1108,7 @@ export default function Page() {
 										assets: registeredAssets,
 									},
 								});
-								const metaUpload = await backend.apiState.put(
+								await backend.apiState.put(
 									profile.data,
 									`admin/bit/${response.id}/en`,
 									bit.meta.en,
@@ -1126,7 +1126,7 @@ export default function Page() {
 										(dep) => `${dep.hub}:${dep.id}`,
 									),
 								});
-								const metaUpload = await backend.apiState.put(
+								await backend.apiState.put(
 									profile.data,
 									`admin/bit/${response.id}/en`,
 									bit.meta.en,
@@ -1172,7 +1172,7 @@ function mergeBitParameters(bit: IBit, parent: IBit): IBit {
 	};
 }
 
-function mergeTtsAssetParameters(bit: IBit, parent: IBit): IBit {
+function mergeAssetParameters(bit: IBit, parent: IBit): IBit {
 	return {
 		...bit,
 		license: bit.license || parent.license,

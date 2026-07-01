@@ -175,7 +175,7 @@ impl LocalSttModel {
                 continue;
             };
 
-            let bytes = std::fs::read(&path).map_err(|error| {
+            let bytes = tokio::fs::read(&path).await.map_err(|error| {
                 anyhow!(
                     "Failed to read STT asset {} from {}: {}",
                     asset.relative_path,

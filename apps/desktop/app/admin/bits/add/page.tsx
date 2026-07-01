@@ -1286,7 +1286,7 @@ export default function Page() {
 					if (!asset.required && !asset.bit.download_link) continue;
 
 					const registered = await uploadBit(
-						mergeTtsAssetParameters(asset.bit, bit),
+						mergeAssetParameters(asset.bit, bit),
 					);
 					dependencies.push(registered);
 					registeredAssets.push({
@@ -1332,7 +1332,7 @@ export default function Page() {
 					if (!asset.required && !asset.bit.download_link) continue;
 
 					const registered = await uploadBit(
-						mergeTtsAssetParameters(asset.bit, bit),
+						mergeAssetParameters(asset.bit, bit),
 					);
 					dependencies.push(registered);
 					registeredAssets.push({
@@ -1638,7 +1638,7 @@ function mergeBitParameters(bit: IBit, parent: IBit): IBit {
 	};
 }
 
-function mergeTtsAssetParameters(bit: IBit, parent: IBit): IBit {
+function mergeAssetParameters(bit: IBit, parent: IBit): IBit {
 	return {
 		...bit,
 		license: bit.license || parent.license,
