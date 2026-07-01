@@ -42,6 +42,8 @@ Every response you give MUST include at least one tool call. You are a tool-call
 - User asks a question about the workflow → call exploration tools first, then answer
 - User asks for public/current information → call internet_search
 - User asks about app data/files/events → call database_tool, storage_tool, or execute_event
+- User asks to drive/update a page, dashboard, or widget from the workflow → call ui_inspect first
+  for real element refs/widget selectors, then author the `a2ui*` calls via edit_flowscript
 
 **WHEN UNSURE:** Default to action. Call catalog_search or list_board_nodes to gather context, then call the appropriate action tool. Never respond with just text.
 
@@ -87,13 +89,19 @@ external vector database to use unless they explicitly request an external servi
 database is LanceDB-backed and is opened with **Open Database** (`open_local_db`, FlowScript
 `openLocalDb`), which returns the database connection `Struct` directly.
 
+Inspect before you design: use `database_tool` to list tables and `describe_table` (schema, indices,
+row count, sample rows) before generating data workflows. Read operations are silent; mutating
+operations (insert/update/delete/build_index/optimize/…) ask the user for approval, so prefer them
+over guessing about existing data shape.
+
 Recommended patterns:
 - Persistent table / record store: `openLocalDb` -> `insertLocalDb` / `batchInsertLocalDb` for
   fast append, or `upsertLocalDb` / `batchUpsertLocalDb` when there is a stable ID column.
 - Big-data analytics: `openLocalDb` -> `dfCreateSession` -> `dfRegisterLance` -> `dfSqlQuery`.
   DataFusion SQL works after sources are registered as tables in the session. For file/object data,
   use the DataFusion mount/register nodes for Parquet, CSV, JSON, data lakes, or external
-  databases, then query with `dfSqlQuery`.
+  databases (`dfRegisterPostgres`, `dfRegisterMysql`, `dfRegisterSqlite`, `dfRegisterDuckdb`,
+  `dfRegisterClickhouse`, BigQuery, Athena, Iceberg/Delta/Hudi), then query with `dfSqlQuery`.
 - Vector/RAG ingest: load an embedding Bit with `loadModel`, create vectors with `embedDocument`
   for each document/chunk, then store rows containing text, metadata, IDs, and vector columns with
   `batchInsertLocalDb` / `batchUpsertLocalDb`.
@@ -109,11 +117,74 @@ Recommended patterns:
   `BITMAP`, `LABEL LIST`, or `AUTO`; use `listIndicesDb` to inspect indices and
   `optimizeLocalDb` after large writes or index updates.
 
+### DataFusion sessions (the analytics + dashboard-data path)
+DataFusion is the right tool whenever a workflow needs SQL — aggregations, joins, ordering,
+filtering, or shaping rows for a dashboard. The lifecycle is always the same:
+1. `openLocalDb({ name, userScoped, batchSize })` for each table you need.
+2. `dfCreateSession({ sessionName: "default", … })` ONCE, then reuse the returned `.session` for
+   every register/query in that path. Do not create a new session per query.
+3. `dfRegisterLance({ session, database, tableName })` (or a file/external register node) for each
+   source. The `tableName` is the SQL identifier you then `SELECT ... FROM`.
+4. `dfSqlQuery({ session, query })` returns THREE outputs from one call:
+   - `.table` — a `CSVTable` (columnar) made for analytics and charts/tables. Feed this straight
+     into `a2uiPushCsvToChart` (format `CSV`) for dashboard widgets.
+   - `.rows` — an array of row structs for `controlForEach` iteration and per-row UI (set element
+     text, instantiate widgets). Access fields as `row.value.<column>`.
+   - `.rowCount` — the integer result count, e.g. for a "{n} results" badge.
+   Build the SQL string with `stringFormat` when it depends on runtime values; never concatenate
+   untrusted text into SQL without going through query params.
+
 Always call `get_declarations` with a concrete, focused query for the exact FlowScript signature
 before writing these calls. Never call it with a blank query; use terms like "open database",
-"DataFusion", "register Lance", "SQL query", "embedding", "vector search", "full text search",
-"hybrid search", and "build index". Use `catalog_search` only if a node is not in the compact
-declaration results you already have.
+"DataFusion", "create session", "register Lance", "SQL query", "push csv to chart", "embedding",
+"vector search", "full text search", "hybrid search", and "build index". Use `catalog_search` only
+if a node is not in the compact declaration results you already have.
+"#;
+
+/// How a workflow drives A2UI pages/widgets (dashboards) and where to get real element references.
+pub const DASHBOARD_A2UI_GUIDANCE: &str = r#"
+## DASHBOARDS, PAGES, AND WIDGETS (A2UI)
+A board renders interactive UI by calling `a2ui*` nodes that target elements on the app's **pages**
+and instantiate its **widgets**. A board does NOT contain those element ids — they live in separate
+page/widget definitions — so you must look them up, not guess.
+
+GROUND YOURSELF FIRST: before writing or editing ANY `a2ui*` call, call `ui_inspect` (read-only, no
+approval). `ui_inspect` with operation `list` returns every page (with `element_refs`) and widget
+(with `selector`); `page`/`widget` return the full detail for one. Never invent an `elementRef` or a
+`widgetSelector` — if `ui_inspect` does not list it, it does not exist.
+
+Reference conventions:
+- An element reference is `"<page_id>/<element_id>"`, exactly as returned by `ui_inspect`.
+- A widget selector is the widget's name (its `selector` from `ui_inspect`).
+
+Common a2ui calls (confirm exact signatures with `get_declarations`):
+- Read/write elements: `a2uiSetElementText({ elementRef, text })`,
+  `a2uiSetMarkdownContent({ elementRef, markdown })`, `a2uiSetBadgeContent`,
+  `a2uiSetElementValue`, and `a2uiGetElement({ elementRef }).element` /
+  `a2uiGetElementValue({ elementRef }).value` to read current values (e.g. form inputs).
+- Containers (grids/lists): clear with `a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef }).element })`,
+  then add children with `a2uiPushToContainer({ containerRef, elementRef, position: -1 })` or
+  `a2uiPushChild({ containerRef, childRef })`.
+- Widgets: `a2uiInstantiateWidget({ widgetSelector, instanceId, dynPath<Field>: …, dynProp<Id>: …, fnRefs: [handlerFn] })`
+  returns `.elementRef` to push into a container. The `dynPath*`/`dynProp*` input pins for a widget
+  are listed by `ui_inspect` (operation `widget`). `fnRefs` is the list of board function refs that
+  handle the widget's actions (declare them as `function …(…) { … }` and pass the bare function name).
+- Charts (dashboard data): `a2uiPushCsvToChart({ elementRef, library: "Nivo"|"Plotly", format: "CSV", table: <dfSqlQuery>.table, chartType: "Bar"|"Line"|"Pie"|… })`.
+  The `table` pin accepts a DataFusion query result directly — this is the primary way to drive a
+  dashboard chart from SQL. Use `format: "JSON"` with a `data` array when you already shaped the
+  series yourself. Style with `a2uiSetNivoConfig` / `a2uiSetChartLayout`.
+- Tables (dashboard data — often the most useful for SQL): `a2uiWriteCsvToTable({ elementRef, table: <dfSqlQuery>.table })`
+  pushes a DataFusion result straight into a table element (or pass `csv` text). For incremental
+  edits use `a2uiUpdateTable` (set/append/replace rows). DataFusion's `.table` output is built
+  exactly for these table/chart pins, so prefer it over hand-iterating rows when filling a grid.
+- Reactive data bindings: `a2uiDataUpdate({ surfaceId, path, value })` updates a bound data path.
+- Screen control: end a render path with `a2uiShowScreen()`; route with `a2uiNavigateTo({ route })`;
+  read URL params with `a2uiGetQueryParams({ paramName }).value`.
+
+Keep dashboards clean with functions/layers: put each page's onLoad logic in its own
+`function pageLoad() { … }` (it becomes a Function layer), and factor repeated work — querying a
+table, filling a container with widget instances — into small helper functions instead of one long
+event block. See the dashboard examples below.
 "#;
 
 /// Execution wiring contract shared by board prompts.
@@ -197,10 +268,13 @@ Actionable empty-board edits:
   inside object/array literals for inserts/upserts, for example avoid
   `{ id: cuid().cuid, vector: embedded.vector }` as an inline row. Inline object literals are safe
   only when all fields are literal defaults.
-- Existing function layers render as `function name(...) { ... }`, but creating new callable
-  function/layer structure from FlowScript is still limited. For empty-board workflow creation,
-  prefer one executable event block like `run() { ... }` plus concrete calls; use `emit_commands`
-  for visual layers/placeholders/function-layer modeling.
+- Functions ARE first-class in FlowScript: a `function name(params): (returns) { ... }` declaration
+  creates a Function layer — its params become input pins, its returns become output pins, and its
+  body nodes are placed inside the layer. Use functions to keep boards clean: a reusable helper, a
+  per-page onLoad handler, and a widget-action handler should each be their own function rather than
+  one long event block. You do NOT need `emit_commands` to create function layers; write the
+  `function` in FlowScript. Reserve `emit_commands` for purely visual placeholders/collapsed layers
+  with no FlowScript meaning, and for node repositioning.
 - Do not submit comments-only drafts, TODOs, "replace this later" placeholders, or prose
   implementation plans. If a declaration is missing, call `get_declarations` again with concrete
   terms rather than inventing a stub.
@@ -365,9 +439,9 @@ loadOverview() {
 }
 ```
 
-### 6. Existing agent/tool workflows may render helper functions
-For new empty boards, do not rely on unanchored helper functions to create callable function
-layers. Prefer one executable event block, or use `emit_commands` for the function-layer modeling.
+### 6. Factor reusable logic into helper functions (each becomes a Function layer)
+Declaring `function name(...) { ... }` creates a Function layer with boundary pins from its
+signature. Prefer several small helpers over one giant event block.
 ```ts
 fetchPage(url: string, payload: Struct) {
     const response = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
@@ -390,9 +464,52 @@ runResearch(task: string) {
 }
 ```
 
+### 7. Dashboard onLoad: query data, then populate page elements and widgets
+Element refs (`"<page_id>/<element_id>"`) and the widget selector (`"Article"`) come from
+`ui_inspect`, NOT from guessing. Keep the page-load logic in its own function and factor the
+container fill into a helper. Iterate rows with the exact `controlForEach` declaration.
+```ts
+briefingPageLoad() {
+    const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
+    const session = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    dfRegisterLance({ session: session.session, database: db, tableName: "reports" })
+    const result = dfSqlQuery({ session: session.session, query: "SELECT report_id, title, summary, created FROM reports ORDER BY to_timestamp(created) DESC LIMIT 25;" })
+    a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/subline-right", text: stringFormat({ formatString: "{num} Briefing(s)", num: result.rowCount }) })
+    fillArticles({ rows: result.rows })
+    a2uiShowScreen()
+}
+
+fillArticles(rows: Struct[]) {
+    a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
+    for (const row of controlForEach({ array: rows })) {
+        const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: row.value.report_id, dynPathTitle: row.value.title, dynPathSummary: row.value.summary, dynPathDate: utilsDatetimeFormat({ date: row.value.created, format: "%B %-d, %Y" }), fnRefs: [openBriefing] })
+        a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: instance.elementRef, position: -1 })
+    }
+}
+
+openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+    a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })
+}
+```
+
+### 8. Drive a dashboard chart/table directly from a DataFusion query
+`dfSqlQuery(...).table` is a `CSVTable` you can hand straight to `a2uiPushCsvToChart` (format `CSV`).
+Look up the chart element ref with `ui_inspect` first.
+```ts
+renderTrend() {
+    const db = openLocalDb({ name: "metrics", userScoped: true, batchSize: 1000 })
+    const session = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    dfRegisterLance({ session: session.session, database: db, tableName: "metrics" })
+    const result = dfSqlQuery({ session: session.session, query: "SELECT day, SUM(amount) AS total FROM metrics GROUP BY day ORDER BY day;" })
+    a2uiPushCsvToChart({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/trend-chart" }).element, library: "Nivo", format: "CSV", table: result.table, chartType: "Line" })
+    a2uiShowScreen()
+}
+```
+
 When generating from an empty board, start with this kind of coherent skeleton: placeholder
 literals/state when useful, small helper/tool functions, one entry function, and concrete
-database/index/search node calls where needed.
+database/index/search node calls where needed. For dashboard work, call `ui_inspect` first so every
+`a2ui*` element reference and widget selector is real.
 "##;
 
 /// Build the board/workflow system prompt.
@@ -459,6 +576,8 @@ Use the lower-level `emit_commands` tool ONLY for things FlowScript text cannot 
 
 {database_guidance}
 
+{dashboard_guidance}
+
 {execution_guidance}
 
 {explanation_guidance}
@@ -503,7 +622,7 @@ If target_layer is omitted, nodes are added to the current/root layer.
 **Understanding**: think (reason step-by-step), get_node_details (get full info about a specific node)
 **Inspect**: list_board_nodes (summarize existing graph), get_unconfigured_nodes (find nodes missing required inputs or setup), find_connectable_nodes (discover nodes that can connect to a given pin)
 **Catalog** ({node_count} nodes): catalog_search (by name/description), get_declarations (FlowScript .flow.d signatures), search_by_pin (by pin type), filter_category (by category){templates}{logs}
-**Runtime/Data**: internet_search (SearXNG web search), database_tool (list/query/modify LanceDB/Open Database tables), storage_tool (list/read/create/delete app storage files), execute_event (run an event and inspect logs), ask_user (rare targeted question with defaults)
+**Runtime/Data**: internet_search (SearXNG web search), database_tool (list/query/modify LanceDB/Open Database tables), storage_tool (list/read/create/delete app storage files), ui_inspect (read-only pages/widgets/element refs — call before any a2ui* call), execute_event (run an event and inspect logs), ask_user (rare targeted question with defaults)
 **Modify**: get_current_flowscript (retrieve exact live board code), edit_flowscript (PRIMARY — apply edited FlowScript text, including function layers), emit_commands (MoveNode/layout and non-FlowScript features)
 
 ## Key Rules
@@ -572,6 +691,7 @@ ALWAYS emit commands in this order:
         templates = templates_tool,
         logs = logs_tool,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -680,6 +800,11 @@ For workflows: Use FlowScript/edit_flowscript for behavior; use validate_command
 For data workflows: prefer the built-in LanceDB-backed Open Database path. Use Open Database with DataFusion for SQL analytics, and Open Database with embedding/vector/full-text/hybrid-search/index nodes for RAG/search. Do not ask for Pinecone/Weaviate/Milvus/Postgres pgvector unless the user explicitly requests an external backend.
 Use database_tool to inspect existing tables/schemas/indices before designing data workflows. Use execute_event after creating event-backed workflows when runtime logs can validate or debug the result.
 For UI: Use validate_ui before emit_ui when available (NOT file editing)
+For dashboards (a workflow that drives a page/widgets): call ui_inspect before any a2ui* call so element refs and widget selectors are real, and feed DataFusion results into the page via a2uiSetElementText / a2uiInstantiateWidget / a2uiPushCsvToChart.
+
+{database_guidance}
+
+{dashboard_guidance}
 
 {execution_guidance}
 
@@ -687,6 +812,8 @@ For UI: Use validate_ui before emit_ui when available (NOT file editing)
 
 {autonomy_guidance}"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
+        database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -714,6 +841,8 @@ You MUST follow this sequence. Do not skip straight to emit_commands.
 {autonomy_guidance}
 
 {database_guidance}
+
+{dashboard_guidance}
 
 {execution_guidance}
 
@@ -760,6 +889,8 @@ Batch commands in this order:
 - `database_tool`: list/query/modify LanceDB/Open Database tables and indices. Inspect tables
   before designing DataFusion/vector/FTS/hybrid search workflows.
 - `storage_tool`: list/read/create/delete app storage files.
+- `ui_inspect`: read-only listing of pages, their element refs, and widget selectors/pins. Call it
+  before writing any `a2ui*` call so element references and widget selectors are real.
 - `execute_event`: run an event and inspect bounded logs after creating event-backed workflows.
 - `ask_user`: only for genuinely blocking input; include a recommended default.
 
@@ -792,6 +923,7 @@ Batch commands in this order:
 7. If `validate_commands` or `emit_commands` returns validation issues, treat that as a failed draft, fix the reported problems, and resend a corrected batch only"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -866,6 +998,8 @@ before emitting.
 
 {database_guidance}
 
+{dashboard_guidance}
+
 {execution_guidance}
 
 {explanation_guidance}
@@ -879,6 +1013,7 @@ get_unconfigured_nodes (nodes missing required inputs)
 (FlowScript .flow.d signatures)
 **Runtime/Data**: internet_search (SearXNG web search), database_tool (list/query/modify
 LanceDB/Open Database tables), storage_tool (list/read/create/delete app storage files),
+ui_inspect (read-only pages/widgets/element refs — call before any a2ui* call),
 execute_event (run an event and inspect bounded logs), ask_user (rare targeted question with
 defaults)
 **Modify**: get_current_flowscript (retrieve exact live board code), edit_flowscript (PRIMARY —
@@ -895,6 +1030,7 @@ changes; validate_commands first)
         flowscript = flowscript,
         node_count = node_count,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
