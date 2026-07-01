@@ -1477,6 +1477,80 @@ export interface GeoMapComponent extends ComponentBase {
 	clusterMaxZoom?: BoundValue;
 }
 
+// ── Planning: Calendar & Gantt (mirrors Rust structs) ──────────────
+
+// A single calendar event (mirrors CalendarEvent in update_schemas.rs)
+export interface CalendarEvent {
+	id: string;
+	title: string;
+	start: string; // ISO 8601
+	end?: string; // ISO 8601
+	allDay?: boolean;
+	color?: string;
+	description?: string;
+	location?: string;
+	calendarId?: string;
+	editable?: boolean;
+	metadata?: unknown;
+}
+
+export type CalendarView = "month" | "week" | "day" | "agenda";
+
+export interface CalendarComponent extends ComponentBase {
+	type: "calendar";
+	events: BoundValue; // CalendarEvent[]
+	view?: BoundValue; // CalendarView
+	date?: BoundValue; // focused date (ISO 8601)
+	editable?: BoundValue;
+	selectable?: BoundValue;
+	firstDayOfWeek?: BoundValue; // 0 = Sunday
+	minTime?: BoundValue; // "06:00"
+	maxTime?: BoundValue; // "22:00"
+	slotDuration?: BoundValue; // minutes
+	showWeekends?: BoundValue;
+	showNowIndicator?: BoundValue;
+	showAllDay?: BoundValue;
+	locale?: BoundValue;
+	height?: BoundValue;
+	responsive?: BoundValue;
+	compactBreakpoint?: BoundValue; // px
+}
+
+// A single gantt task (mirrors GanttTask in update_schemas.rs)
+export interface GanttTask {
+	id: string;
+	name: string;
+	start: string; // ISO 8601
+	end: string; // ISO 8601
+	progress?: number; // 0-100
+	dependencies?: string[]; // predecessor task ids
+	parent?: string;
+	color?: string;
+	assignee?: string;
+	milestone?: boolean;
+	collapsed?: boolean;
+	metadata?: unknown;
+}
+
+export type GanttView = "day" | "week" | "month" | "quarter" | "compact";
+
+export interface GanttComponent extends ComponentBase {
+	type: "gantt";
+	tasks: BoundValue; // GanttTask[]
+	view?: BoundValue; // GanttView
+	editable?: BoundValue;
+	draggable?: BoundValue;
+	resizable?: BoundValue;
+	showDependencies?: BoundValue;
+	showProgress?: BoundValue;
+	showToday?: BoundValue;
+	rowHeight?: BoundValue;
+	columns?: BoundValue; // string[] extra left-panel columns
+	height?: BoundValue;
+	responsive?: BoundValue;
+	compactBreakpoint?: BoundValue; // px
+}
+
 // Widget Instance Component - references a widget definition stored in page.widgetRefs
 // The widget definition is looked up by instanceId from the page's widgetRefs
 export interface WidgetInstanceComponent extends ComponentBase {
@@ -1566,6 +1640,8 @@ export type A2UIComponent =
 	| ImageLabelerComponent
 	| ImageHotspotComponent
 	| GeoMapComponent
+	| CalendarComponent
+	| GanttComponent
 	| WidgetInstanceComponent;
 
 // Surface and data model

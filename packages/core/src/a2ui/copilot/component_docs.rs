@@ -63,6 +63,10 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `plotlyChart` - Plotly.js charts (line, bar, scatter, pie, area, histogram)
 - `nivoChart` - Nivo charts (25+ chart types)
 
+### Planning Components
+- `calendar` - Interactive calendar (month/week/day/agenda) that fires create/move/resize/open/delete actions (props: events, view, editable, selectable, ...)
+- `gantt` - Interactive Gantt timeline with drag/resize/dependency-link that fires create/move/resize/open/delete/link actions (props: tasks, view, editable, showDependencies, ...)
+
 ### Media Components
 - `iframe` - Embedded external content or HTML preview (supports src URL and srcdoc HTML)
 - `filePreview` - Generic file preview

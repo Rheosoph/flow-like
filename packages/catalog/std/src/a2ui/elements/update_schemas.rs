@@ -452,3 +452,213 @@ pub struct VideoSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poster: Option<String>,
 }
+
+// =============================================================================
+// Calendar Input Schemas
+// =============================================================================
+
+/// A single event/appointment shown on the interactive calendar.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEvent {
+    /// Stable unique id used to move/update/remove the event.
+    pub id: String,
+    /// Event title shown on the calendar.
+    pub title: String,
+    /// Start timestamp, ISO 8601 (e.g. "2026-07-01T09:00:00Z" or "2026-07-01").
+    pub start: String,
+    /// End timestamp, ISO 8601. Defaults to a short block when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    /// Render as an all-day event (no time-of-day).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub all_day: Option<bool>,
+    /// Accent color (CSS color or design token).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Optional longer description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional location string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// Grouping key (e.g. source calendar id).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_id: Option<String>,
+    /// Whether this event can be moved/resized in the UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<bool>,
+    /// Arbitrary passthrough payload echoed back on action events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<flow_like_types::Value>,
+}
+
+/// Patch for a single calendar event. Only the `id` is required; provided
+/// fields overwrite, omitted fields are left unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventUpdate {
+    /// Id of the event to patch.
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub all_day: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<flow_like_types::Value>,
+}
+
+/// View/behavior configuration for the calendar element.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarConfig {
+    /// "month" | "week" | "day" | "agenda"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// Focused date (ISO 8601).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selectable: Option<bool>,
+    /// First day of week (0 = Sunday).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_day_of_week: Option<i32>,
+    /// Earliest time shown (e.g. "06:00").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_time: Option<String>,
+    /// Latest time shown (e.g. "22:00").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_time: Option<String>,
+    /// Slot granularity in minutes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_duration: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_weekends: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_now_indicator: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_all_day: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+}
+
+// =============================================================================
+// Gantt Input Schemas
+// =============================================================================
+
+/// A single task on the Gantt timeline.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GanttTask {
+    /// Stable unique id used to move/update/remove the task.
+    pub id: String,
+    /// Task name shown in the left panel and on the bar.
+    pub name: String,
+    /// Start date/time, ISO 8601.
+    pub start: String,
+    /// End date/time, ISO 8601.
+    pub end: String,
+    /// Completion percentage (0-100).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<f64>,
+    /// Ids of predecessor tasks this one depends on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<String>>,
+    /// Parent task id for grouping / sub-tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Bar accent color (CSS color or design token).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Optional assignee (user id or display name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    /// Render as a milestone diamond instead of a bar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<bool>,
+    /// Whether this task's children are collapsed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<bool>,
+    /// Arbitrary passthrough payload echoed back on action events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<flow_like_types::Value>,
+}
+
+/// Patch for a single Gantt task. Only the `id` is required.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GanttTaskUpdate {
+    /// Id of the task to patch.
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<flow_like_types::Value>,
+}
+
+/// A dependency edge between two Gantt tasks (predecessor -> successor).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GanttDependencyUpdate {
+    /// Predecessor task id.
+    pub from_id: String,
+    /// Successor task id (the one that gains the dependency).
+    pub to_id: String,
+}
+
+/// View/behavior configuration for the Gantt element.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GanttConfig {
+    /// "day" | "week" | "month" | "quarter" | "compact"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draggable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resizable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_dependencies: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_progress: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_today: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_height: Option<f64>,
+}

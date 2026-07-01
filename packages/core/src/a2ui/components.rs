@@ -89,6 +89,10 @@ pub enum A2UIComponentType {
     Iframe(IframeProps),
     PlotlyChart(PlotlyChartProps),
     NivoChart(NivoChartProps),
+
+    // Planning components
+    Calendar(CalendarProps),
+    Gantt(GanttProps),
 }
 
 /// A complete A2UI element with its component data, style, and metadata
@@ -1613,4 +1617,110 @@ pub struct DiffViewProps {
     pub trim_trailing_whitespace: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swap_sides: Option<BoundValue>,
+}
+
+// =============================================================================
+// Planning Components (Calendar & Gantt)
+// =============================================================================
+
+/// Interactive calendar for viewing and scheduling events. `events` binds an
+/// array of `CalendarEvent` objects; interactions (create/move/resize/open/
+/// delete) fire the element's bound `workflow_event` action.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarProps {
+    /// Array of calendar events (see `CalendarEvent`).
+    pub events: BoundValue,
+    /// Active view: "month" | "week" | "day" | "agenda".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<BoundValue>,
+    /// Focused date (ISO 8601) the view centers on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<BoundValue>,
+    /// Allow moving/resizing events by dragging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<BoundValue>,
+    /// Allow selecting empty slots to create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selectable: Option<BoundValue>,
+    /// First day of week (0 = Sunday, 1 = Monday).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_day_of_week: Option<BoundValue>,
+    /// Earliest time shown in week/day views (e.g. "06:00").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_time: Option<BoundValue>,
+    /// Latest time shown in week/day views (e.g. "22:00").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_time: Option<BoundValue>,
+    /// Time-slot granularity in minutes (week/day views).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_duration: Option<BoundValue>,
+    /// Show Saturday/Sunday columns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_weekends: Option<BoundValue>,
+    /// Show the current-time indicator line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_now_indicator: Option<BoundValue>,
+    /// Show the all-day row above the time grid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_all_day: Option<BoundValue>,
+    /// BCP-47 locale for date formatting (e.g. "en-US", "de-DE").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<BoundValue>,
+    /// Explicit height (e.g. "640px").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
+    /// Enable automatic compact/agenda fallback on narrow containers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsive: Option<BoundValue>,
+    /// Width in px below which the calendar collapses to the agenda view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_breakpoint: Option<BoundValue>,
+}
+
+/// Interactive Gantt timeline for planning tasks. `tasks` binds an array of
+/// `GanttTask` objects; interactions (create/move/resize/open/delete/link)
+/// fire the element's bound `workflow_event` action.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GanttProps {
+    /// Array of tasks (see `GanttTask`).
+    pub tasks: BoundValue,
+    /// Timeline zoom: "day" | "week" | "month" | "quarter" | "compact".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<BoundValue>,
+    /// Master switch for editing (drag/resize/link). Falls back to `draggable`
+    /// / `resizable` when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editable: Option<BoundValue>,
+    /// Allow moving task bars horizontally.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draggable: Option<BoundValue>,
+    /// Allow resizing task bars by their edges.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resizable: Option<BoundValue>,
+    /// Draw dependency arrows between tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_dependencies: Option<BoundValue>,
+    /// Render the progress fill inside each bar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_progress: Option<BoundValue>,
+    /// Draw the "today" marker line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_today: Option<BoundValue>,
+    /// Row height in px.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_height: Option<BoundValue>,
+    /// Extra left-panel columns (e.g. ["assignee", "progress"]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<BoundValue>,
+    /// Explicit height (e.g. "640px").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
+    /// Enable automatic compact fallback on narrow containers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsive: Option<BoundValue>,
+    /// Width in px below which the timeline collapses to the compact view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_breakpoint: Option<BoundValue>,
 }

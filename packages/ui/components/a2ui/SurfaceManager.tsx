@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { A2UIRenderer } from "./A2UIRenderer";
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
+import { applyCalendarUpdate, applyGanttUpdate } from "./planning-updates";
 import { applyStyleUpdate } from "./style-updates";
 import type {
 	A2UIClientMessage,
@@ -548,6 +549,28 @@ export function useSurfaceManager() {
 									data: { literalOptions: existingData },
 								} as unknown as SurfaceComponent["component"],
 							};
+							break;
+						}
+						case "setCalendarEvents":
+						case "addCalendarEvent":
+						case "updateCalendarEvent":
+						case "removeCalendarEvent":
+						case "setCalendarView":
+						case "setCalendarDate":
+						case "setCalendarConfig": {
+							updatedComponent = applyCalendarUpdate(component, updateValue);
+							break;
+						}
+						case "setGanttTasks":
+						case "addGanttTask":
+						case "updateGanttTask":
+						case "removeGanttTask":
+						case "setGanttProgress":
+						case "addGanttDependency":
+						case "removeGanttDependency":
+						case "setGanttView":
+						case "setGanttConfig": {
+							updatedComponent = applyGanttUpdate(component, updateValue);
 							break;
 						}
 						case "pushChild": {

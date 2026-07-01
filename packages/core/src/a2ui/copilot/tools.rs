@@ -352,6 +352,63 @@ Example:
 }"#
         .to_string(),
 
+        "calendar" => r#"Calendar - Interactive calendar for viewing & scheduling events
+Properties:
+- type: "calendar" (required)
+- events: BoundValue (required) - Array of CalendarEvent { id, title, start, end?, allDay?, color?, description?, location?, calendarId?, editable?, metadata? }
+- view: "month" | "week" | "day" | "agenda" (default "month")
+- date: BoundValue (string, ISO 8601) - Focused date
+- editable: BoundValue (boolean, default true) - Allow drag/resize
+- selectable: BoundValue (boolean, default true) - Allow slot selection to create
+- firstDayOfWeek: BoundValue (number, 0=Sunday, default 1)
+- minTime / maxTime: BoundValue (string "HH:MM") - Time-grid bounds
+- slotDuration: BoundValue (number, minutes, default 30)
+- showWeekends / showNowIndicator / showAllDay: BoundValue (boolean)
+- locale: BoundValue (string, e.g. "en-US")
+- responsive: BoundValue (boolean) - auto agenda on narrow widths
+- compactBreakpoint: BoundValue (number, px)
+- actions: bind a workflow_event action; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+
+Example:
+{
+  "id": "planner",
+  "component": {
+    "type": "calendar",
+    "events": { "path": "$.events" },
+    "view": { "literalString": "week" },
+    "editable": { "literalBool": true }
+  }
+}"#
+        .to_string(),
+
+        "gantt" => r#"Gantt - Interactive Gantt timeline for planning tasks
+Properties:
+- type: "gantt" (required)
+- tasks: BoundValue (required) - Array of GanttTask { id, name, start, end, progress?, dependencies?, parent?, color?, assignee?, milestone?, collapsed?, metadata? }
+- view: "day" | "week" | "month" | "quarter" | "compact" (default "week")
+- editable: BoundValue (boolean, default true) - Master switch for drag/resize/link
+- draggable / resizable: BoundValue (boolean) - Fine-grained edit controls
+- showDependencies: BoundValue (boolean, default true) - Draw dependency arrows
+- showProgress: BoundValue (boolean, default true) - Bar progress fill
+- showToday: BoundValue (boolean, default true) - Today marker line
+- rowHeight: BoundValue (number, px)
+- columns: BoundValue (array of string) - Extra left-panel columns e.g. ["assignee","progress"]
+- responsive: BoundValue (boolean) - auto compact on narrow widths
+- compactBreakpoint: BoundValue (number, px)
+- actions: bind a workflow_event action; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
+
+Example:
+{
+  "id": "roadmap",
+  "component": {
+    "type": "gantt",
+    "tasks": { "path": "$.tasks" },
+    "view": { "literalString": "week" },
+    "showDependencies": { "literalBool": true }
+  }
+}"#
+        .to_string(),
+
         "checkbox" => r#"Checkbox - Boolean toggle with label
 Properties:
 - type: "checkbox" (required)

@@ -59,6 +59,8 @@ pub mod set_select_value;
 pub mod set_slider_value;
 pub mod set_textfield_error;
 pub mod set_tooltip_content;
+pub mod update_calendar;
+pub mod update_gantt;
 pub mod update_geomap;
 pub mod update_hotspot;
 pub mod update_labeler;
