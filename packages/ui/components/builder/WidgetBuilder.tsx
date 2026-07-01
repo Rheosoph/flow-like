@@ -1316,6 +1316,21 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 						};
 						break;
 					}
+					case "setProps": {
+						const props = updateValue.props as Record<string, unknown>;
+						const componentData = component.component as unknown as Record<
+							string,
+							unknown
+						>;
+						updatedComponent = {
+							...component,
+							component: {
+								...componentData,
+								...props,
+							} as unknown as SurfaceComponent["component"],
+						};
+						break;
+					}
 					case "setChartLayout":
 					case "setNivoConfig": {
 						const configOrLayout = updateValue.layout ?? updateValue.config;

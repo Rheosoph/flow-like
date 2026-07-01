@@ -1089,6 +1089,15 @@ RULES:
   but left with no incoming execution connection and never run. For per-iteration work inside
   `controlForEach`, write the statements directly in the loop body instead of calling a `buildRow`-style
   helper.
+- Charts (`a2uiPushCsvToChart`) read their data from a `format`-specific pin. With `format: "CSV"`, wire
+  a DataFusion query's `table` output into the chart's `table` input (both are the same tabular struct)
+  and set `chartType` (for example "Bar" / "Line" / "Pie"). The `data` input is ONLY for
+  `format: "JSON"`. Wiring a `table` output into `data` with `format: "CSV"` leaves the chart's data
+  unset and fails at run time.
+- Read a struct field with `structGet({ struct: <structValue>, field: "name" }).value` (its `value`
+  output is the field). To target an a2ui element, either pass the element id path string directly to a
+  setter's `elementRef`, or fetch a handle with `a2uiGetElement({ elementRef: "surfaceId/element-id" }).element`;
+  both are accepted.
 - To reposition nodes on the canvas, use `emit_commands` with MoveNode."#,
         )
         .schema(json!({
