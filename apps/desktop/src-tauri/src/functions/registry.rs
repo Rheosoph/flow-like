@@ -48,33 +48,45 @@ fn log_registry_package_error(command: &str, package_id: &str, error: &impl std:
     tracing::error!(command, package_id = %package_id, error = %error, "Registry package command failed");
 }
 
-async fn reload_wasm_nodes(
+/// Rebuild the global node registry from scratch: builtin catalog nodes +
+/// every currently-installed WASM package + developer (local) project nodes.
+///
+/// The registry is append-only (`push_nodes`/`insert` never remove entries),
+/// so after an update or uninstall the previous version's nodes would linger
+/// until an app restart rebuilt the registry from nothing — which is why nodes
+/// could go stale or fail to reconcile without a restart. Rebuilding from the
+/// authoritative installed set makes update/uninstall/downgrade deterministic.
+async fn rebuild_node_registry(
     app_handle: &AppHandle,
     emit_catalog_updated: bool,
 ) -> Result<(), TauriFunctionError> {
     let registry_client = TauriRegistryState::get_client(app_handle).await?;
     let flow_state = TauriFlowLikeState::construct(app_handle).await?;
-
-    let installed = registry_client.list_installed().await.unwrap_or_default();
-
-    if installed.is_empty() {
-        if emit_catalog_updated {
-            let _ = app_handle.emit("catalog-updated", ());
-        }
-        return Ok(());
-    }
-
     let engine = TauriWasmEngineState::construct(app_handle)
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
-    let mut wasm_nodes: Vec<Arc<dyn NodeLogic>> = Vec::new();
+    // 1. Developer (local project) nodes — collected first because they are
+    // also registered in the installed list and would otherwise be loaded a
+    // second time below. Inserted last so they win name collisions.
+    let dev_pairs = super::developer::collect_developer_node_pairs(app_handle).await;
+    let dev_package_ids: std::collections::HashSet<&str> = dev_pairs
+        .iter()
+        .filter_map(|(node, _)| node.wasm.as_ref().map(|w| w.package_id.as_str()))
+        .collect();
 
+    // 2. Builtin catalog nodes (cheap Arc clones of the cached catalog).
+    let mut logic_nodes: Vec<Arc<dyn NodeLogic>> = flow_like_catalog::get_catalog();
+
+    // 3. Installed WASM package nodes (active version of each), skipping
+    // developer projects already loaded above.
+    let installed = registry_client.list_installed().await.unwrap_or_default();
     for pkg in &installed {
+        if dev_package_ids.contains(pkg.id.as_str()) {
+            continue;
+        }
         match registry_client.load_nodes(&pkg.id, engine.clone()).await {
             Ok(nodes) => {
-                for node in nodes {
-                    wasm_nodes.push(Arc::new(node));
-                }
+                logic_nodes.extend(nodes.into_iter().map(|n| Arc::new(n) as Arc<dyn NodeLogic>));
             }
             Err(e) => {
                 tracing::warn!("Failed to load package '{}': {}", pkg.id, e);
@@ -82,14 +94,24 @@ async fn reload_wasm_nodes(
         }
     }
 
-    if !wasm_nodes.is_empty() {
+    let mut inner =
+        flow_like::state::FlowNodeRegistryInner::new(logic_nodes.len() + dev_pairs.len());
+    for logic in logic_nodes {
+        let node = logic.get_node();
+        inner.insert(node, logic);
+    }
+    for (node, logic) in dev_pairs {
+        inner.insert(node, logic);
+    }
+
+    {
         let registry_guard = flow_state.node_registry.clone();
         let mut registry = registry_guard.write().await;
-        registry.push_nodes(wasm_nodes);
+        registry.node_registry = Arc::new(inner);
     }
 
     if emit_catalog_updated {
-        let _ = app_handle.emit("catalog-updated", ());
+        super::developer::emit_catalog_updated_on_main(app_handle);
     }
 
     Ok(())
@@ -124,7 +146,7 @@ async fn load_installed_package_nodes(
     }
 
     if emit_catalog_updated {
-        let _ = app_handle.emit("catalog-updated", ());
+        super::developer::emit_catalog_updated_on_main(app_handle);
     }
 
     Ok(())
@@ -245,8 +267,8 @@ pub async fn registry_uninstall_package(
     let registry_client: RegistryClient = TauriRegistryState::get_client(&app_handle).await?;
     registry_client.uninstall(&package_id).await?;
 
-    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
-        tracing::warn!("Failed to reload WASM nodes after uninstall: {:?}", e);
+    if let Err(e) = rebuild_node_registry(&app_handle, true).await {
+        tracing::warn!("Failed to rebuild node registry after uninstall: {:?}", e);
     }
 
     Ok(())
@@ -326,8 +348,8 @@ pub async fn registry_update_package(
             emit_package_status(&app_handle, &package_id, "error");
         })?;
 
-    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
-        tracing::warn!("Failed to reload WASM nodes after update: {:?}", e);
+    if let Err(e) = rebuild_node_registry(&app_handle, true).await {
+        tracing::warn!("Failed to rebuild node registry after update: {:?}", e);
     } else {
         clear_package_status(&app_handle, &package_id);
     }
@@ -336,6 +358,7 @@ pub async fn registry_update_package(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageUpdate {
     pub package_id: String,
     pub current_version: String,
@@ -395,13 +418,13 @@ pub async fn registry_load_local(
     let local_path = std::path::Path::new(&path);
     let cached = registry_client.load_local(local_path).await?;
 
-    // Register in the installed list so reload_wasm_nodes can find it
+    // Register in the installed list so rebuild_node_registry can find it
     let _ = registry_client
         .register_local_package(local_path, cached.entry.manifest.clone())
         .await;
 
-    if let Err(e) = reload_wasm_nodes(&app_handle, true).await {
-        tracing::warn!("Failed to reload WASM nodes after local load: {:?}", e);
+    if let Err(e) = rebuild_node_registry(&app_handle, true).await {
+        tracing::warn!("Failed to rebuild node registry after local load: {:?}", e);
     }
 
     Ok(cached)
@@ -458,7 +481,7 @@ pub async fn registry_init(
     *guard = Some(client);
     drop(guard);
 
-    if let Err(e) = reload_wasm_nodes(&app_handle, false).await {
+    if let Err(e) = rebuild_node_registry(&app_handle, true).await {
         tracing::warn!("Failed to load WASM nodes during registry init: {:?}", e);
     }
 

@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	ArrowUpCircle,
 	ChevronDown,
 	ChevronRight,
 	Layers,
@@ -19,6 +20,7 @@ import type {
 	AddAppPackageRequest,
 	AppPackage,
 	InstalledPackage,
+	PackageUpdate,
 	UpdateAppPackageRequest,
 } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
@@ -139,6 +141,22 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		enabled: !!appId && !!packages.data?.length,
 	});
 
+	const updates = useQuery<PackageUpdate[]>({
+		queryKey: ["app", appId, "package-updates"],
+		queryFn: async () => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			return backend.apiState.get<PackageUpdate[]>(
+				profile.data,
+				`apps/${appId}/packages/updates`,
+			);
+		},
+		enabled:
+			!!appId &&
+			isOffline.data === false &&
+			!!profile.data &&
+			!!packages.data?.length,
+	});
+
 	const nodesByPackage = useMemo(() => {
 		if (!catalog.data) return new Map<string, INode[]>();
 		const map = new Map<string, INode[]>();
@@ -153,6 +171,14 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		}
 		return map;
 	}, [catalog.data]);
+
+	const updatesByPackage = useMemo(() => {
+		const map = new Map<string, PackageUpdate>();
+		for (const update of updates.data ?? []) {
+			map.set(update.packageId, update);
+		}
+		return map;
+	}, [updates.data]);
 
 	const addPackage = useMutation({
 		mutationFn: async (req: AddAppPackageRequest) => {
@@ -236,12 +262,77 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			toast.error(`Failed to reactivate: ${err.message}`),
 	});
 
+	const patchPackageVersion = useCallback(
+		async (pkgId: string, version: string) => {
+			if (!profile.data) throw new Error("Profile not loaded");
+			const body: UpdateAppPackageRequest = { version };
+			return backend.apiState.patch(
+				profile.data,
+				`apps/${appId}/packages/${pkgId}`,
+				body,
+			);
+		},
+		[backend.apiState, profile.data, appId],
+	);
+
+	const invalidatePackageQueries = useCallback(() => {
+		queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
+		queryClient.invalidateQueries({
+			queryKey: ["app", appId, "package-updates"],
+		});
+		queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
+		queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
+	}, [queryClient, appId]);
+
+	const applyUpdate = useMutation({
+		mutationFn: ({ pkgId, version }: { pkgId: string; version: string }) =>
+			patchPackageVersion(pkgId, version),
+		onSuccess: () => {
+			toast.success("Package updated");
+			invalidatePackageQueries();
+		},
+		onError: (err: Error) =>
+			toast.error(`Failed to update package: ${err.message}`),
+	});
+
+	const applyAllUpdates = useMutation({
+		mutationFn: async (updatesToApply: PackageUpdate[]) => {
+			const results = await Promise.allSettled(
+				updatesToApply.map((update) =>
+					patchPackageVersion(update.packageId, update.latestVersion),
+				),
+			);
+			const failed = results.filter((r) => r.status === "rejected").length;
+			return { total: results.length, failed };
+		},
+		onSuccess: ({ total, failed }) => {
+			if (failed === 0) {
+				toast.success(
+					total === 1 ? "Package updated" : `${total} packages updated`,
+				);
+			} else {
+				toast.error(`Failed to update ${failed} of ${total} packages`);
+			}
+			invalidatePackageQueries();
+		},
+	});
+
 	const handleSelect = useCallback(
 		(packageId: string, version: string) => {
 			addPackage.mutate({ packageId, version, autoUpdate: !isOffline.data });
 			setSearchOpen(false);
 		},
 		[addPackage, isOffline.data],
+	);
+
+	// Updates that can actually be applied: package is not stale and has a
+	// newer version available. Stale packages must be reactivated first.
+	const applicableUpdates = useMemo(
+		() =>
+			(packages.data ?? [])
+				.filter((p) => !p.stale)
+				.flatMap((p) => updatesByPackage.get(p.packageId) ?? []),
+		[packages.data, updatesByPackage],
 	);
 
 	const excludeIds = packages.data?.map((p) => p.packageId) ?? [];
@@ -257,10 +348,23 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 					<CardTitle>Packages</CardTitle>
 					<CardDescription>WASM packages linked to this app</CardDescription>
 				</div>
-				<Button size="sm" onClick={() => setSearchOpen(true)}>
-					<Package className="mr-2 h-4 w-4" />
-					Add Package
-				</Button>
+				<div className="flex items-center gap-2">
+					{applicableUpdates.length > 0 && !isOffline.data && (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => applyAllUpdates.mutate(applicableUpdates)}
+							disabled={applyAllUpdates.isPending || applyUpdate.isPending}
+						>
+							<ArrowUpCircle className="mr-2 h-4 w-4" />
+							Update all ({applicableUpdates.length})
+						</Button>
+					)}
+					<Button size="sm" onClick={() => setSearchOpen(true)}>
+						<Package className="mr-2 h-4 w-4" />
+						Add Package
+					</Button>
+				</div>
 			</CardHeader>
 			<CardContent>
 				{staleCount > 0 && !isOffline.data && (
@@ -291,17 +395,30 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 								offline={!!isOffline.data}
 								nodes={nodesByPackage.get(pkg.packageId) ?? []}
 								catalogLoading={catalog.isLoading}
+								update={updatesByPackage.get(pkg.packageId)}
 								onToggleAutoUpdate={(val) =>
 									toggleAutoUpdate.mutate({
 										pkgId: pkg.packageId,
 										autoUpdate: val,
 									})
 								}
+								onApplyUpdate={() => {
+									const update = updatesByPackage.get(pkg.packageId);
+									if (update) {
+										applyUpdate.mutate({
+											pkgId: pkg.packageId,
+											version: update.latestVersion,
+										});
+									}
+								}}
 								onRemove={() => removePackage.mutate(pkg.packageId)}
 								onReactivate={() => reactivatePackage.mutate(pkg.packageId)}
 								isToggling={toggleAutoUpdate.isPending}
 								isRemoving={removePackage.isPending}
 								isReactivating={reactivatePackage.isPending}
+								isApplyingUpdate={
+									applyUpdate.isPending || applyAllUpdates.isPending
+								}
 							/>
 						))}
 					</div>
@@ -324,16 +441,20 @@ function PackageCard(props: {
 	offline: boolean;
 	nodes: INode[];
 	catalogLoading: boolean;
+	update?: PackageUpdate;
 	onToggleAutoUpdate: (val: boolean) => void;
+	onApplyUpdate: () => void;
 	onRemove: () => void;
 	onReactivate: () => void;
 	isToggling: boolean;
 	isRemoving: boolean;
 	isReactivating: boolean;
+	isApplyingUpdate: boolean;
 }) {
-	const { pkg, nodes } = props;
+	const { pkg, nodes, update } = props;
 	const [nodesOpen, setNodesOpen] = useState(false);
 	const grouped = useMemo(() => groupNodesByCategory(nodes), [nodes]);
+	const updatable = !!update && !pkg.stale && !props.offline;
 
 	return (
 		<div
@@ -382,8 +503,12 @@ function PackageCard(props: {
 										/>
 									</div>
 								</TooltipTrigger>
-								<TooltipContent>
-									<p>Auto-update</p>
+								<TooltipContent className="max-w-60">
+									<p className="font-medium">Auto-update</p>
+									<p className="text-xs text-muted-foreground">
+										Flags this package to track new versions. Apply available
+										updates from the package list.
+									</p>
 								</TooltipContent>
 							</Tooltip>
 						</TooltipProvider>
@@ -411,6 +536,30 @@ function PackageCard(props: {
 					</Button>
 				</div>
 			</div>
+
+			{updatable && update && (
+				<div className="flex items-center gap-2 border-t bg-primary/5 px-4 py-2.5">
+					<ArrowUpCircle className="h-4 w-4 shrink-0 text-primary" />
+					<span className="min-w-0 flex-1 text-xs text-muted-foreground">
+						Update available:{" "}
+						<span className="font-medium text-foreground">
+							v{update.currentVersion}
+						</span>{" "}
+						→{" "}
+						<span className="font-medium text-foreground">
+							v{update.latestVersion}
+						</span>
+					</span>
+					<Button
+						size="sm"
+						onClick={props.onApplyUpdate}
+						disabled={props.isApplyingUpdate}
+					>
+						<ArrowUpCircle className="mr-1 h-3.5 w-3.5" />
+						Apply
+					</Button>
+				</div>
+			)}
 
 			{(nodes.length > 0 || props.catalogLoading) && (
 				<Collapsible open={nodesOpen} onOpenChange={setNodesOpen}>
