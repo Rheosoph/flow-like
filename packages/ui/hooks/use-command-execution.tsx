@@ -1,8 +1,8 @@
 import type { UseQueryResult } from "@tanstack/react-query";
-import { XIcon } from "lucide-react";
+import { AlertTriangleIcon, XIcon } from "lucide-react";
 import { useCallback, useRef } from "react";
 import { getErrorMessage } from "../lib/error-message";
-import { toastError } from "../lib/messages";
+import { toastError, toastWarning } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { INode } from "../lib/schema/flow/node";
@@ -160,6 +160,17 @@ export function useCommandExecution({
 
 					if (awarenessRef.current) {
 						awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
+					}
+
+					// Partial apply: the derivable changes were applied, but some arguments/
+					// connections were skipped. Surface them without blocking.
+					if (result.diagnostics.length > 0) {
+						toastWarning(
+							`Applied with ${result.diagnostics.length} warning${
+								result.diagnostics.length === 1 ? "" : "s"
+							}: ${result.diagnostics[0]}`,
+							<AlertTriangleIcon />,
+						);
 					}
 				} else if (result.diagnostics.length > 0) {
 					const suppressToast =

@@ -291,6 +291,11 @@ const FIXTURE_A_ANCHORED: &str =
 const FIXTURE_B: &str = include_str!("../../../tests/ast/ttwctnp08u18sg2z6nmcqqak.flow");
 const FIXTURE_B_ANCHORED: &str =
     include_str!("../../../tests/ast/ttwctnp08u18sg2z6nmcqqak.anchored.flow");
+/// Dashboard board that drives pages/widgets: DataFusion SQL feeding `a2ui*` element/widget calls.
+const FIXTURE_DASHBOARD: &str =
+    include_str!("../../../tests/ast/widgets-pages/bypaw6n2ksuvrw0kcaj14omz.flow");
+const FIXTURE_DASHBOARD_ANCHORED: &str =
+    include_str!("../../../tests/ast/widgets-pages/bypaw6n2ksuvrw0kcaj14omz.anchored.flow");
 
 #[test]
 fn fixture_a_idempotent() {
@@ -310,4 +315,14 @@ fn fixture_b_idempotent() {
 #[test]
 fn fixture_b_anchored_idempotent() {
     assert_idempotent(FIXTURE_B_ANCHORED, &anchored_opts());
+}
+
+#[test]
+fn fixture_dashboard_idempotent() {
+    assert_idempotent(FIXTURE_DASHBOARD, &RenderOptions::default());
+}
+
+#[test]
+fn fixture_dashboard_anchored_idempotent() {
+    assert_idempotent(FIXTURE_DASHBOARD_ANCHORED, &anchored_opts());
 }
