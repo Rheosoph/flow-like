@@ -461,14 +461,17 @@ pub struct VideoSource {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarEvent {
-    /// Stable unique id used to move/update/remove the event.
-    pub id: String,
+    /// Stable unique id used to move/update/remove the item. Auto-generated when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Event title shown on the calendar.
     pub title: String,
     /// Start timestamp, ISO 8601 (e.g. "2026-07-01T09:00:00Z" or "2026-07-01").
+    #[schemars(extend("format" = "date-time"))]
     pub start: String,
     /// End timestamp, ISO 8601. Defaults to a short block when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("format" = "date-time"))]
     pub end: Option<String>,
     /// Render as an all-day event (no time-of-day).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -488,9 +491,15 @@ pub struct CalendarEvent {
     /// Whether this event can be moved/resized in the UI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editable: Option<bool>,
-    /// Arbitrary passthrough payload echoed back on action events.
+    /// Optional link opened from the item's detail dialog. Relative paths
+    /// (e.g. "/orders/42") navigate inside the app; absolute URLs (https://…)
+    /// open externally.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<flow_like_types::Value>,
+    pub link: Option<String>,
+    /// Key-value metadata echoed back on action events and shown in the
+    /// item's detail dialog (e.g. ticket number, external ids).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, flow_like_types::Value>>,
 }
 
 /// Patch for a single calendar event. Only the `id` is required; provided
@@ -503,8 +512,10 @@ pub struct CalendarEventUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("format" = "date-time"))]
     pub start: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("format" = "date-time"))]
     pub end: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub all_day: Option<bool>,
@@ -518,8 +529,13 @@ pub struct CalendarEventUpdate {
     pub calendar_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editable: Option<bool>,
+    /// Optional link opened from the item's detail dialog. Relative paths
+    /// (e.g. "/orders/42") navigate inside the app; absolute URLs (https://…)
+    /// open externally.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<flow_like_types::Value>,
+    pub link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, flow_like_types::Value>>,
 }
 
 /// View/behavior configuration for the calendar element.
@@ -531,6 +547,7 @@ pub struct CalendarConfig {
     pub view: Option<String>,
     /// Focused date (ISO 8601).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("format" = "date-time"))]
     pub date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editable: Option<bool>,
@@ -556,6 +573,24 @@ pub struct CalendarConfig {
     pub show_all_day: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+    /// Header title shown above the calendar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Visual density: "compact" | "default" | "comfortable".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density: Option<String>,
+    /// Show the month/week/day/agenda view switcher.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_view_switcher: Option<bool>,
+    /// Element height (CSS value, e.g. "600px").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<String>,
+    /// Auto-switch to agenda view on narrow widths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsive: Option<bool>,
+    /// Width in px below which the responsive compact mode kicks in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_breakpoint: Option<f64>,
 }
 
 // =============================================================================
@@ -566,13 +601,16 @@ pub struct CalendarConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GanttTask {
-    /// Stable unique id used to move/update/remove the task.
-    pub id: String,
+    /// Stable unique id used to move/update/remove the item. Auto-generated when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Task name shown in the left panel and on the bar.
     pub name: String,
     /// Start date/time, ISO 8601.
+    #[schemars(extend("format" = "date-time"))]
     pub start: String,
     /// End date/time, ISO 8601.
+    #[schemars(extend("format" = "date-time"))]
     pub end: String,
     /// Completion percentage (0-100).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -586,7 +624,8 @@ pub struct GanttTask {
     /// Bar accent color (CSS color or design token).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
-    /// Optional assignee (user id or display name).
+    /// Optional assignee: a free-text display name, or a team member's user
+    /// sub — subs resolve to the member's profile (avatar + name) in the UI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
     /// Render as a milestone diamond instead of a bar.
@@ -595,9 +634,15 @@ pub struct GanttTask {
     /// Whether this task's children are collapsed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
-    /// Arbitrary passthrough payload echoed back on action events.
+    /// Optional link opened from the item's detail dialog. Relative paths
+    /// (e.g. "/orders/42") navigate inside the app; absolute URLs (https://…)
+    /// open externally.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<flow_like_types::Value>,
+    pub link: Option<String>,
+    /// Key-value metadata echoed back on action events and shown in the
+    /// item's detail dialog (e.g. ticket number, external ids).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, flow_like_types::Value>>,
 }
 
 /// Patch for a single Gantt task. Only the `id` is required.
@@ -609,8 +654,10 @@ pub struct GanttTaskUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("format" = "date-time"))]
     pub start: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("format" = "date-time"))]
     pub end: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<f64>,
@@ -626,8 +673,13 @@ pub struct GanttTaskUpdate {
     pub milestone: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
+    /// Optional link opened from the item's detail dialog. Relative paths
+    /// (e.g. "/orders/42") navigate inside the app; absolute URLs (https://…)
+    /// open externally.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<flow_like_types::Value>,
+    pub link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::HashMap<String, flow_like_types::Value>>,
 }
 
 /// A dependency edge between two Gantt tasks (predecessor -> successor).
@@ -661,4 +713,180 @@ pub struct GanttConfig {
     pub show_today: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_height: Option<f64>,
+    /// Header title shown above the timeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Visual density: "compact" | "default" | "comfortable".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density: Option<String>,
+    /// Show the day/week/month/quarter/compact view switcher.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_view_switcher: Option<bool>,
+    /// Show the left task-list panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_task_list: Option<bool>,
+    /// Width of the left task-list panel in px.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_list_width: Option<f64>,
+    /// Shade weekend columns on the timeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shade_weekends: Option<bool>,
+    /// Extra left-panel columns (e.g. ["assignee", "progress"]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<Vec<String>>,
+    /// Element height (CSS value, e.g. "600px").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<String>,
+    /// Auto-switch to compact view on narrow widths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub responsive: Option<bool>,
+    /// Width in px below which the responsive compact mode kicks in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_breakpoint: Option<f64>,
+}
+
+// =============================================================================
+// Shared Item Helpers (Calendar / Gantt)
+// =============================================================================
+
+/// Fill missing/empty `id` fields on an item or an array of items.
+pub fn ensure_item_ids(value: &mut flow_like_types::Value) {
+    if let Some(arr) = value.as_array_mut() {
+        for item in arr {
+            ensure_item_id(item);
+        }
+    } else {
+        ensure_item_id(value);
+    }
+}
+
+/// Fill a missing/empty `id` field on a single item with a generated id.
+pub fn ensure_item_id(item: &mut flow_like_types::Value) {
+    if let Some(obj) = item.as_object_mut() {
+        let missing = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.is_empty())
+            .unwrap_or(true);
+        if missing {
+            obj.insert(
+                "id".into(),
+                flow_like_types::Value::String(flow_like_types::create_id()),
+            );
+        }
+    }
+}
+
+/// Numeric-coercion-safe deep equality: numbers compare via `as_f64()`,
+/// objects compare key-order independent.
+pub fn values_equal(a: &flow_like_types::Value, b: &flow_like_types::Value) -> bool {
+    use flow_like_types::Value;
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => x == y,
+            _ => x == y,
+        },
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| values_equal(a, b))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(key, value)| {
+                    y.get(key).map(|other| values_equal(value, other)) == Some(true)
+                })
+        }
+        _ => a == b,
+    }
+}
+
+/// Diff two item arrays by string `id`. Returns `(created, updated, deleted)`;
+/// `updated` contains the current version of changed items. Items without an
+/// id cannot be paired: current ones count as created, previous ones as deleted.
+pub fn diff_items(
+    previous: &flow_like_types::Value,
+    current: &flow_like_types::Value,
+) -> (
+    Vec<flow_like_types::Value>,
+    Vec<flow_like_types::Value>,
+    Vec<flow_like_types::Value>,
+) {
+    let empty = Vec::new();
+    let prev_items = previous.as_array().unwrap_or(&empty);
+    let curr_items = current.as_array().unwrap_or(&empty);
+
+    let item_id = |item: &flow_like_types::Value| -> Option<String> {
+        item.get("id")?.as_str().map(String::from)
+    };
+
+    let prev_by_id: std::collections::HashMap<String, &flow_like_types::Value> = prev_items
+        .iter()
+        .filter_map(|item| item_id(item).map(|id| (id, item)))
+        .collect();
+    let curr_ids: std::collections::HashSet<String> =
+        curr_items.iter().filter_map(&item_id).collect();
+
+    let mut created = Vec::new();
+    let mut updated = Vec::new();
+    let mut deleted = Vec::new();
+
+    for item in curr_items {
+        match item_id(item) {
+            Some(id) => match prev_by_id.get(&id) {
+                Some(prev) => {
+                    if !values_equal(prev, item) {
+                        updated.push(item.clone());
+                    }
+                }
+                None => created.push(item.clone()),
+            },
+            None => created.push(item.clone()),
+        }
+    }
+
+    for item in prev_items {
+        match item_id(item) {
+            Some(id) => {
+                if !curr_ids.contains(&id) {
+                    deleted.push(item.clone());
+                }
+            }
+            None => deleted.push(item.clone()),
+        }
+    }
+
+    (created, updated, deleted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gantt_task_schema_types_dates_and_dependency_items() {
+        let schema = flow_like_types::json::to_value(schemars::schema_for!(GanttTask)).unwrap();
+        assert_eq!(schema["properties"]["start"]["format"], "date-time");
+        assert_eq!(schema["properties"]["end"]["format"], "date-time");
+        // Nullable arrays must keep `items` on the same schema so pin
+        // inference can see the element type.
+        assert_eq!(
+            schema["properties"]["dependencies"]["items"]["type"],
+            "string"
+        );
+        // Metadata is a typed key-value object, not `any`.
+        let meta_type = &schema["properties"]["metadata"]["type"];
+        assert!(
+            meta_type == "object"
+                || meta_type
+                    .as_array()
+                    .is_some_and(|t| t.contains(&flow_like_types::json::json!("object"))),
+            "metadata should be object-typed, got {meta_type}"
+        );
+    }
+
+    #[test]
+    fn calendar_event_schema_types_dates() {
+        let schema = flow_like_types::json::to_value(schemars::schema_for!(CalendarEvent)).unwrap();
+        assert_eq!(schema["properties"]["start"]["format"], "date-time");
+        assert_eq!(schema["properties"]["end"]["format"], "date-time");
+    }
 }

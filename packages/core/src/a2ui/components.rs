@@ -1624,8 +1624,9 @@ pub struct DiffViewProps {
 // =============================================================================
 
 /// Interactive calendar for viewing and scheduling events. `events` binds an
-/// array of `CalendarEvent` objects; interactions (create/move/resize/open/
-/// delete) fire the element's bound `workflow_event` action.
+/// array of `CalendarEvent` objects; interactions (create/update/move/resize/
+/// open/delete) fire the element's bound `workflow_event` action. Clicking an
+/// event opens a detail dialog; right-click offers edit/duplicate/delete.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarProps {
@@ -1637,6 +1638,12 @@ pub struct CalendarProps {
     /// Focused date (ISO 8601) the view centers on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<BoundValue>,
+    /// Optional header title shown next to the navigation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<BoundValue>,
+    /// Visual density: "compact" | "default" | "comfortable".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density: Option<BoundValue>,
     /// Allow moving/resizing events by dragging.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editable: Option<BoundValue>,
@@ -1664,6 +1671,9 @@ pub struct CalendarProps {
     /// Show the all-day row above the time grid.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_all_day: Option<BoundValue>,
+    /// Show the month/week/day view switcher in the header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_view_switcher: Option<BoundValue>,
     /// BCP-47 locale for date formatting (e.g. "en-US", "de-DE").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<BoundValue>,
@@ -1679,8 +1689,10 @@ pub struct CalendarProps {
 }
 
 /// Interactive Gantt timeline for planning tasks. `tasks` binds an array of
-/// `GanttTask` objects; interactions (create/move/resize/open/delete/link)
-/// fire the element's bound `workflow_event` action.
+/// `GanttTask` objects; interactions (create/update/move/resize/open/delete/
+/// link/reorder) fire the element's bound `workflow_event` action. Clicking a
+/// bar opens a detail dialog; right-click offers edit/duplicate/progress/
+/// delete; the task list supports drag-and-drop reordering.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GanttProps {
@@ -1689,6 +1701,12 @@ pub struct GanttProps {
     /// Timeline zoom: "day" | "week" | "month" | "quarter" | "compact".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<BoundValue>,
+    /// Header title (default "Timeline").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<BoundValue>,
+    /// Visual density: "compact" | "default" | "comfortable".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density: Option<BoundValue>,
     /// Master switch for editing (drag/resize/link). Falls back to `draggable`
     /// / `resizable` when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1708,6 +1726,18 @@ pub struct GanttProps {
     /// Draw the "today" marker line.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_today: Option<BoundValue>,
+    /// Show the day/week/month/quarter view switcher in the header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_view_switcher: Option<BoundValue>,
+    /// Show the left task-list panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_task_list: Option<BoundValue>,
+    /// Width in px of the left task-list panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_list_width: Option<BoundValue>,
+    /// Shade Saturday/Sunday columns in day/week views.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shade_weekends: Option<BoundValue>,
     /// Row height in px.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_height: Option<BoundValue>,

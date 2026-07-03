@@ -1,5 +1,43 @@
+use flow_like::flow::{
+    node::{Node, remove_pin},
+    pin::PinType,
+};
 use flow_like_types::Value;
 use flow_like_types::json::Map;
+
+/// Signature of a dynamic pin: (name, friendly_name, is_input).
+pub type DynamicPinSig = (&'static str, &'static str, bool);
+
+/// Removes dynamic pins that don't match the current operation's expected
+/// signatures. Matching pins are left untouched so their ids — and any
+/// connections to them — stay stable across board parses.
+pub fn retain_dynamic_pins(node: &mut Node, dynamic_names: &[&str], expected: &[DynamicPinSig]) {
+    let stale: Vec<_> = node
+        .pins
+        .values()
+        .filter(|p| dynamic_names.contains(&p.name.as_str()))
+        .filter(|p| {
+            let is_input = p.pin_type == PinType::Input;
+            !expected.iter().any(|(name, friendly, input)| {
+                p.name == *name && p.friendly_name == *friendly && is_input == *input
+            })
+        })
+        .cloned()
+        .collect();
+    for pin in stale {
+        remove_pin(node, Some(pin));
+    }
+}
+
+/// Number of existing pins matching a dynamic pin signature.
+pub fn count_matching_pins(node: &Node, sig: &DynamicPinSig) -> usize {
+    node.pins
+        .values()
+        .filter(|p| {
+            p.name == sig.0 && p.friendly_name == sig.1 && (p.pin_type == PinType::Input) == sig.2
+        })
+        .count()
+}
 
 /// Finds an element in the elements map by ID.
 ///

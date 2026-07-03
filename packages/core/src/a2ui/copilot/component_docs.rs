@@ -64,8 +64,8 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `nivoChart` - Nivo charts (25+ chart types)
 
 ### Planning Components
-- `calendar` - Interactive calendar (month/week/day/agenda) that fires create/move/resize/open/delete actions (props: events, view, editable, selectable, ...)
-- `gantt` - Interactive Gantt timeline with drag/resize/dependency-link that fires create/move/resize/open/delete/link actions (props: tasks, view, editable, showDependencies, ...)
+- `calendar` - Interactive calendar (month/week/day/agenda) with detail/edit dialogs and right-click menus; fires create/update/move/resize/open/delete actions (props: events, view, date, title, density, editable, selectable, ...)
+- `gantt` - Interactive Gantt timeline with drag/resize/dependency-link, detail/edit dialogs, right-click menus and task-list drag-reordering; fires create/update/move/resize/open/delete/link/reorder actions (props: tasks, view, title, density, editable, showDependencies, showTaskList, ...)
 
 ### Media Components
 - `iframe` - Embedded external content or HTML preview (supports src URL and srcdoc HTML)

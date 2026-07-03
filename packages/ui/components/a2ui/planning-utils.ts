@@ -14,9 +14,16 @@ import {
 	startOfMonth,
 	startOfWeek,
 } from "date-fns";
-import type { CalendarEvent, GanttTask } from "./types";
+import type { CalendarEvent, GanttTask, PlanningDensity } from "./types";
+import { createId } from "@paralleldrive/cuid2";
 
 export type WeekStartsOn = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+/** Unique id for a locally-created event/task (optimistic create). */
+export function genId(prefix: string): string {
+	const rand = createId()
+	return `${prefix}-${rand}`;
+}
 
 /** Parse an ISO/loose date string (or epoch ms) into a Date, never NaN. */
 export function toDate(value: string | number | Date | undefined | null): Date {
@@ -60,6 +67,13 @@ function toBool(value: unknown): boolean | undefined {
 	return undefined;
 }
 
+function toMetadata(value: unknown): Record<string, unknown> | undefined {
+	if (value && typeof value === "object" && !Array.isArray(value)) {
+		return value as Record<string, unknown>;
+	}
+	return undefined;
+}
+
 /** Coerce arbitrary flow output into well-formed CalendarEvent objects. */
 export function normalizeCalendarEvents(raw: unknown): CalendarEvent[] {
 	return coerceArray(raw)
@@ -75,7 +89,8 @@ export function normalizeCalendarEvents(raw: unknown): CalendarEvent[] {
 			location: e.location != null ? String(e.location) : undefined,
 			calendarId: e.calendarId != null ? String(e.calendarId) : undefined,
 			editable: toBool(e.editable),
-			metadata: e.metadata,
+			link: e.link != null ? String(e.link) : undefined,
+			metadata: toMetadata(e.metadata),
 		}))
 		.filter((e) => e.start);
 }
@@ -101,7 +116,8 @@ export function normalizeGanttTasks(raw: unknown): GanttTask[] {
 			assignee: t.assignee != null ? String(t.assignee) : undefined,
 			milestone: toBool(t.milestone),
 			collapsed: toBool(t.collapsed),
-			metadata: t.metadata,
+			link: t.link != null ? String(t.link) : undefined,
+			metadata: toMetadata(t.metadata),
 		}))
 		.filter((t) => t.start && t.end);
 }
@@ -191,4 +207,115 @@ export function taskBarDays(
 		differenceInCalendarDays(toDate(task.end), toDate(task.start)) + 1,
 	);
 	return { offsetDays, spanDays };
+}
+
+// ── Density presets ─────────────────────────────────────────────────
+
+export interface DensityPreset {
+	/** Gantt row height in px. */
+	rowHeight: number;
+	/** Calendar time-grid px per hour. */
+	hourHeight: number;
+	/** Minimum month-view week-row height in px. */
+	monthRowMinHeight: number;
+}
+
+export const DENSITY_PRESETS: Record<PlanningDensity, DensityPreset> = {
+	compact: { rowHeight: 30, hourHeight: 40, monthRowMinHeight: 72 },
+	default: { rowHeight: 38, hourHeight: 52, monthRowMinHeight: 96 },
+	comfortable: { rowHeight: 46, hourHeight: 64, monthRowMinHeight: 120 },
+};
+
+/** Normalize a raw density prop value to a preset (falls back to default). */
+export function densityPreset(value: unknown): DensityPreset {
+	if (value === "compact" || value === "comfortable")
+		return DENSITY_PRESETS[value];
+	return DENSITY_PRESETS.default;
+}
+
+// ── Overlap layout (time grid) ──────────────────────────────────────
+
+export interface TimedEventLayout {
+	/** 0-based column within the overlap cluster. */
+	column: number;
+	/** Total columns in the overlap cluster. */
+	columns: number;
+}
+
+/**
+ * Column layout for overlapping timed events (Google-Calendar style). Events
+ * are clustered by transitive overlap; within a cluster each event takes the
+ * leftmost column free at its start. Returns a map keyed by event id.
+ */
+export function layoutOverlappingEvents(
+	events: CalendarEvent[],
+): Map<string, TimedEventLayout> {
+	const sorted = [...events].sort((a, b) => {
+		const sa = toDate(a.start).getTime();
+		const sb = toDate(b.start).getTime();
+		if (sa !== sb) return sa - sb;
+		return eventEnd(b).getTime() - eventEnd(a).getTime();
+	});
+
+	const layouts = new Map<string, TimedEventLayout>();
+	let cluster: { id: string; end: number; column: number }[] = [];
+	let clusterMaxEnd = Number.NEGATIVE_INFINITY;
+
+	const flush = () => {
+		if (cluster.length === 0) return;
+		const columns = Math.max(...cluster.map((c) => c.column)) + 1;
+		for (const item of cluster)
+			layouts.set(item.id, { column: item.column, columns });
+		cluster = [];
+		clusterMaxEnd = Number.NEGATIVE_INFINITY;
+	};
+
+	for (const ev of sorted) {
+		const start = toDate(ev.start).getTime();
+		const end = start + eventDurationMinutes(ev) * 60000;
+		if (cluster.length > 0 && start >= clusterMaxEnd) flush();
+		const used = new Set<number>();
+		for (const item of cluster) if (item.end > start) used.add(item.column);
+		let column = 0;
+		while (used.has(column)) column += 1;
+		cluster.push({ id: ev.id, end, column });
+		if (end > clusterMaxEnd) clusterMaxEnd = end;
+	}
+	flush();
+	return layouts;
+}
+
+// ── List reordering ─────────────────────────────────────────────────
+
+/** Move the item with `fromId` to the current position of `toId`. */
+export function reorderById<T extends { id: string }>(
+	list: T[],
+	fromId: string,
+	toId: string,
+): T[] {
+	const fromIndex = list.findIndex((t) => t.id === fromId);
+	const toIndex = list.findIndex((t) => t.id === toId);
+	if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return list;
+	const next = [...list];
+	const [moved] = next.splice(fromIndex, 1);
+	next.splice(toIndex, 0, moved);
+	return next;
+}
+
+// ── Form input formatting ───────────────────────────────────────────
+
+function pad(n: number): string {
+	return String(n).padStart(2, "0");
+}
+
+/** Format a date for `<input type="datetime-local">` (local time). */
+export function toDateTimeLocalInput(value: string | Date): string {
+	const d = toDate(value);
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Format a date for `<input type="date">` (local calendar day). */
+export function toDateInput(value: string | Date): string {
+	const d = toDate(value);
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }

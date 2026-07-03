@@ -1491,16 +1491,24 @@ export interface CalendarEvent {
 	location?: string;
 	calendarId?: string;
 	editable?: boolean;
-	metadata?: unknown;
+	/** Opened from the detail dialog: relative = in-app route, absolute = external. */
+	link?: string;
+	/** Key-value metadata shown in the detail dialog (e.g. ticket number). */
+	metadata?: Record<string, unknown>;
 }
 
 export type CalendarView = "month" | "week" | "day" | "agenda";
+
+/** Visual density preset for planning components. */
+export type PlanningDensity = "compact" | "default" | "comfortable";
 
 export interface CalendarComponent extends ComponentBase {
 	type: "calendar";
 	events: BoundValue; // CalendarEvent[]
 	view?: BoundValue; // CalendarView
 	date?: BoundValue; // focused date (ISO 8601)
+	title?: BoundValue; // optional header title
+	density?: BoundValue; // PlanningDensity
 	editable?: BoundValue;
 	selectable?: BoundValue;
 	firstDayOfWeek?: BoundValue; // 0 = Sunday
@@ -1510,6 +1518,7 @@ export interface CalendarComponent extends ComponentBase {
 	showWeekends?: BoundValue;
 	showNowIndicator?: BoundValue;
 	showAllDay?: BoundValue;
+	showViewSwitcher?: BoundValue;
 	locale?: BoundValue;
 	height?: BoundValue;
 	responsive?: BoundValue;
@@ -1529,7 +1538,10 @@ export interface GanttTask {
 	assignee?: string;
 	milestone?: boolean;
 	collapsed?: boolean;
-	metadata?: unknown;
+	/** Opened from the detail dialog: relative = in-app route, absolute = external. */
+	link?: string;
+	/** Key-value metadata shown in the detail dialog (e.g. ticket number). */
+	metadata?: Record<string, unknown>;
 }
 
 export type GanttView = "day" | "week" | "month" | "quarter" | "compact";
@@ -1538,12 +1550,18 @@ export interface GanttComponent extends ComponentBase {
 	type: "gantt";
 	tasks: BoundValue; // GanttTask[]
 	view?: BoundValue; // GanttView
+	title?: BoundValue; // header title (default "Timeline")
+	density?: BoundValue; // PlanningDensity
 	editable?: BoundValue;
 	draggable?: BoundValue;
 	resizable?: BoundValue;
 	showDependencies?: BoundValue;
 	showProgress?: BoundValue;
 	showToday?: BoundValue;
+	showViewSwitcher?: BoundValue;
+	showTaskList?: BoundValue; // show/hide the left task panel
+	taskListWidth?: BoundValue; // px width of the left task panel
+	shadeWeekends?: BoundValue; // shade Sat/Sun columns in day/week views
 	rowHeight?: BoundValue;
 	columns?: BoundValue; // string[] extra left-panel columns
 	height?: BoundValue;
