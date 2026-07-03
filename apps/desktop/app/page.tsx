@@ -8,6 +8,7 @@ import {
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { HeroSearchBar } from "../components/global-chat/hero-search-bar";
 import { useTauriInvoke } from "../components/useInvoke";
 
 export default function Home() {
@@ -76,6 +77,7 @@ export default function Home() {
 	return (
 		<main className="flex flex-col flex-1 w-full min-h-0 overflow-hidden">
 			<TutorialDialog />
+			<HeroSearchBar />
 			<HomeSwimlanes />
 		</main>
 	);

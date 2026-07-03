@@ -130,6 +130,14 @@ const data = {
 			items: [],
 		},
 		{
+			title: "FlowPilot",
+			url: "/chat",
+			icon: AnimatedSparklesIcon,
+			isActive: false,
+			permission: false,
+			items: [],
+		},
+		{
 			title: "Explore Apps",
 			url: "/store/explore/apps",
 			icon: AnimatedExploreAppsIcon,

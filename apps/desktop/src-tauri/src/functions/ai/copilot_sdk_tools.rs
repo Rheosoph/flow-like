@@ -84,6 +84,249 @@ pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandle
     ]
 }
 
+/// Platform-level tools for the global FlowPilot assistant.
+///
+/// These act on the Flow-Like app itself (navigation, app creation) or delegate board/app-building
+/// work to the board copilot. They execute through the frontend bridge just like runtime tools;
+/// mutating actions open the approval dialog before running.
+pub fn create_platform_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    vec![
+        create_list_apps_tool(bridge.clone()),
+        create_describe_app_interface_tool(bridge.clone()),
+        create_navigate_view_tool(bridge.clone()),
+        create_create_app_tool(bridge.clone()),
+        create_flowpilot_board_tool(bridge.clone()),
+        create_call_app_chat_tool(bridge.clone()),
+        create_open_app_chat_tool(bridge),
+    ]
+}
+
+fn create_describe_app_interface_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("describe_app_interface")
+        .description(
+            r#"Read the full, user-readable configuration of one app event/interface (chat, MCP, REST,
+simple chat, …). Use after `list_apps` to understand HOW to call an interface: its inputs, routes,
+tools, or chat settings. Read-only."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "app_id": { "type": "string", "description": "App id (from list_apps)." },
+                "event_id": { "type": "string", "description": "Event id (from list_apps)." }
+            },
+            "required": ["app_id", "event_id"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result(
+            &bridge,
+            "describe_app_interface",
+            args.clone(),
+            FrontendToolApproval::none(),
+        )
+    });
+
+    (tool, handler)
+}
+
+fn create_open_app_chat_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("open_app_chat")
+        .description(
+            r#"Open an app's chat event as an inline chat card in the user's current view, so the USER
+can talk to that app directly. Prefer this over `call_app_chat` when the user should take over the
+conversation. Non-destructive UI change."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "app_id": { "type": "string", "description": "App id (from list_apps)." },
+                "event_id": { "type": "string", "description": "Chat event id (from list_apps). Optional; defaults to the app's first chat event." }
+            },
+            "required": ["app_id"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result(
+            &bridge,
+            "open_app_chat",
+            args.clone(),
+            FrontendToolApproval::none(),
+        )
+    });
+
+    (tool, handler)
+}
+
+fn create_list_apps_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("list_apps")
+        .description(
+            r#"List the apps visible in the user's CURRENT profile, with the callable interfaces each
+one exposes (e.g. a chat event). Use this to discover which app to act on before calling
+`call_app_chat` or `flowpilot_board`. Only apps in the current profile are returned."#,
+        )
+        .schema(json!({ "type": "object", "properties": {} }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result(&bridge, "list_apps", args.clone(), FrontendToolApproval::none())
+    });
+
+    (tool, handler)
+}
+
+fn create_call_app_chat_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("call_app_chat")
+        .description(
+            r#"Talk to a Flow-Like app that exposes a chat event: send it a message and get its reply.
+
+Use this to interact with an app's own chat agent on the user's behalf (e.g. ask a knowledge-base app
+a question). Running the app's chat is side-effecting, so it asks for approval unless the user selected
+"don't ask again this session". Returns the app chat's text response."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "app_id": { "type": "string", "description": "Id of the app whose chat event to call (from list_apps)." },
+                "event_id": { "type": "string", "description": "Id of the specific chat event to call (from list_apps). Optional; defaults to the app's first chat event." },
+                "message": { "type": "string", "description": "Message to send to the app's chat." }
+            },
+            "required": ["app_id", "message"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let app_id = arg_string(args, "app_id", "appId");
+        frontend_tool_result_with_timeout(
+            &bridge,
+            "call_app_chat",
+            args.clone(),
+            FrontendToolApproval::execute(
+                "Approve app chat call",
+                if app_id.is_empty() {
+                    "FlowPilot wants to message an app's chat.".to_string()
+                } else {
+                    format!("FlowPilot wants to message the chat of app '{app_id}'.")
+                },
+                "call_app_chat".to_string(),
+            ),
+            Duration::from_secs(600),
+        )
+    });
+
+    (tool, handler)
+}
+
+/// Tool set for the global FlowPilot assistant: public-web search, a way to ask the user for input,
+/// and the platform tools. App-scoped runtime tools (database/storage/execute_event) are excluded
+/// because the global assistant is not bound to a single app.
+pub fn create_global_assistant_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    let mut tools = vec![
+        create_internet_search_tool(),
+        create_ask_user_tool(bridge.clone()),
+    ];
+    tools.extend(create_platform_tools(bridge));
+    tools
+}
+
+fn create_navigate_view_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("navigate_view")
+        .description(
+            r#"Navigate the Flow-Like desktop app to a different view or route.
+
+Use this to take the user to the relevant screen (an app, the store, settings, a profile view, etc.)
+so the next step is visible. Navigation is a non-destructive UI change and runs without an approval
+dialog. Prefer an explicit `route` when you know it; otherwise pass a logical `view`."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "view": { "type": "string", "description": "Logical view id, e.g. 'home', 'apps', 'store', 'settings', 'profile', 'board'." },
+                "route": { "type": "string", "description": "Explicit router path to navigate to, e.g. '/store' or '/flow?id=<board>&app=<app>'." },
+                "app_id": { "type": "string", "description": "App id, when the target view is app-scoped." }
+            },
+            "required": ["view"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result(&bridge, "navigate_view", args.clone(), FrontendToolApproval::none())
+    });
+
+    (tool, handler)
+}
+
+fn create_create_app_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("create_app")
+        .description(
+            r#"Create a new Flow-Like app (project) in the current profile.
+
+Use this when the user wants to start a new automation/app. Creating an app is a mutating action and
+shows an approval dialog with a "don't ask again this session" option before it runs."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "Human-readable app name." },
+                "description": { "type": "string", "description": "Short description of what the app does." }
+            },
+            "required": ["name"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let name = arg_string(args, "name", "name");
+        let approval = FrontendToolApproval::mutating(
+            "Approve app creation",
+            if name.is_empty() {
+                "FlowPilot wants to create a new app.".to_string()
+            } else {
+                format!("FlowPilot wants to create a new app named '{name}'.")
+            },
+            "create_app".to_string(),
+        );
+        frontend_tool_result(&bridge, "create_app", args.clone(), approval)
+    });
+
+    (tool, handler)
+}
+
+fn create_flowpilot_board_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("flowpilot_board")
+        .description(
+            r#"Delegate board- or page-internal work to the board FlowPilot for a specific app/board.
+
+Use this to build or modify a workflow board (add/connect/configure nodes) or a UI page on the user's
+behalf. This runs the board copilot as a sub-agent and applies its changes; it is side-effecting and
+always asks for approval unless the user selected "don't ask again this session"."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "instruction": { "type": "string", "description": "Natural-language instruction for the board copilot." },
+                "app_id": { "type": "string", "description": "App id. Optional when the current app is already known." },
+                "board_id": { "type": "string", "description": "Target board id within the app." }
+            },
+            "required": ["instruction"]
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let instruction = arg_string(args, "instruction", "instruction");
+        frontend_tool_result_with_timeout(
+            &bridge,
+            "flowpilot_board",
+            args.clone(),
+            FrontendToolApproval::execute(
+                "Approve board edit",
+                if instruction.is_empty() {
+                    "FlowPilot wants to run the board copilot on this app.".to_string()
+                } else {
+                    format!("FlowPilot wants to run the board copilot: {instruction}")
+                },
+                "flowpilot_board".to_string(),
+            ),
+            Duration::from_secs(600),
+        )
+    });
+
+    (tool, handler)
+}
+
 fn frontend_tool_result(
     bridge: &FrontendToolBridge,
     tool_name: &'static str,

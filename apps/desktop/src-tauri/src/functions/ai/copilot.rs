@@ -10,6 +10,8 @@ use flow_like::flow::copilot::{
     BoardCommand, CatalogProvider, GraphContext, NodeMetadata, PinMetadata, RunContext,
     enrich_node_metadata, score_catalog_metadata,
 };
+use flow_like::flow::copilot::memory::{AssistantMemory, MemoryStatus};
+use flow_like::flow::copilot::platform::{PlatformCopilot, PlatformToolBridge};
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
@@ -414,6 +416,7 @@ pub async fn copilot_chat(
                     current_images,
                     history.unwrap_or_default(),
                     channel,
+                    None,
                 )
                 .await
             }
@@ -435,6 +438,7 @@ pub async fn copilot_chat(
                     user_prompt,
                     history.unwrap_or_default(),
                     channel,
+                    None,
                 )
                 .await
             }
@@ -501,6 +505,403 @@ pub async fn copilot_chat(
         .map_err(|e| e.to_string())
 }
 
+fn global_assistant_system_prompt() -> String {
+    r#"You are FlowPilot, the built-in AI assistant of Flow-Like — a visual automation platform where users build node-based "boards", group them into "apps", and run them locally or in the cloud.
+
+You operate at the PLATFORM level (not inside a single board). Your job:
+1. Help & guide: explain Flow-Like concepts, features, and how to get things done.
+2. Act for the user via tools: navigate the app, create apps, and more. Prefer doing the work with a tool over only describing the steps.
+3. Delegate board/page-internal work: when the user wants to build or edit the CONTENTS of a specific board or UI page (add/connect/configure nodes, design a page), call `flowpilot_board` with a clear instruction — do not try to author FlowScript yourself.
+
+Rules:
+- Use `navigate_view` to take the user to the relevant screen when it helps.
+- Creating, updating, or deleting things is a mutating action; the tool shows the user an approval dialog. Never claim something is done until the tool returns success.
+- Be concise and concrete. After an action, briefly state what you did and what changed.
+- Use `internet_search` for general/public-web questions.
+- If a tool needs information you do not have (e.g. which app), ask with `ask_user` rather than guessing.
+- Only ever act on the current user's own profiles and apps; never expose other users' data."#
+        .to_string()
+}
+
+/// Collects self-awareness context for the global assistant: the signed-in user (supplied by the
+/// frontend), the active profile, and the names of the user's other profiles. Injected into the
+/// system prompt so the assistant knows where it is operating.
+async fn build_global_agent_context(app_handle: &AppHandle, user_context: Option<&str>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(user) = user_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("Signed-in user: {user}."));
+    }
+
+    if let Ok(current) = TauriSettingsState::current_profile(app_handle).await {
+        let profile = &current.hub_profile;
+        let name = profile.name.trim();
+        let name = if name.is_empty() {
+            "Unnamed profile"
+        } else {
+            name
+        };
+        parts.push(format!("Active profile: \"{}\" (id: {}).", name, profile.id));
+    }
+
+    if let Ok(profiles) =
+        crate::functions::settings::profiles::get_profiles(app_handle.clone()).await
+    {
+        let mut names: Vec<String> = profiles
+            .values()
+            .map(|profile| {
+                let name = profile.hub_profile.name.trim();
+                if name.is_empty() {
+                    profile.hub_profile.id.clone()
+                } else {
+                    name.to_string()
+                }
+            })
+            .collect();
+        names.sort();
+        if !names.is_empty() {
+            parts.push(format!(
+                "Profiles the user can switch to (by name): {}.",
+                names.join(", ")
+            ));
+        }
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("## CURRENT FLOW-LIKE CONTEXT\n{}", parts.join("\n"))
+    }
+}
+
+fn attachment_media_type(url: &str) -> String {
+    let name_hint = url
+        .split_once("filename=")
+        .map(|(_, rest)| rest.split('&').next().unwrap_or(rest))
+        .map(|encoded| urlencoding::decode(encoded).unwrap_or_default().to_string())
+        .unwrap_or_else(|| url.split('?').next().unwrap_or(url).to_string());
+
+    match name_hint.rsplit('.').next().map(str::to_ascii_lowercase) {
+        Some(ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg".to_string(),
+        Some(ext) if ext == "gif" => "image/gif".to_string(),
+        Some(ext) if ext == "webp" => "image/webp".to_string(),
+        _ => "image/png".to_string(),
+    }
+}
+
+/// Convert a Tauri asset-protocol URL (produced by `convertFileSrc`) back to the local file path.
+fn local_asset_path(url: &str) -> Option<PathBuf> {
+    let without_query = url.split('?').next().unwrap_or(url);
+    let encoded_path = without_query
+        .strip_prefix("asset://localhost/")
+        .or_else(|| without_query.split_once("asset.localhost/").map(|(_, rest)| rest))?;
+    let decoded = urlencoding::decode(encoded_path).ok()?.to_string();
+    // On unix the leading slash is consumed by the host split; restore it when missing.
+    let path = if decoded.starts_with('/') || decoded.contains(":\\") || decoded.contains(":/") {
+        PathBuf::from(decoded)
+    } else {
+        PathBuf::from(format!("/{decoded}"))
+    };
+    path.is_file().then_some(path)
+}
+
+/// Resolve chat attachment URLs (local tmp files via the asset protocol, or presigned tmp uploads)
+/// into base64 `ChatImage`s for the model — mirrors the simple chat's attachment handling, keeping
+/// large blobs out of the frontend store and IPC payloads.
+async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
+    use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let mut images = Vec::with_capacity(urls.len());
+    for url in urls {
+        let bytes = if let Some(path) = local_asset_path(url) {
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => Some(bytes),
+                Err(error) => {
+                    eprintln!("[global_chat] failed to read attachment {path:?}: {error}");
+                    None
+                }
+            }
+        } else if url.starts_with("http://") || url.starts_with("https://") {
+            match flow_like_types::reqwest::get(url).await {
+                Ok(response) => response.bytes().await.ok().map(|bytes| bytes.to_vec()),
+                Err(error) => {
+                    eprintln!("[global_chat] failed to fetch attachment {url}: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(bytes) = bytes {
+            images.push(ChatImage {
+                data: STANDARD.encode(&bytes),
+                media_type: attachment_media_type(url),
+            });
+        }
+    }
+    images
+}
+
+/// Global FlowPilot assistant chat: a separate platform-level agent loop.
+///
+/// Reuses the same backend selection as `copilot_chat` (profile Bits models plus the GitHub Copilot,
+/// Codex, and Claude Code agent backends) but injects a platform system prompt, self-awareness
+/// context, and the platform tool set instead of board/frontend tools.
+#[tauri::command]
+pub async fn global_chat(
+    app_handle: AppHandle,
+    state: State<'_, TauriFlowLikeState>,
+    scope: CopilotScope,
+    user_prompt: String,
+    current_images: Option<Vec<ChatImage>>,
+    history: Option<Vec<UnifiedChatMessage>>,
+    model_id: Option<String>,
+    token: Option<String>,
+    user_context: Option<String>,
+    embedding_model_id: Option<String>,
+    attachment_urls: Option<Vec<String>>,
+    channel: Channel<String>,
+) -> Result<UnifiedCopilotResponse, String> {
+    let model_selection = FlowPilotModelSelection::parse(model_id);
+    let history = history.unwrap_or_default();
+    let context = build_global_agent_context(&app_handle, user_context.as_deref()).await;
+
+    // Attachments arrive as URLs (local tmp files / presigned uploads, like the simple chat) and
+    // are resolved to base64 images here, right before the model call.
+    let current_images = {
+        let mut images = current_images.unwrap_or_default();
+        if let Some(urls) = attachment_urls.as_deref() {
+            images.extend(resolve_attachment_images(urls).await);
+        }
+        (!images.is_empty()).then_some(images)
+    };
+
+    match model_selection.backend {
+        FlowPilotChatBackend::Agent(FlowPilotAgentBackendKind::GithubCopilot) => {
+            let model_id = model_selection
+                .model_id
+                .as_deref()
+                .filter(|model_id| !model_id.trim().is_empty())
+                .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
+
+            copilot_sdk_chat_internal(
+                app_handle.clone(),
+                model_id,
+                scope,
+                None,
+                None,
+                &[],
+                None,
+                user_prompt,
+                current_images,
+                history,
+                channel,
+                Some(context),
+            )
+            .await
+        }
+        FlowPilotChatBackend::Agent(agent_backend) => {
+            let model_id = model_selection
+                .model_id
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+
+            external_code_agent_chat_internal(
+                app_handle.clone(),
+                agent_backend,
+                &model_id,
+                scope,
+                None,
+                None,
+                &[],
+                None,
+                user_prompt,
+                history,
+                channel,
+                Some(context),
+            )
+            .await
+        }
+        FlowPilotChatBackend::Bits => {
+            // Profile ("Bits") models are made tool-capable via the same rig machinery the board
+            // copilot uses for Bits (get_model + rig agent + manual tool loop), but with the platform
+            // tools + global prompt. Platform tools run through the frontend bridge (GLOBAL event).
+            let profile = TauriSettingsState::current_profile(&app_handle)
+                .await
+                .ok()
+                .map(|p| Arc::new(p.hub_profile));
+
+            // Profile-scoped semantic memory, enabled only when the user selected an embedding model.
+            let memory = if let (Some(profile_arc), Some(embedding_id)) =
+                (&profile, embedding_model_id.as_ref())
+            {
+                match profile_arc
+                    .find_bit(embedding_id, state.0.http_client.clone())
+                    .await
+                {
+                    Ok(bit) => match AssistantMemory::open(
+                        state.0.clone(),
+                        &profile_arc.id,
+                        &bit,
+                    )
+                    .await
+                    {
+                        Ok(memory) => Some(Arc::new(memory)),
+                        Err(error) => {
+                            eprintln!("[global_chat] memory init failed: {error}");
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!(
+                            "[global_chat] embedding model '{embedding_id}' not found: {error}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let system_prompt = if context.is_empty() {
+                global_assistant_system_prompt()
+            } else {
+                format!("{}\n\n{}", global_assistant_system_prompt(), context)
+            };
+
+            let bridge: Arc<dyn PlatformToolBridge> = Arc::new(GlobalPlatformBridge {
+                bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
+                    app_handle.clone(),
+                    super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+                ),
+            });
+
+            let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
+                .into_iter()
+                .map(|m| flow_like::flow::copilot::ChatMessage {
+                    role: m.role,
+                    content: m.content,
+                    images: m.images,
+                })
+                .collect();
+
+            let on_token = move |token: String| {
+                let _ = channel.send(token);
+            };
+
+            let assistant = PlatformCopilot::new(state.0.clone(), profile);
+            let message = assistant
+                .chat(
+                    system_prompt,
+                    user_prompt,
+                    current_images,
+                    board_history,
+                    model_selection.model_id,
+                    token,
+                    bridge,
+                    memory,
+                    Some(on_token),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(UnifiedCopilotResponse {
+                message,
+                commands: Vec::new(),
+                suggestions: Vec::new(),
+                components: Vec::new(),
+                canvas_settings: None,
+                root_component_id: None,
+                flowscript_workspace: None,
+                active_scope: scope,
+            })
+        }
+    }
+}
+
+/// Stored-memory count for a profile + the embedding model that produced them, so the UI can warn
+/// before switching to an incompatible embedding model.
+#[tauri::command]
+pub async fn global_chat_memory_status(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+) -> Result<MemoryStatus, String> {
+    AssistantMemory::status(state.0.clone(), &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete all memories for a profile (used when the user switches the embedding model).
+#[tauri::command]
+pub async fn global_chat_clear_memory(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+) -> Result<(), String> {
+    AssistantMemory::clear(state.0.clone(), &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Desktop implementation of the platform tool bridge: routes the global assistant's tool calls to
+/// the frontend over the GLOBAL bridge event with per-tool approval, running the blocking bridge call
+/// off the async runtime thread.
+struct GlobalPlatformBridge {
+    bridge: super::frontend_tool_bridge::FrontendToolBridge,
+}
+
+#[async_trait]
+impl PlatformToolBridge for GlobalPlatformBridge {
+    async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+        use super::frontend_tool_bridge::FrontendToolApproval;
+
+        let (approval, timeout) = match tool_name {
+            "create_app" => (
+                FrontendToolApproval::mutating(
+                    "Approve app creation",
+                    "FlowPilot wants to create a new app.",
+                    "create_app",
+                ),
+                Duration::from_secs(120),
+            ),
+            "flowpilot_board" => (
+                FrontendToolApproval::execute(
+                    "Approve board edit",
+                    "FlowPilot wants to run the board copilot on this app.",
+                    "flowpilot_board",
+                ),
+                Duration::from_secs(600),
+            ),
+            "call_app_chat" => (
+                FrontendToolApproval::execute(
+                    "Approve app chat call",
+                    "FlowPilot wants to message an app's chat.",
+                    "call_app_chat",
+                ),
+                Duration::from_secs(600),
+            ),
+            "ask_user" => (FrontendToolApproval::none(), Duration::from_secs(600)),
+            _ => (FrontendToolApproval::none(), Duration::from_secs(120)),
+        };
+
+        let bridge = self.bridge.clone();
+        let name = tool_name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            bridge.call_with_timeout(name, arguments, approval, timeout)
+        })
+        .await
+        {
+            Ok(value) => {
+                serde_json::to_string(&value).unwrap_or_else(|_| "{\"status\":\"error\"}".to_string())
+            }
+            Err(err) => serde_json::json!({ "status": "error", "error": err.to_string() }).to_string(),
+        }
+    }
+}
+
 async fn external_code_agent_chat_internal(
     app_handle: AppHandle,
     backend: FlowPilotAgentBackendKind,
@@ -513,6 +914,7 @@ async fn external_code_agent_chat_internal(
     user_prompt: String,
     history: Vec<UnifiedChatMessage>,
     channel: Channel<String>,
+    global: Option<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut surface = build_flowpilot_agent_surface(
         scope,
@@ -522,6 +924,7 @@ async fn external_code_agent_chat_internal(
         current_surface,
         &history,
         &user_prompt,
+        global.as_deref(),
     );
     surface.capabilities.tool_protocol = FlowPilotAgentTransportKind::Mcp;
 
@@ -533,7 +936,7 @@ async fn external_code_agent_chat_internal(
         )
     })?;
 
-    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface);
+    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface, global.is_some());
     let tool_names = tools
         .iter()
         .map(|(tool, _)| tool.name.clone())
@@ -596,6 +999,7 @@ async fn copilot_sdk_chat_internal(
     current_images: Option<Vec<ChatImage>>,
     history: Vec<UnifiedChatMessage>,
     channel: Channel<String>,
+    global: Option<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
     use copilot_sdk::SessionEventData;
 
@@ -615,11 +1019,12 @@ async fn copilot_sdk_chat_internal(
         current_surface,
         &history,
         &original_user_prompt,
+        global.as_deref(),
     );
     let side_effect_commands = surface.side_effect_commands.clone();
     let workflow_edit_request = surface.workflow_edit_request;
 
-    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface);
+    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface, global.is_some());
 
     // Extract just the Tool definitions for SessionConfig
     let tool_defs: Vec<copilot_sdk::Tool> = tools.iter().map(|(t, _)| t.clone()).collect();
@@ -1423,11 +1828,22 @@ fn build_flowpilot_sdk_tools(
     app_handle: AppHandle,
     scope: CopilotScope,
     surface: &FlowPilotAgentSurface,
+    global: bool,
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
-        copilot_sdk_tools::{create_board_tools, create_frontend_tools, create_runtime_tools},
-        frontend_tool_bridge::FrontendToolBridge,
+        copilot_sdk_tools::{
+            create_board_tools, create_frontend_tools, create_global_assistant_tools,
+            create_runtime_tools,
+        },
+        frontend_tool_bridge::{FrontendToolBridge, GLOBAL_FRONTEND_TOOL_EVENT},
     };
+
+    // The global assistant is not bound to a board/surface: it gets the curated global tool set on
+    // its own bridge event so its tool requests reach the global listener, not the board copilot's.
+    if global {
+        let bridge = FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT);
+        return create_global_assistant_tools(bridge);
+    }
 
     let mut tools = match scope {
         CopilotScope::Board => create_board_tools(
@@ -2694,6 +3110,7 @@ fn build_flowpilot_agent_surface(
     current_surface: Option<&Vec<SurfaceComponent>>,
     history: &[UnifiedChatMessage],
     original_user_prompt: &str,
+    global: Option<&str>,
 ) -> FlowPilotAgentSurface {
     use flow_like::flow::copilot::prepare_context;
 
@@ -2742,27 +3159,38 @@ fn build_flowpilot_agent_surface(
         && board_arc.is_some()
         && is_workflow_edit_request(original_user_prompt);
 
-    let mut system_content = match scope {
-        CopilotScope::Board => match board_flowscript.as_deref() {
-            Some(flowscript) => flow_like::copilot::prompts::board_sdk_flowscript_system_prompt(
-                flowscript,
-                catalog_node_count,
-            ),
-            None => flow_like::copilot::prompts::board_sdk_system_prompt(),
-        },
-        CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
-        CopilotScope::Both => {
-            let mut prompt = flow_like::copilot::prompts::general_system_prompt();
-            if let Some(flowscript) = board_flowscript.as_deref() {
-                prompt.push_str("\n\n");
-                prompt.push_str(&flow_like::copilot::prompts::flowscript_board_context(
+    let mut system_content = if global.is_some() {
+        global_assistant_system_prompt()
+    } else {
+        match scope {
+            CopilotScope::Board => match board_flowscript.as_deref() {
+                Some(flowscript) => flow_like::copilot::prompts::board_sdk_flowscript_system_prompt(
                     flowscript,
                     catalog_node_count,
-                ));
+                ),
+                None => flow_like::copilot::prompts::board_sdk_system_prompt(),
+            },
+            CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
+            CopilotScope::Both => {
+                let mut prompt = flow_like::copilot::prompts::general_system_prompt();
+                if let Some(flowscript) = board_flowscript.as_deref() {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&flow_like::copilot::prompts::flowscript_board_context(
+                        flowscript,
+                        catalog_node_count,
+                    ));
+                }
+                prompt
             }
-            prompt
         }
     };
+
+    if let Some(context) = global
+        && !context.is_empty()
+    {
+        system_content.push_str("\n\n");
+        system_content.push_str(context);
+    }
 
     if matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
         && let Some(components) = current_surface

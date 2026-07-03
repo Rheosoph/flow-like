@@ -5,6 +5,8 @@
 
 mod context;
 mod declarations;
+pub mod memory;
+pub mod platform;
 mod provider;
 mod search;
 mod tools;

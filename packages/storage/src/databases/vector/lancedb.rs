@@ -100,6 +100,23 @@ impl LanceDBVectorStore {
         self.write_options = Some(options);
     }
 
+    /// Drop the whole table (data AND schema). Unlike `purge`, this allows the table to be
+    /// recreated with a different schema (e.g. a new embedding vector dimension) on the next insert.
+    pub async fn drop_table(&mut self) -> Result<()> {
+        let exists = self
+            .connection
+            .table_names()
+            .execute()
+            .await?
+            .iter()
+            .any(|name| name == &self.table_name);
+        if exists {
+            self.connection.drop_table(&self.table_name, &[]).await?;
+        }
+        self.table = None;
+        Ok(())
+    }
+
     pub async fn list_tables(&self) -> Result<Vec<String>> {
         let tables = self.connection.table_names().execute().await?;
         Ok(tables)
