@@ -10,6 +10,7 @@ import {
 	Columns3,
 	CreditCard,
 	FileDiff,
+	GanttChartSquare,
 	Image,
 	ImagePlus,
 	Layers,
@@ -544,6 +545,20 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Square,
 		category: "Display",
 		description: "Interactive geographic map with markers and routes",
+	},
+	{
+		type: "calendar",
+		label: "Calendar",
+		icon: Calendar,
+		category: "Display",
+		description: "Interactive calendar with month/week/day/agenda views",
+	},
+	{
+		type: "gantt",
+		label: "Gantt",
+		icon: GanttChartSquare,
+		category: "Display",
+		description: "Interactive Gantt timeline for planning tasks",
 	},
 ];
 

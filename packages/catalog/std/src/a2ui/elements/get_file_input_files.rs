@@ -182,8 +182,7 @@ fn decode_local_file_url(url: &str) -> Option<String> {
     let host = parsed.host_str().unwrap_or("");
     let is_local = parsed.scheme() == "file"
         || (parsed.scheme() == "asset" && host == "localhost")
-        || ((parsed.scheme() == "http" || parsed.scheme() == "https")
-            && host == "asset.localhost");
+        || ((parsed.scheme() == "http" || parsed.scheme() == "https") && host == "asset.localhost");
     if !is_local {
         return None;
     }

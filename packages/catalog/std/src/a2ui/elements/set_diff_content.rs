@@ -55,12 +55,7 @@ impl NodeLogic for SetDiffContent {
             VariableType::String,
         );
 
-        node.add_output_pin(
-            "exec_out",
-            "▶",
-            "Execution output",
-            VariableType::Execution,
-        );
+        node.add_output_pin("exec_out", "▶", "Execution output", VariableType::Execution);
 
         node.set_long_running(true);
 
