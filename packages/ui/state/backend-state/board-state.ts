@@ -141,6 +141,14 @@ export interface IBoardState {
 		allowDeletions?: boolean,
 	): Promise<IApplyFlowScriptResponse>;
 
+	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */
+	getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string>;
+
 	getExecutionElements(
 		appId: string,
 		boardId: string,

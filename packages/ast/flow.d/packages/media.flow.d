@@ -4,6 +4,21 @@
 // === AI/Generative/Audio ===
 
 /**
+ * Transcribes audio locally with an installed any-speech-to-text model bit. Decodes WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM, including browser MediaRecorder output (Chrome WebM/Opus, Safari MP4/AAC).
+ * @param bit — Installed local STT model Bit
+ * @param audio — Audio file path. WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM are decoded automatically, including browser MediaRecorder recordings.
+ * @param language (optional) — Optional source language code. Use auto to detect.
+ * @param task (optional) — Transcribe in the source language or translate to English
+ * @param timestamps (optional) — Emit per-segment timestamps in the metadata
+ * @returns text — Transcript text
+ * @returns message — Transcript as a user HistoryMessage
+ * @returns history — Transcript wrapped in History
+ * @returns metadata — Local transcription metadata (model, runtime, detected language, duration, and segments)
+ * @impure has side effects / drives control flow
+ */
+declare function aiAudioLocalSpeechToText({ bit: Struct, audio: Struct, language?: string, task?: string, timestamps?: bool }): { text: string, message: Struct, history: Struct, metadata: Struct };
+
+/**
  * Generates WAV speech locally with an installed any-tts model bit.
  * @param bit — Installed TTS model Bit
  * @param text (optional) — Text to synthesize
@@ -331,6 +346,63 @@ declare function aiVideoBuildReplicate({ apiKey?: string, endpoint?: string, mod
 declare function aiVideoBuildRunway({ apiKey?: string, endpoint?: string, apiVersion?: string, modelId?: string }): Struct;
 
 
+// === Audio ===
+
+/**
+ * Decode audio and report waveform, peak/RMS, and silence ranges
+ * @param source — Source audio/media FlowPath
+ * @param waveformBuckets (optional) — Number of waveform buckets
+ * @param silenceThresholdDb (optional) — RMS threshold in dB
+ * @param windowMs (optional) — Silence analysis window
+ * @param minSilenceMs (optional) — Minimum silence duration
+ * @returns report — Audio analysis report
+ * @returns waveform — Waveform buckets
+ * @returns silence — Detected silence ranges
+ * @impure has side effects / drives control flow
+ */
+declare function videoAnalyzeAudio({ source: Struct, waveformBuckets?: int, silenceThresholdDb?: float, windowMs?: int, minSilenceMs?: int }): { report: Struct, waveform: Struct[], silence: Struct[] };
+
+/**
+ * Decode an audio/media object and write WAV PCM output
+ * @param source — Source audio/media FlowPath
+ * @param target — Target WAV FlowPath
+ * @param audioTrackId (optional) — Audio track id, or 0 for default
+ * @returns result — Written WAV FlowPath
+ * @returns report — Audio conversion report
+ * @impure has side effects / drives control flow
+ */
+declare function videoAudioToWav({ source: Struct, target: Struct, audioTrackId?: int }): { result: Struct, report: Struct };
+
+/**
+ * Decode audio and return silence intervals
+ * @param source — Source audio/media FlowPath
+ * @param silenceThresholdDb (optional) — RMS threshold in dB
+ * @param windowMs (optional) — Silence analysis window
+ * @param minSilenceMs (optional) — Minimum silence duration
+ * @returns silence — Detected silence ranges
+ * @returns count — Detected silence range count
+ * @impure has side effects / drives control flow
+ */
+declare function videoDetectSilence({ source: Struct, silenceThresholdDb?: float, windowMs?: int, minSilenceMs?: int }): { silence: Struct[], count: int };
+
+/**
+ * Decode audio, apply gain/normalization/fades, and write WAV PCM output
+ * @param source — Source audio/media FlowPath
+ * @param target — Target WAV FlowPath
+ * @param audioTrackId (optional) — Audio track id, or 0 for default
+ * @param gainFactor (optional) — Linear gain factor
+ * @param gainDb (optional) — Gain in decibels
+ * @param normalizePeak (optional) — Target peak amplitude, or 0 to skip
+ * @param fadeInSeconds (optional) — Fade-in seconds
+ * @param fadeOutSeconds (optional) — Fade-out seconds
+ * @param fadeShape (optional) — linear or equal_power
+ * @returns result — Written WAV FlowPath
+ * @returns report — Audio transform report
+ * @impure has side effects / drives control flow
+ */
+declare function videoTransformAudio({ source: Struct, target: Struct, audioTrackId?: int, gainFactor?: float, gainDb?: float, normalizePeak?: float, fadeInSeconds?: float, fadeOutSeconds?: float, fadeShape?: string }): { result: Struct, report: Struct };
+
+
 // === Bit ===
 
 /**
@@ -371,6 +443,36 @@ declare function switchOnBit({ bit: Struct }): Struct;
  * @impure has side effects / drives control flow
  */
 declare function writeQrcode({ data: string, format?: string, scale?: int, margin?: int }): Struct;
+
+
+// === Diagnostics ===
+
+/**
+ * Choose the preferred compiled backend for a codec and operation
+ * @param codec (optional) — Codec id such as h264, h265, av1, aac, or mp3
+ * @param direction (optional) — decode or encode
+ * @returns selection — Preferred backend selection
+ * @returns support — Compiled codec support registry
+ * @impure has side effects / drives control flow
+ */
+declare function videoPickCodecBackend({ codec?: string, direction?: string }): { selection: Struct, support: Struct[] };
+
+/**
+ * Report compiled video-utils-rs features and recommended codec backend lanes
+ * @returns backends — Recommended codec backends
+ * @returns features — Compiled video-utils-rs feature set
+ * @impure has side effects / drives control flow
+ */
+declare function videoProbeCodecBackends(): { backends: Struct[], features: Struct };
+
+/**
+ * Check whether the current host can decode or encode a codec through native platform APIs
+ * @param codec (optional) — Codec id such as h264, h265, av1, aac, or mp3
+ * @param direction (optional) — decode or encode
+ * @returns probe — Platform codec probe result
+ * @impure has side effects / drives control flow
+ */
+declare function videoProbePlatformCodec({ codec?: string, direction?: string }): Struct;
 
 
 // === Document/DOCX ===
@@ -1018,6 +1120,44 @@ declare function pptxSetMetadata({ template: Struct, title?: string, author?: st
 declare function pptxSlideCount({ template: Struct }): int;
 
 
+// === Image ===
+
+/**
+ * Decode a still image and write it as PNG, JPEG, GIF, WebP, or AVIF
+ * @param source — Source image FlowPath
+ * @param target — Target image FlowPath
+ * @param format (optional) — Output image format, or auto from target extension
+ * @returns result — Written image FlowPath
+ * @returns report — Image conversion report
+ * @impure has side effects / drives control flow
+ */
+declare function videoConvertImageFormat({ source: Struct, target: Struct, format?: string }): { result: Struct, report: Struct };
+
+/**
+ * Apply crop, resize, flip, rotate, blur, and color filters to a still image
+ * @param source — Source image FlowPath
+ * @param target — Target image FlowPath
+ * @param format (optional) — Output image format, or auto from target extension
+ * @param cropX (optional)
+ * @param cropY (optional)
+ * @param cropWidth (optional)
+ * @param cropHeight (optional)
+ * @param resizeWidth (optional)
+ * @param resizeHeight (optional)
+ * @param rotateDegrees (optional)
+ * @param blurRadius (optional)
+ * @param flipHorizontal (optional)
+ * @param flipVertical (optional)
+ * @param brightness (optional) — -1.0 to 1.0
+ * @param contrast (optional) — 1.0 keeps contrast unchanged
+ * @param saturation (optional) — 1.0 keeps saturation unchanged
+ * @returns result — Written image FlowPath
+ * @returns report — Image transform report
+ * @impure has side effects / drives control flow
+ */
+declare function videoTransformImage({ source: Struct, target: Struct, format?: string, cropX?: int, cropY?: int, cropWidth?: int, cropHeight?: int, resizeWidth?: int, resizeHeight?: int, rotateDegrees?: int, blurRadius?: int, flipHorizontal?: bool, flipVertical?: bool, brightness?: float, contrast?: float, saturation?: float }): { result: Struct, report: Struct };
+
+
 // === Image/Annotate ===
 
 /**
@@ -1210,6 +1350,315 @@ declare function cropImage({ imageIn: Struct, bbox: Struct, useRef?: bool }): St
 declare function resizeImage({ imageIn: Struct, useRef?: bool, mode?: string, filter?: string, widthIn?: int, heightIn?: int }): { imageOut: Struct, widthOut: int, heightOut: int };
 
 
+// === Streaming ===
+
+/**
+ * Write an HLS media playlist plus MPEG-TS or fMP4 segments
+ * @param source — Source media FlowPath
+ * @param playlist — Target .m3u8 FlowPath
+ * @param targetDurationSeconds (optional) — Target segment duration in seconds
+ * @param segmentFormat (optional) — Segment container format
+ * @param segmentTrackId (optional) — Track used for segment boundaries; 0 chooses first video/audio
+ * @param copyAllTracks (optional) — Include every stream in each segment
+ * @param segmentPrefix (optional) — Optional segment object-key prefix
+ * @param initSegmentName (optional) — Optional fMP4 init segment name
+ * @param uriPrefix (optional) — Optional URI prefix written into playlist
+ * @returns playlistOut — Written playlist FlowPath
+ * @returns segments — Written segment FlowPaths
+ * @returns report — Written HLS package details
+ * @impure has side effects / drives control flow
+ */
+declare function videoPackageHlsVod({ source: Struct, playlist: Struct, targetDurationSeconds?: float, segmentFormat?: string, segmentTrackId?: int, copyAllTracks?: bool, segmentPrefix?: string, initSegmentName?: string, uriPrefix?: string }): { playlistOut: Struct, segments: Struct[], report: Struct };
+
+
+// === Subtitles ===
+
+/**
+ * Mux an SRT or WebVTT sidecar into a Matroska subtitle track
+ * @param source — Source media FlowPath
+ * @param sidecar — Subtitle sidecar FlowPath
+ * @param target — Target Matroska FlowPath
+ * @param format (optional) — Subtitle sidecar format
+ * @param trackId (optional) — Subtitle track id to create
+ * @param language (optional) — Optional language tag
+ * @returns result — Written media FlowPath
+ * @returns report — Subtitle mux report
+ * @impure has side effects / drives control flow
+ */
+declare function videoAddSubtitleTrack({ source: Struct, sidecar: Struct, target: Struct, format?: string, trackId?: int, language?: string }): { result: Struct, report: Struct };
+
+/**
+ * Render an SRT/WebVTT sidecar into video frames and mux the result
+ * @param source — Source media FlowPath
+ * @param sidecar — Subtitle sidecar FlowPath
+ * @param target — Target media FlowPath
+ * @param format (optional) — srt or webvtt
+ * @param outputCodec (optional) — Video codec to encode
+ * @param videoTrackId (optional) — Video track id, or 0 for default
+ * @param preserveNonVideo (optional) — Copy non-video packets when possible
+ * @param bitrate (optional) — Target bitrate in bits per second, or 0 for backend default
+ * @param scale (optional) — Subtitle render scale
+ * @param marginBottom (optional) — Subtitle bottom margin in pixels
+ * @returns result — Written media FlowPath
+ * @returns report — Subtitle burn-in report
+ * @impure has side effects / drives control flow
+ */
+declare function videoBurnSubtitles({ source: Struct, sidecar: Struct, target: Struct, format?: string, outputCodec?: string, videoTrackId?: int, preserveNonVideo?: bool, bitrate?: int, scale?: int, marginBottom?: int }): { result: Struct, report: Struct };
+
+/**
+ * Extract a subtitle track to an SRT or WebVTT sidecar
+ * @param source — Source media FlowPath
+ * @param target — Target sidecar FlowPath
+ * @param format (optional) — Output subtitle format
+ * @param trackId (optional) — Subtitle track id; 0 uses first subtitle track
+ * @returns result — Written sidecar FlowPath
+ * @returns report — Subtitle extraction report
+ * @impure has side effects / drives control flow
+ */
+declare function videoExtractSubtitleTrack({ source: Struct, target: Struct, format?: string, trackId?: int }): { result: Struct, report: Struct };
+
+/**
+ * Parse SRT or WebVTT sidecar subtitles into cue structs
+ * @param sidecar — Subtitle sidecar FlowPath
+ * @param format (optional) — Subtitle format
+ * @returns cues — Parsed subtitle cues
+ * @returns count — Cue count
+ * @impure has side effects / drives control flow
+ */
+declare function videoParseSubtitles({ sidecar: Struct, format?: string }): { cues: Struct[], count: int };
+
+/**
+ * Offset all SRT or WebVTT cues and write a new sidecar
+ * @param source — Subtitle sidecar FlowPath
+ * @param target — Target sidecar FlowPath
+ * @param format (optional) — Subtitle format
+ * @param offsetMs (optional) — Positive or negative subtitle offset in milliseconds
+ * @returns result — Written sidecar FlowPath
+ * @returns count — Shifted cue count
+ * @impure has side effects / drives control flow
+ */
+declare function videoShiftSubtitleFile({ source: Struct, target: Struct, format?: string, offsetMs?: int }): { result: Struct, count: int };
+
+/**
+ * Write subtitle cue structs to an SRT or WebVTT sidecar
+ * @param cues — Subtitle cues
+ * @param target — Subtitle sidecar FlowPath
+ * @param format (optional) — Subtitle format
+ * @returns result — Written sidecar FlowPath
+ * @returns count — Cue count
+ * @impure has side effects / drives control flow
+ */
+declare function videoWriteSubtitles({ cues: Struct[], target: Struct, format?: string }): { result: Struct, count: int };
+
+
+// === Video/Containers ===
+
+/**
+ * Rewrap compatible streams into another container without decoding
+ * @param source — Source media FlowPath
+ * @param target — Target media FlowPath
+ * @returns result — Written media FlowPath
+ * @returns report — Remux operation report
+ * @impure has side effects / drives control flow
+ */
+declare function videoRemux({ source: Struct, target: Struct }): { result: Struct, report: Struct };
+
+
+// === Video/Editing ===
+
+/**
+ * Concatenate packet-copy-compatible media files
+ * @param sources — Media FlowPaths in concatenation order
+ * @param target — Target media FlowPath
+ * @returns result — Written media FlowPath
+ * @returns packetCount — Packets written
+ * @impure has side effects / drives control flow
+ */
+declare function videoConcat({ sources: Struct[], target: Struct }): { result: Struct, packetCount: int };
+
+/**
+ * Trim a media file using a keyframe-aligned packet range
+ * @param source — Source media FlowPath
+ * @param target — Target media FlowPath
+ * @param startSeconds (optional) — Requested start time
+ * @param endSeconds (optional) — Requested end time
+ * @param trackId (optional) — Boundary video track; 0 uses first video track
+ * @returns result — Written media FlowPath
+ * @returns packetCount — Packets written
+ * @returns boundaryTrackId — Track used for keyframe selection
+ * @impure has side effects / drives control flow
+ */
+declare function videoTrimKeyframes({ source: Struct, target: Struct, startSeconds?: float, endSeconds?: float, trackId?: int }): { result: Struct, packetCount: int, boundaryTrackId: int };
+
+
+// === Video/Inspect ===
+
+/**
+ * Detect the media container for a FlowPath object
+ * @param source — Media FlowPath to inspect
+ * @returns container — Detected media container
+ * @impure has side effects / drives control flow
+ */
+declare function videoDetectContainer({ source: Struct }): Struct;
+
+/**
+ * Extract stream metadata from a media FlowPath
+ * @param source — Media FlowPath to inspect
+ * @returns media — Container and stream metadata
+ * @returns streams — Detected media streams
+ * @impure has side effects / drives control flow
+ */
+declare function videoProbeMediaInfo({ source: Struct }): { media: Struct, streams: Struct[] };
+
+
+// === Video/Packets ===
+
+/**
+ * Convert H.264/H.265/AAC packet bitstream framing into an elementary output file
+ * @param source — Source media FlowPath
+ * @param target — Target elementary FlowPath
+ * @param conversion (optional) — h264_annex_b, h264_length_prefixed, h265_annex_b, h265_length_prefixed, aac_adts, or aac_raw
+ * @param trackId (optional) — Track id, or 0 to select by conversion codec
+ * @returns result — Written elementary FlowPath
+ * @returns report — Bitstream conversion report
+ * @impure has side effects / drives control flow
+ */
+declare function videoBitstreamConvert({ source: Struct, target: Struct, conversion?: string, trackId?: int }): { result: Struct, report: Struct };
+
+/**
+ * Rebase packet timestamps so each track starts at zero or later
+ * @param source — Source media FlowPath
+ * @param target — Target media FlowPath
+ * @returns result — Written media FlowPath
+ * @returns packetCount — Packets written
+ * @impure has side effects / drives control flow
+ */
+declare function videoNormalizeTimestamps({ source: Struct, target: Struct }): { result: Struct, packetCount: int };
+
+
+// === Video/Planning ===
+
+/**
+ * Check whether source streams can be packet-copied into a target container
+ * @param source — Source media FlowPath
+ * @param target — Target FlowPath with desired extension
+ * @returns report — Detailed remux compatibility report
+ * @impure has side effects / drives control flow
+ */
+declare function videoCheckRemuxCompatibility({ source: Struct, target: Struct }): Struct;
+
+
+// === Video/Preview ===
+
+/**
+ * Sample decoded frames and write a preview grid image
+ * @param source — Source media FlowPath
+ * @param target — Target image FlowPath
+ * @param maxFrames (optional) — Maximum frames in the sheet
+ * @param everyNFrames (optional) — Sampling interval in decoded frames
+ * @param columns (optional) — Grid column count
+ * @param cellWidth (optional) — Cell width in pixels
+ * @param cellHeight (optional) — Cell height in pixels
+ * @param videoTrackId (optional) — Video track id, or 0 for default
+ * @param format (optional) — Output image format, or auto from target extension
+ * @returns result — Written contact sheet FlowPath
+ * @returns report — Contact sheet image report
+ * @impure has side effects / drives control flow
+ */
+declare function videoContactSheet({ source: Struct, target: Struct, maxFrames?: int, everyNFrames?: int, columns?: int, cellWidth?: int, cellHeight?: int, videoTrackId?: int, format?: string }): { result: Struct, report: Struct };
+
+/**
+ * Decode a video frame and write it as a still image
+ * @param source — Source media FlowPath
+ * @param target — Target image FlowPath
+ * @param frameIndex (optional) — Decoded frame index to export
+ * @param videoTrackId (optional) — Video track id, or 0 for default
+ * @param format (optional) — Output image format, or auto from target extension
+ * @param width (optional) — Output width, or 0 to keep decoded width
+ * @param height (optional) — Output height, or 0 to keep decoded height
+ * @returns result — Written image FlowPath
+ * @returns report — Thumbnail report
+ * @impure has side effects / drives control flow
+ */
+declare function videoExtractThumbnail({ source: Struct, target: Struct, frameIndex?: int, videoTrackId?: int, format?: string, width?: int, height?: int }): { result: Struct, report: Struct };
+
+
+// === Video/Tracks ===
+
+/**
+ * Write one encoded media track into a new container
+ * @param source — Source media FlowPath
+ * @param target — Target media FlowPath
+ * @param trackId (optional) — Track to keep
+ * @returns result — Written media FlowPath
+ * @returns packetCount — Packets written
+ * @returns stream — Extracted stream metadata
+ * @impure has side effects / drives control flow
+ */
+declare function videoExtractTrack({ source: Struct, target: Struct, trackId?: int }): { result: Struct, packetCount: int, stream: Struct };
+
+
+// === Video/Transcode ===
+
+/**
+ * Decode a selected video stream and encode it to AV1 with the Rust rav1e backend
+ * @param source — Source media FlowPath
+ * @param target — Target AV1 media FlowPath
+ * @param videoTrackId (optional) — Video track id, or 0 for default
+ * @param preserveNonVideo (optional) — Copy non-video packets when possible
+ * @param speed (optional) — rav1e speed preset 0..10
+ * @param quantizer (optional) — rav1e quantizer 0..255
+ * @param maxKeyFrameInterval (optional) — Maximum keyframe interval
+ * @param threads (optional) — Worker threads, or 0 for rav1e default
+ * @returns result — Written AV1 media FlowPath
+ * @returns report — AV1 encode report
+ * @impure has side effects / drives control flow
+ */
+declare function videoEncodeAv1({ source: Struct, target: Struct, videoTrackId?: int, preserveNonVideo?: bool, speed?: int, quantizer?: int, maxKeyFrameInterval?: int, threads?: int }): { result: Struct, report: Struct };
+
+/**
+ * Packet-copy when allowed or decode/encode a selected video stream into a target container
+ * @param source — Source media FlowPath
+ * @param target — Target media FlowPath
+ * @param outputCodec (optional) — Codec to encode, or copy to only packet-copy/remux
+ * @param videoTrackId (optional) — Video track id, or 0 for default
+ * @param allowPacketCopy (optional) — Use copy/remux when no encode stage is requested
+ * @param preserveNonVideo (optional) — Copy compatible non-video packets
+ * @param bitrate (optional) — Target bitrate in bits per second, or 0 for backend default
+ * @returns result — Written media FlowPath
+ * @returns report — Video transcode report
+ * @impure has side effects / drives control flow
+ */
+declare function videoTranscodeVideo({ source: Struct, target: Struct, outputCodec?: string, videoTrackId?: int, allowPacketCopy?: bool, preserveNonVideo?: bool, bitrate?: int }): { result: Struct, report: Struct };
+
+/**
+ * Decode video frames, apply frame transforms, encode, and mux the result
+ * @param source — Source media FlowPath
+ * @param target — Target media FlowPath
+ * @param outputCodec (optional) — Video codec to encode, such as h264, h265, vp9, or av1
+ * @param videoTrackId (optional) — Video track id, or 0 for default
+ * @param preserveNonVideo (optional) — Copy non-video packets when possible
+ * @param bitrate (optional) — Target bitrate in bits per second, or 0 for backend default
+ * @param cropX (optional)
+ * @param cropY (optional)
+ * @param cropWidth (optional)
+ * @param cropHeight (optional)
+ * @param resizeWidth (optional)
+ * @param resizeHeight (optional)
+ * @param rotateDegrees (optional)
+ * @param blurRadius (optional)
+ * @param flipHorizontal (optional)
+ * @param flipVertical (optional)
+ * @param brightness (optional) — -1.0 to 1.0
+ * @param contrast (optional) — 1.0 keeps contrast unchanged
+ * @param saturation (optional) — 1.0 keeps saturation unchanged
+ * @returns result — Written media FlowPath
+ * @returns report — Video transform report
+ * @impure has side effects / drives control flow
+ */
+declare function videoTransformVideo({ source: Struct, target: Struct, outputCodec?: string, videoTrackId?: int, preserveNonVideo?: bool, bitrate?: int, cropX?: int, cropY?: int, cropWidth?: int, cropHeight?: int, resizeWidth?: int, resizeHeight?: int, rotateDegrees?: int, blurRadius?: int, flipHorizontal?: bool, flipVertical?: bool, brightness?: float, contrast?: float, saturation?: float }): { result: Struct, report: Struct };
+
+
 // === Web/Camera ===
 
 /**
@@ -1220,3 +1669,4 @@ declare function resizeImage({ imageIn: Struct, useRef?: bool, mode?: string, fi
  * @impure has side effects / drives control flow
  */
 declare function imageWriteDataurl({ image: Struct, format?: string }): string;
+

@@ -42,7 +42,7 @@ const EVENT_RESPONSE_PIN: &str = "response";
 
 /// Dynamic-pin prefixes used by the schema struct nodes.
 const MAKE_STRUCT_PREFIX: &str = "__make_struct_field__";
-const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
+pub(crate) const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
 
 /// Loop node types and their FlowScript keyword. Each loops its `exec_out` exec output as the
 /// body and continues the enclosing chain from `done`.
@@ -1414,10 +1414,17 @@ fn var_decl_of(v: &Variable, refs: &HashMap<String, String>) -> VarDecl {
     VarDecl {
         name: util::to_camel_case(&v.name),
         ty: util::type_ref(&v.data_type, &v.value_type),
-        default: v
-            .default_value
-            .as_ref()
-            .and_then(|b| util::decode_default(b)),
+        // Secret values must never enter the text domain: rendered FlowScript is shown in
+        // editors, copied, and sent to LLMs. Reconcile lowers the live board through this
+        // same path, so both sides agree the decl is value-free and round-trips can neither
+        // leak nor clear the stored value.
+        default: if v.secret {
+            None
+        } else {
+            v.default_value
+                .as_ref()
+                .and_then(|b| util::decode_default(b))
+        },
         exposed: v.exposed,
         secret: v.secret,
         editable: v.editable,

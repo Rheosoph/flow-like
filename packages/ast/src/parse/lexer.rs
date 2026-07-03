@@ -63,7 +63,8 @@ struct Lexer {
 
 /// Multi-character operators, longest first so the scanner is greedy.
 const OPERATORS: &[&str] = &[
-    "===", "!==", "==", "!=", ">=", "<=", "&&", "||", ">", "<", "|", "+", "-", "*", "/", "%",
+    "===", "!==", "==", "!=", ">=", "<=", "&&", "||", "**", ">", "<", "|", "+", "-", "*", "/", "%",
+    "^",
 ];
 
 /// Tokenize a FlowScript source string.
@@ -176,15 +177,32 @@ impl Lexer {
         self.advance();
         self.advance();
         let mut text = String::new();
+        let mut split_at_anchor = false;
         while let Some(&c) = self.chars.get(self.pos) {
             if c == '\n' {
+                break;
+            }
+            // The renderer appends anchors to lines that may already end in a label
+            // comment (`{ // label   //@n:id`). End this comment token at an embedded
+            // anchor start so the anchor is scanned as its own Comment token.
+            if c == '/'
+                && !text.is_empty()
+                && self.peek(1) == Some('/')
+                && self.peek(2) == Some('@')
+                && matches!(self.peek(3), Some('n') | Some('v') | Some('l'))
+                && self.peek(4) == Some(':')
+            {
+                split_at_anchor = true;
                 break;
             }
             text.push(c);
             self.advance();
         }
         // Drop a single leading space (renderer writes `// text` and `   //@n:id`).
-        let trimmed = text.strip_prefix(' ').unwrap_or(&text).to_string();
+        let mut trimmed = text.strip_prefix(' ').unwrap_or(&text).to_string();
+        if split_at_anchor {
+            trimmed.truncate(trimmed.trim_end().len());
+        }
         Token {
             tok: Tok::Comment(trimmed),
             line: token_line,
@@ -368,10 +386,12 @@ impl Lexer {
     }
 }
 
+// Unicode-aware: `to_camel_case` keeps any alphanumeric char, so rendered identifiers
+// (from user-named boards/variables/events) can carry non-ASCII letters.
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c == '$'
+    c.is_alphabetic() || c == '_' || c == '$'
 }
 
 fn is_ident_continue(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+    c.is_alphanumeric() || c == '_' || c == '$'
 }

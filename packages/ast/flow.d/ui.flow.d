@@ -351,6 +351,15 @@ declare function a2uiRemoveChildAtIndex({ containerRef: any, index: int }): void
 declare function a2uiSetBadgeContent({ elementRef: Struct, content: string }): void;
 
 /**
+ * Sets the original and modified content of a diff view element
+ * @param elementRef — Reference to the diff view element
+ * @param original — Left / old content (text or document URL)
+ * @param modified — Right / new content (text or document URL)
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiSetDiffContent({ elementRef: Struct, original: string, modified: string }): void;
+
+/**
  * Sets the icon name of an icon element
  * @param elementRef — Reference to the icon element
  * @param name — The icon name (e.g., 'check', 'x', 'star')
@@ -378,8 +387,8 @@ declare function a2uiSetProgress({ elementRef: Struct, value: float }): void;
 // === UI/Elements/Files ===
 
 /**
- * Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput element
- * @param elementRef — File input element ID or element object from Get Element
+ * Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element
+ * @param elementRef — File or voice input element ID or element object from Get Element
  * @returns files — Uploaded file objects
  * @returns signedUrls — Signed or local URLs for the uploaded files
  * @returns flowPaths — Temporary FlowPaths for uploaded files when available

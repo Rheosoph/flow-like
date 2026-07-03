@@ -521,6 +521,16 @@ declare function aiGenerativeSetPreferenceWeight({ preferencesIn: Struct, prefer
 declare function aiGenerativeBuildAnthropic({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
 
 /**
+ * Builds a model served by Atlas Cloud, a full-modal AI inference platform exposing a single OpenAI-compatible API (DeepSeek, Qwen, GLM, Kimi, MiniMax and more)
+ * @param endpoint (optional) — Atlas Cloud OpenAI-compatible base URL (override only for a proxy)
+ * @param apiKey (optional) — Atlas Cloud API key used for authentication
+ * @param modelId (optional) — Atlas Cloud model identifier to request (e.g., deepseek-ai/deepseek-v4-pro)
+ * @returns model — Structured Bit describing the Atlas Cloud provider
+ * @impure has side effects / drives control flow
+ */
+declare function aiGenerativeBuildAtlascloud({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
+
+/**
  * Prepares a Bit for AWS Bedrock model endpoints
  * @param region (optional) — AWS Bedrock runtime region
  * @param endpoint (optional) — Optional Bedrock Runtime endpoint override. Leave empty to derive from region.

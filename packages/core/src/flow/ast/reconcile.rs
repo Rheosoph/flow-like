@@ -116,15 +116,26 @@ fn reconcile_inner(
             ));
             continue;
         };
+        // Multi-pins (several input pins sharing one name) pair positionally with the
+        // same-named args, mirroring the order lowering emitted them in.
+        let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
         for arg in &call.args {
+            let occurrence = {
+                let counter = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+                let index = *counter;
+                *counter += 1;
+                index
+            };
             let Some(mut new_value) = literal_expr_to_value(&arg.value) else {
                 // References / nested calls describe wiring, which v1 does not rewrite.
                 continue;
             };
-            let Some(pin) = find_input_pin(node, &arg.name) else {
+            let pins = matching_input_pins(node, &arg.name);
+            let Some(pin) = pins.get(occurrence).copied() else {
                 result.diagnostics.push(format!(
-                    "node {anchor} has no input pin named {:?}; skipped",
-                    arg.name
+                    "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
+                    arg.name,
+                    occurrence + 1
                 ));
                 continue;
             };
@@ -138,7 +149,12 @@ fn reconcile_inner(
             }
             result.commands.push(BoardCommand::UpdateNodePin {
                 node_id: anchor.clone(),
-                pin_id: pin.name.clone(),
+                // The name is ambiguous across multi-pins; address those by exact pin id.
+                pin_id: if pins.len() > 1 {
+                    pin.id.clone()
+                } else {
+                    pin.name.clone()
+                },
                 value: new_value,
                 summary: Some(format!("Set {} on {}", arg.name, node.friendly_name)),
             });
@@ -633,15 +649,44 @@ fn normalize_variable_ref_value_for_pin(
 }
 
 fn find_input_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
-    node.pins
+    matching_input_pins(node, name).first().copied()
+}
+
+/// All input pins matching `name`, deterministically ordered: populated pins (connected or
+/// holding a default — the ones lowering emits args for) first, then empty ones, each sorted
+/// by pin index. `node.pins` is a HashMap, so an unsorted `.find()` picks an arbitrary pin
+/// among same-named multi-pins and corrupts them nondeterministically.
+fn matching_input_pins<'a>(node: &'a Node, name: &str) -> Vec<&'a Pin> {
+    let mut matching: Vec<&Pin> = node
+        .pins
         .values()
-        .find(|p| p.pin_type == PinType::Input && node_pin_name_matches(p, name))
+        .filter(|p| p.pin_type == PinType::Input && node_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| {
+        let populated = !p.depends_on.is_empty() || p.default_value.is_some();
+        (!populated, p.index, p.id.clone())
+    });
+    matching
 }
 
 fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
-    node.pins
+    let mut matching: Vec<&Pin> = node
+        .pins
         .values()
-        .find(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
+        .filter(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| (p.index, p.id.clone()));
+    matching.first().copied()
+}
+
+/// Read a pin's configured literal default as a JSON string value.
+fn node_pin_literal_string(node: &Node, pin_name: &str) -> Option<String> {
+    let pin = find_input_pin(node, pin_name)?;
+    let bytes = pin.default_value.as_deref()?;
+    match flow_like_types::json::from_slice::<flow_like_types::Value>(bytes).ok()? {
+        flow_like_types::Value::String(value) => Some(value),
+        _ => None,
+    }
 }
 
 fn pin_name_matches(raw: &str, requested: &str) -> bool {
@@ -1265,7 +1310,10 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) {
         let mut previous_exec = entry;
-        let mut inserted_since_existing = false;
+        // The `(node, pin)` exec edge the current insertion streak branched off from — set
+        // when a NEW node is first wired after an EXISTING one, and used to splice out only
+        // that predecessor's old edge when the chain reaches the next existing node.
+        let mut insertion_origin: Option<(String, String)> = None;
         let promoted_local_aliases = promoted_local_aliases(block);
 
         for stmt in &block.stmts {
@@ -1306,16 +1354,20 @@ impl<'a> StructuralPlanner<'a> {
                         }
                         None => previous.clone(),
                     };
-                    if self.connect_exec(&previous, &current.entity, inserted_since_existing)
+                    let connected_edge =
+                        self.connect_exec(&previous, &current.entity, insertion_origin.as_ref());
+                    if let Some(edge) = connected_edge
                         && !used_branch_output
+                        && insertion_origin.is_none()
+                        && matches!(previous.entity, NodeEntity::Existing(_))
+                        && matches!(current.entity, NodeEntity::New { .. })
                     {
-                        inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
+                        insertion_origin = Some(edge);
                     }
                     if used_branch_output {
                         continue;
                     }
                 } else {
-                    inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
                     // No execution predecessor to wire from (e.g. a function body's first node):
                     // exempt it from the dangling-execution warning.
                     if let NodeEntity::New { ref_id, .. } = &current.entity {
@@ -1325,7 +1377,7 @@ impl<'a> StructuralPlanner<'a> {
             }
 
             if matches!(current.entity, NodeEntity::Existing(_)) {
-                inserted_since_existing = false;
+                insertion_origin = None;
             }
             if continues_exec {
                 previous_exec = Some(current.next_cursor());
@@ -1846,13 +1898,24 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 continue;
             };
-            self.connect_commands.push(BoardCommand::ConnectPins {
-                from_node: source.node.node_ref(),
-                from_pin: output_pin.clone(),
-                to_node: entity.node_ref(),
-                to_pin: input.name.clone(),
-                summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
-            });
+            // Idempotency: when the input is already wired to exactly this source, re-emitting
+            // ConnectPins would put a no-op command into the undo history on every apply.
+            let already_connected = matches!(entity, NodeEntity::Existing(_))
+                && self
+                    .existing_source_for_input(entity, input)
+                    .is_some_and(|existing| {
+                        existing.node.node_ref() == source.node.node_ref()
+                            && existing.output_pin.as_deref() == Some(output_pin.as_str())
+                    });
+            if !already_connected {
+                self.connect_commands.push(BoardCommand::ConnectPins {
+                    from_node: source.node.node_ref(),
+                    from_pin: output_pin.clone(),
+                    to_node: entity.node_ref(),
+                    to_pin: input.name.clone(),
+                    summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
+                });
+            }
             input_sources.push(ValueSource {
                 node: source.node,
                 output_pin: Some(output_pin),
@@ -1905,11 +1968,145 @@ impl<'a> StructuralPlanner<'a> {
                     None
                 }
             }
-            Expr::Member { base, .. } | Expr::Index { base, .. } => {
-                self.resolve_expr_using_existing_source(base, source, target_layer)
+            // Sugared data sources: these text forms lower FROM a specific node shape, and
+            // when the consumer's existing source IS that node, it must be reused. Falling
+            // back to `resolve_expr` would materialize a duplicate node on every apply, and
+            // resolving only the base would silently drop the field/index selection.
+            Expr::Ref(name) => self.reuse_existing_variable_get(name, source),
+            Expr::Member { base, field } => {
+                self.reuse_existing_member_source(base, field, source, target_layer)
             }
+            Expr::Index { base, index } => {
+                self.reuse_existing_index_source(base, index, source, target_layer)
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => self.reuse_existing_select_source(cond, then, otherwise, source, target_layer),
             _ => None,
         }
+    }
+
+    /// Reuse an existing `variable_get` node feeding this input when the text ref names the
+    /// same variable it reads.
+    fn reuse_existing_variable_get(
+        &mut self,
+        name: &str,
+        source: ValueSource,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != "variable_get" {
+            return None;
+        }
+        let SymbolValue::VariableRef { variable_id } = self.lookup_symbol(name)? else {
+            return None;
+        };
+        let configured = node_pin_literal_string(node, "var_ref")?;
+        (configured == variable_id).then_some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing struct/array accessor node a `base.field` member access lowered
+    /// from (`struct_get`, `struct_break`, or `array_length`). The base is recursed so
+    /// literal edits deeper in the chain still apply.
+    fn reuse_existing_member_source(
+        &mut self,
+        base: &Expr,
+        field: &str,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        let base_input = match node.name.as_str() {
+            "struct_get"
+                if node_pin_literal_string(node, "field").as_deref() == Some(field) =>
+            {
+                "struct"
+            }
+            "struct_break"
+                if source
+                    .output_pin
+                    .as_deref()
+                    .and_then(|pin| pin.strip_prefix(super::lower::BREAK_STRUCT_PREFIX))
+                    == Some(field) =>
+            {
+                "struct_in"
+            }
+            "array_length" if field == "length" => "array",
+            _ => return None,
+        };
+        if let Some(base_source) = self.board_index.data_source_for_input(node, base_input) {
+            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
+        }
+        Some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing `array_get` node a `base[index]` access lowered from. A changed
+    /// literal index becomes a pin update on the same node.
+    fn reuse_existing_index_source(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != "array_get" || source.output_pin.as_deref() != Some("element") {
+            return None;
+        }
+        if let Some(base_source) = self.board_index.data_source_for_input(node, "array_in") {
+            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
+        }
+        if let Some(value) = literal_expr_to_value(index) {
+            let meta = node_to_metadata(node);
+            if let Some(pin) = metadata_input_pin(&meta, "index") {
+                let entity = NodeEntity::Existing(node_id.clone());
+                self.queue_update_input(&entity, pin, value, &meta);
+            }
+        }
+        Some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing `utils_types_select` node a `cond ? a : b` ternary lowered from,
+    /// diffing its literal inputs and recursing into wired ones.
+    fn reuse_existing_select_source(
+        &mut self,
+        cond: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != "utils_types_select" {
+            return None;
+        }
+        let meta = node_to_metadata(node);
+        for (pin_name, expr) in [("condition", cond), ("a", then), ("b", otherwise)] {
+            if let Some(value) = literal_expr_to_value(expr) {
+                if let Some(pin) = metadata_input_pin(&meta, pin_name) {
+                    let entity = NodeEntity::Existing(node_id.clone());
+                    self.queue_update_input(&entity, pin, value, &meta);
+                }
+            } else if let Some(sub_source) = self.board_index.data_source_for_input(node, pin_name)
+            {
+                let _ =
+                    self.resolve_expr_using_existing_source(expr, sub_source, target_layer.clone());
+            }
+        }
+        Some(SymbolValue::Source(source))
     }
 
     fn reuse_existing_call_source(
@@ -2059,12 +2256,19 @@ impl<'a> StructuralPlanner<'a> {
             .unwrap_or((0.0, 200.0))
     }
 
+    /// Wire `previous` into `current`'s exec input. Returns the `(from_node, from_pin)`
+    /// edge that was connected, or `None` when no connection was made.
+    ///
+    /// `insertion_origin` is the existing predecessor edge the current insertion streak
+    /// branched off from. When new nodes were spliced before an existing target, ONLY that
+    /// edge is disconnected — an exec input is a legal fan-in point, and the other incoming
+    /// edges belong to unrelated events/branches that must stay wired.
     fn connect_exec(
         &mut self,
         previous: &ExecCursor,
         current: &NodeEntity,
-        inserted_since_existing: bool,
-    ) -> bool {
+        insertion_origin: Option<&(String, String)>,
+    ) -> Option<(String, String)> {
         let Some(from_pin) = previous
             .output_pin
             .clone()
@@ -2078,41 +2282,43 @@ impl<'a> StructuralPlanner<'a> {
                     outputs.join(", ")
                 ));
             }
-            return false;
+            return None;
         };
         let Some(to_pin) = self.entity_exec_input_pin(current) else {
-            return false;
+            return None;
         };
 
         if matches!(previous.entity, NodeEntity::Existing(_))
             && matches!(current, NodeEntity::Existing(_))
         {
-            return false;
+            return None;
         }
 
-        if inserted_since_existing
+        if let Some((origin_node, origin_pin)) = insertion_origin
             && let NodeEntity::Existing(node_id) = current
             && let Some(node) = find_board_node(self.existing, node_id)
         {
             for (from_node, from_pin) in self.board_index.exec_incoming_edges(node, &to_pin) {
-                self.disconnect_commands.push(BoardCommand::DisconnectPins {
-                    from_node,
-                    from_pin,
-                    to_node: node_id.clone(),
-                    to_pin: to_pin.clone(),
-                    summary: Some(format!("Rewire execution into {}", node.friendly_name)),
-                });
+                if &from_node == origin_node && &from_pin == origin_pin {
+                    self.disconnect_commands.push(BoardCommand::DisconnectPins {
+                        from_node,
+                        from_pin,
+                        to_node: node_id.clone(),
+                        to_pin: to_pin.clone(),
+                        summary: Some(format!("Rewire execution into {}", node.friendly_name)),
+                    });
+                }
             }
         }
 
         self.connect_commands.push(BoardCommand::ConnectPins {
             from_node: previous.entity.node_ref(),
-            from_pin,
+            from_pin: from_pin.clone(),
             to_node: current.node_ref(),
             to_pin,
             summary: Some("Connect FlowScript execution order".to_string()),
         });
-        true
+        Some((previous.entity.node_ref(), from_pin))
     }
 
     fn preferred_exec_output_for_input_sources(
@@ -2253,6 +2459,79 @@ impl<'a> StructuralPlanner<'a> {
         }))
     }
 
+    /// Materialize an `array_length` node for a `.length` member access.
+    fn lower_array_length_access(
+        &mut self,
+        base: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let probe = Call {
+            node_type: "array_length".to_string(),
+            display: "arrayLength".to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+        let meta = self.catalog.resolve_call(&probe).ok()?;
+        let entity = self.queue_add_node(meta.clone(), target_layer);
+
+        if let Some(array_pin) = metadata_input_pin(&meta, "array") {
+            let from_pin = base
+                .output_pin
+                .clone()
+                .or_else(|| self.resolve_entity_output_pin(&base.node, None));
+            if let Some(from_pin) = from_pin {
+                self.connect_commands.push(BoardCommand::ConnectPins {
+                    from_node: base.node.node_ref(),
+                    from_pin,
+                    to_node: entity.node_ref(),
+                    to_pin: array_pin.name.clone(),
+                    summary: Some("Read array length".to_string()),
+                });
+            }
+        }
+
+        let output = self
+            .resolve_entity_output_pin(&entity, Some("length"))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
+    /// Materialize an `array_get` node for a `base[index]` access, reading its `element`
+    /// output. The synthetic call routes base/index through the standard argument planner.
+    fn lower_array_index_access(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let call = Call {
+            node_type: "array_get".to_string(),
+            display: "arrayGet".to_string(),
+            args: vec![
+                Arg {
+                    name: "array_in".to_string(),
+                    value: base.clone(),
+                },
+                Arg {
+                    name: "index".to_string(),
+                    value: index.clone(),
+                },
+            ],
+            anchor: None,
+        };
+        let entity = self.add_call_node(&call, target_layer)?;
+        let output = self
+            .resolve_entity_output_pin(&entity, Some("element"))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
     fn resolve_expr(&mut self, expr: &Expr, target_layer: Option<String>) -> Option<SymbolValue> {
         if let Some(value) = literal_expr_to_value(expr) {
             return Some(SymbolValue::Literal(value));
@@ -2285,8 +2564,20 @@ impl<'a> StructuralPlanner<'a> {
                     output_pin: None,
                 })
             }),
-            Expr::Member { base, .. } | Expr::Index { base, .. } => {
-                self.resolve_expr(base, target_layer)
+            Expr::Member { base, field } => {
+                // `base.field` is the text form of struct_get / array_length; rebuild the
+                // accessor node instead of silently dropping the selection (which would
+                // wire the consumer straight to the base value).
+                let base_symbol = self.resolve_expr(base, target_layer.clone())?;
+                let base_source = self.symbol_to_source(base_symbol, target_layer.clone())?;
+                if field == "length" {
+                    self.lower_array_length_access(base_source, target_layer)
+                } else {
+                    self.lower_struct_field_access(base_source, field, target_layer)
+                }
+            }
+            Expr::Index { base, index } => {
+                self.lower_array_index_access(base, index, target_layer)
             }
             Expr::Ternary {
                 cond,
@@ -2862,7 +3153,10 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
-            if !is_placeholder_call(call) {
+            // Condition-form branches parse with a placeholder call, but their anchor still
+            // identifies the underlying control_branch node — register it so an unchanged
+            // `if (cond)` round-trip is not mistaken for a deletion.
+            if !is_placeholder_call(call) || anchor.is_some() {
                 collect_call_with_anchor(call, anchor.as_deref(), out);
             }
             for arm in arms {
@@ -3228,6 +3522,154 @@ mod tests {
         }
     }
 
+    /// Build an `event → control_branch(true) → log` board (condition-form `if` sugar).
+    fn board_with_condition_branch() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.id = "branch".to_string();
+        let branch_in = branch
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let condition = branch.add_input_pin("condition", "Condition", "", VariableType::Boolean);
+        condition.default_value = Some(b"true".to_vec());
+        let branch_true = branch
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        branch.add_output_pin("false", "False", "", VariableType::Execution);
+        board.nodes.insert(branch.id.clone(), branch);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        log.add_input_pin("text", "Text", "", VariableType::String);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "branch", &branch_in);
+        connect(&mut board, "branch", &branch_true, "log", &log_in);
+        board
+    }
+
+    /// Build an `event → single_choice` board whose two same-named `options` input pins
+    /// hold different literal defaults (the dynamic multi-pin pattern). Returns the board
+    /// plus the two option-pin ids in index order.
+    fn board_with_multi_pin_node() -> (Board, String, String) {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut choice = Node::new("single_choice", "Single Choice", "", "interaction");
+        choice.id = "choice".to_string();
+        let choice_in = choice
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        choice.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let first = choice.add_input_pin("options", "Options", "", VariableType::String);
+        first.default_value = Some(b"\"a\"".to_vec());
+        let first_id = first.id.clone();
+        let second = choice.add_input_pin("options", "Options", "", VariableType::String);
+        second.default_value = Some(b"\"b\"".to_vec());
+        let second_id = second.id.clone();
+        board.nodes.insert(choice.id.clone(), choice);
+
+        connect(&mut board, "event", &event_out, "choice", &choice_in);
+        (board, first_id, second_id)
+    }
+
+    fn anchored_text(board: &Board) -> String {
+        super::super::board_to_flowscript(
+            board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn unchanged_multi_pin_roundtrip_emits_nothing() {
+        let (board, _, _) = board_with_multi_pin_node();
+        let text = anchored_text(&board);
+        let result = reconcile_text(&board, &text);
+        assert!(
+            result.commands.is_empty(),
+            "no-op multi-pin round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn multi_pin_edit_targets_the_right_pin_by_id() {
+        let (board, _first_id, second_id) = board_with_multi_pin_node();
+        let text = anchored_text(&board).replace("options: \"b\"", "options: \"c\"");
+        let result = reconcile_text(&board, &text);
+        let updates: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                BoardCommand::UpdateNodePin { pin_id, value, .. } => {
+                    Some((pin_id.clone(), value.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            updates,
+            vec![(
+                second_id,
+                flow_like_types::Value::String("c".to_string())
+            )],
+            "editing the second occurrence must update exactly the second pin, by id"
+        );
+    }
+
+    #[test]
+    fn unchanged_condition_branch_roundtrip_emits_no_removals() {
+        // `if (cond)` sugar parses with a placeholder call; its anchor must still count as
+        // present, otherwise a no-op round-trip deletes the control_branch node.
+        let board = board_with_condition_branch();
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let result = reconcile_text(&board, &text);
+        let removals: Vec<_> = result
+            .commands
+            .iter()
+            .filter(|c| matches!(c, BoardCommand::RemoveNode { .. }))
+            .collect();
+        assert!(
+            removals.is_empty(),
+            "no-op round-trip must not delete nodes; got {removals:?} from text:\n{text}"
+        );
+    }
+
     #[test]
     fn literal_edit_emits_update_pin() {
         let board = board_with_log("hello");
@@ -3481,6 +3923,308 @@ mod tests {
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
         }
+    }
+
+    /// Board: event → makeData (struct output) → log, where log.text is fed through a
+    /// sugared `struct_get` (renders as `makeData.data.report_id`).
+    fn board_with_struct_member_chain() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut producer = Node::new("make_data", "Make Data", "", "data");
+        producer.id = "producer".to_string();
+        let producer_in = producer
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let producer_out = producer
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let data_out = producer
+            .add_output_pin("data", "Data", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(producer.id.clone(), producer);
+
+        let mut getter = Node::new("struct_get", "Get Field", "", "structs");
+        getter.id = "getter".to_string();
+        let struct_in = getter
+            .add_input_pin("struct", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        let field_pin = getter.add_input_pin("field", "Field", "", VariableType::String);
+        field_pin.default_value = Some(b"\"report_id\"".to_vec());
+        let value_out = getter
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        board.nodes.insert(getter.id.clone(), getter);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "producer", &producer_in);
+        connect(&mut board, "producer", &producer_out, "log", &log_in);
+        connect(&mut board, "producer", &data_out, "getter", &struct_in);
+        connect(&mut board, "getter", &value_out, "log", &text_in);
+        board
+    }
+
+    fn member_chain_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "make_data",
+                "Make Data",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("data", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "struct_get",
+                "Get Field",
+                vec![
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                ],
+                vec![pin_meta("value", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn unchanged_struct_member_roundtrip_reuses_accessor() {
+        // A sugared struct_get (`base.field` in text) must reuse the existing accessor on a
+        // no-op apply — not rewire the consumer to the bare base value or add a duplicate.
+        let board = board_with_struct_member_chain();
+        let text = anchored_text(&board);
+        let result = reconcile_text_with_catalog(&board, &text, &member_chain_catalog());
+        assert!(
+            result.commands.is_empty(),
+            "no-op member-chain round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unchanged_variable_ref_roundtrip_reuses_variable_get() {
+        // A bare variable ref in text lowers from a variable_get node; a no-op apply must
+        // reuse that node instead of materializing a duplicate reader.
+        let mut board = empty_board();
+        let mut variable = Variable::new("greeting", VariableType::String, ValueType::Normal);
+        variable.id = "var1".to_string();
+        variable.set_default_value(flow_like_types::Value::String("hi".to_string()));
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut reader = Node::new("variable_get", "Get Variable", "", "variables");
+        reader.id = "reader".to_string();
+        let var_ref = reader.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        var_ref.default_value = Some(b"\"var1\"".to_vec());
+        let value_out = reader
+            .add_output_pin("value_ref", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        board.nodes.insert(reader.id.clone(), reader);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "log", &log_in);
+        connect(&mut board, "reader", &value_out, "log", &text_in);
+
+        let text = anchored_text(&board);
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.commands.is_empty(),
+            "no-op variable-ref round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn inserting_before_fan_in_only_splices_own_chain() {
+        // Two events converge on one log node (exec fan-in). Inserting a new node into one
+        // chain must splice only that chain's edge — the other event's wiring stays intact.
+        let mut board = empty_board();
+
+        for event_id in ["event_a", "event_b"] {
+            let mut event = Node::new(
+                if event_id == "event_a" {
+                    "event_start"
+                } else {
+                    "event_timer"
+                },
+                "Event",
+                "",
+                "events",
+            );
+            event.id = event_id.to_string();
+            event.set_start(true);
+            let exec_out = event
+                .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+                .id
+                .clone();
+            board.nodes.insert(event.id.clone(), event);
+            let _ = exec_out;
+        }
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let text_pin = log.add_input_pin("text", "Text", "", VariableType::String);
+        text_pin.default_value = Some(b"\"hi\"".to_vec());
+        board.nodes.insert(log.id.clone(), log);
+
+        for event_id in ["event_a", "event_b"] {
+            let exec_out = board.nodes[event_id]
+                .pins
+                .values()
+                .find(|p| p.pin_type == PinType::Output)
+                .map(|p| p.id.clone())
+                .expect("event exec out");
+            connect(&mut board, event_id, &exec_out, "log", &log_in);
+        }
+
+        let text = anchored_text(&board);
+        let log_line = text
+            .lines()
+            .find(|line| line.contains("//@n:log"))
+            .expect("log statement in rendered text")
+            .to_string();
+        let edited = text.replace(&log_line, &format!("    notify()\n{log_line}"));
+
+        let catalog = vec![
+            catalog_meta(
+                "event_start",
+                "Event Start",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "event_timer",
+                "Event Timer",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "notify",
+                "Notify",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(&board, &edited, &catalog);
+
+        let disconnects: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                BoardCommand::DisconnectPins {
+                    from_node, to_node, ..
+                } => Some((from_node.clone(), to_node.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            disconnects.len(),
+            1,
+            "only the edited chain's edge may be spliced; got {disconnects:?} from:\n{edited}"
+        );
+        assert_eq!(disconnects[0].1, "log");
+        assert!(
+            disconnects[0].0.starts_with("event_"),
+            "splice must originate from the chain's own event; got {disconnects:?}"
+        );
     }
 
     #[test]

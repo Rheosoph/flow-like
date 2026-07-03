@@ -5,7 +5,7 @@ use crate::{
 use flow_like::{
     app::App,
     flow::{
-        ast::ApplyFlowScriptResult,
+        ast::{ApplyFlowScriptResult, RenderOptions, board_to_flowscript},
         board::{Board, VersionType, commands::GenericCommand},
         node::Node,
     },
@@ -106,6 +106,34 @@ pub async fn get_board(
     if let Ok(app) = App::load(app_id, flow_like_state).await {
         let board = app.open_board(board_id, Some(true), version).await?;
         return Ok(board.lock().await.clone());
+    }
+
+    Err(TauriFunctionError::new("Board not found"))
+}
+
+#[tauri::command(async)]
+pub async fn get_flowscript(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+    anchors: Option<bool>,
+) -> Result<String, TauriFunctionError> {
+    let render_options = RenderOptions {
+        anchors: anchors.unwrap_or(true),
+        ..RenderOptions::default()
+    };
+
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    if let Ok(board) = flow_like_state.get_board(&board_id, version) {
+        let board = board.lock().await;
+        return Ok(board_to_flowscript(&board, &render_options));
+    }
+
+    if let Ok(app) = App::load(app_id, flow_like_state).await {
+        let board = app.open_board(board_id, Some(true), version).await?;
+        let board = board.lock().await;
+        return Ok(board_to_flowscript(&board, &render_options));
     }
 
     Err(TauriFunctionError::new("Board not found"))

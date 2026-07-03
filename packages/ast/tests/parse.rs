@@ -283,6 +283,154 @@ fn rejects_unknown_decorator() {
     assert!(err.message.contains("bogus"));
 }
 
+#[test]
+fn labelled_branch_keeps_anchor_after_arm_label() {
+    // The renderer emits arm label and anchor on one line (`{ // label   //@n:id`); the
+    // lexer must split them so the branch keeps its identity anchor across round-trips.
+    let text = "function guard(path: string) {\n    if (pathExists({ path: path })) { // exec_out_exists   //@n:branch1\n    } else { // exec_out_missing\n    }\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Branch { anchor, arms, .. } => {
+            assert_eq!(anchor.as_deref(), Some("branch1"));
+            assert_eq!(arms[0].label, "exec_out_exists");
+            assert_eq!(arms[1].label, "exec_out_missing");
+        }
+        other => panic!("expected labelled branch, got {other:?}"),
+    }
+    assert_idempotent(text, &anchored_opts());
+}
+
+#[test]
+fn roundtrip_array_of_union_interface_type() {
+    // `string | null[]` would reparse as `string | (null[])`; unions under an array
+    // suffix must render grouped.
+    let text =
+        "interface Entry {\n    tags?: (string | null)[] = [];\n}\n\nconst entry: Entry = {}\n";
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn interface_any_field_with_default_keeps_schema() {
+    let text = "interface Cfg {\n    payload?: any = null;\n}\n\nconst cfg: Cfg = {}\n";
+    let ast = parse(text).expect("parse should succeed");
+    assert!(
+        ast.variables[0].schema.is_some(),
+        "an `any` field with a default must not wipe the generated schema"
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn roundtrip_quoted_interface_field_names() {
+    // JSON-schema property names are arbitrary strings; non-identifier names render quoted.
+    let text = "interface Row {\n    \"content-type\": string;\n    \"created at\"?: float;\n}\n\nconst row: Row = {}\n";
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn interface_dedup_renames_references_too() {
+    use flow_like_ast::{Container, TypeRef, VarDecl, interfaces_for_variables};
+
+    fn struct_var(name: &str, schema: &str) -> VarDecl {
+        VarDecl {
+            name: name.to_string(),
+            ty: TypeRef::new("Struct", Container::Normal),
+            default: None,
+            exposed: false,
+            secret: false,
+            editable: true,
+            runtime_configured: false,
+            category: None,
+            description: None,
+            schema: Some(schema.to_string()),
+            anchor: None,
+        }
+    }
+
+    // Two schema families both define a `$defs` entry named `Meta` with different shapes.
+    let alpha = struct_var(
+        "alpha",
+        r##"{"type":"object","properties":{"m":{"$ref":"#/$defs/Meta"}},"$defs":{"Meta":{"type":"object","properties":{"a":{"type":"string"}}}}}"##,
+    );
+    let beta = struct_var(
+        "beta",
+        r##"{"type":"object","properties":{"m":{"$ref":"#/$defs/Meta"}},"$defs":{"Meta":{"type":"object","properties":{"b":{"type":"integer"}}}}}"##,
+    );
+
+    let interfaces = interfaces_for_variables(&[alpha, beta]);
+    let names: Vec<&str> = interfaces.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        names.contains(&"Meta") && names.contains(&"Meta2"),
+        "colliding $defs interfaces must be deduplicated: {names:?}"
+    );
+
+    let beta_root = interfaces
+        .iter()
+        .find(|d| d.name == "Beta")
+        .expect("beta root interface");
+    let field_ty = flow_like_ast::render::render_interface_type(&beta_root.fields[0].ty);
+    assert_eq!(
+        field_ty, "Meta2",
+        "the renamed interface must be re-referenced by its own family"
+    );
+}
+
+#[test]
+fn lexes_power_and_xor_operators() {
+    // `int_power`/`float_power` render as `**`, `bool_xor` as `^`; both must tokenize.
+    let text = "function calc(a: int, b: int) {\n    return ((a ** b) == (a ^ b))\n}\n";
+    parse(text).expect("`**` and `^` should tokenize");
+}
+
+#[test]
+fn lexes_non_ascii_identifiers() {
+    // to_camel_case keeps unicode alphanumerics, so rendered names can carry them.
+    let text = "const größe: float = 1.5\n";
+    let ast = parse(text).expect("non-ASCII identifiers should lex");
+    assert_eq!(ast.variables[0].name, "größe");
+}
+
+#[test]
+fn deep_nesting_errors_instead_of_overflowing() {
+    let mut expr = String::from("1");
+    for _ in 0..2000 {
+        expr = format!("({expr})");
+    }
+    let text = format!("function calc(a: int) {{\n    return {expr}\n}}\n");
+    let err = parse(&text).expect_err("deep nesting must be a parse error, not a crash");
+    assert!(err.message.contains("nesting too deep"));
+}
+
+#[test]
+fn trailing_at_comment_is_not_an_anchor() {
+    let text = "function noop(a: int) {\n    logInfo({ message: a }) //@todo revisit\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Call { anchor, .. } => {
+            assert_eq!(
+                anchor.as_deref(),
+                None,
+                "user comment must not become an anchor"
+            );
+        }
+        other => panic!("expected call, got {other:?}"),
+    }
+}
+
+#[test]
+fn comment_with_embedded_anchor_pattern_splits_only_on_anchor_kinds() {
+    // `//@x:` sequences that are not anchor kinds stay part of the label text.
+    let text = "function guard(path: string) {\n    if (pathExists({ path: path })) { // see //@q:not-an-anchor\n    } else {\n    }\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Branch { anchor, arms, .. } => {
+            assert_eq!(anchor.as_deref(), None);
+            assert_eq!(arms[0].label, "see //@q:not-an-anchor");
+        }
+        other => panic!("expected labelled branch, got {other:?}"),
+    }
+}
+
 // ---- full-fixture idempotency ------------------------------------------------------------
 
 const FIXTURE_A: &str = include_str!("../../../tests/ast/bypaw6n2ksuvrw0kcaj14omz.flow");

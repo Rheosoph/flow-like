@@ -36,6 +36,7 @@ import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
 	Eye,
+	FileCode2Icon,
 	FileTextIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
@@ -86,6 +87,7 @@ import {
 	type FlowNodeInfoOverlayHandle,
 } from "../../components/flow/flow-node/flow-node-info-overlay";
 import { FlowPages } from "../../components/flow/flow-pages";
+import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
@@ -384,6 +386,7 @@ export function FlowBoard({
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
 
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
+	const flowScriptPanelRef = useRef<ImperativePanelHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
 	const shiftPressed = useKeyPress("Shift");
@@ -1054,6 +1057,8 @@ export function FlowBoard({
 
 	const [varsOpen, setVarsOpen] = useState(false);
 
+	const [flowScriptSheetOpen, setFlowScriptSheetOpen] = useState(false);
+	const [flowScriptPanelVisible, setFlowScriptPanelVisible] = useState(false);
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
@@ -1103,6 +1108,21 @@ export function FlowBoard({
 			// For desktop, we use the runs panel area to show pages
 			// Toggle the runs panel if needed, or just open the sheet
 			setPagesOpen((v) => !v);
+		}
+	}, [isMobile]);
+
+	const toggleFlowScript = useCallback(() => {
+		if (isMobile) {
+			setFlowScriptSheetOpen((v) => !v);
+			return;
+		}
+		const panel = flowScriptPanelRef.current;
+		if (!panel) return;
+		if (panel.isCollapsed()) {
+			panel.expand();
+			if (panel.getSize() < 15) panel.resize(35);
+		} else {
+			panel.collapse();
 		}
 	}, [isMobile]);
 
@@ -3222,6 +3242,13 @@ export function FlowBoard({
 							},
 						},
 						{
+							icon: <FileCode2Icon />,
+							title: "FlowScript",
+							onClick: async () => {
+								toggleFlowScript();
+							},
+						},
+						{
 							icon: <HistoryIcon />,
 							separator: "left",
 							title: "Run History",
@@ -3512,6 +3539,29 @@ export function FlowBoard({
 						/>
 					)}
 				</ResizablePanel>
+				<ResizableHandle withHandle />
+				<ResizablePanel
+					className="z-50 hidden md:block"
+					autoSave="flow-flowscript"
+					defaultSize={0}
+					collapsible={true}
+					collapsedSize={0}
+					ref={flowScriptPanelRef}
+					onExpand={() => setFlowScriptPanelVisible(true)}
+					onCollapse={() => setFlowScriptPanelVisible(false)}
+				>
+					{board.data && flowScriptPanelVisible && (
+						<FlowScriptPanel
+							appId={appId}
+							boardId={boardId}
+							version={version}
+							boardUpdatedAt={board.dataUpdatedAt}
+							catalogNodes={catalog.data}
+							onApplyFlowScript={handleApplyFlowScript}
+							onClose={() => flowScriptPanelRef.current?.collapse()}
+						/>
+					)}
+				</ResizablePanel>
 				{searchMode === "sidebar" && searchOpen && (
 					<>
 						<ResizableHandle withHandle />
@@ -3590,6 +3640,27 @@ export function FlowBoard({
 						{(!currentMetadata || !board.data) && (
 							<div className="h-[calc(80dvh-3.5rem)] w-full flex items-center justify-center text-sm text-muted-foreground p-6">
 								No run selected yet. Start a run to view logs here.
+							</div>
+						)}
+					</SheetContent>
+				</Sheet>
+				{/* FlowScript Sheet (mobile) */}
+				<Sheet open={flowScriptSheetOpen} onOpenChange={setFlowScriptSheetOpen}>
+					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
+						<SheetHeader className="px-4 pt-4">
+							<SheetTitle>FlowScript</SheetTitle>
+						</SheetHeader>
+						{board.data && flowScriptSheetOpen && (
+							<div className="h-[calc(90dvh-3.5rem)] w-full">
+								<FlowScriptPanel
+									appId={appId}
+									boardId={boardId}
+									version={version}
+									boardUpdatedAt={board.dataUpdatedAt}
+									catalogNodes={catalog.data}
+									onApplyFlowScript={handleApplyFlowScript}
+									onClose={() => setFlowScriptSheetOpen(false)}
+								/>
 							</div>
 						)}
 					</SheetContent>

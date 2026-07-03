@@ -19,14 +19,22 @@ pub fn parse(src: &str) -> Result<BoardAst, ParseError> {
         src,
         toks: tokens,
         pos: 0,
+        depth: 0,
     };
     parser.board()
 }
+
+/// Recursion ceiling for nested expressions/blocks. User-authored text feeds this parser
+/// directly (editor view, API route), so unbounded recursion is a process-killing DoS.
+/// Each level costs ~5 stack frames through the Pratt chain; 128 keeps the worst case
+/// well inside a 2 MiB (debug/test) stack while allowing any realistic board.
+const MAX_NESTING_DEPTH: usize = 128;
 
 struct Parser<'a> {
     src: &'a str,
     toks: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 /// A parsed `@decorator`, optionally carrying a single string argument.
@@ -102,16 +110,15 @@ impl Parser<'_> {
     // ---- trailing comments (labels / anchors) ---------------------------------------------
 
     /// Consume a trailing anchor comment (`//@n:id`) if present; returns the id.
+    /// Only the known anchor kinds (`n`/`v`/`l`) qualify — any other `@…` comment is an
+    /// ordinary user comment and must not be swallowed as an anchor.
     fn take_anchor(&mut self) -> Option<String> {
         if let Tok::Comment(text) = self.cur()
             && let Some(rest) = text.strip_prefix('@')
+            && let Some((kind, id)) = rest.split_once(':')
+            && matches!(kind, "n" | "v" | "l")
         {
-            // form is `n:id` / `v:id` / `l:id`; keep only the id portion.
-            let id = rest
-                .split_once(':')
-                .map(|(_, id)| id)
-                .unwrap_or("")
-                .to_string();
+            let id = id.to_string();
             self.bump();
             return Some(id);
         }
@@ -261,7 +268,14 @@ impl Parser<'_> {
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
         while !matches!(self.cur(), Tok::RBrace) {
-            let field_name = self.ident()?;
+            // Non-identifier JSON-schema property names render as quoted strings.
+            let field_name = match self.cur().clone() {
+                Tok::Str(name) => {
+                    self.bump();
+                    name
+                }
+                _ => self.ident()?,
+            };
             let optional = self.eat(&Tok::Question);
             self.expect(&Tok::Colon)?;
             let ty = self.interface_type()?;
@@ -414,6 +428,14 @@ impl Parser<'_> {
 
     fn interface_type_primary(&mut self) -> Result<InterfaceType, ParseError> {
         let mut ty = match self.cur().clone() {
+            // Grouping, e.g. `(string | null)[]` — the renderer parenthesises unions
+            // under an array suffix so they don't reparse as `string | (null[])`.
+            Tok::LParen => {
+                self.bump();
+                let inner = self.interface_type()?;
+                self.expect(&Tok::RParen)?;
+                inner
+            }
             Tok::Str(value) => {
                 self.bump();
                 InterfaceType::StringLiteral(value)
@@ -461,6 +483,16 @@ impl Parser<'_> {
     /// Parse statements until a closing `}` (which is consumed). Assumes the opening `{`
     /// (and any trailing label/anchor) was already consumed.
     fn block_body(&mut self) -> Result<Block, ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("block nesting too deep"));
+        }
+        self.depth += 1;
+        let result = self.block_body_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn block_body_inner(&mut self) -> Result<Block, ParseError> {
         let mut stmts = Vec::new();
         while !matches!(self.cur(), Tok::RBrace) {
             if self.at_eof() {
@@ -741,13 +773,11 @@ impl Parser<'_> {
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::LBrace)?;
-        // A trailing non-anchor comment marks the labelled (call-based) branch form.
+        // A trailing non-anchor comment marks the labelled (call-based) branch form. The
+        // renderer may emit both on one line (`{ // label   //@n:id`); the lexer splits
+        // them into separate Comment tokens, so try the anchor after the label.
         let true_label = self.take_label();
-        let anchor = if true_label.is_some() {
-            None
-        } else {
-            self.take_anchor()
-        };
+        let anchor = self.take_anchor();
         let true_body = self.block_body()?;
 
         let mut else_label = None;
@@ -864,7 +894,13 @@ impl Parser<'_> {
     // ---- expressions (Pratt) --------------------------------------------------------------
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.ternary()
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("expression nesting too deep"));
+        }
+        self.depth += 1;
+        let result = self.ternary();
+        self.depth -= 1;
+        result
     }
 
     fn ternary(&mut self) -> Result<Expr, ParseError> {
