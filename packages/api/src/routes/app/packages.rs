@@ -338,7 +338,7 @@ pub async fn remove_package(
         (status = 200, description = "Package updated", body = AppPackageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Package not found in app")
+        (status = 404, description = "Package not found in app, or requested version not published")
     ),
     security(
         ("bearer_auth" = []),
@@ -376,6 +376,20 @@ pub async fn update_package(
     let mut active: app_package::ActiveModel = existing.into();
 
     if let Some(version) = request.version {
+        // Reject versions that don't exist as published records — a bad pin
+        // would silently drop the package's nodes from the app catalog.
+        let version_exists = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(&package_id))
+            .filter(wasm_package_version::Column::Version.eq(&version))
+            .one(&state.db)
+            .await?
+            .is_some();
+        if !version_exists {
+            return Err(ApiError::not_found(format!(
+                "Version '{}' not found for package '{}'",
+                version, package_id
+            )));
+        }
         active.version = Set(version);
     }
     if let Some(auto_update) = request.auto_update {
@@ -451,24 +465,20 @@ pub async fn get_patch_info(
         .filter(wasm_package_version::Column::PackageId.eq(&package_id))
         .filter(wasm_package_version::Column::Version.eq(&app_pkg.version))
         .one(&state.db)
-        .await?;
-
-    let nodes = match version_record {
-        Some(record) => record.nodes,
-        None => {
-            tracing::warn!(
+        .await?
+        .ok_or_else(|| {
+            tracing::error!(
                 package_id = %package_id,
                 version = %app_pkg.version,
-                "patch-info: pinned WASM package version not found; returning empty node set"
+                "patch-info: pinned WASM package version not found"
             );
-            serde_json::json!([])
-        }
-    };
+            ApiError::not_found("Pinned WASM package version not found")
+        })?;
 
     Ok(Json(PatchInfo {
         package_id,
         version: app_pkg.version,
-        nodes,
+        nodes: version_record.nodes,
     }))
 }
 

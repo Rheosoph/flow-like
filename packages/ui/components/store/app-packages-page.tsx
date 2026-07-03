@@ -151,7 +151,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			);
 		},
 		enabled:
-			!!appId && !isOffline.data && !!profile.data && !!packages.data?.length,
+			!!appId &&
+			isOffline.data === false &&
+			!!profile.data &&
+			!!packages.data?.length,
 	});
 
 	const nodesByPackage = useMemo(() => {
@@ -259,11 +262,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 			toast.error(`Failed to reactivate: ${err.message}`),
 	});
 
-	const applyUpdate = useMutation({
-		mutationFn: async ({
-			pkgId,
-			version,
-		}: { pkgId: string; version: string }) => {
+	const patchPackageVersion = useCallback(
+		async (pkgId: string, version: string) => {
 			if (!profile.data) throw new Error("Profile not loaded");
 			const body: UpdateAppPackageRequest = { version };
 			return backend.apiState.patch(
@@ -272,17 +272,49 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 				body,
 			);
 		},
+		[backend.apiState, profile.data, appId],
+	);
+
+	const invalidatePackageQueries = useCallback(() => {
+		queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
+		queryClient.invalidateQueries({
+			queryKey: ["app", appId, "package-updates"],
+		});
+		queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
+		queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
+	}, [queryClient, appId]);
+
+	const applyUpdate = useMutation({
+		mutationFn: ({ pkgId, version }: { pkgId: string; version: string }) =>
+			patchPackageVersion(pkgId, version),
 		onSuccess: () => {
 			toast.success("Package updated");
-			queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
-			queryClient.invalidateQueries({
-				queryKey: ["app", appId, "package-updates"],
-			});
-			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
-			queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
+			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
 			toast.error(`Failed to update package: ${err.message}`),
+	});
+
+	const applyAllUpdates = useMutation({
+		mutationFn: async (updatesToApply: PackageUpdate[]) => {
+			const results = await Promise.allSettled(
+				updatesToApply.map((update) =>
+					patchPackageVersion(update.packageId, update.latestVersion),
+				),
+			);
+			const failed = results.filter((r) => r.status === "rejected").length;
+			return { total: results.length, failed };
+		},
+		onSuccess: ({ total, failed }) => {
+			if (failed === 0) {
+				toast.success(
+					total === 1 ? "Package updated" : `${total} packages updated`,
+				);
+			} else {
+				toast.error(`Failed to update ${failed} of ${total} packages`);
+			}
+			invalidatePackageQueries();
+		},
 	});
 
 	const handleSelect = useCallback(
@@ -298,19 +330,10 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 	const applicableUpdates = useMemo(
 		() =>
 			(packages.data ?? [])
-				.filter((p) => !p.stale && updatesByPackage.has(p.packageId))
-				.map((p) => updatesByPackage.get(p.packageId) as PackageUpdate),
+				.filter((p) => !p.stale)
+				.flatMap((p) => updatesByPackage.get(p.packageId) ?? []),
 		[packages.data, updatesByPackage],
 	);
-
-	const applyAllUpdates = useCallback(() => {
-		for (const update of applicableUpdates) {
-			applyUpdate.mutate({
-				pkgId: update.packageId,
-				version: update.latestVersion,
-			});
-		}
-	}, [applicableUpdates, applyUpdate]);
 
 	const excludeIds = packages.data?.map((p) => p.packageId) ?? [];
 	const staleCount = packages.data?.filter((p) => p.stale).length ?? 0;
@@ -330,8 +353,8 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 						<Button
 							size="sm"
 							variant="outline"
-							onClick={applyAllUpdates}
-							disabled={applyUpdate.isPending}
+							onClick={() => applyAllUpdates.mutate(applicableUpdates)}
+							disabled={applyAllUpdates.isPending || applyUpdate.isPending}
 						>
 							<ArrowUpCircle className="mr-2 h-4 w-4" />
 							Update all ({applicableUpdates.length})
@@ -393,7 +416,9 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 								isToggling={toggleAutoUpdate.isPending}
 								isRemoving={removePackage.isPending}
 								isReactivating={reactivatePackage.isPending}
-								isApplyingUpdate={applyUpdate.isPending}
+								isApplyingUpdate={
+									applyUpdate.isPending || applyAllUpdates.isPending
+								}
 							/>
 						))}
 					</div>

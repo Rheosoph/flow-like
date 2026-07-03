@@ -10,7 +10,7 @@ use flow_like::flow::{
     node::{Node, NodeWasm},
 };
 use flow_like_wasm::manifest::PackageNodeEntry;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, Condition, EntityTrait, QueryFilter};
 
 pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>, ApiError> {
     let packages = app_package::Entity::find()
@@ -19,16 +19,33 @@ pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>,
         .all(&state.db)
         .await?;
 
+    if packages.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut pinned = Condition::any();
+    for pkg in &packages {
+        pinned = pinned.add(
+            Condition::all()
+                .add(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
+                .add(wasm_package_version::Column::Version.eq(&pkg.version)),
+        );
+    }
+
+    let mut nodes_by_pin: HashMap<(String, String), serde_json::Value> =
+        wasm_package_version::Entity::find()
+            .filter(pinned)
+            .all(&state.db)
+            .await?
+            .into_iter()
+            .map(|record| ((record.package_id, record.version), record.nodes))
+            .collect();
+
     let mut wasm_nodes: Vec<Node> = Vec::with_capacity(packages.len() * 5);
 
     for pkg in &packages {
-        let version_record = wasm_package_version::Entity::find()
-            .filter(wasm_package_version::Column::PackageId.eq(&pkg.package_id))
-            .filter(wasm_package_version::Column::Version.eq(&pkg.version))
-            .one(&state.db)
-            .await?;
-
-        let Some(version_record) = version_record else {
+        let key = (pkg.package_id.clone(), pkg.version.clone());
+        let Some(nodes_value) = nodes_by_pin.remove(&key) else {
             tracing::warn!(
                 package_id = %pkg.package_id,
                 version = %pkg.version,
@@ -38,7 +55,7 @@ pub async fn app_wasm_nodes(state: &AppState, app_id: &str) -> Result<Vec<Node>,
         };
 
         let entries: Vec<PackageNodeEntry> =
-            serde_json::from_value(version_record.nodes).unwrap_or_default();
+            serde_json::from_value(nodes_value).unwrap_or_default();
 
         for entry in &entries {
             wasm_nodes.push(package_node_to_node(entry, &pkg.package_id));

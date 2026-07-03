@@ -1496,7 +1496,7 @@ pub async fn developer_load_into_catalog(
         }
         registry.node_registry = Arc::new(inner);
         drop(registry);
-        let _ = app_handle.emit("catalog-updated", ());
+        emit_catalog_updated_on_main(&app_handle);
     }
 
     if let Some(manifest) = manifest {

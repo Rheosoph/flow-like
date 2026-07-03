@@ -65,12 +65,25 @@ async fn rebuild_node_registry(
     let engine = TauriWasmEngineState::construct(app_handle)
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
-    // 1. Builtin catalog nodes (cheap Arc clones of the cached catalog).
+    // 1. Developer (local project) nodes — collected first because they are
+    // also registered in the installed list and would otherwise be loaded a
+    // second time below. Inserted last so they win name collisions.
+    let dev_pairs = super::developer::collect_developer_node_pairs(app_handle).await;
+    let dev_package_ids: std::collections::HashSet<&str> = dev_pairs
+        .iter()
+        .filter_map(|(node, _)| node.wasm.as_ref().map(|w| w.package_id.as_str()))
+        .collect();
+
+    // 2. Builtin catalog nodes (cheap Arc clones of the cached catalog).
     let mut logic_nodes: Vec<Arc<dyn NodeLogic>> = flow_like_catalog::get_catalog();
 
-    // 2. Installed WASM package nodes (active version of each).
+    // 3. Installed WASM package nodes (active version of each), skipping
+    // developer projects already loaded above.
     let installed = registry_client.list_installed().await.unwrap_or_default();
     for pkg in &installed {
+        if dev_package_ids.contains(pkg.id.as_str()) {
+            continue;
+        }
         match registry_client.load_nodes(&pkg.id, engine.clone()).await {
             Ok(nodes) => {
                 logic_nodes.extend(nodes.into_iter().map(|n| Arc::new(n) as Arc<dyn NodeLogic>));
@@ -80,10 +93,6 @@ async fn rebuild_node_registry(
             }
         }
     }
-
-    // 3. Developer (local project) nodes — custom-built Node pairs that must be
-    // re-applied on every rebuild, otherwise the from-scratch swap wipes them.
-    let dev_pairs = super::developer::collect_developer_node_pairs(app_handle).await;
 
     let mut inner =
         flow_like::state::FlowNodeRegistryInner::new(logic_nodes.len() + dev_pairs.len());
@@ -137,7 +146,7 @@ async fn load_installed_package_nodes(
     }
 
     if emit_catalog_updated {
-        let _ = app_handle.emit("catalog-updated", ());
+        super::developer::emit_catalog_updated_on_main(app_handle);
     }
 
     Ok(())
@@ -349,6 +358,7 @@ pub async fn registry_update_package(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageUpdate {
     pub package_id: String,
     pub current_version: String,
