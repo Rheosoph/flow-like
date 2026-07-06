@@ -573,6 +573,18 @@ declare function oidcDiscoveryAuth({ issuer: string, audience: string, requiredS
  */
 declare function webCameraGrabFrame({ request: Struct }): Struct;
 
+/**
+ * Captures one frame from an RTSP camera stream
+ * @param rtspUrl — RTSP or RTSPS stream URL
+ * @param transport (optional) — RTSP RTP transport protocol
+ * @param timeoutMs (optional) — Maximum time in milliseconds to connect and decode a frame
+ * @param maxFrames (optional) — Maximum video frames to inspect before failing
+ * @returns image — The captured RTSP frame
+ * @returns errorMessage — Readable capture error
+ * @impure has side effects / drives control flow
+ */
+declare function webCameraGrabRtspFrame({ rtspUrl: string, transport?: string, timeoutMs?: int, maxFrames?: int }): { image: Struct, errorMessage: string };
+
 
 // === Web/MCP ===
 

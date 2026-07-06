@@ -968,6 +968,15 @@ declare function a2uiRemoveChildAtIndex({ containerRef: any, index: int }): void
 declare function a2uiSetBadgeContent({ elementRef: Struct, content: string }): void;
 
 /**
+ * Sets the original and modified content of a diff view element
+ * @param elementRef — Reference to the diff view element
+ * @param original — Left / old content (text or document URL)
+ * @param modified — Right / new content (text or document URL)
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiSetDiffContent({ elementRef: Struct, original: string, modified: string }): void;
+
+/**
  * Sets the icon name of an icon element
  * @param elementRef — Reference to the icon element
  * @param name — The icon name (e.g., 'check', 'x', 'star')
@@ -995,8 +1004,8 @@ declare function a2uiSetProgress({ elementRef: Struct, value: float }): void;
 // === UI/Elements/Files ===
 
 /**
- * Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput element
- * @param elementRef — File input element ID or element object from Get Element
+ * Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element
+ * @param elementRef — File or voice input element ID or element object from Get Element
  * @returns files — Uploaded file objects
  * @returns signedUrls — Signed or local URLs for the uploaded files
  * @returns flowPaths — Temporary FlowPaths for uploaded files when available
@@ -2009,15 +2018,63 @@ declare function utilsEncodingUrlEncode({ input: string }): string;
 // === Utils/Execution ===
 
 /**
- * Determines whether the current run is executing in the desktop app/local runtime or on the server.
- * @returns environment — The execution environment: desktop or server
+ * Returns the current app identifier.
+ * @returns appId — Current app identifier
+ */
+declare function utilsExecutionGetAppId(): string;
+
+/**
+ * Returns where and how the current run is executing.
+ * @returns environment — The execution environment: local, desktop, mobile, browser_sandbox, or server
+ * @returns executionMode — The execution mode: sync, async, event, or scheduled
  * @returns isDesktop — True when the run is executing locally in the desktop app
  * @returns isServer — True when the run is executing on the server
+ * @returns isMobile — True when the run is executing on a mobile runtime
+ * @returns isBrowserSandbox — True when the run is executing in a browser sandbox runtime
  * @returns isLocal — True when the run has local/offline execution context
  * @returns isRemote — True when the run does not have local/offline execution context
+ * @returns runId — Current run identifier
+ * @returns appId — Current app identifier, if available
+ * @returns userId — Current user identifier, if available
  * @returns details — Structured execution environment details
  */
-declare function utilsExecutionGetEnvironment(): { environment: string, isDesktop: bool, isServer: bool, isLocal: bool, isRemote: bool, details: Struct };
+declare function utilsExecutionGetEnvironment(): { environment: string, executionMode: string, isDesktop: bool, isServer: bool, isMobile: bool, isBrowserSandbox: bool, isLocal: bool, isRemote: bool, runId: string, appId: string, userId: string, details: Struct };
+
+/**
+ * Returns the current execution mode.
+ * @returns mode — The execution mode: sync, async, event, or scheduled
+ */
+declare function utilsExecutionGetMode(): string;
+
+/**
+ * Returns the current execution run identifier.
+ * @returns runId — Current run identifier
+ */
+declare function utilsExecutionGetRunId(): string;
+
+/**
+ * Returns the current user identifier, when available.
+ * @returns userId — Current user identifier, or empty when unavailable
+ */
+declare function utilsExecutionGetUserId(): string;
+
+/**
+ * Returns true when the current run is executing on a local/client runtime.
+ * @returns isLocal — True for local, desktop, mobile, and browser sandbox execution
+ */
+declare function utilsExecutionIsLocalEnvironment(): bool;
+
+/**
+ * Returns true when the current run is executing on a mobile runtime.
+ * @returns isMobile — True for mobile execution
+ */
+declare function utilsExecutionIsMobileEnvironment(): bool;
+
+/**
+ * Returns true when the current run is executing on the server.
+ * @returns isServer — True for server-side execution
+ */
+declare function utilsExecutionIsServerEnvironment(): bool;
 
 
 // === Utils/Faker/Address ===
@@ -2943,6 +3000,44 @@ declare function utilsTypesTryTransform({ typeIn: any }): { typeOut: any, succes
 // === Utils/User ===
 
 /**
+ * Checks whether a project user has the specified role ID or exact role name.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @param role (optional) — Role ID or exact role name.
+ * @returns hasRole — True when the user has the requested role.
+ * @returns projectUser — Project membership, sanitized user ref, role, effective permissions, and attributes.
+ * @returns found — True when a matching project user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserCheckUserHasRole({ appId?: string, userId?: string, role?: string }): { hasRole: bool, projectUser: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Checks whether a project user effectively has a permission. Owner and Admin imply all permissions.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @param permission (optional) — Permission name or bit value to check.
+ * @returns hasPermission — True when the user effectively has the requested permission.
+ * @returns projectUser — Project membership, sanitized user ref, role, effective permissions, and attributes.
+ * @returns found — True when a matching project user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserCheckUserPermission({ appId?: string, userId?: string, permission?: string }): { hasPermission: bool, projectUser: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Gets the current runtime user and, when available, their project membership, role, effective permissions, and attributes.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @returns currentUser — Current runtime user with project membership details when available.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserGetCurrentUser({ appId?: string }): { currentUser: Struct, success: bool, statusCode: int, error: string };
+
+/**
  * Fetches the current user's persisted user information from the configured FlowLike hub's /api/v1/user/info endpoint when an execution token is available.
  * @returns userInfo — The user record returned by /api/v1/user/info
  * @returns success — True when user info was fetched successfully
@@ -2952,11 +3047,74 @@ declare function utilsTypesTryTransform({ typeIn: any }): { typeOut: any, succes
 declare function utilsUserGetCurrentUserInfo(): { userInfo: Struct, success: bool, statusCode: int, error: string };
 
 /**
+ * Gets a project user's effective permission bitfield and expanded permission names. Owner and Admin imply all permissions.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @returns userPermissions — Effective permissions for the project user.
+ * @returns found — True when the user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserGetEffectiveUserPermissions({ appId?: string, userId?: string }): { userPermissions: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
  * Gets the user context of the current execution. Returns a typed struct containing sub (user ID), role, permissions, attributes, and technical user info. Use 'Break Struct' to access individual fields.
  * @returns userContext — The complete user execution context. Use 'Break Struct' to access: sub, role (with id, name, permissions, attributes), is_technical_user, key_id
  * @returns hasUser — True if user context is available
  */
 declare function utilsUserGetExecutingUser(): { userContext: Struct, hasUser: bool };
+
+/**
+ * Gets a project user membership by user ID/sub.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @returns projectUser — Project membership, sanitized user ref, role, effective permissions, and attributes.
+ * @returns found — True when a matching project user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserGetProjectUser({ appId?: string, userId?: string }): { projectUser: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Checks for one custom role attribute on a project user.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @param attribute (optional) — Role attribute to read.
+ * @returns hasAttribute — True when the user has the requested attribute.
+ * @returns attributeValue — The matching attribute when present.
+ * @returns projectUser — Project membership, sanitized user ref, role, effective permissions, and attributes.
+ * @returns found — True when a matching project user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserGetUserAttribute({ appId?: string, userId?: string, attribute?: string }): { hasAttribute: bool, attributeValue: string, projectUser: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Gets custom role attributes assigned to a project user.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @returns userAttributes — Role attributes for the project user.
+ * @returns found — True when the user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserGetUserAttributes({ appId?: string, userId?: string }): { userAttributes: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Gets the project role assigned to a user.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param userId (optional) — User subject / user ID within the project.
+ * @returns userRoles — Role assignment for the project user. Current projects have one role per user.
+ * @returns found — True when the user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserGetUserRoles({ appId?: string, userId?: string }): { userRoles: Struct, found: bool, success: bool, statusCode: int, error: string };
 
 /**
  * Checks if the executing user's role has a specific attribute (tag). Attributes are custom string tags assigned to roles for flexible authorization. Returns false if no user context is available or the user has no role.
@@ -2978,6 +3136,82 @@ declare function utilsUserHasPermission({ permission?: string }): bool;
  * @returns keyId — The API key identifier for technical users, empty string for human users
  */
 declare function utilsUserIsTechnicalUser(): { isTechnical: bool, keyId: string };
+
+/**
+ * Lists project users with pagination.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param offset (optional) — Number of matching users to skip.
+ * @param limit (optional) — Maximum number of users to return, capped at 100.
+ * @returns users — Matching project users.
+ * @returns count — Number of users returned.
+ * @returns nextOffset — Offset to use for the next page.
+ * @returns hasMore — True when another page may contain more matching users.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserListProjectUsers({ appId?: string, offset?: int, limit?: int }): { users: Struct[], count: int, nextOffset: int, hasMore: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Lists project users whose assigned role contains a custom attribute.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param attribute (optional) — Role attribute to match.
+ * @param offset (optional) — Number of matching users to skip.
+ * @param limit (optional) — Maximum number of users to return, capped at 100.
+ * @returns users — Matching project users.
+ * @returns count — Number of users returned.
+ * @returns nextOffset — Offset to use for the next page.
+ * @returns hasMore — True when another page may contain more matching users.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserListUsersWithAttribute({ appId?: string, attribute?: string, offset?: int, limit?: int }): { users: Struct[], count: int, nextOffset: int, hasMore: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Lists project users assigned to a role ID or exact role name.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param role (optional) — Role ID or exact role name. Leave empty to return all project users.
+ * @param offset (optional) — Number of matching users to skip.
+ * @param limit (optional) — Maximum number of users to return, capped at 100.
+ * @returns users — Matching project users.
+ * @returns count — Number of users returned.
+ * @returns nextOffset — Offset to use for the next page.
+ * @returns hasMore — True when another page may contain more matching users.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserListUsersWithRole({ appId?: string, role?: string, offset?: int, limit?: int }): { users: Struct[], count: int, nextOffset: int, hasMore: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Resolves a project user by user ID/sub or by email when email is exposed by platform lookup settings. Email matching is constrained to project members.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param identifier (optional) — Email, sub, or user ID to resolve within the project.
+ * @param identifierType (optional) — How to interpret the identifier.
+ * @returns projectUser — Project membership, sanitized user ref, role, effective permissions, and attributes.
+ * @returns found — True when a matching project user was found.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserResolveUser({ appId?: string, identifier?: string, identifierType?: string }): { projectUser: Struct, found: bool, success: bool, statusCode: int, error: string };
+
+/**
+ * Searches project users by exposed profile fields. Email is only searchable when the platform returns email in user lookup results.
+ * @param appId (optional) — Project/app ID. Leave empty to use the current execution app.
+ * @param query (optional) — Search text matched against project user ID, username, preferred username, name, visible email, or role name.
+ * @param offset (optional) — Number of matching users to skip.
+ * @param limit (optional) — Maximum number of users to return, capped at 100.
+ * @returns users — Matching project users.
+ * @returns count — Number of users returned.
+ * @returns nextOffset — Offset to use for the next page.
+ * @returns hasMore — True when another page may contain more matching users.
+ * @returns success — True when the read operation completed successfully.
+ * @returns statusCode — HTTP status code returned by the hub, or 0 if no request was made.
+ * @returns error — Error message when the read operation could not complete.
+ */
+declare function utilsUserSearchUsers({ appId?: string, query?: string, offset?: int, limit?: int }): { users: Struct[], count: int, nextOffset: int, hasMore: bool, success: bool, statusCode: int, error: string };
 
 
 // === Variable ===
