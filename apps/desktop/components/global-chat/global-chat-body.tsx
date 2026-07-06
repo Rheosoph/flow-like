@@ -255,19 +255,23 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[],
 		true,
 	);
-	const embeddingBits = useInvoke(
-		backend.bitState.searchBits,
+	// Read the profile's INSTALLED bits directly rather than intersecting a remote catalog search
+	// with profile.bits strings — the latter silently misses embeddings whose stored hub prefix
+	// differs from the search hub, which is exactly why the memory picker never appeared.
+	const profileBits = useInvoke(
+		backend.bitState.getProfileBits,
 		backend.bitState,
-		[{ bit_types: [IBitTypes.Embedding] }],
+		[],
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
-	const memoryModels = useMemo(() => {
-		const profileBits = settingsProfile.data?.hub_profile.bits;
-		if (!embeddingBits.data || !profileBits) return [];
-		const ids = new Set(profileBits);
-		return embeddingBits.data.filter((bit) => ids.has(`${bit.hub}:${bit.id}`));
-	}, [embeddingBits.data, settingsProfile.data?.hub_profile.bits]);
+	const memoryModels = useMemo(
+		() =>
+			(profileBits.data ?? []).filter(
+				(bit) => bit.type === IBitTypes.Embedding,
+			),
+		[profileBits.data],
+	);
 
 	// LLM/VLM bits in the current profile — the selectable models for the "Profile" provider.
 	const llmBits = useInvoke(
@@ -614,11 +618,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		setPendingEmbedding(null);
 	}, [pendingEmbedding, setEmbeddingModelId]);
 
-	// Memory is only wired into the profile (Bits) agent loop today — hide the picker for the
-	// external agent backends so the UI never implies memory that silently no-ops.
+	// Memory recall + the memory tools run on EVERY backend (the Rust loop wires `memory` into the
+	// Copilot/Codex/Claude-Code agents and the Bits loop alike), so the picker is shown wherever the
+	// profile has an embedding model — not gated to the Bits backend.
 	const memoryPicker = useMemo(
 		() =>
-			!isAgent && memoryModels.length > 0 ? (
+			memoryModels.length > 0 ? (
 				<Select
 					value={embeddingModelId || MEMORY_OFF}
 					onValueChange={handleEmbeddingChange}
@@ -642,7 +647,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					</SelectContent>
 				</Select>
 			) : null,
-		[isAgent, memoryModels, embeddingModelId, handleEmbeddingChange],
+		[memoryModels, embeddingModelId, handleEmbeddingChange],
 	);
 
 	const showEmptyState =
@@ -737,7 +742,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0 overflow-x-auto">
 				{providerModelPicker}
 				{memoryPicker}
-				{!isAgent && memoryModels.length > 0 && profileId && (
+				{profileId && (
 					<Button
 						type="button"
 						variant="outline"
@@ -890,6 +895,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					open={memoryManagerOpen}
 					onOpenChange={setMemoryManagerOpen}
 					profileId={profileId}
+					active={!!embeddingModelId}
 				/>
 			)}
 
@@ -949,10 +955,12 @@ function MemoryManagerDialog({
 	open,
 	onOpenChange,
 	profileId,
+	active,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	profileId: string;
+	active: boolean;
 }) {
 	const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
 	const [loading, setLoading] = useState(false);
@@ -1022,6 +1030,14 @@ function MemoryManagerDialog({
 						profile. Delete anything it should forget.
 					</DialogDescription>
 				</DialogHeader>
+
+				{!active && (
+					<p className="rounded-md border border-border/50 bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground">
+						Memory is off — pick an embedding model in the header to let the
+						assistant recall and save memories. You can still review and delete
+						saved memories here.
+					</p>
+				)}
 
 				<ScrollArea className="max-h-[50vh] pr-3">
 					{loading ? (
