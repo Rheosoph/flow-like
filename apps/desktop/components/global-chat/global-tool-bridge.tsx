@@ -489,9 +489,14 @@ export function GlobalToolBridge() {
 	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
 	useEffect(() => {
 		if (isStreaming || !pendingNavigation) return;
+		const target = pendingNavigation;
 		useGlobalChatStore.getState().setPendingNavigation(null);
-		router.push(pendingNavigation);
-	}, [isStreaming, pendingNavigation, router]);
+		router.push(target);
+		// Dock the conversation alongside the destination view so the user keeps chatting there.
+		// Deferred to the navigation moment (not fired when the tool ran) so the dock never pops
+		// open over the full /chat page mid-stream — /chat renders the conversation itself.
+		if (!target.startsWith("/chat")) openOverlay();
+	}, [isStreaming, pendingNavigation, router, openOverlay]);
 
 	// The full /chat page already renders the conversation — only dock the overlay elsewhere.
 	const pathnameRef = useRef(pathname);
@@ -644,10 +649,7 @@ export function GlobalToolBridge() {
 					// Defer the route change until the turn ends — navigating mid-stream tears down
 					// the run. The bridge performs it once streaming stops.
 					useGlobalChatStore.getState().setPendingNavigation(route);
-					// Morph the conversation into the docked overlay so the user keeps chatting
-					// while the destination view is shown — decided by the TARGET route (the
-					// pre-navigation pathname may still be /chat when this runs).
-					if (!route.startsWith("/chat")) openOverlay();
+					// The bridge docks the overlay alongside the destination once streaming stops.
 					referenceApp(argString(args, "app_id") || argString(args, "appId"));
 					return { status: "ok", route };
 				}
@@ -1266,7 +1268,6 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 								useGlobalChatStore
 									.getState()
 									.setPendingNavigation(`/flow?id=${boardId}&app=${appId}`);
-								openOverlay();
 							}
 							referenceApp(appId);
 							return {
@@ -1415,7 +1416,6 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 						useGlobalChatStore
 							.getState()
 							.setPendingNavigation(`/flow?id=${boardId}&app=${appId}`);
-						openOverlay();
 					}
 					referenceApp(appId);
 
@@ -1742,7 +1742,6 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 							.setPendingNavigation(
 								`/page-builder?id=${pageId}&app=${targetAppId}&board=${boardId}`,
 							);
-						openOverlay();
 						return {
 							status: "ok",
 							message: response.message,
@@ -1969,7 +1968,6 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 			backend.widgetState,
 			backend.routeState,
 			queryClient,
-			openOverlay,
 			showConversation,
 			addInlineAppChat,
 			openDialog,

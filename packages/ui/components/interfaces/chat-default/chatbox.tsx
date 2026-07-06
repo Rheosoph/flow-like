@@ -171,12 +171,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				return;
 			}
 
-			await onSendMessage(
-				input.trim(),
-				attachedFiles,
-				activeTools,
-				recordedAudio || undefined,
-			);
+			const message = input.trim();
+			const files = attachedFiles;
+			const audio = recordedAudio || undefined;
+
+			// Clear the composer immediately on send — onSendMessage may not resolve until the
+			// whole response has streamed back, and leaving the sent text sitting there reads as
+			// "nothing happened". Restore it if the send fails so the user can retry.
 			setInput("");
 			setAttachedFiles([]);
 			setRecordedAudio(null);
@@ -185,6 +186,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			try {
 				chatboxRef.current?.blur();
 			} catch {}
+
+			try {
+				await onSendMessage(message, files, activeTools, audio);
+			} catch (error) {
+				setInput(message);
+				setAttachedFiles(files);
+				setRecordedAudio(audio ?? null);
+				throw error;
+			}
 		};
 
 		useEffect(() => {
