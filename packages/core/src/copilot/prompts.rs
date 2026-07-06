@@ -116,6 +116,32 @@ before writing these calls. Never call it with a blank query; use terms like "op
 declaration results you already have.
 "#;
 
+/// A2UI page contract: how board logic pushes values into a live UI page. Prevents the recurring
+/// mistake of using page/global state (a scratch store) to drive on-screen `$.data.*` bindings.
+pub const A2UI_STATE_GUIDANCE: &str = r#"
+## A2UI PAGES: UPDATING WHAT A WIDGET SHOWS
+When a board drives an a2ui page (page-load or action event handlers writing to a UI surface),
+pick the write node by WHERE the value must appear. These are NOT interchangeable:
+
+- To change something visible on screen — any value a widget binds to via `$.data.<path>` — use
+  **Data Update** (`a2uiDataUpdate`). Its `path` is that binding path WITHOUT the `$.` prefix and
+  with `/` separators: a widget bound to `$.data.temperature` is fed by
+  `a2uiDataUpdate({{ path: "data/temperature", value }})`. `surfaceId` defaults to `"main"`; set it
+  to the surface the widget lives on. This streams a data-model update that re-renders bound widgets
+  immediately. This is the ONLY node that updates the live UI.
+- **Set Page State** (`a2uiSetPageState`) does NOT touch `$.data.*` bindings and will NOT update the
+  screen. Page state is a separate per-page key/value store that widgets never read; its value only
+  travels back to the board on the NEXT event, where **Get Page State** (`a2uiGetPageState`) reads
+  it. Use it for cross-event scratch data scoped to a page. Its `key` is a plain identifier (e.g.
+  `"lastQuery"`), never a `$.data...` path.
+- **Set/Get Global State** behave like page state but shared across pages — same rule, not for
+  display.
+
+Rule of thumb: value must be visible now -> `a2uiDataUpdate`. Value must survive to a later
+event/handler -> page/global state. When unsure, call `get_declarations` for "data update" and
+"page state" and read the signatures before writing.
+"#;
+
 /// Execution wiring contract shared by board prompts.
 pub const EXECUTION_FLOW_GUIDANCE: &str = r#"
 ## EXECUTION FLOW AND MULTI-OUTPUT NODES
@@ -459,6 +485,8 @@ Use the lower-level `emit_commands` tool ONLY for things FlowScript text cannot 
 
 {database_guidance}
 
+{a2ui_guidance}
+
 {execution_guidance}
 
 {explanation_guidance}
@@ -572,6 +600,7 @@ ALWAYS emit commands in this order:
         templates = templates_tool,
         logs = logs_tool,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -710,12 +739,15 @@ For data workflows: prefer the built-in LanceDB-backed Open Database path. Use O
 Use database_tool to inspect existing tables/schemas/indices before designing data workflows. Use execute_event after creating event-backed workflows when runtime logs can validate or debug the result.
 For UI: Use validate_ui before emit_ui when available (NOT file editing)
 
+{a2ui_guidance}
+
 {execution_guidance}
 
 {explanation_guidance}
 
 {autonomy_guidance}"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -743,6 +775,8 @@ You MUST follow this sequence. Do not skip straight to emit_commands.
 {autonomy_guidance}
 
 {database_guidance}
+
+{a2ui_guidance}
 
 {execution_guidance}
 
@@ -821,6 +855,7 @@ Batch commands in this order:
 7. If `validate_commands` or `emit_commands` returns validation issues, treat that as a failed draft, fix the reported problems, and resend a corrected batch only"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -895,6 +930,8 @@ before emitting.
 
 {database_guidance}
 
+{a2ui_guidance}
+
 {execution_guidance}
 
 {explanation_guidance}
@@ -924,6 +961,7 @@ changes; validate_commands first)
         flowscript = flowscript,
         node_count = node_count,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
