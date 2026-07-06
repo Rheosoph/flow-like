@@ -155,6 +155,28 @@ fn call_app_event_message(args: &Value) -> String {
     }
 }
 
+fn upsert_event_message(args: &Value) -> String {
+    let name = spec_arg_str(args, "name", "name");
+    if name.is_empty() {
+        "FlowPilot wants to create or update an event.".to_string()
+    } else {
+        format!("FlowPilot wants to create or update the event '{name}'.")
+    }
+}
+
+fn delete_event_message(args: &Value) -> String {
+    let event_id = spec_arg_str(args, "event_id", "eventId");
+    if event_id.is_empty() {
+        "FlowPilot wants to delete an event.".to_string()
+    } else {
+        format!("FlowPilot wants to delete event '{event_id}'.")
+    }
+}
+
+fn set_page_load_event_message(_args: &Value) -> String {
+    "FlowPilot wants to set the page's onLoad event.".to_string()
+}
+
 /// The complete tool set of the global FlowPilot assistant. `memory_enabled` appends the
 /// `_memory_store`/`_memory_search` tools (only offered when the user selected an embedding model).
 pub fn global_assistant_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec> {
@@ -278,7 +300,7 @@ Navigation is a non-destructive UI change and runs without an approval dialog. P
         },
         PlatformToolSpec {
             name: "create_app",
-            description: r#"Create a new Flow-Like app (project) in the current profile.
+            description: r#"Create a new Flow-Like app (project) in the current profile. ALWAYS pass a `name` — derive a short one from the request (e.g. "Weather App"). Call this ONCE per app; if it succeeds, move on — do NOT call it again with empty arguments.
 
 Use this when the user wants to start a new automation/app. By default the app is created online
 (synced to the user's Flow-Like account) when they are signed in, and local-only otherwise. Set
@@ -307,7 +329,7 @@ approval dialog with a "don't ask again this session" option before it runs."#,
 
 Two modes (set `mode`):
 - mode="explain" (read-only): answer the user's question about the board — "explain this workflow", "what does this do", "why is this failing". Nothing is modified and no approval is asked. Relay the returned answer to the user.
-- mode="edit" (default): build or modify the board (add/connect/configure nodes) or a UI page. If the app has no board yet, one is created automatically — never ask the user to create a board manually. Give a complete, self-contained instruction (trigger/event, the processing steps, and where results go). Side-effecting; asks for approval unless the user selected "don't ask again this session".
+- mode="edit" (default): build or modify the board's WORKFLOW LOGIC (add/connect/configure nodes and events). This is NOT for UI — pages, widgets and components go to flowpilot_widget. If the app has no board yet, one is created automatically — never ask the user to create a board manually. Give a complete, self-contained instruction (trigger/event, the processing steps, and where results go). Side-effecting; asks for approval unless the user selected "don't ask again this session".
 
 When a board is already open (see CURRENTLY OPEN BOARD in your context), pass its app_id/board_id and route the user's board question here directly — do NOT ask which app or board, and do NOT answer board questions yourself.
 
@@ -333,15 +355,20 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
         },
         PlatformToolSpec {
             name: "flowpilot_widget",
-            description: r#"Design or modify UI components on the user's CURRENTLY OPEN widget/page surface (A2UI).
-Only available when the user has a widget/page builder open — check list_apps/context or just call it;
-it errors cleanly when no surface is open. Give a complete instruction of what the UI should look
-like/do. Side-effecting; asks for approval."#,
+            description: r#"The UI specialist — design and build interfaces (A2UI). Two modes:
+- EDIT the user's currently OPEN widget/page builder (generated components are staged for review), OR
+- CREATE a NEW page from scratch in an app (pass app_id). A page is board-scoped, so a board is created automatically if the app has none.
+It builds the page AND any reusable widgets it needs — repeated or dynamic elements like list/grid cards, project or save-state rows, email-list items — in ONE call, then navigates the user to the page builder. A simple one-off layout (e.g. a dashboard with a chart and a table) needs no widget. Give a complete instruction of what the UI should look like and do. Side-effecting; asks for approval.
+SCOPE: UI only — pages, widgets, components. Board/workflow LOGIC (nodes, events, data wiring) goes through flowpilot_board."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "instruction": { "type": "string", "description": "Complete natural-language instruction describing the UI to design or modify on the open widget/page surface." }
+                        "instruction": { "type": "string", "description": "Complete natural-language description of the UI to build or modify (layout, content, and any reusable/repeated widgets)." },
+                        "app_id": { "type": "string", "description": "App to create a NEW page in (from list_apps/create_app). Omit when editing the currently open builder surface." },
+                        "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted." },
+                        "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name." },
+                        "board_id": { "type": "string", "description": "Board the new page binds to. Optional; defaults to the app's first board, creating one if none exists." }
                     },
                     "required": ["instruction"]
                 })
@@ -434,6 +461,78 @@ title/url/snippet/date results."#,
                 })
             },
             approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "upsert_event",
+            description: r#"Create or update an EVENT on an app — a deliberate choice. Two kinds:
+- PAGE event (shows a page at a URL): pass page_id (the page to render) and route (e.g. "/weather"). board_id/node_id are not needed.
+- NORMAL event (a workflow trigger): pass board_id and node_id (an events_* node the workflow was built around), plus an optional route.
+Omit event_id to create; pass it to update. Side-effecting; asks for approval."#,
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "app_id": { "type": "string", "description": "App id." },
+                        "event_id": { "type": "string", "description": "Existing event id to UPDATE. Omit to create a new event." },
+                        "name": { "type": "string", "description": "Event name." },
+                        "event_type": { "type": "string", "description": "Event type, e.g. \"quick_action\", \"generic_form\", \"simple_chat\", \"api\", \"cron\". Defaults to a page/quick-action type." },
+                        "page_id": { "type": "string", "description": "PAGE event: the page id to render (sets default_page_id)." },
+                        "route": { "type": "string", "description": "URL path the event/page is reachable at, e.g. \"/weather\". Optional." },
+                        "board_id": { "type": "string", "description": "NORMAL event: the board holding the entry node." },
+                        "node_id": { "type": "string", "description": "NORMAL event: the events_* node id in the board." },
+                        "description": { "type": "string", "description": "Short description." },
+                        "active": { "type": "boolean", "description": "Whether the event is active. Defaults to true." }
+                    },
+                    "required": ["app_id", "name"]
+                })
+            },
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve event change",
+                message: upsert_event_message,
+            },
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "delete_event",
+            description: r#"Delete an event from an app (and its URL route mapping). Side-effecting; asks for approval."#,
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "app_id": { "type": "string", "description": "App id." },
+                        "event_id": { "type": "string", "description": "Event id to delete." }
+                    },
+                    "required": ["app_id", "event_id"]
+                })
+            },
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve event deletion",
+                message: delete_event_message,
+            },
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "set_page_load_event",
+            description: r#"Wire a page's onLoad behavior — the workflow that runs when the page opens (e.g. to fetch data to display). Pass the page_id and on_load_event_id (an events_* NODE id in the page's board; a flowpilot_board result lists new ones under `event_nodes`). Side-effecting; asks for approval."#,
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "app_id": { "type": "string", "description": "App id." },
+                        "page_id": { "type": "string", "description": "The page whose onLoad event to set (from flowpilot_widget)." },
+                        "on_load_event_id": { "type": "string", "description": "Board NODE id (events_simple) to run when the page opens. From a flowpilot_board result's `event_nodes`." },
+                        "on_interval_event_id": { "type": "string", "description": "Optional: node id to run on a timer." },
+                        "on_interval_seconds": { "type": "number", "description": "Optional: interval in seconds for on_interval_event_id." },
+                        "board_id": { "type": "string", "description": "The page's board id (optional)." }
+                    },
+                    "required": ["app_id", "page_id", "on_load_event_id"]
+                })
+            },
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve page event",
+                message: set_page_load_event_message,
+            },
             timeout_secs: 120,
         },
     ];

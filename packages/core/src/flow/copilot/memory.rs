@@ -28,6 +28,16 @@ pub struct MemoryStatus {
     pub embedding_model_id: Option<String>,
 }
 
+/// A single stored observation, surfaced to the UI so the user can review and delete what the
+/// assistant remembered.
+#[derive(Debug, Clone, flow_like_types::json::Serialize)]
+pub struct MemoryEntry {
+    pub id: String,
+    pub content: String,
+    pub role: String,
+    pub timestamp: i64,
+}
+
 /// Semantic memory store for one profile. Cheap to hold across the chat loop (async-locked store).
 pub struct AssistantMemory {
     store: RwLock<LanceDBVectorStore>,
@@ -119,6 +129,56 @@ impl AssistantMemory {
     pub async fn clear(state: Arc<FlowLikeState>, profile_id: &str) -> Result<()> {
         let mut store = Self::open_store(&state, profile_id).await?;
         store.drop_table().await
+    }
+
+    /// List a profile's stored observations, newest first, for display and management in the UI.
+    /// Reads the table directly (no embedding model needed), mirroring `status`/`clear`. Returns an
+    /// empty list for a fresh profile whose table does not exist yet.
+    pub async fn list(state: Arc<FlowLikeState>, profile_id: &str) -> Result<Vec<MemoryEntry>> {
+        let store = Self::open_store(&state, profile_id).await?;
+        let rows = store
+            .filter(
+                "1=1",
+                Some(vec![
+                    "id".to_string(),
+                    "content".to_string(),
+                    "role".to_string(),
+                    "timestamp".to_string(),
+                ]),
+                1000,
+                0,
+            )
+            .await
+            .unwrap_or_default();
+
+        let mut entries: Vec<MemoryEntry> = rows
+            .into_iter()
+            .filter_map(|row| {
+                Some(MemoryEntry {
+                    id: row.get("id")?.as_str()?.to_string(),
+                    content: row.get("content")?.as_str()?.to_string(),
+                    role: row
+                        .get("role")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("user")
+                        .to_string(),
+                    timestamp: row.get("timestamp").and_then(|value| value.as_i64()).unwrap_or(0),
+                })
+            })
+            .collect();
+        entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(entries)
+    }
+
+    /// Delete a single observation by id. No-op if it no longer exists.
+    pub async fn delete_entry(
+        state: Arc<FlowLikeState>,
+        profile_id: &str,
+        id: &str,
+    ) -> Result<()> {
+        let store = Self::open_store(&state, profile_id).await?;
+        let escaped = id.replace('\'', "''");
+        store.delete(&format!("id = '{escaped}'")).await
     }
 
     /// Embed `content` and append it as a memory observation. Returns the total observation count.

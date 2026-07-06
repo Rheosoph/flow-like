@@ -18,6 +18,28 @@ export const SUB_STEP_PREFIX = "sub:";
 
 export type GlobalChatMode = "closed" | "overlay";
 
+/** Session-scoped dock visibility, so a hard reload mid-response re-opens the overlay (and thus
+ * re-mounts the chat surface that re-attaches to the live stream) instead of hiding it. */
+const OVERLAY_MODE_KEY = "flow-like:global-chat:mode";
+
+function persistOverlayMode(mode: GlobalChatMode) {
+	try {
+		sessionStorage.setItem(OVERLAY_MODE_KEY, mode);
+	} catch {
+		// persistence is best-effort
+	}
+}
+
+/** The dock mode persisted before a reload, if any. Consumed once by the overlay on mount. */
+export function readPersistedOverlayMode(): GlobalChatMode | null {
+	try {
+		const raw = sessionStorage.getItem(OVERLAY_MODE_KEY);
+		return raw === "overlay" || raw === "closed" ? raw : null;
+	} catch {
+		return null;
+	}
+}
+
 export interface InlineAppChat {
 	id: string;
 	appId: string;
@@ -99,6 +121,12 @@ interface GlobalChatState {
 	messages: IMessage[];
 	isStreaming: boolean;
 	/**
+	 * A route a tool asked to open, deferred until the agent turn finishes. Navigating mid-stream
+	 * tears down the run, so tools (e.g. flowpilot_widget after creating a page) stash the target
+	 * here and the bridge navigates once streaming ends.
+	 */
+	pendingNavigation: string | null;
+	/**
 	 * The in-flight assistant reply. Lives in the store (not a surface-local ref) so streaming keeps
 	 * rendering when the conversation morphs between the /chat page and the docked overlay mid-response.
 	 */
@@ -165,7 +193,12 @@ interface GlobalChatState {
 	consumeDraft: () => GlobalChatDraft | null;
 	openOverlay: () => void;
 	closeOverlay: () => void;
+	/** Defer a route change until the agent turn ends (navigating mid-stream breaks the run). */
+	setPendingNavigation: (route: string | null) => void;
 	appendMessage: (message: IMessage) => void;
+	/** Upsert a message by id — replaces an existing one (e.g. a restored streaming checkpoint that a
+	 * resumed run finalizes) or appends it when new. Used to commit finished assistant replies. */
+	commitMessage: (message: IMessage) => void;
 	setStreaming: (streaming: boolean) => void;
 	setStreamingMessage: (message: IMessage | null) => void;
 	setToolPrompt: (prompt: GlobalToolPrompt | null) => void;
@@ -216,6 +249,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	activeConversationId: createId(),
 	messages: [],
 	isStreaming: false,
+	pendingNavigation: null,
 	streamingMessage: null,
 	toolPrompt: null,
 	provider: "bits",
@@ -237,10 +271,25 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		if (draft) set({ draft: null });
 		return draft;
 	},
-	openOverlay: () => set({ mode: "overlay" }),
-	closeOverlay: () => set({ mode: "closed" }),
+	openOverlay: () => {
+		persistOverlayMode("overlay");
+		set({ mode: "overlay" });
+	},
+	closeOverlay: () => {
+		persistOverlayMode("closed");
+		set({ mode: "closed" });
+	},
+	setPendingNavigation: (pendingNavigation) => set({ pendingNavigation }),
 	appendMessage: (message) =>
 		set((state) => ({ messages: [...state.messages, message] })),
+	commitMessage: (message) =>
+		set((state) => {
+			const index = state.messages.findIndex((m) => m.id === message.id);
+			if (index === -1) return { messages: [...state.messages, message] };
+			const messages = [...state.messages];
+			messages[index] = message;
+			return { messages };
+		}),
 	setStreaming: (isStreaming) => set({ isStreaming }),
 	setStreamingMessage: (streamingMessage) => set({ streamingMessage }),
 	setToolPrompt: (toolPrompt) => set({ toolPrompt }),

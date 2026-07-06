@@ -17,17 +17,24 @@ import {
 	AlertDialogFooter,
 	AlertDialogHeader,
 	AlertDialogTitle,
+	Badge,
 	Button,
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
+	ScrollArea,
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
 } from "@flow-like/flow-like-ui";
-import { createCopilotStreamParser } from "@flow-like/flow-like-ui/components/flowpilot/copilot-stream-parser";
 import { FlowScriptWorkspacePanel } from "@flow-like/flow-like-ui/components/flowpilot/flowscript-workspace-panel";
 import {
 	type AIProvider,
@@ -42,8 +49,7 @@ import {
 } from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat";
 import type { ISendMessageFunction } from "@flow-like/flow-like-ui/components/interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "@flow-like/flow-like-ui/components/interfaces/chat-default/respond-interaction";
-import { createId } from "@paralleldrive/cuid2";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import {
 	BotIcon,
 	BrainIcon,
@@ -53,36 +59,38 @@ import {
 	FileCode2Icon,
 	GithubIcon,
 	LayersIcon,
+	Loader2Icon,
 	PackageIcon,
 	PlusIcon,
+	SettingsIcon,
 	SparklesIcon,
+	Trash2Icon,
 	WorkflowIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import {
-	GLOBAL_CHAT_APP_ID,
-	type IMessage,
-	globalChatDb,
-} from "../../lib/global-chat-db";
+import { type IMessage, globalChatDb } from "../../lib/global-chat-db";
 import { useGlobalChatStore } from "../../lib/global-chat-store";
 import {
-	applyStreamEvent,
-	createStreamAccumulator,
-	mergeUsageStats,
-	orderedSteps,
-} from "./copilot-stream-steps";
+	LAST_CONVERSATION_KEY,
+	driveGlobalChatStream,
+	makeGlobalChatMessage,
+	persistGlobalChatMessage,
+	persistGlobalChatSession,
+	resumeGlobalChatStream,
+	setActiveRun,
+} from "../../lib/global-chat-stream";
 import { GlobalChatHistory } from "./global-chat-history";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
 import { PendingComponentsCard } from "./pending-components-card";
 
-// global_chat streams raw assistant text interleaved with the FlowPilot XML control protocol; the
-// shared parser (createCopilotStreamParser) turns chunks into typed events, which we accumulate
-// (copilot-stream-steps.ts) into the message's content + plan_steps so the presentational <Chat>
-// renders tool activity and reasoning exactly like the board copilot and the simple chat.
+// The streaming engine (parse the FlowPilot protocol → message content + plan_steps → store) lives
+// in lib/global-chat-stream.ts, OUTSIDE this component, so a turn survives the page↔overlay morph
+// and a hard reload (re-attaching to the live Rust run via global_chat_resume). This surface only
+// builds the send payload, then renders the store's shared transcript + streaming bubble.
 
 const PROVIDERS: Array<{
 	id: AIProvider;
@@ -116,51 +124,6 @@ const EMPTY_SUGGESTIONS: Array<{
 
 // Radix Select disallows an empty value, so "memory off" uses a sentinel mapped back to "".
 const MEMORY_OFF = "__off__";
-
-/** Session-scoped pointer to the active conversation, so reloads/navigation restore the transcript. */
-const LAST_CONVERSATION_KEY = "flow-like:global-chat:last-conversation";
-
-function makeMessage(
-	role: IRole,
-	content: string,
-	sessionId: string,
-): IMessage {
-	return {
-		id: createId(),
-		appId: GLOBAL_CHAT_APP_ID,
-		sessionId,
-		inner: { role, content },
-		files: [],
-		tools: [],
-		actions: [],
-		timestamp: Date.now(),
-	};
-}
-
-async function persist(message: IMessage) {
-	try {
-		await globalChatDb.messages.put(message);
-	} catch {
-		// history persistence is best-effort in v1
-	}
-}
-
-/** Create/update the conversation's session row so it shows up in the history list. */
-async function persistSession(sessionId: string, title: string) {
-	try {
-		const existing = await globalChatDb.sessions.get(sessionId);
-		const now = Date.now();
-		await globalChatDb.sessions.put({
-			id: sessionId,
-			appId: GLOBAL_CHAT_APP_ID,
-			summarization: existing?.summarization || title.slice(0, 80),
-			createdAt: existing?.createdAt ?? now,
-			updatedAt: now,
-		});
-	} catch {
-		// history persistence is best-effort in v1
-	}
-}
 
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
@@ -249,6 +212,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						),
 					}));
 					current.loadConversation(lastId, normalized);
+					// If a response was still streaming when the webview reloaded, the Rust run kept
+					// going into a dead channel — re-attach and continue rendering it live. No-op when
+					// nothing is in flight (the run already finished/GC'd → checkpoint stays as-is).
+					resumeGlobalChatStream();
 				}
 			} catch {
 				// best-effort restore
@@ -408,170 +375,80 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				state.selectedModelId,
 			);
 
-			const userMessage = makeMessage(IRole.User, trimmed, sessionId);
+			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
 			userMessage.files = attachments;
 			appendMessage(userMessage);
-			void persist(userMessage);
-			void persistSession(sessionId, trimmed || "Image message");
+			void persistGlobalChatMessage(userMessage);
+			void persistGlobalChatSession(sessionId, trimmed || "Image message");
 
-			const responseMessage = makeMessage(IRole.Assistant, "", sessionId);
+			const responseMessage = makeGlobalChatMessage(
+				IRole.Assistant,
+				"",
+				sessionId,
+			);
 			useGlobalChatStore.getState().setStreamingMessage({ ...responseMessage });
+			// Register the run so a reload mid-response can re-attach to the live Rust stream.
+			setActiveRun(sessionId, responseMessage.id);
 
 			const historyPayload = priorMessages.map((m) => ({
 				role: m.inner.role === IRole.Assistant ? "Assistant" : "User",
 				content: typeof m.inner.content === "string" ? m.inner.content : "",
 			}));
 
-			const parser = createCopilotStreamParser();
-			const acc = createStreamAccumulator();
-			// Checkpoint the in-flight reply to IndexedDB (throttled) so a hard reload mid-response
-			// restores the partial transcript instead of losing the whole turn.
-			let lastCheckpoint = 0;
-			const syncMessage = () => {
-				const state = useGlobalChatStore.getState();
-				responseMessage.inner.content = acc.content;
-				// Nested sub-agent activity (flowpilot_board) is published by the tool bridge into
-				// subPlanSteps — render it inline after this response's own steps.
-				responseMessage.plan_steps = [
-					...orderedSteps(acc),
-					...state.subPlanSteps,
-				];
-				responseMessage.current_step_id = acc.currentStepId;
-				responseMessage.tools = acc.currentStepId ? ["working"] : [];
-				responseMessage.app_refs =
-					state.pendingAppRefs.length > 0
-						? [...state.pendingAppRefs]
-						: undefined;
-				// Attachments produced by nested app-chat runs (call_app_chat) are published into
-				// subAttachments by the tool bridge — render them on this response's message.
-				responseMessage.files = state.subAttachments;
-				// The agent's own token usage (streamed usage_stat frames) plus stats reported by
-				// called apps / sub-agents (subUsageStats) — rendered by <UsageStats>.
-				const combinedUsage = mergeUsageStats(
-					acc.usageStats,
-					state.subUsageStats,
-				);
-				responseMessage.usage_stats =
-					combinedUsage.length > 0 ? combinedUsage : undefined;
-				state.setStreamingMessage({ ...responseMessage });
-				const now = Date.now();
-				if (now - lastCheckpoint > 1_000) {
-					lastCheckpoint = now;
-					void persist({ ...responseMessage });
-				}
-			};
-
-			const channel = new Channel<string>();
-			channel.onmessage = (chunk) => {
-				for (const event of parser.push(chunk)) applyStreamEvent(acc, event);
-				syncMessage();
-			};
-
-			try {
-				const authUser = authRef.current?.user;
-				const userContext =
-					authUser?.profile?.name ??
-					authUser?.profile?.preferred_username ??
-					authUser?.profile?.email;
-				// Forward the open board (if any) so the assistant knows what "this workflow /
-				// these nodes" refers to and routes board questions to flowpilot_board without
-				// asking which app/board. Read imperatively at send time — the live surface is the
-				// same one the flowpilot_board tool later resolves.
-				const surface = useAssistantSurface.getState().boardSurface;
-				const boardContext = surface
-					? {
-							app_id: surface.appId,
-							board_id: surface.boardId,
-							board_name: surface.board?.name || undefined,
-							current_layer: surface.currentLayer || undefined,
-							selected_node_ids: surface.selectedNodeIds,
-							node_count: surface.board
-								? Object.keys(surface.board.nodes ?? {}).length +
-									Object.values(surface.board.layers ?? {}).reduce(
-										(sum, layer) =>
-											sum + Object.keys(layer?.nodes ?? {}).length,
-										0,
-									)
-								: undefined,
-						}
-					: undefined;
-				await invoke("global_chat", {
-					scope: "Frontend",
-					userPrompt: trimmed,
-					attachmentUrls:
-						attachments.length > 0
-							? attachments.map((attachment) =>
-									typeof attachment === "string" ? attachment : attachment.url,
+			const authUser = authRef.current?.user;
+			const userContext =
+				authUser?.profile?.name ??
+				authUser?.profile?.preferred_username ??
+				authUser?.profile?.email;
+			// Forward the open board (if any) so the assistant knows what "this workflow /
+			// these nodes" refers to and routes board questions to flowpilot_board without
+			// asking which app/board. Read imperatively at send time — the live surface is the
+			// same one the flowpilot_board tool later resolves.
+			const surface = useAssistantSurface.getState().boardSurface;
+			const boardContext = surface
+				? {
+						app_id: surface.appId,
+						board_id: surface.boardId,
+						board_name: surface.board?.name || undefined,
+						current_layer: surface.currentLayer || undefined,
+						selected_node_ids: surface.selectedNodeIds,
+						node_count: surface.board
+							? Object.keys(surface.board.nodes ?? {}).length +
+								Object.values(surface.board.layers ?? {}).reduce(
+									(sum, layer) => sum + Object.keys(layer?.nodes ?? {}).length,
+									0,
 								)
 							: undefined,
-					history: historyPayload,
-					modelId: effectiveModelId,
-					embeddingModelId: state.embeddingModelId || undefined,
-					token: authUser?.access_token ?? undefined,
-					userContext: userContext ?? undefined,
-					boardContext,
-					channel,
-				});
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				// Surface mid-stream failures even when partial content already arrived —
-				// a silent stop reads as a crash. The failed step keeps the panel open.
-				acc.stepOrder.push("stream-error");
-				acc.steps.set("stream-error", {
-					id: "stream-error",
-					title: "Stream failed",
-					description: message.slice(0, 300),
-					status: "failed",
-					timestamp: Date.now(),
-				});
-				if (!acc.content) {
-					acc.content = `Something went wrong: ${message}`;
-				}
-			} finally {
-				// Emit any held-back partial-tag fragment so replies ending in '<...' are not lost.
-				for (const event of parser.flush()) applyStreamEvent(acc, event);
-				for (const id of acc.stepOrder) {
-					const step = acc.steps.get(id);
-					if (step?.status === "progress") {
-						acc.steps.set(id, { ...step, status: "done" });
 					}
-				}
-				const finalState = useGlobalChatStore.getState();
-				responseMessage.inner.content = acc.content;
-				responseMessage.plan_steps = [
-					...orderedSteps(acc),
-					...finalState.subPlanSteps.map((step) =>
-						step.status === "progress"
-							? { ...step, status: "done" as const }
-							: step,
-					),
-				];
-				responseMessage.current_step_id = undefined;
-				responseMessage.tools = [];
-				responseMessage.app_refs =
-					finalState.pendingAppRefs.length > 0
-						? [...finalState.pendingAppRefs]
-						: undefined;
-				// Bake app-chat attachments into the persisted message before clearing the transient
-				// sub-run buffer. Interactions stay in the store so answered dialogs remain visible.
-				responseMessage.files = finalState.subAttachments;
-				// Bake the turn's usage stats (agent's own + called apps/sub-agents) into the message.
-				const finalUsage = mergeUsageStats(
-					acc.usageStats,
-					finalState.subUsageStats,
-				);
-				responseMessage.usage_stats =
-					finalUsage.length > 0 ? finalUsage : undefined;
-				const finalized = { ...responseMessage };
-				appendMessage(finalized);
-				void persist(finalized);
-				finalState.clearPendingAppRefs();
-				finalState.clearSubPlanSteps();
-				finalState.clearSubAttachments();
-				finalState.clearSubUsageStats();
-				finalState.setStreamingMessage(null);
-				setStreaming(false);
-			}
+				: undefined;
+
+			// The stream is driven OUTSIDE this component (global-chat-stream.ts) so it keeps
+			// rendering + finalizing even if this surface unmounts mid-response (the page↔overlay
+			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
+			await driveGlobalChatStream({
+				responseMessage,
+				startInvoke: (channel) =>
+					invoke("global_chat", {
+						scope: "Frontend",
+						userPrompt: trimmed,
+						attachmentUrls:
+							attachments.length > 0
+								? attachments.map((attachment) =>
+										typeof attachment === "string"
+											? attachment
+											: attachment.url,
+									)
+								: undefined,
+						history: historyPayload,
+						modelId: effectiveModelId,
+						embeddingModelId: state.embeddingModelId || undefined,
+						token: authUser?.access_token ?? undefined,
+						userContext: userContext ?? undefined,
+						boardContext,
+						runId: responseMessage.id,
+						channel,
+					}),
+			});
 		},
 		[appendMessage, setStreaming, backend],
 	);
@@ -681,6 +558,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		profileId: string;
 		count: number;
 	} | null>(null);
+	const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
+	const profileId = settingsProfile.data?.hub_profile.id;
 
 	// Switching the embedding model makes existing (differently-embedded) memories unreadable, so
 	// warn + delete on confirm. Only prompts when the profile already has memories from another model.
@@ -858,6 +737,18 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0 overflow-x-auto">
 				{providerModelPicker}
 				{memoryPicker}
+				{!isAgent && memoryModels.length > 0 && profileId && (
+					<Button
+						type="button"
+						variant="outline"
+						size="icon"
+						onClick={() => setMemoryManagerOpen(true)}
+						title="Review & manage saved memories"
+						className="size-7 shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					>
+						<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
+					</Button>
+				)}
 				{boardSurface && (
 					<div
 						className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 text-xs text-foreground/80"
@@ -994,6 +885,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				)}
 			</div>
 
+			{profileId && (
+				<MemoryManagerDialog
+					open={memoryManagerOpen}
+					onOpenChange={setMemoryManagerOpen}
+					profileId={profileId}
+				/>
+			)}
+
 			<AlertDialog
 				open={pendingEmbedding !== null}
 				onOpenChange={(open) => !open && setPendingEmbedding(null)}
@@ -1017,5 +916,196 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				</AlertDialogContent>
 			</AlertDialog>
 		</div>
+	);
+}
+
+interface MemoryEntry {
+	id: string;
+	content: string;
+	role: string;
+	timestamp: number;
+}
+
+// Human-friendly "how long ago" for a stored memory's epoch-millis timestamp.
+function formatMemoryAge(timestamp: number): string {
+	if (!timestamp) return "";
+	const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+	if (seconds < 60) return "just now";
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days < 30) return `${days}d ago`;
+	return new Date(timestamp).toLocaleDateString();
+}
+
+/**
+ * Lists the assistant's profile-scoped memories and lets the user delete individual entries or clear
+ * them all. Reads on open via `global_chat_list_memories`; deletions hit the backend then update the
+ * in-view list optimistically.
+ */
+function MemoryManagerDialog({
+	open,
+	onOpenChange,
+	profileId,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	profileId: string;
+}) {
+	const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
+	const [loading, setLoading] = useState(false);
+	const [busyId, setBusyId] = useState<string | null>(null);
+	const [clearing, setClearing] = useState(false);
+
+	const load = useCallback(async () => {
+		setLoading(true);
+		try {
+			const rows = await invoke<MemoryEntry[]>("global_chat_list_memories", {
+				profileId,
+			});
+			setEntries(rows);
+		} catch {
+			toast.error("Couldn't load memories");
+			setEntries([]);
+		} finally {
+			setLoading(false);
+		}
+	}, [profileId]);
+
+	useEffect(() => {
+		if (open) void load();
+		else setEntries(null);
+	}, [open, load]);
+
+	const handleDelete = useCallback(
+		async (id: string) => {
+			setBusyId(id);
+			try {
+				await invoke("global_chat_delete_memory", { profileId, id });
+				setEntries((prev) => prev?.filter((entry) => entry.id !== id) ?? null);
+			} catch {
+				toast.error("Couldn't delete memory");
+			} finally {
+				setBusyId(null);
+			}
+		},
+		[profileId],
+	);
+
+	const handleClearAll = useCallback(async () => {
+		setClearing(true);
+		try {
+			await invoke("global_chat_clear_memory", { profileId });
+			setEntries([]);
+			toast.success("Cleared all memories");
+		} catch {
+			toast.error("Couldn't clear memories");
+		} finally {
+			setClearing(false);
+		}
+	}, [profileId]);
+
+	const hasEntries = (entries?.length ?? 0) > 0;
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="max-w-lg">
+				<DialogHeader>
+					<DialogTitle className="flex items-center gap-2">
+						<BrainIcon className="size-4 text-primary" />
+						Saved memories
+					</DialogTitle>
+					<DialogDescription>
+						Facts, preferences, and decisions the assistant remembered for this
+						profile. Delete anything it should forget.
+					</DialogDescription>
+				</DialogHeader>
+
+				<ScrollArea className="max-h-[50vh] pr-3">
+					{loading ? (
+						<div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+							<Loader2Icon className="size-4 animate-spin" />
+							Loading…
+						</div>
+					) : !hasEntries ? (
+						<div className="flex flex-col items-center gap-1 py-10 text-center text-sm text-muted-foreground">
+							<BrainIcon className="size-6 opacity-40" />
+							<p>No memories saved yet.</p>
+							<p className="text-xs">
+								The assistant stores salient facts as you chat.
+							</p>
+						</div>
+					) : (
+						<ul className="flex flex-col gap-2 py-1">
+							{entries?.map((entry) => (
+								<li
+									key={entry.id}
+									className="group flex items-start gap-2 rounded-lg border border-border/50 bg-muted/30 p-2.5"
+								>
+									<div className="min-w-0 flex-1">
+										<p className="whitespace-pre-wrap wrap-break-word text-sm text-foreground">
+											{entry.content}
+										</p>
+										<div className="mt-1.5 flex items-center gap-1.5">
+											{entry.role && entry.role !== "observation" && (
+												<Badge
+													variant="secondary"
+													className="h-4 px-1.5 text-[10px] font-normal"
+												>
+													{entry.role}
+												</Badge>
+											)}
+											<span className="text-[11px] text-muted-foreground">
+												{formatMemoryAge(entry.timestamp)}
+											</span>
+										</div>
+									</div>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										disabled={busyId === entry.id}
+										onClick={() => handleDelete(entry.id)}
+										title="Forget this memory"
+										className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+									>
+										{busyId === entry.id ? (
+											<Loader2Icon className="size-3.5 animate-spin" />
+										) : (
+											<Trash2Icon className="size-3.5" />
+										)}
+									</Button>
+								</li>
+							))}
+						</ul>
+					)}
+				</ScrollArea>
+
+				{hasEntries && (
+					<DialogFooter className="sm:justify-between">
+						<span className="text-xs text-muted-foreground">
+							{entries?.length} {entries?.length === 1 ? "memory" : "memories"}
+						</span>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							disabled={clearing}
+							onClick={handleClearAll}
+							className="gap-1.5 text-destructive hover:text-destructive"
+						>
+							{clearing ? (
+								<Loader2Icon className="size-3.5 animate-spin" />
+							) : (
+								<Trash2Icon className="size-3.5" />
+							)}
+							Clear all
+						</Button>
+					</DialogFooter>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }

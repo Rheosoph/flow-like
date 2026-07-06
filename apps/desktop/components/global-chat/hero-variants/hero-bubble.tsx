@@ -204,6 +204,14 @@ const HERO_BUBBLE_CSS = `
 .dark .hero-bubble-hint { color: #c3c9e8; }
 .hero-bubble-hint svg { color: #7c5cf0; }
 .dark .hero-bubble-hint svg { color: #cfc6ff; }
+/* per-letter ripple: the loop warps each glyph in step with the bubble's
+   own traveling surface wave, so the hint reads as part of the liquid film */
+.hero-bubble-hint-text { white-space: nowrap; }
+.hero-bubble-hint-l {
+	display: inline-block;
+	transform-origin: 50% 78%;
+	will-change: transform;
+}
 /* animation would out-cascade the opacity here — disable it when open */
 .hero-bubble-wrap.hero-bubble-open .hero-bubble-hint {
 	animation: none;
@@ -596,6 +604,8 @@ const SATELLITES = HERO_SUGGESTIONS.map((label, index) => ({
 
 const ROTATING_WORDS = ["build", "do", "know", "automate"];
 
+const HINT_TEXT = "Click to ask FlowPilot";
+
 type RotatingWordFx = "morph" | "wipe" | "pop";
 
 function wordLetters(word: string) {
@@ -832,6 +842,10 @@ export function HeroSearchBarBubble() {
 		let morphTarget = 0;
 
 		const input = wrap.querySelector("textarea");
+		const hintLetters = Array.from(
+			wrap.querySelectorAll<HTMLElement>(".hero-bubble-hint-l"),
+		);
+		const hintDenom = Math.max(HINT_TEXT.length - 1, 1);
 		// open/close is click-outside based (not blur) so using the attach/send
 		// buttons inside the composer doesn't collapse it mid-interaction
 		const setOpen = (open: boolean) => {
@@ -927,6 +941,29 @@ export function HeroSearchBarBubble() {
 			gl.drawArrays(gl.TRIANGLES, 0, 3);
 		};
 
+		// warp each hint glyph in step with the shader's traveling surface wave
+		// (sin(p.x*1.8 - t*1.4)); livelier under the cursor, lifting toward it like
+		// the film bulges, and flattening out as the composer straightens open
+		const rippleHint = (ms: number) => {
+			if (!hintLetters.length) return;
+			const ts = ms / 1000;
+			const tw = ts * 0.3;
+			const calm = 1 - Math.min(Math.max(morph, 0), 1);
+			const hov = 0.5 + 0.9 * mstr;
+			for (const el of hintLetters) {
+				const idx = Number(el.dataset.i) || 0;
+				const xu = (idx / hintDenom - 0.5) * 2.2;
+				const wave = Math.sin(xu * 1.8 - tw * 1.4);
+				const swell = Math.sin(xu * 0.9 + ts * 0.5);
+				const md = xu - mx;
+				const near = Math.exp(-md * md * 2.0) * mstr;
+				const y = ((wave * 2.6 + swell * 1.3) * hov - near * 5) * calm;
+				const rot = wave * 5 * hov * calm;
+				const sy = 1 + (wave * 0.06 * hov + near * 0.12) * calm;
+				el.style.transform = `translate3d(0,${y.toFixed(2)}px,0) rotate(${rot.toFixed(2)}deg) scaleY(${sy.toFixed(3)})`;
+			}
+		};
+
 		const resize = () => {
 			const dpr = Math.min(window.devicePixelRatio || 1, 2);
 			const w = canvas.clientWidth;
@@ -961,6 +998,7 @@ export function HeroSearchBarBubble() {
 				if (++frame % 20 === 0) lightTarget = themeIsLight() ? 1 : 0;
 				light += (lightTarget - light) * 0.08;
 				draw(ms);
+				rippleHint(ms);
 				raf = requestAnimationFrame(loop);
 			};
 			raf = requestAnimationFrame(loop);
@@ -1066,7 +1104,18 @@ export function HeroSearchBarBubble() {
 				))}
 				<span className="hero-bubble-hint" aria-hidden="true">
 					<SparklesIcon className="size-4.25" strokeWidth={1.8} />
-					Click to ask FlowPilot
+					<span className="hero-bubble-hint-text">
+						{[...HINT_TEXT].map((ch, i) => (
+							<span
+								// biome-ignore lint/suspicious/noArrayIndexKey: fixed static string, index is stable
+								key={i}
+								className="hero-bubble-hint-l"
+								data-i={i}
+							>
+								{ch === " " ? " " : ch}
+							</span>
+						))}
+					</span>
 				</span>
 				{SATELLITES.map(({ label, icon: Icon, strokeWidth, style }) => (
 					<button

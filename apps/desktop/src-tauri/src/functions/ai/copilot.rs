@@ -1,12 +1,13 @@
 use crate::state::{TauriFlowLikeState, TauriSettingsState};
 use async_trait::async_trait;
+use dashmap::DashMap;
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
     ChatImage, CopilotScope, UIActionContext, UnifiedChatMessage, UnifiedContext, UnifiedCopilot,
     UnifiedCopilotResponse,
 };
 use flow_like::flow::board::Board;
-use flow_like::flow::copilot::memory::{AssistantMemory, MemoryStatus};
+use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformCopilot, PlatformToolBridge};
 use flow_like::flow::copilot::{
     BoardCommand, CatalogProvider, GraphContext, NodeMetadata, PinMetadata, RunContext,
@@ -22,10 +23,14 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{Arc, LazyLock, Mutex as StdMutex},
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State, ipc::Channel};
+use tauri::{
+    AppHandle, Manager, State,
+    ipc::{Channel, InvokeResponseBody},
+};
+use tokio::sync::watch;
 
 /// Desktop implementation of the catalog provider for node search
 struct DesktopCatalogProvider {
@@ -521,7 +526,7 @@ fn global_assistant_system_prompt() -> String {
 You operate at the PLATFORM level (not inside a single board). Your job:
 1. Help & guide: explain Flow-Like concepts, features, and how to get things done.
 2. Act for the user via tools: navigate the app, create apps, and more. Prefer doing the work with a tool over only describing the steps.
-3. Delegate ALL board/page questions and work: whenever the user asks about a specific board/workflow/page — explaining it, editing it, or debugging it — call `flowpilot_board`. It has full access to the board's nodes and connections. Use mode="explain" to answer a question (read-only, no changes) and mode="edit" (default) to build or modify. Never author FlowScript or explain a board's internals yourself.
+3. Two specialists, clear split: board/workflow LOGIC (nodes, connections, events, data) → `flowpilot_board`; the USER INTERFACE (pages, widgets, components) → `flowpilot_widget`. Whenever the user asks about a specific board/workflow — explaining it, editing its nodes, or debugging it — call `flowpilot_board` (mode="explain" read-only, or mode="edit" default). Never author FlowScript or explain a board's internals yourself.
 
 Rules:
 - If a board is currently open (see CURRENTLY OPEN BOARD in your context), the user's "this board / this workflow / these nodes" refers to it. Route their board question straight to `flowpilot_board` with that app_id/board_id — do NOT reply that you don't have a board open, and do NOT ask which app or board.
@@ -529,8 +534,10 @@ Rules:
 - Use `navigate_view` to take the user to a different screen when a full view is better than an inline embed. Only use the documented routes — never invent paths.
 - Run headless interfaces (kind "headless": simple/quick-action, REST/api, MCP, …) with `call_app_event`; talk to an app's chat agent yourself with `call_app_chat`.
 - Building or editing workflow logic (nodes, connections, events) ALWAYS goes through `flowpilot_board`. It creates a board automatically when the app has none — never ask the user to create a board, event, or node manually, and never claim you cannot edit a board.
-- `flowpilot_board` edits board/page CONTENTS only — it cannot create or rename apps or change app settings. Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
-- Building or editing UI on the user's OPEN widget/page builder surface goes through `flowpilot_widget` (only available while such a surface is open; the generated components are staged in the chat for the user to review and apply). Board/workflow logic stays with `flowpilot_board`.
+- `flowpilot_board` edits board CONTENTS only (nodes/events/logic) — it cannot create or rename apps or change app settings, and it does NOT build UI (that's `flowpilot_widget`). Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
+- Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. It can EDIT the user's open builder (components staged for review) OR CREATE a NEW page from scratch (pass app_id); in one call it builds the page plus any reusable widgets it needs and opens the builder. Board/workflow logic stays with `flowpilot_board`.
+- Events are a DELIBERATE step you choose — never auto-created by other tools. Use `upsert_event` to create/update one and `delete_event` to remove it. A PAGE event makes a page reachable at a URL: pass page_id (the page) and a route (e.g. "/weather"). A NORMAL event is a workflow trigger: pass board_id + node_id (an events_* node). Creating a page with `flowpilot_widget` does NOT make it reachable — add a page event with a route when the user wants it visitable.
+- To build a whole interface or app, ORDER MATTERS: `create_app` (if needed) → `flowpilot_widget` to create the page and its widgets FIRST → then `flowpilot_board` to wire the logic (it returns `event_nodes` — the events_simple nodes it created) → `set_page_load_event` to run one of those when the page opens (e.g. to load data) → `upsert_event` (page event with a route) so the page is reachable. Create the UI first because the workflow references it: nodes like widget-action events reference a widget's action, and navigation/onLoad reference a page — so the widgets and pages must exist before the board can point at them. When you then call `flowpilot_board`, include the created page name/route and the widget names + their action ids in the instruction so it wires the logic to the right targets. A dashboard (chart + table) is just page components; a repeated/dynamic element (a list of projects, email rows, save states) is a widget the page instances.
 - Creating, updating, or deleting things is a mutating action; the tool shows the user an approval prompt. Never claim something is done until the tool returns success.
 - Be concise and concrete. After an action, briefly state what you did and what changed.
 - Use `internet_search` for general/public-web questions.
@@ -538,6 +545,7 @@ Rules:
 - Only ever act on the current user's own profiles and apps; never expose other users' data.
 
 Examples of good tool use:
+- "Build a weather app with a page showing Munich's weather" → `create_app` (name: "Weather App") → `flowpilot_widget` (app_id from the result, instruction: "A weather page for Munich: a header, a large current-temperature card, and stat tiles for conditions, humidity and wind") → `flowpilot_board` (same app_id, instruction: "On page load, fetch current weather for Munich from a weather API and output temperature, conditions, humidity and wind for the page to display") — note the returned `event_nodes` (the created events_simple node) → `set_page_load_event` (app_id, page_id from flowpilot_widget, on_load_event_id: that node id) so the weather loads when the page opens → `upsert_event` (app_id, name: "Weather", page_id, route: "/weather") so the page is reachable → summarize. Call each tool ONCE, in this order; after a tool succeeds, move to the next step — never repeat a successful call.
 - "Create an app that fetches RSS feeds daily" → `create_app` (name: "RSS Digest") → `flowpilot_board` (app_id from the create result, instruction: "Create a cron-triggered workflow that fetches these RSS feeds daily, deduplicates items and stores them in the app database") → summarize what was built.
 - "Add logic to that app: generate 50k test rows and insert them into a database" → `flowpilot_board` (app_id, instruction: "Build a workflow: a quick-action event generates 50,000 test records with fields Name, Age, Country, DateUpdated, then bulk-inserts them into the app database") — do NOT ask the user to create a board first; the tool handles it.
 - "Show me my briefings" → `list_apps` → the briefing event has kind "page" → `open_app_page`.
@@ -771,6 +779,109 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
 
 /// Global FlowPilot assistant chat: a separate platform-level agent loop.
 ///
+/// How long a finished/aborted global-chat run stays resumable after completion, so a client that
+/// reloads or reconnects a moment after the turn ended can still replay the full transcript.
+const GLOBAL_CHAT_RUN_TTL_SECS: u64 = 120;
+
+/// A single in-flight (or just-finished) `global_chat` generation, addressable by run id so a
+/// reloaded webview can re-attach to it via `global_chat_resume`.
+///
+/// The webview's JS `Channel` dies on reload, but the Rust generation task keeps running — it just
+/// streams into a dead channel. This handle mirrors every emitted chunk into an ordered `buffer`
+/// (the replay log) and forwards it to whichever `live` channel is currently attached. On resume we
+/// swap `live` to the fresh channel and replay the buffer, so the client rebuilds the whole message
+/// from a clean parser. `done` flips true when the turn ends, unblocking waiting resumers.
+struct GlobalChatRun {
+    buffer: StdMutex<Vec<String>>,
+    live: StdMutex<Option<Channel<String>>>,
+    done_tx: watch::Sender<bool>,
+    done_rx: watch::Receiver<bool>,
+}
+
+/// Registry of live global-chat runs, keyed by the assistant message id the frontend generated.
+static GLOBAL_CHAT_RUNS: LazyLock<DashMap<String, Arc<GlobalChatRun>>> =
+    LazyLock::new(DashMap::new);
+
+/// Register a new run and take ownership of its initial live channel.
+fn register_global_chat_run(run_id: &str, live: Channel<String>) -> Arc<GlobalChatRun> {
+    let (done_tx, done_rx) = watch::channel(false);
+    let run = Arc::new(GlobalChatRun {
+        buffer: StdMutex::new(Vec::new()),
+        live: StdMutex::new(Some(live)),
+        done_tx,
+        done_rx,
+    });
+    GLOBAL_CHAT_RUNS.insert(run_id.to_string(), run.clone());
+    run
+}
+
+/// A `Channel<String>` whose sends are mirrored into the run (buffer + live forward) instead of
+/// going straight to the webview. Passed to the backend in place of the raw JS channel.
+fn global_chat_run_channel(run: Arc<GlobalChatRun>) -> Channel<String> {
+    Channel::new(move |body: InvokeResponseBody| {
+        let chunk = match &body {
+            InvokeResponseBody::Json(json) => serde_json::from_str::<String>(json).ok(),
+            InvokeResponseBody::Raw(bytes) => String::from_utf8(bytes.clone()).ok(),
+        };
+        if let Some(chunk) = chunk {
+            let mut buffer = run.buffer.lock().unwrap();
+            buffer.push(chunk.clone());
+            if let Some(channel) = run.live.lock().unwrap().as_ref() {
+                let _ = channel.send(chunk);
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Mark a run finished and schedule its removal from the registry after the resumable TTL.
+fn finish_global_chat_run(run_id: String, run: &Arc<GlobalChatRun>) {
+    let _ = run.done_tx.send(true);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(GLOBAL_CHAT_RUN_TTL_SECS)).await;
+        GLOBAL_CHAT_RUNS.remove(&run_id);
+    });
+}
+
+#[derive(Serialize)]
+pub struct GlobalChatResumeResult {
+    /// True when a live/recent run was found and its transcript replayed onto the new channel.
+    pub attached: bool,
+}
+
+/// Re-attach a reloaded webview to an in-flight (or just-finished) `global_chat` run: swaps the
+/// run's live channel to the caller's, replays the full buffer, then blocks until the turn ends so
+/// the frontend's awaited invoke resolves exactly like the original send. Returns `attached: false`
+/// when no run exists (already GC'd or never registered) — the client then keeps its local
+/// checkpoint as-is.
+#[tauri::command]
+pub async fn global_chat_resume(
+    run_id: String,
+    channel: Channel<String>,
+) -> Result<GlobalChatResumeResult, String> {
+    let run = match GLOBAL_CHAT_RUNS.get(&run_id) {
+        Some(entry) => entry.value().clone(),
+        None => return Ok(GlobalChatResumeResult { attached: false }),
+    };
+
+    {
+        // Hold the buffer lock across the swap + replay so no concurrent push can interleave: every
+        // buffered chunk reaches the new channel in order, and later pushes follow it.
+        let buffer = run.buffer.lock().unwrap();
+        *run.live.lock().unwrap() = Some(channel.clone());
+        for chunk in buffer.iter() {
+            let _ = channel.send(chunk.clone());
+        }
+    }
+
+    let mut done_rx = run.done_rx.clone();
+    if !*done_rx.borrow_and_update() {
+        let _ = done_rx.wait_for(|done| *done).await;
+    }
+
+    Ok(GlobalChatResumeResult { attached: true })
+}
+
 /// Reuses the same backend selection as `copilot_chat` (profile Bits models plus the GitHub Copilot,
 /// Codex, and Claude Code agent backends) but injects a platform system prompt, self-awareness
 /// context, and the platform tool set instead of board/frontend tools.
@@ -788,6 +899,9 @@ pub async fn global_chat(
     embedding_model_id: Option<String>,
     attachment_urls: Option<Vec<String>>,
     board_context: Option<GlobalOpenBoardContext>,
+    // Frontend-generated id (the assistant message id) under which this run is registered so a
+    // reloaded webview can re-attach via `global_chat_resume`. `None` disables resumability.
+    run_id: Option<String>,
     channel: Channel<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
     let model_selection = FlowPilotModelSelection::parse(model_id);
@@ -837,6 +951,18 @@ pub async fn global_chat(
         None
     };
 
+    // Register the run (if the frontend gave a run id) and stream through a mirror channel that
+    // buffers every chunk + forwards to the live webview channel, so a reload can re-attach and
+    // replay via `global_chat_resume`. Without a run id, stream straight to the raw channel.
+    let run = run_id
+        .as_ref()
+        .map(|id| register_global_chat_run(id, channel.clone()));
+    let sink = match &run {
+        Some(run) => global_chat_run_channel(run.clone()),
+        None => channel,
+    };
+
+    let result = async {
     match model_selection.backend {
         FlowPilotChatBackend::Agent(FlowPilotAgentBackendKind::GithubCopilot) => {
             let model_id = model_selection
@@ -857,7 +983,7 @@ pub async fn global_chat(
                 user_prompt,
                 current_images,
                 history,
-                channel,
+                sink,
                 Some(context),
                 memory,
                 false,
@@ -883,7 +1009,7 @@ pub async fn global_chat(
                 None,
                 user_prompt,
                 history,
-                channel,
+                sink,
                 Some(context),
                 memory,
                 false,
@@ -918,7 +1044,7 @@ pub async fn global_chat(
                 .collect();
 
             let on_token = move |token: String| {
-                let _ = channel.send(token);
+                let _ = sink.send(token);
             };
 
             let assistant = PlatformCopilot::new(state.0.clone(), profile);
@@ -949,6 +1075,16 @@ pub async fn global_chat(
             })
         }
     }
+    }
+    .await;
+
+    // Mark the run finished (unblocking any resumer waiting on completion) and schedule its removal
+    // after the resumable TTL. Runs on both the success and error paths so the registry never leaks.
+    if let (Some(run_id), Some(run)) = (run_id, run) {
+        finish_global_chat_run(run_id, &run);
+    }
+
+    result
 }
 
 /// Append the shared memory recall/instruction sections to the platform context for the agent
@@ -984,6 +1120,29 @@ pub async fn global_chat_clear_memory(
     profile_id: String,
 ) -> Result<(), String> {
     AssistantMemory::clear(state.0.clone(), &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List a profile's saved memories (newest first) so the UI can review and manage them.
+#[tauri::command]
+pub async fn global_chat_list_memories(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+) -> Result<Vec<MemoryEntry>, String> {
+    AssistantMemory::list(state.0.clone(), &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a single saved memory by id.
+#[tauri::command]
+pub async fn global_chat_delete_memory(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), String> {
+    AssistantMemory::delete_entry(state.0.clone(), &profile_id, &id)
         .await
         .map_err(|e| e.to_string())
 }

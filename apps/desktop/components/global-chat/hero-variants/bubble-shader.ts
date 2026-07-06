@@ -130,9 +130,13 @@ void main() {
 	colL += clamp(filmL * 1.3, 0.0, 1.0) * rimCoreL * 0.55;
 	colL = mix(colL, vec3(1.0), spec * 0.8);        // white specular hotspot
 	colL += filmL * exp(-mdist * 2.5) * 0.34 * u_mstr * fill;
-	// open composer keeps a soft tint (was near-white) so it still reads coloured,
-	// while staying light enough for legible input text
-	colL = mix(colL, mix(vec3(0.985, 0.982, 0.997), filmL * 0.5 + vec3(0.6), 0.5), m * 0.9);
+	// open composer (light): wash the interior near-white so input text stays legible…
+	vec3 openBody = mix(vec3(0.99, 0.988, 1.0), clamp(filmL * 0.38 + vec3(0.66), 0.0, 1.0), 0.28);
+	colL = mix(colL, openBody, m * 0.92);
+	// …then lay a THIN saturated iridescent line hugging the inner silhouette so the
+	// cool bubble border survives the straighten-out (fill gates it from blooming out)
+	float edgeLine = exp(-abs(d) * 80.0) * fill;
+	colL = mix(colL, clamp(filmL * 0.95, 0.0, 1.0), edgeLine * m * 0.9);
 	// alpha = translucent film body + a crisp thin rim line ONLY — no broad outer
 	// halo, so the canvas stays transparent over the heading text behind it
 	float rimLineL = exp(-abs(d) * 60.0) * (1.0 + 0.6 * mnear) * mix(1.0, 0.7, m);

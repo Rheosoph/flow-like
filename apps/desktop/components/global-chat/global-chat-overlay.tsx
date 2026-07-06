@@ -13,7 +13,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { migrateFlowPilotHistory } from "../../lib/global-chat-migration";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+import {
+	readPersistedOverlayMode,
+	useGlobalChatStore,
+} from "../../lib/global-chat-store";
 import { GlobalChatBody } from "./global-chat-body";
 
 // Dock geometry. Sizes are in px; MARGIN matches the fixed bottom-6/right-6 inset so the dock never
@@ -104,6 +107,19 @@ export function GlobalChatOverlay() {
 	useEffect(() => {
 		void migrateFlowPilotHistory();
 	}, []);
+
+	// Restore the dock across a hard reload: if it was open before the reload (and we're not on the
+	// full /chat page, which renders the conversation itself), re-open it. Re-opening re-mounts the
+	// chat surface, which then restores the transcript from IndexedDB and re-attaches to any run
+	// that was still streaming when the reload hit (global_chat_resume).
+	useEffect(() => {
+		if (
+			readPersistedOverlayMode() === "overlay" &&
+			window.location.pathname !== "/chat"
+		) {
+			openOverlay();
+		}
+	}, [openOverlay]);
 
 	// --- resizable dock -------------------------------------------------------
 	const [size, setSize] = useState<OverlaySize | null>(null);

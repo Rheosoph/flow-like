@@ -692,6 +692,104 @@ fn metadata_input_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinM
         .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
 }
 
+/// Node types whose `on_update` mints one input pin per template placeholder, paired with the
+/// config pin that carries the template. Reconcile plans NEW nodes against static catalog metadata
+/// that predates those pins, so it predicts them from the config value here. Extend this list as
+/// more placeholder-driven nodes appear (the prediction machinery is otherwise node-agnostic).
+fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static str> {
+    match node_type {
+        "string_format" => Some("format_string"),
+        _ => None,
+    }
+}
+
+/// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
+fn template_placeholders(template: &str) -> Vec<String> {
+    let bytes = template.as_bytes();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+                end += 1;
+            }
+            if end > start && bytes.get(end) == Some(&b'}') {
+                names.push(template[start..end].to_string());
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// The literal template string driving a placeholder node's dynamic pins: the value of the config
+/// arg on this call if it is a string literal, else the existing node's stored config default.
+fn placeholder_template_value(
+    meta: &NodeMetadata,
+    call: &Call,
+    entity: &NodeEntity,
+    existing: &Board,
+    config_pin: &str,
+) -> Option<String> {
+    for arg in &call.args {
+        if metadata_input_pin(meta, &arg.name).is_some_and(|pin| pin.name == config_pin) {
+            return match &arg.value {
+                Expr::Literal(Literal::String(template)) => Some(template.clone()),
+                _ => None,
+            };
+        }
+    }
+
+    let NodeEntity::Existing(node_id) = entity else {
+        return None;
+    };
+    let node = find_board_node(existing, node_id)?;
+    let bytes = find_input_pin(node, config_pin)?.default_value.as_deref()?;
+    flow_like_types::json::from_slice::<flow_like_types::Value>(bytes)
+        .ok()?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+/// Permissive Generic input pin, mirroring the `VariableType::Generic` pins a placeholder node's
+/// `on_update` adds. Generic short-circuits `metadata_pins_are_compatible`, so it accepts any wire.
+fn generic_input_pin_metadata(name: &str) -> PinMetadata {
+    PinMetadata {
+        name: name.to_string(),
+        friendly_name: name.to_string(),
+        description: String::new(),
+        data_type: "Generic".to_string(),
+        value_type: "Normal".to_string(),
+        default_value: None,
+        schema: None,
+        is_generic: true,
+        valid_values: None,
+        enforce_schema: false,
+    }
+}
+
+/// Predict the dynamic input pin an `on_update` will add for `arg`, when it names a template
+/// placeholder of a placeholder-driven node. Returns `None` for genuinely unknown pins so real
+/// typos still surface as diagnostics.
+fn synthesize_dynamic_input_pin(
+    meta: &NodeMetadata,
+    call: &Call,
+    arg: &Arg,
+    entity: &NodeEntity,
+    existing: &Board,
+) -> Option<PinMetadata> {
+    let config_pin = dynamic_placeholder_config_pin(&meta.name)?;
+    let template = placeholder_template_value(meta, call, entity, existing, config_pin)?;
+    template_placeholders(&template)
+        .iter()
+        .any(|token| token == &arg.name || to_camel_case(token) == arg.name)
+        .then(|| generic_input_pin_metadata(&arg.name))
+}
+
 /// The node type + response pin an event/tool-entry `return` maps to (mirrors the `lower.rs`
 /// `events_generic_return_result` sugar).
 const EVENT_RETURN_RESULT_TYPE: &str = "events_generic_return_result";
@@ -1701,12 +1799,12 @@ impl<'a> StructuralPlanner<'a> {
         let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) else {
             return;
         };
-        let already_wired =
-            self.existing_source_for_input(entity, input)
-                .is_some_and(|existing| {
-                    existing.node.node_ref() == source.node.node_ref()
-                        && existing.output_pin.as_deref() == Some(output_pin.as_str())
-                });
+        let already_wired = self
+            .existing_source_for_input(entity, input)
+            .is_some_and(|existing| {
+                existing.node.node_ref() == source.node.node_ref()
+                    && existing.output_pin.as_deref() == Some(output_pin.as_str())
+            });
         if !already_wired {
             self.connect_commands.push(BoardCommand::ConnectPins {
                 from_node: source.node.node_ref(),
@@ -1797,35 +1895,57 @@ impl<'a> StructuralPlanner<'a> {
     ) -> Vec<ValueSource> {
         let mut input_sources = Vec::new();
         for arg in &call.args {
-            let Some(input) = metadata_input_pin(&meta, &arg.name) else {
-                // `tools:`/`fnRefs:` carry a node's function references, not pin values — they are
-                // not board pins. For a NEWLY added node, materialize them as a
-                // `SetNodeFunctionRefs` command (the applier resolves each named target once the
-                // referenced functions/events exist). For an EXISTING node, leave its references
-                // untouched: an unchanged document round-trips to a clean no-op, and rewriting them
-                // would need exact ref→entry-node resolution against the live board.
-                if is_synthetic_fn_ref_arg(arg) {
-                    if let NodeEntity::New { .. } = entity {
-                        let refs = synthetic_fn_ref_targets(arg);
-                        if !refs.is_empty() {
-                            self.fn_ref_commands
-                                .push(BoardCommand::SetNodeFunctionRefs {
-                                    node_id: entity.node_ref(),
-                                    fn_refs: refs,
-                                    summary: Some(format!(
-                                        "Register {} on {}",
-                                        arg.name, meta.friendly_name
-                                    )),
-                                });
+            // Pins minted by a node's `on_update` (for example each `{placeholder}` of a
+            // `string_format` node) are absent from the STATIC catalog metadata used to plan a NEW
+            // node, so they must be predicted from the call's own config args. `synthesized_pin`
+            // backs the `&PinMetadata` borrow for such a predicted dynamic pin.
+            let synthesized_pin;
+            let input = match metadata_input_pin(meta, &arg.name) {
+                Some(pin) => pin,
+                None => {
+                    // `tools:`/`fnRefs:` carry a node's function references, not pin values — they
+                    // are not board pins. For a NEWLY added node, materialize them as a
+                    // `SetNodeFunctionRefs` command (the applier resolves each named target once the
+                    // referenced functions/events exist). For an EXISTING node, leave its
+                    // references untouched: an unchanged document round-trips to a clean no-op, and
+                    // rewriting them would need exact ref→entry-node resolution against the live
+                    // board.
+                    if is_synthetic_fn_ref_arg(arg) {
+                        if let NodeEntity::New { .. } = entity {
+                            let refs = synthetic_fn_ref_targets(arg);
+                            if !refs.is_empty() {
+                                self.fn_ref_commands
+                                    .push(BoardCommand::SetNodeFunctionRefs {
+                                        node_id: entity.node_ref(),
+                                        fn_refs: refs,
+                                        summary: Some(format!(
+                                            "Register {} on {}",
+                                            arg.name, meta.friendly_name
+                                        )),
+                                    });
+                            }
+                        }
+                        continue;
+                    }
+                    // A dynamic pin the node's `on_update` will add from its config (for example a
+                    // `string_format` placeholder that appears in the format string): synthesize a
+                    // permissive Generic pin so its value/connection is still planned. Apply sets
+                    // the config pin first, runs `on_update`, then resolves the wire against the
+                    // now-live pin (see `plan()`'s update-before-connect ordering).
+                    match synthesize_dynamic_input_pin(meta, call, arg, entity, self.existing) {
+                        Some(pin) => {
+                            synthesized_pin = pin;
+                            &synthesized_pin
+                        }
+                        None => {
+                            self.result.diagnostics.push(format!(
+                                "node `{}` has no input pin named `{}`; skipped that argument",
+                                call.display, arg.name
+                            ));
+                            continue;
                         }
                     }
-                    continue;
                 }
-                self.result.diagnostics.push(format!(
-                    "node `{}` has no input pin named `{}`; skipped that argument",
-                    call.display, arg.name
-                ));
-                continue;
             };
 
             if let Some(mut value) = literal_expr_to_value(&arg.value) {
@@ -3941,6 +4061,94 @@ mod tests {
                         && to_pin == "message"
             )
         }));
+    }
+
+    /// Catalog for a `string_format` node exactly as its `get_node()` declares it: a `format_string`
+    /// input and a `value` output, with NO placeholder pins (those are minted by `on_update`).
+    fn string_format_dynamic_catalog() -> Vec<NodeMetadata> {
+        vec![catalog_meta(
+            "string_format",
+            "String Format",
+            vec![pin_meta("format_string", "String", PinType::Input)],
+            vec![pin_meta("value", "String", PinType::Output)],
+        )]
+    }
+
+    #[test]
+    fn string_format_wired_placeholder_pin_connects_without_diagnostic() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value
+}
+"#,
+            &string_format_dynamic_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "$0"
+                        && from_pin == "name"
+                        && to_node == "$1"
+                        && to_pin == "name"
+            )),
+            "placeholder `{{name}}` should wire the function param into the synthesized `name` pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn string_format_literal_placeholder_pin_emits_update_without_diagnostic() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(): (message: string) {
+    const formatted = stringFormat({ formatString: "Count {idx}", idx: "five" })
+    return formatted.value
+}
+"#,
+            &string_format_dynamic_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "idx"
+                        && value == &flow_like_types::Value::String("five".to_string())
+            )),
+            "literal placeholder value should set the synthesized `idx` pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn string_format_non_placeholder_arg_still_diagnoses() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(): (message: string) {
+    const formatted = stringFormat({ formatString: "Count {idx}", jdx: "x" })
+    return formatted.value
+}
+"#,
+            &string_format_dynamic_catalog(),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("no input pin named `jdx`")),
+            "an arg that is not a template placeholder must not be synthesized: {:?}",
+            result.diagnostics
+        );
     }
 
     fn accumulator_catalog() -> Vec<NodeMetadata> {

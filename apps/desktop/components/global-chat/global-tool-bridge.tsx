@@ -1,6 +1,8 @@
 "use client";
 
 import {
+	type IEvent,
+	IEventExecutionMode,
 	IExecutionStage,
 	ILogLevel,
 	type IMetadata,
@@ -95,6 +97,91 @@ type DialogState =
 function argString(args: Record<string, unknown>, key: string): string {
 	const value = args[key];
 	return typeof value === "string" ? value : "";
+}
+
+/** Turn a page name/route into a leading-slash URL slug (e.g. "My Page" -> "/my-page"). */
+function slugifyRoute(value: string): string {
+	const slug = value
+		.trim()
+		.toLowerCase()
+		.replace(/^\/+/, "")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return `/${slug || "page"}`;
+}
+
+interface InlineWidgetInstance {
+	instanceId: string;
+	copilotWidgetId: string;
+	inlineDef: Record<string, unknown>;
+	/** The live widgetInstance component object, so the caller can remap/strip it in place. */
+	component: Record<string, unknown>;
+}
+
+/**
+ * Collect the `widgetInstance` components that carry an inline widget definition (the copilot embeds
+ * a reusable widget's tree there). The caller persists each unique widget once and wires the page's
+ * instances to it via `widgetRefs`.
+ */
+function collectInlineWidgets(
+	components: SurfaceComponent[],
+): InlineWidgetInstance[] {
+	const out: InlineWidgetInstance[] = [];
+	for (const comp of components) {
+		const inner = comp.component as unknown as
+			| Record<string, unknown>
+			| undefined;
+		if (!inner || inner.type !== "widgetInstance") continue;
+		const inlineDef = inner.inlineWidgetDef;
+		if (!inlineDef || typeof inlineDef !== "object") continue;
+		const instanceId =
+			(typeof inner.instanceId === "string" && inner.instanceId) || comp.id;
+		const copilotWidgetId =
+			(typeof inner.widgetId === "string" && inner.widgetId) || instanceId;
+		out.push({
+			instanceId,
+			copilotWidgetId,
+			inlineDef: inlineDef as Record<string, unknown>,
+			component: inner,
+		});
+	}
+	return out;
+}
+
+/**
+ * Ensure a component tree has a root with id "root" (the page/widget renderers look up "root"
+ * verbatim). If the copilot rooted the tree under a different id (e.g. "page-root"), rename that
+ * top-level (unreferenced) component to "root". No-op when a "root" already exists.
+ */
+function ensureRootId(components: SurfaceComponent[]): SurfaceComponent[] {
+	if (
+		components.length === 0 ||
+		components.some((comp) => comp.id === "root")
+	) {
+		return components;
+	}
+	const referenced = new Set<string>();
+	for (const comp of components) {
+		const inner = comp.component as unknown as
+			| Record<string, unknown>
+			| undefined;
+		const children = inner?.children as Record<string, unknown> | undefined;
+		if (Array.isArray(children?.explicitList)) {
+			for (const id of children.explicitList as unknown[]) {
+				if (typeof id === "string") referenced.add(id);
+			}
+		}
+		const template = children?.template as Record<string, unknown> | undefined;
+		if (typeof template?.componentId === "string") {
+			referenced.add(template.componentId);
+		}
+	}
+	// The root is the one component nothing else references as a child.
+	const root = components.find((comp) => !referenced.has(comp.id));
+	if (!root) return components;
+	return components.map((comp) =>
+		comp.id === root.id ? { ...comp, id: "root" } : comp,
+	);
 }
 
 /** Read an optional boolean tool argument, tolerating the "true"/"false" string forms some backends emit. */
@@ -395,6 +482,17 @@ export function GlobalToolBridge() {
 	const addInlineAppChat = useGlobalChatStore((s) => s.addInlineAppChat);
 	const setToolPrompt = useGlobalChatStore((s) => s.setToolPrompt);
 
+	// Perform a tool-requested navigation only AFTER the agent turn ends — navigating mid-stream
+	// tears down the run. Tools stash the target via setPendingNavigation; we execute it here once
+	// streaming stops.
+	const pendingNavigation = useGlobalChatStore((s) => s.pendingNavigation);
+	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
+	useEffect(() => {
+		if (isStreaming || !pendingNavigation) return;
+		useGlobalChatStore.getState().setPendingNavigation(null);
+		router.push(pendingNavigation);
+	}, [isStreaming, pendingNavigation, router]);
+
 	// The full /chat page already renders the conversation — only dock the overlay elsewhere.
 	const pathnameRef = useRef(pathname);
 	useEffect(() => {
@@ -543,7 +641,9 @@ export function GlobalToolBridge() {
 				}
 				case "navigate_view": {
 					const route = routeForView(args);
-					router.push(route);
+					// Defer the route change until the turn ends — navigating mid-stream tears down
+					// the run. The bridge performs it once streaming stops.
+					useGlobalChatStore.getState().setPendingNavigation(route);
 					// Morph the conversation into the docked overlay so the user keeps chatting
 					// while the destination view is shown — decided by the TARGET route (the
 					// pre-navigation pathname may still be /chat when this runs).
@@ -741,7 +841,13 @@ export function GlobalToolBridge() {
 					};
 				}
 				case "create_app": {
-					const name = argString(args, "name") || "Untitled app";
+					const name = argString(args, "name").trim();
+					if (!name)
+						return {
+							status: "error",
+							message:
+								'create_app requires a `name`. Derive a short name from the request (e.g. "Weather App") and call create_app once with it — do not call it again with empty arguments.',
+						};
 					const description = argString(args, "description");
 					const meta: IMetadata = {
 						name,
@@ -781,6 +887,176 @@ export function GlobalToolBridge() {
 					queryClient.invalidateQueries({ queryKey: ["getSettingsProfile"] });
 					referenceApp(app.id);
 					return { status: "ok", app_id: app.id, name, online };
+				}
+				case "upsert_event": {
+					const appId = argString(args, "app_id") || argString(args, "appId");
+					if (!appId)
+						return {
+							status: "error",
+							message: "upsert_event requires an app_id.",
+						};
+					const name = argString(args, "name").trim();
+					if (!name)
+						return {
+							status: "error",
+							message: "upsert_event requires a name.",
+						};
+					const pageId =
+						argString(args, "page_id") || argString(args, "pageId");
+					const eventBoardId =
+						argString(args, "board_id") || argString(args, "boardId");
+					const eventNodeId =
+						argString(args, "node_id") || argString(args, "nodeId");
+					// A page event binds default_page_id (board/node optional); a normal event
+					// needs an entry node in a board.
+					if (!pageId && (!eventBoardId || !eventNodeId))
+						return {
+							status: "error",
+							message:
+								"Provide page_id for a page event, OR board_id + node_id (an events_* node) for a normal event.",
+						};
+					const now = nowSystemTime();
+					const event: IEvent = {
+						id:
+							argString(args, "event_id") ||
+							argString(args, "eventId") ||
+							createId(),
+						name,
+						description: argString(args, "description"),
+						board_id: eventBoardId,
+						node_id: eventNodeId,
+						config: [],
+						active: argBool(args, "active") ?? true,
+						event_type:
+							argString(args, "event_type") ||
+							(pageId ? "quick_action" : "events_simple"),
+						event_version: [0, 0, 0],
+						priority: 0,
+						variables: {},
+						created_at: now,
+						updated_at: now,
+						execution_mode: IEventExecutionMode.Local,
+						...(pageId ? { default_page_id: pageId } : {}),
+					};
+					let savedEvent: IEvent;
+					try {
+						savedEvent = await backend.eventState.upsertEvent(appId, event);
+					} catch (error) {
+						return {
+							status: "error",
+							message: `Failed to upsert event: ${error instanceof Error ? error.message : String(error)}`,
+						};
+					}
+					// Optional URL route mapping (path -> eventId) so the event is reachable.
+					const rawRoute = argString(args, "route");
+					let routePath: string | undefined;
+					if (rawRoute) {
+						routePath = rawRoute.startsWith("/") ? rawRoute : `/${rawRoute}`;
+						try {
+							await backend.routeState.setRoute(
+								appId,
+								routePath,
+								savedEvent.id,
+							);
+						} catch (error) {
+							console.error(
+								"[global-tool-bridge] upsert_event: setRoute failed",
+								error,
+							);
+						}
+					}
+					referenceApp(appId);
+					return {
+						status: "ok",
+						event_id: savedEvent.id,
+						...(pageId ? { page_id: pageId } : {}),
+						...(routePath ? { route: routePath } : {}),
+						note: pageId
+							? "Page event upserted (bound to the page)."
+							: "Event upserted.",
+					};
+				}
+				case "delete_event": {
+					const appId = argString(args, "app_id") || argString(args, "appId");
+					const eventId =
+						argString(args, "event_id") || argString(args, "eventId");
+					if (!appId || !eventId)
+						return {
+							status: "error",
+							message: "delete_event requires app_id and event_id.",
+						};
+					try {
+						await backend.eventState.deleteEvent(appId, eventId);
+					} catch (error) {
+						return {
+							status: "error",
+							message: `Failed to delete event: ${error instanceof Error ? error.message : String(error)}`,
+						};
+					}
+					try {
+						await backend.routeState.deleteRouteByEvent(appId, eventId);
+					} catch {
+						// best-effort route cleanup
+					}
+					referenceApp(appId);
+					return { status: "ok", note: "Event deleted." };
+				}
+				case "set_page_load_event": {
+					const appId = argString(args, "app_id") || argString(args, "appId");
+					const pageId =
+						argString(args, "page_id") || argString(args, "pageId");
+					if (!appId || !pageId)
+						return {
+							status: "error",
+							message: "set_page_load_event requires app_id and page_id.",
+						};
+					const boardId =
+						argString(args, "board_id") ||
+						argString(args, "boardId") ||
+						undefined;
+					let page: Awaited<ReturnType<typeof backend.pageState.getPage>>;
+					try {
+						page = await backend.pageState.getPage(appId, pageId, boardId);
+					} catch (error) {
+						return {
+							status: "error",
+							message: `Page not found: ${error instanceof Error ? error.message : String(error)}`,
+						};
+					}
+					// onLoad/onUnload/onInterval are board NODE ids (events_simple), e.g. from a
+					// flowpilot_board result's event_nodes.
+					const onLoad =
+						argString(args, "on_load_event_id") ||
+						argString(args, "onLoadEventId");
+					const onUnload =
+						argString(args, "on_unload_event_id") ||
+						argString(args, "onUnloadEventId");
+					const onInterval =
+						argString(args, "on_interval_event_id") ||
+						argString(args, "onIntervalEventId");
+					page.onLoadEventId = onLoad || undefined;
+					if (onUnload) page.onUnloadEventId = onUnload;
+					if (onInterval) {
+						page.onIntervalEventId = onInterval;
+						const secs = args.on_interval_seconds ?? args.onIntervalSeconds;
+						if (typeof secs === "number" && secs > 0)
+							page.onIntervalSeconds = secs;
+					}
+					try {
+						await backend.pageState.updatePage(appId, page);
+					} catch (error) {
+						return {
+							status: "error",
+							message: `Failed to update page: ${error instanceof Error ? error.message : String(error)}`,
+						};
+					}
+					referenceApp(appId);
+					return {
+						status: "ok",
+						note: onLoad
+							? "Page onLoad event wired — it runs when the page opens."
+							: "Page onLoad event cleared.",
+					};
 				}
 				case "flowpilot_board": {
 					const instruction = argString(args, "instruction");
@@ -848,6 +1124,20 @@ export function GlobalToolBridge() {
 							? Promise.resolve(liveSurface.catalogNodes)
 							: backend.boardState.getCatalog(appId),
 					]);
+
+					// Event (events_simple) nodes already on the board before this run — so we can
+					// report which ones the copilot ADDED, letting the orchestrator wire one as a
+					// page's onLoad event (set_page_load_event).
+					const preExistingEventNodeIds = new Set(
+						Object.values(
+							(board?.nodes ?? {}) as Record<
+								string,
+								{ id: string; name: string }
+							>,
+						)
+							.filter((node) => node.name === "events_simple")
+							.map((node) => node.id),
+					);
 
 					// Run the board copilot as a sub-agent, using the global chat's selected model.
 					const chat = useGlobalChatStore.getState();
@@ -973,7 +1263,9 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 						// when it isn't already the live canvas) and relay the copilot's answer.
 						if (readOnly) {
 							if (!liveSurface) {
-								router.push(`/flow?id=${boardId}&app=${appId}`);
+								useGlobalChatStore
+									.getState()
+									.setPendingNavigation(`/flow?id=${boardId}&app=${appId}`);
 								openOverlay();
 							}
 							referenceApp(appId);
@@ -1120,15 +1412,58 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 					// already looking at the board — no navigation. If the board was closed
 					// mid-run (apply fell back to detached), navigate so the change is visible.
 					if (!liveSurface || appliedViaLive === false) {
-						router.push(`/flow?id=${boardId}&app=${appId}`);
+						useGlobalChatStore
+							.getState()
+							.setPendingNavigation(`/flow?id=${boardId}&app=${appId}`);
 						openOverlay();
 					}
 					referenceApp(appId);
+
+					// Report the events_simple nodes the copilot added, so the orchestrator can wire
+					// one as a page's onLoad event (via set_page_load_event) or a page/normal event.
+					let addedEventNodes: Array<{ id: string; name: string }> = [];
+					if (
+						source &&
+						!applyFailed &&
+						workspaceStatus !== "validation_errors"
+					) {
+						try {
+							const updatedBoard = await backend.boardState.getBoard(
+								appId,
+								boardId,
+								undefined,
+								true,
+							);
+							addedEventNodes = Object.values(
+								(updatedBoard?.nodes ?? {}) as Record<
+									string,
+									{ id: string; name: string; friendly_name?: string }
+								>,
+							)
+								.filter(
+									(node) =>
+										node.name === "events_simple" &&
+										!preExistingEventNodeIds.has(node.id),
+								)
+								.map((node) => ({
+									id: node.id,
+									name: node.friendly_name || node.name,
+								}));
+						} catch (error) {
+							console.error(
+								"[global-tool-bridge] flowpilot_board: event-node scan failed",
+								error,
+							);
+						}
+					}
 
 					return {
 						status: "ok",
 						message: response.message,
 						applied_commands: appliedCommands,
+						...(addedEventNodes.length > 0
+							? { event_nodes: addedEventNodes }
+							: {}),
 						...(createdBoard ? { created_board_id: boardId } : {}),
 						...(!source
 							? {
@@ -1165,15 +1500,19 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 							status: "error",
 							message: "flowpilot_widget requires an instruction.",
 						};
-					// The widget copilot only targets a LIVE builder surface — there is no
-					// detached path: generated components are staged for review and applied
-					// through the surface's own pipeline.
+					// Edit mode targets the OPEN builder surface. When none is open we create a NEW
+					// board-scoped page from scratch (mirrors how flowpilot_board bootstraps a board).
 					const widgetSurface = useAssistantSurface.getState().widgetSurface;
-					if (!widgetSurface)
+					const createMode = !widgetSurface;
+					const appId =
+						widgetSurface?.appId ||
+						argString(args, "app_id") ||
+						argString(args, "appId");
+					if (createMode && !appId)
 						return {
 							status: "error",
 							message:
-								"No widget/page surface is open. Ask the user to open the page/widget builder first (navigate_view or open the builder), then retry.",
+								"No widget/page builder is open. To create a NEW page pass app_id (from list_apps/create_app); otherwise ask the user to open a builder first.",
 						};
 
 					// Run the widget copilot as a sub-agent, using the global chat's selected model.
@@ -1236,8 +1575,8 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 							null,
 							undefined,
 							[],
-							widgetSurface.currentComponents,
-							widgetSurface.selectedComponentIds,
+							widgetSurface?.currentComponents ?? [],
+							widgetSurface?.selectedComponentIds ?? [],
 							instruction,
 							[],
 							undefined /* images */,
@@ -1259,41 +1598,177 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 					canvasSettings =
 						validateCanvasSettings(response.canvas_settings) ?? canvasSettings;
 
-					let staged = false;
-					if (components.length > 0) {
-						// Stage for the user's inline review — NEVER auto-applied to the canvas.
-						// Bound to the generating builder so Apply can't target another surface.
-						if (runIsLive()) {
-							useGlobalChatStore.getState().setPendingComponents({
-								components,
-								canvasSettings,
-								warnings: warnings.length > 0 ? warnings : undefined,
-								surfaceId: widgetSurface.surfaceId,
-								appId: widgetSurface.appId,
-							});
-							staged = true;
-						}
-						// Close the run with a summary step, like the board case's FlowScript step.
-						subAcc.stepOrder.push("components");
-						subAcc.steps.set("components", {
-							id: "components",
-							title: "UI components",
-							description: `${components.length} component${components.length === 1 ? "" : "s"} ready for review`,
-							status: "done",
-							timestamp: Date.now(),
-						});
-						publishSubSteps();
-					}
-
-					if (widgetSurface.appId) referenceApp(widgetSurface.appId);
-
 					if (components.length === 0)
 						return {
 							status: "ok",
 							message: response.message,
 							component_count: 0,
-							note: "IMPORTANT: the widget copilot ended WITHOUT generating any UI components — the surface was NOT changed. Do not tell the user the UI was built; retry once with a clearer instruction or tell the user honestly that nothing was generated.",
+							note: "IMPORTANT: the widget copilot ended WITHOUT generating any UI components — nothing was changed. Do not tell the user the UI was built; retry once with a clearer instruction or tell the user honestly that nothing was generated.",
 						};
+
+					// Close the run with a summary step, like the board case's FlowScript step.
+					subAcc.stepOrder.push("components");
+					subAcc.steps.set("components", {
+						id: "components",
+						title: "UI components",
+						description: `${components.length} component${components.length === 1 ? "" : "s"} ${createMode ? "generated" : "ready for review"}`,
+						status: "done",
+						timestamp: Date.now(),
+					});
+					publishSubSteps();
+
+					if (createMode) {
+						const targetAppId = appId as string;
+						// A page is board-scoped: reuse the app's board or create one (like
+						// flowpilot_board) so the page's logic can be wired next.
+						let boardId =
+							argString(args, "board_id") || argString(args, "boardId");
+						let createdBoard = false;
+						if (!boardId) {
+							const boards = await backend.boardState.getBoards(targetAppId);
+							boardId = boards?.[0]?.id ?? "";
+						}
+						if (!boardId) {
+							boardId = createId();
+							await backend.boardState.upsertBoard(
+								targetAppId,
+								boardId,
+								argString(args, "board_name") || "Main Board",
+								instruction.slice(0, 140),
+								ILogLevel.Debug,
+								IExecutionStage.Dev,
+							);
+							createdBoard = true;
+						}
+
+						// Persist each reusable widget the copilot embedded inline, and point the
+						// page's instances at the saved widget via widgetRefs (keyed by instance id).
+						const inlineWidgets = collectInlineWidgets(components);
+						const widgetRefs: Record<string, unknown> = {};
+						const realIdByCopilotId = new Map<string, string>();
+						const widgetByRealId = new Map<string, unknown>();
+						// Concrete ids/names/action-ids so the orchestrator can reference these
+						// widgets when it calls flowpilot_board to wire the logic.
+						const createdWidgets: Array<{
+							id: string;
+							name: string;
+							action_ids: string[];
+						}> = [];
+						try {
+							for (const iw of inlineWidgets) {
+								let realId = realIdByCopilotId.get(iw.copilotWidgetId);
+								if (!realId) {
+									realId = createId();
+									const widgetName =
+										typeof iw.inlineDef.name === "string"
+											? iw.inlineDef.name
+											: "Widget";
+									const widget = await backend.widgetState.createWidget(
+										targetAppId,
+										realId,
+										widgetName,
+									);
+									widget.components = ensureRootId(
+										collectComponents(iw.inlineDef.components),
+									);
+									widget.rootComponentId = "root";
+									if (Array.isArray(iw.inlineDef.exposedProps))
+										(widget as { exposedProps?: unknown }).exposedProps =
+											iw.inlineDef.exposedProps;
+									if (Array.isArray(iw.inlineDef.actions))
+										(widget as { actions?: unknown }).actions =
+											iw.inlineDef.actions;
+									await backend.widgetState.updateWidget(targetAppId, widget);
+									realIdByCopilotId.set(iw.copilotWidgetId, realId);
+									widgetByRealId.set(realId, widget);
+									const actionIds = Array.isArray(iw.inlineDef.actions)
+										? (iw.inlineDef.actions as Array<Record<string, unknown>>)
+												.map((action) =>
+													typeof action?.id === "string" ? action.id : "",
+												)
+												.filter(Boolean)
+										: [];
+									createdWidgets.push({
+										id: realId,
+										name: widgetName,
+										action_ids: actionIds,
+									});
+								}
+								// Point the instance at the saved widget and drop the redundant inline def.
+								iw.component.widgetId = realId;
+								iw.component.instanceId = iw.instanceId;
+								iw.component.appId = targetAppId;
+								iw.component.inlineWidgetDef = undefined;
+								widgetRefs[iw.instanceId] = widgetByRealId.get(realId);
+							}
+						} catch (error) {
+							return {
+								status: "error",
+								message: `Failed to create the page's widgets: ${error instanceof Error ? error.message : String(error)}`,
+							};
+						}
+
+						const pageId = createId();
+						const pageName =
+							argString(args, "page_name") ||
+							argString(args, "name") ||
+							"New Page";
+						const route = slugifyRoute(argString(args, "route") || pageName);
+						try {
+							const page = await backend.pageState.createPage(
+								targetAppId,
+								pageId,
+								pageName,
+								route,
+								boardId,
+							);
+							page.components = ensureRootId(components);
+							if (canvasSettings) page.canvasSettings = canvasSettings;
+							if (Object.keys(widgetRefs).length > 0)
+								(page as { widgetRefs?: unknown }).widgetRefs = widgetRefs;
+							await backend.pageState.updatePage(targetAppId, page);
+						} catch (error) {
+							return {
+								status: "error",
+								message: `Failed to create the page: ${error instanceof Error ? error.message : String(error)}`,
+							};
+						}
+
+						referenceApp(targetAppId);
+						// Defer the navigation: router.push mid-stream tears down the run. The bridge
+						// navigates once the agent turn ends.
+						useGlobalChatStore
+							.getState()
+							.setPendingNavigation(
+								`/page-builder?id=${pageId}&app=${targetAppId}&board=${boardId}`,
+							);
+						openOverlay();
+						return {
+							status: "ok",
+							message: response.message,
+							component_count: components.length,
+							app_id: targetAppId,
+							board_id: boardId,
+							page: { id: pageId, name: pageName, route },
+							widgets: createdWidgets,
+							...(createdBoard ? { created_board_id: boardId } : {}),
+							note: "Created a new page (and any reusable widgets it needs), applied the UI, and opened the page builder. To wire the logic, call flowpilot_board with this app_id and reference the page (route) and these widgets/action_ids in the instruction.",
+						};
+					}
+
+					// Edit mode: stage for the user's inline review — NEVER auto-applied.
+					let staged = false;
+					if (runIsLive() && widgetSurface) {
+						useGlobalChatStore.getState().setPendingComponents({
+							components,
+							canvasSettings,
+							warnings: warnings.length > 0 ? warnings : undefined,
+							surfaceId: widgetSurface.surfaceId,
+							appId: widgetSurface.appId,
+						});
+						staged = true;
+					}
+					if (widgetSurface?.appId) referenceApp(widgetSurface.appId);
 					if (!staged)
 						return {
 							status: "ok",
@@ -1490,7 +1965,9 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 			backend.boardState,
 			backend.eventState,
 			backend.userState,
-			router,
+			backend.pageState,
+			backend.widgetState,
+			backend.routeState,
 			queryClient,
 			openOverlay,
 			showConversation,
