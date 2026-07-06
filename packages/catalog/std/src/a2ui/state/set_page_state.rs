@@ -70,7 +70,7 @@ impl NodeLogic for SetPageState {
         let value: Value = context.evaluate_pin("value").await?;
 
         // Get page ID from payload
-        let payload = context.get_payload().await?;
+        let payload = context.get_run_payload().await?;
         let page_id = payload
             .payload
             .as_ref()

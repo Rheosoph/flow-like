@@ -58,7 +58,7 @@ impl NodeLogic for GetPageState {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let key: String = context.evaluate_pin("key").await?;
 
-        let payload = context.get_payload().await?;
+        let payload = context.get_run_payload().await?;
 
         let page_state = payload
             .payload

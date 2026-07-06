@@ -742,7 +742,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0 overflow-x-auto">
 				{providerModelPicker}
 				{memoryPicker}
-				{profileId && (
+				{memoryModels.length > 0 && profileId && (
 					<Button
 						type="button"
 						variant="outline"
