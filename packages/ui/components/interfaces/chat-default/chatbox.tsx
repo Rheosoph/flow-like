@@ -604,7 +604,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 				<form onSubmit={handleSubmit} className="relative">
 					<div
-						className="flex flex-col items-start bg-background border border-border rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
+						className="flex flex-col items-start bg-background border border-border rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
 						onDrop={handleDrop}
 						onDragOver={handleDragOver}
 					>
@@ -633,7 +633,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						</div>
 
 						{/* Tool bar and settings */}
-						<div className="flex items-center justify-between w-full bg-background rounded-b-2xl">
+						<div className="flex items-center justify-between w-full bg-background rounded-b-xl">
 							{/* Left side buttons */}
 							<div className="flex items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}

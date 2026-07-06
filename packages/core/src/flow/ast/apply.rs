@@ -29,7 +29,7 @@ use crate::{
             },
         },
         copilot::{BoardCommand, NodePosition, PlaceholderPinDef, node_to_metadata},
-        node::Node,
+        node::{FnRefs, Node},
         pin::{Pin, PinType, ValueType},
         variable::{Variable, VariableType},
     },
@@ -659,10 +659,63 @@ impl FlowScriptApplyPlanner {
                         true,
                     )));
                 }
+                BoardCommand::SetNodeFunctionRefs {
+                    node_id, fn_refs, ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    let mut resolved: Vec<String> = Vec::new();
+                    for reference in fn_refs {
+                        // Unresolvable references (e.g. a tool the model named but never defined)
+                        // are skipped rather than failing the whole apply.
+                        let Ok(target_id) = self.resolve_node_id(board, reference) else {
+                            continue;
+                        };
+                        // Functions are authored as layers; reference the layer's referenceable
+                        // entry node so runtime function-reference resolution finds a concrete node.
+                        let entry_id = self
+                            .referenceable_entry_in_layer(board, &target_id)
+                            .unwrap_or(target_id);
+                        if !resolved.contains(&entry_id) {
+                            resolved.push(entry_id);
+                        }
+                    }
+                    if resolved.is_empty() {
+                        continue;
+                    }
+                    let can_be_referenced_by_fns = node
+                        .fn_refs
+                        .as_ref()
+                        .map(|refs| refs.can_be_referenced_by_fns)
+                        .unwrap_or(false);
+                    node.fn_refs = Some(FnRefs {
+                        fn_refs: resolved,
+                        can_reference_fns: true,
+                        can_be_referenced_by_fns,
+                    });
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
             }
         }
 
         Ok(generic_commands)
+    }
+
+    /// If `id` refers to a layer (e.g. an authored FlowScript function), return the id of its
+    /// referenceable entry node — an event-type node flagged `can_be_referenced_by_fns`. Returns
+    /// `None` when `id` is not a layer or the layer has no referenceable entry.
+    fn referenceable_entry_in_layer(&self, board: &Board, id: &str) -> Option<String> {
+        let layer = board.layers.get(id).or_else(|| self.staged_layers.get(id))?;
+        layer
+            .nodes
+            .values()
+            .find(|node| {
+                node.fn_refs
+                    .as_ref()
+                    .map(|refs| refs.can_be_referenced_by_fns)
+                    .unwrap_or(false)
+            })
+            .map(|node| node.id.clone())
     }
 
     fn register_node_aliases(&mut self, aliases: &[Option<&str>], node_id: &str) {

@@ -47,6 +47,7 @@ import { DesktopAuthProvider } from "../components/auth-provider";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
 import DownloadNotificationProvider from "../components/download-notification-provider";
 import GlobalAnchorHandler from "../components/global-anchor-component";
+import { FlowPilotBubbleButton } from "../components/global-chat/flowpilot-bubble-button";
 import { GlobalChatOverlay } from "../components/global-chat/global-chat-overlay";
 import { GlobalToolBridge } from "../components/global-chat/global-tool-bridge";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
@@ -222,6 +223,7 @@ export default function RootLayout({
 																			<AppSidebar>{children}</AppSidebar>
 																			<GlobalToolBridge />
 																			<GlobalChatOverlay />
+																			<FlowPilotBubbleButton />
 																		</SpotlightWrapper>
 																	</ExecutionEngineProviderComponent>
 																</ExecutionServiceProvider>

@@ -259,3 +259,32 @@ export function detectAgentMode(prompt: string): "board" | "ui" | "both" {
 	// Default to "both" if no clear signal (let AI decide)
 	return "both";
 }
+
+// === Tool Result Compaction ===
+
+/** Cap a JSON-serializable value for tool results so huge payloads don't flood the model. */
+export function compactJson(value: unknown, maxChars = 12_000): unknown {
+	try {
+		const text = JSON.stringify(value);
+		if (text.length <= maxChars) return value;
+		return {
+			truncated: true,
+			chars: text.length,
+			preview: text.slice(0, maxChars),
+		};
+	} catch {
+		return String(value);
+	}
+}
+
+/** Keep only the tail of an intercom event stream, each event size-capped. */
+export function compactLogEvents(events: unknown[], maxEvents = 80): unknown[] {
+	return events.slice(-maxEvents).map((event) => {
+		if (!event || typeof event !== "object") return event;
+		const object = event as Record<string, unknown>;
+		return {
+			event_type: object.event_type,
+			payload: compactJson(object.payload, 3000),
+		};
+	});
+}

@@ -37,7 +37,10 @@ pub struct AssistantMemory {
 
 impl AssistantMemory {
     /// Open the per-profile LanceDB store (no embedding model). Lazily created on first write.
-    async fn open_store(state: &Arc<FlowLikeState>, profile_id: &str) -> Result<LanceDBVectorStore> {
+    async fn open_store(
+        state: &Arc<FlowLikeState>,
+        profile_id: &str,
+    ) -> Result<LanceDBVectorStore> {
         let dir = Path::from("assistant-memory").child(profile_id);
         let builder = {
             let config = state.config.read().await;
@@ -50,7 +53,14 @@ impl AssistantMemory {
         };
         let connection = state.with_lance_session(builder).execute().await?;
         let mut store = LanceDBVectorStore::from_connection(connection, "memory".to_string()).await;
-        if let Some(opts) = state.config.read().await.callbacks.lance_write_options.clone() {
+        if let Some(opts) = state
+            .config
+            .read()
+            .await
+            .callbacks
+            .lance_write_options
+            .clone()
+        {
             store.set_write_options(opts);
         }
         Ok(store)
@@ -150,6 +160,25 @@ impl AssistantMemory {
         Ok(count)
     }
 
+    /// System-prompt sections advertising memory to the model: recalled facts relevant to
+    /// `user_prompt` (when any) plus the standing memory-tool instructions. Shared by every
+    /// backend so recall behaves identically regardless of the selected model.
+    pub async fn prompt_sections(&self, user_prompt: &str) -> String {
+        let mut sections = String::new();
+        if let Ok(recalled) = self.search(user_prompt, 6).await
+            && !recalled.is_empty()
+        {
+            sections.push_str("\n\n## RELEVANT MEMORY\nFacts you remembered that may help:\n");
+            for item in &recalled {
+                sections.push_str(&format!("- {item}\n"));
+            }
+        }
+        sections.push_str(
+            "\n\n## MEMORY\nYou have persistent, profile-scoped memory. Use `_memory_search` to recall facts and `_memory_store` to save important user facts, preferences, and decisions. Store salient facts immediately rather than only saying you will remember them.",
+        );
+        sections
+    }
+
     /// Embed `query` and return up to `top_k` relevant memory contents (most similar first). Returns
     /// an empty list rather than erroring when the table does not exist yet (fresh profile).
     pub async fn search(&self, query: &str, top_k: usize) -> Result<Vec<String>> {
@@ -158,7 +187,10 @@ impl AssistantMemory {
             return Ok(Vec::new());
         }
 
-        let embeddings = self.embedding.text_embed_query(&vec![query.to_string()]).await?;
+        let embeddings = self
+            .embedding
+            .text_embed_query(&vec![query.to_string()])
+            .await?;
         if embeddings.is_empty() {
             return Ok(Vec::new());
         }

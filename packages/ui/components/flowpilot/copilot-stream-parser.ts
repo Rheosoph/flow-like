@@ -3,9 +3,10 @@
  *
  * Both the board FlowPilot (copilot_chat) and the global assistant (global_chat) stream over a Tauri
  * `Channel<string>` that interleaves raw assistant text with XML-tagged control frames
- * (`<tool_start>…</tool_start>`, `<plan_step>…</plan_step>`, `<commands>…`, etc.) plus the legacy
- * `tool_call:` / `tool_result:` text markers. This module turns a chunk stream into typed events so
- * every consumer shares one grammar and one partial-tag buffering rule instead of re-deriving it.
+ * (`<tool_start>…</tool_start>`, `<plan_step>…</plan_step>`, `<commands>…`, etc.). Every backend
+ * (Bits/rig, GitHub Copilot, Codex, Claude Code) emits this same grammar. This module turns a chunk
+ * stream into typed events so every consumer shares one grammar and one partial-tag buffering rule
+ * instead of re-deriving it.
  */
 
 export type CopilotStreamEventType =
@@ -19,14 +20,13 @@ export type CopilotStreamEventType =
 	| "commands"
 	| "components"
 	| "canvas_settings"
-	| "tool_call"
-	| "tool_result";
+	| "usage_stat";
 
 export interface CopilotStreamEvent {
 	type: CopilotStreamEventType;
 	/** Best-effort parsed JSON payload of a tag body (undefined if not JSON). */
 	data?: unknown;
-	/** Raw inner string of the tag body, or the tool name for `tool_call`. */
+	/** Raw inner string of the tag body. */
 	raw?: string;
 	/** Cleaned assistant text delta, present only on `text` events. */
 	text?: string;
@@ -43,6 +43,7 @@ const TAG_TYPES: CopilotStreamEventType[] = [
 	"commands",
 	"components",
 	"canvas_settings",
+	"usage_stat",
 ];
 
 function safeParse(input: string): unknown {
@@ -98,16 +99,6 @@ export function createCopilotStreamParser(): CopilotStreamParser {
 					return "";
 				});
 			}
-
-			// Legacy text markers emitted by the rig/Bits path.
-			token = token.replace(/tool_call:(\w+)/g, (_match, name: string) => {
-				events.push({ type: "tool_call", raw: name });
-				return "";
-			});
-			token = token.replace(/tool_result:\w*/g, () => {
-				events.push({ type: "tool_result" });
-				return "";
-			});
 
 			if (token.length > 0) events.push({ type: "text", text: token });
 

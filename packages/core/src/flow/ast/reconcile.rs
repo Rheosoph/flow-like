@@ -692,6 +692,40 @@ fn metadata_input_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinM
         .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
 }
 
+/// The node type + response pin an event/tool-entry `return` maps to (mirrors the `lower.rs`
+/// `events_generic_return_result` sugar).
+const EVENT_RETURN_RESULT_TYPE: &str = "events_generic_return_result";
+const EVENT_RESPONSE_PIN: &str = "response";
+
+/// Synthetic argument names the FlowScript decompiler emits for a node's function references
+/// (`tools:` for agent tool-registration nodes, `fnRefs:` for generic references — see
+/// `lower.rs::fn_ref_arg`). They are NOT board input pins, so reconcile must not treat them as
+/// missing pins.
+const SYNTHETIC_FN_REF_ARGS: &[&str] = &["tools", "fnRefs"];
+
+/// A `tools:`/`fnRefs:` array carrying a node's function references, rather than a real pin
+/// argument. Recognized so reconcile skips it (round-tripping to a no-op) instead of reporting a
+/// missing pin — which otherwise surfaces to the user as a spurious "FlowScript apply blocked".
+fn is_synthetic_fn_ref_arg(arg: &Arg) -> bool {
+    SYNTHETIC_FN_REF_ARGS.contains(&arg.name.as_str()) && matches!(arg.value, Expr::Array(_))
+}
+
+/// Extract the referenced target names from a synthetic `tools:`/`fnRefs:` array argument
+/// (`[fetchPage, …]`). Only bare references are recognized; the applier resolves each name to a
+/// concrete node id.
+fn synthetic_fn_ref_targets(arg: &Arg) -> Vec<String> {
+    let Expr::Array(items) = &arg.value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Expr::Ref(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn metadata_output_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinMetadata> {
     meta.outputs
         .iter()
@@ -979,6 +1013,12 @@ fn one_catalog_match(display: &str, matches: &[NodeMetadata]) -> Result<NodeMeta
             "FlowScript call `{display}` did not match the catalog"
         )),
         many => {
+            // Board-derived catalogs carry one entry per node INSTANCE — identical node types
+            // are one logical declaration, not an ambiguity.
+            let first = &many[0];
+            if many.iter().all(|m| m.name == first.name) {
+                return Ok(first.clone());
+            }
             let node_types: Vec<&str> = many.iter().map(|m| m.name.as_str()).collect();
             Err(format!(
                 "FlowScript call `{display}` is ambiguous; matched {}",
@@ -1035,12 +1075,22 @@ impl<'a> BoardIndex<'a> {
         if is_exec_pin(input) {
             return None;
         }
-        let source_pin_id = input.depends_on.iter().next()?;
-        let (source_node, source_pin) = self.pin_owner.get(source_pin_id.as_str())?;
-        Some(ValueSource {
-            node: NodeEntity::Existing(source_node.id.clone()),
-            output_pin: Some(source_pin.name.clone()),
-        })
+        let mut source_pin_id = input.depends_on.iter().next()?;
+        // Reroutes are pure wire-bends that the renderer collapses; trace through them so the
+        // reuse path sees the real origin node — the one the FlowScript text actually shows.
+        // Otherwise every inline chain behind a reroute is re-created on reconcile.
+        for _ in 0..64 {
+            let (source_node, source_pin) = self.pin_owner.get(source_pin_id.as_str())?;
+            if source_node.name != "reroute" {
+                return Some(ValueSource {
+                    node: NodeEntity::Existing(source_node.id.clone()),
+                    output_pin: Some(source_pin.name.clone()),
+                });
+            }
+            let route_in = find_input_pin(source_node, "route_in")?;
+            source_pin_id = route_in.depends_on.iter().next()?;
+        }
+        None
     }
 }
 
@@ -1059,6 +1109,16 @@ struct StructuralPlanner<'a> {
     unresolved_variable_refs: HashSet<String>,
     next_ref: usize,
     next_position: usize,
+    /// Impure calls planned in expression/argument position (e.g. `value: fakerFullName()`).
+    /// They only receive data wiring where they are resolved; `plan_block` drains this queue and
+    /// splices them into the exec chain ahead of the consuming statement (innermost call first —
+    /// the natural push order of the expression recursion). Without this their exec pins dangle
+    /// and the nodes never run.
+    pending_exec_splices: Vec<NodeEntity>,
+    /// `SetNodeFunctionRefs` commands synthesized from `tools:`/`fnRefs:` arguments on newly added
+    /// nodes. Held separately so they emit after the add/connect commands (the applier resolves the
+    /// referenced targets — function layers, events — once those nodes exist).
+    fn_ref_commands: Vec<BoardCommand>,
 }
 
 impl<'a> StructuralPlanner<'a> {
@@ -1078,6 +1138,8 @@ impl<'a> StructuralPlanner<'a> {
             unresolved_variable_refs: HashSet::new(),
             next_ref: 0,
             next_position: 0,
+            pending_exec_splices: Vec::new(),
+            fn_ref_commands: Vec::new(),
         }
     }
 
@@ -1098,6 +1160,8 @@ impl<'a> StructuralPlanner<'a> {
         self.result.commands.extend(self.update_commands);
         self.result.commands.extend(self.disconnect_commands);
         self.result.commands.extend(self.connect_commands);
+        // Function references resolve against the nodes/layers added above, so emit last.
+        self.result.commands.extend(self.fn_ref_commands);
         self.result
     }
 
@@ -1153,6 +1217,18 @@ impl<'a> StructuralPlanner<'a> {
                     Stmt::LocalAlias { name, .. } if promoted_local_aliases.contains(name)
                 ),
             );
+
+            // Splice impure argument calls (data-wired during expression resolution) into the
+            // exec chain ahead of the statement that consumes their outputs, innermost first,
+            // so they actually execute at runtime.
+            for splice in std::mem::take(&mut self.pending_exec_splices) {
+                if let Some(previous) = &previous_exec {
+                    self.connect_exec(previous, &splice, inserted_since_existing);
+                }
+                inserted_since_existing |= matches!(splice, NodeEntity::New { .. });
+                previous_exec = Some(ExecCursor::new(splice));
+            }
+
             let Some(current) = planned else {
                 continue;
             };
@@ -1167,14 +1243,19 @@ impl<'a> StructuralPlanner<'a> {
                         &previous.entity,
                         &current.input_sources,
                     );
+                    // Only a streaming-preferred branch (on_stream/on_chunk/…) is a side-chain
+                    // that must not advance the main exec cursor. A cursor that merely carries a
+                    // non-default continuation pin (loop body entry, loop "done") IS the main
+                    // chain — gating on the cursor's own pin left every statement after a loop
+                    // with unconnected exec pins.
+                    let used_branch_output = preferred_output.is_some()
+                        && self.entity_exec_output_pin(&previous.entity) != preferred_output;
                     let previous = match preferred_output {
                         Some(output_pin) => {
                             ExecCursor::with_output(previous.entity.clone(), Some(output_pin))
                         }
                         None => previous.clone(),
                     };
-                    let used_branch_output = previous.output_pin.is_some()
-                        && self.entity_exec_output_pin(&previous.entity) != previous.output_pin;
                     if self.connect_exec(&previous, &current.entity, inserted_since_existing)
                         && !used_branch_output
                     {
@@ -1385,8 +1466,15 @@ impl<'a> StructuralPlanner<'a> {
                     );
                 }
                 if let Some(cond) = condition {
-                    let _ = self.resolve_expr(cond, target_layer.clone());
+                    // Anchored (existing) branches already have their condition wired on the
+                    // board; resolving it again would duplicate the pure helpers feeding it.
+                    if !matches!(entity, Some(NodeEntity::Existing(_))) {
+                        let _ = self.resolve_expr(cond, target_layer.clone());
+                    }
                 }
+                // The branch's own argument/condition splices must chain BEFORE the branch
+                // node, not inside an arm — stash them across the nested blocks.
+                let mut stashed_splices = std::mem::take(&mut self.pending_exec_splices);
                 for arm in arms {
                     self.push_scope();
                     self.plan_block(
@@ -1396,6 +1484,8 @@ impl<'a> StructuralPlanner<'a> {
                     );
                     self.pop_scope();
                 }
+                stashed_splices.append(&mut self.pending_exec_splices);
+                self.pending_exec_splices = stashed_splices;
                 if bind.is_some() && is_placeholder_call(call) {
                     None
                 } else {
@@ -1411,6 +1501,9 @@ impl<'a> StructuralPlanner<'a> {
             } => {
                 let entity =
                     self.plan_call_statement(call, anchor.as_deref(), target_layer.clone());
+                // The loop's own argument splices must chain BEFORE the loop node, not inside
+                // its body — stash them across the nested plan_block.
+                let mut stashed_splices = std::mem::take(&mut self.pending_exec_splices);
                 self.push_scope();
                 if let (Some(bind), Some(entity)) = (bind, entity.as_ref()) {
                     self.insert_symbol(
@@ -1431,6 +1524,8 @@ impl<'a> StructuralPlanner<'a> {
                     );
                 }
                 self.pop_scope();
+                stashed_splices.append(&mut self.pending_exec_splices);
+                self.pending_exec_splices = stashed_splices;
                 entity.map(|entity| {
                     PlannedStmt::with_next_exec_pin(
                         entity.clone(),
@@ -1442,9 +1537,8 @@ impl<'a> StructuralPlanner<'a> {
                 self.plan_event(event);
                 None
             }
-            Stmt::Return { values } => {
-                self.plan_return(values, target_layer);
-                None
+            Stmt::Return { values, anchor } => {
+                self.plan_return(values, anchor.as_deref(), target_layer)
             }
             Stmt::Local(_) | Stmt::Comment(_) => None,
         }
@@ -1496,47 +1590,130 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
-    fn plan_return(&mut self, values: &[Expr], target_layer: Option<String>) {
-        let Some((layer, return_pins)) = self.function_return_targets.last().cloned() else {
-            if !values.is_empty() {
-                self.result.diagnostics.push(
-                    "return statements are only supported inside FlowScript functions".to_string(),
-                );
+    fn plan_return(
+        &mut self,
+        values: &[Expr],
+        anchor: Option<&str>,
+        target_layer: Option<String>,
+    ) -> Option<PlannedStmt> {
+        // Inside a function layer: connect each value to the layer's boundary output pin.
+        if let Some((layer, return_pins)) = self.function_return_targets.last().cloned() {
+            for (index, value) in values.iter().enumerate() {
+                let Some(return_pin) = return_pins.get(index).cloned() else {
+                    self.result.diagnostics.push(format!(
+                        "return value {} has no matching function return pin",
+                        index + 1
+                    ));
+                    continue;
+                };
+                let Some(source) = self
+                    .resolve_expr(value, target_layer.clone())
+                    .and_then(|symbol| self.symbol_to_source(symbol, target_layer.clone()))
+                else {
+                    self.result.diagnostics.push(format!(
+                        "return value {} is not a resolvable FlowScript value",
+                        index + 1
+                    ));
+                    continue;
+                };
+                let Some(output_pin) = self.resolve_source_output_pin(&source) else {
+                    self.result.diagnostics.push(format!(
+                        "could not choose output pin for return value {}",
+                        index + 1
+                    ));
+                    continue;
+                };
+                self.connect_commands.push(BoardCommand::ConnectPins {
+                    from_node: source.node.node_ref(),
+                    from_pin: output_pin,
+                    to_node: layer.node_ref(),
+                    to_pin: return_pin,
+                    summary: Some("Connect FlowScript function return".to_string()),
+                });
             }
+            return None;
+        }
+
+        // Outside a function layer: an event/tool-entry `return` reverses the
+        // `events_generic_return_result` sugar so agent tools and event handlers can return a value.
+        self.plan_event_return(values, anchor, target_layer)
+    }
+
+    /// Reverse the `events_generic_return_result` sugar: reuse the anchored result node (or add a
+    /// fresh one), wire the returned value into its `response` input, and chain it into the exec
+    /// flow as a terminal statement.
+    fn plan_event_return(
+        &mut self,
+        values: &[Expr],
+        anchor: Option<&str>,
+        target_layer: Option<String>,
+    ) -> Option<PlannedStmt> {
+        let entity = match anchor {
+            Some(anchor) if find_board_node(self.existing, anchor).is_some() => {
+                NodeEntity::Existing(anchor.to_string())
+            }
+            _ => {
+                let meta =
+                    self.resolve_variable_node(EVENT_RETURN_RESULT_TYPE, "returnGenericResult")?;
+                self.queue_add_node(meta, target_layer.clone())
+            }
+        };
+
+        if let Some(value) = values.first() {
+            self.wire_return_response(&entity, value, target_layer);
+        }
+        Some(PlannedStmt::new(entity))
+    }
+
+    /// Wire a return value into an `events_generic_return_result` node's `response` input (literal
+    /// set or data connection), reusing existing wiring on an unchanged roundtrip.
+    fn wire_return_response(
+        &mut self,
+        entity: &NodeEntity,
+        value: &Expr,
+        target_layer: Option<String>,
+    ) {
+        let meta = match entity {
+            NodeEntity::Existing(id) => find_board_node(self.existing, id).map(node_to_metadata),
+            NodeEntity::New { meta, .. } => Some(meta.clone()),
+            NodeEntity::Layer { .. } => None,
+        };
+        let Some(meta) = meta else { return };
+        let Some(input) = metadata_input_pin(&meta, EVENT_RESPONSE_PIN) else {
             return;
         };
 
-        for (index, value) in values.iter().enumerate() {
-            let Some(return_pin) = return_pins.get(index).cloned() else {
-                self.result.diagnostics.push(format!(
-                    "return value {} has no matching function return pin",
-                    index + 1
-                ));
-                continue;
-            };
-            let Some(source) = self
-                .resolve_expr(value, target_layer.clone())
-                .and_then(|symbol| self.symbol_to_source(symbol, target_layer.clone()))
-            else {
-                self.result.diagnostics.push(format!(
-                    "return value {} is not a resolvable FlowScript value",
-                    index + 1
-                ));
-                continue;
-            };
-            let Some(output_pin) = self.resolve_source_output_pin(&source) else {
-                self.result.diagnostics.push(format!(
-                    "could not choose output pin for return value {}",
-                    index + 1
-                ));
-                continue;
-            };
+        if let Some(mut literal) = literal_expr_to_value(value) {
+            self.normalize_input_value(input, &mut literal);
+            self.queue_update_input(entity, input, literal, &meta);
+            return;
+        }
+
+        let Some(source) = self
+            .resolve_expr(value, target_layer.clone())
+            .and_then(|symbol| self.symbol_to_source(symbol, target_layer))
+        else {
+            self.result
+                .diagnostics
+                .push("return value is not a resolvable FlowScript value".to_string());
+            return;
+        };
+        let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) else {
+            return;
+        };
+        let already_wired =
+            self.existing_source_for_input(entity, input)
+                .is_some_and(|existing| {
+                    existing.node.node_ref() == source.node.node_ref()
+                        && existing.output_pin.as_deref() == Some(output_pin.as_str())
+                });
+        if !already_wired {
             self.connect_commands.push(BoardCommand::ConnectPins {
                 from_node: source.node.node_ref(),
                 from_pin: output_pin,
-                to_node: layer.node_ref(),
-                to_pin: return_pin,
-                summary: Some("Connect FlowScript function return".to_string()),
+                to_node: entity.node_ref(),
+                to_pin: input.name.clone(),
+                summary: Some("Connect FlowScript return value".to_string()),
             });
         }
     }
@@ -1621,6 +1798,29 @@ impl<'a> StructuralPlanner<'a> {
         let mut input_sources = Vec::new();
         for arg in &call.args {
             let Some(input) = metadata_input_pin(&meta, &arg.name) else {
+                // `tools:`/`fnRefs:` carry a node's function references, not pin values — they are
+                // not board pins. For a NEWLY added node, materialize them as a
+                // `SetNodeFunctionRefs` command (the applier resolves each named target once the
+                // referenced functions/events exist). For an EXISTING node, leave its references
+                // untouched: an unchanged document round-trips to a clean no-op, and rewriting them
+                // would need exact ref→entry-node resolution against the live board.
+                if is_synthetic_fn_ref_arg(arg) {
+                    if let NodeEntity::New { .. } = entity {
+                        let refs = synthetic_fn_ref_targets(arg);
+                        if !refs.is_empty() {
+                            self.fn_ref_commands
+                                .push(BoardCommand::SetNodeFunctionRefs {
+                                    node_id: entity.node_ref(),
+                                    fn_refs: refs,
+                                    summary: Some(format!(
+                                        "Register {} on {}",
+                                        arg.name, meta.friendly_name
+                                    )),
+                                });
+                        }
+                    }
+                    continue;
+                }
                 self.result.diagnostics.push(format!(
                     "node `{}` has no input pin named `{}`; skipped that argument",
                     call.display, arg.name
@@ -1639,6 +1839,13 @@ impl<'a> StructuralPlanner<'a> {
             let Some(source) =
                 self.resolve_expr_for_argument(&arg.value, entity, input, target_layer.clone())
             else {
+                // Expression forms v1 cannot resolve (ternaries, binaries, event returns) but
+                // whose input is already wired on the board: keep the existing wiring silently —
+                // the rendered text CAME from that wiring, so this is not an authoring error.
+                if let Some(existing_source) = self.existing_source_for_input(entity, input) {
+                    input_sources.push(existing_source);
+                    continue;
+                }
                 self.result.diagnostics.push(format!(
                     "argument `{}` on `{}` is not a literal or resolvable node output; skipped connection",
                     arg.name, call.display
@@ -1683,13 +1890,23 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 continue;
             };
-            self.connect_commands.push(BoardCommand::ConnectPins {
-                from_node: source.node.node_ref(),
-                from_pin: output_pin.clone(),
-                to_node: entity.node_ref(),
-                to_pin: input.name.clone(),
-                summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
-            });
+            // Roundtrip no-op: the board may already carry exactly this data edge — re-emitting
+            // it would flood every reconcile of an unchanged document with ConnectPins commands.
+            let already_wired =
+                self.existing_source_for_input(entity, input)
+                    .is_some_and(|existing_source| {
+                        existing_source.node.node_ref() == source.node.node_ref()
+                            && existing_source.output_pin.as_deref() == Some(output_pin.as_str())
+                    });
+            if !already_wired {
+                self.connect_commands.push(BoardCommand::ConnectPins {
+                    from_node: source.node.node_ref(),
+                    from_pin: output_pin.clone(),
+                    to_node: entity.node_ref(),
+                    to_pin: input.name.clone(),
+                    summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
+                });
+            }
             input_sources.push(ValueSource {
                 node: source.node,
                 output_pin: Some(output_pin),
@@ -1745,8 +1962,38 @@ impl<'a> StructuralPlanner<'a> {
             Expr::Member { base, .. } | Expr::Index { base, .. } => {
                 self.resolve_expr_using_existing_source(base, source, target_layer)
             }
+            // A bare variable reference whose input is already fed by a variable_get reading the
+            // SAME variable: reuse that reader instead of adding a duplicate on every reconcile.
+            Expr::Ref(name) => {
+                if let Some(SymbolValue::VariableRef { variable_id }) = self.lookup_symbol(name)
+                    && self.source_is_variable_get_for(&source, &variable_id)
+                {
+                    return Some(SymbolValue::Source(source));
+                }
+                None
+            }
             _ => None,
         }
+    }
+
+    /// True when `source` is an existing `variable_get` node configured to read `variable_id`.
+    fn source_is_variable_get_for(&self, source: &ValueSource, variable_id: &str) -> bool {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return false;
+        };
+        let Some(node) = find_board_node(self.existing, node_id) else {
+            return false;
+        };
+        if node.name != "variable_get" {
+            return false;
+        }
+        find_input_pin(node, "var_ref")
+            .and_then(|pin| pin.default_value.as_deref())
+            .and_then(|bytes| {
+                flow_like_types::json::from_slice::<flow_like_types::Value>(bytes).ok()
+            })
+            .and_then(|value| value.as_str().map(|read| read == variable_id))
+            .unwrap_or(false)
     }
 
     fn reuse_existing_call_source(
@@ -1760,8 +2007,10 @@ impl<'a> StructuralPlanner<'a> {
             return None;
         };
         let source_node = find_board_node(self.existing, source_node_id)?;
+        // Always describe the reused node by ITS OWN pins: catalog metadata is a per-type sample
+        // and misses instance pins of dynamic nodes (string_format placeholders, added pins).
         let meta = match self.catalog.resolve_call(call) {
-            Ok(meta) if meta.name == source_node.name => meta,
+            Ok(meta) if meta.name == source_node.name => node_to_metadata(source_node),
             Ok(_) => return None,
             Err(_) if call_matches_node(call, source_node) => node_to_metadata(source_node),
             Err(_) => return None,
@@ -1873,6 +2122,15 @@ impl<'a> StructuralPlanner<'a> {
         current: &NodeEntity,
         inserted_since_existing: bool,
     ) -> bool {
+        // Existing→existing pairs keep their board wiring (v1 does not rewrite exec edges) —
+        // check FIRST so unchanged roundtrips don't emit no-continuation-policy diagnostics for
+        // multi-output nodes whose successors are already wired.
+        if matches!(previous.entity, NodeEntity::Existing(_))
+            && matches!(current, NodeEntity::Existing(_))
+        {
+            return false;
+        }
+
         let Some(from_pin) = previous
             .output_pin
             .clone()
@@ -1891,12 +2149,6 @@ impl<'a> StructuralPlanner<'a> {
         let Some(to_pin) = self.entity_exec_input_pin(current) else {
             return false;
         };
-
-        if matches!(previous.entity, NodeEntity::Existing(_))
-            && matches!(current, NodeEntity::Existing(_))
-        {
-            return false;
-        }
 
         if inserted_since_existing
             && let NodeEntity::Existing(node_id) = current
@@ -2030,6 +2282,11 @@ impl<'a> StructuralPlanner<'a> {
                 Some(SymbolValue::Source(source))
             }
             Expr::Call(call) => self.add_call_node(call, target_layer).map(|node| {
+                // Impure calls in expression position only get data wiring here; queue them so
+                // plan_block splices them into the exec chain before the consuming statement.
+                if self.entity_exec_input_pin(&node).is_some() {
+                    self.pending_exec_splices.push(node.clone());
+                }
                 SymbolValue::Source(ValueSource {
                     node,
                     output_pin: None,
@@ -2457,7 +2714,7 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
             anchor.is_none() || expr_has_unanchored_calls(value)
         }
         Stmt::Handler(event) => event.anchor.is_none() || block_has_unanchored_calls(&event.body),
-        Stmt::Return { values } => values.iter().any(expr_has_unanchored_calls),
+        Stmt::Return { values, .. } => values.iter().any(expr_has_unanchored_calls),
         Stmt::Local(_) | Stmt::Comment(_) => false,
     }
 }
@@ -2535,9 +2792,10 @@ fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
-            if !is_placeholder_call(call) {
-                collect_call_anchor_only(call, anchor.as_deref(), out);
-            }
+            // Sugared boolean branches carry a placeholder call, but the statement anchor is
+            // still the branch node itself — it must register as present or reconcile deletes
+            // the branch node on every roundtrip.
+            collect_call_anchor_only(call, anchor.as_deref(), out);
             for arm in arms {
                 collect_statement_block(&arm.body, out);
             }
@@ -2578,9 +2836,9 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
         Stmt::Branch {
             call, arms, anchor, ..
         } => {
-            if !is_placeholder_call(call) {
-                collect_call_with_anchor(call, anchor.as_deref(), out);
-            }
+            // Collect the anchor even for placeholder-call (sugared boolean) branches — the
+            // statement anchor is the branch node itself; see collect_statement_stmt.
+            collect_call_with_anchor(call, anchor.as_deref(), out);
             for arm in arms {
                 collect_block(&arm.body, out);
             }
@@ -2607,7 +2865,7 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
             }
             collect_expr(value, out);
         }
-        Stmt::Return { values } => {
+        Stmt::Return { values, .. } => {
             for v in values {
                 collect_expr(v, out);
             }
@@ -3236,6 +3494,339 @@ mod tests {
                     && to_node == "$1"
                     && to_pin == "exec_in"
         ));
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_skips_synthetic_tools_arg_without_diagnostic() {
+        // `agentRegisterFunctionTools` has no `tools` input pin — its function references are a
+        // synthetic `tools:` argument the decompiler emits. Reconcile must skip it rather than
+        // report a missing pin (which surfaced to users as a false "FlowScript apply blocked").
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_from_model",
+                "Agent From Model",
+                Vec::new(),
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: agentFromModel({}), tools: [fetchPage] })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("no input pin named `tools`")),
+            "synthetic tools arg must not produce a missing-pin diagnostic: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. }
+                    if node_type == "agent_register_function_tools"
+            )),
+            "agent node should still be added: {:?}",
+            result.commands
+        );
+        // The synthetic `tools:` arg on a NEW node materializes as a SetNodeFunctionRefs command
+        // carrying the referenced target names for the applier to resolve.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::SetNodeFunctionRefs { fn_refs, .. }
+                    if fn_refs == &vec!["fetchPage".to_string()]
+            )),
+            "expected SetNodeFunctionRefs with [fetchPage]: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_lowers_event_return_to_result_node() {
+        // A `return` inside a keyword-less event/tool entry must NOT be rejected — it reverses the
+        // `events_generic_return_result` sugar so agent tools and event handlers can return a value.
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_generic_return_result",
+                "Return Generic Result",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("response", "Generic", PinType::Input),
+                ],
+                Vec::new(),
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    return "done"
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("only supported inside FlowScript functions")),
+            "event return must not be rejected: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. }
+                    if node_type == "events_generic_return_result"
+            )),
+            "return should add a result node: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "response"
+                        && value == &flow_like_types::Value::String("done".to_string())
+            )),
+            "return value should feed the response pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_chains_exec_through_and_after_loops() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "for_each",
+                "For Each",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("array", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("loop", "Execution", PinType::Output),
+                    pin_meta("done", "Execution", PinType::Output),
+                    pin_meta("item", "Generic", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    for (const item of forEach()) {
+        log({ text: "inner" })
+    }
+    log({ text: "after" })
+    log({ text: "last" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let connects: Vec<(String, String, String, String)> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_node,
+                    to_pin,
+                    ..
+                } => Some((
+                    from_node.clone(),
+                    from_pin.clone(),
+                    to_node.clone(),
+                    to_pin.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+
+        // $0 event, $1 for_each, $2 log(inner), $3 log(after), $4 log(last)
+        let expected = [
+            ("$0", "exec_out", "$1", "exec_in"),
+            ("$1", "loop", "$2", "exec_in"),
+            ("$1", "done", "$3", "exec_in"),
+            // The regression: a statement AFTER a loop must chain onward from ITS exec output.
+            // Gating the cursor advance on the cursor's own (non-default) pin instead of the
+            // streaming-preferred output left every statement after the loop dangling.
+            ("$3", "exec_out", "$4", "exec_in"),
+        ];
+        for (from_node, from_pin, to_node, to_pin) in expected {
+            assert!(
+                connects.iter().any(|(fnode, fpin, tnode, tpin)| {
+                    fnode == from_node && fpin == from_pin && tnode == to_node && tpin == to_pin
+                }),
+                "missing exec connection {from_node}.{from_pin} -> {to_node}.{to_pin}; got {connects:?}"
+            );
+        }
+        assert!(
+            !connects
+                .iter()
+                .any(|(fnode, fpin, tnode, _)| fnode == "$1" && fpin == "done" && tnode == "$4"),
+            "log(last) must chain from log(after), not from the loop's done pin again; got {connects:?}"
+        );
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_splices_impure_argument_calls_into_exec_chain() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            // Pure: no exec pins — must stay data-only.
+            catalog_meta(
+                "make_struct",
+                "Make Struct",
+                Vec::new(),
+                vec![pin_meta("struct", "Struct", PinType::Output)],
+            ),
+            // Impure: has exec pins — must be spliced into the exec chain.
+            catalog_meta(
+                "faker_full_name",
+                "Fake Full Name",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("full_name", "String", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "set_field",
+                "Set Field",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("value", "String", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("result", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    setField({ struct: makeStruct(), value: fakerFullName() })
+    log({ text: "done" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let connects: Vec<(String, String, String, String)> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_node,
+                    to_pin,
+                    ..
+                } => Some((
+                    from_node.clone(),
+                    from_pin.clone(),
+                    to_node.clone(),
+                    to_pin.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+
+        // $0 event, $1 set_field, $2 make_struct (pure), $3 faker (impure), $4 log
+        let expected = [
+            // The impure argument call is spliced into the chain ahead of its consumer…
+            ("$0", "exec_out", "$3", "exec_in"),
+            ("$3", "exec_out", "$1", "exec_in"),
+            // …and the chain continues normally after the consuming statement.
+            ("$1", "exec_out", "$4", "exec_in"),
+            // Data wiring stays intact.
+            ("$3", "full_name", "$1", "value"),
+            ("$2", "struct", "$1", "struct"),
+        ];
+        for (from_node, from_pin, to_node, to_pin) in expected {
+            assert!(
+                connects.iter().any(|(fnode, fpin, tnode, tpin)| {
+                    fnode == from_node && fpin == from_pin && tnode == to_node && tpin == to_pin
+                }),
+                "missing connection {from_node}.{from_pin} -> {to_node}.{to_pin}; got {connects:?}"
+            );
+        }
+        // The pure helper must not receive exec wiring.
+        assert!(
+            !connects.iter().any(|(fnode, fpin, tnode, tpin)| {
+                (fnode == "$2" && fpin.contains("exec")) || (tnode == "$2" && tpin.contains("exec"))
+            }),
+            "make_struct is pure and must stay data-only; got {connects:?}"
+        );
     }
 
     #[test]

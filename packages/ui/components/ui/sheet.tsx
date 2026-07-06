@@ -49,9 +49,12 @@ function SheetContent({
 	children,
 	side = "right",
 	style,
+	overlayClassName,
 	...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
 	side?: "top" | "right" | "bottom" | "left";
+	/** Override the backdrop overlay (e.g. raise its z-index above a high-z host panel). */
+	overlayClassName?: string;
 }) {
 	const safeAreaStyle: React.CSSProperties = {
 		...(side === "left" || side === "right"
@@ -75,7 +78,7 @@ function SheetContent({
 
 	return (
 		<SheetPortal>
-			<SheetOverlay />
+			<SheetOverlay className={overlayClassName} />
 			<SheetPrimitive.Content
 				data-slot="sheet-content"
 				className={cn(

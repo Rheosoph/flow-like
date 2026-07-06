@@ -1,0 +1,137 @@
+"use client";
+
+import { Button, UsePageContent } from "@flow-like/flow-like-ui";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+	AppWindowIcon,
+	ChevronDownIcon,
+	ExternalLinkIcon,
+	XIcon,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { EVENT_CONFIG } from "../../lib/event-config";
+import type { InlineAppPage } from "../../lib/global-chat-store";
+
+interface InlineAppPageCardProps {
+	page: InlineAppPage;
+	onClose: (id: string) => void;
+	/** Tighter height when rendered inside the docked overlay. */
+	compact?: boolean;
+}
+
+/**
+ * An app's UI page embedded inline in the global FlowPilot view — artifact-like, but backed by a
+ * real, already-built app. Mounts the same use surface as the /use route (embedded mode), and the
+ * header lets the user jump to the full app view.
+ */
+export function InlineAppPageCard({
+	page,
+	onClose,
+	compact = false,
+}: InlineAppPageCardProps) {
+	const router = useRouter();
+	const [expanded, setExpanded] = useState(true);
+	const [target, setTarget] = useState<{
+		routePath: string;
+		eventId: string | null;
+	}>({ routePath: "/", eventId: page.eventId ?? null });
+
+	const fullViewRoute = `/use?id=${page.appId}${
+		target.eventId ? `&eventId=${target.eventId}` : ""
+	}`;
+
+	return (
+		<motion.div
+			layout
+			initial={{ opacity: 0, y: 8, scale: 0.98 }}
+			animate={{ opacity: 1, y: 0, scale: 1 }}
+			exit={{ opacity: 0, y: 8, scale: 0.98 }}
+			transition={{ type: "spring", stiffness: 380, damping: 32 }}
+			className="mx-3 mb-2 rounded-xl border border-border dark:border-white/20 bg-muted shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35)] dark:shadow-[0_16px_40px_-8px_rgba(0,0,0,0.85)] overflow-hidden shrink-0"
+		>
+			<div className="flex items-center justify-between gap-2 px-3 py-2 bg-primary/5">
+				<button
+					type="button"
+					className="flex items-center gap-2 min-w-0 flex-1 text-left rounded-md outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					onClick={() => setExpanded((open) => !open)}
+					aria-expanded={expanded}
+				>
+					<span className="flex items-center justify-center size-6 rounded-md bg-primary/15 text-primary shrink-0">
+						<AppWindowIcon className="size-3.5" />
+					</span>
+					<span className="text-[13px] font-semibold truncate">
+						{page.name}
+					</span>
+					<span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold uppercase tracking-wide shrink-0">
+						App Page
+					</span>
+					<ChevronDownIcon
+						className={`size-4 text-muted-foreground shrink-0 ml-auto transition-transform ${expanded ? "" : "-rotate-90"}`}
+					/>
+				</button>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					aria-label="Open in full app view"
+					title="Open in full app view"
+					onClick={() => router.push(fullViewRoute)}
+				>
+					<ExternalLinkIcon className="size-3.5" />
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					aria-label="Close app page"
+					onClick={() => onClose(page.id)}
+				>
+					<XIcon className="size-3.5" />
+				</Button>
+			</div>
+
+			<AnimatePresence initial={false}>
+				{expanded && (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: 0.2 }}
+					>
+						{/* [contain:layout_paint] makes this box the containing block for the page's
+						    position:fixed/absolute a2ui widgets and clips their painting — without it
+						    fixed-position page content escapes the card and bleeds over the chat. */}
+						<div className="p-2 pt-1">
+							<div
+								className={`${compact ? "h-95 max-h-[50vh]" : "h-120 max-h-[60vh]"} relative overflow-hidden flex flex-col rounded-md border border-black/15 dark:border-black/60 bg-background contain-[layout_paint]`}
+							>
+								<UsePageContent
+									eventConfig={EVENT_CONFIG}
+									notFound={
+										<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-6">
+											This app page is no longer available.
+										</div>
+									}
+									appId={page.appId}
+									routePath={target.routePath}
+									eventId={target.eventId}
+									embedded
+									onNavigate={(next) =>
+										setTarget((current) => ({
+											routePath: next.routePath ?? current.routePath,
+											eventId:
+												next.eventId === undefined
+													? current.eventId
+													: next.eventId,
+										}))
+									}
+								/>
+							</div>
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
+		</motion.div>
+	);
+}

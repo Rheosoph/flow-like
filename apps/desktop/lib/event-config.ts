@@ -16,6 +16,16 @@ import {
 } from "@flow-like/flow-like-ui";
 import { createId } from "@paralleldrive/cuid2";
 
+/**
+ * Whether an event renders a chat interface. Chat event types are `simple_chat`/`advanced_chat`
+ * (and future variants), never the literal string `"chat"` — so consumers must match on this
+ * predicate rather than `event_type === "chat"`, or they reject valid chat events. Keep this in
+ * sync with the chat `eventTypes` declared in `EVENT_CONFIG.events_chat` below.
+ */
+export function isChatEventType(eventType: string): boolean {
+	return eventType.includes("chat");
+}
+
 export const EVENT_CONFIG: IEventMapping = {
 	events_chat: {
 		configInterfaces: {

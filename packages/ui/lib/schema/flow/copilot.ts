@@ -96,6 +96,13 @@ export type BoardCommand =
 			summary?: string;
 	  }
 	| {
+			command_type: "SetNodeFunctionRefs";
+			node_id: string;
+			/** Referenced targets as ref tokens (`$N` ref-ids, node/layer anchors, or names). */
+			fn_refs: string[];
+			summary?: string;
+	  }
+	| {
 			command_type: "MoveNode";
 			node_id: string;
 			position: { x: number; y: number };

@@ -181,8 +181,14 @@ pub enum Stmt {
         value: Expr,
         anchor: Option<String>,
     },
-    /// `return a, b` — function layer outputs.
-    Return { values: Vec<Expr> },
+    /// `return a, b` — function layer outputs, or an event/tool-entry result
+    /// (`events_generic_return_result`). `anchor` is that result node's id when the return maps to
+    /// a concrete node (event returns), letting reconcile match it instead of duplicating.
+    Return {
+        values: Vec<Expr>,
+        #[serde(default)]
+        anchor: Option<String>,
+    },
     /// `let name: Type = default` — a function-local (layer) variable declaration.
     Local(VarDecl),
     /// A nested event handler (`name(params) { … }`) — a `start`/`event_callback` trigger node

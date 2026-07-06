@@ -62,6 +62,7 @@ import {
 } from "./chat-default/chat-db";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
+import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatHistory } from "./chat-default/history";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
@@ -470,46 +471,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			}
 
 			try {
-				if (interaction.responder_jwt) {
-					const profile = backend.profile;
-					let baseUrl = profile?.hub ?? "api.flow-like.com";
-					if (
-						typeof process !== "undefined" &&
-						process.env?.NEXT_PUBLIC_API_URL
-					) {
-						baseUrl = process.env.NEXT_PUBLIC_API_URL;
-					}
-					if (
-						!baseUrl.startsWith("http://") &&
-						!baseUrl.startsWith("https://")
-					) {
-						baseUrl =
-							profile?.secure === false
-								? `http://${baseUrl}`
-								: `https://${baseUrl}`;
-					}
-					if (!baseUrl.endsWith("/")) baseUrl += "/";
-					const url = `${baseUrl}api/v1/interaction/${interactionId}/respond`;
-
-					const res = await fetch(url, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							Authorization: `Bearer ${interaction.responder_jwt}`,
-						},
-						body: JSON.stringify({ value }),
-					});
-					if (!res.ok) {
-						const errorText = await res.text();
-						throw new Error(`API responded ${res.status}: ${errorText}`);
-					}
-				} else {
-					const { invoke } = await import("@tauri-apps/api/core");
-					await invoke("respond_to_interaction", {
-						interactionId,
-						value,
-					});
-				}
+				await submitInteractionResponse(interaction, value, backend.profile);
 
 				setActiveInteractions((prev) =>
 					prev.map((i) =>

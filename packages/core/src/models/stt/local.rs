@@ -211,8 +211,13 @@ impl LocalSttModel {
 
         let runtime = config.device.label();
         let dtype = config.dtype.label().to_string();
-        let model = load_model(config)
-            .map_err(|error| anyhow!("Failed to load any-speech-to-text model {}: {}", bit.id, error))?;
+        let model = load_model(config).map_err(|error| {
+            anyhow!(
+                "Failed to load any-speech-to-text model {}: {}",
+                bit.id,
+                error
+            )
+        })?;
 
         Ok(Self {
             bit: Arc::new(bit.clone()),

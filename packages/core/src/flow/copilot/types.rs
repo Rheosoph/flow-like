@@ -298,6 +298,15 @@ pub enum BoardCommand {
         #[serde(default)]
         summary: Option<String>,
     },
+    /// Set a node's function references (e.g. an agent's registered tool functions). `fn_refs`
+    /// carries the referenced targets as ref tokens (`$N` ref-ids, board node/layer anchors, or
+    /// names) which the applier resolves to concrete node ids.
+    SetNodeFunctionRefs {
+        node_id: String,
+        fn_refs: Vec<String>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
     MoveNode {
         node_id: String,
         position: NodePosition,

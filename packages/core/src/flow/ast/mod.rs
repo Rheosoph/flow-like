@@ -138,6 +138,95 @@ mod generate_flowscript {
             mismatches.join("\n  ")
         );
     }
+
+    /// Decode every fixture board, render it as anchored FlowScript, and reconcile that document
+    /// back against the SAME board (catalog = the board's own nodes): an unchanged document must
+    /// be a no-op — no commands, no diagnostics. This exercises the full lower→parse→reconcile
+    /// pipeline on real boards, including functions/layers, loops, and streaming handlers.
+    ///
+    /// Known remaining gaps (2026-07-05, run manually with `--ignored` while closing them):
+    /// - anchored Assign / variable_set paths re-emit ConnectPins for edges that already exist
+    ///   (needs the same already-wired guard `plan_call_arguments` has),
+    /// - `variable.field` sugar (Field on a variable ref) re-creates variable_get + struct_get
+    ///   chains instead of reusing the existing readers,
+    /// - event-level `return` (return_result sugar) reports "only supported inside functions",
+    /// - multi-pin array args (`tools: [...]`, `fnRefs: [...]`) don't map to repeated pins.
+    #[ignore = "documents remaining lower→reconcile roundtrip gaps; the destructive classes are fixed"]
+    #[tokio::test]
+    async fn anchored_roundtrip_is_noop() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/ast")
+            .canonicalize()
+            .expect("tests/ast directory should exist");
+
+        let store: Arc<dyn flow_like_storage::object_store::ObjectStore> = Arc::new(
+            flow_like_storage::object_store::local::LocalFileSystem::new_with_prefix(&dir)
+                .expect("local object store"),
+        );
+
+        let mut boards: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .expect("read tests/ast")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("board"))
+            .collect();
+        boards.sort();
+        assert!(!boards.is_empty(), "no .board fixtures found in {dir:?}");
+
+        let mut failures: Vec<String> = Vec::new();
+
+        for board_path in boards {
+            let file_name = board_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let store_path = flow_like_storage::Path::from(file_name.clone());
+            let proto: flow_like_types::proto::Board =
+                crate::utils::compression::from_compressed(store.clone(), store_path)
+                    .await
+                    .unwrap_or_else(|e| panic!("decode {file_name}: {e}"));
+            let board = Board::from_proto(proto);
+
+            let annotated = board_to_flowscript(
+                &board,
+                &RenderOptions {
+                    anchors: true,
+                    ..RenderOptions::default()
+                },
+            );
+            let catalog: Vec<crate::flow::copilot::NodeMetadata> = board
+                .nodes
+                .values()
+                .map(crate::flow::copilot::node_to_metadata)
+                .collect();
+
+            let result = reconcile_text_with_catalog(&board, &annotated, &catalog);
+            if !result.diagnostics.is_empty() {
+                failures.push(format!(
+                    "{file_name}: roundtrip diagnostics:\n    {}",
+                    result.diagnostics.join("\n    ")
+                ));
+            }
+            if !result.commands.is_empty() {
+                let summaries: Vec<String> = result
+                    .commands
+                    .iter()
+                    .map(|command| format!("{command:?}"))
+                    .collect();
+                failures.push(format!(
+                    "{file_name}: roundtrip produced {} commands (expected none):\n    {}",
+                    summaries.len(),
+                    summaries.join("\n    ")
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "anchored FlowScript roundtrip is not a no-op:\n  {}",
+            failures.join("\n  ")
+        );
+    }
 }
 
 #[cfg(test)]
