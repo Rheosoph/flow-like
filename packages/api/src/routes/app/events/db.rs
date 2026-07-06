@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::entity::event;
 use flow_like::app::App;
 use flow_like::flow::event::{
-    CanaryEvent, Event as CoreEvent, EventExecutionMode, EventInput, ReleaseNotes,
+    CanaryEvent, Event as CoreEvent, EventExecutionMode, EventExposure, EventInput, ReleaseNotes,
 };
 use flow_like_types::anyhow;
 use sea_orm::{
@@ -118,6 +118,7 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
         is_default: Set(event.is_default),
         event_version: Set(event_version),
         execution_mode: Set(event.execution_mode.as_str().to_string()),
+        exposure: Set(event.exposure.as_str().to_string()),
         variables: Set(variables),
         config: Set(config),
         inputs: Set(inputs),
@@ -224,6 +225,7 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
         route: model.route,
         is_default: model.is_default,
         execution_mode: EventExecutionMode::parse(&model.execution_mode),
+        exposure: EventExposure::parse(&model.exposure),
     })
 }
 

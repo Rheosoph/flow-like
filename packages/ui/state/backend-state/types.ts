@@ -47,6 +47,116 @@ export interface IMember {
 	updated_at: string;
 }
 
+export type IAppConnectionStatus = "PENDING" | "ACTIVE";
+
+export interface IAppConnection {
+	id: string;
+	source_app_id: string;
+	target_app_id: string;
+	status: IAppConnectionStatus;
+	role_id?: string | null;
+	role_name?: string | null;
+	comment?: string | null;
+	requested_by_user_id?: string | null;
+	approved_by_user_id?: string | null;
+	app_name?: string | null;
+	app_description?: string | null;
+	created_at: number;
+	updated_at: number;
+}
+
+export interface IAppConnectionsResponse {
+	incoming: IAppConnection[];
+	outgoing: IAppConnection[];
+}
+
+export interface IAccessibleApp {
+	app_id: string;
+	name?: string | null;
+	description?: string | null;
+}
+
+export interface IRemoteEvent {
+	id: string;
+	name: string;
+	description?: string | null;
+	event_type: string;
+}
+
+export interface IRemoteRestRoute {
+	method: string;
+	path: string;
+	params: string[];
+}
+
+export interface IRemoteRestFile {
+	path: string;
+	directory: boolean;
+	content_type?: string | null;
+}
+
+export interface IRemoteMcpTool {
+	name: string;
+	description?: string | null;
+	input_schema?: Record<string, unknown> | null;
+}
+
+export interface IRemoteMcpResource {
+	uri: string;
+	name?: string | null;
+	description?: string | null;
+	mime_type?: string | null;
+}
+
+export interface IRemoteEventDetail {
+	id: string;
+	name: string;
+	description?: string | null;
+	event_type: string;
+	rest_routes: IRemoteRestRoute[];
+	rest_files: IRemoteRestFile[];
+	mcp_tools: IRemoteMcpTool[];
+	mcp_resources: IRemoteMcpResource[];
+}
+
+export interface IProcessNote {
+	id: string;
+	author_user_id?: string | null;
+	content: string;
+	created_at: number;
+	updated_at: number;
+}
+
+export interface IProcessGraphNode {
+	id: string;
+	name?: string | null;
+	description?: string | null;
+	icon?: string | null;
+	unknown: boolean;
+	is_current: boolean;
+	can_annotate: boolean;
+	notes: IProcessNote[];
+}
+
+export interface IProcessGraphEdge {
+	source: string;
+	target: string;
+	status: IAppConnectionStatus;
+	role_name?: string | null;
+}
+
+export interface IProcessFlow {
+	path: string[];
+	run_count: number;
+	last_run_at: number;
+}
+
+export interface IProcessGraphResponse {
+	nodes: IProcessGraphNode[];
+	edges: IProcessGraphEdge[];
+	flows: IProcessFlow[];
+}
+
 export interface IInvite {
 	id: string;
 	user_id: string;

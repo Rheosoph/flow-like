@@ -100,6 +100,19 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 				icon: Pencil,
 			},
 			{
+				permission: RolePermissions.ReadDatabase,
+				label: "Read Databases",
+				description:
+					"Query and list databases without file access — ideal for connected apps",
+				icon: Database,
+			},
+			{
+				permission: RolePermissions.WriteDatabase,
+				label: "Write Databases",
+				description: "Insert, update, and manage databases without file access",
+				icon: Database,
+			},
+			{
 				permission: RolePermissions.WriteMeta,
 				label: "Write Metadata",
 				description: "Edit file and entity metadata",

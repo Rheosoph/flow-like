@@ -16,6 +16,7 @@ pub use flow_like_catalog_core::{NodeConstructor, NodeLogic, register_node};
 pub mod data;
 pub mod events;
 pub mod interaction;
+pub(crate) mod remote_util;
 
 pub use data::*;
 

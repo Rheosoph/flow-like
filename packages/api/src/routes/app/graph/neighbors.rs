@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -69,7 +69,13 @@ pub async fn neighbors(
     Query(scope): Query<ScopeParams>,
     Json(payload): Json<NeighborsPayload>,
 ) -> Result<Json<SubgraphResult>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
 
     let direction = match payload.direction.to_lowercase().as_str() {
         "outgoing" | "out" => TraversalDirection::Outgoing,

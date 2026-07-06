@@ -217,6 +217,7 @@ pub async fn report_run(
             expires_at: Set(Some(expires_at)),
             user_id: Set(Some(sub.clone())),
             technical_user_id: Set(None),
+            caller_app_chain: Set(None),
             app_id: Set(app_id.clone()),
             created_at: Set(now),
             updated_at: Set(now),

@@ -40,6 +40,7 @@ pub mod usage_limits;
 pub mod user_management;
 pub mod utils;
 
+pub mod app_connection_jwt;
 pub mod backend_jwt;
 pub mod compilation;
 pub mod execution;

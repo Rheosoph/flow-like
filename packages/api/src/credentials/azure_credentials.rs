@@ -283,6 +283,50 @@ impl AzureRuntimeCredentials {
                     None,
                 )
             }
+            CredentialsAccess::ReadAppDb => {
+                // Project LanceDB only — the SAS is restricted to the
+                // db directory so connected apps cannot read the rest
+                // of the app's content (e.g. upload/). The path
+                // prefix stays at apps/{app_id} because it is
+                // path-resolution metadata: SharedCredentials::to_db
+                // appends storage/db itself.
+                let content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{}/storage/db", app_id),
+                    "rl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    Some(content_sas),
+                    None,
+                    None,
+                    Some(format!("apps/{}", app_id)),
+                    None,
+                )
+            }
+            CredentialsAccess::EditAppDb => {
+                let content_sas = generate_directory_sas(
+                    &self.account_name,
+                    &self.content_container,
+                    &format!("apps/{}/storage/db", app_id),
+                    "rwdl",
+                    &start,
+                    &expiry_str,
+                    &account_key,
+                )?;
+                (
+                    None,
+                    Some(content_sas),
+                    None,
+                    None,
+                    Some(format!("apps/{}", app_id)),
+                    None,
+                )
+            }
             CredentialsAccess::EditUser => {
                 let user_content_sas = generate_directory_sas(
                     &self.account_name,
@@ -531,6 +575,8 @@ impl AzureRuntimeCredentials {
             CredentialsAccess::ReadApp => "rl",
             CredentialsAccess::ReadAppContent => "rl",
             CredentialsAccess::EditAppContent => "racwdl",
+            CredentialsAccess::ReadAppDb => "rl",
+            CredentialsAccess::EditAppDb => "racwdl",
             CredentialsAccess::EditUser => "racwdl",
             CredentialsAccess::ReadUser => "rl",
             CredentialsAccess::InvokeNone => "racwdl",
@@ -555,6 +601,9 @@ impl AzureRuntimeCredentials {
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent => (Some(format!("apps/{}", app_id)), None),
+            CredentialsAccess::ReadAppDb | CredentialsAccess::EditAppDb => {
+                (Some(format!("apps/{}/storage/db", app_id)), None)
+            }
             CredentialsAccess::EditUser | CredentialsAccess::ReadUser => {
                 (None, Some(format!("users/{}/apps/{}", sub, app_id)))
             }
@@ -625,6 +674,13 @@ impl AzureRuntimeCredentials {
             None
         };
 
+        let content_path_prefix = match mode {
+            CredentialsAccess::ReadAppDb | CredentialsAccess::EditAppDb => {
+                Some(format!("apps/{}", app_id))
+            }
+            _ => app_directory,
+        };
+
         Ok(Self {
             meta_sas_token,
             content_sas_token: app_sas_token,
@@ -636,7 +692,7 @@ impl AzureRuntimeCredentials {
             account_name: self.account_name.clone(),
             account_key: None,
             expiration: Some(expiry),
-            content_path_prefix: app_directory,
+            content_path_prefix,
             user_content_path_prefix: user_directory,
         })
     }

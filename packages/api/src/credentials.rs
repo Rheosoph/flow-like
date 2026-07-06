@@ -91,6 +91,20 @@ pub enum CredentialsAccess {
     /// drop arbitrary `.board` / `.event` files server-side,
     /// bypassing every guard.
     EditAppContent,
+    /// Read-only access scoped to the project LanceDB at
+    /// `apps/{app_id}/storage/db` on the **content** bucket only.
+    /// Exists for app-to-app shared database access: a connected app
+    /// may query the shared database directly, but must not see the
+    /// rest of the app's content (e.g. `apps/{app_id}/upload/*`),
+    /// which `ReadAppContent` would expose.
+    ReadAppDb,
+    /// Read+write access scoped to the project LanceDB at
+    /// `apps/{app_id}/storage/db` on the **content** bucket only.
+    /// Exists for app-to-app shared database access: a connected app
+    /// may write to the shared database directly, but must not touch
+    /// the rest of the app's content (e.g. `apps/{app_id}/upload/*`),
+    /// which `EditAppContent` would expose.
+    EditAppDb,
     EditUser,
     ReadUser,
     InvokeNone,
@@ -111,6 +125,8 @@ impl Display for CredentialsAccess {
             CredentialsAccess::ReadApp => write!(f, "read_app"),
             CredentialsAccess::ReadAppContent => write!(f, "read_app_content"),
             CredentialsAccess::EditAppContent => write!(f, "edit_app_content"),
+            CredentialsAccess::ReadAppDb => write!(f, "read_app_db"),
+            CredentialsAccess::EditAppDb => write!(f, "edit_app_db"),
             CredentialsAccess::EditUser => write!(f, "edit_user"),
             CredentialsAccess::ReadUser => write!(f, "read_user"),
             CredentialsAccess::InvokeNone => write!(f, "invoke_none"),

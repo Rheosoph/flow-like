@@ -54,6 +54,9 @@ pub enum TokenType {
     Realtime,
     /// Token for users to respond to interactions
     InteractionResponder,
+    /// Token for one app to call another app it is connected to.
+    /// Carries both the origin and target app id; only valid for the target.
+    AppConnection,
 }
 
 impl TokenType {
@@ -65,6 +68,7 @@ impl TokenType {
             TokenType::User => "flow-like-user",
             TokenType::Realtime => "y-webrtc",
             TokenType::InteractionResponder => "flow-like-interaction-responder",
+            TokenType::AppConnection => "flow-like-app-connection",
         }
     }
 
@@ -76,6 +80,7 @@ impl TokenType {
             TokenType::User => 60 * 60,                // 1 hour
             TokenType::Realtime => 3 * 60 * 60,        // 3 hours
             TokenType::InteractionResponder => 5 * 60, // 5 minutes
+            TokenType::AppConnection => 10 * 60,       // 10 minutes
         }
     }
 }

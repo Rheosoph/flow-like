@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -59,7 +59,13 @@ pub async fn update_overlay(
     Query(scope): Query<ScopeParams>,
     Json(payload): Json<UpdateOverlayPayload>,
 ) -> Result<Json<flow_like_catalog_core::GraphOverlay>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::WriteFiles,
+        RolePermissions::WriteDatabase
+    );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let mut def = lancegraph::load_overlay(&connection, &overlay_id).await?;

@@ -166,6 +166,7 @@ impl R2RuntimeCredentials {
 
         // Build prefix list based on access mode
         let apps_prefix = format!("apps/{}/", app_id);
+        let db_prefix = format!("{}storage/db/", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}/", sub, app_id);
         let log_prefix = format!("runs/{}/", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}/", sub, app_id);
@@ -188,6 +189,8 @@ impl R2RuntimeCredentials {
             // only ever pointing the client at the content store.
             CredentialsAccess::ReadAppContent => ("object-read-only", vec![apps_prefix.clone()]),
             CredentialsAccess::EditAppContent => ("object-read-write", vec![apps_prefix]),
+            CredentialsAccess::ReadAppDb => ("object-read-only", vec![db_prefix.clone()]),
+            CredentialsAccess::EditAppDb => ("object-read-write", vec![db_prefix]),
             CredentialsAccess::EditUser => ("object-read-write", vec![user_prefix]),
             CredentialsAccess::ReadUser => ("object-read-only", vec![user_prefix]),
             CredentialsAccess::InvokeNone => (
@@ -456,6 +459,8 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::ReadAppDb
+            | CredentialsAccess::EditAppDb
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute

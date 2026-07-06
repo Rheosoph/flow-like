@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use flow_like_types::{FromProto, Timestamp, ToProto};
 
 use crate::flow::{
-    event::{CanaryEvent, Event, EventExecutionMode, EventInput, ReleaseNotes},
+    event::{CanaryEvent, Event, EventExecutionMode, EventExposure, EventInput, ReleaseNotes},
     variable::Variable,
 };
 
@@ -50,6 +50,7 @@ impl ToProto<flow_like_types::proto::Event> for Event {
             route: self.route.clone(),
             is_default: self.is_default,
             execution_mode: Some(self.execution_mode.as_str().to_string()),
+            exposure: Some(self.exposure.as_str().to_string()),
         }
     }
 }
@@ -156,6 +157,11 @@ impl FromProto<flow_like_types::proto::Event> for Event {
                 .execution_mode
                 .as_deref()
                 .map(EventExecutionMode::parse)
+                .unwrap_or_default(),
+            exposure: proto
+                .exposure
+                .as_deref()
+                .map(EventExposure::parse)
                 .unwrap_or_default(),
         }
     }

@@ -8,6 +8,7 @@ pub mod invoke_event;
 pub mod invoke_event_async;
 pub mod prerun_event;
 pub mod registrations;
+pub mod remote_proxy;
 pub mod setup_event;
 pub mod upsert_event;
 pub mod upsert_event_feedback;
@@ -15,7 +16,7 @@ pub mod validate_event;
 
 use axum::{
     Router,
-    routing::{get, post, put},
+    routing::{any, get, post, put},
 };
 
 use crate::state::AppState;
@@ -45,6 +46,9 @@ pub fn routes() -> Router<AppState> {
             "/{event_id}/registrations",
             get(registrations::list_registrations),
         )
+        .route("/{event_id}/rest", any(remote_proxy::proxy_rest_root))
+        .route("/{event_id}/rest/{*path}", any(remote_proxy::proxy_rest))
+        .route("/{event_id}/mcp", any(remote_proxy::proxy_mcp))
         .route("/{event_id}/alias", get(alias::list_aliases))
         .route(
             "/{event_id}/alias/{slug}",

@@ -1,3 +1,4 @@
+pub mod call_remote_event;
 pub mod chat_event;
 pub mod extract_action_context;
 pub mod extract_input_value;

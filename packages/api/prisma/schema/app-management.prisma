@@ -59,6 +59,55 @@ model Invitation {
   @@index([userId, createdAt])
 }
 
+enum AppConnectionStatus {
+  PENDING
+  ACTIVE
+}
+
+model AppConnection {
+  id String @id
+
+  sourceApp   App    @relation("outgoingAppConnections", fields: [sourceAppId], references: [id], onDelete: Cascade)
+  sourceAppId String
+
+  targetApp   App    @relation("incomingAppConnections", fields: [targetAppId], references: [id], onDelete: Cascade)
+  targetAppId String
+
+  role   Role?   @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  roleId String?
+
+  status AppConnectionStatus @default(PENDING)
+
+  comment String?
+
+  requestedByUserId String?
+  approvedByUserId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sourceAppId, targetAppId])
+  @@index([targetAppId, status])
+  @@index([sourceAppId, status])
+}
+
+/// Free-form documentation app owners/admins attach to their app for the
+/// cross-app process/chain view (e.g. "this app handles invoice OCR").
+model AppProcessNote {
+  id String @id
+
+  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  authorUserId String?
+  content      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([appId, createdAt])
+}
+
 model Membership {
   id String @id
 
@@ -95,6 +144,7 @@ model Role {
 
   memberships    Membership[]
   technicalUsers TechnicalUser[]
+  appConnections AppConnection[]
 
   app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String?

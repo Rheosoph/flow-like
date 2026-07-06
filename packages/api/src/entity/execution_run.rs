@@ -49,6 +49,8 @@ pub struct Model {
     pub updated_at: DateTime,
     #[sea_orm(column_name = "technicalUserId", column_type = "Text", nullable)]
     pub technical_user_id: Option<String>,
+    #[sea_orm(column_name = "callerAppChain")]
+    pub caller_app_chain: Option<Vec<String>>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

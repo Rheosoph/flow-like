@@ -100,6 +100,11 @@ model App {
   forkedAt     DateTime?
 
   technicalUsers TechnicalUser[]
+
+  outgoingAppConnections AppConnection[] @relation("outgoingAppConnections")
+  incomingAppConnections AppConnection[] @relation("incomingAppConnections")
+  processNotes           AppProcessNote[]
+
   llmUsage       LLMUsageTracking[]
   usageLimits    AppUsageLimit[]
   executionUsage ExecutionUsageTracking[]
@@ -408,6 +413,10 @@ model Event {
   /// Events never run Hybrid — they must be bound to one environment so their
   /// config (URLs, credentials, tutorials) is unambiguous.
   executionMode String @default("Local")
+
+  /// Reachability: "PUBLIC" (public REST/MCP surface with its own auth) or
+  /// "INTERNAL" (only callable by connected apps via the app-connection proxy).
+  exposure String @default("PUBLIC")
 
   /// Variables for this event (JSON blob)
   variables Json?

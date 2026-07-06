@@ -180,6 +180,30 @@ async fn inbound_mcp(
     }
 }
 
+/// Enforces the event's exposure against the surface it was reached on.
+/// `is_public_surface` is true for the public inbound routers and false for
+/// the authenticated app-connection proxy.
+///
+/// - A `PUBLIC` event on the proxy → 403 (call it via its public endpoint).
+/// - An `INTERNAL` event on the public router → 404 (never publicly exposed;
+///   404 rather than 403 so its existence is not revealed).
+fn enforce_exposure(event_row: &event::Model, is_public_surface: bool) -> Result<(), Response> {
+    let internal = flow_like::flow::event::EventExposure::parse(&event_row.exposure).is_internal();
+    if is_public_surface && internal {
+        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response());
+    }
+    if !is_public_surface && !internal {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "This event is public; call it through its public endpoint, not the app-connection proxy"
+            })),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
 async fn dispatch_inbound_rest(
     state: &AppState,
     slug_or_id: &str,
@@ -199,9 +223,43 @@ async fn dispatch_inbound_rest(
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
         .ok_or_else(|| ApiError::not_found("event not found"))?;
 
+    dispatch_rest_for_event(
+        state, &event_row, slug_or_id, path, raw_query, headers, method, body, true, None,
+    )
+    .await
+}
+
+/// Matches and executes a REST registration of an event. Used by the public
+/// inbound router (with per-registration auth) and by the authenticated
+/// app-connection proxy (`enforce_registration_auth = false` — the caller has
+/// already authorized the request through a connection role; `injected_auth`
+/// then lands in `_client.auth` so flows can attribute the caller).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dispatch_rest_for_event(
+    state: &AppState,
+    event_row: &event::Model,
+    public_slug: &str,
+    path: &str,
+    raw_query: &str,
+    headers: &HeaderMap,
+    method: &axum::http::Method,
+    body: &Bytes,
+    enforce_registration_auth: bool,
+    injected_auth: Option<Value>,
+) -> Result<Response, ApiError> {
     if !event_row.active || event_row.event_type != "rest" {
         return Err(ApiError::not_found("REST event not found or inactive"));
     }
+
+    if let Err(response) = enforce_exposure(&event_row, enforce_registration_auth) {
+        return Ok(response);
+    }
+
+    let resolved = alias_util::ResolvedAlias {
+        event_id: event_row.id.clone(),
+        app_id: event_row.app_id.clone(),
+    };
+    let slug_or_id = public_slug;
 
     let version = event_row.last_setup_version.clone().ok_or_else(|| {
         ApiError::not_found("event has no completed setup; call POST /setup first")
@@ -231,7 +289,9 @@ async fn dispatch_inbound_rest(
     })?;
 
     // Auth check.
-    let auth_claims = if let Some(auth_id) = &registration.auth_id {
+    let auth_claims = if !enforce_registration_auth {
+        injected_auth
+    } else if let Some(auth_id) = &registration.auth_id {
         let auth = EventRemoteAuth::find_by_id(auth_id)
             .one(&state.db)
             .await
@@ -249,7 +309,7 @@ async fn dispatch_inbound_rest(
         "rest_fn" => {
             let result = dispatch_rest_fn(
                 state,
-                &event_row,
+                event_row,
                 &registration,
                 &normalized,
                 raw_query,
@@ -325,9 +385,38 @@ async fn dispatch_inbound_mcp(
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?
         .ok_or_else(|| ApiError::not_found("event not found"))?;
 
+    dispatch_mcp_for_event(
+        state, &event_row, slug_or_id, path, raw_query, headers, method, body, true, None,
+    )
+    .await
+}
+
+/// Serves the MCP surface of an event. Used by the public inbound router
+/// (with per-registration auth) and by the authenticated app-connection proxy
+/// (`enforce_registration_auth = false` — the connection role authorizes;
+/// `injected_auth` lands in `_client.auth` for caller attribution).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dispatch_mcp_for_event(
+    state: &AppState,
+    event_row: &event::Model,
+    public_slug: &str,
+    path: &str,
+    raw_query: &str,
+    headers: &HeaderMap,
+    method: &axum::http::Method,
+    body: &Bytes,
+    enforce_registration_auth: bool,
+    injected_auth: Option<Value>,
+) -> Result<Response, ApiError> {
     if !event_row.active || event_row.event_type != "mcp" {
         return Err(ApiError::not_found("MCP event not found or inactive"));
     }
+
+    if let Err(response) = enforce_exposure(&event_row, enforce_registration_auth) {
+        return Ok(response);
+    }
+
+    let slug_or_id = public_slug;
 
     let version = event_row.last_setup_version.clone().ok_or_else(|| {
         ApiError::not_found("event has no completed setup; call POST /setup first")
@@ -340,8 +429,8 @@ async fn dispatch_inbound_mcp(
     }
 
     let registration = event_remote_registration::Entity::find()
-        .filter(event_remote_registration::Column::AppId.eq(&resolved.app_id))
-        .filter(event_remote_registration::Column::EventId.eq(&resolved.event_id))
+        .filter(event_remote_registration::Column::AppId.eq(&event_row.app_id))
+        .filter(event_remote_registration::Column::EventId.eq(&event_row.id))
         .filter(event_remote_registration::Column::EventVersion.eq(&version))
         .filter(event_remote_registration::Column::Kind.eq("mcp_raw"))
         .one(&state.db)
@@ -367,7 +456,9 @@ async fn dispatch_inbound_mcp(
             .into_response());
     }
 
-    let auth_claims = if let Some(auth_id) = &registration.auth_id {
+    let auth_claims = if !enforce_registration_auth {
+        injected_auth
+    } else if let Some(auth_id) = &registration.auth_id {
         let auth = EventRemoteAuth::find_by_id(auth_id)
             .one(&state.db)
             .await
@@ -382,11 +473,11 @@ async fn dispatch_inbound_mcp(
     let client = client_metadata("mcp", headers, auth_claims);
 
     if method == axum::http::Method::POST {
-        mcp_handle_post(state, &event_row, &config, raw_query, headers, body, client).await
+        mcp_handle_post(state, event_row, &config, raw_query, headers, body, client).await
     } else if method == axum::http::Method::DELETE {
         Ok(mcp_handle_delete(raw_query, headers).await)
     } else if method == axum::http::Method::GET {
-        Ok(mcp_handle_get(&event_row, slug_or_id, raw_query, headers).await)
+        Ok(mcp_handle_get(event_row, slug_or_id, raw_query, headers).await)
     } else {
         let mut resp = (
             StatusCode::METHOD_NOT_ALLOWED,
@@ -1583,6 +1674,7 @@ async fn dispatch_event_collect(
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_row.id.clone()),
+        app_chain: None,
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
@@ -1644,6 +1736,7 @@ async fn dispatch_event_collect(
         expires_at: Set(Some(now + chrono::Duration::hours(24))),
         user_id: Set(actor_user_id),
         technical_user_id: Set(None),
+        caller_app_chain: Set(None),
         app_id: Set(event_row.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),

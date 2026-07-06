@@ -13,6 +13,7 @@ pub mod invoke;
 pub mod lazy_register_tools;
 pub mod memory;
 pub mod register_mcp_tools;
+pub mod register_remote_mcp_tools;
 pub mod register_thinking;
 pub mod register_tools;
 pub mod set_system_prompt;
@@ -29,6 +30,24 @@ pub struct McpServerConfig {
     /// If Some, only tools in this set are used
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_filter: Option<HashSet<String>>,
+
+    /// Optional value sent in the Authorization header of every request,
+    /// e.g. a bearer token for app-connection MCP proxies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_header: Option<String>,
+}
+
+/// Builds the streamable-HTTP transport config for an MCP server,
+/// attaching the configured Authorization header to every request.
+#[cfg(feature = "execute")]
+pub(crate) fn mcp_transport_config(
+    config: &McpServerConfig,
+) -> rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
+    use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+
+    let mut transport_config = StreamableHttpClientTransportConfig::with_uri(config.uri.clone());
+    transport_config.auth_header = config.auth_header.clone();
+    transport_config
 }
 
 /// DataFusion session context for SQL-based data analysis

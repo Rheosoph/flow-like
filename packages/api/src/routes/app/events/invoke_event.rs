@@ -135,8 +135,18 @@ pub async fn invoke_event(
     Json(params): Json<InvokeEventRequest>,
 ) -> Result<Response, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.effective_user_id()?;
+    let sub = permission.effective_user_id().map_err(|_| {
+        crate::error::ApiError::forbidden(
+            "Invoking requires a caller that is linked to a user account",
+        )
+    })?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+    // If invoked through an app connection, keep the caller app chain so the
+    // run (and any tokens it mints) stays attributable across apps.
+    let caller_app_chain = match &user {
+        AppUser::ConnectedApp(connected) => Some(connected.app_chain.clone()),
+        _ => None,
+    };
 
     // Get event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
@@ -215,6 +225,7 @@ pub async fn invoke_event(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
+        caller_app_chain: Set(caller_app_chain.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -247,6 +258,7 @@ pub async fn invoke_event(
             app_id: app_id.clone(),
             board_id: board_id.clone(),
             event_id: Some(event_id),
+            app_chain: caller_app_chain.clone(),
             callback_url: String::new(),
             token_type: TokenType::User,
             ttl_seconds: Some(60 * 60),
@@ -288,6 +300,7 @@ pub async fn invoke_event(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
+        app_chain: caller_app_chain.clone(),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),

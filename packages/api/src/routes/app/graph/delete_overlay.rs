@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -41,7 +41,13 @@ pub async fn delete_overlay(
     Path((app_id, overlay_id)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
 ) -> Result<(), ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::WriteFiles,
+        RolePermissions::WriteDatabase
+    );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     lancegraph::delete_overlay(&connection, &overlay_id).await?;

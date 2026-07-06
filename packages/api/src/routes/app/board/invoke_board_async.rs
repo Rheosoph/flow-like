@@ -107,8 +107,16 @@ pub async fn invoke_board_async(
     Json(params): Json<InvokeBoardAsyncRequest>,
 ) -> Result<Json<InvokeBoardAsyncResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.effective_user_id()?;
+    let sub = permission.effective_user_id().map_err(|_| {
+        crate::error::ApiError::forbidden(
+            "Invoking requires a caller that is linked to a user account",
+        )
+    })?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+    let caller_app_chain = match &user {
+        AppUser::ConnectedApp(connected) => Some(connected.app_chain.clone()),
+        _ => None,
+    };
 
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(anyhow!(
@@ -172,6 +180,7 @@ pub async fn invoke_board_async(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
+        caller_app_chain: Set(caller_app_chain.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -204,6 +213,7 @@ pub async fn invoke_board_async(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: None,
+        app_chain: caller_app_chain.clone(),
         callback_url: String::new(),
         token_type: TokenType::User,
         ttl_seconds: Some(60 * 60),
@@ -242,6 +252,7 @@ pub async fn invoke_board_async(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: None,
+        app_chain: caller_app_chain.clone(),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),

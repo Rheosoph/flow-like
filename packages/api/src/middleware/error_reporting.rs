@@ -99,6 +99,7 @@ pub async fn error_reporting_middleware(
         AppUser::OpenID(u) => Some(u.sub.clone()),
         AppUser::PAT(u) => Some(u.sub.clone()),
         AppUser::Executor(u) => Some(u.sub.clone()),
+        AppUser::ConnectedApp(u) => u.sub.clone(),
         AppUser::APIKey(_) => None,
         AppUser::Unauthorized => None,
     });

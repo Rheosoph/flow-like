@@ -431,6 +431,12 @@ model ExecutionRun {
   technicalUserId   String?
   technicalUser TechnicalUser? @relation(fields: [technicalUserId], references: [id], onDelete: SetNull)
 
+  /// If the run was triggered through an app connection: the chain of apps
+  /// that led to this run (first = original caller). Used for analytics
+  /// ("called by app" in addition to "called by user"). The Gin (inverted)
+  /// index backs the process-graph "chains containing app X" aggregation.
+  callerAppChain String[]
+
   /// Streaming events for this run
   events ExecutionEvent[]
 
@@ -441,4 +447,5 @@ model ExecutionRun {
   @@index([userId, status])
   @@index([boardId])
   @@index([expiresAt])
+  @@index([callerAppChain], type: Gin)
 }

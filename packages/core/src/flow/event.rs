@@ -62,6 +62,40 @@ impl EventExecutionMode {
     }
 }
 
+/// Where an event is reachable from. `Public` events with a REST/MCP surface
+/// are served on the public inbound routers with their configured auth.
+/// `Internal` events are only callable by connected apps through the
+/// app-connection proxy (gated by the connection role) and are never exposed
+/// publicly — so a public secret can never be bypassed via the proxy.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EventExposure {
+    /// Public HTTP surface (REST/MCP), protected by the event's own auth.
+    #[default]
+    Public,
+    /// Reachable only via app connections, never publicly.
+    Internal,
+}
+
+impl EventExposure {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventExposure::Public => "PUBLIC",
+            EventExposure::Internal => "INTERNAL",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "Internal" | "internal" | "INTERNAL" => EventExposure::Internal,
+            _ => EventExposure::Public,
+        }
+    }
+
+    pub fn is_internal(&self) -> bool {
+        matches!(self, EventExposure::Internal)
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct CanaryEvent {
     pub weight: f32,
@@ -113,6 +147,11 @@ pub struct Event {
     /// the board's `execution_mode` when that mode is not Hybrid.
     #[serde(default)]
     pub execution_mode: EventExecutionMode,
+
+    /// Whether the event is publicly reachable or only callable by connected
+    /// apps via the app-connection proxy. Only meaningful for REST/MCP events.
+    #[serde(default)]
+    pub exposure: EventExposure,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]

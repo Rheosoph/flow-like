@@ -33,6 +33,11 @@ pub struct ExecutionClaims {
     /// Optional event ID if triggered by an event
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
+    /// If the run was triggered through an app connection: the chain of apps
+    /// that led to it (last element = the app that made the call). Passed
+    /// through so tokens minted during this run keep the chain transparent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_chain: Option<Vec<String>>,
     /// Callback URL for progress/event reporting
     pub callback_url: String,
     /// Token type - executor or user
@@ -61,6 +66,8 @@ pub struct ExecutionJwtParams {
     pub app_id: String,
     pub board_id: String,
     pub event_id: Option<String>,
+    /// Chain of apps that led to this run via app connections, if any
+    pub app_chain: Option<Vec<String>>,
     pub callback_url: String,
     /// Token type - executor or user
     pub token_type: TokenType,
@@ -84,6 +91,7 @@ pub fn sign(params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
         app_id: params.app_id,
         board_id: params.board_id,
         event_id: params.event_id,
+        app_chain: params.app_chain,
         callback_url: params.callback_url,
         token_type: params.token_type,
         iss: issuer().to_string(),
@@ -147,6 +155,7 @@ mod tests {
             app_id: "app789".to_string(),
             board_id: "board012".to_string(),
             event_id: Some("event345".to_string()),
+            app_chain: None,
             callback_url: "http://localhost:8080".to_string(),
             token_type: TokenType::Executor,
             ttl_seconds: Some(3600),

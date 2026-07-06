@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -56,7 +56,13 @@ pub async fn run_cypher(
     Query(scope): Query<ScopeParams>,
     Json(payload): Json<CypherPayload>,
 ) -> Result<Json<Vec<flow_like_types::Value>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;

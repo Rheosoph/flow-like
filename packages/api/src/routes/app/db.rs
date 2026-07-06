@@ -108,6 +108,10 @@ pub fn routes() -> Router<AppState> {
         .route("/user", get(list_tables_user::list_tables_user))
         .route("/presign", post(presign_db_access::presign_db_access))
         .route(
+            "/presign/project",
+            post(presign_db_access::presign_project_db_access),
+        )
+        .route(
             "/{table}",
             put(db_add::add_to_table)
                 .delete(db_delete::delete_from_table)

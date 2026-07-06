@@ -155,6 +155,7 @@ impl ExecutionStateStore for PostgresStateStore {
             expires_at: Set(input.expires_at.map(ts_to_datetime)),
             user_id: Set(input.user_id),
             technical_user_id: Set(input.technical_user_id),
+            caller_app_chain: Set(None),
             app_id: Set(input.app_id),
             created_at: Set(now),
             updated_at: Set(now),

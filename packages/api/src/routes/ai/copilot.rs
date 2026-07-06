@@ -338,6 +338,7 @@ fn user_access_token(user: &AppUser) -> Option<String> {
         AppUser::PAT(_u) => None,
         AppUser::APIKey(_k) => None,
         AppUser::Executor(_e) => None,
+        AppUser::ConnectedApp(_a) => None,
         AppUser::Unauthorized => None,
     }
 }

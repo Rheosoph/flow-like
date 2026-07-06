@@ -21,6 +21,7 @@ import {
 	EventTypeConfiguration,
 	type IEvent,
 	IEventExecutionMode,
+	IEventExposure,
 	type IEventInput,
 	type IEventMapping,
 	type IOAuthProvider,
@@ -72,8 +73,10 @@ import {
 	FileTextIcon,
 	FormInputIcon,
 	GitBranchIcon,
+	Globe,
 	LayersIcon,
 	Loader2,
+	Lock,
 	Monitor,
 	Pause,
 	Play,
@@ -320,6 +323,7 @@ export default function EventsPage({
 				notes: null,
 				execution_mode:
 					(newEvent as any)?.execution_mode ?? IEventExecutionMode.Local,
+				exposure: (newEvent as any)?.exposure ?? IEventExposure.Public,
 			};
 
 			let savedEvent: IEvent | null = null;
@@ -1242,6 +1246,49 @@ function EventConfiguration({
 							</div>
 						);
 					})()}
+					{(formData.event_type === "rest" || formData.event_type === "mcp") &&
+						(() => {
+							const currentExposure =
+								formData.exposure ?? IEventExposure.Public;
+							return (
+								<div className="flex shrink-0 items-center gap-2 pl-3 border-l">
+									<Label className="text-xs text-muted-foreground">
+										Exposure
+									</Label>
+									<div className="flex flex-col gap-1">
+										<Select
+											value={currentExposure}
+											onValueChange={(value) => {
+												if (!isEditing) enterEdit();
+												handleInputChange("exposure", value as IEventExposure);
+											}}
+											disabled={!isEditing}
+										>
+											<SelectTrigger size="sm" className="w-32 text-xs">
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value={IEventExposure.Public}>
+													<span className="inline-flex items-center gap-1.5">
+														<Globe className="h-3 w-3" /> Public
+													</span>
+												</SelectItem>
+												<SelectItem value={IEventExposure.Internal}>
+													<span className="inline-flex items-center gap-1.5">
+														<Lock className="h-3 w-3" /> Internal
+													</span>
+												</SelectItem>
+											</SelectContent>
+										</Select>
+										<p className="text-[0.65rem] leading-tight text-muted-foreground max-w-[16rem]">
+											{currentExposure === IEventExposure.Internal
+												? "Only callable by connected apps — no public endpoint."
+												: "Reachable on its public endpoint with the configured auth."}
+										</p>
+									</div>
+								</div>
+							);
+						})()}
 					<div className="ml-auto" />
 					{board.data?.nodes?.[formData.node_id] && formData.node_id && (
 						<EventTypeConfiguration

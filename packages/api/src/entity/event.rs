@@ -48,6 +48,8 @@ pub struct Model {
     pub updated_at: DateTime,
     #[sea_orm(column_name = "executionMode", column_type = "Text")]
     pub execution_mode: String,
+    #[sea_orm(column_type = "Text")]
+    pub exposure: String,
     #[sea_orm(column_name = "lastSetupAt")]
     pub last_setup_at: Option<DateTime>,
     #[sea_orm(column_name = "lastSetupError", column_type = "Text", nullable)]

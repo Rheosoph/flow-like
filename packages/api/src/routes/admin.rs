@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 pub mod ai_act;
 pub mod bit;
+pub mod connections;
 pub mod forks;
 pub mod governance;
 pub mod logs;
@@ -24,6 +25,10 @@ pub mod users;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/connections/graph",
+            get(connections::get_global_connection_graph),
+        )
         .route(
             "/bit/{bit_id}",
             put(upsert_bit::upsert_bit).delete(delete_bit::delete_bit),
