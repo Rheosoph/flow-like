@@ -127,3 +127,28 @@ fn compact_search_result(result: &Value) -> Value {
         "score": object.and_then(|item| item.get("score")).cloned().unwrap_or(Value::Null),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_search_result_keeps_only_model_relevant_fields() {
+        let result = compact_search_result(&json!({
+            "title": "Flow Like",
+            "url": "https://flow-like.com",
+            "content": "Workflow automation",
+            "publishedDate": "2026-06-04",
+            "engine": "test",
+            "category": "general",
+            "score": 1.25,
+            "huge": "drop me"
+        }));
+
+        assert_eq!(
+            result.get("title").and_then(Value::as_str),
+            Some("Flow Like")
+        );
+        assert!(result.get("huge").is_none());
+    }
+}
