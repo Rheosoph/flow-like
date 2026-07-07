@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
-import { useGlobalChatStore } from "../../../lib/global-chat-store";
+import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 
 export const HERO_SUGGESTIONS = [
 	"Create a new app",

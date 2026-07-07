@@ -1,13 +1,13 @@
 "use client";
 
-import { useAssistantSurface } from "@flow-like/flow-like-ui";
-import { PendingComponentsView } from "@flow-like/flow-like-ui/components/flowpilot/PendingComponentsView";
-import type { AssistantWidgetSurface } from "@flow-like/flow-like-ui/state/assistant-surface";
 import { motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+import { useAssistantSurface } from "../../index";
+import type { AssistantWidgetSurface } from "../../state/assistant-surface";
+import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import { PendingComponentsView } from "../flowpilot/PendingComponentsView";
 
 /**
  * The builder's `applyComponents` applies its OWN staged components (it ignores the passed array),

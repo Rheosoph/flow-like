@@ -3,6 +3,7 @@
 //! This module provides the Copilot struct which enables natural language
 //! interaction with flow graphs, supporting both explanation and modification.
 
+pub mod assistant;
 mod context;
 mod declarations;
 pub mod memory;
@@ -15,6 +16,10 @@ mod tools;
 mod types;
 mod validation;
 
+pub use assistant::{
+    GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
+    global_assistant_system_prompt, open_board_section, run_platform_chat,
+};
 pub use context::{
     EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, prepare_context,
 };

@@ -1,6 +1,5 @@
 "use client";
 
-import { Button, useAssistantSurface } from "@flow-like/flow-like-ui";
 import { AnimatePresence, motion } from "framer-motion";
 import { Maximize2Icon, SparklesIcon, XIcon } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -12,11 +11,12 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { migrateFlowPilotHistory } from "../../lib/global-chat-migration";
+import { Button, useAssistantSurface } from "../../index";
+import { migrateFlowPilotHistory } from "../../state/global-chat/global-chat-migration";
 import {
 	readPersistedOverlayMode,
 	useGlobalChatStore,
-} from "../../lib/global-chat-store";
+} from "../../state/global-chat/global-chat-store";
 import { GlobalChatBody } from "./global-chat-body";
 
 // Dock geometry. Sizes are in px; MARGIN matches the fixed bottom-6/right-6 inset so the dock never

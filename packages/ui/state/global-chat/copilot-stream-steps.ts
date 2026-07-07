@@ -1,9 +1,9 @@
-import type { CopilotStreamEvent } from "@flow-like/flow-like-ui/components/flowpilot/copilot-stream-parser";
+import type { CopilotStreamEvent } from "../../components/flowpilot/copilot-stream-parser";
 import type {
 	IChatUsageStat,
 	IPlanStep,
 	PlanStepStatus,
-} from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat-db";
+} from "../../components/interfaces/chat-default/chat-db";
 
 // Turns the FlowPilot copilot stream protocol (plan_step / tool_start / tool_call / …) into an
 // ordered IPlanStep list. Shared by the global chat's own response stream and by nested sub-agent

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import { GlobalChatBody } from "./global-chat-body";
 
 /**

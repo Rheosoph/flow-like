@@ -29,7 +29,9 @@ use serde_json::{Value, json};
 
 use super::memory::AssistantMemory;
 use super::stream::{plan_step_frame, tool_end_frame, tool_start_frame, usage_stat_frame};
-use super::tool_spec::{MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, global_assistant_tool_specs};
+use super::tool_spec::{
+    MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, global_assistant_tool_specs, spec_arg_str,
+};
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
 use crate::profile::Profile;
@@ -464,6 +466,132 @@ pub async fn run_memory_tool(
         _ => json!({ "status": "error", "error": format!("Unknown memory tool '{name}'.") })
             .to_string(),
     }
+}
+
+/// Run the shared `internet_search` tool (SearXNG) server-side. Async counterpart of the desktop's
+/// blocking version, so both hosts share one implementation: the server FlowPilot bridge awaits it
+/// directly and the desktop delegates to it via `block_on`.
+pub async fn run_internet_search(args: &Value) -> Value {
+    let query = spec_arg_str(args, "query", "query").trim().to_string();
+    if query.is_empty() {
+        return json!({
+            "status": "error",
+            "tool": "internet_search",
+            "error": "internet_search requires a non-empty query."
+        });
+    }
+
+    let language = {
+        let language = spec_arg_str(args, "language", "language").trim();
+        if language.is_empty() {
+            "en-US".to_string()
+        } else {
+            language.to_string()
+        }
+    };
+    let page = args
+        .get("page")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        .clamp(1, 100);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(8)
+        .clamp(1, 20) as usize;
+
+    let client = match flow_like_types::reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent("FlowPilot/1.0")
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            return json!({
+                "status": "error",
+                "tool": "internet_search",
+                "error": format!("Failed to create search client: {error}")
+            });
+        }
+    };
+
+    let page_str = page.to_string();
+    let response = match client
+        .get("https://search.flow-like.com/search")
+        .query(&[
+            ("q", query.as_str()),
+            ("format", "json"),
+            ("pageno", page_str.as_str()),
+            ("language", language.as_str()),
+        ])
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return json!({
+                "status": "error",
+                "tool": "internet_search",
+                "query": query,
+                "error": format!("Search request failed: {error}")
+            });
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        return json!({
+            "status": "error",
+            "tool": "internet_search",
+            "query": query,
+            "http_status": status.as_u16(),
+            "error": format!("Search request failed with HTTP {status}")
+        });
+    }
+
+    let payload = match response.json::<Value>().await {
+        Ok(payload) => payload,
+        Err(error) => {
+            return json!({
+                "status": "error",
+                "tool": "internet_search",
+                "query": query,
+                "error": format!("Search response was not valid JSON: {error}")
+            });
+        }
+    };
+
+    let results = payload
+        .get("results")
+        .and_then(Value::as_array)
+        .map(|results| {
+            results
+                .iter()
+                .take(limit)
+                .map(compact_search_result)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    json!({
+        "status": "ok",
+        "query": query,
+        "page": page,
+        "results": results
+    })
+}
+
+fn compact_search_result(result: &Value) -> Value {
+    let object = result.as_object();
+    json!({
+        "title": object.and_then(|item| item.get("title")).cloned().unwrap_or(Value::Null),
+        "url": object.and_then(|item| item.get("url")).cloned().unwrap_or(Value::Null),
+        "content": object.and_then(|item| item.get("content")).cloned().unwrap_or(Value::Null),
+        "publishedDate": object.and_then(|item| item.get("publishedDate")).cloned().unwrap_or(Value::Null),
+        "engine": object.and_then(|item| item.get("engine")).cloned().unwrap_or(Value::Null),
+        "category": object.and_then(|item| item.get("category")).cloned().unwrap_or(Value::Null),
+        "score": object.and_then(|item| item.get("score")).cloned().unwrap_or(Value::Null),
+    })
 }
 
 /// Map a tool's JSON output to the stream status the frontend renders ("error" → failed step).

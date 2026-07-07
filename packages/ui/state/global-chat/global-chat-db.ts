@@ -1,8 +1,8 @@
+import Dexie, { type EntityTable } from "dexie";
 import type {
 	IMessage,
 	ISession,
-} from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat-db";
-import Dexie, { type EntityTable } from "dexie";
+} from "../../components/interfaces/chat-default/chat-db";
 
 export type { IMessage, ISession };
 

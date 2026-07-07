@@ -1,6 +1,5 @@
 "use client";
 
-import { Textarea } from "@flow-like/flow-like-ui";
 import {
 	ArrowUpIcon,
 	AudioLinesIcon,
@@ -19,6 +18,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { Textarea } from "../../../index";
 import { FRAG, VERT, readTokenRGB, themeIsLight } from "./bubble-shader";
 import { HeroAgentControls } from "./hero-agent-controls";
 import { HeroFileChips, HeroFileInput } from "./hero-file-chips";

@@ -1,6 +1,6 @@
 "use client";
 
-import { GlobalChatView } from "../../components/global-chat/global-chat-view";
+import { GlobalChatView } from "@flow-like/flow-like-ui/components/global-chat/global-chat-view";
 
 export default function ChatPage() {
 	return (

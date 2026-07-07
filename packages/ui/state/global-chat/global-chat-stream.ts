@@ -1,13 +1,13 @@
-import { IRole } from "@flow-like/flow-like-ui";
-import { createCopilotStreamParser } from "@flow-like/flow-like-ui/components/flowpilot/copilot-stream-parser";
 import { createId } from "@paralleldrive/cuid2";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { createCopilotStreamParser } from "../../components/flowpilot/copilot-stream-parser";
+import { isTauri } from "../../lib/platform";
+import { IRole } from "../../lib/schema/llm/history";
 import {
 	applyStreamEvent,
 	createStreamAccumulator,
 	mergeUsageStats,
 	orderedSteps,
-} from "../components/global-chat/copilot-stream-steps";
+} from "./copilot-stream-steps";
 import {
 	GLOBAL_CHAT_APP_ID,
 	type IMessage,
@@ -118,8 +118,30 @@ interface DriveOptions {
 	responseMessage: IMessage;
 	/** True for a resume re-attach (guards against overwriting a restored checkpoint on a miss). */
 	isResume?: boolean;
-	/** Opens the Tauri command with the channel bound (global_chat or global_chat_resume). */
-	startInvoke: (channel: Channel<string>) => Promise<unknown>;
+	/**
+	 * Transport hook. Drives the underlying run and forwards every raw FlowPilot stream chunk to
+	 * `onChunk`; resolves with the transport's result (the desktop Tauri command's return value or,
+	 * on the web, the final `UnifiedCopilotResponse`). This is the ONE seam that differs between the
+	 * desktop (Tauri Channel — see {@link tauriStart}) and browser (HTTP+SSE — see
+	 * `global-chat-web-transport.ts`) transports; everything else in the engine is shared.
+	 */
+	start: (onChunk: (chunk: string) => void) => Promise<unknown>;
+}
+
+/**
+ * Desktop transport: bridge a Tauri `Channel<string>` to the engine's `onChunk` seam. Every chunk
+ * the Rust command streams over the channel is forwarded to the parser. Returns a `start` function
+ * suitable for {@link driveGlobalChatStream}.
+ */
+export function tauriStart(command: string, args: Record<string, unknown>) {
+	return async (onChunk: (chunk: string) => void) => {
+		// Tauri is imported lazily (mirrors use-copilot-sdk) so this module also loads on the web,
+		// where the caller uses `webGlobalChatStart` instead and never reaches this path.
+		const { Channel, invoke } = await import("@tauri-apps/api/core");
+		const channel = new Channel<string>();
+		channel.onmessage = onChunk;
+		return invoke(command, { ...args, channel });
+	};
 }
 
 /**
@@ -130,7 +152,7 @@ interface DriveOptions {
 export async function driveGlobalChatStream({
 	responseMessage,
 	isResume,
-	startInvoke,
+	start,
 }: DriveOptions) {
 	const store = useGlobalChatStore;
 	const parser = createCopilotStreamParser();
@@ -159,15 +181,14 @@ export async function driveGlobalChatStream({
 		}
 	};
 
-	const channel = new Channel<string>();
-	channel.onmessage = (chunk) => {
+	const onChunk = (chunk: string) => {
 		for (const event of parser.push(chunk)) applyStreamEvent(acc, event);
 		syncMessage();
 	};
 
 	let invokeResult: unknown;
 	try {
-		invokeResult = await startInvoke(channel);
+		invokeResult = await start(onChunk);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		// Surface mid-stream failures even when partial content already arrived — a silent stop
@@ -249,6 +270,9 @@ export async function driveGlobalChatStream({
  * has already GC'd resolves `attached: false`, leaving the restored checkpoint untouched.
  */
 export function resumeGlobalChatStream() {
+	// Resume re-attaches to a live Rust run registry that only exists on the desktop; browser runs
+	// are ephemeral (non-resumable), so this is a no-op there.
+	if (!isTauri()) return;
 	const state = useGlobalChatStore.getState();
 	if (state.isStreaming) return;
 	const active = readActiveRun();
@@ -267,7 +291,6 @@ export function resumeGlobalChatStream() {
 	void driveGlobalChatStream({
 		responseMessage,
 		isResume: true,
-		startInvoke: (channel) =>
-			invoke("global_chat_resume", { runId: active.runId, channel }),
+		start: tauriStart("global_chat_resume", { runId: active.runId }),
 	});
 }

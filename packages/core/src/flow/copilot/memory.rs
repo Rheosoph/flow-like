@@ -47,11 +47,23 @@ pub struct AssistantMemory {
 
 impl AssistantMemory {
     /// Open the per-profile LanceDB store (no embedding model). Lazily created on first write.
+    ///
+    /// `owner` scopes the table to a user on multi-tenant deployments: `Some(sub)` stores under
+    /// `users/<sub>/assistant-memory/<profile_id>` (matching the per-user credential prefix so
+    /// scoped writes are allowed and users never share a namespace); `None` (desktop, single user)
+    /// keeps the flat `assistant-memory/<profile_id>` layout.
     async fn open_store(
         state: &Arc<FlowLikeState>,
+        owner: Option<&str>,
         profile_id: &str,
     ) -> Result<LanceDBVectorStore> {
-        let dir = Path::from("assistant-memory").child(profile_id);
+        let dir = match owner.map(str::trim).filter(|owner| !owner.is_empty()) {
+            Some(owner) => Path::from("users")
+                .child(owner)
+                .child("assistant-memory")
+                .child(profile_id),
+            None => Path::from("assistant-memory").child(profile_id),
+        };
         let builder = {
             let config = state.config.read().await;
             let build = config
@@ -77,9 +89,10 @@ impl AssistantMemory {
     }
 
     /// Open (or lazily create on first write) the memory table for `profile_id`, embedding with the
-    /// given bit. The table lives under the user store at `assistant-memory/<profile_id>`.
+    /// given bit. See [`open_store`](Self::open_store) for how `owner` scopes the table.
     pub async fn open(
         state: Arc<FlowLikeState>,
+        owner: Option<&str>,
         profile_id: &str,
         embedding_bit: &Bit,
     ) -> Result<Self> {
@@ -89,7 +102,7 @@ impl AssistantMemory {
             .await
             .build_text(embedding_bit, state.clone())
             .await?;
-        let store = Self::open_store(&state, profile_id).await?;
+        let store = Self::open_store(&state, owner, profile_id).await?;
 
         Ok(Self {
             store: RwLock::new(store),
@@ -99,8 +112,12 @@ impl AssistantMemory {
     }
 
     /// Report how many observations a profile has stored and which embedding model produced them.
-    pub async fn status(state: Arc<FlowLikeState>, profile_id: &str) -> Result<MemoryStatus> {
-        let store = Self::open_store(&state, profile_id).await?;
+    pub async fn status(
+        state: Arc<FlowLikeState>,
+        owner: Option<&str>,
+        profile_id: &str,
+    ) -> Result<MemoryStatus> {
+        let store = Self::open_store(&state, owner, profile_id).await?;
         let count = store.count(None).await.unwrap_or(0);
         let embedding_model_id = if count > 0 {
             store
@@ -126,16 +143,24 @@ impl AssistantMemory {
     /// embedding model changes: a new model usually has a different vector dimension, so the table
     /// must be recreated with the new schema on the next insert — purging rows would keep the old
     /// schema and permanently break `_memory_store`.
-    pub async fn clear(state: Arc<FlowLikeState>, profile_id: &str) -> Result<()> {
-        let mut store = Self::open_store(&state, profile_id).await?;
+    pub async fn clear(
+        state: Arc<FlowLikeState>,
+        owner: Option<&str>,
+        profile_id: &str,
+    ) -> Result<()> {
+        let mut store = Self::open_store(&state, owner, profile_id).await?;
         store.drop_table().await
     }
 
     /// List a profile's stored observations, newest first, for display and management in the UI.
     /// Reads the table directly (no embedding model needed), mirroring `status`/`clear`. Returns an
     /// empty list for a fresh profile whose table does not exist yet.
-    pub async fn list(state: Arc<FlowLikeState>, profile_id: &str) -> Result<Vec<MemoryEntry>> {
-        let store = Self::open_store(&state, profile_id).await?;
+    pub async fn list(
+        state: Arc<FlowLikeState>,
+        owner: Option<&str>,
+        profile_id: &str,
+    ) -> Result<Vec<MemoryEntry>> {
+        let store = Self::open_store(&state, owner, profile_id).await?;
         let rows = store
             .filter(
                 "1=1",
@@ -173,10 +198,11 @@ impl AssistantMemory {
     /// Delete a single observation by id. No-op if it no longer exists.
     pub async fn delete_entry(
         state: Arc<FlowLikeState>,
+        owner: Option<&str>,
         profile_id: &str,
         id: &str,
     ) -> Result<()> {
-        let store = Self::open_store(&state, profile_id).await?;
+        let store = Self::open_store(&state, owner, profile_id).await?;
         let escaped = id.replace('\'', "''");
         store.delete(&format!("id = '{escaped}'")).await
     }

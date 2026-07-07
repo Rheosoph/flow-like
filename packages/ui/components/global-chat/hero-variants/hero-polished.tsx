@@ -1,6 +1,5 @@
 "use client";
 
-import { Textarea } from "@flow-like/flow-like-ui";
 import {
 	ArrowUpIcon,
 	PackageIcon,
@@ -9,6 +8,7 @@ import {
 	SparklesIcon,
 	UserRoundIcon,
 } from "lucide-react";
+import { Textarea } from "../../../index";
 import { HeroFileChips, HeroFileInput } from "./hero-file-chips";
 import { HERO_SUGGESTIONS, useHeroComposer } from "./use-hero-composer";
 

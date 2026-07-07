@@ -1,5 +1,8 @@
 "use client";
 
+import { useLiveQuery } from "dexie-react-hooks";
+import { HistoryIcon, SquarePenIcon, Trash2Icon } from "lucide-react";
+import { useCallback, useState } from "react";
 import {
 	Button,
 	Popover,
@@ -8,12 +11,12 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
-} from "@flow-like/flow-like-ui";
-import { useLiveQuery } from "dexie-react-hooks";
-import { HistoryIcon, SquarePenIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useState } from "react";
-import { GLOBAL_CHAT_APP_ID, globalChatDb } from "../../lib/global-chat-db";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+} from "../../index";
+import {
+	GLOBAL_CHAT_APP_ID,
+	globalChatDb,
+} from "../../state/global-chat/global-chat-db";
+import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 
 function relativeTime(timestamp: number): string {
 	const delta = Date.now() - timestamp;

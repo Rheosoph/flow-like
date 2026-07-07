@@ -1,23 +1,20 @@
 "use client";
 
 import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuRadioGroup,
-	DropdownMenuRadioItem,
-	DropdownMenuTrigger,
-} from "@flow-like/flow-like-ui";
-import type {
-	AIProvider,
-	NormalizedAIProvider,
-} from "@flow-like/flow-like-ui/components/flowpilot/types";
-import {
 	ChevronDownIcon,
 	Code2Icon,
 	GithubIcon,
 	type LucideIcon,
 	SparklesIcon,
 } from "lucide-react";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "../../../index";
+import type { AIProvider, NormalizedAIProvider } from "../../flowpilot/types";
 import { useAgentSelection } from "./use-agent-selection";
 
 const PROVIDER_ICON: Record<NormalizedAIProvider, LucideIcon> = {

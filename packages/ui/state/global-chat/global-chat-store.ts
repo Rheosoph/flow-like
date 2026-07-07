@@ -1,16 +1,16 @@
+import { createId } from "@paralleldrive/cuid2";
+import { create } from "zustand";
 import type {
 	CanvasSettings,
 	SurfaceComponent,
-} from "@flow-like/flow-like-ui/components/a2ui/types";
-import type { AIProvider } from "@flow-like/flow-like-ui/components/flowpilot/types";
+} from "../../components/a2ui/types";
+import type { AIProvider } from "../../components/flowpilot/types";
 import type {
 	IAttachment,
 	IChatUsageStat,
 	IPlanStep,
-} from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat-db";
-import type { IInteractionRequest } from "@flow-like/flow-like-ui/lib/schema/interaction";
-import { createId } from "@paralleldrive/cuid2";
-import { create } from "zustand";
+} from "../../components/interfaces/chat-default/chat-db";
+import type { IInteractionRequest } from "../../lib/schema/interaction";
 import type { IMessage } from "./global-chat-db";
 
 /** Id prefix marking plan steps that belong to a nested sub-agent run (e.g. flowpilot_board). */

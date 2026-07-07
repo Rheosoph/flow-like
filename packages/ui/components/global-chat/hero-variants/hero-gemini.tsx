@@ -1,6 +1,5 @@
 "use client";
 
-import { Textarea } from "@flow-like/flow-like-ui";
 import {
 	ChevronDownIcon,
 	LayoutGridIcon,
@@ -12,6 +11,7 @@ import {
 	UserRoundIcon,
 } from "lucide-react";
 import { type KeyboardEvent, useCallback } from "react";
+import { Textarea } from "../../../index";
 import { HeroFileChips, HeroFileInput } from "./hero-file-chips";
 import { HERO_SUGGESTIONS, useHeroComposer } from "./use-hero-composer";
 

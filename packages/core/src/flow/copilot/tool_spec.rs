@@ -11,6 +11,7 @@
 //! - `_memory_store` / `_memory_search` run against the core `AssistantMemory`.
 
 use rig::completion::ToolDefinition;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 pub const INTERNET_SEARCH_TOOL: &str = "internet_search";
@@ -58,6 +59,58 @@ pub fn spec_arg_str<'a>(args: &'a Value, snake: &str, camel: &str) -> &'a str {
         .or_else(|| args.get(camel))
         .and_then(Value::as_str)
         .unwrap_or("")
+}
+
+/// Host-neutral approval payload the client must satisfy before a tool runs. Serializes to the same
+/// camelCase shape every FlowPilot frontend already handles (`{kind, title, description, sessionKey}`),
+/// so the desktop (Tauri event) and the browser (SSE `tool_request` frame) send an identical object.
+/// `kind` is one of `"none" | "mutating" | "execute"`; `session_key` is the tool name (the
+/// "don't ask again this session" key).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedToolApproval {
+    pub kind: String,
+    pub title: String,
+    pub description: String,
+    pub session_key: String,
+}
+
+impl ResolvedToolApproval {
+    pub fn none() -> Self {
+        Self {
+            kind: "none".to_string(),
+            title: String::new(),
+            description: String::new(),
+            session_key: String::new(),
+        }
+    }
+}
+
+/// Resolve the approval a tool call requires from its spec + arguments. Single source of truth for
+/// approval policy across every backend and host, so a `flowpilot_board` explain call never prompts
+/// while a mutating/execute call always does.
+pub fn resolve_tool_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedToolApproval {
+    // A read-only board explanation (flowpilot_board mode="explain") changes nothing, so it must not
+    // surface the "Approve board edit" prompt — that would make asking about a board feel like
+    // authorizing a mutation.
+    if spec.name == "flowpilot_board" && spec_arg_str(args, "mode", "mode") == "explain" {
+        return ResolvedToolApproval::none();
+    }
+    match spec.approval {
+        ToolApprovalSpec::None => ResolvedToolApproval::none(),
+        ToolApprovalSpec::Mutating { title, message } => ResolvedToolApproval {
+            kind: "mutating".to_string(),
+            title: title.to_string(),
+            description: message(args),
+            session_key: spec.name.to_string(),
+        },
+        ToolApprovalSpec::Execute { title, message } => ResolvedToolApproval {
+            kind: "execute".to_string(),
+            title: title.to_string(),
+            description: message(args),
+            session_key: spec.name.to_string(),
+        },
+    }
 }
 
 fn snake_to_camel(snake: &str) -> String {

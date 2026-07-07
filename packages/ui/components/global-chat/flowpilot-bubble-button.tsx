@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { usePathname } from "next/navigation";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import {
 	FRAG,
 	VERT,

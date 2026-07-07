@@ -8,10 +8,11 @@ use flow_like::copilot::{
 };
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
-use flow_like::flow::copilot::platform::{PlatformCopilot, PlatformToolBridge};
+use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, GraphContext, NodeMetadata, PinMetadata, RunContext,
-    enrich_node_metadata, score_catalog_metadata,
+    BoardCommand, CatalogProvider, GlobalOpenBoardContext, GraphContext, NodeMetadata,
+    PinMetadata, PlatformContextInput, RunContext, build_platform_context, enrich_node_metadata,
+    global_assistant_system_prompt, run_platform_chat, score_catalog_metadata,
 };
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
@@ -520,188 +521,48 @@ pub async fn copilot_chat(
         .map_err(|e| e.to_string())
 }
 
-fn global_assistant_system_prompt() -> String {
-    r#"You are FlowPilot, the built-in AI assistant of Flow-Like — a visual automation platform where users build node-based "boards", group them into "apps", and run them locally or in the cloud.
-
-You operate at the PLATFORM level (not inside a single board). Your job:
-1. Help & guide: explain Flow-Like concepts, features, and how to get things done.
-2. Act for the user via tools: navigate the app, create apps, and more. Prefer doing the work with a tool over only describing the steps.
-3. Two specialists, clear split: board/workflow LOGIC (nodes, connections, events, data) → `flowpilot_board`; the USER INTERFACE (pages, widgets, components) → `flowpilot_widget`. Whenever the user asks about a specific board/workflow — explaining it, editing its nodes, or debugging it — call `flowpilot_board` (mode="explain" read-only, or mode="edit" default). Never author FlowScript or explain a board's internals yourself.
-
-Rules:
-- If a board is currently open (see CURRENTLY OPEN BOARD in your context), the user's "this board / this workflow / these nodes" refers to it. Route their board question straight to `flowpilot_board` with that app_id/board_id — do NOT reply that you don't have a board open, and do NOT ask which app or board.
-- When the user wants to SEE or USE an app's content/results in the conversation ("show me", "embed", "display here"), call `open_app_page` (for events marked kind "page" in `list_apps`) or `open_app_chat` (kind "chat") — these embed the app INLINE in the chat. `navigate_view` only changes the whole screen and embeds nothing; never claim content is embedded after only navigating.
-- Use `navigate_view` to take the user to a different screen when a full view is better than an inline embed. Only use the documented routes — never invent paths.
-- Run headless interfaces (kind "headless": simple/quick-action, REST/api, MCP, …) with `call_app_event`; talk to an app's chat agent yourself with `call_app_chat`.
-- Building or editing workflow logic (nodes, connections, events) ALWAYS goes through `flowpilot_board`. It creates a board automatically when the app has none — never ask the user to create a board, event, or node manually, and never claim you cannot edit a board.
-- `flowpilot_board` edits board CONTENTS only (nodes/events/logic) — it cannot create or rename apps or change app settings, and it does NOT build UI (that's `flowpilot_widget`). Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
-- Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. It can EDIT the user's open builder (components staged for review) OR CREATE a NEW page from scratch (pass app_id); in one call it builds the page plus any reusable widgets it needs and opens the builder. Board/workflow logic stays with `flowpilot_board`.
-- Events are a DELIBERATE step you choose — never auto-created by other tools. Use `upsert_event` to create/update one and `delete_event` to remove it. A PAGE event makes a page reachable at a URL: pass page_id (the page) and a route (e.g. "/weather"). A NORMAL event is a workflow trigger: pass board_id + node_id (an events_* node). Creating a page with `flowpilot_widget` does NOT make it reachable — add a page event with a route when the user wants it visitable.
-- To build a whole interface or app, ORDER MATTERS: `create_app` (if needed) → `flowpilot_widget` to create the page and its widgets FIRST → then `flowpilot_board` to wire the logic (it returns `event_nodes` — the events_simple nodes it created) → `set_page_load_event` to run one of those when the page opens (e.g. to load data) → `upsert_event` (page event with a route) so the page is reachable. Create the UI first because the workflow references it: nodes like widget-action events reference a widget's action, and navigation/onLoad reference a page — so the widgets and pages must exist before the board can point at them. When you then call `flowpilot_board`, include the created page name/route and the widget names + their action ids in the instruction so it wires the logic to the right targets. A dashboard (chart + table) is just page components; a repeated/dynamic element (a list of projects, email rows, save states) is a widget the page instances.
-- Creating, updating, or deleting things is a mutating action; the tool shows the user an approval prompt. Never claim something is done until the tool returns success.
-- Be concise and concrete. After an action, briefly state what you did and what changed.
-- Use `internet_search` for general/public-web questions.
-- If a tool needs information you do not have (e.g. which app), ask with `ask_user` rather than guessing.
-- Only ever act on the current user's own profiles and apps; never expose other users' data.
-
-Examples of good tool use:
-- "Build a weather app with a page showing Munich's weather" → `create_app` (name: "Weather App") → `flowpilot_widget` (app_id from the result, instruction: "A weather page for Munich: a header, a large current-temperature card, and stat tiles for conditions, humidity and wind") → `flowpilot_board` (same app_id, instruction: "On page load, fetch current weather for Munich from a weather API and output temperature, conditions, humidity and wind for the page to display") — note the returned `event_nodes` (the created events_simple node) → `set_page_load_event` (app_id, page_id from flowpilot_widget, on_load_event_id: that node id) so the weather loads when the page opens → `upsert_event` (app_id, name: "Weather", page_id, route: "/weather") so the page is reachable → summarize. Call each tool ONCE, in this order; after a tool succeeds, move to the next step — never repeat a successful call.
-- "Create an app that fetches RSS feeds daily" → `create_app` (name: "RSS Digest") → `flowpilot_board` (app_id from the create result, instruction: "Create a cron-triggered workflow that fetches these RSS feeds daily, deduplicates items and stores them in the app database") → summarize what was built.
-- "Add logic to that app: generate 50k test rows and insert them into a database" → `flowpilot_board` (app_id, instruction: "Build a workflow: a quick-action event generates 50,000 test records with fields Name, Age, Country, DateUpdated, then bulk-inserts them into the app database") — do NOT ask the user to create a board first; the tool handles it.
-- "Show me my briefings" → `list_apps` → the briefing event has kind "page" → `open_app_page`.
-- "What's in my knowledge base about X?" → `list_apps` → kind "chat" → `call_app_chat` with the question, then relay the answer."#
-        .to_string()
-}
-
-/// The board the user currently has open on screen, forwarded by the frontend so the global
-/// assistant knows which board "this workflow / these nodes" refers to and can route board work to
-/// `flowpilot_board` without asking which app/board. Mirrors the live `AssistantBoardSurface`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct GlobalOpenBoardContext {
-    pub app_id: String,
-    #[serde(default)]
-    pub board_id: Option<String>,
-    #[serde(default)]
-    pub board_name: Option<String>,
-    #[serde(default)]
-    pub app_name: Option<String>,
-    #[serde(default)]
-    pub current_layer: Option<String>,
-    #[serde(default)]
-    pub selected_node_ids: Vec<String>,
-    #[serde(default)]
-    pub node_count: Option<usize>,
-}
-
-/// Render the open-board section injected into the assistant context. Kept separate so the wording
-/// (which the model relies on to route board questions to `flowpilot_board`) lives in one place.
-fn open_board_section(board: &GlobalOpenBoardContext) -> String {
-    let app_id = board.app_id.trim();
-    if app_id.is_empty() {
-        return String::new();
-    }
-    let app_label = board
-        .app_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(app_id);
-    let board_label = board
-        .board_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("Untitled board");
-
-    let mut lines = vec![
-        "## CURRENTLY OPEN BOARD".to_string(),
-        "The user has this board open and visible on screen right now. When they say \"this board\", \"this workflow\", \"this flow\", \"these nodes\", or ask to explain / edit / debug it, they mean THIS board — never ask which app or board.".to_string(),
-        format!("- App: \"{app_label}\" (app_id: {app_id})"),
-    ];
-    match board.board_id.as_deref().map(str::trim) {
-        Some(board_id) if !board_id.is_empty() => {
-            lines.push(format!("- Board: \"{board_label}\" (board_id: {board_id})"));
-        }
-        _ => lines.push(format!("- Board: \"{board_label}\"")),
-    }
-    if let Some(layer) = board
-        .current_layer
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        lines.push(format!("- Editing layer: {layer}"));
-    }
-    if let Some(count) = board.node_count {
-        let selected = board.selected_node_ids.len();
-        lines.push(if selected > 0 {
-            format!("- {count} nodes ({selected} selected)")
-        } else {
-            format!("- {count} nodes")
-        });
-    } else if !board.selected_node_ids.is_empty() {
-        lines.push(format!(
-            "- {} nodes selected",
-            board.selected_node_ids.len()
-        ));
-    }
-
-    let board_arg = match board.board_id.as_deref().map(str::trim) {
-        Some(board_id) if !board_id.is_empty() => format!(", board_id=\"{board_id}\""),
-        _ => String::new(),
-    };
-    lines.push(format!(
-        "To explain OR change this board, call flowpilot_board with app_id=\"{app_id}\"{board_arg} — use mode=\"explain\" to answer a question about it (read-only) and mode=\"edit\" to modify it. Do not answer board questions yourself."
-    ));
-    lines.join("\n")
-}
-
 /// Collects self-awareness context for the global assistant: the signed-in user (supplied by the
 /// frontend), the active profile, the names of the user's other profiles, and — when the user has a
-/// board open — that board's identity. Injected into the system prompt so the assistant knows where
-/// it is operating and which board board work refers to.
+/// board open — that board's identity. Gathers the Tauri-owned data (profiles, active profile) and
+/// delegates the shared rendering to [`build_platform_context`] so desktop and server produce the
+/// same context wording.
 async fn build_global_agent_context(
     app_handle: &AppHandle,
     user_context: Option<&str>,
     open_board: Option<&GlobalOpenBoardContext>,
 ) -> String {
-    let mut parts: Vec<String> = Vec::new();
+    let active = TauriSettingsState::current_profile(app_handle)
+        .await
+        .ok()
+        .map(|current| {
+            let profile = &current.hub_profile;
+            (profile.name.clone(), profile.id.clone())
+        });
 
-    if let Some(user) = user_context
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        parts.push(format!("Signed-in user: {user}."));
-    }
-
-    if let Ok(current) = TauriSettingsState::current_profile(app_handle).await {
-        let profile = &current.hub_profile;
-        let name = profile.name.trim();
-        let name = if name.is_empty() {
-            "Unnamed profile"
-        } else {
-            name
+    let switchable: Vec<String> =
+        match crate::functions::settings::profiles::get_profiles(app_handle.clone()).await {
+            Ok(profiles) => profiles
+                .values()
+                .map(|profile| {
+                    let name = profile.hub_profile.name.trim();
+                    if name.is_empty() {
+                        profile.hub_profile.id.clone()
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect(),
+            Err(_) => Vec::new(),
         };
-        parts.push(format!(
-            "Active profile: \"{}\" (id: {}).",
-            name, profile.id
-        ));
-    }
 
-    if let Ok(profiles) =
-        crate::functions::settings::profiles::get_profiles(app_handle.clone()).await
-    {
-        let mut names: Vec<String> = profiles
-            .values()
-            .map(|profile| {
-                let name = profile.hub_profile.name.trim();
-                if name.is_empty() {
-                    profile.hub_profile.id.clone()
-                } else {
-                    name.to_string()
-                }
-            })
-            .collect();
-        names.sort();
-        if !names.is_empty() {
-            parts.push(format!(
-                "Profiles the user can switch to (by name): {}.",
-                names.join(", ")
-            ));
-        }
-    }
-
-    let mut sections: Vec<String> = Vec::new();
-    if !parts.is_empty() {
-        sections.push(format!("## CURRENT FLOW-LIKE CONTEXT\n{}", parts.join("\n")));
-    }
-    if let Some(board) = open_board {
-        let section = open_board_section(board);
-        if !section.is_empty() {
-            sections.push(section);
-        }
-    }
-    sections.join("\n\n")
+    build_platform_context(PlatformContextInput {
+        user_context,
+        active_profile: active
+            .as_ref()
+            .map(|(name, id)| (name.as_str(), id.as_str())),
+        switchable_profiles: &switchable,
+        open_board,
+    })
 }
 
 fn attachment_media_type(url: &str) -> String {
@@ -935,7 +796,7 @@ pub async fn global_chat(
             .find_bit(embedding_id, state.0.http_client.clone())
             .await
         {
-            Ok(bit) => match AssistantMemory::open(state.0.clone(), &profile_arc.id, &bit).await {
+            Ok(bit) => match AssistantMemory::open(state.0.clone(), None, &profile_arc.id, &bit).await {
                 Ok(memory) => Some(Arc::new(memory)),
                 Err(error) => {
                     eprintln!("[global_chat] memory init failed: {error}");
@@ -1020,13 +881,8 @@ pub async fn global_chat(
             // Profile ("Bits") models are made tool-capable via the same rig machinery the board
             // copilot uses for Bits (get_model + rig agent + manual tool loop), but with the platform
             // tools + global prompt. Platform tools run through the frontend bridge (GLOBAL event).
-            // Memory recall/advertisement happens inside PlatformCopilot::chat.
-            let system_prompt = if context.is_empty() {
-                global_assistant_system_prompt()
-            } else {
-                format!("{}\n\n{}", global_assistant_system_prompt(), context)
-            };
-
+            // The whole loop lives in core (`run_platform_chat`); the desktop only supplies the
+            // Tauri-backed tool bridge and token sink. Memory recall happens inside the loop.
             let bridge: Arc<dyn PlatformToolBridge> = Arc::new(GlobalPlatformBridge {
                 bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
                     app_handle.clone(),
@@ -1047,21 +903,21 @@ pub async fn global_chat(
                 let _ = sink.send(token);
             };
 
-            let assistant = PlatformCopilot::new(state.0.clone(), profile);
-            let message = assistant
-                .chat(
-                    system_prompt,
-                    user_prompt,
-                    current_images,
-                    board_history,
-                    model_selection.model_id,
-                    token,
-                    bridge,
-                    memory,
-                    Some(on_token),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
+            let message = run_platform_chat(
+                state.0.clone(),
+                profile,
+                context,
+                user_prompt,
+                current_images,
+                board_history,
+                model_selection.model_id,
+                token,
+                bridge,
+                memory,
+                Some(on_token),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
 
             Ok(UnifiedCopilotResponse {
                 message,
@@ -1108,7 +964,7 @@ pub async fn global_chat_memory_status(
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
 ) -> Result<MemoryStatus, String> {
-    AssistantMemory::status(state.0.clone(), &profile_id)
+    AssistantMemory::status(state.0.clone(), None, &profile_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1119,7 +975,7 @@ pub async fn global_chat_clear_memory(
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
 ) -> Result<(), String> {
-    AssistantMemory::clear(state.0.clone(), &profile_id)
+    AssistantMemory::clear(state.0.clone(), None, &profile_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1130,7 +986,7 @@ pub async fn global_chat_list_memories(
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
 ) -> Result<Vec<MemoryEntry>, String> {
-    AssistantMemory::list(state.0.clone(), &profile_id)
+    AssistantMemory::list(state.0.clone(), None, &profile_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1142,7 +998,7 @@ pub async fn global_chat_delete_memory(
     profile_id: String,
     id: String,
 ) -> Result<(), String> {
-    AssistantMemory::delete_entry(state.0.clone(), &profile_id, &id)
+    AssistantMemory::delete_entry(state.0.clone(), None, &profile_id, &id)
         .await
         .map_err(|e| e.to_string())
 }

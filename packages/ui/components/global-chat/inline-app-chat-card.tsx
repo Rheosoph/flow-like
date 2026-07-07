@@ -1,45 +1,72 @@
 "use client";
 
-import { Button, UsePageContent } from "@flow-like/flow-like-ui";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-	AppWindowIcon,
 	ChevronDownIcon,
 	ExternalLinkIcon,
+	MessageSquareIcon,
 	XIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { EVENT_CONFIG } from "../../lib/event-config";
-import type { InlineAppPage } from "../../lib/global-chat-store";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button, type IEvent, useBackend } from "../../index";
+import { isChatEventType } from "../../lib/event-config";
+import { parseUint8ArrayToJson } from "../../lib/uint8";
+import type { InlineAppChat } from "../../state/global-chat/global-chat-store";
+import { ChatInterfaceMemoized } from "../interfaces/chat-default";
 
-interface InlineAppPageCardProps {
-	page: InlineAppPage;
+interface InlineAppChatCardProps {
+	chat: InlineAppChat;
 	onClose: (id: string) => void;
 	/** Tighter height when rendered inside the docked overlay. */
 	compact?: boolean;
 }
 
 /**
- * An app's UI page embedded inline in the global FlowPilot view — artifact-like, but backed by a
- * real, already-built app. Mounts the same use surface as the /use route (embedded mode), and the
- * header lets the user jump to the full app view.
+ * An app's chat event rendered inline inside the global FlowPilot view. Mounts the full simple-chat
+ * surface (ChatInterfaceMemoized), so files, plan steps, interactions and streaming all work — the
+ * user talks to the app without leaving the global conversation.
  */
-export function InlineAppPageCard({
-	page,
+export function InlineAppChatCard({
+	chat,
 	onClose,
 	compact = false,
-}: InlineAppPageCardProps) {
+}: InlineAppChatCardProps) {
+	const backend = useBackend();
 	const router = useRouter();
+	const [event, setEvent] = useState<IEvent | null>(null);
+	const [error, setError] = useState<string | null>(null);
 	const [expanded, setExpanded] = useState(true);
-	const [target, setTarget] = useState<{
-		routePath: string;
-		eventId: string | null;
-	}>({ routePath: "/", eventId: page.eventId ?? null });
+	const toolbarRef = useRef(null);
+	const sidebarRef = useRef(null);
 
-	const fullViewRoute = `/use?id=${page.appId}${
-		target.eventId ? `&eventId=${target.eventId}` : ""
-	}`;
+	useEffect(() => {
+		let disposed = false;
+		void (async () => {
+			try {
+				const events = await backend.eventState.getEvents(chat.appId);
+				const found = events.find(
+					(candidate) =>
+						candidate.id === chat.eventId &&
+						isChatEventType(candidate.event_type),
+				);
+				if (disposed) return;
+				if (found) setEvent(found);
+				else setError("This app chat is no longer available.");
+			} catch {
+				if (!disposed) setError("Failed to load the app chat.");
+			}
+		})();
+		return () => {
+			disposed = true;
+		};
+	}, [backend.eventState, chat.appId, chat.eventId]);
+
+	// IEvent.config arrives as raw bytes — the chat config must be the parsed JSON.
+	const config = useMemo(
+		() => (event ? (parseUint8ArrayToJson(event.config) ?? {}) : {}),
+		[event],
+	);
 
 	return (
 		<motion.div
@@ -58,13 +85,13 @@ export function InlineAppPageCard({
 					aria-expanded={expanded}
 				>
 					<span className="flex items-center justify-center size-6 rounded-md bg-primary/15 text-primary shrink-0">
-						<AppWindowIcon className="size-3.5" />
+						<MessageSquareIcon className="size-3.5" />
 					</span>
 					<span className="text-[13px] font-semibold truncate">
-						{page.name}
+						{chat.name}
 					</span>
 					<span className="ml-1 px-1.5 py-0.5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold uppercase tracking-wide shrink-0">
-						App Page
+						App Chat
 					</span>
 					<ChevronDownIcon
 						className={`size-4 text-muted-foreground shrink-0 ml-auto transition-transform ${expanded ? "" : "-rotate-90"}`}
@@ -76,7 +103,9 @@ export function InlineAppPageCard({
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 					aria-label="Open in full app view"
 					title="Open in full app view"
-					onClick={() => router.push(fullViewRoute)}
+					onClick={() =>
+						router.push(`/use?id=${chat.appId}&eventId=${chat.eventId}`)
+					}
 				>
 					<ExternalLinkIcon className="size-3.5" />
 				</Button>
@@ -84,8 +113,8 @@ export function InlineAppPageCard({
 					variant="ghost"
 					size="icon"
 					className="h-7 w-7 rounded-full shrink-0 text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					aria-label="Close app page"
-					onClick={() => onClose(page.id)}
+					aria-label="Close app chat"
+					onClick={() => onClose(chat.id)}
 				>
 					<XIcon className="size-3.5" />
 				</Button>
@@ -99,34 +128,23 @@ export function InlineAppPageCard({
 						exit={{ height: 0, opacity: 0 }}
 						transition={{ duration: 0.2 }}
 					>
-						{/* [contain:layout_paint] makes this box the containing block for the page's
-						    position:fixed/absolute a2ui widgets and clips their painting — without it
-						    fixed-position page content escapes the card and bleeds over the chat. */}
 						<div className="p-2 pt-1">
 							<div
-								className={`${compact ? "h-95 max-h-[50vh]" : "h-120 max-h-[60vh]"} relative overflow-hidden flex flex-col rounded-md border border-black/15 dark:border-black/60 bg-background contain-[layout_paint]`}
+								className={`${compact ? "h-80 max-h-[45vh]" : "h-105 max-h-[55vh]"} overflow-hidden flex flex-col rounded-md border border-black/15 dark:border-black/60 bg-background`}
 							>
-								<UsePageContent
-									eventConfig={EVENT_CONFIG}
-									notFound={
-										<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-6">
-											This app page is no longer available.
-										</div>
-									}
-									appId={page.appId}
-									routePath={target.routePath}
-									eventId={target.eventId}
-									embedded
-									onNavigate={(next) =>
-										setTarget((current) => ({
-											routePath: next.routePath ?? current.routePath,
-											eventId:
-												next.eventId === undefined
-													? current.eventId
-													: next.eventId,
-										}))
-									}
-								/>
+								{event ? (
+									<ChatInterfaceMemoized
+										appId={chat.appId}
+										event={event}
+										config={config}
+										toolbarRef={toolbarRef}
+										sidebarRef={sidebarRef}
+									/>
+								) : (
+									<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground p-6">
+										{error ?? "Loading app chat…"}
+									</div>
+								)}
 							</div>
 						</div>
 					</motion.div>

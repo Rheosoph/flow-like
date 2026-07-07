@@ -83,7 +83,7 @@ import type {
 	ImperativePanelHandle,
 } from "react-resizable-panels";
 import { toast } from "sonner";
-import { EVENT_CONFIG } from "../../../lib/event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { learnApi } from "../../../lib/learn-api";
 import { oauthConsentStore, oauthTokenStore } from "../../../lib/oauth-db";
 import { oauthService } from "../../../lib/oauth-service";

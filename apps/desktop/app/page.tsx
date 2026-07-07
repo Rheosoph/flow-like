@@ -8,7 +8,7 @@ import {
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { HeroSearchBarBubble } from "../components/global-chat/hero-variants";
+import { HeroSearchBarBubble } from "@flow-like/flow-like-ui/components/global-chat/hero-variants";
 import { useTauriInvoke } from "../components/useInvoke";
 
 export default function Home() {

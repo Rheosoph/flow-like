@@ -1,3 +1,4 @@
+import { createId } from "@paralleldrive/cuid2";
 import {
 	ChatInterface,
 	CronJobConfig,
@@ -13,8 +14,7 @@ import {
 	SimpleChatConfig,
 	TelegramConfig,
 	UserMailConfig,
-} from "@flow-like/flow-like-ui";
-import { createId } from "@paralleldrive/cuid2";
+} from "../index";
 
 /**
  * Whether an event renders a chat interface. Chat event types are `simple_chat`/`advanced_chat`

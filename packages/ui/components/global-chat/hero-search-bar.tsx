@@ -1,10 +1,10 @@
 "use client";
 
-import { Button, Textarea } from "@flow-like/flow-like-ui";
 import { ArrowUpIcon, ImageIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+import { Button, Textarea } from "../../index";
+import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 
 const SUGGESTIONS = [
 	"Create a new app",

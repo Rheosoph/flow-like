@@ -1,13 +1,33 @@
 "use client";
 
 import {
+	BotIcon,
+	BrainIcon,
+	CheckIcon,
+	ChevronDownIcon,
+	Code2Icon,
+	FileCode2Icon,
+	GithubIcon,
+	LayersIcon,
+	Loader2Icon,
+	PackageIcon,
+	PlusIcon,
+	SettingsIcon,
+	SparklesIcon,
+	Trash2Icon,
+	WorkflowIcon,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "react-oidc-context";
+import { toast } from "sonner";
+import {
 	IBitTypes,
 	IRole,
 	useAssistantSurface,
 	useBackend,
 	useCopilotSDK,
 	useInvoke,
-} from "@flow-like/flow-like-ui";
+} from "../../index";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -34,44 +54,21 @@ import {
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "@flow-like/flow-like-ui";
-import { FlowScriptWorkspacePanel } from "@flow-like/flow-like-ui/components/flowpilot/flowscript-workspace-panel";
+} from "../../index";
+import { getApiOrigin } from "../../lib/api-url";
+import { isTauri } from "../../lib/platform";
 import {
-	type AIProvider,
-	flowPilotModelIdForProvider,
-	isAgentBackendProvider,
-	normalizeAIProvider,
-} from "@flow-like/flow-like-ui/components/flowpilot/types";
-import { fileToAttachment } from "@flow-like/flow-like-ui/components/interfaces/chat-default/attachment";
+	type IMessage,
+	globalChatDb,
+} from "../../state/global-chat/global-chat-db";
 import {
-	Chat,
-	type IChatRef,
-} from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat";
-import type { ISendMessageFunction } from "@flow-like/flow-like-ui/components/interfaces/chat-default/chatbox";
-import { submitInteractionResponse } from "@flow-like/flow-like-ui/components/interfaces/chat-default/respond-interaction";
-import { invoke } from "@tauri-apps/api/core";
-import {
-	BotIcon,
-	BrainIcon,
-	CheckIcon,
-	ChevronDownIcon,
-	Code2Icon,
-	FileCode2Icon,
-	GithubIcon,
-	LayersIcon,
-	Loader2Icon,
-	PackageIcon,
-	PlusIcon,
-	SettingsIcon,
-	SparklesIcon,
-	Trash2Icon,
-	WorkflowIcon,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAuth } from "react-oidc-context";
-import { toast } from "sonner";
-import { type IMessage, globalChatDb } from "../../lib/global-chat-db";
-import { useGlobalChatStore } from "../../lib/global-chat-store";
+	type MemoryEntry,
+	clearGlobalChatMemory,
+	deleteGlobalChatMemory,
+	globalChatMemoryStatus,
+	listGlobalChatMemories,
+} from "../../state/global-chat/global-chat-memory";
+import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import {
 	LAST_CONVERSATION_KEY,
 	driveGlobalChatStream,
@@ -80,7 +77,21 @@ import {
 	persistGlobalChatSession,
 	resumeGlobalChatStream,
 	setActiveRun,
-} from "../../lib/global-chat-stream";
+	tauriStart,
+} from "../../state/global-chat/global-chat-stream";
+import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
+import { webGlobalChatStart } from "../../state/global-chat/global-chat-web-transport";
+import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
+import {
+	type AIProvider,
+	flowPilotModelIdForProvider,
+	isAgentBackendProvider,
+	normalizeAIProvider,
+} from "../flowpilot/types";
+import { fileToAttachment } from "../interfaces/chat-default/attachment";
+import { Chat, type IChatRef } from "../interfaces/chat-default/chat";
+import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
+import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
 import { GlobalChatHistory } from "./global-chat-history";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
@@ -431,27 +442,52 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
 			await driveGlobalChatStream({
 				responseMessage,
-				startInvoke: (channel) =>
-					invoke("global_chat", {
-						scope: "Frontend",
-						userPrompt: trimmed,
-						attachmentUrls:
-							attachments.length > 0
-								? attachments.map((attachment) =>
-										typeof attachment === "string"
-											? attachment
-											: attachment.url,
-									)
-								: undefined,
-						history: historyPayload,
-						modelId: effectiveModelId,
-						embeddingModelId: state.embeddingModelId || undefined,
-						token: authUser?.access_token ?? undefined,
-						userContext: userContext ?? undefined,
-						boardContext,
-						runId: responseMessage.id,
-						channel,
-					}),
+				// Desktop drives the run over a Tauri Channel (resumable via the Rust registry); the
+				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
+				// tool bridge via the registry. Both feed the shared parser identically.
+				start: isTauri()
+					? tauriStart("global_chat", {
+							scope: "Frontend",
+							userPrompt: trimmed,
+							attachmentUrls:
+								attachments.length > 0
+									? attachments.map((attachment) =>
+											typeof attachment === "string"
+												? attachment
+												: attachment.url,
+										)
+									: undefined,
+							history: historyPayload,
+							modelId: effectiveModelId,
+							embeddingModelId: state.embeddingModelId || undefined,
+							token: authUser?.access_token ?? undefined,
+							userContext: userContext ?? undefined,
+							boardContext,
+							runId: responseMessage.id,
+						})
+					: webGlobalChatStart({
+							baseUrl: getApiOrigin(),
+							token: authUser?.access_token ?? undefined,
+							onToolRequest: runGlobalChatTool,
+							body: {
+								scope: "Frontend",
+								user_prompt: trimmed,
+								history: historyPayload,
+								model_id: effectiveModelId,
+								embedding_model_id: state.embeddingModelId || undefined,
+								user_context: userContext ?? undefined,
+								board_context: boardContext,
+								// Signed tmp-upload URLs (from fileToAttachment); the server fetches them.
+								attachment_urls:
+									attachments.length > 0
+										? attachments.map((attachment) =>
+												typeof attachment === "string"
+													? attachment
+													: attachment.url,
+											)
+										: undefined,
+							},
+						}),
 			});
 		},
 		[appendMessage, setStreaming, backend],
@@ -581,10 +617,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				return;
 			}
 			try {
-				const status = await invoke<{
-					count: number;
-					embedding_model_id: string | null;
-				}>("global_chat_memory_status", { profileId });
+				const status = await globalChatMemoryStatus(
+					profileId,
+					auth.user?.access_token,
+				);
 				if (status.count > 0 && status.embedding_model_id !== newModelId) {
 					setPendingEmbedding({
 						modelId: newModelId,
@@ -602,21 +638,23 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			embeddingModelId,
 			setEmbeddingModelId,
 			settingsProfile.data?.hub_profile.id,
+			auth.user?.access_token,
 		],
 	);
 
 	const confirmEmbeddingChange = useCallback(async () => {
 		if (!pendingEmbedding) return;
 		try {
-			await invoke("global_chat_clear_memory", {
-				profileId: pendingEmbedding.profileId,
-			});
+			await clearGlobalChatMemory(
+				pendingEmbedding.profileId,
+				auth.user?.access_token,
+			);
 		} catch {
 			// best-effort delete
 		}
 		setEmbeddingModelId(pendingEmbedding.modelId);
 		setPendingEmbedding(null);
-	}, [pendingEmbedding, setEmbeddingModelId]);
+	}, [pendingEmbedding, setEmbeddingModelId, auth.user?.access_token]);
 
 	// Memory recall + the memory tools run on EVERY backend (the Rust loop wires `memory` into the
 	// Copilot/Codex/Claude-Code agents and the Bits loop alike), so the picker is shown wherever the
@@ -658,9 +696,25 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		// A queued draft is about to send — don't flash the empty state under it.
 		!pendingDraft;
 
+	// Agent-SDK backends (Copilot / Codex / Claude Code) are local CLIs — desktop only. On web only
+	// profile Bits are offered, matching the `/ai/global-chat/backends` capability.
+	const availableProviders = useMemo(
+		() => PROVIDERS.filter((p) => isTauri() || !isAgentBackendProvider(p.id)),
+		[],
+	);
+
+	// If a stale desktop selection (an agent backend) carried into the web app, fall back to Bits so
+	// the picker and the send path stay on a backend that can actually run here.
+	useEffect(() => {
+		if (!isTauri() && isAgentBackendProvider(provider)) {
+			setProvider("bits");
+		}
+	}, [provider, setProvider]);
+
 	const currentProvider =
-		PROVIDERS.find((p) => normalizeAIProvider(p.id) === normalizedProvider) ??
-		PROVIDERS[0];
+		availableProviders.find(
+			(p) => normalizeAIProvider(p.id) === normalizedProvider,
+		) ?? availableProviders[0];
 	const CurrentProviderIcon = currentProvider.icon;
 	const currentModelLabel = modelOptions.find(
 		(option) => option.id === selectedModelId,
@@ -690,7 +744,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					Provider
 				</p>
 				<div className="flex gap-0.5 rounded-lg border border-border/40 bg-muted/30 p-0.5">
-					{PROVIDERS.map(({ id, label, icon: Icon }) => {
+					{availableProviders.map(({ id, label, icon: Icon }) => {
 						const active = normalizeAIProvider(id) === normalizedProvider;
 						return (
 							<button
@@ -925,13 +979,6 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 }
 
-interface MemoryEntry {
-	id: string;
-	content: string;
-	role: string;
-	timestamp: number;
-}
-
 // Human-friendly "how long ago" for a stored memory's epoch-millis timestamp.
 function formatMemoryAge(timestamp: number): string {
 	if (!timestamp) return "";
@@ -966,13 +1013,15 @@ function MemoryManagerDialog({
 	const [loading, setLoading] = useState(false);
 	const [busyId, setBusyId] = useState<string | null>(null);
 	const [clearing, setClearing] = useState(false);
+	const auth = useAuth();
 
 	const load = useCallback(async () => {
 		setLoading(true);
 		try {
-			const rows = await invoke<MemoryEntry[]>("global_chat_list_memories", {
+			const rows = await listGlobalChatMemories(
 				profileId,
-			});
+				auth.user?.access_token,
+			);
 			setEntries(rows);
 		} catch {
 			toast.error("Couldn't load memories");
@@ -980,7 +1029,7 @@ function MemoryManagerDialog({
 		} finally {
 			setLoading(false);
 		}
-	}, [profileId]);
+	}, [profileId, auth.user?.access_token]);
 
 	useEffect(() => {
 		if (open) void load();
@@ -991,7 +1040,7 @@ function MemoryManagerDialog({
 		async (id: string) => {
 			setBusyId(id);
 			try {
-				await invoke("global_chat_delete_memory", { profileId, id });
+				await deleteGlobalChatMemory(profileId, id, auth.user?.access_token);
 				setEntries((prev) => prev?.filter((entry) => entry.id !== id) ?? null);
 			} catch {
 				toast.error("Couldn't delete memory");
@@ -999,13 +1048,13 @@ function MemoryManagerDialog({
 				setBusyId(null);
 			}
 		},
-		[profileId],
+		[profileId, auth.user?.access_token],
 	);
 
 	const handleClearAll = useCallback(async () => {
 		setClearing(true);
 		try {
-			await invoke("global_chat_clear_memory", { profileId });
+			await clearGlobalChatMemory(profileId, auth.user?.access_token);
 			setEntries([]);
 			toast.success("Cleared all memories");
 		} catch {
@@ -1013,7 +1062,7 @@ function MemoryManagerDialog({
 		} finally {
 			setClearing(false);
 		}
-	}, [profileId]);
+	}, [profileId, auth.user?.access_token]);
 
 	const hasEntries = (entries?.length ?? 0) > 0;
 

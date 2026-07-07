@@ -88,7 +88,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
-import { EVENT_CONFIG } from "../../../lib/event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { isIosTauriRuntime } from "../../../lib/platform";
 
 const navigationItems: {

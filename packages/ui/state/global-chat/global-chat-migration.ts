@@ -1,5 +1,5 @@
-import { IRole } from "@flow-like/flow-like-ui";
-import { flowpilotDB } from "@flow-like/flow-like-ui/lib/flowpilot-db";
+import { flowpilotDB } from "../../lib/flowpilot-db";
+import { IRole } from "../../lib/schema/llm/history";
 import {
 	GLOBAL_CHAT_APP_ID,
 	type IGlobalChatSession,

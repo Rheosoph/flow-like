@@ -1,23 +1,23 @@
 "use client";
 
+import { useEffect, useMemo } from "react";
 import {
 	IBitTypes,
 	useBackend,
 	useCopilotSDK,
 	useInvoke,
-} from "@flow-like/flow-like-ui";
+} from "../../../index";
+import { isTauri } from "../../../lib/platform";
+import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 import type {
 	AIProvider,
 	AgentBackendProvider,
 	NormalizedAIProvider,
-} from "@flow-like/flow-like-ui/components/flowpilot/types";
+} from "../../flowpilot/types";
 import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
-} from "@flow-like/flow-like-ui/components/flowpilot/types";
-import { useEffect, useMemo } from "react";
-import { useGlobalChatStore } from "../../../lib/global-chat-store";
-import { isTauriRuntime } from "../../../lib/platform";
+} from "../../flowpilot/types";
 
 const PROVIDER_STORAGE_KEY = "flowpilot.hero.provider";
 const MODEL_STORAGE_KEY = "flowpilot.hero.model";
@@ -77,7 +77,7 @@ export function useAgentSelection() {
 		: "github-copilot";
 	const copilotSDK = useCopilotSDK(activeAgentBackend);
 
-	const isDesktop = isTauriRuntime();
+	const isDesktop = isTauri();
 	const availableProviders = useMemo<AgentProviderOption[]>(
 		() =>
 			isDesktop ? [PROFILE_PROVIDER, ...AGENT_PROVIDERS] : [PROFILE_PROVIDER],

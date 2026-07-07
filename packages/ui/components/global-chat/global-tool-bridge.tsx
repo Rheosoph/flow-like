@@ -1,5 +1,9 @@
 "use client";
 
+import { createId } from "@paralleldrive/cuid2";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef } from "react";
+import { useAuth } from "react-oidc-context";
 import {
 	type IEvent,
 	IEventExecutionMode,
@@ -12,45 +16,36 @@ import {
 	useAssistantSurface,
 	useBackend,
 	useQueryClient,
-} from "@flow-like/flow-like-ui";
-import type {
-	CanvasSettings,
-	SurfaceComponent,
-} from "@flow-like/flow-like-ui/components/a2ui/types";
-import { createCopilotStreamParser } from "@flow-like/flow-like-ui/components/flowpilot/copilot-stream-parser";
-import {
-	flowPilotModelIdForProvider,
-	normalizeAIProvider,
-} from "@flow-like/flow-like-ui/components/flowpilot/types";
-import { compactLogEvents } from "@flow-like/flow-like-ui/components/flowpilot/utils";
-import {
-	validateCanvasSettings,
-	validateComponents,
-} from "@flow-like/flow-like-ui/components/flowpilot/validateComponents";
-import type {
-	IAttachment,
-	IMessage,
-} from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat-db";
-import { processChatEvents } from "@flow-like/flow-like-ui/components/interfaces/chat-default/event-processor";
-import { parseUint8ArrayToJson } from "@flow-like/flow-like-ui/lib/uint8";
-import { createId } from "@paralleldrive/cuid2";
-import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef } from "react";
-import { useAuth } from "react-oidc-context";
+} from "../../index";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
+import { parseUint8ArrayToJson } from "../../lib/uint8";
+import {
+	applyStreamEvent,
+	createStreamAccumulator,
+	orderedSteps,
+	readUsageStat,
+} from "../../state/global-chat/copilot-stream-steps";
 import {
 	type GlobalToolAsk,
 	type GlobalToolAskChoice,
 	type GlobalToolPromptResolution,
 	SUB_STEP_PREFIX,
 	useGlobalChatStore,
-} from "../../lib/global-chat-store";
+} from "../../state/global-chat/global-chat-store";
+import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
+import type { CanvasSettings, SurfaceComponent } from "../a2ui/types";
+import { createCopilotStreamParser } from "../flowpilot/copilot-stream-parser";
 import {
-	applyStreamEvent,
-	createStreamAccumulator,
-	orderedSteps,
-	readUsageStat,
-} from "./copilot-stream-steps";
+	flowPilotModelIdForProvider,
+	normalizeAIProvider,
+} from "../flowpilot/types";
+import { compactLogEvents } from "../flowpilot/utils";
+import {
+	validateCanvasSettings,
+	validateComponents,
+} from "../flowpilot/validateComponents";
+import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
+import { processChatEvents } from "../interfaces/chat-default/event-processor";
 
 const GLOBAL_FRONTEND_TOOL_EVENT = "flowpilot://global-tool-request";
 
@@ -66,14 +61,14 @@ interface FrontendToolApproval {
 	sessionKey?: string;
 }
 
-interface FrontendToolRequest {
+export interface FrontendToolRequest {
 	requestId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
 	approval?: FrontendToolApproval;
 }
 
-interface FrontendToolResponse {
+export interface FrontendToolResponse {
 	requestId: string;
 	approved: boolean;
 	result?: unknown;
@@ -2028,6 +2023,14 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 	useEffect(() => {
 		executeRef.current = execute;
 	}, [execute]);
+
+	// Expose the executor to the web transport, which receives tool requests inside the chat SSE
+	// stream (no Tauri event channel). Desktop also registers it harmlessly; the Tauri listener below
+	// is what actually drives tools there.
+	useEffect(() => {
+		registerGlobalChatToolExecutor((request) => executeRef.current(request));
+		return () => registerGlobalChatToolExecutor(null);
+	}, []);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;

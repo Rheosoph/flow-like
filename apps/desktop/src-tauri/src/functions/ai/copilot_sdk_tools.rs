@@ -23,8 +23,7 @@ use flow_like::flow::copilot::memory::AssistantMemory;
 use flow_like::flow::copilot::platform::run_memory_tool;
 use flow_like::flow::copilot::tool_spec::{
     INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
-    ToolApprovalSpec, find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
-    spec_arg_str,
+    find_global_tool_spec, global_assistant_tool_specs, missing_required_args, resolve_tool_approval,
 };
 use flow_like::flow::copilot::{
     BoardCommand, CatalogProvider, EmitCommandsArgs, EmitCommandsTool, GetCurrentFlowScriptTool,
@@ -141,20 +140,14 @@ pub fn sdk_tool_from_spec(
 }
 
 pub fn approval_from_spec(spec: &PlatformToolSpec, args: &Value) -> FrontendToolApproval {
-    // A read-only board explanation (flowpilot_board mode="explain") changes nothing, so it must
-    // not surface the "Approve board edit" prompt — that would make asking about a board feel like
-    // authorizing a mutation.
-    if spec.name == "flowpilot_board" && spec_arg_str(args, "mode", "mode") == "explain" {
-        return FrontendToolApproval::none();
-    }
-    match spec.approval {
-        ToolApprovalSpec::None => FrontendToolApproval::none(),
-        ToolApprovalSpec::Mutating { title, message } => {
-            FrontendToolApproval::mutating(title, message(args), spec.name)
-        }
-        ToolApprovalSpec::Execute { title, message } => {
-            FrontendToolApproval::execute(title, message(args), spec.name)
-        }
+    // Approval policy is resolved by core so the desktop (Tauri event) and the browser (SSE frame)
+    // enforce exactly the same rules; here it's just wrapped in the desktop's serialize type.
+    let resolved = resolve_tool_approval(spec, args);
+    FrontendToolApproval {
+        kind: resolved.kind,
+        title: resolved.title,
+        description: resolved.description,
+        session_key: resolved.session_key,
     }
 }
 

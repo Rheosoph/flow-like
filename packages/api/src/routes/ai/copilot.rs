@@ -332,7 +332,7 @@ impl CatalogProvider for ServerCatalogProvider {
     }
 }
 
-fn user_access_token(user: &AppUser) -> Option<String> {
+pub(crate) fn user_access_token(user: &AppUser) -> Option<String> {
     match user {
         AppUser::OpenID(u) => Some(u.access_token.clone()),
         AppUser::PAT(_u) => None,
@@ -342,7 +342,7 @@ fn user_access_token(user: &AppUser) -> Option<String> {
     }
 }
 
-async fn master_flow_like_state(state: &AppState) -> Result<Arc<FlowLikeState>, ApiError> {
+pub(crate) async fn master_flow_like_state(state: &AppState) -> Result<Arc<FlowLikeState>, ApiError> {
     let cached = state.state_cache.get("master");
     if let Some(flow_like_state) = cached {
         return Ok(flow_like_state);
@@ -406,9 +406,11 @@ pub async fn copilot_chat(
         None
     };
 
-    // TODO: Load user profile (flow_like::profile::Profile) from DB when available.
-    // For now, we rely on explicit model_id or the server default model.
-    let profile: Option<Arc<Profile>> = None;
+    // Load the user's profile so the client-selected `model_id` (the Bit the FlowPilot picker chose)
+    // resolves against their own Bits instead of the server default. With a hosted Bit + the user's
+    // token, the model call loops through this server's metered `/chat/completions`, so tier
+    // enforcement + usage tracking apply. Falls back to `None` only when the user has no profile.
+    let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
     let copilot = build_unified_copilot(&state, payload.scope, profile).await?;
 
     if !payload.stream {

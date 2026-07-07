@@ -1,5 +1,8 @@
 "use client";
 
+import { motion } from "framer-motion";
+import { LayersIcon, ShieldQuestionIcon, SparklesIcon } from "lucide-react";
+import { useState } from "react";
 import {
 	Button,
 	Checkbox,
@@ -7,15 +10,12 @@ import {
 	cn,
 	useBackend,
 	useInvoke,
-} from "@flow-like/flow-like-ui";
-import { motion } from "framer-motion";
-import { LayersIcon, ShieldQuestionIcon, SparklesIcon } from "lucide-react";
-import { useState } from "react";
+} from "../../index";
 import type {
 	GlobalToolAsk,
 	GlobalToolAskChoice,
 	GlobalToolPrompt,
-} from "../../lib/global-chat-store";
+} from "../../state/global-chat/global-chat-store";
 
 const choiceValue = (choice: GlobalToolAskChoice): unknown =>
 	choice.value ?? choice.label;
