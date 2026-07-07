@@ -342,7 +342,9 @@ pub(crate) fn user_access_token(user: &AppUser) -> Option<String> {
     }
 }
 
-pub(crate) async fn master_flow_like_state(state: &AppState) -> Result<Arc<FlowLikeState>, ApiError> {
+pub(crate) async fn master_flow_like_state(
+    state: &AppState,
+) -> Result<Arc<FlowLikeState>, ApiError> {
     let cached = state.state_cache.get("master");
     if let Some(flow_like_state) = cached {
         return Ok(flow_like_state);

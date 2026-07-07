@@ -20,16 +20,17 @@
 //! SSE is server→client only, but the platform tools (navigate, create app, delegate to the board /
 //! widget copilots, ask the user) run in the browser and must return a value to the running loop.
 //! The bridge emits a `tool_request` SSE frame — `{ requestId, toolName, arguments, approval }`, the
-//! same shape the desktop sends over its Tauri event — and awaits a `POST /{runId}/tool-result`,
-//! keyed by `(runId, requestId)`. Memory tools never reach the bridge (handled in core). This is not
-//! resumable across a reconnect (browser runs are ephemeral by design); a dropped stream lets pending
-//! tool calls time out.
+//! same shape the desktop sends over its Tauri event — and awaits a `POST /{runId}/tool-result`.
+//! Because that POST may land on a different process than the streaming run (each AWS
+//! streaming-Lambda request gets its own instance), the two coordinate through a Postgres
+//! `GlobalChatToolCall` row (insert PENDING + short-poll ↔ POST flips it to RESPONDED) rather than
+//! shared process memory. Memory tools never reach the bridge (handled in core). Runs are not
+//! resumable across a reconnect; a dropped stream lets pending tool calls time out and get swept.
 
 use std::{
-    collections::HashMap,
     convert::Infallible,
     sync::{
-        Arc, LazyLock, Mutex as StdMutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -42,6 +43,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse};
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
@@ -49,7 +51,6 @@ use flow_like::flow::copilot::tool_spec::{
     INTERNET_SEARCH_TOOL, ResolvedToolApproval, find_global_tool_spec, missing_required_args,
     resolve_tool_approval,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like::flow::copilot::{
     ChatMessage, GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
     run_platform_chat,
@@ -57,14 +58,22 @@ use flow_like::flow::copilot::{
 use flow_like::profile::Profile;
 use flow_like_types::tokio::{
     sync::{mpsc, oneshot},
-    time::timeout,
+    time::sleep,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::copilot::{master_flow_like_state, user_access_token};
-use crate::{entity::profile, error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{
+    entity::{
+        global_chat_tool_call, prelude::GlobalChatToolCall, profile,
+        sea_orm_active_enums::InteractionStatus,
+    },
+    error::ApiError,
+    middleware::jwt::AppUser,
+    state::AppState,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -93,7 +102,12 @@ const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Infer an image media type from a (signed) attachment URL's extension, defaulting to PNG.
 fn attachment_media_type(url: &str) -> String {
     let name = url.split('?').next().unwrap_or(url);
-    match name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+    match name
+        .rsplit('.')
+        .next()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("jpg") | Some("jpeg") => "image/jpeg".to_string(),
         Some("gif") => "image/gif".to_string(),
         Some("webp") => "image/webp".to_string(),
@@ -118,7 +132,9 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
                         media_type: attachment_media_type(url),
                     });
                 }
-                Ok(_) => tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped"),
+                Ok(_) => {
+                    tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped")
+                }
                 Err(error) => tracing::warn!(%error, url, "[global_chat] attachment read failed"),
             },
             Err(error) => tracing::warn!(%error, url, "[global_chat] attachment fetch failed"),
@@ -128,38 +144,19 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Run registry: routes a browser's `POST /{runId}/tool-result` back to the awaiting tool future.
+// Cross-instance tool-call coordination (Postgres-backed).
 // ---------------------------------------------------------------------------------------------
+// The desktop drives frontend tools over a Tauri event; the browser drives them over one SSE stream
+// whose `POST /{runId}/tool-result` may land on a DIFFERENT process (AWS streaming-Lambda scales each
+// request onto its own instance). So the awaiting run and the result POST cannot share process memory
+// — they coordinate through a lean `GlobalChatToolCall` row instead, mirroring the interaction
+// endpoint: the run inserts a PENDING row and short-polls it; any instance's POST flips it to
+// RESPONDED. Rows are deleted when the run's loop ends; abandoned rows are swept lazily.
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
-static GLOBAL_CHAT_RUNS: LazyLock<StdMutex<HashMap<String, Arc<RunHandle>>>> =
-    LazyLock::new(|| StdMutex::new(HashMap::new()));
 
-/// One in-flight global-chat run. Owns the map of tool calls awaiting a browser response, keyed by
-/// request id. `owner` is the authenticated `sub` so a tool result can only be delivered by the user
-/// who started the run.
-struct RunHandle {
-    owner: String,
-    pending: StdMutex<HashMap<String, oneshot::Sender<ToolResultBody>>>,
-}
-
-fn register_run(run_id: &str, owner: &str) -> Arc<RunHandle> {
-    let handle = Arc::new(RunHandle {
-        owner: owner.to_string(),
-        pending: StdMutex::new(HashMap::new()),
-    });
-    GLOBAL_CHAT_RUNS
-        .lock()
-        .unwrap()
-        .insert(run_id.to_string(), handle.clone());
-    handle
-}
-
-/// Remove a finished run and drop any still-pending tool senders (dropping a `oneshot::Sender`
-/// wakes its waiter with an error, so no tool future is left hanging).
-fn finish_run(run_id: &str) {
-    GLOBAL_CHAT_RUNS.lock().unwrap().remove(run_id);
-}
+/// How often an awaiting run re-reads its pending tool-call row.
+const TOOL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 fn next_request_id() -> String {
     let counter = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -177,6 +174,66 @@ fn next_run_id() -> String {
         .map(|d| d.as_millis())
         .unwrap_or_default();
     format!("global-chat-{millis}-{counter}")
+}
+
+/// Insert a PENDING coordination row for one in-flight browser tool call.
+async fn insert_pending_tool_call(
+    db: &DatabaseConnection,
+    run_id: &str,
+    request_id: &str,
+    sub: &str,
+    expires_at: i64,
+) -> Result<(), sea_orm::DbErr> {
+    global_chat_tool_call::ActiveModel {
+        id: Set(request_id.to_string()),
+        run_id: Set(run_id.to_string()),
+        sub: Set(sub.to_string()),
+        status: Set(InteractionStatus::Pending),
+        expires_at: Set(expires_at),
+        response_value: Set(None),
+        created_at: Set(chrono::Utc::now().naive_utc()),
+    }
+    .insert(db)
+    .await
+    .map(|_| ())
+}
+
+/// Best-effort delete of a single coordination row (the run consumed its result or gave up on it).
+async fn delete_tool_call(db: &DatabaseConnection, request_id: &str) {
+    if let Err(error) = GlobalChatToolCall::delete_by_id(request_id.to_string())
+        .exec(db)
+        .await
+    {
+        tracing::warn!(%error, request_id, "[global_chat] failed to delete tool-call row");
+    }
+}
+
+/// Delete every coordination row for a finished run, and — at ~5% probability — sweep abandoned rows
+/// past their expiry. There is no background reaper (a streaming Lambda freezes once it returns), so
+/// cleanup piggybacks on run completion.
+async fn finish_run_rows(db: &DatabaseConnection, run_id: &str) {
+    if let Err(error) = GlobalChatToolCall::delete_many()
+        .filter(global_chat_tool_call::Column::RunId.eq(run_id))
+        .exec(db)
+        .await
+    {
+        tracing::warn!(%error, run_id, "[global_chat] failed to delete run tool-call rows");
+    }
+
+    let sample = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or_default();
+    if sample % 20 == 0 {
+        let now = chrono::Utc::now().timestamp();
+        if let Err(error) = GlobalChatToolCall::delete_many()
+            .filter(global_chat_tool_call::Column::ExpiresAt.lt(now))
+            .exec(db)
+            .await
+        {
+            tracing::warn!(%error, "[global_chat] expired tool-call sweep failed");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -222,7 +279,7 @@ pub struct GlobalChatRequest {
 
 /// A browser-executed tool result, posted back to unblock the awaiting tool future. Same shape the
 /// desktop `flowpilot_frontend_tool_result` command accepts.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResultBody {
     pub request_id: String,
@@ -272,7 +329,9 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
         hub: model.hub,
         secure: true,
         hubs: model.hubs.unwrap_or_default(),
-        apps: model.apps.and_then(|value| serde_json::from_value(value).ok()),
+        apps: model
+            .apps
+            .and_then(|value| serde_json::from_value(value).ok()),
         shortcuts: model
             .shortcuts
             .and_then(|value| serde_json::from_value(value).ok()),
@@ -324,11 +383,14 @@ enum GlobalChatFrame {
 }
 
 /// Server-side platform tool bridge. Emits a `tool_request` frame down the SSE stream and blocks the
-/// tool future on a `oneshot` completed by `POST /{runId}/tool-result`. Mirrors the desktop
+/// tool future on a Postgres `GlobalChatToolCall` row completed by `POST /{runId}/tool-result` — so
+/// the result POST may hit a different process than the streaming run (Lambda). Mirrors the desktop
 /// `GlobalPlatformBridge`: same missing-args guard, same approval policy (from the shared core spec),
 /// same result normalization — so the frontend tool handlers behave identically on both transports.
 struct ServerPlatformBridge {
-    run: Arc<RunHandle>,
+    db: DatabaseConnection,
+    run_id: String,
+    sub: String,
     frames: mpsc::UnboundedSender<GlobalChatFrame>,
 }
 
@@ -354,20 +416,27 @@ impl PlatformToolBridge for ServerPlatformBridge {
         }
 
         let (approval, timeout_secs) = match &spec {
-            Some(spec) => (
-                resolve_tool_approval(spec, &arguments),
-                spec.timeout_secs,
-            ),
+            Some(spec) => (resolve_tool_approval(spec, &arguments), spec.timeout_secs),
             None => (ResolvedToolApproval::none(), DEFAULT_TOOL_TIMEOUT_SECS),
         };
 
         let request_id = next_request_id();
-        let (tx, rx) = oneshot::channel::<ToolResultBody>();
-        self.run
-            .pending
-            .lock()
-            .unwrap()
-            .insert(request_id.clone(), tx);
+        let expires_at = chrono::Utc::now().timestamp() + timeout_secs as i64;
+
+        // Persist the pending request BEFORE announcing it, so a result POST that races the frame
+        // always finds a row to flip. Any instance can then deliver the result.
+        if let Err(error) =
+            insert_pending_tool_call(&self.db, &self.run_id, &request_id, &self.sub, expires_at)
+                .await
+        {
+            tracing::warn!(%error, tool_name, "[global_chat] failed to persist tool request");
+            return json!({
+                "status": "error",
+                "tool": tool_name,
+                "error": "Failed to register the tool request."
+            })
+            .to_string();
+        }
 
         let request = json!({
             "requestId": request_id,
@@ -376,8 +445,12 @@ impl PlatformToolBridge for ServerPlatformBridge {
             "approval": approval,
         });
 
-        if self.frames.send(GlobalChatFrame::ToolRequest(request)).is_err() {
-            self.run.pending.lock().unwrap().remove(&request_id);
+        if self
+            .frames
+            .send(GlobalChatFrame::ToolRequest(request))
+            .is_err()
+        {
+            delete_tool_call(&self.db, &request_id).await;
             return json!({
                 "status": "error",
                 "tool": tool_name,
@@ -386,22 +459,54 @@ impl PlatformToolBridge for ServerPlatformBridge {
             .to_string();
         }
 
-        match timeout(Duration::from_secs(timeout_secs), rx).await {
-            Ok(Ok(response)) => normalize_response(tool_name, response),
-            Ok(Err(_)) => json!({
-                "status": "error",
-                "tool": tool_name,
-                "error": "The FlowPilot run ended before the tool responded."
-            })
-            .to_string(),
-            Err(_) => {
-                self.run.pending.lock().unwrap().remove(&request_id);
-                json!({
+        // Short-poll the row until the browser POSTs a result (from any instance) or it expires.
+        loop {
+            sleep(TOOL_POLL_INTERVAL).await;
+
+            if chrono::Utc::now().timestamp() >= expires_at {
+                delete_tool_call(&self.db, &request_id).await;
+                return json!({
                     "status": "timeout",
                     "tool": tool_name,
                     "message": "Timed out waiting for the FlowPilot tool response."
                 })
-                .to_string()
+                .to_string();
+            }
+
+            match GlobalChatToolCall::find_by_id(request_id.clone())
+                .one(&self.db)
+                .await
+            {
+                Ok(Some(row)) if row.status == InteractionStatus::Responded => {
+                    let response = row
+                        .response_value
+                        .as_deref()
+                        .and_then(|value| serde_json::from_str::<ToolResultBody>(value).ok());
+                    delete_tool_call(&self.db, &request_id).await;
+                    return match response {
+                        Some(response) => normalize_response(tool_name, response),
+                        None => json!({
+                            "status": "error",
+                            "tool": tool_name,
+                            "error": "The FlowPilot tool response was malformed."
+                        })
+                        .to_string(),
+                    };
+                }
+                // Still pending — keep waiting.
+                Ok(Some(_)) => {}
+                // Row vanished (run finished elsewhere or swept) — stop waiting.
+                Ok(None) => {
+                    return json!({
+                        "status": "error",
+                        "tool": tool_name,
+                        "error": "The FlowPilot run ended before the tool responded."
+                    })
+                    .to_string();
+                }
+                Err(error) => {
+                    tracing::warn!(%error, request_id, "[global_chat] tool-call poll failed");
+                }
             }
         }
     }
@@ -521,12 +626,13 @@ pub async fn global_chat(
     };
 
     let run_id = next_run_id();
-    let run = register_run(&run_id, &sub);
     let scope = payload.scope;
 
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge {
-        run: run.clone(),
+        db: state.db.clone(),
+        run_id: run_id.clone(),
+        sub: sub.clone(),
         frames: frames_tx.clone(),
     });
 
@@ -537,6 +643,7 @@ pub async fn global_chat(
 
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
     let run_id_for_task = run_id.clone();
+    let cleanup_db = state.db.clone();
 
     flow_like_types::tokio::spawn(async move {
         let result = run_platform_chat(
@@ -565,8 +672,8 @@ pub async fn global_chat(
         })
         .map_err(|e| e.to_string());
 
-        // Cleanup here (not in the SSE stream) so the run never leaks even if the client disconnects.
-        finish_run(&run_id_for_task);
+        // Cleanup here (not in the SSE stream) so rows never leak even if the client disconnects.
+        finish_run_rows(&cleanup_db, &run_id_for_task).await;
         let _ = done_tx.send(result);
     });
 
@@ -624,33 +731,45 @@ pub async fn global_chat(
 /// Deliver a browser-executed tool result to the awaiting run. Only the user who started the run may
 /// post to it, and only for a request the run is actually waiting on.
 pub async fn global_chat_tool_result(
+    State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(run_id): Path<String>,
     Json(body): Json<ToolResultBody>,
 ) -> Result<Json<Value>, ApiError> {
     let sub = user.sub()?;
 
-    let run = {
-        let runs = GLOBAL_CHAT_RUNS.lock().unwrap();
-        runs.get(&run_id).cloned()
-    }
-    .ok_or_else(|| ApiError::bad_request("Unknown or already-finished FlowPilot run."))?;
+    let row = GlobalChatToolCall::find_by_id(body.request_id.clone())
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to query tool call: {e}")))?
+        .ok_or_else(|| ApiError::bad_request("Unknown or already-finished FlowPilot tool call."))?;
 
-    if run.owner != sub {
+    // Only the user who started the run, and only for a request that run is actually waiting on.
+    if row.run_id != run_id {
+        return Err(ApiError::bad_request(
+            "Tool call does not belong to this run.",
+        ));
+    }
+    if row.sub != sub {
         return Err(ApiError::FORBIDDEN);
     }
-
-    let request_id = body.request_id.clone();
-    let sender = run.pending.lock().unwrap().remove(&request_id);
-    match sender {
-        Some(tx) => {
-            let _ = tx.send(body);
-            Ok(Json(json!({ "status": "ok" })))
-        }
-        None => Err(ApiError::bad_request(
-            "No pending tool request with that id (it may have already timed out).",
-        )),
+    // First write wins; a retry after the poll consumed and deleted the row is a harmless no-op.
+    if row.status == InteractionStatus::Responded {
+        return Ok(Json(json!({ "status": "ok" })));
     }
+
+    let response_json = serde_json::to_string(&body)
+        .map_err(|e| ApiError::bad_request(format!("Invalid tool result: {e}")))?;
+
+    let mut active: global_chat_tool_call::ActiveModel = row.into();
+    active.status = Set(InteractionStatus::Responded);
+    active.response_value = Set(Some(response_json));
+    active
+        .update(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to update tool call: {e}")))?;
+
+    Ok(Json(json!({ "status": "ok" })))
 }
 
 /// Query for the memory status/clear endpoints: which profile's memory to act on.

@@ -1,5 +1,6 @@
 "use client";
 import { HomeSwimlanes, Skeleton, useBackend } from "@flow-like/flow-like-ui";
+import { HeroSearchBarBubble } from "@flow-like/flow-like-ui/components/global-chat/hero-variants";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -22,8 +23,9 @@ export default function Home() {
 	}
 
 	return (
-		// The swimlanes are flow content — the page itself scrolls.
+		// One page-level scroll: hero + swimlanes move together (the swimlanes are flow content).
 		<main className="flex flex-col flex-1 w-full min-h-0 overflow-y-auto">
+			<HeroSearchBarBubble />
 			<HomeSwimlanes />
 		</main>
 	);

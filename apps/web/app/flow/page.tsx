@@ -26,6 +26,7 @@ export default function FlowEditPage() {
 			nodeId={nodeId}
 			version={version}
 			sub={auth.user?.profile?.sub}
+			externalAssistant
 		/>
 	);
 }
