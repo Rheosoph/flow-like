@@ -133,6 +133,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn internet_search_requires_non_empty_query_without_network() {
+        let result = run_internet_search(&json!({ "query": "   " }));
+
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("error"));
+        assert_eq!(
+            result.get("tool").and_then(Value::as_str),
+            Some("internet_search")
+        );
+    }
+
+    #[test]
     fn compact_search_result_keeps_only_model_relevant_fields() {
         let result = compact_search_result(&json!({
             "title": "Flow Like",

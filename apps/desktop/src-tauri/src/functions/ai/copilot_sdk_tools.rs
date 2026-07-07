@@ -2301,19 +2301,3 @@ fn get_component_schema_doc(component_type: &str) -> String {
         base_doc
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn internet_search_requires_non_empty_query_without_network() {
-        let result = run_internet_search_tool(&json!({ "query": "   " }));
-
-        assert_eq!(result.get("status").and_then(Value::as_str), Some("error"));
-        assert_eq!(
-            result.get("tool").and_then(Value::as_str),
-            Some("internet_search")
-        );
-    }
-}
