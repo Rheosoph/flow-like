@@ -97,7 +97,7 @@ const MAX_HISTORY_MESSAGE_CHARS: usize = 8_000;
 /// Fallback dispatch timeout for a tool with no spec (specs carry their own `timeout_secs`).
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 120;
 const MAX_ATTACHMENT_URLS: usize = 8;
-const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES: usize = 512 * 1024 * 1024;
 
 /// Infer an image media type from a (signed) attachment URL's extension, defaulting to PNG.
 fn attachment_media_type(url: &str) -> String {
@@ -125,18 +125,32 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
             continue;
         }
         match flow_like_types::reqwest::get(url).await {
-            Ok(response) => match response.bytes().await {
-                Ok(bytes) if bytes.len() <= MAX_ATTACHMENT_BYTES => {
-                    images.push(ChatImage {
-                        data: STANDARD.encode(&bytes),
-                        media_type: attachment_media_type(url),
-                    });
+            Ok(response) => {
+                // Reject oversized attachments by Content-Length before buffering the body into
+                // memory (a malicious URL could otherwise OOM the process). The post-read length
+                // check below stays as a backstop for a missing or dishonest Content-Length.
+                if response
+                    .content_length()
+                    .is_some_and(|len| len > MAX_ATTACHMENT_BYTES as u64)
+                {
+                    tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped");
+                    continue;
                 }
-                Ok(_) => {
-                    tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped")
+                match response.bytes().await {
+                    Ok(bytes) if bytes.len() <= MAX_ATTACHMENT_BYTES => {
+                        images.push(ChatImage {
+                            data: STANDARD.encode(&bytes),
+                            media_type: attachment_media_type(url),
+                        });
+                    }
+                    Ok(_) => {
+                        tracing::warn!(url, "[global_chat] attachment exceeds size limit, skipped")
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, url, "[global_chat] attachment read failed")
+                    }
                 }
-                Err(error) => tracing::warn!(%error, url, "[global_chat] attachment read failed"),
-            },
+            }
             Err(error) => tracing::warn!(%error, url, "[global_chat] attachment fetch failed"),
         }
     }
@@ -155,8 +169,12 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-/// How often an awaiting run re-reads its pending tool-call row.
+/// Initial interval between reads of a pending tool-call row. The poll backs off up to
+/// [`TOOL_POLL_MAX_INTERVAL`] so a long human-in-the-loop tool (e.g. `ask_user`, `call_app_chat`)
+/// does not hammer the DB for its whole timeout window while fast tools still resolve quickly.
 const TOOL_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Upper bound the poll interval backs off to.
+const TOOL_POLL_MAX_INTERVAL: Duration = Duration::from_secs(3);
 
 fn next_request_id() -> String {
     let counter = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -460,8 +478,11 @@ impl PlatformToolBridge for ServerPlatformBridge {
         }
 
         // Short-poll the row until the browser POSTs a result (from any instance) or it expires.
+        // Back off from a snappy initial interval so a slow tool doesn't hammer the DB.
+        let mut poll_interval = TOOL_POLL_INTERVAL;
         loop {
-            sleep(TOOL_POLL_INTERVAL).await;
+            sleep(poll_interval).await;
+            poll_interval = (poll_interval * 2).min(TOOL_POLL_MAX_INTERVAL);
 
             if chrono::Utc::now().timestamp() >= expires_at {
                 delete_tool_call(&self.db, &request_id).await;
@@ -723,7 +744,7 @@ pub async fn global_chat(
     let sse = Sse::new(stream).keep_alive(
         KeepAlive::new()
             .text("keep-alive")
-            .interval(Duration::from_secs(1)),
+            .interval(Duration::from_secs(15)),
     );
     Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
 }

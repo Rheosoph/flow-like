@@ -23,7 +23,8 @@ use flow_like::flow::copilot::memory::AssistantMemory;
 use flow_like::flow::copilot::platform::run_memory_tool;
 use flow_like::flow::copilot::tool_spec::{
     INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
-    find_global_tool_spec, global_assistant_tool_specs, missing_required_args, resolve_tool_approval,
+    find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
+    resolve_tool_approval,
 };
 use flow_like::flow::copilot::{
     BoardCommand, CatalogProvider, EmitCommandsArgs, EmitCommandsTool, GetCurrentFlowScriptTool,
@@ -204,8 +205,7 @@ fn frontend_tool_result_with_timeout(
     approval: FrontendToolApproval,
     timeout: Duration,
 ) -> ToolResultObject {
-    let result =
-        run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
+    let result = run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
     ToolResultObject::text(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),

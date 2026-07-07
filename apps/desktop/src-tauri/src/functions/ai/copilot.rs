@@ -10,8 +10,8 @@ use flow_like::flow::board::Board;
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, GlobalOpenBoardContext, GraphContext, NodeMetadata,
-    PinMetadata, PlatformContextInput, RunContext, build_platform_context, enrich_node_metadata,
+    BoardCommand, CatalogProvider, GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata,
+    PlatformContextInput, RunContext, build_platform_context, enrich_node_metadata,
     global_assistant_system_prompt, run_platform_chat, score_catalog_metadata,
 };
 use flow_like::flow::node::Node;
@@ -600,6 +600,9 @@ fn local_asset_path(url: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// Maximum size of a single fetched attachment; larger ones are skipped to bound memory use.
+const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
+
 /// Resolve chat attachment URLs (local tmp files via the asset protocol, or presigned tmp uploads)
 /// into base64 `ChatImage`s for the model — mirrors the simple chat's attachment handling, keeping
 /// large blobs out of the frontend store and IPC payloads.
@@ -618,7 +621,33 @@ async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
             }
         } else if url.starts_with("http://") || url.starts_with("https://") {
             match flow_like_types::reqwest::get(url).await {
-                Ok(response) => response.bytes().await.ok().map(|bytes| bytes.to_vec()),
+                Ok(response) => {
+                    // Reject oversized attachments by Content-Length before buffering the body into
+                    // memory (a malicious URL could otherwise OOM the process).
+                    if response
+                        .content_length()
+                        .is_some_and(|len| len > MAX_ATTACHMENT_BYTES)
+                    {
+                        eprintln!("[global_chat] attachment exceeds size limit, skipped: {url}");
+                        None
+                    } else {
+                        match response.bytes().await {
+                            Ok(bytes) if bytes.len() as u64 <= MAX_ATTACHMENT_BYTES => {
+                                Some(bytes.to_vec())
+                            }
+                            Ok(_) => {
+                                eprintln!(
+                                    "[global_chat] attachment exceeds size limit, skipped: {url}"
+                                );
+                                None
+                            }
+                            Err(error) => {
+                                eprintln!("[global_chat] failed to read attachment {url}: {error}");
+                                None
+                            }
+                        }
+                    }
+                }
                 Err(error) => {
                     eprintln!("[global_chat] failed to fetch attachment {url}: {error}");
                     None
@@ -698,9 +727,12 @@ fn global_chat_run_channel(run: Arc<GlobalChatRun>) -> Channel<String> {
 /// Mark a run finished and schedule its removal from the registry after the resumable TTL.
 fn finish_global_chat_run(run_id: String, run: &Arc<GlobalChatRun>) {
     let _ = run.done_tx.send(true);
+    let run = run.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(GLOBAL_CHAT_RUN_TTL_SECS)).await;
-        GLOBAL_CHAT_RUNS.remove(&run_id);
+        // Only evict if THIS run is still registered — a retry / regeneration of the same message
+        // id may have re-registered the run_id meanwhile, and we must not drop that newer run.
+        GLOBAL_CHAT_RUNS.remove_if(&run_id, |_, entry| Arc::ptr_eq(entry, &run));
     });
 }
 
@@ -796,13 +828,15 @@ pub async fn global_chat(
             .find_bit(embedding_id, state.0.http_client.clone())
             .await
         {
-            Ok(bit) => match AssistantMemory::open(state.0.clone(), None, &profile_arc.id, &bit).await {
-                Ok(memory) => Some(Arc::new(memory)),
-                Err(error) => {
-                    eprintln!("[global_chat] memory init failed: {error}");
-                    None
+            Ok(bit) => {
+                match AssistantMemory::open(state.0.clone(), None, &profile_arc.id, &bit).await {
+                    Ok(memory) => Some(Arc::new(memory)),
+                    Err(error) => {
+                        eprintln!("[global_chat] memory init failed: {error}");
+                        None
+                    }
                 }
-            },
+            }
             Err(error) => {
                 eprintln!("[global_chat] embedding model '{embedding_id}' not found: {error}");
                 None
@@ -824,113 +858,113 @@ pub async fn global_chat(
     };
 
     let result = async {
-    match model_selection.backend {
-        FlowPilotChatBackend::Agent(FlowPilotAgentBackendKind::GithubCopilot) => {
-            let model_id = model_selection
-                .model_id
-                .as_deref()
-                .filter(|model_id| !model_id.trim().is_empty())
-                .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
-            let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
+        match model_selection.backend {
+            FlowPilotChatBackend::Agent(FlowPilotAgentBackendKind::GithubCopilot) => {
+                let model_id = model_selection
+                    .model_id
+                    .as_deref()
+                    .filter(|model_id| !model_id.trim().is_empty())
+                    .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
+                let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
 
-            copilot_sdk_chat_internal(
-                app_handle.clone(),
-                model_id,
-                scope,
-                None,
-                None,
-                &[],
-                None,
-                user_prompt,
-                current_images,
-                history,
-                sink,
-                Some(context),
-                memory,
-                false,
-                false,
-            )
-            .await
-        }
-        FlowPilotChatBackend::Agent(agent_backend) => {
-            let model_id = model_selection
-                .model_id
-                .clone()
-                .unwrap_or_else(|| "default".to_string());
-            let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
-
-            external_code_agent_chat_internal(
-                app_handle.clone(),
-                agent_backend,
-                &model_id,
-                scope,
-                None,
-                None,
-                &[],
-                None,
-                user_prompt,
-                history,
-                sink,
-                Some(context),
-                memory,
-                false,
-            )
-            .await
-        }
-        FlowPilotChatBackend::Bits => {
-            // Profile ("Bits") models are made tool-capable via the same rig machinery the board
-            // copilot uses for Bits (get_model + rig agent + manual tool loop), but with the platform
-            // tools + global prompt. Platform tools run through the frontend bridge (GLOBAL event).
-            // The whole loop lives in core (`run_platform_chat`); the desktop only supplies the
-            // Tauri-backed tool bridge and token sink. Memory recall happens inside the loop.
-            let bridge: Arc<dyn PlatformToolBridge> = Arc::new(GlobalPlatformBridge {
-                bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
+                copilot_sdk_chat_internal(
                     app_handle.clone(),
-                    super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
-                ),
-            });
+                    model_id,
+                    scope,
+                    None,
+                    None,
+                    &[],
+                    None,
+                    user_prompt,
+                    current_images,
+                    history,
+                    sink,
+                    Some(context),
+                    memory,
+                    false,
+                    false,
+                )
+                .await
+            }
+            FlowPilotChatBackend::Agent(agent_backend) => {
+                let model_id = model_selection
+                    .model_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+                let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
 
-            let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
-                .into_iter()
-                .map(|m| flow_like::flow::copilot::ChatMessage {
-                    role: m.role,
-                    content: m.content,
-                    images: m.images,
+                external_code_agent_chat_internal(
+                    app_handle.clone(),
+                    agent_backend,
+                    &model_id,
+                    scope,
+                    None,
+                    None,
+                    &[],
+                    None,
+                    user_prompt,
+                    history,
+                    sink,
+                    Some(context),
+                    memory,
+                    false,
+                )
+                .await
+            }
+            FlowPilotChatBackend::Bits => {
+                // Profile ("Bits") models are made tool-capable via the same rig machinery the board
+                // copilot uses for Bits (get_model + rig agent + manual tool loop), but with the platform
+                // tools + global prompt. Platform tools run through the frontend bridge (GLOBAL event).
+                // The whole loop lives in core (`run_platform_chat`); the desktop only supplies the
+                // Tauri-backed tool bridge and token sink. Memory recall happens inside the loop.
+                let bridge: Arc<dyn PlatformToolBridge> = Arc::new(GlobalPlatformBridge {
+                    bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
+                        app_handle.clone(),
+                        super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+                    ),
+                });
+
+                let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
+                    .into_iter()
+                    .map(|m| flow_like::flow::copilot::ChatMessage {
+                        role: m.role,
+                        content: m.content,
+                        images: m.images,
+                    })
+                    .collect();
+
+                let on_token = move |token: String| {
+                    let _ = sink.send(token);
+                };
+
+                let message = run_platform_chat(
+                    state.0.clone(),
+                    profile,
+                    context,
+                    user_prompt,
+                    current_images,
+                    board_history,
+                    model_selection.model_id,
+                    token,
+                    bridge,
+                    memory,
+                    Some(on_token),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+                Ok(UnifiedCopilotResponse {
+                    message,
+                    commands: Vec::new(),
+                    suggestions: Vec::new(),
+                    components: Vec::new(),
+                    canvas_settings: None,
+                    root_component_id: None,
+                    flowscript_workspace: None,
+                    active_scope: scope,
                 })
-                .collect();
-
-            let on_token = move |token: String| {
-                let _ = sink.send(token);
-            };
-
-            let message = run_platform_chat(
-                state.0.clone(),
-                profile,
-                context,
-                user_prompt,
-                current_images,
-                board_history,
-                model_selection.model_id,
-                token,
-                bridge,
-                memory,
-                Some(on_token),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-
-            Ok(UnifiedCopilotResponse {
-                message,
-                commands: Vec::new(),
-                suggestions: Vec::new(),
-                components: Vec::new(),
-                canvas_settings: None,
-                root_component_id: None,
-                flowscript_workspace: None,
-                active_scope: scope,
-            })
+            }
         }
-    }
     }
     .await;
 
