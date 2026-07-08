@@ -27,6 +27,8 @@ const STRUCT_BREAK: &str = "struct_break";
 const STRUCT_SET: &str = "struct_set";
 const STRUCT_SET_IN_PIN: &str = "struct_in";
 const STRUCT_SET_OUT_PIN: &str = "struct_out";
+const STRUCT_SET_FIELD_PIN: &str = "field";
+const STRUCT_SET_VALUE_PIN: &str = "value";
 
 /// Array node types sugared to literals / index / member access.
 const MAKE_ARRAY: &str = "make_array";
@@ -819,6 +821,20 @@ impl<'a> Lowering<'a> {
             && let Some(target) = self.struct_accumulators.get(&node.id)
             && let Some(output) = self.struct_set_output_pin(node)
         {
+            // A single-field accumulator reassignment (`struct_in` reads the same variable the node
+            // rebinds and `field` is a literal) is the readable `base.path = value` struct-field
+            // write. Dynamic-field or cross-source updates keep the explicit `structSet({…})` form.
+            if self.previous_struct_set(node).is_some()
+                && let Some((path, value)) = struct_set_field_assign(&call, target)
+            {
+                return Stmt::FieldAssign {
+                    base: target.clone(),
+                    path,
+                    value,
+                    anchor: Some(node.id.clone()),
+                };
+            }
+
             let value = Expr::Field {
                 base: Box::new(Expr::Call(call)),
                 pin: output.name.clone(),
@@ -1472,6 +1488,33 @@ fn ref_name_of_arg(args: &[Arg], pin: &str) -> Option<String> {
 
 fn is_impure(node: &Node) -> bool {
     node.pins.values().any(is_exec)
+}
+
+/// If a `struct_set` call is a single-field accumulator update of `target` — its `struct_in`
+/// reads the same variable the node rebinds and its `field` is a literal string — return the
+/// `(field_path, value_expr)` backing the `target.field = value` struct-field write sugar.
+/// Returns `None` (keep the explicit `structSet({…})` form) when the field is wired/dynamic or
+/// `struct_in` comes from a different source than `target`.
+fn struct_set_field_assign(call: &Call, target: &str) -> Option<(String, Expr)> {
+    let mut struct_in = None;
+    let mut field = None;
+    let mut value = None;
+    for arg in &call.args {
+        match arg.name.as_str() {
+            STRUCT_SET_IN_PIN => struct_in = Some(&arg.value),
+            STRUCT_SET_FIELD_PIN => field = Some(&arg.value),
+            STRUCT_SET_VALUE_PIN => value = Some(&arg.value),
+            _ => {}
+        }
+    }
+    match struct_in {
+        Some(Expr::Ref(name)) if name == target => {}
+        _ => return None,
+    }
+    let Some(Expr::Literal(Literal::String(path))) = field else {
+        return None;
+    };
+    Some((path.clone(), value?.clone()))
 }
 
 /// A trigger entry is a `start` node — an independent entry point (e.g. a generic event used as

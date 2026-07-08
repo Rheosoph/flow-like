@@ -432,47 +432,124 @@ fn comment_with_embedded_anchor_pattern_splits_only_on_anchor_kinds() {
 }
 
 #[test]
-fn member_assignment_desugars_to_struct_set() {
+fn member_assignment_parses_to_field_assign() {
     let text = "function f() {\n    const pref = makePrefs({ multimodal: true }).preferences\n    pref.cost_weight = 0.5\n}\n";
     let ast = parse(text).expect("member field assignment should parse");
     match ast.functions[0].body.stmts.last().expect("has statements") {
-        flow_like_ast::Stmt::Assign { target, value, .. } => {
-            assert_eq!(target, "pref", "rebinds the base variable");
-            let flow_like_ast::Expr::Call(call) = value else {
-                panic!("expected a structSet call, got {value:?}");
-            };
-            assert_eq!(call.display, "structSet");
-            let arg = |name: &str| call.args.iter().find(|a| a.name == name).map(|a| &a.value);
-            assert!(matches!(arg("structIn"), Some(flow_like_ast::Expr::Ref(r)) if r == "pref"));
+        flow_like_ast::Stmt::FieldAssign {
+            base, path, value, ..
+        } => {
+            assert_eq!(base, "pref", "keeps the base variable");
+            assert_eq!(path, "cost_weight", "field path carries no leading dot");
             assert!(matches!(
-                arg("field"),
-                Some(flow_like_ast::Expr::Literal(flow_like_ast::Literal::String(s))) if s == "cost_weight"
-            ));
-            assert!(matches!(
-                arg("value"),
-                Some(flow_like_ast::Expr::Literal(flow_like_ast::Literal::Float(_)))
+                value,
+                flow_like_ast::Expr::Literal(flow_like_ast::Literal::Float(_))
             ));
         }
-        other => panic!("expected an assignment, got {other:?}"),
+        other => panic!("expected a field assignment, got {other:?}"),
     }
+    // The dot form is first-class: it round-trips verbatim instead of re-rendering `structSet(`.
+    let rendered = render(&ast, &RenderOptions::default());
+    assert!(
+        rendered.contains("pref.cost_weight = 0.5"),
+        "field write must render as the dot form:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("structSet("),
+        "field write must not re-render as an explicit structSet:\n{rendered}"
+    );
+    // The dot form itself round-trips verbatim (the surrounding `const` alias canonicalizes to
+    // `let`, so idempotency is asserted on a self-contained snippet).
+    assert_idempotent(
+        "function f() {\n    pref.cost_weight = 0.5\n}\n",
+        &RenderOptions::default(),
+    );
 }
 
 #[test]
 fn nested_member_assignment_builds_dot_path() {
     let text = "function f() {\n    const p = makePrefs({}).preferences\n    p.a.b = 1\n}\n";
     let ast = parse(text).expect("nested member assignment should parse");
-    let flow_like_ast::Stmt::Assign {
-        value: flow_like_ast::Expr::Call(call),
-        ..
-    } = ast.functions[0].body.stmts.last().unwrap()
+    let flow_like_ast::Stmt::FieldAssign { base, path, .. } =
+        ast.functions[0].body.stmts.last().unwrap()
     else {
-        panic!("expected a structSet call");
+        panic!("expected a field assignment");
     };
-    let field = call.args.iter().find(|a| a.name == "field").unwrap();
-    assert!(matches!(
-        &field.value,
-        flow_like_ast::Expr::Literal(flow_like_ast::Literal::String(s)) if s == "a.b"
-    ));
+    assert_eq!(base, "p");
+    assert_eq!(path, "a.b", "nested fields join into a dot path");
+    assert_idempotent(
+        "function f() {\n    p.a.b = 1\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn field_assign_dot_form_is_idempotent() {
+    // Snake-case field (dot separator) and a value that is itself a member/pin access.
+    assert_idempotent(
+        "function f() {\n    x.a_b = 1\n}\n",
+        &RenderOptions::default(),
+    );
+    assert_idempotent(
+        "function f() {\n    x.field = call().out\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn field_assign_bracket_and_nested_paths_roundtrip() {
+    // A bracket-rooted path (`items[0]`) carries no leading dot; mixed field/index paths render
+    // back verbatim.
+    let ast = parse("function f() {\n    items[0] = 1\n}\n").expect("bracket lvalue should parse");
+    let flow_like_ast::Stmt::FieldAssign { base, path, .. } =
+        ast.functions[0].body.stmts.last().unwrap()
+    else {
+        panic!("expected a field assignment");
+    };
+    assert_eq!(base, "items");
+    assert_eq!(path, "[0]", "bracket-rooted path has no leading dot");
+    assert_idempotent(
+        "function f() {\n    items[0] = 1\n}\n",
+        &RenderOptions::default(),
+    );
+    assert_idempotent(
+        "function f() {\n    row.items[0].name = \"x\"\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn field_assign_renders_from_hand_built_ast() {
+    use flow_like_ast::{Block, BoardAst, Expr, FnDecl, Literal, Stmt};
+
+    let field_assign = |anchor: Option<&str>| Stmt::FieldAssign {
+        base: "row".to_string(),
+        path: "id".to_string(),
+        value: Expr::Literal(Literal::Int(7)),
+        anchor: anchor.map(str::to_string),
+    };
+    let build = |stmt: Stmt| BoardAst {
+        functions: vec![FnDecl {
+            name: "f".to_string(),
+            params: Vec::new(),
+            returns: Vec::new(),
+            body: Block { stmts: vec![stmt] },
+            anchor: None,
+        }],
+        ..BoardAst::default()
+    };
+
+    let plain = render(&build(field_assign(None)), &RenderOptions::default());
+    assert!(
+        plain.contains("row.id = 7"),
+        "hand-built field assign renders as the dot form:\n{plain}"
+    );
+
+    let anchored = render(&build(field_assign(Some("set1"))), &anchored_opts());
+    assert!(
+        anchored.contains("row.id = 7   //@n:set1"),
+        "anchored field assign renders its node anchor:\n{anchored}"
+    );
 }
 
 // ---- full-fixture idempotency ------------------------------------------------------------

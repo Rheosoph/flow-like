@@ -104,9 +104,21 @@ fn reconcile_inner(
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
 
+    // Anchored `base.path = value` writes carry no `&Call`, so synthesize the equivalent
+    // `struct_set` calls the anchor-keyed collectors below diff against / delete. These arenas own
+    // the calls and must outlive the `new_calls`/`visible` maps that borrow them, so build them in
+    // full up front — pushing to the Vec later would reallocate and invalidate the references.
+    let new_field_assign_calls = collect_anchored_field_assign_calls(new);
+    let board_field_assign_calls = collect_anchored_field_assign_calls(&board_ast);
+
     // 1. Index every anchored call in the new AST by node id.
     let mut new_calls: HashMap<String, &Call> = HashMap::new();
     collect_calls(new, &mut new_calls);
+    for call in &new_field_assign_calls {
+        if let Some(anchor) = call.anchor.as_deref() {
+            new_calls.entry(anchor.to_string()).or_insert(call);
+        }
+    }
 
     // 2. Configuration edits: for each anchored call that still maps to a board node, diff its
     //    literal arguments against the node's current pin defaults.
@@ -181,6 +193,11 @@ fn reconcile_inner(
     //    struct_make, pure helpers) are never removed just for lacking an anchor in the text.
     let mut visible: HashMap<String, &Call> = HashMap::new();
     collect_statement_calls(&board_ast, &mut visible);
+    for call in &board_field_assign_calls {
+        if let Some(anchor) = call.anchor.as_deref() {
+            visible.entry(anchor.to_string()).or_insert(call);
+        }
+    }
     let new_anchors: HashSet<&String> = new_calls.keys().collect();
     for anchor in visible.keys() {
         if new_anchors.contains(anchor) {
@@ -1647,6 +1664,24 @@ impl<'a> StructuralPlanner<'a> {
                 }
                 self.assign_symbol(target.clone(), resolved);
                 entity.map(PlannedStmt::new)
+            }
+            Stmt::FieldAssign {
+                base,
+                path,
+                value,
+                anchor,
+            } => {
+                // Expand the `base.path = value` struct-field write to its `struct_set` accumulator
+                // form and reuse the `Stmt::Assign`+call planning path: it wires `struct_in` from
+                // `base`'s prior source, rebinds `base` to `struct_out`, and (via the non-anchored
+                // path) drops the struct_set's own splice so it never self-connects.
+                let call = field_assign_struct_set_call(base, path, value, anchor.as_deref());
+                let assign = Stmt::Assign {
+                    target: base.clone(),
+                    value: Expr::Call(call),
+                    anchor: anchor.clone(),
+                };
+                self.plan_stmt(&assign, target_layer, promote_local_alias)
             }
             Stmt::LocalAlias {
                 name,
@@ -3304,8 +3339,9 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
                 || call_args_have_unanchored_calls(call)
                 || block_has_unanchored_calls(body)
         }
-        Stmt::Assign { value, anchor, .. } => anchor.is_none() || expr_has_unanchored_calls(value),
-        Stmt::LocalAlias { value, anchor, .. } => {
+        Stmt::Assign { value, anchor, .. }
+        | Stmt::FieldAssign { value, anchor, .. }
+        | Stmt::LocalAlias { value, anchor, .. } => {
             anchor.is_none() || expr_has_unanchored_calls(value)
         }
         Stmt::Handler(event) => event.anchor.is_none() || block_has_unanchored_calls(&event.body),
@@ -3342,6 +3378,85 @@ fn expr_has_unanchored_calls(expr: &Expr) -> bool {
             expr_has_unanchored_calls(lhs) || expr_has_unanchored_calls(rhs)
         }
         Expr::Ref(_) | Expr::Literal(_) => false,
+    }
+}
+
+/// Synthesize the `struct_set` [`Call`] a `base.path = value` struct-field write
+/// (`Stmt::FieldAssign`) expands to: `structSet({ structIn: base, field: "path", value })`.
+///
+/// Shared by the structural planner's `Stmt::FieldAssign` arm (which turns it into an `AddNode`)
+/// and the reconcile collectors (which key it by anchor to drive config-edits and deletions) so
+/// the two expansions can never drift.
+fn field_assign_struct_set_call(
+    base: &str,
+    path: &str,
+    value: &Expr,
+    anchor: Option<&str>,
+) -> Call {
+    Call {
+        node_type: String::new(),
+        display: "structSet".to_string(),
+        args: vec![
+            Arg {
+                name: "structIn".to_string(),
+                value: Expr::Ref(base.to_string()),
+            },
+            Arg {
+                name: "field".to_string(),
+                value: Expr::Literal(Literal::String(path.to_string())),
+            },
+            Arg {
+                name: "value".to_string(),
+                value: value.clone(),
+            },
+        ],
+        anchor: anchor.map(str::to_string),
+    }
+}
+
+/// Materialize the synthesized `struct_set` [`Call`] for every *anchored* `Stmt::FieldAssign` in
+/// `ast`, at any nesting depth. `FieldAssign` carries no `&Call`, so without this the config-edit
+/// (`new_calls`) and deletion (`visible`) collectors would never see a `base.path = value` write's
+/// underlying `struct_set` node. The returned owned calls back the `&Call` entries those maps key
+/// by anchor. Anchorless writes are fresh (handled by the structural planner) and are skipped.
+fn collect_anchored_field_assign_calls(ast: &BoardAst) -> Vec<Call> {
+    let mut out = Vec::new();
+    for ev in &ast.events {
+        collect_field_assign_calls_in_block(&ev.body, &mut out);
+    }
+    for f in &ast.functions {
+        collect_field_assign_calls_in_block(&f.body, &mut out);
+    }
+    out
+}
+
+fn collect_field_assign_calls_in_block(block: &Block, out: &mut Vec<Call>) {
+    for stmt in &block.stmts {
+        collect_field_assign_calls_in_stmt(stmt, out);
+    }
+}
+
+fn collect_field_assign_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
+    match stmt {
+        Stmt::FieldAssign {
+            base,
+            path,
+            value,
+            anchor: Some(anchor),
+        } => out.push(field_assign_struct_set_call(
+            base,
+            path,
+            value,
+            Some(anchor),
+        )),
+        Stmt::Branch { arms, .. } => {
+            for arm in arms {
+                collect_field_assign_calls_in_block(&arm.body, out);
+            }
+        }
+        Stmt::Loop { body, .. } => collect_field_assign_calls_in_block(body, out),
+        Stmt::Handler(event) => collect_field_assign_calls_in_block(&event.body, out),
+        _ => {}
     }
 }
 
@@ -3409,7 +3524,10 @@ fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call
             }
         }
         Stmt::Handler(event) => collect_statement_block(&event.body, out),
-        Stmt::Return { .. } | Stmt::Local(_) | Stmt::Comment(_) => {}
+        // A `base.path = value` write's own `struct_set` node has no `&Call` to key here; its
+        // anchor is registered into `visible` separately from the owned arena built by
+        // `collect_anchored_field_assign_calls`, so a deleted dot-form line still flags a removal.
+        Stmt::FieldAssign { .. } | Stmt::Return { .. } | Stmt::Local(_) | Stmt::Comment(_) => {}
     }
 }
 
@@ -3462,6 +3580,10 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
             }
             collect_expr(value, out);
         }
+        // A `base.path = value` write's own `struct_set` has no `&Call` to key here; its anchor is
+        // registered into `new_calls` separately (see `collect_anchored_field_assign_calls`). Still
+        // walk the RHS so any anchored calls feeding `value` are tracked.
+        Stmt::FieldAssign { value, .. } => collect_expr(value, out),
         Stmt::Return { values, .. } => {
             for v in values {
                 collect_expr(v, out);
@@ -3589,6 +3711,9 @@ fn collect_nested_assignments_to(
     match stmt {
         Stmt::Assign { target, .. } if nested && local_names.contains(target) => {
             out.insert(target.clone());
+        }
+        Stmt::FieldAssign { base, .. } if nested && local_names.contains(base) => {
+            out.insert(base.clone());
         }
         Stmt::Branch { arms, .. } => {
             for arm in arms {
@@ -6228,6 +6353,196 @@ eventsSimple() {
         );
     }
 
+    /// Build an `eventsSimple → structSet(seed) → structSet(accumulate) → batchInsertLocalDb`
+    /// board. The second `struct_set` reads the seed's `struct_out` (same accumulator) and rebinds
+    /// it. With `wired_field == false` its `field` is a literal — the shape lowering sugars to
+    /// `row.title = "hello"`; with `wired_field == true` a `cuid` node feeds `field`, so it must
+    /// stay the explicit `structSet({…})` form.
+    fn board_with_struct_accumulator(wired_field: bool) -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let ev_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut seed = Node::new("struct_set", "Set Field", "", "structs");
+        seed.id = "seed".to_string();
+        let seed_exec_in = seed
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let seed_exec_out = seed
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        seed.add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(br#""created""#.to_vec());
+        seed.add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(b"1".to_vec());
+        let seed_struct_out = seed
+            .add_output_pin("struct_out", "Struct Out", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(seed.id.clone(), seed);
+
+        let mut acc = Node::new("struct_set", "Set Field", "", "structs");
+        acc.id = "acc".to_string();
+        let acc_exec_in = acc
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let acc_exec_out = acc
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let acc_struct_in = acc
+            .add_input_pin("struct_in", "Struct In", "", VariableType::Struct)
+            .id
+            .clone();
+        let acc_field_id = {
+            let field = acc.add_input_pin("field", "Field", "", VariableType::String);
+            if !wired_field {
+                field.default_value = Some(br#""title""#.to_vec());
+            }
+            field.id.clone()
+        };
+        acc.add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(br#""hello""#.to_vec());
+        let acc_struct_out = acc
+            .add_output_pin("struct_out", "Struct Out", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(acc.id.clone(), acc);
+
+        let mut sink = Node::new("batch_insert_local_db", "Batch Insert Local DB", "", "data");
+        sink.id = "sink".to_string();
+        let sink_exec_in = sink
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let sink_value = sink
+            .add_input_pin("value", "Value", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(sink.id.clone(), sink);
+
+        connect(&mut board, "event", &ev_out, "seed", &seed_exec_in);
+        connect(&mut board, "seed", &seed_exec_out, "acc", &acc_exec_in);
+        connect(&mut board, "seed", &seed_struct_out, "acc", &acc_struct_in);
+        connect(&mut board, "acc", &acc_exec_out, "sink", &sink_exec_in);
+        connect(&mut board, "acc", &acc_struct_out, "sink", &sink_value);
+
+        if wired_field {
+            let mut cuid = Node::new("cuid", "CUID v2", "", "std");
+            cuid.id = "cuid".to_string();
+            let cuid_out = cuid
+                .add_output_pin("cuid", "CUID", "", VariableType::String)
+                .id
+                .clone();
+            board.nodes.insert(cuid.id.clone(), cuid);
+            connect(&mut board, "cuid", &cuid_out, "acc", &acc_field_id);
+        }
+
+        board
+    }
+
+    #[test]
+    fn lower_sugars_accumulator_reassignment_and_reconciles_back() {
+        let board = board_with_struct_accumulator(false);
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+
+        // The accumulator reassignment lowers to the dot-form struct-field write; only the seed
+        // `struct_set` (which cannot be a `base.field =` write) keeps its explicit call.
+        assert!(
+            text.contains("row.title = \"hello\""),
+            "accumulator reassignment must render as the dot form:\n{text}"
+        );
+        assert_eq!(
+            text.matches("structSet(").count(),
+            1,
+            "only the seed struct_set stays explicit; the reassignment is sugared:\n{text}"
+        );
+
+        // Reconciling the rendered text against an empty board recreates the same struct_set shape:
+        // a struct_set with a literal `field`, `struct_in` fed by the seed (base's prior source),
+        // `struct_out` rebound into the consumer, and no self-connection.
+        let catalog = struct_accumulator_catalog();
+        let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "reconcile emitted a self-connection: {:?}",
+            self_connections(&result.commands)
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref() == Some("struct_set")
+                        && pin_id == "field"
+                        && value == &flow_like_types::Value::String("title".to_string())
+            )),
+            "expected struct_set field=\"title\"; commands: {:?}",
+            result.commands
+        );
+        // struct_in of the dot-form struct_set is fed by the seed struct_set (base's prior source).
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
+                        && from_pin == "struct_out"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "struct_in"
+            )),
+            "expected struct_set.struct_out -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+        // The rebound accumulator (struct_out) flows into the downstream consumer.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
+                        && from_pin == "struct_out"
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("batch_insert_local_db")
+                        && to_pin == "value"
+            )),
+            "expected struct_set.struct_out -> batch_insert_local_db.value; commands: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn lower_keeps_wired_field_struct_set_explicit() {
+        let board = board_with_struct_accumulator(true);
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+
+        // A wired (non-literal) `field` cannot be a `row.<field> = value` write, so lowering
+        // conservatively keeps BOTH struct_sets in the explicit `structSet({…})` form.
+        assert!(
+            text.contains("field: cuid()"),
+            "a wired-field struct_set must keep its explicit call:\n{text}"
+        );
+        assert_eq!(
+            text.matches("structSet(").count(),
+            2,
+            "neither the seed nor the wired-field struct_set may sugar to a dot write:\n{text}"
+        );
+        assert!(
+            !text.contains("row.title"),
+            "the wired-field update must not render as a dot write:\n{text}"
+        );
+    }
+
     #[test]
     fn catalog_aware_reconcile_promotes_loop_local_accumulator_for_db_insert() {
         let board = empty_board();
@@ -7028,6 +7343,163 @@ eventsSimple() {
                     && diagnostic.contains("top-level FlowScript variable")),
             "{:?}",
             result.diagnostics
+        );
+    }
+
+    /// Build `event → makePreferences → structSet(a) → structSet(b)` where the tail `structSet`
+    /// (`set_b`) is a single-field accumulator update of the head's `struct_out`, so lowering
+    /// re-sugars it to the `record.reasoning_weight = 0.5` dot form (a `Stmt::FieldAssign`).
+    fn board_with_struct_accumulator_chain() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut make = Node::new("make_preferences", "Make Preferences", "", "data");
+        make.id = "make".to_string();
+        let make_in = make
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let make_exec_out = make
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let make_struct_out = make
+            .add_output_pin("preferences", "Preferences", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(make.id.clone(), make);
+
+        let mut set_a = Node::new("struct_set", "Set Field", "", "structs");
+        set_a.id = "set_a".to_string();
+        let a_in = set_a
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let a_struct_in = set_a
+            .add_input_pin("struct_in", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        set_a
+            .add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(b"\"coding_weight\"".to_vec());
+        set_a
+            .add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(b"0.3".to_vec());
+        let a_exec_out = set_a
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let a_struct_out = set_a
+            .add_output_pin("struct_out", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(set_a.id.clone(), set_a);
+
+        let mut set_b = Node::new("struct_set", "Set Field", "", "structs");
+        set_b.id = "set_b".to_string();
+        let b_in = set_b
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let b_struct_in = set_b
+            .add_input_pin("struct_in", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        set_b
+            .add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(b"\"reasoning_weight\"".to_vec());
+        set_b
+            .add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(b"0.5".to_vec());
+        set_b.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        set_b.add_output_pin("struct_out", "Struct", "", VariableType::Struct);
+        board.nodes.insert(set_b.id.clone(), set_b);
+
+        connect(&mut board, "event", &event_out, "make", &make_in);
+        connect(&mut board, "make", &make_exec_out, "set_a", &a_in);
+        connect(&mut board, "make", &make_struct_out, "set_a", &a_struct_in);
+        connect(&mut board, "set_a", &a_exec_out, "set_b", &b_in);
+        connect(&mut board, "set_a", &a_struct_out, "set_b", &b_struct_in);
+        board
+    }
+
+    #[test]
+    fn field_assign_value_literal_edit_updates_struct_set_value_pin() {
+        // Editing the value literal on an existing anchored `record.reasoning_weight = 0.5` dot
+        // form (rendered from the tail struct_set accumulator) must update that struct_set's
+        // `value` pin in place — the regression this synthesis fixes was a silent no-op here.
+        let board = board_with_struct_accumulator_chain();
+        let text =
+            anchored_text(&board).replace("reasoning_weight = 0.5", "reasoning_weight = 0.7");
+        let result = reconcile_text(&board, &text);
+
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "set_b" && pin_id == "value" && value.as_f64() == Some(0.7)
+            )),
+            "expected UpdateNodePin on set_b.value = 0.7; got {:?}",
+            result.commands
+        );
+        // The struct_set already exists; the edit must not duplicate or remove the accumulator node.
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { .. } | BoardCommand::RemoveNode { .. }
+            )),
+            "field-assign config edit must not add or remove nodes; got {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn deleting_field_assign_line_removes_struct_set_node() {
+        // Removing the anchored dot-form line must flag its struct_set for deletion — before the
+        // synthesis, `visible` never saw the FieldAssign's node, so it lingered on the board.
+        let board = board_with_struct_accumulator_chain();
+        let reduced = anchored_text(&board)
+            .lines()
+            .filter(|line| !line.contains("//@n:set_b"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = reconcile_text(&board, &reduced);
+
+        let removed: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::RemoveNode { node_id, .. } => Some(node_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            vec!["set_b"],
+            "deleting the `record.reasoning_weight = …` line must remove only its struct_set; got {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unchanged_field_assign_roundtrip_emits_nothing() {
+        // Reconciling the identical anchored dot-form text against its own board must stay a no-op;
+        // this guards against the synthesized struct_set call producing a spurious edit or deletion.
+        let board = board_with_struct_accumulator_chain();
+        let text = anchored_text(&board);
+        let result = reconcile_text(&board, &text);
+        assert!(
+            result.commands.is_empty(),
+            "no-op field-assign round-trip must emit no commands; got {:?} from text:\n{text}",
+            result.commands
         );
     }
 }

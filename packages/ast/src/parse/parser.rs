@@ -707,9 +707,9 @@ impl Parser<'_> {
             });
         }
         let value = self.expr()?;
-        // `base.field = expr` (or `base.a.b`, `base.items[0]`) — a struct-field write. Desugar to
-        // the existing `base = structSet({ structIn: base, field: "path", value: expr })` form so
-        // reconcile creates a `struct_set` node and rebinds `base` to its updated struct.
+        // `base.field = expr` (or `base.a.b`, `base.items[0]`) — a struct-field write. Kept as a
+        // first-class `Stmt::FieldAssign` (round-trips back to the dot form); reconcile expands it
+        // to `structSet({ structIn: base, field: "path", value })` and rebinds `base`.
         if matches!(self.cur(), Tok::Assign) {
             let (base, path) = lvalue_to_field_path(&value).filter(|(_, p)| !p.is_empty()).ok_or_else(
                 || self.err("assignment target must be a variable or a struct field path (e.g. `x.field`)"),
@@ -717,28 +717,10 @@ impl Parser<'_> {
             self.bump(); // =
             let rhs = self.expr()?;
             let anchor = self.take_anchor();
-            let call = Call {
-                node_type: String::new(),
-                display: "structSet".to_string(),
-                args: vec![
-                    Arg {
-                        name: "structIn".to_string(),
-                        value: Expr::Ref(base.clone()),
-                    },
-                    Arg {
-                        name: "field".to_string(),
-                        value: Expr::Literal(Literal::String(path)),
-                    },
-                    Arg {
-                        name: "value".to_string(),
-                        value: rhs,
-                    },
-                ],
-                anchor: None,
-            };
-            return Ok(Stmt::Assign {
-                target: base,
-                value: Expr::Call(call),
+            return Ok(Stmt::FieldAssign {
+                base,
+                path,
+                value: rhs,
                 anchor,
             });
         }

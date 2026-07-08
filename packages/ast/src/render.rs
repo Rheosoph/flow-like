@@ -276,6 +276,25 @@ impl Writer<'_> {
                 self.anchor("n", anchor.as_deref());
                 self.out.push('\n');
             }
+            Stmt::FieldAssign {
+                base,
+                path,
+                value,
+                anchor,
+            } => {
+                self.indent();
+                self.out.push_str(base);
+                // A bracket-rooted path (`base[0]`) has no separator; a named field (`base.field`)
+                // is dot-joined.
+                if !path.starts_with('[') {
+                    self.out.push('.');
+                }
+                self.out.push_str(path);
+                self.out.push_str(" = ");
+                self.out.push_str(&render_expr(value));
+                self.anchor("n", anchor.as_deref());
+                self.out.push('\n');
+            }
             Stmt::LocalAlias {
                 name,
                 value,
