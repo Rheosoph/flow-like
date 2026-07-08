@@ -19,6 +19,7 @@ import type {
 	IApplyFlowScriptResponse,
 	IFlowScriptDiagnostic,
 } from "../../../state/backend-state/board-state";
+import { useSuppressFabBubble } from "../../../state/fab-suppression";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -99,6 +100,9 @@ export function FlowScriptPanel({
 }: Readonly<FlowScriptPanelProps>) {
 	const backend = useBackend();
 	const { resolvedTheme } = useTheme();
+	// This panel's footer (Apply/Reset) sits exactly where the global FlowPilot bubble floats;
+	// suppress the bubble while the panel is open so they don't overlap.
+	useSuppressFabBubble();
 
 	const [text, setText] = useState("");
 	const [baseline, setBaseline] = useState("");

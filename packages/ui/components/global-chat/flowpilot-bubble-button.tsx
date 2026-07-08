@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { usePathname } from "next/navigation";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useFabBubbleSuppressed } from "../../state/fab-suppression";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import {
 	FRAG,
@@ -250,13 +251,16 @@ export function FlowPilotBubbleButton() {
 	const pathname = usePathname();
 	const mode = useGlobalChatStore((s) => s.mode);
 	const openOverlay = useGlobalChatStore((s) => s.openOverlay);
+	const suppressed = useFabBubbleSuppressed();
 	const hostRef = useRef<HTMLButtonElement>(null);
 
 	// Hide where a FlowPilot entry point already exists: the hero bubble (start page), the full chat
-	// view, the board/widget builders, and while the docked overlay itself is open.
+	// view, and while the docked overlay itself is open. Also hide while a component claims the
+	// bottom-right corner (e.g. the FlowScript panel's Apply button) so they don't overlap.
 	const hidden =
 		pathname === "/" ||
 		mode === "overlay" ||
+		suppressed ||
 		HIDDEN_ROUTE_PREFIXES.some(
 			(prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
 		);
