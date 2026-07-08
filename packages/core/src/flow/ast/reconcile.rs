@@ -1642,6 +1642,9 @@ impl<'a> StructuralPlanner<'a> {
                     }
                     _ => None,
                 };
+                if let Some(entity) = &entity {
+                    self.undefer_statement_call_splice(entity);
+                }
                 self.assign_symbol(target.clone(), resolved);
                 entity.map(PlannedStmt::new)
             }
@@ -1691,6 +1694,9 @@ impl<'a> StructuralPlanner<'a> {
                     }
                     _ => None,
                 };
+                if let Some(entity) = &entity {
+                    self.undefer_statement_call_splice(entity);
+                }
                 self.insert_symbol(name.clone(), resolved);
                 entity.map(PlannedStmt::new)
             }
@@ -2819,6 +2825,24 @@ impl<'a> StructuralPlanner<'a> {
             node: entity,
             output_pin: output,
         }))
+    }
+
+    /// Drop a statement's own primary call node from the exec-splice queue.
+    ///
+    /// A bare `x = impureCall(...)` reassignment (or a `let`/`const` alias such as
+    /// `x = call(...).pin`) resolves its RHS through [`Self::resolve_expr`], whose `Expr::Call`
+    /// arm queues every impure call for exec-splicing — the machinery that threads impure calls
+    /// buried in *arguments* into the execution chain ahead of the consuming statement. But the
+    /// RHS's own top-level call is the statement's primary node, and `plan_block` already
+    /// exec-wires it as the `current` statement. Leaving it queued wires it twice, and because the
+    /// splice makes it `previous_exec` immediately before it becomes `current`, `connect_exec`
+    /// runs its execution output straight back into its own input — a self-connection that aborts
+    /// apply with "Cannot connect a node to itself". Removing it leaves the statement path as its
+    /// single, correct execution wiring; genuine argument-position splices stay queued.
+    fn undefer_statement_call_splice(&mut self, entity: &NodeEntity) {
+        let ref_id = entity.node_ref();
+        self.pending_exec_splices
+            .retain(|splice| splice.node_ref() != ref_id);
     }
 
     fn resolve_expr(&mut self, expr: &Expr, target_layer: Option<String>) -> Option<SymbolValue> {
@@ -6005,6 +6029,201 @@ eventsSimple() {
                 )
             }),
             "expected struct_make -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+    }
+
+    fn preferences_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "ai_generative_make_preferences",
+                "Make Preferences",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("multimodal", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("preferences", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "struct_set",
+                "Set Field",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("struct_in", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                    pin_meta("value", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("struct_out", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "ai_generative_find_model",
+                "Find Model",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("preferences", "Struct", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("model", "Struct", PinType::Output),
+                ],
+            ),
+        ]
+    }
+
+    /// Every `ConnectPins` this reconcile emitted, as `(from_node, to_node)` — used to assert no
+    /// edge is a self-connection, which `connect_pins` rejects at apply time with "Cannot connect a
+    /// node to itself".
+    fn self_connections(commands: &[BoardCommand]) -> Vec<(String, String)> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node, to_node, ..
+                } if from_node == to_node => Some((from_node.clone(), to_node.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_const_bound_struct_set_avoids_self_connection() {
+        let board = empty_board();
+        let catalog = preferences_catalog();
+
+        // The struct-field write sugar has already been desugared by the parser into the
+        // accumulator form `x = structSet({ structIn: x, … })`. `x` here is a `const`-bound impure
+        // single-output node; the reassignment must wire struct_in from the PRIOR source and thread
+        // the impure struct_set into the exec chain exactly once — never onto itself.
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const preferences = aiGenerativeMakePreferences({ multimodal: true })
+    preferences = structSet({ structIn: preferences, field: "coding_weight", value: 0.5 })
+    const findModel = aiGenerativeFindModel({ preferences: preferences })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "reconcile emitted a self-connection: {:?}",
+            self_connections(&result.commands)
+        );
+
+        // struct_in reads the pre-reassignment source (make_preferences.preferences), not struct_set.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("ai_generative_make_preferences")
+                        && from_pin == "preferences"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "struct_in"
+            )),
+            "expected make_preferences.preferences -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+        // The rebound `preferences` (struct_set.struct_out) feeds the downstream consumer.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
+                        && from_pin == "struct_out"
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("ai_generative_find_model")
+                        && to_pin == "preferences"
+            )),
+            "expected struct_set.struct_out -> find_model.preferences; commands: {:?}",
+            result.commands
+        );
+        // The impure struct_set is threaded into the exec chain from make_preferences, once.
+        let struct_set_exec_in: Vec<_> = result
+            .commands
+            .iter()
+            .filter(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_node, to_pin, .. }
+                    if command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "exec_in"
+            ))
+            .collect();
+        assert_eq!(
+            struct_set_exec_in.len(),
+            1,
+            "struct_set exec_in should be wired exactly once; got {struct_set_exec_in:?}"
+        );
+        assert!(
+            matches!(
+                struct_set_exec_in[0],
+                BoardCommand::ConnectPins { from_node, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("ai_generative_make_preferences")
+            ),
+            "struct_set exec_in should come from make_preferences; got {struct_set_exec_in:?}"
+        );
+    }
+
+    #[test]
+    fn member_assignment_sugar_on_const_binding_avoids_self_connection() {
+        let board = empty_board();
+        let catalog = preferences_catalog();
+
+        // Same shape as above but exercising the parser sugar `x.field = value` directly, so the
+        // desugaring path is covered end to end.
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const preferences = aiGenerativeMakePreferences({ multimodal: true })
+    preferences.coding_weight = 0.5
+    const findModel = aiGenerativeFindModel({ preferences: preferences })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "reconcile emitted a self-connection: {:?}",
+            self_connections(&result.commands)
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref() == Some("struct_set")
+                        && pin_id == "field"
+                        && value == &flow_like_types::Value::String("coding_weight".to_string())
+            )),
+            "expected struct_set field=\"coding_weight\"; commands: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("ai_generative_make_preferences")
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "struct_in"
+            )),
+            "expected make_preferences -> struct_set.struct_in; commands: {:?}",
             result.commands
         );
     }
