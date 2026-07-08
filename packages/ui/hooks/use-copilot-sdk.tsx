@@ -9,15 +9,15 @@ import type {
 } from "../components/flowpilot/types";
 import { isTauri } from "../lib/platform";
 
+// Offline / loading fallback only. The authoritative list is fetched from the
+// backend (`flowpilot_agent_backend_list_models`), which discovers the
+// auth-available models dynamically from the installed runtime — Codex via its
+// `app-server`, Claude Code via its `initialize` control handshake.
 const STATIC_BACKEND_MODELS: Partial<
 	Record<AgentBackendProvider, CopilotModel[]>
 > = {
 	codex: [{ id: "default", name: "Codex configured default" }],
-	"claude-code": [
-		{ id: "sonnet", name: "Claude Sonnet" },
-		{ id: "opus", name: "Claude Opus" },
-		{ id: "default", name: "Claude Code configured default" },
-	],
+	"claude-code": [{ id: "default", name: "Claude Code configured default" }],
 };
 
 function staticModelsForBackend(backend: AgentBackendProvider): CopilotModel[] {
@@ -157,7 +157,9 @@ export function useCopilotSDK(
 				invoke<CopilotModel[]>("flowpilot_agent_backend_list_models", {
 					backend,
 				}),
-				8_000,
+				// Above the backend's discovery bound (Claude Code's control
+				// handshake allows up to 12s) so cold starts don't fall back early.
+				15_000,
 				`Loading ${backend} models`,
 			);
 			setModels(result.length > 0 ? result : staticModelsForBackend(backend));

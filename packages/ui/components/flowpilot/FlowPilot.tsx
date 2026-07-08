@@ -88,7 +88,6 @@ import type {
 	FlowPilotProcessEventStatus,
 	FlowPilotProps,
 	LoadingPhase,
-	NormalizedAIProvider,
 	UnifiedPlanStep,
 } from "./types";
 import {
@@ -195,13 +194,6 @@ function parseStreamJson(payload: string): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
-}
-
-function normalizeEnabledAIProvider(
-	provider?: AIProvider,
-): NormalizedAIProvider {
-	const normalized = normalizeAIProvider(provider);
-	return normalized === "claude-code" ? "codex" : normalized;
 }
 
 function getProcessToolLabel(toolName?: string): string {
@@ -664,7 +656,7 @@ function FlowPilotImpl({
 
 	// Provider state
 	const [provider, setProvider] = useState<AIProvider>(
-		normalizeEnabledAIProvider(forceProvider ?? defaultProvider),
+		normalizeAIProvider(forceProvider ?? defaultProvider),
 	);
 	const normalizedProvider = normalizeAIProvider(provider);
 	const activeAgentBackend: AgentBackendProvider = isAgentBackendProvider(
@@ -1536,7 +1528,10 @@ function FlowPilotImpl({
 				preferredModel =
 					currentModels.find((m) => m.id === "default") || currentModels[0];
 			} else if (normalizedProvider === "claude-code") {
+				// Honor the CLI's recommended "default" entry (from dynamic
+				// discovery) before falling back to Sonnet, matching Codex.
 				preferredModel =
+					currentModels.find((m) => m.id === "default") ||
 					currentModels.find((m) => m.id.includes("sonnet")) ||
 					currentModels[0];
 			} else {
