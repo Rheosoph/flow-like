@@ -5964,6 +5964,52 @@ eventsSimple() {
     }
 
     #[test]
+    fn member_assignment_sugar_reconciles_to_struct_set() {
+        let board = empty_board();
+        let catalog = struct_accumulator_catalog();
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    let pref = structMake()
+    pref.cost_weight = 0.5
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // `pref.cost_weight = 0.5` desugars to a `struct_set` node with field="cost_weight".
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if command_node_type(&result.commands, node_id).as_deref() == Some("struct_set")
+                            && pin_id == "field"
+                            && value == &flow_like_types::Value::String("cost_weight".to_string())
+                )
+            }),
+            "expected a struct_set with field=\"cost_weight\"; commands: {:?}",
+            result.commands
+        );
+        // The struct source feeds the struct_set's struct_in (the read-modify-write chain).
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref() == Some("struct_make")
+                            && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                            && to_pin == "struct_in"
+                )
+            }),
+            "expected struct_make -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
     fn catalog_aware_reconcile_promotes_loop_local_accumulator_for_db_insert() {
         let board = empty_board();
         let catalog = accumulator_catalog();

@@ -707,6 +707,41 @@ impl Parser<'_> {
             });
         }
         let value = self.expr()?;
+        // `base.field = expr` (or `base.a.b`, `base.items[0]`) — a struct-field write. Desugar to
+        // the existing `base = structSet({ structIn: base, field: "path", value: expr })` form so
+        // reconcile creates a `struct_set` node and rebinds `base` to its updated struct.
+        if matches!(self.cur(), Tok::Assign) {
+            let (base, path) = lvalue_to_field_path(&value).filter(|(_, p)| !p.is_empty()).ok_or_else(
+                || self.err("assignment target must be a variable or a struct field path (e.g. `x.field`)"),
+            )?;
+            self.bump(); // =
+            let rhs = self.expr()?;
+            let anchor = self.take_anchor();
+            let call = Call {
+                node_type: String::new(),
+                display: "structSet".to_string(),
+                args: vec![
+                    Arg {
+                        name: "structIn".to_string(),
+                        value: Expr::Ref(base.clone()),
+                    },
+                    Arg {
+                        name: "field".to_string(),
+                        value: Expr::Literal(Literal::String(path)),
+                    },
+                    Arg {
+                        name: "value".to_string(),
+                        value: rhs,
+                    },
+                ],
+                anchor: None,
+            };
+            return Ok(Stmt::Assign {
+                target: base,
+                value: Expr::Call(call),
+                anchor,
+            });
+        }
         // `call(...) { … }` — a general N-way branch fan-out.
         if matches!(self.cur(), Tok::LBrace) {
             self.bump(); // {
@@ -1153,6 +1188,36 @@ fn placeholder_call() -> Call {
         display: String::new(),
         args: Vec::new(),
         anchor: None,
+    }
+}
+
+/// Flattens an lvalue member/index chain rooted at a variable into `(base_variable, dot_path)`:
+/// `pref.cost_weight` → `("pref", "cost_weight")`, `p.a.b` → `("p", "a.b")`,
+/// `p.items[0].name` → `("p", "items[0].name")`. Returns `None` for non-static lvalues.
+fn lvalue_to_field_path(expr: &Expr) -> Option<(String, String)> {
+    // `.field` renders as `Expr::Field` for camelCase-stable keys and `Expr::Member` otherwise;
+    // as an assignment target both are struct field-path segments.
+    let dot = |base: &Expr, key: &str| -> Option<(String, String)> {
+        let (var, path) = lvalue_to_field_path(base)?;
+        let joined = if path.is_empty() {
+            key.to_string()
+        } else {
+            format!("{path}.{key}")
+        };
+        Some((var, joined))
+    };
+    match expr {
+        Expr::Ref(name) => Some((name.clone(), String::new())),
+        Expr::Member { base, field } => dot(base, field),
+        Expr::Field { base, pin } => dot(base, pin),
+        Expr::Index { base, index } => {
+            let (var, path) = lvalue_to_field_path(base)?;
+            let Expr::Literal(Literal::Int(i)) = &**index else {
+                return None;
+            };
+            Some((var, format!("{path}[{i}]")))
+        }
+        _ => None,
     }
 }
 

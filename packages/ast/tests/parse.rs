@@ -431,6 +431,50 @@ fn comment_with_embedded_anchor_pattern_splits_only_on_anchor_kinds() {
     }
 }
 
+#[test]
+fn member_assignment_desugars_to_struct_set() {
+    let text = "function f() {\n    const pref = makePrefs({ multimodal: true }).preferences\n    pref.cost_weight = 0.5\n}\n";
+    let ast = parse(text).expect("member field assignment should parse");
+    match ast.functions[0].body.stmts.last().expect("has statements") {
+        flow_like_ast::Stmt::Assign { target, value, .. } => {
+            assert_eq!(target, "pref", "rebinds the base variable");
+            let flow_like_ast::Expr::Call(call) = value else {
+                panic!("expected a structSet call, got {value:?}");
+            };
+            assert_eq!(call.display, "structSet");
+            let arg = |name: &str| call.args.iter().find(|a| a.name == name).map(|a| &a.value);
+            assert!(matches!(arg("structIn"), Some(flow_like_ast::Expr::Ref(r)) if r == "pref"));
+            assert!(matches!(
+                arg("field"),
+                Some(flow_like_ast::Expr::Literal(flow_like_ast::Literal::String(s))) if s == "cost_weight"
+            ));
+            assert!(matches!(
+                arg("value"),
+                Some(flow_like_ast::Expr::Literal(flow_like_ast::Literal::Float(_)))
+            ));
+        }
+        other => panic!("expected an assignment, got {other:?}"),
+    }
+}
+
+#[test]
+fn nested_member_assignment_builds_dot_path() {
+    let text = "function f() {\n    const p = makePrefs({}).preferences\n    p.a.b = 1\n}\n";
+    let ast = parse(text).expect("nested member assignment should parse");
+    let flow_like_ast::Stmt::Assign {
+        value: flow_like_ast::Expr::Call(call),
+        ..
+    } = ast.functions[0].body.stmts.last().unwrap()
+    else {
+        panic!("expected a structSet call");
+    };
+    let field = call.args.iter().find(|a| a.name == "field").unwrap();
+    assert!(matches!(
+        &field.value,
+        flow_like_ast::Expr::Literal(flow_like_ast::Literal::String(s)) if s == "a.b"
+    ));
+}
+
 // ---- full-fixture idempotency ------------------------------------------------------------
 
 const FIXTURE_A: &str = include_str!("../../../tests/ast/bypaw6n2ksuvrw0kcaj14omz.flow");

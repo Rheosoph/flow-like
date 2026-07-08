@@ -137,6 +137,7 @@ export interface FlowScriptArg {
 	dataType: IVariableType;
 	container: IValueType;
 	schemaTitle?: string;
+	schema?: string;
 	optional: boolean;
 	enumValues?: string[];
 	sensitive: boolean;
@@ -149,6 +150,7 @@ export interface FlowScriptOutput {
 	dataType: IVariableType;
 	container: IValueType;
 	schemaTitle?: string;
+	schema?: string;
 }
 
 export interface FlowScriptNodeInfo {
@@ -183,6 +185,7 @@ function buildArg(pin: IPin): FlowScriptArg {
 		dataType: pin.data_type,
 		container: pin.value_type,
 		schemaTitle: title,
+		schema: pin.schema ?? undefined,
 		optional: pin.default_value != null,
 		enumValues: pin.options?.valid_values ?? undefined,
 		sensitive: pin.options?.sensitive === true,
@@ -213,6 +216,7 @@ function buildNodeInfo(node: INode): FlowScriptNodeInfo {
 			dataType: pin.data_type,
 			container: pin.value_type,
 			schemaTitle: schemaTitle(pin.schema),
+			schema: pin.schema ?? undefined,
 		}));
 	const impure = pins.some((pin) => pin.data_type === IVariableType.Execution);
 	return {
@@ -787,38 +791,299 @@ function collectDocumentSymbols(masked: string): DocumentSymbols {
 	return { variables, functions, interfaces };
 }
 
+interface StructMember {
+	name: string;
+	typeString: string;
+	description: string;
+	/** Sub-schema (carrying $defs) for nested navigation, when this member is itself a struct. */
+	schema?: string;
+}
+
+/** A value whose members can be navigated: a multi-output node result, or a struct schema. */
+type MemberSource =
+	| { kind: "node"; info: FlowScriptNodeInfo }
+	| { kind: "struct"; title?: string; members: StructMember[] };
+
+type Schema = Record<string, unknown>;
+
+const schemaParseCache = new Map<string, Schema | null>();
+
+function parseSchema(str: string): Schema | null {
+	const cached = schemaParseCache.get(str);
+	if (cached !== undefined) return cached;
+	let parsed: Schema | null = null;
+	try {
+		const value = JSON.parse(str);
+		parsed = value && typeof value === "object" ? (value as Schema) : null;
+	} catch {
+		parsed = null;
+	}
+	schemaParseCache.set(str, parsed);
+	return parsed;
+}
+
+function resolveRef(schema: unknown, defs: Schema): Schema | undefined {
+	let s = schema as Schema | undefined;
+	let guard = 0;
+	while (s && typeof s.$ref === "string" && guard++ < 12) {
+		const m = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(s.$ref as string);
+		if (!m) break;
+		s = defs[m[1]] as Schema | undefined;
+	}
+	return s;
+}
+
+/** Picks the object-shaped branch of a (possibly $ref / anyOf-with-null) schema. */
+function objectBranch(schema: unknown, defs: Schema): Schema | undefined {
+	const s = resolveRef(schema, defs);
+	if (!s) return undefined;
+	const union = (s.anyOf ?? s.oneOf) as unknown[] | undefined;
+	if (Array.isArray(union)) {
+		for (const branch of union) {
+			const rb = resolveRef(branch, defs);
+			if (rb?.properties) return rb;
+		}
+		return undefined;
+	}
+	return s.properties ? s : undefined;
+}
+
+function schemaTypeLabel(schema: unknown, defs: Schema): string {
+	const s = resolveRef(schema, defs);
+	if (!s) return "any";
+	if (typeof s.title === "string") return s.title;
+	const union = (s.anyOf ?? s.oneOf) as unknown[] | undefined;
+	if (Array.isArray(union)) {
+		const parts = union
+			.map((b) => schemaTypeLabel(b, defs))
+			.filter((t) => t !== "null" && t !== "any");
+		return parts.length ? [...new Set(parts)].join(" | ") : "any";
+	}
+	if (s.type === "array") return `${schemaTypeLabel(s.items, defs)}[]`;
+	const type = Array.isArray(s.type)
+		? (s.type as string[]).find((x) => x !== "null")
+		: s.type;
+	switch (type) {
+		case "integer":
+			return "int";
+		case "number":
+			return "float";
+		case "boolean":
+			return "bool";
+		case "string":
+			return "string";
+		case "object":
+			return "object";
+		default:
+			return "any";
+	}
+}
+
+/** Extracts a struct's members (schema properties) from a struct pin's JSON-schema string. */
+function structFromSchema(
+	schemaStr?: string,
+): { title?: string; members: StructMember[] } | null {
+	if (!schemaStr) return null;
+	const root = parseSchema(schemaStr);
+	if (!root) return null;
+	const defs = ((root.$defs ?? root.definitions) as Schema) ?? {};
+	const obj = objectBranch(root, defs);
+	const properties = obj?.properties as Schema | undefined;
+	if (!properties) return null;
+	const required = new Set<string>(
+		Array.isArray(obj?.required) ? (obj.required as string[]) : [],
+	);
+	const members: StructMember[] = Object.entries(properties).map(
+		([name, prop]) => {
+			const branch = objectBranch(prop, defs);
+			return {
+				name,
+				typeString:
+					schemaTypeLabel(prop, defs) + (required.has(name) ? "" : "?"),
+				description: (resolveRef(prop, defs)?.description as string) ?? "",
+				schema: branch ? JSON.stringify({ ...branch, $defs: defs }) : undefined,
+			};
+		},
+	);
+	return {
+		title: (root.title as string) ?? (obj?.title as string | undefined),
+		members,
+	};
+}
+
+function outputToSource(output: FlowScriptOutput): MemberSource | null {
+	if (output.dataType !== IVariableType.Struct || !output.schema) return null;
+	const s = structFromSchema(output.schema);
+	return s
+		? {
+				kind: "struct",
+				title: s.title ?? output.schemaTitle,
+				members: s.members,
+			}
+		: null;
+}
+
+/** Maps each `const/let x = <rhs>` and `for (const x of <call>)` binding to its RHS expression. */
+function collectVariableExprs(masked: string): Map<string, string> {
+	const map = new Map<string, string>();
+	const scanRhs = (from: number): string => {
+		let i = from;
+		let depth = 0;
+		while (i < masked.length) {
+			const c = masked[i];
+			if (c === "{" || c === "[" || c === "(") depth++;
+			else if (c === "}" || c === "]" || c === ")") {
+				if (depth === 0) break;
+				depth--;
+			} else if (depth === 0 && (c === "\n" || c === ";" || c === ",")) break;
+			i++;
+		}
+		return masked.slice(from, i).trim();
+	};
+	const declRe =
+		/(?:^|[\n;{}])[ \t]*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=[ \t]*/g;
+	for (let m = declRe.exec(masked); m; m = declRe.exec(masked)) {
+		if (!map.has(m[1])) map.set(m[1], scanRhs(declRe.lastIndex));
+	}
+	const loopRe = /for\s*\(\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s+of[ \t]+/g;
+	for (let m = loopRe.exec(masked); m; m = loopRe.exec(masked)) {
+		if (!map.has(m[1])) map.set(m[1], scanRhs(loopRe.lastIndex));
+	}
+	return map;
+}
+
+function memberSourceOf(
+	source: MemberSource,
+	field: string,
+): MemberSource | null {
+	if (source.kind === "node") {
+		const output = source.info.outputs.find((o) => o.name === field);
+		return output ? outputToSource(output) : null;
+	}
+	const member = source.members.find((m) => m.name === field);
+	if (!member?.schema) return null;
+	const s = structFromSchema(member.schema);
+	return s ? { kind: "struct", title: s.title, members: s.members } : null;
+}
+
+function resolveMemberChain(
+	source: MemberSource | null,
+	chain: string,
+	depth: number,
+): MemberSource | null {
+	if (!source) return null;
+	const trimmed = chain.trim();
+	const m = /^([A-Za-z_$][\w$]*)/.exec(trimmed);
+	if (!m) return source; // trailing dot → the source itself (used for completion)
+	const next = memberSourceOf(source, m[1]);
+	const rest = trimmed.slice(m[1].length).trim();
+	if (rest.startsWith(".")) {
+		return resolveMemberChain(next, rest.slice(1), depth + 1);
+	}
+	return next;
+}
+
 /**
- * Given masked text ending just before a member `.`, resolves the node whose outputs the member
- * accesses — the receiver may be a variable (`x.`) or a call result (`someNode({…}).`).
+ * Resolves the member-providing type of a FlowScript expression: a call result (`node({…})`),
+ * an explicit output (`node({…}).out`), a variable, or a member chain (`x.field.sub`). Follows
+ * variable bindings and JSON-schema `$ref`s so struct fields resolve deeply.
  */
+function resolveExprType(
+	expr: string,
+	index: FlowScriptIndex,
+	varExprs: Map<string, string>,
+	depth = 0,
+): MemberSource | null {
+	if (depth > 8) return null;
+	const e = expr.trim();
+
+	const callHead = /^([A-Za-z_$][\w$]*)\s*\(/.exec(e);
+	if (callHead) {
+		const info = index.byName.get(callHead[1]);
+		if (!info) return null;
+		let d = 0;
+		let i = callHead[0].length - 1;
+		for (; i < e.length; i++) {
+			if (e[i] === "(") d++;
+			else if (e[i] === ")") {
+				d--;
+				if (d === 0) {
+					i++;
+					break;
+				}
+			}
+		}
+		const rest = e.slice(i).trim();
+		if (rest.startsWith(".")) {
+			return resolveMemberChain({ kind: "node", info }, rest.slice(1), depth);
+		}
+		if (info.outputs.length === 1) return outputToSource(info.outputs[0]);
+		return { kind: "node", info };
+	}
+
+	const idHead = /^([A-Za-z_$][\w$]*)/.exec(e);
+	if (idHead) {
+		const rhs = varExprs.get(idHead[1]);
+		const base = rhs ? resolveExprType(rhs, index, varExprs, depth + 1) : null;
+		const rest = e.slice(idHead[1].length).trim();
+		if (rest.startsWith(".")) {
+			return base ? resolveMemberChain(base, rest.slice(1), depth) : null;
+		}
+		return base;
+	}
+	return null;
+}
+
+function sourceMembers(
+	source: MemberSource,
+): { name: string; typeString: string; description: string }[] {
+	if (source.kind === "node") {
+		return source.info.outputs.map((o) => ({
+			name: o.name,
+			typeString: o.typeString,
+			description: o.description,
+		}));
+	}
+	return source.members.map((m) => ({
+		name: m.name,
+		typeString: m.typeString,
+		description: m.description,
+	}));
+}
+
+/** Extracts the trailing primary expression (identifier / call / member chain) ending a string. */
+function extractTrailingExpr(s: string): string {
+	let i = s.length;
+	let depth = 0;
+	while (i > 0) {
+		const c = s[i - 1];
+		if (c === ")" || c === "]" || c === "}") {
+			depth++;
+			i--;
+		} else if (c === "(" || c === "[" || c === "{") {
+			if (depth === 0) break;
+			depth--;
+			i--;
+		} else if (depth > 0 || IDENT_CHAR.test(c) || c === ".") {
+			i--;
+		} else {
+			break;
+		}
+	}
+	return s.slice(i);
+}
+
+/** Resolves the member source for a `<expr>.` position (masked text ending before the dot). */
 function resolveMemberReceiver(
 	beforeDot: string,
 	maskedFull: string,
 	index: FlowScriptIndex,
-): FlowScriptNodeInfo | null {
-	const receiver = beforeDot.replace(/\s+$/, "");
-	if (receiver.endsWith(")")) {
-		let depth = 0;
-		let i = receiver.length - 1;
-		for (; i >= 0; i--) {
-			if (receiver[i] === ")") depth++;
-			else if (receiver[i] === "(") {
-				depth--;
-				if (depth === 0) break;
-			}
-		}
-		if (i < 0) return null;
-		let j = i - 1;
-		while (j >= 0 && /\s/.test(receiver[j])) j--;
-		const end = j + 1;
-		while (j >= 0 && IDENT_CHAR.test(receiver[j])) j--;
-		const callName = receiver.slice(j + 1, end);
-		return callName ? (index.byName.get(callName) ?? null) : null;
-	}
-	const idMatch = /([A-Za-z_$][\w$]*)$/.exec(receiver);
-	if (idMatch)
-		return collectVariableNodes(maskedFull, index).get(idMatch[1]) ?? null;
-	return null;
+): MemberSource | null {
+	return resolveExprType(
+		extractTrailingExpr(beforeDot),
+		index,
+		collectVariableExprs(maskedFull),
+	);
 }
 
 function snippetPlaceholder(arg: FlowScriptArg, tabStop: number): string {
@@ -834,17 +1099,6 @@ function buildCallSnippet(info: FlowScriptNodeInfo): string {
 		.map((arg, idx) => `${arg.name}: ${snippetPlaceholder(arg, idx + 1)}`)
 		.join(", ");
 	return `${info.identifier}({ ${params} })`;
-}
-
-function outputHoverMarkdown(
-	info: FlowScriptNodeInfo,
-	output: FlowScriptOutput,
-): string {
-	const lines = [
-		`\`${output.name}: ${output.typeString}\` — output of \`${info.identifier}\``,
-	];
-	if (output.description) lines.push(output.description);
-	return lines.join("\n\n");
 }
 
 /**
@@ -872,7 +1126,8 @@ export function registerFlowScriptProviders(
 				const maskedFull = maskLiterals(model.getValue());
 				const offset = model.getOffsetAt(position);
 
-				// Dot notation on a variable OR a call result → offer the node's output pins.
+				// Dot notation → offer members: a node's output pins, or a struct's schema fields
+				// (following variable bindings, explicit outputs and nested $refs).
 				const beforeDot = maskedFull
 					.slice(0, offset)
 					.replace(/[A-Za-z_$][\w$]*$/, "")
@@ -883,16 +1138,19 @@ export function registerFlowScriptProviders(
 						maskedFull,
 						index,
 					);
-					if (source && source.outputs.length > 0) {
+					const members = source ? sourceMembers(source) : [];
+					if (members.length > 0) {
 						return {
-							suggestions: source.outputs.map((output) => ({
-								label: output.name,
+							suggestions: members.map((member) => ({
+								label: member.name,
 								kind: monaco.languages.CompletionItemKind.Property,
-								detail: output.typeString,
-								documentation: { value: outputHoverMarkdown(source, output) },
-								insertText: output.name,
+								detail: member.typeString,
+								documentation: member.description
+									? { value: member.description }
+									: undefined,
+								insertText: member.name,
 								range,
-								sortText: `0_${output.name}`,
+								sortText: `0_${member.name}`,
 							})),
 						};
 					}
@@ -1053,12 +1311,22 @@ export function registerFlowScriptProviders(
 					maskLiterals(model.getValue()),
 					index,
 				);
-				const output = source?.outputs.find((out) => out.name === word.word);
-				if (source && output) {
-					return {
-						range,
-						contents: [{ value: outputHoverMarkdown(source, output) }],
-					};
+				const member = source
+					? sourceMembers(source).find((m) => m.name === word.word)
+					: undefined;
+				if (source && member) {
+					const owner =
+						source.kind === "node"
+							? `\`${source.info.identifier}\``
+							: source.title
+								? `\`${source.title}\``
+								: "struct";
+					const kind = source.kind === "node" ? "output" : "field";
+					const lines = [
+						`\`${member.name}: ${member.typeString}\` — ${kind} of ${owner}`,
+					];
+					if (member.description) lines.push(member.description);
+					return { range, contents: [{ value: lines.join("\n\n") }] };
 				}
 			}
 
