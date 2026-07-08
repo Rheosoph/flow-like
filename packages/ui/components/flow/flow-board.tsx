@@ -66,7 +66,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { ImperativePanelHandle } from "react-resizable-panels";
+import type {
+	ImperativePanelGroupHandle,
+	ImperativePanelHandle,
+} from "react-resizable-panels";
 import {
 	Button,
 	Sheet,
@@ -319,6 +322,12 @@ const FlowCanvas = memo(function FlowCanvas({
 	);
 });
 
+// Index of each panel inside the outer horizontal ResizablePanelGroup, ordered by
+// their `order` prop: variables(0), main container(1), runs(2), flowscript(3), search(4).
+const MAIN_PANEL_INDEX = 1;
+const RUNS_PANEL_INDEX = 2;
+const FLOWSCRIPT_PANEL_INDEX = 3;
+
 export function FlowBoard({
 	appId,
 	boardId,
@@ -387,6 +396,7 @@ export function FlowBoard({
 
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
 	const flowScriptPanelRef = useRef<ImperativePanelHandle>(null);
+	const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
 	const shiftPressed = useKeyPress("Shift");
@@ -1092,14 +1102,43 @@ export function FlowBoard({
 	}, [copilotOpen]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 
-	const { toggleVars, toggleRunHistory, toggleLogs } = useFlowPanels({
+	const { toggleVars, toggleLogs } = useFlowPanels({
 		varPanelRef,
-		runsPanelRef,
 		logPanelRef,
 		setVarsOpen,
-		setRunsOpen,
 		setLogsOpen,
 	});
+
+	// Runs and FlowScript are collapsible siblings on the right edge of the outer
+	// horizontal group. Collapsing one via the per-panel imperative API makes
+	// react-resizable-panels hand the freed width to its immediate neighbor, which
+	// un-collapses it (e.g. closing FlowScript surfaces Runs). Rewrite the whole
+	// layout instead and give the freed width back to the flexible main container.
+	const setSidePanelSize = useCallback((index: number, size: number) => {
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const layout = group.getLayout();
+		const current = layout[index] ?? 0;
+		if (Math.abs(current - size) < 0.01) return;
+		const next = [...layout];
+		next[index] = size;
+		next[MAIN_PANEL_INDEX] = Math.max(
+			0,
+			(next[MAIN_PANEL_INDEX] ?? 0) - (size - current),
+		);
+		group.setLayout(next);
+	}, []);
+
+	const toggleRunHistory = useCallback(() => {
+		if (isMobile) {
+			setRunsOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[RUNS_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(RUNS_PANEL_INDEX, open ? 30 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	const togglePages = useCallback(() => {
 		if (isMobile) {
@@ -1116,15 +1155,11 @@ export function FlowBoard({
 			setFlowScriptSheetOpen((v) => !v);
 			return;
 		}
-		const panel = flowScriptPanelRef.current;
-		if (!panel) return;
-		if (panel.isCollapsed()) {
-			panel.expand();
-			if (panel.getSize() < 15) panel.resize(35);
-		} else {
-			panel.collapse();
-		}
-	}, [isMobile]);
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[FLOWSCRIPT_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, open ? 35 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	// Clear selections when version changes
 	useEffect(() => {
@@ -3302,6 +3337,7 @@ export function FlowBoard({
 			)}
 
 			<ResizablePanelGroup
+				ref={panelGroupRef}
 				direction="horizontal"
 				className="flex grow flex-1 min-h-0 h-full overscroll-none"
 				style={{
@@ -3311,8 +3347,9 @@ export function FlowBoard({
 			>
 				{/* Desktop/Tablet side panels */}
 				<ResizablePanel
+					id="flow-variables"
+					order={1}
 					className="z-50 bg-background hidden md:block"
-					autoSave="flow-variables"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3329,7 +3366,7 @@ export function FlowBoard({
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
-				<ResizablePanel autoSave="flow-main-container">
+				<ResizablePanel id="flow-main-container" order={2}>
 					<ResizablePanelGroup
 						direction="vertical"
 						className="h-full flex grow"
@@ -3520,8 +3557,9 @@ export function FlowBoard({
 				</ResizablePanel>
 				<ResizableHandle withHandle />
 				<ResizablePanel
+					id="flow-runs"
+					order={3}
 					className="z-50 hidden md:block"
-					autoSave="flow-runs"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3541,8 +3579,9 @@ export function FlowBoard({
 				</ResizablePanel>
 				<ResizableHandle withHandle />
 				<ResizablePanel
+					id="flow-flowscript"
+					order={4}
 					className="z-50 hidden md:block"
-					autoSave="flow-flowscript"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3558,7 +3597,7 @@ export function FlowBoard({
 							boardUpdatedAt={board.dataUpdatedAt}
 							catalogNodes={catalog.data}
 							onApplyFlowScript={handleApplyFlowScript}
-							onClose={() => flowScriptPanelRef.current?.collapse()}
+							onClose={() => setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 0)}
 						/>
 					)}
 				</ResizablePanel>
@@ -3566,6 +3605,8 @@ export function FlowBoard({
 					<>
 						<ResizableHandle withHandle />
 						<ResizablePanel
+							id="flow-search"
+							order={5}
 							className="z-50 hidden md:block min-w-[280px] max-w-[400px]"
 							defaultSize={20}
 							minSize={15}

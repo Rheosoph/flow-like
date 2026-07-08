@@ -3,19 +3,15 @@ import type { ImperativePanelHandle } from "react-resizable-panels";
 
 interface UseFlowPanelsProps {
 	varPanelRef: RefObject<ImperativePanelHandle | null>;
-	runsPanelRef: RefObject<ImperativePanelHandle | null>;
 	logPanelRef: RefObject<ImperativePanelHandle | null>;
 	setVarsOpen: (value: boolean | ((v: boolean) => boolean)) => void;
-	setRunsOpen: (value: boolean | ((v: boolean) => boolean)) => void;
 	setLogsOpen: (value: boolean | ((v: boolean) => boolean)) => void;
 }
 
 export function useFlowPanels({
 	varPanelRef,
-	runsPanelRef,
 	logPanelRef,
 	setVarsOpen,
-	setRunsOpen,
 	setLogsOpen,
 }: UseFlowPanelsProps) {
 	const toggleVars = () => {
@@ -34,26 +30,6 @@ export function useFlowPanels({
 
 		const size = varPanelRef.current.getSize();
 		if (size < 10) varPanelRef.current.resize(20);
-	};
-
-	const toggleRunHistory = () => {
-		if (
-			typeof window !== "undefined" &&
-			window.matchMedia("(max-width: 767px)").matches
-		) {
-			setRunsOpen((v) => !v);
-			return;
-		}
-		if (!runsPanelRef.current) return;
-		const isCollapsed = runsPanelRef.current.isCollapsed();
-		isCollapsed
-			? runsPanelRef.current.expand()
-			: runsPanelRef.current.collapse();
-
-		if (!isCollapsed) return;
-
-		const size = runsPanelRef.current.getSize();
-		if (size < 10) runsPanelRef.current.resize(30);
 	};
 
 	const toggleLogs = () => {
@@ -76,7 +52,6 @@ export function useFlowPanels({
 
 	return {
 		toggleVars,
-		toggleRunHistory,
 		toggleLogs,
 	};
 }
