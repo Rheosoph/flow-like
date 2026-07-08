@@ -35,12 +35,11 @@ export interface AgentProviderOption {
 	label: string;
 }
 
-// Claude Code is defined in the type union but not enabled (normalizeEnabledAIProvider
-// folds it into codex), so it is intentionally omitted from the available list.
 const PROFILE_PROVIDER: AgentProviderOption = { id: "bits", label: "Profile" };
 const AGENT_PROVIDERS: AgentProviderOption[] = [
 	{ id: "github-copilot", label: "Copilot" },
 	{ id: "codex", label: "Codex" },
+	{ id: "claude-code", label: "Claude Code" },
 ];
 
 export function useAgentSelection() {

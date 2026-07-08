@@ -2678,9 +2678,11 @@ impl ExternalAgentInvocation {
             "--config".to_string(),
             "approval_policy=\"never\"".to_string(),
         ];
-        let allow_explicit_codex_model =
-            std::env::var_os("FLOWPILOT_CODEX_ALLOW_EXPLICIT_MODEL").is_some();
-        if allow_explicit_codex_model && !model_id.trim().is_empty() && model_id != "default" {
+        // Model ids reach this point straight from Codex's own auth-aware catalog
+        // (discovered via `codex app-server`'s `model/list`), so an explicit
+        // selection is safe to forward. "default" defers to Codex's configured
+        // runtime model by omitting `--model` entirely.
+        if !model_id.trim().is_empty() && model_id != "default" {
             args.extend(["--model".to_string(), model_id.to_string()]);
         }
 
@@ -2726,6 +2728,9 @@ impl ExternalAgentInvocation {
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--verbose".to_string(),
+            // Stream assistant tokens as content_block_delta frames so FlowPilot
+            // can render the reply live instead of only at the final result.
+            "--include-partial-messages".to_string(),
             "--strict-mcp-config".to_string(),
             "--mcp-config".to_string(),
             mcp_config_path.display().to_string(),
@@ -2862,10 +2867,19 @@ fn run_external_agent_invocation_blocking(
                 let _ = channel.send(workspace_event);
             }
 
-            if let Some(event) = external_agent_process_event(&value) {
-                let _ = channel.send(event);
-            } else if let Some(label) = external_agent_progress_label(&value) {
-                send_external_progress_event(&channel, EXTERNAL_AGENT_TOOL_CALL_ID, &label);
+            let tool_events = if invocation.backend == FlowPilotAgentBackendKind::ClaudeCode {
+                claude_agent_tool_events(&value, &mut stream_state)
+            } else {
+                external_agent_process_event(&value).into_iter().collect()
+            };
+            if tool_events.is_empty() {
+                if let Some(label) = external_agent_progress_label(&value) {
+                    send_external_progress_event(&channel, EXTERNAL_AGENT_TOOL_CALL_ID, &label);
+                }
+            } else {
+                for event in tool_events {
+                    let _ = channel.send(event);
+                }
             }
 
             if let Some(delta) =
@@ -2938,6 +2952,9 @@ struct ExternalAgentStreamState {
     agent_message_text_by_id: HashMap<String, String>,
     last_agent_message_id: Option<String>,
     has_streamed_assistant_text: bool,
+    // Claude reports a tool's name only on the `tool_use` block; the matching
+    // `tool_result` carries just the id, so remember id -> display name here.
+    claude_tool_names: HashMap<String, String>,
 }
 
 impl ExternalAgentStreamState {
@@ -3167,7 +3184,7 @@ fn external_agent_stream_delta(
 ) -> Option<String> {
     match backend {
         FlowPilotAgentBackendKind::Codex => codex_agent_message_delta(value, state),
-        FlowPilotAgentBackendKind::ClaudeCode => generic_agent_message_delta(value, state),
+        FlowPilotAgentBackendKind::ClaudeCode => claude_agent_message_delta(value, state),
         FlowPilotAgentBackendKind::GithubCopilot => None,
     }
 }
@@ -3253,32 +3270,120 @@ fn codex_agent_message_delta(
     Some(state.decorate_agent_delta(item_id, &delta))
 }
 
-fn generic_agent_message_delta(
+fn claude_agent_message_delta(
     value: &serde_json::Value,
     state: &mut ExternalAgentStreamState,
 ) -> Option<String> {
-    let event_type = value
-        .get("type")
-        .or_else(|| value.get("event"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if !event_type.contains("delta") && !event_type.contains("message") {
+    // Claude Code (with --include-partial-messages) streams assistant tokens as
+    // `stream_event` frames wrapping a content_block_delta / text_delta. The full
+    // `assistant` message and the final `result` event are handled elsewhere, so
+    // only the incremental text deltas are emitted here to avoid duplication.
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("stream_event") {
+        return None;
+    }
+    let event = value.get("event")?;
+    if event.get("type").and_then(serde_json::Value::as_str) != Some("content_block_delta") {
+        return None;
+    }
+    let delta = event.get("delta")?;
+    if delta.get("type").and_then(serde_json::Value::as_str) != Some("text_delta") {
+        return None;
+    }
+    let text = delta.get("text").and_then(serde_json::Value::as_str)?;
+    if text.is_empty() {
         return None;
     }
 
-    let item_id = value
-        .get("item_id")
-        .or_else(|| value.get("itemId"))
-        .or_else(|| value.get("id"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("external-agent-message");
-    let delta = value
-        .get("delta")
-        .or_else(|| value.pointer("/message/delta"))
-        .or_else(|| value.pointer("/item/delta"))
-        .and_then(serde_json::Value::as_str)?;
+    Some(state.decorate_agent_delta("claude-agent-message", text))
+}
 
-    Some(state.decorate_agent_delta(item_id, delta))
+/// Strip the `mcp__<server>__` prefix Claude uses for MCP tools so the frontend
+/// tool labeller recognizes the bare FlowPilot tool name (e.g. `edit_flowscript`).
+fn claude_display_tool_name(name: &str) -> &str {
+    name.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .map(|(_, tool)| tool)
+        .unwrap_or(name)
+}
+
+/// Surface Claude Code's tool activity as FlowPilot `tool_start`/`tool_end`
+/// frames. Claude reports tool calls as `tool_use` blocks inside an `assistant`
+/// message and their outcomes as `tool_result` blocks in the following `user`
+/// message — unlike Codex's `item.*` events, so it needs its own extractor.
+fn claude_agent_tool_events(
+    value: &serde_json::Value,
+    state: &mut ExternalAgentStreamState,
+) -> Vec<String> {
+    let event_type = value
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let Some(blocks) = value
+        .pointer("/message/content")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut events = Vec::new();
+    match event_type {
+        "assistant" => {
+            for block in blocks {
+                if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
+                    continue;
+                }
+                let Some(id) = block.get("id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let name = claude_display_tool_name(
+                    block
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("tool"),
+                )
+                .to_string();
+                state.claude_tool_names.insert(id.to_string(), name.clone());
+                events.push(flowpilot_stream_tag(
+                    "tool_start",
+                    &serde_json::json!({
+                        "tool_call_id": id,
+                        "tool": name,
+                        "summary": format!("flowpilot/{name}"),
+                    }),
+                ));
+            }
+        }
+        "user" => {
+            for block in blocks {
+                if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                let Some(id) = block.get("tool_use_id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let is_error = block
+                    .get("is_error")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                let name = state
+                    .claude_tool_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "tool".to_string());
+                events.push(flowpilot_stream_tag(
+                    "tool_end",
+                    &serde_json::json!({
+                        "tool_call_id": id,
+                        "tool": name,
+                        "status": if is_error { "error" } else { "done" },
+                        "result_summary": if is_error { "failed" } else { "completed" },
+                    }),
+                ));
+            }
+        }
+        _ => {}
+    }
+    events
 }
 
 fn send_external_progress_event(channel: &Channel<String>, event_id: &str, message: &str) {
@@ -3954,6 +4059,10 @@ fn codex_binary_name() -> &'static str {
     if cfg!(windows) { "codex.exe" } else { "codex" }
 }
 
+fn claude_binary_name() -> &'static str {
+    if cfg!(windows) { "claude.exe" } else { "claude" }
+}
+
 fn codex_target() -> Option<(&'static str, &'static str)> {
     let target = if cfg!(target_os = "linux") {
         if cfg!(target_arch = "x86_64") {
@@ -4038,6 +4147,13 @@ fn extra_bin_dirs() -> Vec<std::path::PathBuf> {
     dirs.push(home.join(".npm-global/bin"));
     dirs.push(home.join(".npm-packages/bin"));
     dirs.push(home.join(".npm/bin"));
+
+    // Claude Code local install (e.g. after `claude migrate-installer`)
+    let claude_home = std::env::var("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home.join(".claude"));
+    dirs.push(claude_home.join("local"));
+
     dirs.extend(codex_standalone_visible_dirs(&home));
 
     dirs.sort();
@@ -4111,6 +4227,70 @@ fn collect_codex_cli_dirs(root: &std::path::Path, depth: usize, out: &mut Vec<st
             collect_codex_cli_dirs(&path, depth - 1, out);
         }
     }
+}
+
+/// Numeric version key from an `anthropic.claude-code-<version>-<platform>`
+/// extension directory name (e.g. `[2, 1, 204]`), for newest-first ordering.
+fn claude_extension_version_key(path: &Path) -> Vec<u64> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("anthropic.claude-code-"))
+        .map(|rest| {
+            rest.split('-')
+                .next()
+                .unwrap_or_default()
+                .split('.')
+                .map(|part| part.parse::<u64>().unwrap_or(0))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Locate `claude` executables bundled inside IDE extensions, newest first.
+///
+/// The Claude Code editor extension ships the native CLI at
+/// `<editor>/extensions/anthropic.claude-code-<version>-<platform>/resources/native-binary/claude`.
+/// Desktop apps launched from Finder/Dock don't inherit `claude` on PATH, so this
+/// lets FlowPilot reuse the CLI the user already installed via that extension.
+fn claude_ide_extension_binaries(home: &Path) -> Vec<PathBuf> {
+    let mut binaries = Vec::new();
+    for root in [
+        home.join(".vscode/extensions"),
+        home.join(".vscode-insiders/extensions"),
+        home.join(".vscode-oss/extensions"),
+        home.join(".cursor/extensions"),
+        home.join(".windsurf/extensions"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut extension_dirs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_dir()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("anthropic.claude-code-"))
+            })
+            .collect();
+        // Sort by parsed version (numeric, newest first) — a lexical sort would
+        // rank "2.1.9" above "2.1.204".
+        extension_dirs.sort_by(|a, b| {
+            claude_extension_version_key(b).cmp(&claude_extension_version_key(a))
+        });
+        for dir in extension_dirs {
+            let candidate = dir
+                .join("resources")
+                .join("native-binary")
+                .join(claude_binary_name());
+            if is_executable_file(&candidate) {
+                binaries.push(candidate);
+            }
+        }
+    }
+    binaries
 }
 
 /// Resolve the Copilot CLI path, searching beyond the (possibly limited) bundled-app PATH.
@@ -4187,6 +4367,16 @@ fn find_cli_resolution(
                 ));
             }
         }
+    }
+
+    if kind == FlowPilotAgentBackendKind::ClaudeCode
+        && let Some(home) = dirs_next::home_dir()
+        && let Some(candidate) = claude_ide_extension_binaries(&home).into_iter().next()
+    {
+        return Some(CliResolution::new(
+            candidate,
+            CliResolutionSource::IdeExtensionFallback,
+        ));
     }
 
     None
@@ -4522,6 +4712,285 @@ async fn probe_external_agent_cli(
     }
 }
 
+/// Discover the Codex models available for the current authentication mode by
+/// driving the installed `codex` CLI's `app-server` JSON-RPC protocol.
+///
+/// Codex model availability is auth-, policy-, and version-dependent, so the set
+/// is read from Codex itself rather than hard-coded. Any failure (missing
+/// `app-server` subcommand, unauthenticated session, timeout) is returned as an
+/// error and the caller falls back to Codex's configured default.
+async fn list_codex_models_via_app_server(
+    cli: &CliResolution,
+) -> Result<Vec<CopilotModelInfo>, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let mut child = tokio::process::Command::new(&cli.executable)
+        .arg("app-server")
+        .env("PATH", augmented_path_with_dirs(&cli.path_dirs))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to start codex app-server: {e}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "codex app-server did not expose stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "codex app-server did not expose stdout".to_string())?;
+
+    // Newline-delimited JSON-RPC 2.0 (without the "jsonrpc" field), matching the
+    // codex app-server framing: initialize -> initialized -> model/list.
+    const MODEL_LIST_ID: i64 = 1;
+    let messages = [
+        serde_json::json!({
+            "method": "initialize",
+            "id": 0,
+            "params": {
+                "clientInfo": {
+                    "name": "flow-like",
+                    "title": "Flow-Like FlowPilot",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }
+            }
+        }),
+        serde_json::json!({ "method": "initialized", "params": {} }),
+        serde_json::json!({
+            "method": "model/list",
+            "id": MODEL_LIST_ID,
+            "params": { "limit": 100, "includeHidden": false }
+        }),
+    ];
+    let mut payload = String::new();
+    for message in &messages {
+        payload.push_str(&message.to_string());
+        payload.push('\n');
+    }
+    stdin
+        .write_all(payload.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to send codex app-server request: {e}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush codex app-server request: {e}"))?;
+
+    let read_models = async {
+        let mut lines = tokio::io::BufReader::new(stdout).lines();
+        while let Some(line) = lines
+            .next_line()
+            .await
+            .map_err(|e| format!("Failed to read codex app-server output: {e}"))?
+        {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            if value.get("id").and_then(serde_json::Value::as_i64) != Some(MODEL_LIST_ID) {
+                continue;
+            }
+            if let Some(error) = value.get("error") {
+                return Err(format!("codex app-server model/list failed: {error}"));
+            }
+            let entries = value
+                .get("result")
+                .and_then(|result| result.get("data"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            return Ok(parse_codex_model_catalog(&entries));
+        }
+        Err("codex app-server closed before returning models".to_string())
+    };
+
+    let outcome = tokio::time::timeout(Duration::from_secs(8), read_models).await;
+    let _ = child.start_kill();
+    match outcome {
+        Ok(result) => result,
+        Err(_) => Err("codex app-server model listing timed out".to_string()),
+    }
+}
+
+/// Convert a `model/list` `data` array into FlowPilot model options, skipping
+/// hidden entries and preserving Codex's ordering (recommended model first).
+fn parse_codex_model_catalog(entries: &[serde_json::Value]) -> Vec<CopilotModelInfo> {
+    let mut models = Vec::new();
+    for entry in entries {
+        if entry
+            .get("hidden")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Some(id) = entry
+            .get("id")
+            .or_else(|| entry.get("model"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let name = entry
+            .get("displayName")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(id.as_str())
+            .to_string();
+        models.push(CopilotModelInfo { id, name });
+    }
+    models
+}
+
+/// Discover the Claude Code models available for the current authentication by
+/// driving the CLI's stream-json control protocol — the same `initialize`
+/// handshake the Agent SDK's `supportedModels()` reads. Claude Code has no
+/// model-listing subcommand, so this is the only auth-aware, version-current
+/// source; nothing about the model set is hard-coded. Any failure (CLI missing,
+/// unauthenticated, protocol change, timeout) surfaces as an error and the
+/// caller falls back to the CLI's configured default.
+async fn list_claude_models_via_control_protocol(
+    cli: &CliResolution,
+) -> Result<Vec<CopilotModelInfo>, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    // A neutral cwd keeps the handshake from triggering workspace-trust or
+    // CLAUDE.md discovery for the user's project; the model set only depends on
+    // account auth (read from the keychain), not the working directory.
+    let mut child = tokio::process::Command::new(&cli.executable)
+        .args([
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--input-format",
+            "stream-json",
+        ])
+        .current_dir(std::env::temp_dir())
+        .env("PATH", augmented_path_with_dirs(&cli.path_dirs))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Failed to start claude control session: {e}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "claude control session did not expose stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "claude control session did not expose stdout".to_string())?;
+
+    // Newline-delimited control protocol: send one `initialize` control_request;
+    // the success control_response carries the model catalog at
+    // `response.response.models`.
+    let request = serde_json::json!({
+        "request_id": "flowpilot-model-list",
+        "type": "control_request",
+        "request": { "subtype": "initialize" }
+    });
+    stdin
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .map_err(|e| format!("Failed to send claude initialize request: {e}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush claude initialize request: {e}"))?;
+
+    let read_models = async {
+        let mut lines = tokio::io::BufReader::new(stdout).lines();
+        while let Some(line) = lines
+            .next_line()
+            .await
+            .map_err(|e| format!("Failed to read claude control output: {e}"))?
+        {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+                continue;
+            };
+            if value.get("type").and_then(serde_json::Value::as_str) != Some("control_response") {
+                continue;
+            }
+            let response = value.get("response");
+            if response
+                .and_then(|response| response.get("subtype"))
+                .and_then(serde_json::Value::as_str)
+                == Some("error")
+            {
+                let message = response
+                    .and_then(|response| response.get("error"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown error");
+                return Err(format!("claude initialize failed: {message}"));
+            }
+            let entries = response
+                .and_then(|response| response.get("response"))
+                .and_then(|inner| inner.get("models"))
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if entries.is_empty() {
+                continue;
+            }
+            return Ok(parse_claude_model_catalog(&entries));
+        }
+        Err("claude control session closed before returning models".to_string())
+    };
+
+    let outcome = tokio::time::timeout(Duration::from_secs(12), read_models).await;
+    let _ = child.start_kill();
+    match outcome {
+        Ok(result) => result,
+        Err(_) => Err("claude model listing timed out".to_string()),
+    }
+}
+
+/// Convert the Claude Code `initialize` handshake's `models` array into FlowPilot
+/// model options. `value` is the id passed to `--model`; `displayName` is shown
+/// to the user (falling back to the value), preserving the CLI's ordering.
+fn parse_claude_model_catalog(entries: &[serde_json::Value]) -> Vec<CopilotModelInfo> {
+    let mut models = Vec::new();
+    for entry in entries {
+        let Some(id) = entry
+            .get("value")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if models.iter().any(|existing: &CopilotModelInfo| existing.id == id) {
+            continue;
+        }
+        let name = entry
+            .get("displayName")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(id.as_str())
+            .to_string();
+        models.push(CopilotModelInfo { id, name });
+    }
+    models
+}
+
 #[async_trait]
 impl FlowPilotAgentBackend for GithubCopilotBackend {
     fn kind(&self) -> FlowPilotAgentBackendKind {
@@ -4659,30 +5128,65 @@ impl FlowPilotAgentBackend for ExternalCodeAgentBackend {
             FlowPilotAgentBackendKind::Codex => {
                 // Codex model availability depends on whether the user is
                 // authenticated with a ChatGPT account, API key, enterprise
-                // policy, and the installed Codex runtime version. Hard-coded
-                // Codex model ids regularly become invalid for ChatGPT-account
-                // sessions, so default to the runtime/configured model unless a
-                // future dynamic model source can prove a model is supported.
+                // policy, and the installed Codex runtime version, so the options
+                // are discovered from Codex itself (its `app-server` `model/list`)
+                // rather than hard-coded. "default" is always offered first so the
+                // user can defer to Codex's own configured/runtime model.
                 models.push(CopilotModelInfo {
                     id: "default".to_string(),
                     name: "Codex configured default".to_string(),
                 });
+                if let Some(cli) = find_cli_resolution(self.kind, None) {
+                    match list_codex_models_via_app_server(&cli).await {
+                        Ok(discovered) => {
+                            for model in discovered {
+                                if model.id != "default"
+                                    && !models.iter().any(|existing| existing.id == model.id)
+                                {
+                                    models.push(model);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                backend = self.kind.label(),
+                                %error,
+                                "codex model discovery unavailable; offering configured default only"
+                            );
+                        }
+                    }
+                }
             }
             FlowPilotAgentBackendKind::ClaudeCode => {
-                models.extend([
-                    CopilotModelInfo {
-                        id: "sonnet".to_string(),
-                        name: "Claude Sonnet".to_string(),
-                    },
-                    CopilotModelInfo {
-                        id: "opus".to_string(),
-                        name: "Claude Opus".to_string(),
-                    },
-                    CopilotModelInfo {
+                // The Claude Code CLI exposes no model-listing subcommand, so the
+                // options are discovered from its own auth-aware `initialize`
+                // handshake (the same list the Agent SDK's `supportedModels()`
+                // returns) rather than hard-coded. That catalog already includes
+                // a "default (recommended)" entry, so nothing is prepended.
+                if let Some(cli) = find_cli_resolution(self.kind, None) {
+                    match list_claude_models_via_control_protocol(&cli).await {
+                        Ok(discovered) => {
+                            for model in discovered {
+                                if !models.iter().any(|existing| existing.id == model.id) {
+                                    models.push(model);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                backend = self.kind.label(),
+                                %error,
+                                "claude model discovery unavailable; offering configured default only"
+                            );
+                        }
+                    }
+                }
+                if models.is_empty() {
+                    models.push(CopilotModelInfo {
                         id: "default".to_string(),
                         name: "Claude Code configured default".to_string(),
-                    },
-                ]);
+                    });
+                }
             }
             FlowPilotAgentBackendKind::GithubCopilot => {
                 models.push(CopilotModelInfo {
@@ -5076,7 +5580,7 @@ mod tests {
                 std::path::PathBuf::from("/usr/bin/codex"),
                 CliResolutionSource::Path,
             ),
-            "gpt-5-mini",
+            "default",
             "http://127.0.0.1:12345/mcp",
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
@@ -5094,7 +5598,7 @@ mod tests {
         assert!(invocation.args.contains(&"--config".to_string()));
         assert!(
             !invocation.args.contains(&"--model".to_string()),
-            "Codex should use its runtime/configured default model by default because explicit model ids can be rejected for ChatGPT-account sessions: {:?}",
+            "the \"default\" model selection must defer to Codex's configured runtime model by omitting --model: {:?}",
             invocation.args
         );
         assert!(
@@ -5130,6 +5634,87 @@ mod tests {
             "codex invocation should run non-interactively through FlowPilot approvals/tools"
         );
         assert!(invocation.prompt.contains("hello"));
+    }
+
+    #[test]
+    fn codex_invocation_forwards_selected_model() {
+        let invocation = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::Codex,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/codex"),
+                CliResolutionSource::Path,
+            ),
+            "gpt-5.5",
+            "http://127.0.0.1:12345/mcp",
+            "hello".to_string(),
+            vec!["edit_flowscript".to_string()],
+        )
+        .expect("codex invocation should build");
+
+        assert!(
+            invocation
+                .args
+                .windows(2)
+                .any(|args| args == ["--model", "gpt-5.5"]),
+            "a discovered Codex model id must be forwarded via --model: {:?}",
+            invocation.args
+        );
+    }
+
+    #[test]
+    fn parse_codex_model_catalog_maps_and_filters() {
+        let entries = vec![
+            serde_json::json!({
+                "id": "gpt-5.5",
+                "displayName": "GPT-5.5",
+                "hidden": false,
+                "isDefault": true
+            }),
+            serde_json::json!({ "model": "gpt-5.4-mini", "hidden": false }),
+            serde_json::json!({ "id": "internal", "displayName": "Internal", "hidden": true }),
+            serde_json::json!({ "displayName": "No id here" }),
+        ];
+
+        let models = parse_codex_model_catalog(&entries);
+
+        assert_eq!(models.len(), 2, "hidden and id-less entries are dropped");
+        assert_eq!(models[0].id, "gpt-5.5");
+        assert_eq!(models[0].name, "GPT-5.5");
+        assert_eq!(models[1].id, "gpt-5.4-mini");
+        assert_eq!(
+            models[1].name, "gpt-5.4-mini",
+            "displayName falls back to the model id"
+        );
+    }
+
+    #[test]
+    fn parse_claude_model_catalog_maps_and_dedupes() {
+        let entries = vec![
+            serde_json::json!({
+                "value": "default",
+                "resolvedModel": "claude-opus-4-8[1m]",
+                "displayName": "Default (recommended)"
+            }),
+            serde_json::json!({ "value": "sonnet", "displayName": "Sonnet" }),
+            serde_json::json!({ "value": "sonnet", "displayName": "Sonnet duplicate" }),
+            serde_json::json!({ "value": "claude-fable-5[1m]" }),
+            serde_json::json!({ "displayName": "No value here" }),
+        ];
+
+        let models = parse_claude_model_catalog(&entries);
+
+        assert_eq!(models.len(), 3, "duplicate value and value-less entries drop");
+        assert_eq!(models[0].id, "default");
+        assert_eq!(models[0].name, "Default (recommended)");
+        assert_eq!(models[1].id, "sonnet");
+        assert_eq!(
+            models[2].id, "claude-fable-5[1m]",
+            "bracketed model ids are passed through verbatim for --model"
+        );
+        assert_eq!(
+            models[2].name, "claude-fable-5[1m]",
+            "displayName falls back to the value"
+        );
     }
 
     #[test]
@@ -5355,6 +5940,109 @@ mod tests {
     }
 
     #[test]
+    fn claude_stream_parser_emits_text_deltas_and_ignores_other_frames() {
+        let mut state = ExternalAgentStreamState::default();
+        let make_delta = |text: &str| {
+            serde_json::json!({
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": { "type": "text_delta", "text": text }
+                }
+            })
+        };
+
+        assert_eq!(
+            claude_agent_message_delta(&make_delta("hello "), &mut state).as_deref(),
+            Some("hello ")
+        );
+        assert_eq!(
+            claude_agent_message_delta(&make_delta("there"), &mut state).as_deref(),
+            Some("there"),
+            "consecutive deltas concatenate without inserting separators"
+        );
+
+        // Thinking deltas, full assistant messages, and results are handled
+        // elsewhere and must not be double-emitted as streamed text.
+        let thinking = serde_json::json!({
+            "type": "stream_event",
+            "event": { "type": "content_block_delta", "delta": { "type": "thinking_delta", "thinking": "hmm" } }
+        });
+        let assistant = serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [{ "type": "text", "text": "hello there" }] }
+        });
+        let result = serde_json::json!({ "type": "result", "subtype": "success", "result": "hello there" });
+        assert_eq!(claude_agent_message_delta(&thinking, &mut state), None);
+        assert_eq!(claude_agent_message_delta(&assistant, &mut state), None);
+        assert_eq!(claude_agent_message_delta(&result, &mut state), None);
+    }
+
+    #[test]
+    fn claude_result_event_yields_final_text() {
+        let event = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": "Here is what I found.",
+            "usage": { "input_tokens": 10, "output_tokens": 5 }
+        });
+        assert_eq!(
+            external_agent_result_text(FlowPilotAgentBackendKind::ClaudeCode, &event).as_deref(),
+            Some("Here is what I found.")
+        );
+    }
+
+    #[test]
+    fn claude_tool_events_frame_mcp_tool_use_and_result() {
+        let mut state = ExternalAgentStreamState::default();
+        let tool_use = serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [
+                { "type": "text", "text": "Let me check." },
+                { "type": "tool_use", "id": "toolu_1", "name": "mcp__flowpilot__edit_flowscript", "input": {} }
+            ] }
+        });
+        let tool_result = serde_json::json!({
+            "type": "user",
+            "message": { "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_1", "content": "ok" }
+            ] }
+        });
+
+        let starts = claude_agent_tool_events(&tool_use, &mut state);
+        assert_eq!(starts.len(), 1, "only the tool_use block frames a tool_start");
+        assert!(
+            starts[0].contains("tool_start")
+                && starts[0].contains("\"tool\":\"edit_flowscript\"")
+                && starts[0].contains("toolu_1"),
+            "mcp__flowpilot__ prefix must be stripped: {}",
+            starts[0]
+        );
+
+        let ends = claude_agent_tool_events(&tool_result, &mut state);
+        assert_eq!(ends.len(), 1);
+        assert!(
+            ends[0].contains("tool_end")
+                && ends[0].contains("\"tool\":\"edit_flowscript\"")
+                && ends[0].contains("\"status\":\"done\""),
+            "tool_end reuses the remembered name and marks success: {}",
+            ends[0]
+        );
+    }
+
+    #[test]
+    fn claude_tool_events_ignore_plain_assistant_text() {
+        let mut state = ExternalAgentStreamState::default();
+        let text_only = serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [{ "type": "text", "text": "just text" }] }
+        });
+        assert!(claude_agent_tool_events(&text_only, &mut state).is_empty());
+    }
+
+    #[test]
     fn codex_event_parser_surfaces_turn_failures() {
         let event = serde_json::json!({
             "type": "turn.failed",
@@ -5453,6 +6141,45 @@ mod tests {
             dirs.iter().any(|dir| dir == &codex_dir.join("codex-path")),
             "expected bundled Codex PATH helper directory in candidates: {:?}",
             dirs
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_home);
+        Ok(())
+    }
+
+    #[test]
+    fn claude_ide_extension_binaries_prefers_newest_version() -> std::io::Result<()> {
+        let temp_home = std::env::temp_dir().join(format!(
+            "flowpilot-claude-ext-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let binary_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+        let make = |version: &str| -> std::io::Result<PathBuf> {
+            let dir = temp_home
+                .join(".vscode/extensions")
+                .join(format!("anthropic.claude-code-{version}-darwin-arm64"))
+                .join("resources/native-binary");
+            std::fs::create_dir_all(&dir)?;
+            let executable = dir.join(binary_name);
+            std::fs::write(&executable, b"#!/bin/sh\nexit 0\n")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(executable)
+        };
+        let _older = make("2.1.9")?;
+        let newest = make("2.1.204")?;
+        // An unrelated extension must not be mistaken for the Claude Code CLI.
+        std::fs::create_dir_all(temp_home.join(".vscode/extensions/some.other-ext"))?;
+
+        let binaries = claude_ide_extension_binaries(&temp_home);
+        assert_eq!(
+            binaries.first(),
+            Some(&newest),
+            "newest extension version must resolve first: {:?}",
+            binaries
         );
 
         let _ = std::fs::remove_dir_all(&temp_home);

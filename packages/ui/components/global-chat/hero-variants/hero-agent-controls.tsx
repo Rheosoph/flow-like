@@ -26,8 +26,9 @@ const PROVIDER_ICON: Record<NormalizedAIProvider, LucideIcon> = {
 
 /**
  * The bubble composer's agent controls: pick the FlowPilot provider (Profile /
- * GitHub Copilot / Codex, whichever are available) and its model. Both write to
- * the shared global-chat store — the choice carries into /chat and is remembered.
+ * GitHub Copilot / Codex / Claude Code, whichever are available) and its model.
+ * Both write to the shared global-chat store — the choice carries into /chat and
+ * is remembered.
  */
 export function HeroAgentControls() {
 	const {
