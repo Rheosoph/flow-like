@@ -29,31 +29,32 @@ export default function FlowEditPage() {
 		<>
 			<FlowDeepLinkHandler appId={appId} boardId={boardId} />
 			<FlowWrapper
-			boardId={boardId}
-			appId={appId}
-			nodeId={nodeId}
-			version={version}
-			sub={auth.user?.profile?.sub}
-			extraDockItems={[
-				{
-					icon: <Video className={showRecording ? "text-red-500" : ""} />,
-					title: "Record Actions",
-					separator: "left",
-					onClick: () => setShowRecording((prev) => !prev),
-				},
-			]}
-			renderOverlay={() =>
-				showRecording ? (
-					<RecordingDock
-						boardId={boardId}
-						appId={appId || undefined}
-						token={auth.user?.access_token}
-						version={version}
-						onClose={() => setShowRecording(false)}
-					/>
-				) : null
-			}
-		/>
+				boardId={boardId}
+				appId={appId}
+				nodeId={nodeId}
+				version={version}
+				sub={auth.user?.profile?.sub}
+				externalAssistant
+				extraDockItems={[
+					{
+						icon: <Video className={showRecording ? "text-red-500" : ""} />,
+						title: "Record Actions",
+						separator: "left",
+						onClick: () => setShowRecording((prev) => !prev),
+					},
+				]}
+				renderOverlay={() =>
+					showRecording ? (
+						<RecordingDock
+							boardId={boardId}
+							appId={appId || undefined}
+							token={auth.user?.access_token}
+							version={version}
+							onClose={() => setShowRecording(false)}
+						/>
+					) : null
+				}
+			/>
 		</>
 	);
 }

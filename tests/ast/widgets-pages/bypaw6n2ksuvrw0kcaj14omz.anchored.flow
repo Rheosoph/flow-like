@@ -207,7 +207,7 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
     addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {   //@n:qtx8zi1adxqna4vd82y9g58u
         const push2 = arrayPush({ arrayIn: reportEntry, value: { title: title, uri: uri, summary: summary, date: date, interest: label, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
         reportEntry = push2.arrayOut   //@n:l2fh63vjftwrfgsrqmzlcl0y
-        return stringFormat({ formatString: "Successfully Added" })
+        return stringFormat({ formatString: "Successfully Added" })   //@n:ia430e904bgj81jzpeh2plyf
     }
     fetchPage(url: string, payload: Struct) {   //@n:owypi2kzuovvg7cnelos4uvi
         eventsChatPushStep({ title: "Reading Website", description: url })   //@n:ow3fh5re5xfh3pb00zcxg6xt
@@ -216,10 +216,10 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
             execSuccess: {
                 const toText = httpResponseToText({ response: aPICall.response })   //@n:idbdkfu6b8jq6eovcn9fqgw0
                 const hTMLToMarkdown = utilsMdHtmlToMd({ html: toText.text, skippedTags: ["script","style","iframe"] })   //@n:b10najenij7p74aebpgfb107
-                return hTMLToMarkdown.markdown
+                return hTMLToMarkdown.markdown   //@n:rl6l97y8l3h2yjo7j8cnr0rq
             }
             execError: {
-                return stringFormat({ formatString: "FAILED TO FETCH WEBSITE - SKIP" })
+                return stringFormat({ formatString: "FAILED TO FETCH WEBSITE - SKIP" })   //@n:l1wdbhzhzgn9r5m077l6q08s
             }
         }
     }
@@ -229,10 +229,10 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
         aPICall3 {
             execSuccess: {
                 const toStruct = httpResponseToJson({ response: aPICall3.response })   //@n:b6adf2qe4yg3ejon9sigwm0i
-                return toStruct.struct
+                return toStruct.struct   //@n:xyos4tlvpfkx2wfhhytxorop
             }
             execError: {
-                return stringFormat({ formatString: "FAILED TO SEARCH" })
+                return stringFormat({ formatString: "FAILED TO SEARCH" })   //@n:rai8yzp15h79lazn2kji06gp
             }
         }
     }
@@ -364,7 +364,7 @@ notifyProjectUser(success: bool) {   //@n:iykhixlujrwjsexflb8ekm93
 
 writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
     if (reportCreated) {   //@n:yg4t28sqthqd2bwo3gsbgp8r
-        return stringFormat({ formatString: "Already created a report" })
+        return stringFormat({ formatString: "Already created a report" })   //@n:rkd57x855lzb6sr1lyatwt2h
     } else {
         reportCreated = true   //@n:c3z9pjjhjpy4njl7v5pl1exk
         const now2 = utilsDatetimeNow()   //@n:ijrzyi85455n11q11zjlins6
@@ -376,7 +376,7 @@ writeReport(title: string, shortSummary: string, report: string, payload: Struct
         const openDatabase6 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
         insertLocalDb({ database: openDatabase6.database, value: record })   //@n:fqn428vwps1mlqa5qqa5ttbm
         notifyUser({ title: title, description: "", link: stringFormat({ formatString: "/briefing?report_id={id}", id: reportID }), showDesktop: true })   //@n:jcqwuf19ps7p9n7a7zpv796q
-        return stringFormat({ formatString: "Successfully created Report. You are done now!" })
+        return stringFormat({ formatString: "Successfully created Report. You are done now!" })   //@n:u44suc8lkffroaz9f30waxaf
     }
 }
 

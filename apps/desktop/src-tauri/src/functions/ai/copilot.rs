@@ -1,14 +1,18 @@
 use crate::state::{TauriFlowLikeState, TauriSettingsState};
 use async_trait::async_trait;
+use dashmap::DashMap;
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
     ChatImage, CopilotScope, UIActionContext, UnifiedChatMessage, UnifiedContext, UnifiedCopilot,
     UnifiedCopilotResponse,
 };
 use flow_like::flow::board::Board;
+use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
+use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, GraphContext, NodeMetadata, PinMetadata, RunContext,
-    enrich_node_metadata, score_catalog_metadata,
+    BoardCommand, CatalogProvider, GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata,
+    PlatformContextInput, RunContext, build_platform_context, enrich_node_metadata,
+    global_assistant_system_prompt, run_platform_chat, score_catalog_metadata,
 };
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
@@ -20,10 +24,14 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{Arc, LazyLock, Mutex as StdMutex},
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State, ipc::Channel};
+use tauri::{
+    AppHandle, Manager, State,
+    ipc::{Channel, InvokeResponseBody},
+};
+use tokio::sync::watch;
 
 /// Desktop implementation of the catalog provider for node search
 struct DesktopCatalogProvider {
@@ -389,9 +397,14 @@ pub async fn copilot_chat(
     // Extended context
     run_context: Option<RunContext>,
     action_context: Option<UIActionContext>,
+    // Sub-agent run spawned while another Copilot session is mid-turn (needs its own CLI)
+    nested: Option<bool>,
+    // Read-only sub-run (flowpilot_board explain): answer questions about the board without editing.
+    read_only: Option<bool>,
     // Streaming channel
     channel: Channel<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
+    let read_only = read_only.unwrap_or(false);
     let model_selection = FlowPilotModelSelection::parse(model_id);
     if let FlowPilotChatBackend::Agent(agent_backend) = model_selection.backend {
         return match agent_backend {
@@ -414,6 +427,10 @@ pub async fn copilot_chat(
                     current_images,
                     history.unwrap_or_default(),
                     channel,
+                    None,
+                    None,
+                    nested.unwrap_or(false),
+                    read_only,
                 )
                 .await
             }
@@ -435,6 +452,9 @@ pub async fn copilot_chat(
                     user_prompt,
                     history.unwrap_or_default(),
                     channel,
+                    None,
+                    None,
+                    read_only,
                 )
                 .await
             }
@@ -501,6 +521,599 @@ pub async fn copilot_chat(
         .map_err(|e| e.to_string())
 }
 
+/// Collects self-awareness context for the global assistant: the signed-in user (supplied by the
+/// frontend), the active profile, the names of the user's other profiles, and — when the user has a
+/// board open — that board's identity. Gathers the Tauri-owned data (profiles, active profile) and
+/// delegates the shared rendering to [`build_platform_context`] so desktop and server produce the
+/// same context wording.
+async fn build_global_agent_context(
+    app_handle: &AppHandle,
+    user_context: Option<&str>,
+    open_board: Option<&GlobalOpenBoardContext>,
+) -> String {
+    let active = TauriSettingsState::current_profile(app_handle)
+        .await
+        .ok()
+        .map(|current| {
+            let profile = &current.hub_profile;
+            (profile.name.clone(), profile.id.clone())
+        });
+
+    let switchable: Vec<String> =
+        match crate::functions::settings::profiles::get_profiles(app_handle.clone()).await {
+            Ok(profiles) => profiles
+                .values()
+                .map(|profile| {
+                    let name = profile.hub_profile.name.trim();
+                    if name.is_empty() {
+                        profile.hub_profile.id.clone()
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+    build_platform_context(PlatformContextInput {
+        user_context,
+        active_profile: active
+            .as_ref()
+            .map(|(name, id)| (name.as_str(), id.as_str())),
+        switchable_profiles: &switchable,
+        open_board,
+    })
+}
+
+fn attachment_media_type(url: &str) -> String {
+    let name_hint = url
+        .split_once("filename=")
+        .map(|(_, rest)| rest.split('&').next().unwrap_or(rest))
+        .map(|encoded| urlencoding::decode(encoded).unwrap_or_default().to_string())
+        .unwrap_or_else(|| url.split('?').next().unwrap_or(url).to_string());
+
+    match name_hint.rsplit('.').next().map(str::to_ascii_lowercase) {
+        Some(ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg".to_string(),
+        Some(ext) if ext == "gif" => "image/gif".to_string(),
+        Some(ext) if ext == "webp" => "image/webp".to_string(),
+        _ => "image/png".to_string(),
+    }
+}
+
+/// Convert a Tauri asset-protocol URL (produced by `convertFileSrc`) back to the local file path.
+fn local_asset_path(url: &str) -> Option<PathBuf> {
+    let without_query = url.split('?').next().unwrap_or(url);
+    let encoded_path = without_query
+        .strip_prefix("asset://localhost/")
+        .or_else(|| {
+            without_query
+                .split_once("asset.localhost/")
+                .map(|(_, rest)| rest)
+        })?;
+    let decoded = urlencoding::decode(encoded_path).ok()?.to_string();
+    // On unix the leading slash is consumed by the host split; restore it when missing.
+    let path = if decoded.starts_with('/') || decoded.contains(":\\") || decoded.contains(":/") {
+        PathBuf::from(decoded)
+    } else {
+        PathBuf::from(format!("/{decoded}"))
+    };
+    path.is_file().then_some(path)
+}
+
+/// Maximum size of a single fetched attachment; larger ones are skipped to bound memory use.
+const MAX_ATTACHMENT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Resolve chat attachment URLs (local tmp files via the asset protocol, or presigned tmp uploads)
+/// into base64 `ChatImage`s for the model — mirrors the simple chat's attachment handling, keeping
+/// large blobs out of the frontend store and IPC payloads.
+async fn resolve_attachment_images(urls: &[String]) -> Vec<ChatImage> {
+    use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let mut images = Vec::with_capacity(urls.len());
+    for url in urls {
+        let bytes = if let Some(path) = local_asset_path(url) {
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => Some(bytes),
+                Err(error) => {
+                    eprintln!("[global_chat] failed to read attachment {path:?}: {error}");
+                    None
+                }
+            }
+        } else if url.starts_with("http://") || url.starts_with("https://") {
+            match flow_like_types::reqwest::get(url).await {
+                Ok(response) => {
+                    // Reject oversized attachments by Content-Length before buffering the body into
+                    // memory (a malicious URL could otherwise OOM the process).
+                    if response
+                        .content_length()
+                        .is_some_and(|len| len > MAX_ATTACHMENT_BYTES)
+                    {
+                        eprintln!("[global_chat] attachment exceeds size limit, skipped: {url}");
+                        None
+                    } else {
+                        match response.bytes().await {
+                            Ok(bytes) if bytes.len() as u64 <= MAX_ATTACHMENT_BYTES => {
+                                Some(bytes.to_vec())
+                            }
+                            Ok(_) => {
+                                eprintln!(
+                                    "[global_chat] attachment exceeds size limit, skipped: {url}"
+                                );
+                                None
+                            }
+                            Err(error) => {
+                                eprintln!("[global_chat] failed to read attachment {url}: {error}");
+                                None
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[global_chat] failed to fetch attachment {url}: {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(bytes) = bytes {
+            images.push(ChatImage {
+                data: STANDARD.encode(&bytes),
+                media_type: attachment_media_type(url),
+            });
+        }
+    }
+    images
+}
+
+/// Global FlowPilot assistant chat: a separate platform-level agent loop.
+///
+/// How long a finished/aborted global-chat run stays resumable after completion, so a client that
+/// reloads or reconnects a moment after the turn ended can still replay the full transcript.
+const GLOBAL_CHAT_RUN_TTL_SECS: u64 = 120;
+
+/// A single in-flight (or just-finished) `global_chat` generation, addressable by run id so a
+/// reloaded webview can re-attach to it via `global_chat_resume`.
+///
+/// The webview's JS `Channel` dies on reload, but the Rust generation task keeps running — it just
+/// streams into a dead channel. This handle mirrors every emitted chunk into an ordered `buffer`
+/// (the replay log) and forwards it to whichever `live` channel is currently attached. On resume we
+/// swap `live` to the fresh channel and replay the buffer, so the client rebuilds the whole message
+/// from a clean parser. `done` flips true when the turn ends, unblocking waiting resumers.
+struct GlobalChatRun {
+    buffer: StdMutex<Vec<String>>,
+    live: StdMutex<Option<Channel<String>>>,
+    done_tx: watch::Sender<bool>,
+    done_rx: watch::Receiver<bool>,
+}
+
+/// Registry of live global-chat runs, keyed by the assistant message id the frontend generated.
+static GLOBAL_CHAT_RUNS: LazyLock<DashMap<String, Arc<GlobalChatRun>>> =
+    LazyLock::new(DashMap::new);
+
+/// Register a new run and take ownership of its initial live channel.
+fn register_global_chat_run(run_id: &str, live: Channel<String>) -> Arc<GlobalChatRun> {
+    let (done_tx, done_rx) = watch::channel(false);
+    let run = Arc::new(GlobalChatRun {
+        buffer: StdMutex::new(Vec::new()),
+        live: StdMutex::new(Some(live)),
+        done_tx,
+        done_rx,
+    });
+    GLOBAL_CHAT_RUNS.insert(run_id.to_string(), run.clone());
+    run
+}
+
+/// A `Channel<String>` whose sends are mirrored into the run (buffer + live forward) instead of
+/// going straight to the webview. Passed to the backend in place of the raw JS channel.
+fn global_chat_run_channel(run: Arc<GlobalChatRun>) -> Channel<String> {
+    Channel::new(move |body: InvokeResponseBody| {
+        let chunk = match &body {
+            InvokeResponseBody::Json(json) => serde_json::from_str::<String>(json).ok(),
+            InvokeResponseBody::Raw(bytes) => String::from_utf8(bytes.clone()).ok(),
+        };
+        if let Some(chunk) = chunk {
+            let mut buffer = run.buffer.lock().unwrap();
+            buffer.push(chunk.clone());
+            if let Some(channel) = run.live.lock().unwrap().as_ref() {
+                let _ = channel.send(chunk);
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Mark a run finished and schedule its removal from the registry after the resumable TTL.
+fn finish_global_chat_run(run_id: String, run: &Arc<GlobalChatRun>) {
+    let _ = run.done_tx.send(true);
+    let run = run.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(GLOBAL_CHAT_RUN_TTL_SECS)).await;
+        // Only evict if THIS run is still registered — a retry / regeneration of the same message
+        // id may have re-registered the run_id meanwhile, and we must not drop that newer run.
+        GLOBAL_CHAT_RUNS.remove_if(&run_id, |_, entry| Arc::ptr_eq(entry, &run));
+    });
+}
+
+#[derive(Serialize)]
+pub struct GlobalChatResumeResult {
+    /// True when a live/recent run was found and its transcript replayed onto the new channel.
+    pub attached: bool,
+}
+
+/// Re-attach a reloaded webview to an in-flight (or just-finished) `global_chat` run: swaps the
+/// run's live channel to the caller's, replays the full buffer, then blocks until the turn ends so
+/// the frontend's awaited invoke resolves exactly like the original send. Returns `attached: false`
+/// when no run exists (already GC'd or never registered) — the client then keeps its local
+/// checkpoint as-is.
+#[tauri::command]
+pub async fn global_chat_resume(
+    run_id: String,
+    channel: Channel<String>,
+) -> Result<GlobalChatResumeResult, String> {
+    let run = match GLOBAL_CHAT_RUNS.get(&run_id) {
+        Some(entry) => entry.value().clone(),
+        None => return Ok(GlobalChatResumeResult { attached: false }),
+    };
+
+    {
+        // Hold the buffer lock across the swap + replay so no concurrent push can interleave: every
+        // buffered chunk reaches the new channel in order, and later pushes follow it.
+        let buffer = run.buffer.lock().unwrap();
+        *run.live.lock().unwrap() = Some(channel.clone());
+        for chunk in buffer.iter() {
+            let _ = channel.send(chunk.clone());
+        }
+    }
+
+    let mut done_rx = run.done_rx.clone();
+    if !*done_rx.borrow_and_update() {
+        let _ = done_rx.wait_for(|done| *done).await;
+    }
+
+    Ok(GlobalChatResumeResult { attached: true })
+}
+
+/// Reuses the same backend selection as `copilot_chat` (profile Bits models plus the GitHub Copilot,
+/// Codex, and Claude Code agent backends) but injects a platform system prompt, self-awareness
+/// context, and the platform tool set instead of board/frontend tools.
+#[tauri::command]
+pub async fn global_chat(
+    app_handle: AppHandle,
+    state: State<'_, TauriFlowLikeState>,
+    scope: CopilotScope,
+    user_prompt: String,
+    current_images: Option<Vec<ChatImage>>,
+    history: Option<Vec<UnifiedChatMessage>>,
+    model_id: Option<String>,
+    token: Option<String>,
+    user_context: Option<String>,
+    embedding_model_id: Option<String>,
+    attachment_urls: Option<Vec<String>>,
+    board_context: Option<GlobalOpenBoardContext>,
+    // Frontend-generated id (the assistant message id) under which this run is registered so a
+    // reloaded webview can re-attach via `global_chat_resume`. `None` disables resumability.
+    run_id: Option<String>,
+    channel: Channel<String>,
+) -> Result<UnifiedCopilotResponse, String> {
+    let model_selection = FlowPilotModelSelection::parse(model_id);
+    let history = history.unwrap_or_default();
+    let context =
+        build_global_agent_context(&app_handle, user_context.as_deref(), board_context.as_ref())
+            .await;
+
+    // Attachments arrive as URLs (local tmp files / presigned uploads, like the simple chat) and
+    // are resolved to base64 images here, right before the model call.
+    let current_images = {
+        let mut images = current_images.unwrap_or_default();
+        if let Some(urls) = attachment_urls.as_deref() {
+            images.extend(resolve_attachment_images(urls).await);
+        }
+        (!images.is_empty()).then_some(images)
+    };
+
+    let profile = TauriSettingsState::current_profile(&app_handle)
+        .await
+        .ok()
+        .map(|p| Arc::new(p.hub_profile));
+
+    // Profile-scoped semantic memory, enabled only when the user selected an embedding model.
+    // Shared by every backend so recall and the memory tools behave identically regardless of
+    // the selected model.
+    let memory = if let (Some(profile_arc), Some(embedding_id)) =
+        (&profile, embedding_model_id.as_ref())
+    {
+        match profile_arc
+            .find_bit(embedding_id, state.0.http_client.clone())
+            .await
+        {
+            Ok(bit) => {
+                match AssistantMemory::open(state.0.clone(), None, &profile_arc.id, &bit).await {
+                    Ok(memory) => Some(Arc::new(memory)),
+                    Err(error) => {
+                        eprintln!("[global_chat] memory init failed: {error}");
+                        None
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("[global_chat] embedding model '{embedding_id}' not found: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Register the run (if the frontend gave a run id) and stream through a mirror channel that
+    // buffers every chunk + forwards to the live webview channel, so a reload can re-attach and
+    // replay via `global_chat_resume`. Without a run id, stream straight to the raw channel.
+    let run = run_id
+        .as_ref()
+        .map(|id| register_global_chat_run(id, channel.clone()));
+    let sink = match &run {
+        Some(run) => global_chat_run_channel(run.clone()),
+        None => channel,
+    };
+
+    let result = async {
+        match model_selection.backend {
+            FlowPilotChatBackend::Agent(FlowPilotAgentBackendKind::GithubCopilot) => {
+                let model_id = model_selection
+                    .model_id
+                    .as_deref()
+                    .filter(|model_id| !model_id.trim().is_empty())
+                    .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
+                let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
+
+                copilot_sdk_chat_internal(
+                    app_handle.clone(),
+                    model_id,
+                    scope,
+                    None,
+                    None,
+                    &[],
+                    None,
+                    user_prompt,
+                    current_images,
+                    history,
+                    sink,
+                    Some(context),
+                    memory,
+                    false,
+                    false,
+                )
+                .await
+            }
+            FlowPilotChatBackend::Agent(agent_backend) => {
+                let model_id = model_selection
+                    .model_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+                let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
+
+                external_code_agent_chat_internal(
+                    app_handle.clone(),
+                    agent_backend,
+                    &model_id,
+                    scope,
+                    None,
+                    None,
+                    &[],
+                    None,
+                    user_prompt,
+                    history,
+                    sink,
+                    Some(context),
+                    memory,
+                    false,
+                )
+                .await
+            }
+            FlowPilotChatBackend::Bits => {
+                // Profile ("Bits") models are made tool-capable via the same rig machinery the board
+                // copilot uses for Bits (get_model + rig agent + manual tool loop), but with the platform
+                // tools + global prompt. Platform tools run through the frontend bridge (GLOBAL event).
+                // The whole loop lives in core (`run_platform_chat`); the desktop only supplies the
+                // Tauri-backed tool bridge and token sink. Memory recall happens inside the loop.
+                let bridge: Arc<dyn PlatformToolBridge> = Arc::new(GlobalPlatformBridge {
+                    bridge: super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
+                        app_handle.clone(),
+                        super::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
+                    ),
+                });
+
+                let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
+                    .into_iter()
+                    .map(|m| flow_like::flow::copilot::ChatMessage {
+                        role: m.role,
+                        content: m.content,
+                        images: m.images,
+                    })
+                    .collect();
+
+                let on_token = move |token: String| {
+                    let _ = sink.send(token);
+                };
+
+                let message = run_platform_chat(
+                    state.0.clone(),
+                    profile,
+                    context,
+                    user_prompt,
+                    current_images,
+                    board_history,
+                    model_selection.model_id,
+                    token,
+                    bridge,
+                    memory,
+                    Some(on_token),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+                Ok(UnifiedCopilotResponse {
+                    message,
+                    commands: Vec::new(),
+                    suggestions: Vec::new(),
+                    components: Vec::new(),
+                    canvas_settings: None,
+                    root_component_id: None,
+                    flowscript_workspace: None,
+                    active_scope: scope,
+                })
+            }
+        }
+    }
+    .await;
+
+    // Mark the run finished (unblocking any resumer waiting on completion) and schedule its removal
+    // after the resumable TTL. Runs on both the success and error paths so the registry never leaks.
+    if let (Some(run_id), Some(run)) = (run_id, run) {
+        finish_global_chat_run(run_id, &run);
+    }
+
+    result
+}
+
+/// Append the shared memory recall/instruction sections to the platform context for the agent
+/// backends, whose system prompt is assembled here (the Bits path does the same inside
+/// `PlatformCopilot::chat`).
+async fn context_with_memory(
+    context: String,
+    memory: Option<&Arc<AssistantMemory>>,
+    user_prompt: &str,
+) -> String {
+    match memory {
+        Some(memory) => format!("{context}{}", memory.prompt_sections(user_prompt).await),
+        None => context,
+    }
+}
+
+/// Stored-memory count for a profile + the embedding model that produced them, so the UI can warn
+/// before switching to an incompatible embedding model.
+#[tauri::command]
+pub async fn global_chat_memory_status(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+) -> Result<MemoryStatus, String> {
+    AssistantMemory::status(state.0.clone(), None, &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete all memories for a profile (used when the user switches the embedding model).
+#[tauri::command]
+pub async fn global_chat_clear_memory(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+) -> Result<(), String> {
+    AssistantMemory::clear(state.0.clone(), None, &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// List a profile's saved memories (newest first) so the UI can review and manage them.
+#[tauri::command]
+pub async fn global_chat_list_memories(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+) -> Result<Vec<MemoryEntry>, String> {
+    AssistantMemory::list(state.0.clone(), None, &profile_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a single saved memory by id.
+#[tauri::command]
+pub async fn global_chat_delete_memory(
+    state: State<'_, TauriFlowLikeState>,
+    profile_id: String,
+    id: String,
+) -> Result<(), String> {
+    AssistantMemory::delete_entry(state.0.clone(), None, &profile_id, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Desktop implementation of the platform tool bridge: routes the global assistant's tool calls to
+/// the frontend over the GLOBAL bridge event with per-tool approval, running the blocking bridge call
+/// off the async runtime thread.
+struct GlobalPlatformBridge {
+    bridge: super::frontend_tool_bridge::FrontendToolBridge,
+}
+
+#[async_trait]
+impl PlatformToolBridge for GlobalPlatformBridge {
+    async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
+        use super::copilot_sdk_tools::approval_from_spec;
+        use super::frontend_tool_bridge::FrontendToolApproval;
+        use flow_like::flow::copilot::tool_spec::{
+            INTERNET_SEARCH_TOOL, find_global_tool_spec, missing_required_args,
+        };
+
+        let spec = find_global_tool_spec(tool_name);
+
+        // Reject calls with missing required arguments before any approval dialog or dispatch,
+        // so the model retries with complete arguments (same guard as the SDK/MCP backends).
+        if let Some(spec) = &spec
+            && let Some(error) = missing_required_args(spec, &arguments)
+        {
+            return serde_json::json!({ "status": "error", "error": error }).to_string();
+        }
+
+        // Host-local tool: run the web search in-process instead of round-tripping the frontend.
+        if tool_name == INTERNET_SEARCH_TOOL {
+            let args = arguments.clone();
+            return match tokio::task::spawn_blocking(move || {
+                super::internet_search::run_internet_search(&args)
+            })
+            .await
+            {
+                Ok(value) => serde_json::to_string(&value)
+                    .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
+                Err(err) => {
+                    serde_json::json!({ "status": "error", "error": err.to_string() }).to_string()
+                }
+            };
+        }
+
+        // Approval + timeout come from the shared platform tool spec, so the Bits path enforces
+        // exactly the same policy as the Copilot SDK / MCP backends.
+        let (approval, timeout) = match spec {
+            Some(spec) => (
+                approval_from_spec(&spec, &arguments),
+                Duration::from_secs(spec.timeout_secs),
+            ),
+            None => (FrontendToolApproval::none(), Duration::from_secs(120)),
+        };
+
+        let bridge = self.bridge.clone();
+        let name = tool_name.to_string();
+        match tokio::task::spawn_blocking(move || {
+            bridge.call_with_timeout(name, arguments, approval, timeout)
+        })
+        .await
+        {
+            Ok(value) => serde_json::to_string(&value)
+                .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
+            Err(err) => {
+                serde_json::json!({ "status": "error", "error": err.to_string() }).to_string()
+            }
+        }
+    }
+}
+
+const EXTERNAL_AGENT_TOOL_CALL_ID: &str = "external-agent";
+
+/// Result of one external agent CLI run. `error` carries a non-fatal failure (agent error event,
+/// non-zero exit) when partial text was still produced, so callers can surface both.
+struct ExternalAgentRunOutput {
+    text: String,
+    error: Option<String>,
+}
+
 async fn external_code_agent_chat_internal(
     app_handle: AppHandle,
     backend: FlowPilotAgentBackendKind,
@@ -513,6 +1126,9 @@ async fn external_code_agent_chat_internal(
     user_prompt: String,
     history: Vec<UnifiedChatMessage>,
     channel: Channel<String>,
+    global: Option<String>,
+    memory: Option<Arc<AssistantMemory>>,
+    read_only: bool,
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut surface = build_flowpilot_agent_surface(
         scope,
@@ -522,6 +1138,8 @@ async fn external_code_agent_chat_internal(
         current_surface,
         &history,
         &user_prompt,
+        global.as_deref(),
+        read_only,
     );
     surface.capabilities.tool_protocol = FlowPilotAgentTransportKind::Mcp;
 
@@ -533,15 +1151,26 @@ async fn external_code_agent_chat_internal(
         )
     })?;
 
-    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface);
+    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface, global.is_some(), memory);
     let tool_names = tools
         .iter()
         .map(|(tool, _)| tool.name.clone())
         .collect::<Vec<_>>();
     let tool_name_summary = tool_names.join(", ");
+
+    send_stream_json_event(
+        &channel,
+        "tool_start",
+        &serde_json::json!({
+            "tool_call_id": EXTERNAL_AGENT_TOOL_CALL_ID,
+            "tool": backend.cli_name(),
+            "status": "running",
+            "summary": format!("Starting {}", backend.label()),
+        }),
+    );
     send_external_progress_event(
         &channel,
-        "external-agent",
+        EXTERNAL_AGENT_TOOL_CALL_ID,
         &format!(
             "Starting {} with shared FlowPilot MCP tools: {}",
             backend.label(),
@@ -549,30 +1178,68 @@ async fn external_code_agent_chat_internal(
         ),
     );
 
-    let mcp_bridge = FlowPilotMcpBridge::start(tools).await?;
-    let prompt = build_external_agent_prompt(&surface.system_content, &user_prompt);
-    let invocation =
-        ExternalAgentInvocation::new(backend, cli, model_id, &mcp_bridge.url, prompt, tool_names)?;
+    let agent_result = match FlowPilotMcpBridge::start(tools).await {
+        Ok(mcp_bridge) => {
+            let prompt = build_external_agent_prompt(&surface.system_content, &user_prompt);
+            let result = match ExternalAgentInvocation::new(
+                backend,
+                cli,
+                model_id,
+                &mcp_bridge.url,
+                prompt,
+                tool_names,
+            ) {
+                Ok(invocation) => {
+                    send_external_progress_event(
+                        &channel,
+                        EXTERNAL_AGENT_TOOL_CALL_ID,
+                        &format!("Using {} via {}", backend.label(), mcp_bridge.url),
+                    );
+                    run_external_agent_invocation(invocation, channel.clone()).await
+                }
+                Err(error) => Err(error),
+            };
+            mcp_bridge.shutdown().await;
+            result
+        }
+        Err(error) => Err(error),
+    };
 
-    send_external_progress_event(
+    let error_note = match &agent_result {
+        Ok(output) => output.error.clone(),
+        Err(error) => Some(error.clone()),
+    };
+    send_stream_json_event(
         &channel,
-        "external-agent",
-        &format!("Using {} via {}", backend.label(), mcp_bridge.url),
+        "tool_end",
+        &serde_json::json!({
+            "tool_call_id": EXTERNAL_AGENT_TOOL_CALL_ID,
+            "tool": backend.cli_name(),
+            "status": if error_note.is_some() { "error" } else { "done" },
+            "result_summary": error_note
+                .clone()
+                .unwrap_or_else(|| format!("{} finished", backend.label())),
+            "error": error_note,
+        }),
     );
 
-    let agent_result = run_external_agent_invocation(invocation, channel).await;
-    mcp_bridge.shutdown().await;
     let agent_output = agent_result?;
+    let text = agent_output.text.trim().to_string();
+    let message = match (agent_output.error, text.is_empty()) {
+        (Some(error), true) => return Err(format!("{} failed: {error}", backend.label())),
+        (Some(error), false) => format!(
+            "{text}\n\n> Note: {} ended with an error after this partial response: {error}",
+            backend.label()
+        ),
+        (None, true) => format!(
+            "{} completed without a final text response.",
+            backend.label()
+        ),
+        (None, false) => text,
+    };
 
     Ok(UnifiedCopilotResponse {
-        message: if agent_output.trim().is_empty() {
-            format!(
-                "{} completed without a final text response.",
-                backend.label()
-            )
-        } else {
-            agent_output
-        },
+        message,
         commands: drain_side_effect_commands(&surface.side_effect_commands),
         suggestions: Vec::new(),
         components: Vec::new(),
@@ -596,15 +1263,15 @@ async fn copilot_sdk_chat_internal(
     current_images: Option<Vec<ChatImage>>,
     history: Vec<UnifiedChatMessage>,
     channel: Channel<String>,
+    global: Option<String>,
+    memory: Option<Arc<AssistantMemory>>,
+    nested: bool,
+    read_only: bool,
 ) -> Result<UnifiedCopilotResponse, String> {
     use copilot_sdk::SessionEventData;
 
     const MAX_WORKFLOW_IDLE_CONTINUATIONS: u8 = 2;
 
-    let guard = COPILOT_CLIENT.lock().await;
-    let client = guard
-        .as_ref()
-        .ok_or("Copilot SDK not running. Please start it first.")?;
     let original_user_prompt = user_prompt.clone();
 
     let surface = build_flowpilot_agent_surface(
@@ -615,11 +1282,13 @@ async fn copilot_sdk_chat_internal(
         current_surface,
         &history,
         &original_user_prompt,
+        global.as_deref(),
+        read_only,
     );
     let side_effect_commands = surface.side_effect_commands.clone();
     let workflow_edit_request = surface.workflow_edit_request;
 
-    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface);
+    let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface, global.is_some(), memory);
 
     // Extract just the Tool definitions for SessionConfig
     let tool_defs: Vec<copilot_sdk::Tool> = tools.iter().map(|(t, _)| t.clone()).collect();
@@ -675,10 +1344,50 @@ async fn copilot_sdk_chat_internal(
         ..Default::default()
     };
 
-    let session = client
-        .create_session(config)
-        .await
-        .map_err(|e| format!("Failed to create session: {}", e))?;
+    println!(
+        "[copilot_sdk_chat] start (model: {model_id}, global: {}, nested: {nested}, tools: {})",
+        global.is_some(),
+        allowed_tool_names.len()
+    );
+
+    // Hold the client lock only while creating the session (Session is self-contained after
+    // that). Nested runs get a DEDICATED CLI process: the copilot CLI serializes requests
+    // within one process, so a session created on the parent's client while its tool call is
+    // pending is never answered — the sub-run would hang until the tool bridge times out.
+    let session = if nested {
+        let mut guard = NESTED_COPILOT_CLIENT.lock().await;
+        if guard.is_none() {
+            let options = COPILOT_START_OPTIONS.lock().await.clone().unwrap_or(
+                FlowPilotBackendStartOptions {
+                    use_stdio: true,
+                    cli_url: None,
+                    app_handle: None,
+                },
+            );
+            println!("[copilot_sdk_chat] starting dedicated CLI process for nested runs");
+            *guard = Some(build_and_start_copilot_client(&options).await?);
+        }
+        let client = guard.as_ref().expect("nested Copilot client just started");
+        println!("[copilot_sdk_chat] creating session on the nested CLI");
+        client
+            .create_session(config)
+            .await
+            .map_err(|e| format!("Failed to create nested session: {}", e))?
+    } else {
+        let guard = COPILOT_CLIENT.lock().await;
+        let client = guard
+            .as_ref()
+            .ok_or("Copilot SDK not running. Please start it first.")?;
+        println!("[copilot_sdk_chat] client lock acquired; creating session");
+        client
+            .create_session(config)
+            .await
+            .map_err(|e| format!("Failed to create session: {}", e))?
+    };
+    println!(
+        "[copilot_sdk_chat] session {} created",
+        session.session_id()
+    );
 
     // Register tool handlers
     for (tool, handler) in tools {
@@ -717,6 +1426,10 @@ async fn copilot_sdk_chat_internal(
         })
         .await
         .map_err(|e| format!("Failed to send message: {}", e))?;
+    println!(
+        "[copilot_sdk_chat] prompt sent on session {}; streaming events",
+        session.session_id()
+    );
 
     let mut full_response = String::new();
     let mut extracted_commands: Vec<BoardCommand> = Vec::new();
@@ -732,6 +1445,16 @@ async fn copilot_sdk_chat_internal(
     )> = None;
     let mut workflow_idle_continuations = 0u8;
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
+    let mut open_tool_call_ids: HashSet<String> = HashSet::new();
+    let mut session_error_note: Option<String> = None;
+    // Token usage the SDK reports per turn (assistant.usage) — accumulated into one usage_stat frame
+    // so the chat shows the agent's own model usage (mirrors the Bits/rig path in platform.rs).
+    let mut usage_prompt_tokens: u64 = 0;
+    let mut usage_completion_tokens: u64 = 0;
+    let mut usage_cost: f64 = 0.0;
+    let mut usage_has_cost = false;
+    let mut usage_model: Option<String> = None;
+    let mut usage_calls: Vec<serde_json::Value> = Vec::new();
 
     loop {
         match events.recv().await {
@@ -748,40 +1471,74 @@ async fn copilot_sdk_chat_internal(
                         full_response = msg.content.clone();
                     }
                 }
-                SessionEventData::ToolExecutionStart(tool_event) => {
-                    tool_names_by_call_id.insert(
-                        tool_event.tool_call_id.clone(),
-                        tool_event.tool_name.clone(),
-                    );
-
-                    if tool_event.tool_name == "edit_flowscript"
-                        && let Some(arguments) = &tool_event.arguments
-                        && let Some(workspace) =
-                            arguments.get("flowscript").and_then(|value| value.as_str())
-                    {
-                        extracted_flowscript_workspace = Some(workspace.to_string());
-                        let payload = serde_json::json!({
-                            "source": workspace,
-                            "status": "submitted",
-                        });
-                        let workspace_event = format!(
-                            "<flowscript_workspace>{}</flowscript_workspace>",
-                            serde_json::to_string(&payload).unwrap_or_default()
-                        );
-                        let _ = channel.send(workspace_event);
+                SessionEventData::AssistantUsage(data) => {
+                    let input = data.input_tokens.unwrap_or(0.0).max(0.0).round() as u64;
+                    let output = data.output_tokens.unwrap_or(0.0).max(0.0).round() as u64;
+                    if input > 0 || output > 0 {
+                        usage_prompt_tokens += input;
+                        usage_completion_tokens += output;
+                        if let Some(cost) = data.cost {
+                            usage_cost += cost;
+                            usage_has_cost = true;
+                        }
+                        if data.model.is_some() {
+                            usage_model = data.model.clone();
+                        }
+                        usage_calls.push(serde_json::json!({
+                            "model": data.model.clone().unwrap_or_default(),
+                            "usage": {
+                                "prompt_tokens": input,
+                                "completion_tokens": output,
+                                "total_tokens": input + output,
+                                "cost": data.cost,
+                            },
+                        }));
                     }
-
-                    // Send tool start event to frontend
-                    send_stream_json_event(
+                }
+                SessionEventData::ToolExecutionStart(tool_event) => {
+                    let newly_announced = tool_names_by_call_id
+                        .insert(
+                            tool_event.tool_call_id.clone(),
+                            tool_event.tool_name.clone(),
+                        )
+                        .is_none();
+                    open_tool_call_ids.insert(tool_event.tool_call_id.clone());
+                    // The same call may already have been announced via the protocol v3
+                    // external_tool.requested broadcast — don't emit a second tool_start.
+                    if newly_announced {
+                        announce_tool_start(
+                            &channel,
+                            &tool_event.tool_call_id,
+                            &tool_event.tool_name,
+                            tool_event.arguments.as_ref(),
+                            &mut extracted_flowscript_workspace,
+                        );
+                    }
+                }
+                SessionEventData::ExternalToolRequested(request) => {
+                    // Protocol v3 broadcasts custom tool calls as external_tool.requested and may
+                    // never emit tool.execution_start for them — announce the step here so custom
+                    // FlowPilot tools stream reliably.
+                    let Some(tool_call_id) =
+                        request.tool_call_id.clone().filter(|id| !id.is_empty())
+                    else {
+                        continue;
+                    };
+                    if tool_names_by_call_id.contains_key(&tool_call_id) {
+                        continue;
+                    }
+                    let tool_name = request
+                        .tool_name
+                        .clone()
+                        .unwrap_or_else(|| "tool".to_string());
+                    tool_names_by_call_id.insert(tool_call_id.clone(), tool_name.clone());
+                    open_tool_call_ids.insert(tool_call_id.clone());
+                    announce_tool_start(
                         &channel,
-                        "tool_start",
-                        &serde_json::json!({
-                            "tool_call_id": tool_event.tool_call_id,
-                            "tool": tool_event.tool_name,
-                            "status": "running",
-                            "summary": summarize_tool_arguments(&tool_event.tool_name, tool_event.arguments.as_ref()),
-                            "arguments_preview": preview_tool_arguments(&tool_event.tool_name, tool_event.arguments.as_ref()),
-                        }),
+                        &tool_call_id,
+                        &tool_name,
+                        request.arguments.as_ref(),
+                        &mut extracted_flowscript_workspace,
                     );
                 }
                 SessionEventData::ToolExecutionProgress(progress) => {
@@ -790,6 +1547,7 @@ async fn copilot_sdk_chat_internal(
                         "tool_progress",
                         &serde_json::json!({
                             "tool_call_id": progress.tool_call_id,
+                            "tool": tool_names_by_call_id.get(&progress.tool_call_id),
                             "message": progress.progress_message,
                         }),
                     );
@@ -800,11 +1558,13 @@ async fn copilot_sdk_chat_internal(
                         "tool_progress",
                         &serde_json::json!({
                             "tool_call_id": partial.tool_call_id,
+                            "tool": tool_names_by_call_id.get(&partial.tool_call_id),
                             "message": truncate_for_preview(&partial.partial_output, 1200),
                         }),
                     );
                 }
                 SessionEventData::ToolExecutionComplete(tool_complete) => {
+                    open_tool_call_ids.remove(&tool_complete.tool_call_id);
                     let completed_tool_name = tool_names_by_call_id
                         .get(&tool_complete.tool_call_id)
                         .cloned()
@@ -955,6 +1715,16 @@ async fn copilot_sdk_chat_internal(
                     );
                 }
                 SessionEventData::SessionIdle(_) => {
+                    // v3 external tool calls may never get a tool.execution_complete event —
+                    // close any still-open steps so the frontend doesn't keep spinners alive.
+                    close_pending_tool_steps(
+                        &channel,
+                        &mut open_tool_call_ids,
+                        &tool_names_by_call_id,
+                        "done",
+                        None,
+                    );
+
                     if extracted_commands.is_empty()
                         && let Some(commands) = last_validated_commands.take()
                     {
@@ -1004,28 +1774,100 @@ async fn copilot_sdk_chat_internal(
                             extracted_flowscript_workspace.as_deref(),
                             workflow_idle_continuations,
                         );
-                        session
+                        match session
                             .send(MessageOptions {
                                 prompt,
                                 attachments: None,
                                 mode: None,
                             })
                             .await
-                            .map_err(|e| {
-                                format!("Failed to continue workflow edit session: {}", e)
-                            })?;
-                        continue;
+                        {
+                            Ok(_) => continue,
+                            Err(e) => {
+                                // Degrade instead of aborting: keep whatever the session already
+                                // produced and surface the continuation failure as a note.
+                                session_error_note = Some(format!(
+                                    "failed to continue the workflow edit session: {e}"
+                                ));
+                                break;
+                            }
+                        }
                     }
 
                     break;
                 }
                 SessionEventData::SessionError(err) => {
-                    return Err(format!("Session error: {:?}", err));
+                    let error_text = if err.message.trim().is_empty() {
+                        err.error_type.clone()
+                    } else {
+                        format!("{}: {}", err.error_type, err.message)
+                    };
+                    close_pending_tool_steps(
+                        &channel,
+                        &mut open_tool_call_ids,
+                        &tool_names_by_call_id,
+                        "error",
+                        Some(&error_text),
+                    );
+                    let has_partial_output = !full_response.trim().is_empty()
+                        || !extracted_commands.is_empty()
+                        || !extracted_components.is_empty()
+                        || extracted_flowscript_workspace.is_some();
+                    if !has_partial_output {
+                        return Err(format!("Session error: {error_text}"));
+                    }
+                    session_error_note = Some(error_text);
+                    break;
+                }
+                SessionEventData::SessionShutdown(_) | SessionEventData::Abort(_) => {
+                    let note = "the Copilot session ended before the response completed";
+                    close_pending_tool_steps(
+                        &channel,
+                        &mut open_tool_call_ids,
+                        &tool_names_by_call_id,
+                        "error",
+                        Some(note),
+                    );
+                    if full_response.trim().is_empty()
+                        && extracted_commands.is_empty()
+                        && extracted_components.is_empty()
+                    {
+                        return Err(
+                            "GitHub Copilot session ended before producing a response.".to_string()
+                        );
+                    }
+                    session_error_note = Some(note.to_string());
+                    break;
                 }
                 _ => {}
             },
-            Err(e) => {
-                println!("[copilot_sdk_chat] Event receive error: {}", e);
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                // The event buffer overflowed; skipping events is recoverable — terminating here
+                // would silently kill the run mid-stream.
+                eprintln!(
+                    "[copilot_sdk_chat] Event stream lagged, skipped {skipped} events; continuing"
+                );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                let note = "the Copilot event stream closed before the session finished";
+                println!("[copilot_sdk_chat] Event stream closed before session idle");
+                close_pending_tool_steps(
+                    &channel,
+                    &mut open_tool_call_ids,
+                    &tool_names_by_call_id,
+                    "error",
+                    Some(note),
+                );
+                if full_response.trim().is_empty()
+                    && extracted_commands.is_empty()
+                    && extracted_components.is_empty()
+                {
+                    return Err(
+                        "GitHub Copilot stopped before producing a response (event stream closed)."
+                            .to_string(),
+                    );
+                }
+                session_error_note = Some(note.to_string());
                 break;
             }
         }
@@ -1037,6 +1879,39 @@ async fn copilot_sdk_chat_internal(
             send_commands_event(&channel, &commands);
             extracted_commands.extend(commands);
         }
+    }
+
+    // Publish the session's own token usage as a usage_stat frame (once, after the loop so
+    // workflow-edit continuations aggregate into a single stat). Labeled by role so nested board/UI
+    // sub-runs are distinguishable from the top-level assistant in the stats sheet.
+    if !usage_calls.is_empty() {
+        let step_name = if global.is_some() {
+            "Assistant"
+        } else {
+            match scope {
+                CopilotScope::Board => "Board copilot",
+                CopilotScope::Frontend => "UI copilot",
+                CopilotScope::Both => "Copilot",
+            }
+        };
+        send_stream_json_event(
+            &channel,
+            "usage_stat",
+            &serde_json::json!({
+                "step_name": step_name,
+                "stats": {
+                    "usage": {
+                        "prompt_tokens": usage_prompt_tokens,
+                        "completion_tokens": usage_completion_tokens,
+                        "total_tokens": usage_prompt_tokens + usage_completion_tokens,
+                        "cost": usage_has_cost.then_some(usage_cost),
+                    },
+                    "model": usage_model,
+                    "iterations": usage_calls.len(),
+                    "calls": usage_calls,
+                },
+            }),
+        );
     }
 
     // ── Fallback: if the model didn't call emit_ui but dumped JSON in the
@@ -1089,6 +1964,14 @@ async fn copilot_sdk_chat_internal(
         full_response
     };
 
+    let final_message = match &session_error_note {
+        Some(note) if final_message.trim().is_empty() => {
+            format!("The run ended early: {note}")
+        }
+        Some(note) => format!("{final_message}\n\n> Note: the run ended early ({note})."),
+        None => final_message,
+    };
+
     Ok(UnifiedCopilotResponse {
         message: final_message,
         commands: extracted_commands,
@@ -1107,6 +1990,73 @@ fn send_stream_json_event(channel: &Channel<String>, tag: &str, payload: &serde_
         serde_json::to_string(payload).unwrap_or_default()
     );
     let _ = channel.send(event);
+}
+
+/// Emit the tool_start frame (plus the flowscript workspace preview for edit_flowscript) for a
+/// tool call announced either via tool.execution_start or the protocol v3 external_tool.requested
+/// broadcast.
+fn announce_tool_start(
+    channel: &Channel<String>,
+    tool_call_id: &str,
+    tool_name: &str,
+    arguments: Option<&serde_json::Value>,
+    extracted_flowscript_workspace: &mut Option<String>,
+) {
+    if tool_name == "edit_flowscript"
+        && let Some(workspace) = arguments
+            .and_then(|args| args.get("flowscript"))
+            .and_then(|value| value.as_str())
+    {
+        *extracted_flowscript_workspace = Some(workspace.to_string());
+        send_stream_json_event(
+            channel,
+            "flowscript_workspace",
+            &serde_json::json!({
+                "source": workspace,
+                "status": "submitted",
+            }),
+        );
+    }
+
+    send_stream_json_event(
+        channel,
+        "tool_start",
+        &serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "tool": tool_name,
+            "status": "running",
+            "summary": summarize_tool_arguments(tool_name, arguments),
+            "arguments_preview": preview_tool_arguments(tool_name, arguments),
+        }),
+    );
+}
+
+/// Close every tool step that got a tool_start but never a completion event, so the frontend does
+/// not keep spinners alive after the session ends (idle, error, or stream loss).
+fn close_pending_tool_steps(
+    channel: &Channel<String>,
+    open_tool_call_ids: &mut HashSet<String>,
+    tool_names_by_call_id: &HashMap<String, String>,
+    status: &str,
+    error: Option<&str>,
+) {
+    for tool_call_id in open_tool_call_ids.drain() {
+        let tool = tool_names_by_call_id
+            .get(&tool_call_id)
+            .cloned()
+            .unwrap_or_else(|| "tool".to_string());
+        send_stream_json_event(
+            channel,
+            "tool_end",
+            &serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "tool": tool,
+                "status": status,
+                "result_summary": error.unwrap_or("completed"),
+                "error": error,
+            }),
+        );
+    }
 }
 
 fn truncate_for_preview(value: &str, max_chars: usize) -> String {
@@ -1423,11 +2373,23 @@ fn build_flowpilot_sdk_tools(
     app_handle: AppHandle,
     scope: CopilotScope,
     surface: &FlowPilotAgentSurface,
+    global: bool,
+    memory: Option<Arc<AssistantMemory>>,
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
-        copilot_sdk_tools::{create_board_tools, create_frontend_tools, create_runtime_tools},
-        frontend_tool_bridge::FrontendToolBridge,
+        copilot_sdk_tools::{
+            create_board_tools, create_frontend_tools, create_global_assistant_tools,
+            create_runtime_tools,
+        },
+        frontend_tool_bridge::{FrontendToolBridge, GLOBAL_FRONTEND_TOOL_EVENT},
     };
+
+    // The global assistant is not bound to a board/surface: it gets the curated global tool set on
+    // its own bridge event so its tool requests reach the global listener, not the board copilot's.
+    if global {
+        let bridge = FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT);
+        return create_global_assistant_tools(bridge, memory);
+    }
 
     let mut tools = match scope {
         CopilotScope::Board => create_board_tools(
@@ -1704,7 +2666,11 @@ impl ExternalAgentInvocation {
             "--config".to_string(),
             "mcp_servers.flowpilot.startup_timeout_sec=10".to_string(),
             "--config".to_string(),
-            "mcp_servers.flowpilot.tool_timeout_sec=600".to_string(),
+            // Outer bound for every FlowPilot MCP tool call. Must be >= the longest per-tool
+            // `timeout_secs` in the shared platform tool specs (call_app_chat = 1800), or Codex
+            // would abort interactive app chats at the MCP layer before their dialogs are answered.
+            // Other tools return their own shorter bridge-timeout result well before this fires.
+            "mcp_servers.flowpilot.tool_timeout_sec=1800".to_string(),
             "--config".to_string(),
             "mcp_servers.flowpilot.default_tools_approval_mode=\"approve\"".to_string(),
             "--config".to_string(),
@@ -1810,7 +2776,7 @@ USER REQUEST
 async fn run_external_agent_invocation(
     invocation: ExternalAgentInvocation,
     channel: Channel<String>,
-) -> Result<String, String> {
+) -> Result<ExternalAgentRunOutput, String> {
     tokio::task::spawn_blocking(move || run_external_agent_invocation_blocking(invocation, channel))
         .await
         .map_err(|e| format!("External agent task failed: {e}"))?
@@ -1819,7 +2785,7 @@ async fn run_external_agent_invocation(
 fn run_external_agent_invocation_blocking(
     invocation: ExternalAgentInvocation,
     channel: Channel<String>,
-) -> Result<String, String> {
+) -> Result<ExternalAgentRunOutput, String> {
     let mut command = Command::new(&invocation.executable);
     command
         .args(&invocation.args)
@@ -1836,19 +2802,22 @@ fn run_external_agent_invocation_blocking(
         )
     })?;
 
-    if !invocation.prompt.is_empty() {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(invocation.prompt.as_bytes())
-                .and_then(|_| stdin.flush())
-                .map_err(|e| {
-                    format!(
-                        "Failed to send prompt to {}: {e}",
-                        invocation.backend.label()
-                    )
-                })?;
+    // Write the prompt from a dedicated thread: writing synchronously before draining stdout can
+    // deadlock on full pipe buffers, and an early CLI exit (EPIPE) must not abort the run before
+    // stderr/exit status are collected.
+    let stdin_handle = match child.stdin.take() {
+        Some(mut stdin) if !invocation.prompt.is_empty() => {
+            let prompt = invocation.prompt.clone();
+            let backend_label = invocation.backend.label();
+            Some(std::thread::spawn(move || {
+                stdin
+                    .write_all(prompt.as_bytes())
+                    .and_then(|_| stdin.flush())
+                    .map_err(|e| format!("Failed to send prompt to {backend_label}: {e}"))
+            }))
         }
-    }
+        _ => None,
+    };
 
     let stdout = child
         .stdout
@@ -1871,6 +2840,7 @@ fn run_external_agent_invocation_blocking(
 
     let mut final_text = String::new();
     let mut streamed_text = String::new();
+    let mut fatal_error: Option<String> = None;
     let mut stream_state = ExternalAgentStreamState::default();
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
@@ -1878,7 +2848,14 @@ fn run_external_agent_invocation_blocking(
         }
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
             if let Some(error) = external_agent_error_text(&value) {
-                return Err(format!("{} failed: {error}", invocation.backend.label()));
+                // Keep draining the stream so partial/final text is preserved; the error is
+                // surfaced after the process exits instead of aborting the run mid-stream.
+                send_external_progress_event(
+                    &channel,
+                    EXTERNAL_AGENT_TOOL_CALL_ID,
+                    &format!("{} reported an error: {error}", invocation.backend.label()),
+                );
+                fatal_error.get_or_insert(error);
             }
 
             if let Some(workspace_event) = external_agent_flowscript_workspace_event(&value) {
@@ -1888,7 +2865,7 @@ fn run_external_agent_invocation_blocking(
             if let Some(event) = external_agent_process_event(&value) {
                 let _ = channel.send(event);
             } else if let Some(label) = external_agent_progress_label(&value) {
-                send_external_progress_event(&channel, "external-agent", &label);
+                send_external_progress_event(&channel, EXTERNAL_AGENT_TOOL_CALL_ID, &label);
             }
 
             if let Some(delta) =
@@ -1902,7 +2879,7 @@ fn run_external_agent_invocation_blocking(
                 final_text = result;
             }
         } else {
-            send_external_progress_event(&channel, "external-agent", &line);
+            send_external_progress_event(&channel, EXTERNAL_AGENT_TOOL_CALL_ID, &line);
         }
     }
 
@@ -1910,6 +2887,9 @@ fn run_external_agent_invocation_blocking(
         .wait()
         .map_err(|e| format!("Failed to wait for {}: {e}", invocation.backend.label()))?;
     let stderr_lines = stderr_handle.join().unwrap_or_default();
+    let stdin_error = stdin_handle
+        .and_then(|handle| handle.join().ok())
+        .and_then(Result::err);
 
     if let Some(path) = &invocation.final_output_path {
         if invocation.backend == FlowPilotAgentBackendKind::Codex
@@ -1921,9 +2901,15 @@ fn run_external_agent_invocation_blocking(
         let _ = std::fs::remove_file(path);
     }
 
+    if final_text.trim().is_empty() {
+        final_text = streamed_text;
+    }
+    let text = final_text.trim().to_string();
+
+    let mut error = fatal_error;
     if !status.success() {
         let stderr_text = stderr_lines.join("\n");
-        return Err(format!(
+        let exit_error = format!(
             "{} exited with status {}{}",
             invocation.backend.label(),
             status,
@@ -1932,14 +2918,19 @@ fn run_external_agent_invocation_blocking(
             } else {
                 format!(":\n{stderr_text}")
             }
-        ));
+        );
+        error = Some(match error {
+            Some(existing) => format!("{existing}\n{exit_error}"),
+            None => exit_error,
+        });
+    } else if error.is_none() {
+        error = stdin_error;
     }
 
-    if final_text.trim().is_empty() {
-        final_text = streamed_text;
+    match (text.is_empty(), error) {
+        (true, Some(error)) => Err(error),
+        (_, error) => Ok(ExternalAgentRunOutput { text, error }),
     }
-
-    Ok(final_text.trim().to_string())
 }
 
 #[derive(Default)]
@@ -2410,6 +3401,9 @@ fn external_agent_error_text(value: &serde_json::Value) -> Option<String> {
             .map(str::to_string);
     }
 
+    // Note: mcp_tool_call items with an error are deliberately NOT fatal — a single failed tool
+    // call is surfaced as a tool_end error frame (external_agent_process_event) and the agent can
+    // recover and continue the turn.
     if matches!(
         event_type,
         "item.started" | "item.updated" | "item.completed"
@@ -2422,13 +3416,6 @@ fn external_agent_error_text(value: &serde_json::Value) -> Option<String> {
         if item_type == "error" {
             return item
                 .get("message")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string);
-        }
-
-        if item_type == "mcp_tool_call" {
-            return item
-                .pointer("/error/message")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
         }
@@ -2584,6 +3571,47 @@ use tokio::sync::Mutex;
 
 /// Global Copilot client instance (singleton) - uses tokio::sync::Mutex for async safety
 static COPILOT_CLIENT: Lazy<Mutex<Option<Client>>> = Lazy::new(|| Mutex::new(None));
+
+/// Dedicated CLI process for NESTED FlowPilot runs (flowpilot_board / flowpilot_widget
+/// sub-agents spawned while a parent Copilot session is mid-turn). The copilot CLI serializes
+/// requests within one process: a `session.create` sent while the parent session has a pending
+/// tool call is never answered, deadlocking the sub-run until the tool bridge times out. A
+/// second process isolates nested sessions completely. Started lazily with the same options as
+/// the main client and kept alive for subsequent nested runs.
+static NESTED_COPILOT_CLIENT: Lazy<Mutex<Option<Client>>> = Lazy::new(|| Mutex::new(None));
+
+/// Options the main Copilot client was started with, reused to start the nested client.
+static COPILOT_START_OPTIONS: Lazy<Mutex<Option<FlowPilotBackendStartOptions>>> =
+    Lazy::new(|| Mutex::new(None));
+
+async fn build_and_start_copilot_client(
+    options: &FlowPilotBackendStartOptions,
+) -> Result<Client, String> {
+    let mut builder = Client::builder()
+        .use_stdio(options.use_stdio)
+        .log_level(LogLevel::Error);
+
+    if let Some(url) = options.cli_url.clone() {
+        builder = builder.cli_url(url);
+    } else if let Some(cli_path) = find_copilot_cli_path() {
+        builder = builder.cli_path(cli_path);
+    }
+
+    // In production builds the app inherits a minimal PATH that often does
+    // not include directories where `node` lives. The copilot CLI is a
+    // Node.js script (#!/usr/bin/env node), so the spawned process needs
+    // node on its PATH. Augment PATH with common Node/tool directories.
+    builder = builder.env("PATH", augmented_path());
+
+    let client = builder
+        .build()
+        .map_err(|e| format!("Failed to build Copilot client: {}", e))?;
+    client
+        .start()
+        .await
+        .map_err(|e| format!("Failed to start Copilot client: {}", e))?;
+    Ok(client)
+}
 static EXTERNAL_AGENT_BACKENDS: Lazy<Mutex<std::collections::HashSet<FlowPilotAgentBackendKind>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 
@@ -2686,6 +3714,7 @@ struct FlowPilotAgentSurface {
     capabilities: FlowPilotAgentCapabilitySet,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_flowpilot_agent_surface(
     scope: CopilotScope,
     board: Option<&Board>,
@@ -2694,6 +3723,11 @@ fn build_flowpilot_agent_surface(
     current_surface: Option<&Vec<SurfaceComponent>>,
     history: &[UnifiedChatMessage],
     original_user_prompt: &str,
+    global: Option<&str>,
+    // Read-only sub-run (flowpilot_board explain): keep the board copilot out of workflow-edit mode
+    // so it streams and returns its answer instead of being coerced to emit an edit and, failing
+    // that, returning a canned "could not produce board commands" message.
+    read_only: bool,
 ) -> FlowPilotAgentSurface {
     use flow_like::flow::copilot::prepare_context;
 
@@ -2738,31 +3772,45 @@ fn build_flowpilot_agent_surface(
         .map(|provider| provider.len())
         .unwrap_or_else(|| flow_like_catalog::get_catalog().len());
 
-    let workflow_edit_request = matches!(scope, CopilotScope::Board | CopilotScope::Both)
+    let workflow_edit_request = !read_only
+        && matches!(scope, CopilotScope::Board | CopilotScope::Both)
         && board_arc.is_some()
         && is_workflow_edit_request(original_user_prompt);
 
-    let mut system_content = match scope {
-        CopilotScope::Board => match board_flowscript.as_deref() {
-            Some(flowscript) => flow_like::copilot::prompts::board_sdk_flowscript_system_prompt(
-                flowscript,
-                catalog_node_count,
-            ),
-            None => flow_like::copilot::prompts::board_sdk_system_prompt(),
-        },
-        CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
-        CopilotScope::Both => {
-            let mut prompt = flow_like::copilot::prompts::general_system_prompt();
-            if let Some(flowscript) = board_flowscript.as_deref() {
-                prompt.push_str("\n\n");
-                prompt.push_str(&flow_like::copilot::prompts::flowscript_board_context(
-                    flowscript,
-                    catalog_node_count,
-                ));
+    let mut system_content = if global.is_some() {
+        global_assistant_system_prompt()
+    } else {
+        match scope {
+            CopilotScope::Board => match board_flowscript.as_deref() {
+                Some(flowscript) => {
+                    flow_like::copilot::prompts::board_sdk_flowscript_system_prompt(
+                        flowscript,
+                        catalog_node_count,
+                    )
+                }
+                None => flow_like::copilot::prompts::board_sdk_system_prompt(),
+            },
+            CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
+            CopilotScope::Both => {
+                let mut prompt = flow_like::copilot::prompts::general_system_prompt();
+                if let Some(flowscript) = board_flowscript.as_deref() {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&flow_like::copilot::prompts::flowscript_board_context(
+                        flowscript,
+                        catalog_node_count,
+                    ));
+                }
+                prompt
             }
-            prompt
         }
     };
+
+    if let Some(context) = global
+        && !context.is_empty()
+    {
+        system_content.push_str("\n\n");
+        system_content.push_str(context);
+    }
 
     if matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
         && let Some(components) = current_surface
@@ -3481,30 +4529,12 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
     }
 
     async fn start(&self, options: FlowPilotBackendStartOptions) -> Result<(), String> {
-        let mut builder = Client::builder()
-            .use_stdio(options.use_stdio)
-            .log_level(LogLevel::Error);
+        let client = build_and_start_copilot_client(&options).await?;
 
-        if let Some(url) = options.cli_url {
-            builder = builder.cli_url(url);
-        } else if let Some(cli_path) = find_copilot_cli_path() {
-            builder = builder.cli_path(cli_path);
+        {
+            let mut opts = COPILOT_START_OPTIONS.lock().await;
+            *opts = Some(options);
         }
-
-        // In production builds the app inherits a minimal PATH that often does
-        // not include directories where `node` lives. The copilot CLI is a
-        // Node.js script (#!/usr/bin/env node), so the spawned process needs
-        // node on its PATH. Augment PATH with common Node/tool directories.
-        builder = builder.env("PATH", augmented_path());
-
-        let client = builder
-            .build()
-            .map_err(|e| format!("Failed to build Copilot client: {}", e))?;
-        client
-            .start()
-            .await
-            .map_err(|e| format!("Failed to start Copilot client: {}", e))?;
-
         let mut guard = COPILOT_CLIENT.lock().await;
         *guard = Some(client);
 
@@ -3516,12 +4546,29 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
             let mut guard = COPILOT_CLIENT.lock().await;
             guard.take()
         };
+        let nested_client = {
+            let mut guard = NESTED_COPILOT_CLIENT.lock().await;
+            guard.take()
+        };
 
+        let mut errors: Vec<String> = Vec::new();
         if let Some(client) = client {
             let stop_errors = client.stop().await;
             if !stop_errors.is_empty() {
-                return Err(format!("Failed to stop Copilot client: {:?}", stop_errors));
+                errors.push(format!("{:?}", stop_errors));
             }
+        }
+        if let Some(client) = nested_client {
+            let stop_errors = client.stop().await;
+            if !stop_errors.is_empty() {
+                errors.push(format!("nested: {:?}", stop_errors));
+            }
+        }
+        if !errors.is_empty() {
+            return Err(format!(
+                "Failed to stop Copilot client: {}",
+                errors.join("; ")
+            ));
         }
 
         Ok(())

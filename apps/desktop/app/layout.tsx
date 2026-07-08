@@ -47,6 +47,9 @@ import { DesktopAuthProvider } from "../components/auth-provider";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
 import DownloadNotificationProvider from "../components/download-notification-provider";
 import GlobalAnchorHandler from "../components/global-anchor-component";
+import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
+import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
+import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
@@ -218,6 +221,9 @@ export default function RootLayout({
 																			<PostHogPageView />
 																			<ThemeLoader />
 																			<AppSidebar>{children}</AppSidebar>
+																			<GlobalToolBridge />
+																			<GlobalChatOverlay />
+																			<FlowPilotBubbleButton />
 																		</SpotlightWrapper>
 																	</ExecutionEngineProviderComponent>
 																</ExecutionServiceProvider>

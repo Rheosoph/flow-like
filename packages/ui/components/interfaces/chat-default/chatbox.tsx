@@ -171,12 +171,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				return;
 			}
 
-			await onSendMessage(
-				input.trim(),
-				attachedFiles,
-				activeTools,
-				recordedAudio || undefined,
-			);
+			const message = input.trim();
+			const files = attachedFiles;
+			const audio = recordedAudio || undefined;
+
+			// Clear the composer immediately on send — onSendMessage may not resolve until the
+			// whole response has streamed back, and leaving the sent text sitting there reads as
+			// "nothing happened". Restore it if the send fails so the user can retry.
 			setInput("");
 			setAttachedFiles([]);
 			setRecordedAudio(null);
@@ -185,6 +186,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			try {
 				chatboxRef.current?.blur();
 			} catch {}
+
+			try {
+				await onSendMessage(message, files, activeTools, audio);
+			} catch (error) {
+				setInput(message);
+				setAttachedFiles(files);
+				setRecordedAudio(audio ?? null);
+				throw error;
+			}
 		};
 
 		useEffect(() => {
@@ -604,7 +614,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 				<form onSubmit={handleSubmit} className="relative">
 					<div
-						className="flex flex-col items-start bg-background border border-border rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
+						className="flex flex-col items-start bg-background border border-border rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
 						onDrop={handleDrop}
 						onDragOver={handleDragOver}
 					>
@@ -633,7 +643,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						</div>
 
 						{/* Tool bar and settings */}
-						<div className="flex items-center justify-between w-full bg-background rounded-b-2xl">
+						<div className="flex items-center justify-between w-full bg-background rounded-b-xl">
 							{/* Left side buttons */}
 							<div className="flex items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}

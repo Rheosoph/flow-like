@@ -361,6 +361,7 @@ export default function WidgetEditorPage() {
 						onSave={handleSave}
 						onChange={handleChange}
 						className="h-full"
+						externalAssistant
 						actionContext={{
 							widgetActions: (widget.actions ?? []).map((a) => ({
 								id: a.id,

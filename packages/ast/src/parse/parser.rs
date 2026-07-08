@@ -600,7 +600,8 @@ impl Parser<'_> {
                 values.push(self.expr()?);
             }
         }
-        Ok(Stmt::Return { values })
+        let anchor = self.take_anchor();
+        Ok(Stmt::Return { values, anchor })
     }
 
     /// Detect a nested event-handler header (`name(params) { … }`). Call/branch arguments are
@@ -741,13 +742,11 @@ impl Parser<'_> {
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::LBrace)?;
-        // A trailing non-anchor comment marks the labelled (call-based) branch form.
+        // A trailing non-anchor comment marks the labelled (call-based) branch form. The anchor
+        // comment can FOLLOW the label on the same line (`{ // exec_out   //@n:id`) — it must be
+        // consumed either way or the branch node counts as deleted on reconcile.
         let true_label = self.take_label();
-        let anchor = if true_label.is_some() {
-            None
-        } else {
-            self.take_anchor()
-        };
+        let anchor = self.take_anchor();
         let true_body = self.block_body()?;
 
         let mut else_label = None;

@@ -27,3 +27,26 @@ model Interaction {
   @@index([status, expiresAt])
   @@index([sub, expiresAt])
 }
+
+/// Lean cross-instance coordination for global-chat FlowPilot browser tool calls.
+/// One row per in-flight client-side tool request. The streaming run inserts a PENDING row
+/// and short-polls it; the (possibly different-instance, on Lambda) POST
+/// /global-chat/{runId}/tool-result flips it to RESPONDED with the serialized result. Rows are
+/// deleted when the run's loop ends; abandoned rows past expiresAt are swept probabilistically
+/// (Lambda has no reliable background task). No appId — the global chat is not app-scoped.
+model GlobalChatToolCall {
+  id            String            @id
+
+  runId         String
+  sub           String
+
+  status        InteractionStatus @default(PENDING)
+  expiresAt     BigInt
+  responseValue String?
+
+  createdAt DateTime @default(now())
+
+  @@index([status, expiresAt])
+  @@index([runId])
+  @@index([sub])
+}

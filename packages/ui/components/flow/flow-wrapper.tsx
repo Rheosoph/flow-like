@@ -1,4 +1,9 @@
-import { DndContext, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import {
+	DndContext,
+	PointerSensor,
+	useSensor,
+	useSensors,
+} from "@dnd-kit/core";
 import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
@@ -18,6 +23,7 @@ export function FlowWrapper({
 	extraDockItems,
 	renderOverlay,
 	sub,
+	externalAssistant,
 }: Readonly<{
 	boardId: string;
 	appId: string;
@@ -34,6 +40,8 @@ export function FlowWrapper({
 	renderOverlay?: () => ReactNode;
 	/** The authenticated user's sub (subject) from the auth token - used for realtime collaboration */
 	sub?: string;
+	/** True when the host app provides the assistant (global chat) — see FlowBoard.externalAssistant. */
+	externalAssistant?: boolean;
 }>) {
 	const pointerSensor = useSensor(PointerSensor, {
 		activationConstraint: {
@@ -141,6 +149,7 @@ export function FlowWrapper({
 				extraDockItems={extraDockItems}
 				renderOverlay={renderOverlay}
 				sub={sub}
+				externalAssistant={externalAssistant}
 			/>
 			<BoardBridgeResponder
 				snapshot={snapshotFn}

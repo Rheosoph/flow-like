@@ -20,6 +20,109 @@ export interface InlineWidgetDef {
 	}[];
 }
 
+/** Minimal shape of a widget's parameter declaration (mirrors ExposedProp in widget-state). */
+interface ExposedPropDef {
+	id: string;
+	targetComponentId: string;
+	/** Dot path on the target component, e.g. "content", "style.className", "data.rows". */
+	propertyPath: string;
+	propType?: unknown;
+}
+
+type WidgetComponentDef = {
+	id: string;
+	component?: Record<string, unknown>;
+	style?: unknown;
+};
+
+function isBoundValue(value: unknown): boolean {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		("literalString" in value ||
+			"literalNumber" in value ||
+			"literalBool" in value ||
+			"literalOptions" in value ||
+			"path" in value)
+	);
+}
+
+/**
+ * Shape an instance's raw parameter value for the target property. Content-style props are consumed
+ * as BoundValues (`{literalString}`/…), while className/style/json props are applied verbatim.
+ */
+function shapeExposedValue(value: unknown, propType: unknown): unknown {
+	if (isBoundValue(value)) return value;
+	if (propType === "Number") return { literalNumber: Number(value) };
+	if (propType === "Boolean") return { literalBool: Boolean(value) };
+	if (
+		propType === "TailwindClass" ||
+		propType === "StyleObject" ||
+		propType === "Json"
+	) {
+		return value;
+	}
+	return { literalString: value == null ? "" : String(value) };
+}
+
+function setDeep(
+	target: Record<string, unknown>,
+	parts: string[],
+	value: unknown,
+): void {
+	let cursor = target;
+	for (let i = 0; i < parts.length - 1; i++) {
+		const key = parts[i];
+		if (typeof cursor[key] !== "object" || cursor[key] === null) {
+			cursor[key] = {};
+		}
+		cursor = cursor[key] as Record<string, unknown>;
+	}
+	cursor[parts[parts.length - 1]] = value;
+}
+
+/**
+ * Apply a widget instance's `exposedPropValues` onto a copy of the widget's components. Each
+ * declared prop maps its value onto `targetComponentId` at `propertyPath` — `style.*` paths target
+ * the component's style, everything else targets its props. Returns the original array untouched
+ * when there is nothing to override (the common case), so unchanged widgets keep referential
+ * identity and don't re-render.
+ */
+function applyExposedProps<T extends WidgetComponentDef>(
+	components: T[],
+	exposedProps: ExposedPropDef[],
+	values: Record<string, unknown> | undefined,
+): T[] {
+	if (!values || exposedProps.length === 0) return components;
+	const overrides = exposedProps
+		.map((prop) => ({ prop, value: values[prop.id] }))
+		.filter((entry) => entry.value !== undefined);
+	if (overrides.length === 0) return components;
+
+	const touched = new Set(
+		overrides.map((entry) => entry.prop.targetComponentId),
+	);
+	const next = components.map((component) =>
+		touched.has(component.id) ? (structuredClone(component) as T) : component,
+	);
+	const byId = new Map(next.map((component) => [component.id, component]));
+	for (const { prop, value } of overrides) {
+		const target = byId.get(prop.targetComponentId);
+		if (!target) continue;
+		const parts = prop.propertyPath.split(".").filter(Boolean);
+		if (parts.length === 0) continue;
+		let root: Record<string, unknown>;
+		if (parts[0] === "style") {
+			root = target as unknown as Record<string, unknown>;
+		} else {
+			if (!target.component) target.component = {};
+			root = target.component;
+		}
+		setDeep(root, parts, shapeExposedValue(value, prop.propType));
+	}
+	return next;
+}
+
 export interface WidgetInstanceComponentProps {
 	widgetId: string;
 	instanceId: string;
@@ -58,8 +161,14 @@ export function A2UIWidgetInstance({
 	onAction,
 }: ComponentProps) {
 	const props = component as unknown as WidgetInstanceComponentProps;
-	const { instanceId, widgetId, appId, inlineWidgetDef, actionBindings } =
-		props;
+	const {
+		instanceId,
+		widgetId,
+		appId,
+		inlineWidgetDef,
+		actionBindings,
+		exposedPropValues,
+	} = props;
 	const effectiveAppId = appId ?? rendererAppId;
 	const widgetRefsContext = useWidgetRefs();
 	const backend = useBackend();
@@ -80,6 +189,22 @@ export function A2UIWidgetInstance({
 		if (inlineWidgetDef) return inlineWidgetDef;
 		return fetched.data;
 	}, [fromRefs, inlineWidgetDef, fetched.data]);
+
+	// Apply this instance's parameter values onto the widget's components, so the same widget
+	// definition can render differently per instance (e.g. a stat card with a per-instance title).
+	const resolvedWidgetDef = useMemo(() => {
+		if (!widgetDef) return widgetDef;
+		const exposedProps =
+			(widgetDef as { exposedProps?: ExposedPropDef[] }).exposedProps ?? [];
+		const original = widgetDef.components as WidgetComponentDef[];
+		const applied = applyExposedProps(
+			original,
+			exposedProps,
+			exposedPropValues,
+		);
+		if (applied === original) return widgetDef;
+		return { ...widgetDef, components: applied } as typeof widgetDef;
+	}, [widgetDef, exposedPropValues]);
 
 	// Create a local renderChild for the widget's internal components
 	const renderWidgetChild = useCallback(
@@ -167,7 +292,10 @@ export function A2UIWidgetInstance({
 				data-widget-id={widgetId}
 				className="contents"
 			>
-				{renderWidgetChild(widgetDef.rootComponentId, widgetDef)}
+				{renderWidgetChild(
+					(resolvedWidgetDef ?? widgetDef).rootComponentId,
+					resolvedWidgetDef ?? widgetDef,
+				)}
 			</div>
 		</WidgetInstanceContext.Provider>
 	);

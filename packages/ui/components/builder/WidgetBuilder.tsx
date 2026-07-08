@@ -22,6 +22,10 @@ import {
 	presignCanvasSettings,
 	presignPageAssets,
 } from "../../lib/presign-assets";
+import {
+	type AssistantWidgetSurface,
+	useAssistantSurface,
+} from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
@@ -164,6 +168,11 @@ export interface WidgetBuilderProps {
 	currentPageId?: string;
 	/** Called when user switches to a different page */
 	onPageChange?: (pageId: string) => void;
+	/**
+	 * When true the host app provides the assistant (global chat) — the FlowPilot button routes to
+	 * requestOpenAssistant() and the embedded A2UICopilot panel/sheet are not mounted.
+	 */
+	externalAssistant?: boolean;
 }
 
 export function WidgetBuilder({
@@ -179,6 +188,7 @@ export function WidgetBuilder({
 	actionContext,
 	currentPageId,
 	onPageChange,
+	externalAssistant = false,
 }: WidgetBuilderProps) {
 	const [mode, setMode] = useState<"edit" | "preview">("edit");
 	const [leftTab, setLeftTab] = useState<"palette" | "hierarchy">("palette");
@@ -218,6 +228,7 @@ export function WidgetBuilder({
 				onExport={onExport}
 				currentPageId={currentPageId}
 				onPageChange={onPageChange}
+				externalAssistant={externalAssistant}
 			/>
 		</BuilderProvider>
 	);
@@ -241,6 +252,7 @@ interface WidgetBuilderContentProps {
 	onExport?: (components: SurfaceComponent[]) => void;
 	currentPageId?: string;
 	onPageChange?: (pageId: string) => void;
+	externalAssistant?: boolean;
 }
 
 // Wrapper that provides DnD context - must be inside BuilderProvider to access setIsDraggingGlobal
@@ -270,6 +282,7 @@ function WidgetBuilderContent({
 	onExport,
 	currentPageId,
 	onPageChange,
+	externalAssistant,
 }: WidgetBuilderContentProps) {
 	const {
 		components,
@@ -403,8 +416,37 @@ function WidgetBuilderContent({
 		setPendingComponents([]);
 	}, [setPendingComponents]);
 
-	const currentComponents = Array.from(components.values());
+	const currentComponents = useMemo(
+		() => Array.from(components.values()),
+		[components],
+	);
 	const selectedIds = selection.componentIds;
+
+	// Publish the live widget surface for the global assistant while the builder is mounted.
+	useEffect(() => {
+		const surface: AssistantWidgetSurface = {
+			surfaceId,
+			appId: actionContext?.appId,
+			currentComponents,
+			selectedComponentIds: selectedIds,
+			captureScreenshot,
+			applyComponents: handleApplyComponents,
+			componentsGenerated: handleComponentsGenerated,
+		};
+		useAssistantSurface.getState().setWidgetSurface(surface);
+		return () => {
+			const store = useAssistantSurface.getState();
+			if (store.widgetSurface === surface) store.setWidgetSurface(null);
+		};
+	}, [
+		surfaceId,
+		actionContext?.appId,
+		currentComponents,
+		selectedIds,
+		captureScreenshot,
+		handleApplyComponents,
+		handleComponentsGenerated,
+	]);
 
 	return (
 		<>
@@ -428,15 +470,19 @@ function WidgetBuilderContent({
 						onPageChange={onPageChange}
 					/>
 					<div className="flex-1" />
-					<Button
-						variant={copilotOpen ? "secondary" : "ghost"}
-						size="sm"
-						className="h-7 px-2 gap-1.5"
-						onClick={() => setCopilotOpen(!copilotOpen)}
-					>
-						<SparklesIcon className="h-4 w-4" />
-						<span className="text-xs">FlowPilot</span>
-					</Button>
+					{/* When the host provides the global assistant, the floating FlowPilot bubble is the
+					    entry point — only show this in-interface button for the embedded copilot. */}
+					{!externalAssistant && (
+						<Button
+							variant={copilotOpen ? "secondary" : "ghost"}
+							size="sm"
+							className="h-7 px-2 gap-1.5"
+							onClick={() => setCopilotOpen(!copilotOpen)}
+						>
+							<SparklesIcon className="h-4 w-4" />
+							<span className="text-xs">FlowPilot</span>
+						</Button>
+					)}
 				</div>
 
 				{/* Pending components bar */}
@@ -525,7 +571,7 @@ function WidgetBuilderContent({
 								maxSize={50}
 								className="min-h-0 min-w-0 overflow-hidden"
 							>
-								{copilotOpen ? (
+								{copilotOpen && !externalAssistant ? (
 									<A2UICopilot
 										currentComponents={currentComponents}
 										selectedComponentIds={selectedIds}
@@ -543,20 +589,22 @@ function WidgetBuilderContent({
 					)}
 				</ResizablePanelGroup>
 
-				{/* Mobile FlowPilot Sheet */}
-				<Sheet open={copilotOpen} onOpenChange={setCopilotOpen}>
-					<SheetContent side="right" className="w-full sm:max-w-md p-0">
-						<A2UICopilot
-							currentComponents={currentComponents}
-							selectedComponentIds={selectedIds}
-							onComponentsGenerated={handleComponentsGenerated}
-							onApplyComponents={handleApplyComponents}
-							onClose={() => setCopilotOpen(false)}
-							className="h-full"
-							captureScreenshot={captureScreenshot}
-						/>
-					</SheetContent>
-				</Sheet>
+				{/* Mobile FlowPilot Sheet (embedded hosts only) */}
+				{!externalAssistant && (
+					<Sheet open={copilotOpen} onOpenChange={setCopilotOpen}>
+						<SheetContent side="right" className="w-full sm:max-w-md p-0">
+							<A2UICopilot
+								currentComponents={currentComponents}
+								selectedComponentIds={selectedIds}
+								onComponentsGenerated={handleComponentsGenerated}
+								onApplyComponents={handleApplyComponents}
+								onClose={() => setCopilotOpen(false)}
+								className="h-full"
+								captureScreenshot={captureScreenshot}
+							/>
+						</SheetContent>
+					</Sheet>
+				)}
 
 				{/* Dev Mode JSON Editor */}
 				<DevModePanel />

@@ -283,7 +283,7 @@ impl Writer<'_> {
                 self.anchor("n", anchor.as_deref());
                 self.out.push('\n');
             }
-            Stmt::Return { values } => {
+            Stmt::Return { values, anchor } => {
                 self.indent();
                 self.out.push_str("return");
                 if !values.is_empty() {
@@ -291,6 +291,7 @@ impl Writer<'_> {
                     let rendered: Vec<String> = values.iter().map(render_expr).collect();
                     self.out.push_str(&rendered.join(", "));
                 }
+                self.anchor("n", anchor.as_deref());
                 self.out.push('\n');
             }
             Stmt::Local(var) => {

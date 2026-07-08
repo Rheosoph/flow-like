@@ -176,15 +176,33 @@ impl Lexer {
         self.advance();
         self.advance();
         let mut text = String::new();
+        let mut split_at_anchor = false;
         while let Some(&c) = self.chars.get(self.pos) {
             if c == '\n' {
+                break;
+            }
+            // The renderer can put a trailing anchor on the same line as a label comment
+            // (`{ // exec_out   //@n:id`). Stop before the embedded `//@` so the anchor lexes
+            // as its own comment token — otherwise the anchor is swallowed by the label and
+            // the node counts as deleted on reconcile.
+            if c == '/'
+                && self.chars.get(self.pos + 1) == Some(&'/')
+                && self.chars.get(self.pos + 2) == Some(&'@')
+                && !text.is_empty()
+            {
+                split_at_anchor = true;
                 break;
             }
             text.push(c);
             self.advance();
         }
         // Drop a single leading space (renderer writes `// text` and `   //@n:id`).
-        let trimmed = text.strip_prefix(' ').unwrap_or(&text).to_string();
+        let trimmed = text.strip_prefix(' ').unwrap_or(&text);
+        let trimmed = if split_at_anchor {
+            trimmed.trim_end().to_string()
+        } else {
+            trimmed.to_string()
+        };
         Token {
             tok: Tok::Comment(trimmed),
             line: token_line,

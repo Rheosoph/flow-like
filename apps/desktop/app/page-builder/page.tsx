@@ -524,6 +524,7 @@ export default function PageBuilderPage() {
 						onSave={handleSave}
 						onChange={handleComponentsChange}
 						className="h-full"
+						externalAssistant
 						actionContext={actionContext}
 						currentPageId={pageId}
 						onPageChange={(newPageId) => {

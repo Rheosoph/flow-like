@@ -302,6 +302,27 @@ pub fn search_result_hint_lines(metadata: &NodeMetadata) -> Vec<String> {
     hints
 }
 
+/// Compact model-facing rendering of catalog search results (one line per node + usage hints).
+/// Single source for the `catalog_search` tool output across every backend executor.
+pub fn render_catalog_search_results(results: &[NodeMetadata]) -> String {
+    if results.is_empty() {
+        return "No nodes found matching your query. Try different keywords.".to_string();
+    }
+
+    results
+        .iter()
+        .map(|meta| {
+            let hints = search_result_hint_lines(meta);
+            if hints.is_empty() {
+                meta.to_compact()
+            } else {
+                format!("{} [{}]", meta.to_compact(), hints.join("; "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn token_synonyms(token: &str) -> &'static [&'static str] {
     match token {
         "email" | "mail" => &["smtp", "imap", "gmail", "outlook", "message"],

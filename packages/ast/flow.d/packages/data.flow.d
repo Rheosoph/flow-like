@@ -2160,6 +2160,23 @@ declare function externalS3ExpressStore({ provider: Struct, bucket: string, pref
  */
 declare function externalS3Store({ provider: Struct, bucket: string, prefix?: string, pathStyle?: bool }): Struct;
 
+/**
+ * Turn an SMB2/3 share into a FlowPath.
+ * @param address — SMB server address. Use host:port, or host to use port 445.
+ * @param share — SMB share name
+ * @param authMode (optional) — How to authenticate: 'credentials' (username/password/domain), 'guest', or 'kerberos_ccache' (local FILE ccache/kinit)
+ * @param prefix (optional) — Optional path prefix within the share
+ * @param username (optional) — SMB username
+ * @param password (optional) — SMB password
+ * @param domain (optional) — Optional SMB domain or workgroup
+ * @param timeoutSeconds (optional) — Connection timeout in seconds
+ * @param compression (optional) — Enable SMB compression when supported by the server
+ * @param dfsEnabled (optional) — Enable DFS referral handling
+ * @returns path — FlowPath pointing to the SMB share
+ * @impure has side effects / drives control flow
+ */
+declare function externalSmbStore({ address: string, share: string, authMode?: string, prefix?: string, username?: string, password?: string, domain?: string, timeoutSeconds?: int, compression?: bool, dfsEnabled?: bool }): Struct;
+
 
 // === Data/Files/Operations ===
 

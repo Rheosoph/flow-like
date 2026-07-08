@@ -32,14 +32,19 @@ async fn master_flow_like_state(state: &AppState) -> Result<Arc<FlowLikeState>, 
 /// Run the governance agent for an app and return its suggestion, the signals
 /// it was grounded on, and the resolved model name that produced it.
 ///
-/// `profile` is the caller's profile used to resolve which model bits to use.
-/// When `None` the copilot falls back to the platform default model.
+/// `profile` is the caller's profile used to resolve which model bits to use; when the request omits
+/// it we load the caller's synced profile from the DB (like the global chat) so hosted Bits — and
+/// their metering — still resolve. `token` is the caller's OpenID access token: hosted Bit models
+/// post to this server's metered `/chat/completions` with it, so without it those models 401. With
+/// neither a profile nor a token the copilot falls back to an unmetered platform default that may
+/// fail if that provider is not configured.
 pub async fn run_governance_agent(
     state: &AppState,
     sub: &str,
     app_id: &str,
     model_id: Option<String>,
     profile: Option<Profile>,
+    token: Option<String>,
 ) -> Result<(GovernanceSuggestion, Signals, String), ApiError> {
     let app = state.master_app(sub, app_id, state).await?;
 
@@ -68,10 +73,17 @@ pub async fn run_governance_agent(
     let context_json = serde_json::to_string(&context).unwrap_or_default();
 
     let flow_like_state = master_flow_like_state(state).await?;
-    let copilot = GovernanceCopilot::new(flow_like_state, profile.map(Arc::new));
+
+    // Prefer the request's profile; otherwise fall back to the caller's synced DB profile so hosted
+    // Bit models (and their metering) still resolve — matching the global chat endpoint.
+    let profile = match profile {
+        Some(profile) => Some(Arc::new(profile)),
+        None => crate::routes::ai::global_chat::load_user_profile_opt(state, sub, None).await?,
+    };
+    let copilot = GovernanceCopilot::new(flow_like_state, profile);
 
     let suggestion = copilot
-        .assist(&depictions, &context_json, model_id, None)
+        .assist(&depictions, &context_json, model_id, token)
         .await
         .map_err(|e| ApiError::internal(format!("Governance agent failed: {e}")))?;
 

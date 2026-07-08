@@ -278,6 +278,21 @@ declare function llmExtractorHistory({ model: Struct, schema: string, history: S
 // === AI/Generative/Audio ===
 
 /**
+ * Transcribes audio locally with an installed any-speech-to-text model bit. Decodes WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM, including browser MediaRecorder output (Chrome WebM/Opus, Safari MP4/AAC).
+ * @param bit — Installed local STT model Bit
+ * @param audio — Audio file path. WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM are decoded automatically, including browser MediaRecorder recordings.
+ * @param language (optional) — Optional source language code. Use auto to detect.
+ * @param task (optional) — Transcribe in the source language or translate to English
+ * @param timestamps (optional) — Emit per-segment timestamps in the metadata
+ * @returns text — Transcript text
+ * @returns message — Transcript as a user HistoryMessage
+ * @returns history — Transcript wrapped in History
+ * @returns metadata — Local transcription metadata (model, runtime, detected language, duration, and segments)
+ * @impure has side effects / drives control flow
+ */
+declare function aiAudioLocalSpeechToText({ bit: Struct, audio: Struct, language?: string, task?: string, timestamps?: bool }): { text: string, message: Struct, history: Struct, metadata: Struct };
+
+/**
  * Generates WAV speech locally with an installed any-tts model bit.
  * @param bit — Installed TTS model Bit
  * @param text (optional) — Text to synthesize
@@ -728,6 +743,16 @@ declare function aiGenerativeSetPreferenceWeight({ preferencesIn: Struct, prefer
  * @impure has side effects / drives control flow
  */
 declare function aiGenerativeBuildAnthropic({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
+
+/**
+ * Builds a model served by Atlas Cloud, a full-modal AI inference platform exposing a single OpenAI-compatible API (DeepSeek, Qwen, GLM, Kimi, MiniMax and more)
+ * @param endpoint (optional) — Atlas Cloud OpenAI-compatible base URL (override only for a proxy)
+ * @param apiKey (optional) — Atlas Cloud API key used for authentication
+ * @param modelId (optional) — Atlas Cloud model identifier to request (e.g., deepseek-ai/deepseek-v4-pro)
+ * @returns model — Structured Bit describing the Atlas Cloud provider
+ * @impure has side effects / drives control flow
+ */
+declare function aiGenerativeBuildAtlascloud({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
 
 /**
  * Prepares a Bit for AWS Bedrock model endpoints

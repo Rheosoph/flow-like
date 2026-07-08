@@ -79,6 +79,9 @@
 		env(safe-area-inset-bottom, 0px),
 		var(--fl-native-safe-bottom, 0px)
 	);
+	/* Breathing room below the chat composer, on top of any device safe-area inset. Global so it
+	   applies to every chat surface; the compact docked FlowPilot overlay overrides it tighter. */
+	--fl-chat-pad-bottom: 1rem;
 
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
