@@ -28,8 +28,8 @@ use crate::{
                 },
             },
         },
-        copilot::{BoardCommand, NodePosition, PlaceholderPinDef, node_to_metadata},
-        node::{FnRefs, Node},
+        copilot::{BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata},
+        node::{FnRefs, Node, NodeLogic},
         pin::{Pin, PinType, ValueType},
         variable::{Variable, VariableType},
     },
@@ -98,9 +98,88 @@ pub async fn apply_flowscript_to_board(
         .iter()
         .map(node_to_metadata)
         .collect::<Vec<_>>();
-    let mut reconcile = super::reconcile_text_with_catalog(board, flowscript, &catalog_metadata);
 
-    if !reconcile.diagnostics.is_empty() || reconcile.commands.is_empty() {
+    // Resolve dynamic (on_update-generated) pins during reconcile by running each node's on_update on
+    // an in-memory scratch node seeded with the call's literal args — no board mutation. Limited to
+    // audited pure nodes whose on_update only reads their own pins (no network / cross-node reads).
+    const ENRICH_ALLOWLIST: &[&str] = &[
+        "string_format",
+        "string_render_template",
+        "a2ui_push_csv_to_chart",
+    ];
+    let logic_by_type: HashMap<String, Arc<dyn NodeLogic>> = {
+        let registry = state.node_registry.read().await.node_registry.clone();
+        catalog_nodes
+            .iter()
+            .filter(|node| ENRICH_ALLOWLIST.contains(&node.name.as_str()))
+            .filter_map(|node| {
+                registry
+                    .instantiate(node)
+                    .ok()
+                    .map(|logic| (node.name.clone(), logic))
+            })
+            .collect()
+    };
+    let enricher: Option<super::MetadataEnricher> = if logic_by_type.is_empty() {
+        None
+    } else {
+        Some(Box::new(
+            move |meta: &NodeMetadata,
+                  args: &[(String, flow_like_types::Value)],
+                  board: &Board|
+                  -> Option<NodeMetadata> {
+                let logic = logic_by_type.get(&meta.name)?;
+                let mut scratch = logic.get_node();
+                let mut seeded = false;
+                for (arg_name, value) in args {
+                    let pin_id = scratch
+                        .pins
+                        .iter()
+                        .find(|(_, pin)| {
+                            // Reuse the reconciler's exact matcher (name OR friendly_name, each
+                            // snake-or-camel; `to_camel_case` normalizes spaces in friendly names)
+                            // so seeding can never drift from `metadata_pin_name_matches`.
+                            pin.pin_type == PinType::Input
+                                && (super::reconcile::pin_name_matches(&pin.name, arg_name)
+                                    || super::reconcile::pin_name_matches(
+                                        &pin.friendly_name,
+                                        arg_name,
+                                    ))
+                        })
+                        .map(|(id, _)| id.clone());
+                    if let Some(pin_id) = pin_id
+                        && let Some(pin) = scratch.pins.get_mut(&pin_id)
+                        && let Ok(bytes) = flow_like_types::json::to_vec(value)
+                    {
+                        pin.default_value = Some(bytes);
+                        seeded = true;
+                    }
+                }
+                if !seeded {
+                    return None;
+                }
+                futures::executor::block_on(logic.on_update(&mut scratch, board));
+                Some(node_to_metadata(&scratch))
+            },
+        ))
+    };
+
+    let mut reconcile = match &enricher {
+        Some(enricher) => super::reconcile_text_with_catalog_enriched(
+            board,
+            flowscript,
+            &catalog_metadata,
+            enricher,
+        ),
+        None => super::reconcile_text_with_catalog(board, flowscript, &catalog_metadata),
+    };
+
+    // Block only when nothing is derivable (parse errors / fully-unresolvable input yield no
+    // commands). Non-fatal diagnostics — a skipped argument, a dangling execution warning — must not
+    // discard the whole apply; the derivable commands are applied and the diagnostics are surfaced as
+    // warnings in the result so partial progress is not lost. (Matches dev's behavior; HEAD's original
+    // gate here treated any diagnostic as fatal, which blocked the whole edit on one skipped arg.)
+    if reconcile.commands.is_empty() {
         return Ok(ApplyFlowScriptResult {
             commands: Vec::new(),
             board_commands: reconcile.commands,

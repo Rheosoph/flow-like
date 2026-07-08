@@ -97,6 +97,44 @@ fn add_root_definitions(schema: &mut Value, root_schema: &Value) {
     }
 }
 
+fn is_date_format(schema: &Value) -> bool {
+    matches!(
+        schema.get("format").and_then(|f| f.as_str()),
+        Some("date-time") | Some("date")
+    )
+}
+
+/// Map a scalar JSON-schema type to a pin type ("format": "date-time"/"date"
+/// strings become Date pins).
+fn scalar_type(type_str: &str, schema: &Value) -> VariableType {
+    match type_str {
+        "boolean" => VariableType::Boolean,
+        "integer" => VariableType::Integer,
+        "number" => VariableType::Float,
+        "string" => {
+            if is_date_format(schema) {
+                VariableType::Date
+            } else {
+                VariableType::String
+            }
+        }
+        "object" => VariableType::Struct,
+        _ => VariableType::Generic,
+    }
+}
+
+fn array_type(resolved: &Value, root_schema: &Value) -> (VariableType, ValueType) {
+    if let Some(items) = resolved.get("items") {
+        let item_resolved = resolve_schema(items, root_schema);
+        match item_resolved.get("type").and_then(|t| t.as_str()) {
+            Some(ts) => (scalar_type(ts, item_resolved), ValueType::Array),
+            None => (VariableType::Struct, ValueType::Array),
+        }
+    } else {
+        (VariableType::Generic, ValueType::Array)
+    }
+}
+
 /// Get the variable type from a resolved schema
 fn get_schema_type(schema: &Value, root_schema: &Value) -> (VariableType, ValueType) {
     let resolved = resolve_schema(schema, root_schema);
@@ -105,49 +143,23 @@ fn get_schema_type(schema: &Value, root_schema: &Value) -> (VariableType, ValueT
         return (VariableType::Struct, ValueType::Normal);
     }
 
-    // Check for array type
     if let Some(type_val) = resolved.get("type") {
         if let Some(type_str) = type_val.as_str() {
             return match type_str {
-                "boolean" => (VariableType::Boolean, ValueType::Normal),
-                "integer" => (VariableType::Integer, ValueType::Normal),
-                "number" => (VariableType::Float, ValueType::Normal),
-                "string" => (VariableType::String, ValueType::Normal),
-                "array" => {
-                    // For arrays, check what the items type is
-                    if let Some(items) = resolved.get("items") {
-                        let item_resolved = resolve_schema(items, root_schema);
-                        let item_type = item_resolved.get("type").and_then(|t| t.as_str());
-                        match item_type {
-                            Some("boolean") => (VariableType::Boolean, ValueType::Array),
-                            Some("integer") => (VariableType::Integer, ValueType::Array),
-                            Some("number") => (VariableType::Float, ValueType::Array),
-                            Some("string") => (VariableType::String, ValueType::Array),
-                            Some("object") | None => (VariableType::Struct, ValueType::Array),
-                            _ => (VariableType::Generic, ValueType::Array),
-                        }
-                    } else {
-                        (VariableType::Generic, ValueType::Array)
-                    }
-                }
-                "object" => (VariableType::Struct, ValueType::Normal),
-                _ => (VariableType::Generic, ValueType::Normal),
+                "array" => array_type(resolved, root_schema),
+                other => (scalar_type(other, resolved), ValueType::Normal),
             };
         }
-        // Handle array of types (e.g., ["string", "null"])
+        // Nullable types (e.g. ["string", "null"]) keep their sibling keywords
+        // (items/format) on the same schema — infer from the non-null type.
         if let Some(types) = type_val.as_array() {
             for t in types {
                 if let Some(ts) = t.as_str()
                     && ts != "null"
                 {
                     return match ts {
-                        "boolean" => (VariableType::Boolean, ValueType::Normal),
-                        "integer" => (VariableType::Integer, ValueType::Normal),
-                        "number" => (VariableType::Float, ValueType::Normal),
-                        "string" => (VariableType::String, ValueType::Normal),
-                        "array" => (VariableType::Generic, ValueType::Array),
-                        "object" => (VariableType::Struct, ValueType::Normal),
-                        _ => (VariableType::Generic, ValueType::Normal),
+                        "array" => array_type(resolved, root_schema),
+                        other => (scalar_type(other, resolved), ValueType::Normal),
                     };
                 }
             }

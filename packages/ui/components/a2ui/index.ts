@@ -134,6 +134,12 @@ export type {
 	GeoRouteResult,
 	GeoTripWaypoint,
 	GeoSearchResult,
+	CalendarComponent,
+	CalendarEvent,
+	CalendarView,
+	GanttComponent,
+	GanttTask,
+	GanttView,
 } from "./types";
 
 // Layout components
@@ -161,6 +167,8 @@ export { A2UISpinner } from "./display/Spinner";
 export { A2UISkeleton } from "./display/Skeleton";
 export { A2UILottie } from "./display/Lottie";
 export { A2UIGeoMap } from "./display/GeoMap";
+export { A2UICalendar } from "./display/Calendar";
+export { A2UIGantt } from "./display/GanttChart";
 
 // Geo conversion utilities
 export {

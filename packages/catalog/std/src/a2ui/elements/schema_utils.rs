@@ -252,6 +252,16 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             true
         }
 
+        // Planning
+        "calendar" => {
+            pin.set_schema::<CalendarProps>();
+            true
+        }
+        "gantt" => {
+            pin.set_schema::<GanttProps>();
+            true
+        }
+
         // Unknown type - use generic element
         _ => {
             pin.set_schema::<A2UIElement>();
@@ -331,5 +341,8 @@ pub fn valid_component_types() -> &'static [&'static str] {
         // Embeds
         "iframe",
         "plotlyChart",
+        // Planning
+        "calendar",
+        "gantt",
     ]
 }

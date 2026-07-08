@@ -38,7 +38,7 @@ impl NodeLogic for WriteCsvToTable {
 
         node.add_input_pin(
             "element_ref",
-            "Table",
+            "Element",
             "Reference to the table element",
             VariableType::Struct,
         )
@@ -67,6 +67,7 @@ impl NodeLogic for WriteCsvToTable {
         node.add_output_pin("exec_out", "▶", "", VariableType::Execution);
 
         node.set_long_running(true);
+        node.set_version(1);
 
         node
     }
@@ -82,8 +83,8 @@ impl NodeLogic for WriteCsvToTable {
         let delimiter_char = delimiter.chars().next().unwrap_or(',');
 
         // Get data from either table or CSV
-        let (headers, rows) = if let Ok(table_value) = context.evaluate_pin::<Value>("table").await
-        {
+        let table_result = context.evaluate_pin::<Value>("table").await;
+        let (headers, rows) = if let Ok(table_value) = table_result {
             if has_csv_table_data(&table_value) {
                 extract_from_csv_table(&table_value)?
             } else {
@@ -99,8 +100,8 @@ impl NodeLogic for WriteCsvToTable {
             let update_value = json!({
                 "type": "setProps",
                 "props": {
-                    "columns": { "literalOptions": [] },
-                    "data": { "literalOptions": [] }
+                    "columns": { "literalJson": "[]" },
+                    "data": { "literalJson": "[]" }
                 }
             });
             context.upsert_element(&element_id, update_value).await?;
@@ -133,11 +134,13 @@ impl NodeLogic for WriteCsvToTable {
             })
             .collect();
 
+        let columns_json = flow_like_types::json::to_string(&columns)?;
+        let data_json = flow_like_types::json::to_string(&data)?;
         let update_value = json!({
             "type": "setProps",
             "props": {
-                "columns": { "literalOptions": columns },
-                "data": { "literalOptions": data }
+                "columns": { "literalJson": columns_json },
+                "data": { "literalJson": data_json }
             }
         });
 

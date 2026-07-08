@@ -51,7 +51,7 @@ pub struct ReconcileResult {
 /// lowered/rendered form) so inlined/sugared helper nodes are never deleted merely for being
 /// absent from the text. See the module docs for the full contract.
 pub fn reconcile(existing: &Board, new: &BoardAst) -> ReconcileResult {
-    reconcile_inner(existing, new, None)
+    reconcile_inner(existing, new, None, None)
 }
 
 /// Diff a parsed FlowScript AST against `existing`, using catalog metadata to turn unanchored
@@ -65,13 +65,36 @@ pub fn reconcile_with_catalog(
     new: &BoardAst,
     catalog: &[NodeMetadata],
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog))
+    reconcile_inner(existing, new, Some(catalog), None)
 }
+
+/// Like [`reconcile_with_catalog`] but runs `enricher` to materialize each new node's dynamic
+/// (`on_update`-generated) pins from its literal args, so literals/connections targeting those pins
+/// resolve against real pins instead of the predicted `synthesize_dynamic_input_pin` fallback.
+pub fn reconcile_with_catalog_enriched(
+    existing: &Board,
+    new: &BoardAst,
+    catalog: &[NodeMetadata],
+    enricher: &MetadataEnricher,
+) -> ReconcileResult {
+    reconcile_inner(existing, new, Some(catalog), Some(enricher))
+}
+
+/// Hook that lets a caller enrich a resolved node's metadata with the dynamic pins its `on_update`
+/// would create for a call's literal arguments (see `apply_flowscript_to_board`). Runs only for
+/// callers that supply one; `None` keeps the pure static-catalog behavior (predicted via
+/// `synthesize_dynamic_input_pin`).
+pub type MetadataEnricher = Box<
+    dyn Fn(&NodeMetadata, &[(String, flow_like_types::Value)], &Board) -> Option<NodeMetadata>
+        + Send
+        + Sync,
+>;
 
 fn reconcile_inner(
     existing: &Board,
     new: &BoardAst,
     catalog: Option<&[NodeMetadata]>,
+    enricher: Option<&MetadataEnricher>,
 ) -> ReconcileResult {
     let mut result = ReconcileResult::default();
     let board_ast = super::lower_to_ast(existing);
@@ -100,10 +123,23 @@ fn reconcile_inner(
                 continue;
             };
             let Some(pin) = find_input_pin(node, &arg.name) else {
-                result.diagnostics.push(format!(
-                    "node {anchor} has no input pin named {:?}; skipped",
-                    arg.name
-                ));
+                // A literal on a pin the node's `on_update` will mint (e.g. a placeholder added to
+                // an existing `string_format`) is deferred to apply, which creates the pin and then
+                // applies the write; a genuinely unknown pin stays a (non-fatal) skip.
+                if arg_targets_predicted_dynamic_pin(node, anchor, call, arg, existing, enricher) {
+                    normalize_variable_ref_value_for_pin(&mut new_value, &arg.name, &variable_refs);
+                    result.commands.push(BoardCommand::UpdateNodePin {
+                        node_id: anchor.clone(),
+                        pin_id: arg.name.clone(),
+                        value: new_value,
+                        summary: Some(format!("Set {} on {}", arg.name, node.friendly_name)),
+                    });
+                } else {
+                    result.diagnostics.push(format!(
+                        "node {anchor} has no input pin named {:?}; skipped",
+                        arg.name
+                    ));
+                }
                 continue;
             };
             normalize_variable_ref_value_for_pin(&mut new_value, &pin.name, &variable_refs);
@@ -145,7 +181,7 @@ fn reconcile_inner(
     // 4. Structural authoring: catalog-aware FlowPilot calls can add new unanchored calls in the
     //    text. Translate those to the same command format the UI already reviews/applies.
     if let Some(catalog) = catalog {
-        let structural = StructuralPlanner::new(existing, catalog).plan(new);
+        let structural = StructuralPlanner::new(existing, catalog, enricher).plan(new);
         if !structural.commands.is_empty() {
             let anchored_edits = std::mem::take(&mut result.commands);
             result.commands = structural.commands;
@@ -622,7 +658,7 @@ fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
         .find(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
 }
 
-fn pin_name_matches(raw: &str, requested: &str) -> bool {
+pub(crate) fn pin_name_matches(raw: &str, requested: &str) -> bool {
     raw == requested || to_camel_case(raw) == requested
 }
 
@@ -788,6 +824,39 @@ fn synthesize_dynamic_input_pin(
         .iter()
         .any(|token| token == &arg.name || to_camel_case(token) == arg.name)
         .then(|| generic_input_pin_metadata(&arg.name))
+}
+
+/// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on
+/// the board node). Used by the config-edit path to DEFER a literal to apply — which creates the pin
+/// via `on_update`, then applies the write — instead of reporting a missing pin. Prefers the
+/// enricher (runs `on_update`); falls back to `synthesize_dynamic_input_pin` (string_format family).
+fn arg_targets_predicted_dynamic_pin(
+    node: &Node,
+    node_id: &str,
+    call: &Call,
+    arg: &Arg,
+    existing: &Board,
+    enricher: Option<&MetadataEnricher>,
+) -> bool {
+    if find_input_pin(node, &arg.name).is_some() {
+        return false;
+    }
+    let base = node_to_metadata(node);
+    if let Some(enricher) = enricher {
+        let literal_args: Vec<(String, flow_like_types::Value)> = call
+            .args
+            .iter()
+            .filter_map(|a| literal_expr_to_value(&a.value).map(|value| (a.name.clone(), value)))
+            .collect();
+        if let Some(enriched) = enricher(&base, &literal_args, existing) {
+            return enriched
+                .inputs
+                .iter()
+                .any(|pin| metadata_pin_name_matches(pin, &arg.name));
+        }
+    }
+    let entity = NodeEntity::Existing(node_id.to_string());
+    synthesize_dynamic_input_pin(&base, call, arg, &entity, existing).is_some()
 }
 
 /// The node type + response pin an event/tool-entry `return` maps to (mirrors the `lower.rs`
@@ -1217,10 +1286,18 @@ struct StructuralPlanner<'a> {
     /// nodes. Held separately so they emit after the add/connect commands (the applier resolves the
     /// referenced targets — function layers, events — once those nodes exist).
     fn_ref_commands: Vec<BoardCommand>,
+    /// Optional hook to materialize a node's dynamic (`on_update`-generated) pins for a call, so a
+    /// literal/connection targeting one resolves against a real pin instead of the predicted
+    /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
+    enricher: Option<&'a MetadataEnricher>,
 }
 
 impl<'a> StructuralPlanner<'a> {
-    fn new(existing: &'a Board, catalog: &[NodeMetadata]) -> Self {
+    fn new(
+        existing: &'a Board,
+        catalog: &[NodeMetadata],
+        enricher: Option<&'a MetadataEnricher>,
+    ) -> Self {
         Self {
             existing,
             board_index: BoardIndex::new(existing),
@@ -1238,7 +1315,25 @@ impl<'a> StructuralPlanner<'a> {
             next_position: 0,
             pending_exec_splices: Vec::new(),
             fn_ref_commands: Vec::new(),
+            enricher,
         }
+    }
+
+    /// Enrich a resolved node's metadata with the dynamic pins its `on_update` would create for this
+    /// call's literal arguments, so the reconciler can resolve those pins. No-op without an enricher
+    /// (the default for tests and the non-enriched entry points).
+    fn enrich_meta(&self, meta: NodeMetadata, call: &Call) -> NodeMetadata {
+        let Some(enricher) = self.enricher else {
+            return meta;
+        };
+        let literal_args: Vec<(String, flow_like_types::Value)> = call
+            .args
+            .iter()
+            .filter_map(|arg| {
+                literal_expr_to_value(&arg.value).map(|value| (arg.name.clone(), value))
+            })
+            .collect();
+        enricher(&meta, &literal_args, self.existing).unwrap_or(meta)
     }
 
     fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
@@ -1878,6 +1973,9 @@ impl<'a> StructuralPlanner<'a> {
                 return None;
             }
         };
+        // Materialize this call's dynamic (`on_update`-generated) pins so its args resolve against
+        // real pins; a no-op when no enricher is supplied (falls back to `synthesize_dynamic_input_pin`).
+        let meta = self.enrich_meta(meta, call);
         let entity = self.queue_add_node(meta.clone(), target_layer.clone());
 
         let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
@@ -3202,6 +3300,26 @@ pub fn reconcile_text_with_catalog(
     }
 }
 
+/// Like [`reconcile_text_with_catalog`] but with a dynamic-pin [`MetadataEnricher`] (see
+/// [`reconcile_with_catalog_enriched`]).
+pub fn reconcile_text_with_catalog_enriched(
+    existing: &Board,
+    text: &str,
+    catalog: &[NodeMetadata],
+    enricher: &MetadataEnricher,
+) -> ReconcileResult {
+    match flow_like_ast::parse(text) {
+        Ok(ast) => reconcile_with_catalog_enriched(existing, &ast, catalog, enricher),
+        Err(err) => ReconcileResult {
+            commands: Vec::new(),
+            diagnostics: vec![format!(
+                "FlowScript parse error at line {}, col {}: {}",
+                err.line, err.col, err.message
+            )],
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3683,6 +3801,115 @@ mod tests {
     }
 
     #[test]
+    fn catalog_aware_reconcile_uses_metadata_enricher_for_dynamic_pins() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            // Static metadata only knows the `shape` driver pin; a/b inputs and the `out` output are
+            // "dynamic" and supplied by the enricher based on the shape literal.
+            catalog_meta(
+                "dynamic_node",
+                "Dynamic Node",
+                vec![pin_meta("shape", "String", PinType::Input)],
+                Vec::new(),
+            ),
+            catalog_meta(
+                "text_source",
+                "Text Source",
+                Vec::new(),
+                vec![pin_meta("text", "String", PinType::Output)],
+            ),
+            catalog_meta(
+                "sink",
+                "Sink",
+                vec![pin_meta("input", "Generic", PinType::Input)],
+                Vec::new(),
+            ),
+        ];
+
+        let enricher: MetadataEnricher = Box::new(
+            |meta: &NodeMetadata,
+             args: &[(String, flow_like_types::Value)],
+             _board: &Board|
+             -> Option<NodeMetadata> {
+                if meta.name != "dynamic_node" {
+                    return None;
+                }
+                let shape = args
+                    .iter()
+                    .find(|(name, _)| name == "shape")
+                    .and_then(|(_, value)| value.as_str());
+                if shape != Some("ab") {
+                    return None;
+                }
+                let mut enriched = meta.clone();
+                enriched
+                    .inputs
+                    .push(pin_meta("a", "Generic", PinType::Input));
+                enriched
+                    .inputs
+                    .push(pin_meta("b", "Generic", PinType::Input));
+                enriched
+                    .outputs
+                    .push(pin_meta("out", "Generic", PinType::Output));
+                Some(enriched)
+            },
+        );
+
+        let result = reconcile_text_with_catalog_enriched(
+            &board,
+            r#"eventsSimple() {
+    const d = dynamicNode({ shape: "ab", a: textSource().text, b: textSource().text })
+    sink({ input: d.out })
+}
+"#,
+            &catalog,
+            &enricher,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // Enricher-provided INPUT pins a and b are recognized and wired.
+        for placeholder in ["a", "b"] {
+            assert!(
+                result.commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                            if command_node_type(&result.commands, from_node).as_deref()
+                                == Some("text_source")
+                                && command_node_type(&result.commands, to_node).as_deref()
+                                    == Some("dynamic_node")
+                                && to_pin == placeholder
+                    )
+                }),
+                "dynamic input `{placeholder}` not wired; commands: {:?}",
+                result.commands
+            );
+        }
+        // Enricher-provided OUTPUT pin `out` resolves for `d.out` and wires into the sink.
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref()
+                            == Some("dynamic_node")
+                            && from_pin == "out"
+                            && command_node_type(&result.commands, to_node).as_deref() == Some("sink")
+                            && to_pin == "input"
+                )
+            }),
+            "dynamic output `out` not wired into sink; commands: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
     fn catalog_aware_reconcile_lowers_event_return_to_result_node() {
         // A `return` inside a keyword-less event/tool entry must NOT be rejected — it reverses the
         // `events_generic_return_result` sugar so agent tools and event handlers can return a value.
@@ -4148,6 +4375,67 @@ mod tests {
                 .any(|diagnostic| diagnostic.contains("no input pin named `jdx`")),
             "an arg that is not a template placeholder must not be synthesized: {:?}",
             result.diagnostics
+        );
+    }
+
+    #[test]
+    fn config_edit_defers_literal_on_new_string_format_placeholder() {
+        // Existing anchored `string_format` with format "Hi {name}" — it has a live `name` pin but
+        // no `age` pin (that placeholder does not exist yet).
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut fmt = Node::new("string_format", "String Format", "", "std");
+        fmt.id = "fmt".to_string();
+        fmt.add_input_pin("format_string", "Format", "", VariableType::String)
+            .default_value = Some("\"Hi {name}\"".to_string().into_bytes());
+        fmt.add_input_pin("name", "Name", "", VariableType::Generic);
+        fmt.add_output_pin("value", "Value", "", VariableType::String);
+        board.nodes.insert(fmt.id.clone(), fmt);
+
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "string_format",
+                "String Format",
+                vec![pin_meta("format_string", "String", PinType::Input)],
+                vec![pin_meta("value", "String", PinType::Output)],
+            ),
+        ];
+
+        // The re-submitted text adds a NEW `{age}` placeholder plus its literal.
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {   //@n:event\n    stringFormat({ formatString: \"Hi {name} {age}\", name: \"World\", age: \"5\" })   //@n:fmt\n}\n",
+            &catalog,
+        );
+
+        // The not-yet-minted `age` placeholder must NOT be reported as a missing pin...
+        assert!(
+            !result.diagnostics.iter().any(|d| d.contains("age")),
+            "new placeholder should not diagnose as missing: {:?}",
+            result.diagnostics
+        );
+        // ...its literal is deferred as an UpdateNodePin (apply mints the pin via on_update first).
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "fmt"
+                        && pin_id == "age"
+                        && value == &flow_like_types::Value::String("5".to_string())
+            )),
+            "literal for the new `age` placeholder should be deferred as an UpdateNodePin: {:?}",
+            result.commands
         );
     }
 

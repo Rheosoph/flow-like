@@ -1477,6 +1477,98 @@ export interface GeoMapComponent extends ComponentBase {
 	clusterMaxZoom?: BoundValue;
 }
 
+// ── Planning: Calendar & Gantt (mirrors Rust structs) ──────────────
+
+// A single calendar event (mirrors CalendarEvent in update_schemas.rs)
+export interface CalendarEvent {
+	id: string;
+	title: string;
+	start: string; // ISO 8601
+	end?: string; // ISO 8601
+	allDay?: boolean;
+	color?: string;
+	description?: string;
+	location?: string;
+	calendarId?: string;
+	editable?: boolean;
+	/** Opened from the detail dialog: relative = in-app route, absolute = external. */
+	link?: string;
+	/** Key-value metadata shown in the detail dialog (e.g. ticket number). */
+	metadata?: Record<string, unknown>;
+}
+
+export type CalendarView = "month" | "week" | "day" | "agenda";
+
+/** Visual density preset for planning components. */
+export type PlanningDensity = "compact" | "default" | "comfortable";
+
+export interface CalendarComponent extends ComponentBase {
+	type: "calendar";
+	events: BoundValue; // CalendarEvent[]
+	view?: BoundValue; // CalendarView
+	date?: BoundValue; // focused date (ISO 8601)
+	title?: BoundValue; // optional header title
+	density?: BoundValue; // PlanningDensity
+	editable?: BoundValue;
+	selectable?: BoundValue;
+	firstDayOfWeek?: BoundValue; // 0 = Sunday
+	minTime?: BoundValue; // "06:00"
+	maxTime?: BoundValue; // "22:00"
+	slotDuration?: BoundValue; // minutes
+	showWeekends?: BoundValue;
+	showNowIndicator?: BoundValue;
+	showAllDay?: BoundValue;
+	showViewSwitcher?: BoundValue;
+	locale?: BoundValue;
+	height?: BoundValue;
+	responsive?: BoundValue;
+	compactBreakpoint?: BoundValue; // px
+}
+
+// A single gantt task (mirrors GanttTask in update_schemas.rs)
+export interface GanttTask {
+	id: string;
+	name: string;
+	start: string; // ISO 8601
+	end: string; // ISO 8601
+	progress?: number; // 0-100
+	dependencies?: string[]; // predecessor task ids
+	parent?: string;
+	color?: string;
+	assignee?: string;
+	milestone?: boolean;
+	collapsed?: boolean;
+	/** Opened from the detail dialog: relative = in-app route, absolute = external. */
+	link?: string;
+	/** Key-value metadata shown in the detail dialog (e.g. ticket number). */
+	metadata?: Record<string, unknown>;
+}
+
+export type GanttView = "day" | "week" | "month" | "quarter" | "compact";
+
+export interface GanttComponent extends ComponentBase {
+	type: "gantt";
+	tasks: BoundValue; // GanttTask[]
+	view?: BoundValue; // GanttView
+	title?: BoundValue; // header title (default "Timeline")
+	density?: BoundValue; // PlanningDensity
+	editable?: BoundValue;
+	draggable?: BoundValue;
+	resizable?: BoundValue;
+	showDependencies?: BoundValue;
+	showProgress?: BoundValue;
+	showToday?: BoundValue;
+	showViewSwitcher?: BoundValue;
+	showTaskList?: BoundValue; // show/hide the left task panel
+	taskListWidth?: BoundValue; // px width of the left task panel
+	shadeWeekends?: BoundValue; // shade Sat/Sun columns in day/week views
+	rowHeight?: BoundValue;
+	columns?: BoundValue; // string[] extra left-panel columns
+	height?: BoundValue;
+	responsive?: BoundValue;
+	compactBreakpoint?: BoundValue; // px
+}
+
 // Widget Instance Component - references a widget definition stored in page.widgetRefs
 // The widget definition is looked up by instanceId from the page's widgetRefs
 export interface WidgetInstanceComponent extends ComponentBase {
@@ -1566,6 +1658,8 @@ export type A2UIComponent =
 	| ImageLabelerComponent
 	| ImageHotspotComponent
 	| GeoMapComponent
+	| CalendarComponent
+	| GanttComponent
 	| WidgetInstanceComponent;
 
 // Surface and data model

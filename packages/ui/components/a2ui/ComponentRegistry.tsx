@@ -29,9 +29,11 @@ import {
 	A2UIAvatar,
 	A2UIBadge,
 	A2UIBoundingBoxOverlay,
+	A2UICalendar,
 	A2UIDiffView,
 	A2UIDivider,
 	A2UIFilePreview,
+	A2UIGantt,
 	A2UIGeoMap,
 	A2UIIcon,
 	A2UIIframe,
@@ -154,6 +156,8 @@ const registry: Record<string, ComponentRenderer> = {
 	nivoChart: A2UINivoChart as ComponentRenderer,
 	boundingBoxOverlay: A2UIBoundingBoxOverlay as ComponentRenderer,
 	geoMap: A2UIGeoMap as ComponentRenderer,
+	calendar: A2UICalendar as ComponentRenderer,
+	gantt: A2UIGantt as ComponentRenderer,
 
 	// Interactive
 	button: A2UIButton as ComponentRenderer,

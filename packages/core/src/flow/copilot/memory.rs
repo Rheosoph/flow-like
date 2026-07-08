@@ -187,7 +187,10 @@ impl AssistantMemory {
                         .and_then(|value| value.as_str())
                         .unwrap_or("user")
                         .to_string(),
-                    timestamp: row.get("timestamp").and_then(|value| value.as_i64()).unwrap_or(0),
+                    timestamp: row
+                        .get("timestamp")
+                        .and_then(|value| value.as_i64())
+                        .unwrap_or(0),
                 })
             })
             .collect();

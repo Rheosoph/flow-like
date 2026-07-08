@@ -134,7 +134,10 @@ pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
             format!("- {count} nodes")
         });
     } else if !board.selected_node_ids.is_empty() {
-        lines.push(format!("- {} nodes selected", board.selected_node_ids.len()));
+        lines.push(format!(
+            "- {} nodes selected",
+            board.selected_node_ids.len()
+        ));
     }
 
     let board_arg = match board.board_id.as_deref().map(str::trim) {
@@ -184,7 +187,10 @@ pub fn build_platform_context(input: PlatformContextInput) -> String {
 
     let mut sections: Vec<String> = Vec::new();
     if !parts.is_empty() {
-        sections.push(format!("## CURRENT FLOW-LIKE CONTEXT\n{}", parts.join("\n")));
+        sections.push(format!(
+            "## CURRENT FLOW-LIKE CONTEXT\n{}",
+            parts.join("\n")
+        ));
     }
     if let Some(board) = input.open_board {
         let section = open_board_section(board);

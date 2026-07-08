@@ -90,6 +90,7 @@ pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandle
     let mut tools = vec![
         create_database_tool(bridge.clone()),
         create_storage_tool(bridge.clone()),
+        create_ui_inspect_tool(bridge.clone()),
         create_execute_event_tool(bridge.clone()),
     ];
     for name in [INTERNET_SEARCH_TOOL, "ask_user"] {
@@ -386,6 +387,46 @@ or create a small helper/config artifact in app/user storage."#,
             FrontendToolApproval::none()
         };
         frontend_tool_result(&bridge, "storage_tool", args.clone(), approval)
+    });
+
+    (tool, handler)
+}
+
+fn create_ui_inspect_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
+    let tool = Tool::new("ui_inspect")
+        .description(
+            r#"Inspect the app's A2UI pages and widgets so `a2ui*` workflow calls target real elements.
+
+This is a READ-ONLY tool and never asks for approval. Call it BEFORE writing or editing any
+`a2ui*` call (set/get element, instantiate widget, push/clear container, navigate) so element
+references and widget selectors are never guessed.
+
+Operations:
+- list (default): every page (id, name, route, onLoad event) and every widget (selector, description).
+- page: full element reference list for one page. An `elementRef` used by `a2uiSetElementText`,
+  `a2uiGetElement`, `a2uiGetElementValue`, `a2uiPushToContainer`, etc. is `"<page_id>/<component_id>"`.
+- widget: instantiation surface for one widget — the `widgetSelector` plus the `dynPath*`/`dynProp*`
+  (camelCase) input pins `a2uiInstantiateWidget` exposes for its bound data paths and exposed props,
+  and the action names usable for `fnRefs`."#,
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "operation": { "type": "string", "enum": ["list", "page", "widget"] },
+                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+                "board_id": { "type": "string", "description": "Restrict pages to this board. Optional." },
+                "page_id": { "type": "string", "description": "Page id for operation 'page'." },
+                "widget_selector": { "type": "string", "description": "Widget id or name for operation 'widget'." }
+            }
+        }));
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        frontend_tool_result(
+            &bridge,
+            "ui_inspect",
+            args.clone(),
+            FrontendToolApproval::none(),
+        )
     });
 
     (tool, handler)
@@ -821,6 +862,21 @@ RULES:
   continue from `exec_done`.
 - For loops, the body is the `exec_out` path and the next statement continues from `done` /
   `exec_done`; make sure the loop's `array` input receives the array being iterated.
+- Prefer writing impure/sequential logic INLINE in the event or loop body over extracting it into a
+  helper `function`. A called function's body does not yet receive an execution entry from its call
+  site, so impure nodes inside a helper (for example `cuid`, `structSet`, `arrayPushRef`) are created
+  but left with no incoming execution connection and never run. For per-iteration work inside
+  `controlForEach`, write the statements directly in the loop body instead of calling a `buildRow`-style
+  helper.
+- Charts (`a2uiPushCsvToChart`) read their data from a `format`-specific pin. With `format: "CSV"`, wire
+  a DataFusion query's `table` output into the chart's `table` input (both are the same tabular struct)
+  and set `chartType` (for example "Bar" / "Line" / "Pie"). The `data` input is ONLY for
+  `format: "JSON"`. Wiring a `table` output into `data` with `format: "CSV"` leaves the chart's data
+  unset and fails at run time.
+- Read a struct field with `structGet({ struct: <structValue>, field: "name" }).value` (its `value`
+  output is the field). To target an a2ui element, either pass the element id path string directly to a
+  setter's `elementRef`, or fetch a handle with `a2uiGetElement({ elementRef: "surfaceId/element-id" }).element`;
+  both are accepted.
 - To reposition nodes on the canvas, use `emit_commands` with MoveNode."#,
         )
         .schema(json!({
@@ -1602,6 +1658,39 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "viewportHeight",
             "zoom",
         ]),
+        "calendar" => Some(&[
+            "events",
+            "view",
+            "date",
+            "editable",
+            "selectable",
+            "firstDayOfWeek",
+            "minTime",
+            "maxTime",
+            "slotDuration",
+            "showWeekends",
+            "showNowIndicator",
+            "showAllDay",
+            "locale",
+            "height",
+            "responsive",
+            "compactBreakpoint",
+        ]),
+        "gantt" => Some(&[
+            "tasks",
+            "view",
+            "editable",
+            "draggable",
+            "resizable",
+            "showDependencies",
+            "showProgress",
+            "showToday",
+            "rowHeight",
+            "columns",
+            "height",
+            "responsive",
+            "compactBreakpoint",
+        ]),
         _ => None,
     }
 }
@@ -1638,6 +1727,8 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "model3d" => &["src"],
         "aspectRatio" => &["ratio"],
         "boundingBoxOverlay" => &["src"],
+        "calendar" => &["events"],
+        "gantt" => &["tasks"],
         _ => &[],
     }
 }
