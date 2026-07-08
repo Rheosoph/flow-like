@@ -283,6 +283,288 @@ fn rejects_unknown_decorator() {
     assert!(err.message.contains("bogus"));
 }
 
+#[test]
+fn labelled_branch_keeps_anchor_after_arm_label() {
+    // The renderer emits arm label and anchor on one line (`{ // label   //@n:id`); the
+    // lexer must split them so the branch keeps its identity anchor across round-trips.
+    let text = "function guard(path: string) {\n    if (pathExists({ path: path })) { // exec_out_exists   //@n:branch1\n    } else { // exec_out_missing\n    }\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Branch { anchor, arms, .. } => {
+            assert_eq!(anchor.as_deref(), Some("branch1"));
+            assert_eq!(arms[0].label, "exec_out_exists");
+            assert_eq!(arms[1].label, "exec_out_missing");
+        }
+        other => panic!("expected labelled branch, got {other:?}"),
+    }
+    assert_idempotent(text, &anchored_opts());
+}
+
+#[test]
+fn roundtrip_array_of_union_interface_type() {
+    // `string | null[]` would reparse as `string | (null[])`; unions under an array
+    // suffix must render grouped.
+    let text =
+        "interface Entry {\n    tags?: (string | null)[] = [];\n}\n\nconst entry: Entry = {}\n";
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn interface_any_field_with_default_keeps_schema() {
+    let text = "interface Cfg {\n    payload?: any = null;\n}\n\nconst cfg: Cfg = {}\n";
+    let ast = parse(text).expect("parse should succeed");
+    assert!(
+        ast.variables[0].schema.is_some(),
+        "an `any` field with a default must not wipe the generated schema"
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn roundtrip_quoted_interface_field_names() {
+    // JSON-schema property names are arbitrary strings; non-identifier names render quoted.
+    let text = "interface Row {\n    \"content-type\": string;\n    \"created at\"?: float;\n}\n\nconst row: Row = {}\n";
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn interface_dedup_renames_references_too() {
+    use flow_like_ast::{Container, TypeRef, VarDecl, interfaces_for_variables};
+
+    fn struct_var(name: &str, schema: &str) -> VarDecl {
+        VarDecl {
+            name: name.to_string(),
+            ty: TypeRef::new("Struct", Container::Normal),
+            default: None,
+            exposed: false,
+            secret: false,
+            editable: true,
+            runtime_configured: false,
+            category: None,
+            description: None,
+            schema: Some(schema.to_string()),
+            anchor: None,
+        }
+    }
+
+    // Two schema families both define a `$defs` entry named `Meta` with different shapes.
+    let alpha = struct_var(
+        "alpha",
+        r##"{"type":"object","properties":{"m":{"$ref":"#/$defs/Meta"}},"$defs":{"Meta":{"type":"object","properties":{"a":{"type":"string"}}}}}"##,
+    );
+    let beta = struct_var(
+        "beta",
+        r##"{"type":"object","properties":{"m":{"$ref":"#/$defs/Meta"}},"$defs":{"Meta":{"type":"object","properties":{"b":{"type":"integer"}}}}}"##,
+    );
+
+    let interfaces = interfaces_for_variables(&[alpha, beta]);
+    let names: Vec<&str> = interfaces.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        names.contains(&"Meta") && names.contains(&"Meta2"),
+        "colliding $defs interfaces must be deduplicated: {names:?}"
+    );
+
+    let beta_root = interfaces
+        .iter()
+        .find(|d| d.name == "Beta")
+        .expect("beta root interface");
+    let field_ty = flow_like_ast::render::render_interface_type(&beta_root.fields[0].ty);
+    assert_eq!(
+        field_ty, "Meta2",
+        "the renamed interface must be re-referenced by its own family"
+    );
+}
+
+#[test]
+fn lexes_power_and_xor_operators() {
+    // `int_power`/`float_power` render as `**`, `bool_xor` as `^`; both must tokenize.
+    let text = "function calc(a: int, b: int) {\n    return ((a ** b) == (a ^ b))\n}\n";
+    parse(text).expect("`**` and `^` should tokenize");
+}
+
+#[test]
+fn lexes_non_ascii_identifiers() {
+    // to_camel_case keeps unicode alphanumerics, so rendered names can carry them.
+    let text = "const größe: float = 1.5\n";
+    let ast = parse(text).expect("non-ASCII identifiers should lex");
+    assert_eq!(ast.variables[0].name, "größe");
+}
+
+#[test]
+fn deep_nesting_errors_instead_of_overflowing() {
+    let mut expr = String::from("1");
+    for _ in 0..2000 {
+        expr = format!("({expr})");
+    }
+    let text = format!("function calc(a: int) {{\n    return {expr}\n}}\n");
+    let err = parse(&text).expect_err("deep nesting must be a parse error, not a crash");
+    assert!(err.message.contains("nesting too deep"));
+}
+
+#[test]
+fn deep_parenthesized_interface_type_errors_instead_of_overflowing() {
+    // Parenthesised interface types recurse into `interface_type`; the recursion budget must
+    // cover them so `((((…))))` can't overflow the stack on user-authored input.
+    let mut ty = String::from("string");
+    for _ in 0..2000 {
+        ty = format!("({ty})");
+    }
+    let text = format!("interface Deep {{\n    field: {ty};\n}}\n\nconst d: Deep = {{}}\n");
+    let err = parse(&text).expect_err("deep parenthesised type must error, not crash");
+    assert!(err.message.contains("nesting too deep"));
+}
+
+#[test]
+fn trailing_at_comment_is_not_an_anchor() {
+    let text = "function noop(a: int) {\n    logInfo({ message: a }) //@todo revisit\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Call { anchor, .. } => {
+            assert_eq!(
+                anchor.as_deref(),
+                None,
+                "user comment must not become an anchor"
+            );
+        }
+        other => panic!("expected call, got {other:?}"),
+    }
+}
+
+#[test]
+fn comment_with_embedded_anchor_pattern_splits_only_on_anchor_kinds() {
+    // `//@x:` sequences that are not anchor kinds stay part of the label text.
+    let text = "function guard(path: string) {\n    if (pathExists({ path: path })) { // see //@q:not-an-anchor\n    } else {\n    }\n}\n";
+    let ast = parse(text).expect("parse should succeed");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Branch { anchor, arms, .. } => {
+            assert_eq!(anchor.as_deref(), None);
+            assert_eq!(arms[0].label, "see //@q:not-an-anchor");
+        }
+        other => panic!("expected labelled branch, got {other:?}"),
+    }
+}
+
+#[test]
+fn member_assignment_parses_to_field_assign() {
+    let text = "function f() {\n    const pref = makePrefs({ multimodal: true }).preferences\n    pref.cost_weight = 0.5\n}\n";
+    let ast = parse(text).expect("member field assignment should parse");
+    match ast.functions[0].body.stmts.last().expect("has statements") {
+        flow_like_ast::Stmt::FieldAssign {
+            base, path, value, ..
+        } => {
+            assert_eq!(base, "pref", "keeps the base variable");
+            assert_eq!(path, "cost_weight", "field path carries no leading dot");
+            assert!(matches!(
+                value,
+                flow_like_ast::Expr::Literal(flow_like_ast::Literal::Float(_))
+            ));
+        }
+        other => panic!("expected a field assignment, got {other:?}"),
+    }
+    // The dot form is first-class: it round-trips verbatim instead of re-rendering `structSet(`.
+    let rendered = render(&ast, &RenderOptions::default());
+    assert!(
+        rendered.contains("pref.cost_weight = 0.5"),
+        "field write must render as the dot form:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("structSet("),
+        "field write must not re-render as an explicit structSet:\n{rendered}"
+    );
+    // The dot form itself round-trips verbatim (the surrounding `const` alias canonicalizes to
+    // `let`, so idempotency is asserted on a self-contained snippet).
+    assert_idempotent(
+        "function f() {\n    pref.cost_weight = 0.5\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn nested_member_assignment_builds_dot_path() {
+    let text = "function f() {\n    const p = makePrefs({}).preferences\n    p.a.b = 1\n}\n";
+    let ast = parse(text).expect("nested member assignment should parse");
+    let flow_like_ast::Stmt::FieldAssign { base, path, .. } =
+        ast.functions[0].body.stmts.last().unwrap()
+    else {
+        panic!("expected a field assignment");
+    };
+    assert_eq!(base, "p");
+    assert_eq!(path, "a.b", "nested fields join into a dot path");
+    assert_idempotent(
+        "function f() {\n    p.a.b = 1\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn field_assign_dot_form_is_idempotent() {
+    // Snake-case field (dot separator) and a value that is itself a member/pin access.
+    assert_idempotent(
+        "function f() {\n    x.a_b = 1\n}\n",
+        &RenderOptions::default(),
+    );
+    assert_idempotent(
+        "function f() {\n    x.field = call().out\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn field_assign_bracket_and_nested_paths_roundtrip() {
+    // A bracket-rooted path (`items[0]`) carries no leading dot; mixed field/index paths render
+    // back verbatim.
+    let ast = parse("function f() {\n    items[0] = 1\n}\n").expect("bracket lvalue should parse");
+    let flow_like_ast::Stmt::FieldAssign { base, path, .. } =
+        ast.functions[0].body.stmts.last().unwrap()
+    else {
+        panic!("expected a field assignment");
+    };
+    assert_eq!(base, "items");
+    assert_eq!(path, "[0]", "bracket-rooted path has no leading dot");
+    assert_idempotent(
+        "function f() {\n    items[0] = 1\n}\n",
+        &RenderOptions::default(),
+    );
+    assert_idempotent(
+        "function f() {\n    row.items[0].name = \"x\"\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+#[test]
+fn field_assign_renders_from_hand_built_ast() {
+    use flow_like_ast::{Block, BoardAst, Expr, FnDecl, Literal, Stmt};
+
+    let field_assign = |anchor: Option<&str>| Stmt::FieldAssign {
+        base: "row".to_string(),
+        path: "id".to_string(),
+        value: Expr::Literal(Literal::Int(7)),
+        anchor: anchor.map(str::to_string),
+    };
+    let build = |stmt: Stmt| BoardAst {
+        functions: vec![FnDecl {
+            name: "f".to_string(),
+            params: Vec::new(),
+            returns: Vec::new(),
+            body: Block { stmts: vec![stmt] },
+            anchor: None,
+        }],
+        ..BoardAst::default()
+    };
+
+    let plain = render(&build(field_assign(None)), &RenderOptions::default());
+    assert!(
+        plain.contains("row.id = 7"),
+        "hand-built field assign renders as the dot form:\n{plain}"
+    );
+
+    let anchored = render(&build(field_assign(Some("set1"))), &anchored_opts());
+    assert!(
+        anchored.contains("row.id = 7   //@n:set1"),
+        "anchored field assign renders its node anchor:\n{anchored}"
+    );
+}
+
 // ---- full-fixture idempotency ------------------------------------------------------------
 
 const FIXTURE_A: &str = include_str!("../../../tests/ast/bypaw6n2ksuvrw0kcaj14omz.flow");

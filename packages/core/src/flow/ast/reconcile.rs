@@ -104,9 +104,21 @@ fn reconcile_inner(
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
 
+    // Anchored `base.path = value` writes carry no `&Call`, so synthesize the equivalent
+    // `struct_set` calls the anchor-keyed collectors below diff against / delete. These arenas own
+    // the calls and must outlive the `new_calls`/`visible` maps that borrow them, so build them in
+    // full up front — pushing to the Vec later would reallocate and invalidate the references.
+    let new_field_assign_calls = collect_anchored_field_assign_calls(new);
+    let board_field_assign_calls = collect_anchored_field_assign_calls(&board_ast);
+
     // 1. Index every anchored call in the new AST by node id.
     let mut new_calls: HashMap<String, &Call> = HashMap::new();
     collect_calls(new, &mut new_calls);
+    for call in &new_field_assign_calls {
+        if let Some(anchor) = call.anchor.as_deref() {
+            new_calls.entry(anchor.to_string()).or_insert(call);
+        }
+    }
 
     // 2. Configuration edits: for each anchored call that still maps to a board node, diff its
     //    literal arguments against the node's current pin defaults.
@@ -117,15 +129,26 @@ fn reconcile_inner(
             ));
             continue;
         };
+        // Multi-pins (several input pins sharing one name) pair positionally with the
+        // same-named args, mirroring the order lowering emitted them in.
+        let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
         for arg in &call.args {
+            let occurrence = {
+                let counter = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+                let index = *counter;
+                *counter += 1;
+                index
+            };
             let Some(mut new_value) = literal_expr_to_value(&arg.value) else {
                 // References / nested calls describe wiring, which v1 does not rewrite.
                 continue;
             };
-            let Some(pin) = find_input_pin(node, &arg.name) else {
-                // A literal on a pin the node's `on_update` will mint (e.g. a placeholder added to
-                // an existing `string_format`) is deferred to apply, which creates the pin and then
-                // applies the write; a genuinely unknown pin stays a (non-fatal) skip.
+            let pins = matching_input_pins(node, &arg.name);
+            let Some(pin) = pins.get(occurrence).copied() else {
+                // No pin at this occurrence: a literal on a pin the node's `on_update` will mint
+                // (e.g. a placeholder added to an existing `string_format`) is deferred to apply,
+                // which creates the pin and then applies the write; a genuinely unknown pin stays a
+                // (non-fatal) skip.
                 if arg_targets_predicted_dynamic_pin(node, anchor, call, arg, existing, enricher) {
                     normalize_variable_ref_value_for_pin(&mut new_value, &arg.name, &variable_refs);
                     result.commands.push(BoardCommand::UpdateNodePin {
@@ -136,8 +159,9 @@ fn reconcile_inner(
                     });
                 } else {
                     result.diagnostics.push(format!(
-                        "node {anchor} has no input pin named {:?}; skipped",
-                        arg.name
+                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
+                        arg.name,
+                        occurrence + 1
                     ));
                 }
                 continue;
@@ -152,7 +176,12 @@ fn reconcile_inner(
             }
             result.commands.push(BoardCommand::UpdateNodePin {
                 node_id: anchor.clone(),
-                pin_id: pin.name.clone(),
+                // The name is ambiguous across multi-pins; address those by exact pin id.
+                pin_id: if pins.len() > 1 {
+                    pin.id.clone()
+                } else {
+                    pin.name.clone()
+                },
                 value: new_value,
                 summary: Some(format!("Set {} on {}", arg.name, node.friendly_name)),
             });
@@ -164,6 +193,11 @@ fn reconcile_inner(
     //    struct_make, pure helpers) are never removed just for lacking an anchor in the text.
     let mut visible: HashMap<String, &Call> = HashMap::new();
     collect_statement_calls(&board_ast, &mut visible);
+    for call in &board_field_assign_calls {
+        if let Some(anchor) = call.anchor.as_deref() {
+            visible.entry(anchor.to_string()).or_insert(call);
+        }
+    }
     let new_anchors: HashSet<&String> = new_calls.keys().collect();
     for anchor in visible.keys() {
         if new_anchors.contains(anchor) {
@@ -647,15 +681,44 @@ fn normalize_variable_ref_value_for_pin(
 }
 
 fn find_input_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
-    node.pins
+    matching_input_pins(node, name).first().copied()
+}
+
+/// All input pins matching `name`, deterministically ordered: populated pins (connected or
+/// holding a default — the ones lowering emits args for) first, then empty ones, each sorted
+/// by pin index. `node.pins` is a HashMap, so an unsorted `.find()` picks an arbitrary pin
+/// among same-named multi-pins and corrupts them nondeterministically.
+fn matching_input_pins<'a>(node: &'a Node, name: &str) -> Vec<&'a Pin> {
+    let mut matching: Vec<&Pin> = node
+        .pins
         .values()
-        .find(|p| p.pin_type == PinType::Input && node_pin_name_matches(p, name))
+        .filter(|p| p.pin_type == PinType::Input && node_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| {
+        let populated = !p.depends_on.is_empty() || p.default_value.is_some();
+        (!populated, p.index, p.id.clone())
+    });
+    matching
 }
 
 fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
-    node.pins
+    let mut matching: Vec<&Pin> = node
+        .pins
         .values()
-        .find(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
+        .filter(|p| p.pin_type == PinType::Output && node_pin_name_matches(p, name))
+        .collect();
+    matching.sort_by_key(|p| (p.index, p.id.clone()));
+    matching.first().copied()
+}
+
+/// Read a pin's configured literal default as a JSON string value.
+fn node_pin_literal_string(node: &Node, pin_name: &str) -> Option<String> {
+    let pin = find_input_pin(node, pin_name)?;
+    let bytes = pin.default_value.as_deref()?;
+    match flow_like_types::json::from_slice::<flow_like_types::Value>(bytes).ok()? {
+        flow_like_types::Value::String(value) => Some(value),
+        _ => None,
+    }
 }
 
 pub(crate) fn pin_name_matches(raw: &str, requested: &str) -> bool {
@@ -1274,6 +1337,12 @@ struct StructuralPlanner<'a> {
     variable_refs: VariableRefLookup,
     function_return_targets: Vec<(NodeEntity, Vec<String>)>,
     unresolved_variable_refs: HashSet<String>,
+    /// Newly added impure nodes: (ref_id, execution input pin, friendly name). Checked at the end
+    /// for a missing incoming execution edge.
+    new_impure_nodes: Vec<(String, String, String)>,
+    /// Ref ids exempt from the dangling-execution check (a function body's first node, which has no
+    /// execution entry to wire from yet).
+    exec_check_exempt: HashSet<String>,
     next_ref: usize,
     next_position: usize,
     /// Impure calls planned in expression/argument position (e.g. `value: fakerFullName()`).
@@ -1311,6 +1380,8 @@ impl<'a> StructuralPlanner<'a> {
             variable_refs: VariableRefLookup::from_board(existing),
             function_return_targets: Vec::new(),
             unresolved_variable_refs: HashSet::new(),
+            new_impure_nodes: Vec::new(),
+            exec_check_exempt: HashSet::new(),
             next_ref: 0,
             next_position: 0,
             pending_exec_splices: Vec::new(),
@@ -1346,6 +1417,8 @@ impl<'a> StructuralPlanner<'a> {
             self.plan_function(func);
         }
         self.pop_scope();
+
+        self.check_dangling_impure_execution();
 
         self.result.commands.extend(self.add_commands);
         // Literal/config updates can change node shape (for example format/schema/template
@@ -1398,7 +1471,10 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) {
         let mut previous_exec = entry;
-        let mut inserted_since_existing = false;
+        // The `(node, pin)` exec edge the current insertion streak branched off from — set
+        // when a NEW node is first wired after an EXISTING one, and used to splice out only
+        // that predecessor's old edge when the chain reaches the next existing node.
+        let mut insertion_origin: Option<(String, String)> = None;
         let promoted_local_aliases = promoted_local_aliases(block);
 
         for stmt in &block.stmts {
@@ -1416,9 +1492,16 @@ impl<'a> StructuralPlanner<'a> {
             // so they actually execute at runtime.
             for splice in std::mem::take(&mut self.pending_exec_splices) {
                 if let Some(previous) = &previous_exec {
-                    self.connect_exec(previous, &splice, inserted_since_existing);
+                    let connected_edge =
+                        self.connect_exec(previous, &splice, insertion_origin.as_ref());
+                    if let Some(edge) = connected_edge
+                        && insertion_origin.is_none()
+                        && matches!(previous.entity, NodeEntity::Existing(_))
+                        && matches!(splice, NodeEntity::New { .. })
+                    {
+                        insertion_origin = Some(edge);
+                    }
                 }
-                inserted_since_existing |= matches!(splice, NodeEntity::New { .. });
                 previous_exec = Some(ExecCursor::new(splice));
             }
 
@@ -1449,21 +1532,30 @@ impl<'a> StructuralPlanner<'a> {
                         }
                         None => previous.clone(),
                     };
-                    if self.connect_exec(&previous, &current.entity, inserted_since_existing)
+                    let connected_edge =
+                        self.connect_exec(&previous, &current.entity, insertion_origin.as_ref());
+                    if let Some(edge) = connected_edge
                         && !used_branch_output
+                        && insertion_origin.is_none()
+                        && matches!(previous.entity, NodeEntity::Existing(_))
+                        && matches!(current.entity, NodeEntity::New { .. })
                     {
-                        inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
+                        insertion_origin = Some(edge);
                     }
                     if used_branch_output {
                         continue;
                     }
                 } else {
-                    inserted_since_existing |= matches!(current.entity, NodeEntity::New { .. });
+                    // No execution predecessor to wire from (e.g. a function body's first node):
+                    // exempt it from the dangling-execution warning.
+                    if let NodeEntity::New { ref_id, .. } = &current.entity {
+                        self.exec_check_exempt.insert(ref_id.clone());
+                    }
                 }
             }
 
             if matches!(current.entity, NodeEntity::Existing(_)) {
-                inserted_since_existing = false;
+                insertion_origin = None;
             }
             if continues_exec {
                 previous_exec = Some(current.next_cursor());
@@ -1567,8 +1659,29 @@ impl<'a> StructuralPlanner<'a> {
                     }
                     _ => None,
                 };
+                if let Some(entity) = &entity {
+                    self.undefer_statement_call_splice(entity);
+                }
                 self.assign_symbol(target.clone(), resolved);
                 entity.map(PlannedStmt::new)
+            }
+            Stmt::FieldAssign {
+                base,
+                path,
+                value,
+                anchor,
+            } => {
+                // Expand the `base.path = value` struct-field write to its `struct_set` accumulator
+                // form and reuse the `Stmt::Assign`+call planning path: it wires `struct_in` from
+                // `base`'s prior source, rebinds `base` to `struct_out`, and (via the non-anchored
+                // path) drops the struct_set's own splice so it never self-connects.
+                let call = field_assign_struct_set_call(base, path, value, anchor.as_deref());
+                let assign = Stmt::Assign {
+                    target: base.clone(),
+                    value: Expr::Call(call),
+                    anchor: anchor.clone(),
+                };
+                self.plan_stmt(&assign, target_layer, promote_local_alias)
             }
             Stmt::LocalAlias {
                 name,
@@ -1616,6 +1729,9 @@ impl<'a> StructuralPlanner<'a> {
                     }
                     _ => None,
                 };
+                if let Some(entity) = &entity {
+                    self.undefer_statement_call_splice(entity);
+                }
                 self.insert_symbol(name.clone(), resolved);
                 entity.map(PlannedStmt::new)
             }
@@ -2177,41 +2293,145 @@ impl<'a> StructuralPlanner<'a> {
                     None
                 }
             }
-            Expr::Member { base, .. } | Expr::Index { base, .. } => {
-                self.resolve_expr_using_existing_source(base, source, target_layer)
+            // Sugared data sources: these text forms lower FROM a specific node shape, and
+            // when the consumer's existing source IS that node, it must be reused. Falling
+            // back to `resolve_expr` would materialize a duplicate node on every apply, and
+            // resolving only the base would silently drop the field/index selection.
+            Expr::Ref(name) => self.reuse_existing_variable_get(name, source),
+            Expr::Member { base, field } => {
+                self.reuse_existing_member_source(base, field, source, target_layer)
             }
-            // A bare variable reference whose input is already fed by a variable_get reading the
-            // SAME variable: reuse that reader instead of adding a duplicate on every reconcile.
-            Expr::Ref(name) => {
-                if let Some(SymbolValue::VariableRef { variable_id }) = self.lookup_symbol(name)
-                    && self.source_is_variable_get_for(&source, &variable_id)
-                {
-                    return Some(SymbolValue::Source(source));
-                }
-                None
+            Expr::Index { base, index } => {
+                self.reuse_existing_index_source(base, index, source, target_layer)
             }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => self.reuse_existing_select_source(cond, then, otherwise, source, target_layer),
             _ => None,
         }
     }
 
-    /// True when `source` is an existing `variable_get` node configured to read `variable_id`.
-    fn source_is_variable_get_for(&self, source: &ValueSource, variable_id: &str) -> bool {
+    /// Reuse an existing `variable_get` node feeding this input when the text ref names the
+    /// same variable it reads.
+    fn reuse_existing_variable_get(
+        &mut self,
+        name: &str,
+        source: ValueSource,
+    ) -> Option<SymbolValue> {
         let NodeEntity::Existing(node_id) = &source.node else {
-            return false;
+            return None;
         };
-        let Some(node) = find_board_node(self.existing, node_id) else {
-            return false;
-        };
+        let node = find_board_node(self.existing, node_id)?;
         if node.name != "variable_get" {
-            return false;
+            return None;
         }
-        find_input_pin(node, "var_ref")
-            .and_then(|pin| pin.default_value.as_deref())
-            .and_then(|bytes| {
-                flow_like_types::json::from_slice::<flow_like_types::Value>(bytes).ok()
-            })
-            .and_then(|value| value.as_str().map(|read| read == variable_id))
-            .unwrap_or(false)
+        let SymbolValue::VariableRef { variable_id } = self.lookup_symbol(name)? else {
+            return None;
+        };
+        let configured = node_pin_literal_string(node, "var_ref")?;
+        (configured == variable_id).then_some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing struct/array accessor node a `base.field` member access lowered
+    /// from (`struct_get`, `struct_break`, or `array_length`). The base is recursed so
+    /// literal edits deeper in the chain still apply.
+    fn reuse_existing_member_source(
+        &mut self,
+        base: &Expr,
+        field: &str,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        let base_input = match node.name.as_str() {
+            "struct_get"
+                if node_pin_literal_string(node, "field").as_deref() == Some(field) =>
+            {
+                "struct"
+            }
+            "struct_break"
+                if source
+                    .output_pin
+                    .as_deref()
+                    .and_then(|pin| pin.strip_prefix(super::lower::BREAK_STRUCT_PREFIX))
+                    == Some(field) =>
+            {
+                "struct_in"
+            }
+            "array_length" if field == "length" => "array",
+            _ => return None,
+        };
+        if let Some(base_source) = self.board_index.data_source_for_input(node, base_input) {
+            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
+        }
+        Some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing `array_get` node a `base[index]` access lowered from. A changed
+    /// literal index becomes a pin update on the same node.
+    fn reuse_existing_index_source(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != "array_get" || source.output_pin.as_deref() != Some("element") {
+            return None;
+        }
+        if let Some(base_source) = self.board_index.data_source_for_input(node, "array_in") {
+            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
+        }
+        if let Some(value) = literal_expr_to_value(index) {
+            let meta = node_to_metadata(node);
+            if let Some(pin) = metadata_input_pin(&meta, "index") {
+                let entity = NodeEntity::Existing(node_id.clone());
+                self.queue_update_input(&entity, pin, value, &meta);
+            }
+        }
+        Some(SymbolValue::Source(source))
+    }
+
+    /// Reuse the existing `utils_types_select` node a `cond ? a : b` ternary lowered from,
+    /// diffing its literal inputs and recursing into wired ones.
+    fn reuse_existing_select_source(
+        &mut self,
+        cond: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != "utils_types_select" {
+            return None;
+        }
+        let meta = node_to_metadata(node);
+        for (pin_name, expr) in [("condition", cond), ("a", then), ("b", otherwise)] {
+            if let Some(value) = literal_expr_to_value(expr) {
+                if let Some(pin) = metadata_input_pin(&meta, pin_name) {
+                    let entity = NodeEntity::Existing(node_id.clone());
+                    self.queue_update_input(&entity, pin, value, &meta);
+                }
+            } else if let Some(sub_source) = self.board_index.data_source_for_input(node, pin_name)
+            {
+                let _ =
+                    self.resolve_expr_using_existing_source(expr, sub_source, target_layer.clone());
+            }
+        }
+        Some(SymbolValue::Source(source))
     }
 
     fn reuse_existing_call_source(
@@ -2295,9 +2515,38 @@ impl<'a> StructuralPlanner<'a> {
         });
     }
 
+    /// Warn (non-blocking) about newly added impure nodes — nodes with an execution input — that end
+    /// up with no incoming execution edge and would therefore never run. Event/entry nodes have no
+    /// execution input and are skipped implicitly; a function body's first node is exempt (no entry
+    /// to wire from yet); existing anchored nodes are never recorded, so only new nodes are checked.
+    fn check_dangling_impure_execution(&mut self) {
+        let nodes = std::mem::take(&mut self.new_impure_nodes);
+        for (ref_id, exec_in, friendly_name) in &nodes {
+            if self.exec_check_exempt.contains(ref_id) {
+                continue;
+            }
+            let connected = self.connect_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { to_node, to_pin, .. }
+                        if to_node == ref_id && to_pin == exec_in
+                )
+            });
+            if !connected {
+                self.result.diagnostics.push(format!(
+                    "node `{friendly_name}` has no incoming execution connection and will not run; wire its execution input from the previous statement's execution output"
+                ));
+            }
+        }
+    }
+
     fn queue_add_node(&mut self, meta: NodeMetadata, target_layer: Option<String>) -> NodeEntity {
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
+        if let Some(exec_in) = metadata_exec_input_pin(&meta) {
+            self.new_impure_nodes
+                .push((ref_id.clone(), exec_in, meta.friendly_name.clone()));
+        }
         let position = self.next_position();
         self.add_commands.push(BoardCommand::AddNode {
             node_type: meta.name.clone(),
@@ -2334,19 +2583,26 @@ impl<'a> StructuralPlanner<'a> {
             .unwrap_or((0.0, 200.0))
     }
 
+    /// Wire `previous` into `current`'s exec input. Returns the `(from_node, from_pin)`
+    /// edge that was connected, or `None` when no connection was made.
+    ///
+    /// `insertion_origin` is the existing predecessor edge the current insertion streak
+    /// branched off from. When new nodes were spliced before an existing target, ONLY that
+    /// edge is disconnected — an exec input is a legal fan-in point, and the other incoming
+    /// edges belong to unrelated events/branches that must stay wired.
     fn connect_exec(
         &mut self,
         previous: &ExecCursor,
         current: &NodeEntity,
-        inserted_since_existing: bool,
-    ) -> bool {
+        insertion_origin: Option<&(String, String)>,
+    ) -> Option<(String, String)> {
         // Existing→existing pairs keep their board wiring (v1 does not rewrite exec edges) —
         // check FIRST so unchanged roundtrips don't emit no-continuation-policy diagnostics for
         // multi-output nodes whose successors are already wired.
         if matches!(previous.entity, NodeEntity::Existing(_))
             && matches!(current, NodeEntity::Existing(_))
         {
-            return false;
+            return None;
         }
 
         let Some(from_pin) = previous
@@ -2362,35 +2618,37 @@ impl<'a> StructuralPlanner<'a> {
                     outputs.join(", ")
                 ));
             }
-            return false;
+            return None;
         };
         let Some(to_pin) = self.entity_exec_input_pin(current) else {
-            return false;
+            return None;
         };
 
-        if inserted_since_existing
+        if let Some((origin_node, origin_pin)) = insertion_origin
             && let NodeEntity::Existing(node_id) = current
             && let Some(node) = find_board_node(self.existing, node_id)
         {
             for (from_node, from_pin) in self.board_index.exec_incoming_edges(node, &to_pin) {
-                self.disconnect_commands.push(BoardCommand::DisconnectPins {
-                    from_node,
-                    from_pin,
-                    to_node: node_id.clone(),
-                    to_pin: to_pin.clone(),
-                    summary: Some(format!("Rewire execution into {}", node.friendly_name)),
-                });
+                if &from_node == origin_node && &from_pin == origin_pin {
+                    self.disconnect_commands.push(BoardCommand::DisconnectPins {
+                        from_node,
+                        from_pin,
+                        to_node: node_id.clone(),
+                        to_pin: to_pin.clone(),
+                        summary: Some(format!("Rewire execution into {}", node.friendly_name)),
+                    });
+                }
             }
         }
 
         self.connect_commands.push(BoardCommand::ConnectPins {
             from_node: previous.entity.node_ref(),
-            from_pin,
+            from_pin: from_pin.clone(),
             to_node: current.node_ref(),
             to_pin,
             summary: Some("Connect FlowScript execution order".to_string()),
         });
-        true
+        Some((previous.entity.node_ref(), from_pin))
     }
 
     fn preferred_exec_output_for_input_sources(
@@ -2480,6 +2738,148 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// Lower a struct-field access (`<source>.field`, where `<source>` already selected an output
+    /// pin) to a `struct_get` node: `struct_get({ struct: <source>, field: "field" }).value`. This
+    /// makes dot-notation field access on a node output resolve. Returns `None` (leaving the original
+    /// diagnostic to fire) if the catalog has no `struct_get` node.
+    fn lower_struct_field_access(
+        &mut self,
+        base: ValueSource,
+        field: &str,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let probe = Call {
+            node_type: "struct_get".to_string(),
+            display: "structGet".to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+        let meta = self.catalog.resolve_call(&probe).ok()?;
+        let entity = self.queue_add_node(meta.clone(), target_layer);
+
+        if let Some(field_pin) = metadata_input_pin(&meta, "field") {
+            self.queue_update_input(
+                &entity,
+                field_pin,
+                flow_like_types::Value::String(field.to_string()),
+                &meta,
+            );
+        }
+
+        if let Some(struct_pin) = metadata_input_pin(&meta, "struct") {
+            let from_pin = base
+                .output_pin
+                .clone()
+                .or_else(|| self.resolve_entity_output_pin(&base.node, None));
+            if let Some(from_pin) = from_pin {
+                self.connect_commands.push(BoardCommand::ConnectPins {
+                    from_node: base.node.node_ref(),
+                    from_pin,
+                    to_node: entity.node_ref(),
+                    to_pin: struct_pin.name.clone(),
+                    summary: Some(format!("Read struct field `{field}`")),
+                });
+            }
+        }
+
+        let output = self.resolve_entity_output_pin(&entity, Some("value"))?;
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: Some(output),
+        }))
+    }
+
+    /// Materialize an `array_length` node for a `.length` member access.
+    fn lower_array_length_access(
+        &mut self,
+        base: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let probe = Call {
+            node_type: "array_length".to_string(),
+            display: "arrayLength".to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+        let meta = self.catalog.resolve_call(&probe).ok()?;
+        let entity = self.queue_add_node(meta.clone(), target_layer);
+
+        if let Some(array_pin) = metadata_input_pin(&meta, "array") {
+            let from_pin = base
+                .output_pin
+                .clone()
+                .or_else(|| self.resolve_entity_output_pin(&base.node, None));
+            if let Some(from_pin) = from_pin {
+                self.connect_commands.push(BoardCommand::ConnectPins {
+                    from_node: base.node.node_ref(),
+                    from_pin,
+                    to_node: entity.node_ref(),
+                    to_pin: array_pin.name.clone(),
+                    summary: Some("Read array length".to_string()),
+                });
+            }
+        }
+
+        let output = self
+            .resolve_entity_output_pin(&entity, Some("length"))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
+    /// Materialize an `array_get` node for a `base[index]` access, reading its `element`
+    /// output. The synthetic call routes base/index through the standard argument planner.
+    fn lower_array_index_access(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let call = Call {
+            node_type: "array_get".to_string(),
+            display: "arrayGet".to_string(),
+            args: vec![
+                Arg {
+                    name: "array_in".to_string(),
+                    value: base.clone(),
+                },
+                Arg {
+                    name: "index".to_string(),
+                    value: index.clone(),
+                },
+            ],
+            anchor: None,
+        };
+        let entity = self.add_call_node(&call, target_layer)?;
+        let output = self
+            .resolve_entity_output_pin(&entity, Some("element"))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
+    /// Drop a statement's own primary call node from the exec-splice queue.
+    ///
+    /// A bare `x = impureCall(...)` reassignment (or a `let`/`const` alias such as
+    /// `x = call(...).pin`) resolves its RHS through [`Self::resolve_expr`], whose `Expr::Call`
+    /// arm queues every impure call for exec-splicing — the machinery that threads impure calls
+    /// buried in *arguments* into the execution chain ahead of the consuming statement. But the
+    /// RHS's own top-level call is the statement's primary node, and `plan_block` already
+    /// exec-wires it as the `current` statement. Leaving it queued wires it twice, and because the
+    /// splice makes it `previous_exec` immediately before it becomes `current`, `connect_exec`
+    /// runs its execution output straight back into its own input — a self-connection that aborts
+    /// apply with "Cannot connect a node to itself". Removing it leaves the statement path as its
+    /// single, correct execution wiring; genuine argument-position splices stay queued.
+    fn undefer_statement_call_splice(&mut self, entity: &NodeEntity) {
+        let ref_id = entity.node_ref();
+        self.pending_exec_splices
+            .retain(|splice| splice.node_ref() != ref_id);
+    }
+
     fn resolve_expr(&mut self, expr: &Expr, target_layer: Option<String>) -> Option<SymbolValue> {
         if let Some(value) = literal_expr_to_value(expr) {
             return Some(SymbolValue::Literal(value));
@@ -2510,8 +2910,20 @@ impl<'a> StructuralPlanner<'a> {
                     output_pin: None,
                 })
             }),
-            Expr::Member { base, .. } | Expr::Index { base, .. } => {
-                self.resolve_expr(base, target_layer)
+            Expr::Member { base, field } => {
+                // `base.field` is the text form of struct_get / array_length; rebuild the
+                // accessor node instead of silently dropping the selection (which would
+                // wire the consumer straight to the base value).
+                let base_symbol = self.resolve_expr(base, target_layer.clone())?;
+                let base_source = self.symbol_to_source(base_symbol, target_layer.clone())?;
+                if field == "length" {
+                    self.lower_array_length_access(base_source, target_layer)
+                } else {
+                    self.lower_struct_field_access(base_source, field, target_layer)
+                }
+            }
+            Expr::Index { base, index } => {
+                self.lower_array_index_access(base, index, target_layer)
             }
             Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } | Expr::Binary { .. } => None,
             Expr::Literal(_) => None,
@@ -2927,8 +3339,9 @@ fn stmt_has_unanchored_calls(stmt: &Stmt) -> bool {
                 || call_args_have_unanchored_calls(call)
                 || block_has_unanchored_calls(body)
         }
-        Stmt::Assign { value, anchor, .. } => anchor.is_none() || expr_has_unanchored_calls(value),
-        Stmt::LocalAlias { value, anchor, .. } => {
+        Stmt::Assign { value, anchor, .. }
+        | Stmt::FieldAssign { value, anchor, .. }
+        | Stmt::LocalAlias { value, anchor, .. } => {
             anchor.is_none() || expr_has_unanchored_calls(value)
         }
         Stmt::Handler(event) => event.anchor.is_none() || block_has_unanchored_calls(&event.body),
@@ -2965,6 +3378,85 @@ fn expr_has_unanchored_calls(expr: &Expr) -> bool {
             expr_has_unanchored_calls(lhs) || expr_has_unanchored_calls(rhs)
         }
         Expr::Ref(_) | Expr::Literal(_) => false,
+    }
+}
+
+/// Synthesize the `struct_set` [`Call`] a `base.path = value` struct-field write
+/// (`Stmt::FieldAssign`) expands to: `structSet({ structIn: base, field: "path", value })`.
+///
+/// Shared by the structural planner's `Stmt::FieldAssign` arm (which turns it into an `AddNode`)
+/// and the reconcile collectors (which key it by anchor to drive config-edits and deletions) so
+/// the two expansions can never drift.
+fn field_assign_struct_set_call(
+    base: &str,
+    path: &str,
+    value: &Expr,
+    anchor: Option<&str>,
+) -> Call {
+    Call {
+        node_type: String::new(),
+        display: "structSet".to_string(),
+        args: vec![
+            Arg {
+                name: "structIn".to_string(),
+                value: Expr::Ref(base.to_string()),
+            },
+            Arg {
+                name: "field".to_string(),
+                value: Expr::Literal(Literal::String(path.to_string())),
+            },
+            Arg {
+                name: "value".to_string(),
+                value: value.clone(),
+            },
+        ],
+        anchor: anchor.map(str::to_string),
+    }
+}
+
+/// Materialize the synthesized `struct_set` [`Call`] for every *anchored* `Stmt::FieldAssign` in
+/// `ast`, at any nesting depth. `FieldAssign` carries no `&Call`, so without this the config-edit
+/// (`new_calls`) and deletion (`visible`) collectors would never see a `base.path = value` write's
+/// underlying `struct_set` node. The returned owned calls back the `&Call` entries those maps key
+/// by anchor. Anchorless writes are fresh (handled by the structural planner) and are skipped.
+fn collect_anchored_field_assign_calls(ast: &BoardAst) -> Vec<Call> {
+    let mut out = Vec::new();
+    for ev in &ast.events {
+        collect_field_assign_calls_in_block(&ev.body, &mut out);
+    }
+    for f in &ast.functions {
+        collect_field_assign_calls_in_block(&f.body, &mut out);
+    }
+    out
+}
+
+fn collect_field_assign_calls_in_block(block: &Block, out: &mut Vec<Call>) {
+    for stmt in &block.stmts {
+        collect_field_assign_calls_in_stmt(stmt, out);
+    }
+}
+
+fn collect_field_assign_calls_in_stmt(stmt: &Stmt, out: &mut Vec<Call>) {
+    match stmt {
+        Stmt::FieldAssign {
+            base,
+            path,
+            value,
+            anchor: Some(anchor),
+        } => out.push(field_assign_struct_set_call(
+            base,
+            path,
+            value,
+            Some(anchor),
+        )),
+        Stmt::Branch { arms, .. } => {
+            for arm in arms {
+                collect_field_assign_calls_in_block(&arm.body, out);
+            }
+        }
+        Stmt::Loop { body, .. } => collect_field_assign_calls_in_block(body, out),
+        Stmt::Handler(event) => collect_field_assign_calls_in_block(&event.body, out),
+        _ => {}
     }
 }
 
@@ -3032,7 +3524,10 @@ fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call
             }
         }
         Stmt::Handler(event) => collect_statement_block(&event.body, out),
-        Stmt::Return { .. } | Stmt::Local(_) | Stmt::Comment(_) => {}
+        // A `base.path = value` write's own `struct_set` node has no `&Call` to key here; its
+        // anchor is registered into `visible` separately from the owned arena built by
+        // `collect_anchored_field_assign_calls`, so a deleted dot-form line still flags a removal.
+        Stmt::FieldAssign { .. } | Stmt::Return { .. } | Stmt::Local(_) | Stmt::Comment(_) => {}
     }
 }
 
@@ -3055,7 +3550,9 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
             call, arms, anchor, ..
         } => {
             // Collect the anchor even for placeholder-call (sugared boolean) branches — the
-            // statement anchor is the branch node itself; see collect_statement_stmt.
+            // statement anchor is the branch node itself; see collect_statement_stmt. A
+            // condition-form `if (cond)` round-trip keeps its control_branch node this way
+            // instead of being mistaken for a deletion.
             collect_call_with_anchor(call, anchor.as_deref(), out);
             for arm in arms {
                 collect_block(&arm.body, out);
@@ -3083,6 +3580,10 @@ fn collect_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call>) {
             }
             collect_expr(value, out);
         }
+        // A `base.path = value` write's own `struct_set` has no `&Call` to key here; its anchor is
+        // registered into `new_calls` separately (see `collect_anchored_field_assign_calls`). Still
+        // walk the RHS so any anchored calls feeding `value` are tracked.
+        Stmt::FieldAssign { value, .. } => collect_expr(value, out),
         Stmt::Return { values, .. } => {
             for v in values {
                 collect_expr(v, out);
@@ -3210,6 +3711,9 @@ fn collect_nested_assignments_to(
     match stmt {
         Stmt::Assign { target, .. } if nested && local_names.contains(target) => {
             out.insert(target.clone());
+        }
+        Stmt::FieldAssign { base, .. } if nested && local_names.contains(base) => {
+            out.insert(base.clone());
         }
         Stmt::Branch { arms, .. } => {
             for arm in arms {
@@ -3418,6 +3922,154 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Build an `event → control_branch(true) → log` board (condition-form `if` sugar).
+    fn board_with_condition_branch() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.id = "branch".to_string();
+        let branch_in = branch
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let condition = branch.add_input_pin("condition", "Condition", "", VariableType::Boolean);
+        condition.default_value = Some(b"true".to_vec());
+        let branch_true = branch
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        branch.add_output_pin("false", "False", "", VariableType::Execution);
+        board.nodes.insert(branch.id.clone(), branch);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        log.add_input_pin("text", "Text", "", VariableType::String);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "branch", &branch_in);
+        connect(&mut board, "branch", &branch_true, "log", &log_in);
+        board
+    }
+
+    /// Build an `event → single_choice` board whose two same-named `options` input pins
+    /// hold different literal defaults (the dynamic multi-pin pattern). Returns the board
+    /// plus the two option-pin ids in index order.
+    fn board_with_multi_pin_node() -> (Board, String, String) {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut choice = Node::new("single_choice", "Single Choice", "", "interaction");
+        choice.id = "choice".to_string();
+        let choice_in = choice
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        choice.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let first = choice.add_input_pin("options", "Options", "", VariableType::String);
+        first.default_value = Some(b"\"a\"".to_vec());
+        let first_id = first.id.clone();
+        let second = choice.add_input_pin("options", "Options", "", VariableType::String);
+        second.default_value = Some(b"\"b\"".to_vec());
+        let second_id = second.id.clone();
+        board.nodes.insert(choice.id.clone(), choice);
+
+        connect(&mut board, "event", &event_out, "choice", &choice_in);
+        (board, first_id, second_id)
+    }
+
+    fn anchored_text(board: &Board) -> String {
+        super::super::board_to_flowscript(
+            board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn unchanged_multi_pin_roundtrip_emits_nothing() {
+        let (board, _, _) = board_with_multi_pin_node();
+        let text = anchored_text(&board);
+        let result = reconcile_text(&board, &text);
+        assert!(
+            result.commands.is_empty(),
+            "no-op multi-pin round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn multi_pin_edit_targets_the_right_pin_by_id() {
+        let (board, _first_id, second_id) = board_with_multi_pin_node();
+        let text = anchored_text(&board).replace("options: \"b\"", "options: \"c\"");
+        let result = reconcile_text(&board, &text);
+        let updates: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                BoardCommand::UpdateNodePin { pin_id, value, .. } => {
+                    Some((pin_id.clone(), value.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            updates,
+            vec![(
+                second_id,
+                flow_like_types::Value::String("c".to_string())
+            )],
+            "editing the second occurrence must update exactly the second pin, by id"
+        );
+    }
+
+    #[test]
+    fn unchanged_condition_branch_roundtrip_emits_no_removals() {
+        // `if (cond)` sugar parses with a placeholder call; its anchor must still count as
+        // present, otherwise a no-op round-trip deletes the control_branch node.
+        let board = board_with_condition_branch();
+        let text = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let result = reconcile_text(&board, &text);
+        let removals: Vec<_> = result
+            .commands
+            .iter()
+            .filter(|c| matches!(c, BoardCommand::RemoveNode { .. }))
+            .collect();
+        assert!(
+            removals.is_empty(),
+            "no-op round-trip must not delete nodes; got {removals:?} from text:\n{text}"
+        );
     }
 
     #[test]
@@ -3673,6 +4325,308 @@ mod tests {
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
         }
+    }
+
+    /// Board: event → makeData (struct output) → log, where log.text is fed through a
+    /// sugared `struct_get` (renders as `makeData.data.report_id`).
+    fn board_with_struct_member_chain() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut producer = Node::new("make_data", "Make Data", "", "data");
+        producer.id = "producer".to_string();
+        let producer_in = producer
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let producer_out = producer
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let data_out = producer
+            .add_output_pin("data", "Data", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(producer.id.clone(), producer);
+
+        let mut getter = Node::new("struct_get", "Get Field", "", "structs");
+        getter.id = "getter".to_string();
+        let struct_in = getter
+            .add_input_pin("struct", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        let field_pin = getter.add_input_pin("field", "Field", "", VariableType::String);
+        field_pin.default_value = Some(b"\"report_id\"".to_vec());
+        let value_out = getter
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        board.nodes.insert(getter.id.clone(), getter);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "producer", &producer_in);
+        connect(&mut board, "producer", &producer_out, "log", &log_in);
+        connect(&mut board, "producer", &data_out, "getter", &struct_in);
+        connect(&mut board, "getter", &value_out, "log", &text_in);
+        board
+    }
+
+    fn member_chain_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "make_data",
+                "Make Data",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("data", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "struct_get",
+                "Get Field",
+                vec![
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                ],
+                vec![pin_meta("value", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn unchanged_struct_member_roundtrip_reuses_accessor() {
+        // A sugared struct_get (`base.field` in text) must reuse the existing accessor on a
+        // no-op apply — not rewire the consumer to the bare base value or add a duplicate.
+        let board = board_with_struct_member_chain();
+        let text = anchored_text(&board);
+        let result = reconcile_text_with_catalog(&board, &text, &member_chain_catalog());
+        assert!(
+            result.commands.is_empty(),
+            "no-op member-chain round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unchanged_variable_ref_roundtrip_reuses_variable_get() {
+        // A bare variable ref in text lowers from a variable_get node; a no-op apply must
+        // reuse that node instead of materializing a duplicate reader.
+        let mut board = empty_board();
+        let mut variable = Variable::new("greeting", VariableType::String, ValueType::Normal);
+        variable.id = "var1".to_string();
+        variable.set_default_value(flow_like_types::Value::String("hi".to_string()));
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut reader = Node::new("variable_get", "Get Variable", "", "variables");
+        reader.id = "reader".to_string();
+        let var_ref = reader.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        var_ref.default_value = Some(b"\"var1\"".to_vec());
+        let value_out = reader
+            .add_output_pin("value_ref", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        board.nodes.insert(reader.id.clone(), reader);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let text_in = log
+            .add_input_pin("text", "Text", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "log", &log_in);
+        connect(&mut board, "reader", &value_out, "log", &text_in);
+
+        let text = anchored_text(&board);
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.commands.is_empty(),
+            "no-op variable-ref round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn inserting_before_fan_in_only_splices_own_chain() {
+        // Two events converge on one log node (exec fan-in). Inserting a new node into one
+        // chain must splice only that chain's edge — the other event's wiring stays intact.
+        let mut board = empty_board();
+
+        for event_id in ["event_a", "event_b"] {
+            let mut event = Node::new(
+                if event_id == "event_a" {
+                    "event_start"
+                } else {
+                    "event_timer"
+                },
+                "Event",
+                "",
+                "events",
+            );
+            event.id = event_id.to_string();
+            event.set_start(true);
+            let exec_out = event
+                .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+                .id
+                .clone();
+            board.nodes.insert(event.id.clone(), event);
+            let _ = exec_out;
+        }
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let text_pin = log.add_input_pin("text", "Text", "", VariableType::String);
+        text_pin.default_value = Some(b"\"hi\"".to_vec());
+        board.nodes.insert(log.id.clone(), log);
+
+        for event_id in ["event_a", "event_b"] {
+            let exec_out = board.nodes[event_id]
+                .pins
+                .values()
+                .find(|p| p.pin_type == PinType::Output)
+                .map(|p| p.id.clone())
+                .expect("event exec out");
+            connect(&mut board, event_id, &exec_out, "log", &log_in);
+        }
+
+        let text = anchored_text(&board);
+        let log_line = text
+            .lines()
+            .find(|line| line.contains("//@n:log"))
+            .expect("log statement in rendered text")
+            .to_string();
+        let edited = text.replace(&log_line, &format!("    notify()\n{log_line}"));
+
+        let catalog = vec![
+            catalog_meta(
+                "event_start",
+                "Event Start",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "event_timer",
+                "Event Timer",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "notify",
+                "Notify",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(&board, &edited, &catalog);
+
+        let disconnects: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                BoardCommand::DisconnectPins {
+                    from_node, to_node, ..
+                } => Some((from_node.clone(), to_node.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            disconnects.len(),
+            1,
+            "only the edited chain's edge may be spliced; got {disconnects:?} from:\n{edited}"
+        );
+        assert_eq!(disconnects[0].1, "log");
+        assert!(
+            disconnects[0].0.starts_with("event_"),
+            "splice must originate from the chain's own event; got {disconnects:?}"
+        );
     }
 
     #[test]
@@ -5159,6 +6113,437 @@ eventsSimple() {
     }
 
     #[test]
+    fn member_assignment_sugar_reconciles_to_struct_set() {
+        let board = empty_board();
+        let catalog = struct_accumulator_catalog();
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    let pref = structMake()
+    pref.cost_weight = 0.5
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // `pref.cost_weight = 0.5` desugars to a `struct_set` node with field="cost_weight".
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if command_node_type(&result.commands, node_id).as_deref() == Some("struct_set")
+                            && pin_id == "field"
+                            && value == &flow_like_types::Value::String("cost_weight".to_string())
+                )
+            }),
+            "expected a struct_set with field=\"cost_weight\"; commands: {:?}",
+            result.commands
+        );
+        // The struct source feeds the struct_set's struct_in (the read-modify-write chain).
+        assert!(
+            result.commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                        if command_node_type(&result.commands, from_node).as_deref() == Some("struct_make")
+                            && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                            && to_pin == "struct_in"
+                )
+            }),
+            "expected struct_make -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+    }
+
+    fn preferences_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "ai_generative_make_preferences",
+                "Make Preferences",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("multimodal", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("preferences", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "struct_set",
+                "Set Field",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("struct_in", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                    pin_meta("value", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("struct_out", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "ai_generative_find_model",
+                "Find Model",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("preferences", "Struct", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("model", "Struct", PinType::Output),
+                ],
+            ),
+        ]
+    }
+
+    /// Every `ConnectPins` this reconcile emitted, as `(from_node, to_node)` — used to assert no
+    /// edge is a self-connection, which `connect_pins` rejects at apply time with "Cannot connect a
+    /// node to itself".
+    fn self_connections(commands: &[BoardCommand]) -> Vec<(String, String)> {
+        commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node, to_node, ..
+                } if from_node == to_node => Some((from_node.clone(), to_node.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_const_bound_struct_set_avoids_self_connection() {
+        let board = empty_board();
+        let catalog = preferences_catalog();
+
+        // The struct-field write sugar has already been desugared by the parser into the
+        // accumulator form `x = structSet({ structIn: x, … })`. `x` here is a `const`-bound impure
+        // single-output node; the reassignment must wire struct_in from the PRIOR source and thread
+        // the impure struct_set into the exec chain exactly once — never onto itself.
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const preferences = aiGenerativeMakePreferences({ multimodal: true })
+    preferences = structSet({ structIn: preferences, field: "coding_weight", value: 0.5 })
+    const findModel = aiGenerativeFindModel({ preferences: preferences })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "reconcile emitted a self-connection: {:?}",
+            self_connections(&result.commands)
+        );
+
+        // struct_in reads the pre-reassignment source (make_preferences.preferences), not struct_set.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("ai_generative_make_preferences")
+                        && from_pin == "preferences"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "struct_in"
+            )),
+            "expected make_preferences.preferences -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+        // The rebound `preferences` (struct_set.struct_out) feeds the downstream consumer.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
+                        && from_pin == "struct_out"
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("ai_generative_find_model")
+                        && to_pin == "preferences"
+            )),
+            "expected struct_set.struct_out -> find_model.preferences; commands: {:?}",
+            result.commands
+        );
+        // The impure struct_set is threaded into the exec chain from make_preferences, once.
+        let struct_set_exec_in: Vec<_> = result
+            .commands
+            .iter()
+            .filter(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_node, to_pin, .. }
+                    if command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "exec_in"
+            ))
+            .collect();
+        assert_eq!(
+            struct_set_exec_in.len(),
+            1,
+            "struct_set exec_in should be wired exactly once; got {struct_set_exec_in:?}"
+        );
+        assert!(
+            matches!(
+                struct_set_exec_in[0],
+                BoardCommand::ConnectPins { from_node, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("ai_generative_make_preferences")
+            ),
+            "struct_set exec_in should come from make_preferences; got {struct_set_exec_in:?}"
+        );
+    }
+
+    #[test]
+    fn member_assignment_sugar_on_const_binding_avoids_self_connection() {
+        let board = empty_board();
+        let catalog = preferences_catalog();
+
+        // Same shape as above but exercising the parser sugar `x.field = value` directly, so the
+        // desugaring path is covered end to end.
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const preferences = aiGenerativeMakePreferences({ multimodal: true })
+    preferences.coding_weight = 0.5
+    const findModel = aiGenerativeFindModel({ preferences: preferences })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "reconcile emitted a self-connection: {:?}",
+            self_connections(&result.commands)
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref() == Some("struct_set")
+                        && pin_id == "field"
+                        && value == &flow_like_types::Value::String("coding_weight".to_string())
+            )),
+            "expected struct_set field=\"coding_weight\"; commands: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref()
+                        == Some("ai_generative_make_preferences")
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "struct_in"
+            )),
+            "expected make_preferences -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+    }
+
+    /// Build an `eventsSimple → structSet(seed) → structSet(accumulate) → batchInsertLocalDb`
+    /// board. The second `struct_set` reads the seed's `struct_out` (same accumulator) and rebinds
+    /// it. With `wired_field == false` its `field` is a literal — the shape lowering sugars to
+    /// `row.title = "hello"`; with `wired_field == true` a `cuid` node feeds `field`, so it must
+    /// stay the explicit `structSet({…})` form.
+    fn board_with_struct_accumulator(wired_field: bool) -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let ev_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut seed = Node::new("struct_set", "Set Field", "", "structs");
+        seed.id = "seed".to_string();
+        let seed_exec_in = seed
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let seed_exec_out = seed
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        seed.add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(br#""created""#.to_vec());
+        seed.add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(b"1".to_vec());
+        let seed_struct_out = seed
+            .add_output_pin("struct_out", "Struct Out", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(seed.id.clone(), seed);
+
+        let mut acc = Node::new("struct_set", "Set Field", "", "structs");
+        acc.id = "acc".to_string();
+        let acc_exec_in = acc
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let acc_exec_out = acc
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let acc_struct_in = acc
+            .add_input_pin("struct_in", "Struct In", "", VariableType::Struct)
+            .id
+            .clone();
+        let acc_field_id = {
+            let field = acc.add_input_pin("field", "Field", "", VariableType::String);
+            if !wired_field {
+                field.default_value = Some(br#""title""#.to_vec());
+            }
+            field.id.clone()
+        };
+        acc.add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(br#""hello""#.to_vec());
+        let acc_struct_out = acc
+            .add_output_pin("struct_out", "Struct Out", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(acc.id.clone(), acc);
+
+        let mut sink = Node::new("batch_insert_local_db", "Batch Insert Local DB", "", "data");
+        sink.id = "sink".to_string();
+        let sink_exec_in = sink
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let sink_value = sink
+            .add_input_pin("value", "Value", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(sink.id.clone(), sink);
+
+        connect(&mut board, "event", &ev_out, "seed", &seed_exec_in);
+        connect(&mut board, "seed", &seed_exec_out, "acc", &acc_exec_in);
+        connect(&mut board, "seed", &seed_struct_out, "acc", &acc_struct_in);
+        connect(&mut board, "acc", &acc_exec_out, "sink", &sink_exec_in);
+        connect(&mut board, "acc", &acc_struct_out, "sink", &sink_value);
+
+        if wired_field {
+            let mut cuid = Node::new("cuid", "CUID v2", "", "std");
+            cuid.id = "cuid".to_string();
+            let cuid_out = cuid
+                .add_output_pin("cuid", "CUID", "", VariableType::String)
+                .id
+                .clone();
+            board.nodes.insert(cuid.id.clone(), cuid);
+            connect(&mut board, "cuid", &cuid_out, "acc", &acc_field_id);
+        }
+
+        board
+    }
+
+    #[test]
+    fn lower_sugars_accumulator_reassignment_and_reconciles_back() {
+        let board = board_with_struct_accumulator(false);
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+
+        // The accumulator reassignment lowers to the dot-form struct-field write; only the seed
+        // `struct_set` (which cannot be a `base.field =` write) keeps its explicit call.
+        assert!(
+            text.contains("row.title = \"hello\""),
+            "accumulator reassignment must render as the dot form:\n{text}"
+        );
+        assert_eq!(
+            text.matches("structSet(").count(),
+            1,
+            "only the seed struct_set stays explicit; the reassignment is sugared:\n{text}"
+        );
+
+        // Reconciling the rendered text against an empty board recreates the same struct_set shape:
+        // a struct_set with a literal `field`, `struct_in` fed by the seed (base's prior source),
+        // `struct_out` rebound into the consumer, and no self-connection.
+        let catalog = struct_accumulator_catalog();
+        let result = reconcile_text_with_catalog(&empty_board(), &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "reconcile emitted a self-connection: {:?}",
+            self_connections(&result.commands)
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&result.commands, node_id).as_deref() == Some("struct_set")
+                        && pin_id == "field"
+                        && value == &flow_like_types::Value::String("title".to_string())
+            )),
+            "expected struct_set field=\"title\"; commands: {:?}",
+            result.commands
+        );
+        // struct_in of the dot-form struct_set is fed by the seed struct_set (base's prior source).
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
+                        && from_pin == "struct_out"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("struct_set")
+                        && to_pin == "struct_in"
+            )),
+            "expected struct_set.struct_out -> struct_set.struct_in; commands: {:?}",
+            result.commands
+        );
+        // The rebound accumulator (struct_out) flows into the downstream consumer.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
+                        && from_pin == "struct_out"
+                        && command_node_type(&result.commands, to_node).as_deref()
+                            == Some("batch_insert_local_db")
+                        && to_pin == "value"
+            )),
+            "expected struct_set.struct_out -> batch_insert_local_db.value; commands: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn lower_keeps_wired_field_struct_set_explicit() {
+        let board = board_with_struct_accumulator(true);
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+
+        // A wired (non-literal) `field` cannot be a `row.<field> = value` write, so lowering
+        // conservatively keeps BOTH struct_sets in the explicit `structSet({…})` form.
+        assert!(
+            text.contains("field: cuid()"),
+            "a wired-field struct_set must keep its explicit call:\n{text}"
+        );
+        assert_eq!(
+            text.matches("structSet(").count(),
+            2,
+            "neither the seed nor the wired-field struct_set may sugar to a dot write:\n{text}"
+        );
+        assert!(
+            !text.contains("row.title"),
+            "the wired-field update must not render as a dot write:\n{text}"
+        );
+    }
+
+    #[test]
     fn catalog_aware_reconcile_promotes_loop_local_accumulator_for_db_insert() {
         let board = empty_board();
         let catalog = accumulator_catalog();
@@ -5958,6 +7343,163 @@ eventsSimple() {
                     && diagnostic.contains("top-level FlowScript variable")),
             "{:?}",
             result.diagnostics
+        );
+    }
+
+    /// Build `event → makePreferences → structSet(a) → structSet(b)` where the tail `structSet`
+    /// (`set_b`) is a single-field accumulator update of the head's `struct_out`, so lowering
+    /// re-sugars it to the `record.reasoning_weight = 0.5` dot form (a `Stmt::FieldAssign`).
+    fn board_with_struct_accumulator_chain() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut make = Node::new("make_preferences", "Make Preferences", "", "data");
+        make.id = "make".to_string();
+        let make_in = make
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let make_exec_out = make
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let make_struct_out = make
+            .add_output_pin("preferences", "Preferences", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(make.id.clone(), make);
+
+        let mut set_a = Node::new("struct_set", "Set Field", "", "structs");
+        set_a.id = "set_a".to_string();
+        let a_in = set_a
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let a_struct_in = set_a
+            .add_input_pin("struct_in", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        set_a
+            .add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(b"\"coding_weight\"".to_vec());
+        set_a
+            .add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(b"0.3".to_vec());
+        let a_exec_out = set_a
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let a_struct_out = set_a
+            .add_output_pin("struct_out", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(set_a.id.clone(), set_a);
+
+        let mut set_b = Node::new("struct_set", "Set Field", "", "structs");
+        set_b.id = "set_b".to_string();
+        let b_in = set_b
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let b_struct_in = set_b
+            .add_input_pin("struct_in", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        set_b
+            .add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(b"\"reasoning_weight\"".to_vec());
+        set_b
+            .add_input_pin("value", "Value", "", VariableType::Generic)
+            .default_value = Some(b"0.5".to_vec());
+        set_b.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        set_b.add_output_pin("struct_out", "Struct", "", VariableType::Struct);
+        board.nodes.insert(set_b.id.clone(), set_b);
+
+        connect(&mut board, "event", &event_out, "make", &make_in);
+        connect(&mut board, "make", &make_exec_out, "set_a", &a_in);
+        connect(&mut board, "make", &make_struct_out, "set_a", &a_struct_in);
+        connect(&mut board, "set_a", &a_exec_out, "set_b", &b_in);
+        connect(&mut board, "set_a", &a_struct_out, "set_b", &b_struct_in);
+        board
+    }
+
+    #[test]
+    fn field_assign_value_literal_edit_updates_struct_set_value_pin() {
+        // Editing the value literal on an existing anchored `record.reasoning_weight = 0.5` dot
+        // form (rendered from the tail struct_set accumulator) must update that struct_set's
+        // `value` pin in place — the regression this synthesis fixes was a silent no-op here.
+        let board = board_with_struct_accumulator_chain();
+        let text =
+            anchored_text(&board).replace("reasoning_weight = 0.5", "reasoning_weight = 0.7");
+        let result = reconcile_text(&board, &text);
+
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if node_id == "set_b" && pin_id == "value" && value.as_f64() == Some(0.7)
+            )),
+            "expected UpdateNodePin on set_b.value = 0.7; got {:?}",
+            result.commands
+        );
+        // The struct_set already exists; the edit must not duplicate or remove the accumulator node.
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { .. } | BoardCommand::RemoveNode { .. }
+            )),
+            "field-assign config edit must not add or remove nodes; got {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn deleting_field_assign_line_removes_struct_set_node() {
+        // Removing the anchored dot-form line must flag its struct_set for deletion — before the
+        // synthesis, `visible` never saw the FieldAssign's node, so it lingered on the board.
+        let board = board_with_struct_accumulator_chain();
+        let reduced = anchored_text(&board)
+            .lines()
+            .filter(|line| !line.contains("//@n:set_b"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = reconcile_text(&board, &reduced);
+
+        let removed: Vec<_> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::RemoveNode { node_id, .. } => Some(node_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            vec!["set_b"],
+            "deleting the `record.reasoning_weight = …` line must remove only its struct_set; got {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unchanged_field_assign_roundtrip_emits_nothing() {
+        // Reconciling the identical anchored dot-form text against its own board must stay a no-op;
+        // this guards against the synthesized struct_set call producing a spurious edit or deletion.
+        let board = board_with_struct_accumulator_chain();
+        let text = anchored_text(&board);
+        let result = reconcile_text(&board, &text);
+        assert!(
+            result.commands.is_empty(),
+            "no-op field-assign round-trip must emit no commands; got {:?} from text:\n{text}",
+            result.commands
         );
     }
 }

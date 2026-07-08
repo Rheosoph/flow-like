@@ -31,6 +31,15 @@ export interface IApplyFlowScriptResponse {
 	diagnostics: string[];
 }
 
+export interface IFlowScriptDiagnostic {
+	message: string;
+	/** 1-based line number. */
+	line: number;
+	/** 1-based column number. */
+	col: number;
+	severity: "error" | "warning";
+}
+
 export interface IBoardState {
 	getBoards(appId: string): Promise<IBoard[]>;
 	getCatalog(appId: string): Promise<INode[]>;
@@ -140,6 +149,22 @@ export interface IBoardState {
 		catalogNodes?: INode[],
 		allowDeletions?: boolean,
 	): Promise<IApplyFlowScriptResponse>;
+
+	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */
+	getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string>;
+
+	/**
+	 * Authoritative parse-only FlowScript validation via the native (Rust) parser, returning
+	 * positioned diagnostics. Non-mutating, safe to call while typing. Optional — only present
+	 * where a native parser exists (Flow-Like Studio / desktop); elsewhere the editor relies on
+	 * the client-side structural linter.
+	 */
+	lintFlowScript?(flowscript: string): Promise<IFlowScriptDiagnostic[]>;
 
 	getExecutionElements(
 		appId: string,

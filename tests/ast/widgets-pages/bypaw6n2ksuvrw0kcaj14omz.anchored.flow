@@ -369,10 +369,10 @@ writeReport(title: string, shortSummary: string, report: string, payload: Struct
         reportCreated = true   //@n:c3z9pjjhjpy4njl7v5pl1exk
         const now2 = utilsDatetimeNow()   //@n:ijrzyi85455n11q11zjlins6
         let record = structSet({ structIn: {}, field: "created", value: now2.date }).structOut   //@n:oyz8sbq88icbqp31xyu68kke
-        record = structSet({ structIn: record, field: "title", value: title }).structOut   //@n:xw6ifsysoanbo9ka83d72cpt
-        record = structSet({ structIn: record, field: "report", value: report }).structOut   //@n:udwegq14u2johkogeuk3etlm
-        record = structSet({ structIn: record, field: "description", value: shortSummary }).structOut   //@n:g4msinux2ooq26k7tk6hdvss
-        record = structSet({ structIn: record, field: "report_id", value: reportID }).structOut   //@n:l3uwlikddjsnscukz2cfu8ll
+        record.title = title   //@n:xw6ifsysoanbo9ka83d72cpt
+        record.report = report   //@n:udwegq14u2johkogeuk3etlm
+        record.description = shortSummary   //@n:g4msinux2ooq26k7tk6hdvss
+        record.report_id = reportID   //@n:l3uwlikddjsnscukz2cfu8ll
         const openDatabase6 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:wcyhts01it7a928cgmlphucj
         insertLocalDb({ database: openDatabase6.database, value: record })   //@n:fqn428vwps1mlqa5qqa5ttbm
         notifyUser({ title: title, description: "", link: stringFormat({ formatString: "/briefing?report_id={id}", id: reportID }), showDesktop: true })   //@n:jcqwuf19ps7p9n7a7zpv796q

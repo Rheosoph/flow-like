@@ -31,4 +31,4 @@ pub use signatures::{
     DeclarationFile, NodeSchemas, SIGNATURE_SET_VERSION, SigParam, Signature, SignatureSet,
     declarations_by_category, declarations_by_package, render_signatures, schema_sidecar,
 };
-pub use text::{quote_string, to_camel_case};
+pub use text::{is_valid_identifier, quote_string, to_camel_case};

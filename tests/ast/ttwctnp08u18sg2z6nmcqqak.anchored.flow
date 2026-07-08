@@ -135,18 +135,18 @@ indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
             writeString({ path: setExtension7.pathOut, content: pagesToMarkdown.markdown })   //@n:ieeqjtlukoozasxoxbzezp2g
             const embedDocument = embedDocument({ queryString: summarizeDocument.summary.summary, model: embeddingModel })   //@n:tt2szytgiqxdo82vh4amz5ol
             let record2 = structSet({ structIn: {}, field: "vector", value: embedDocument.vector }).structOut   //@n:e9kpfkp5ivihjbtmims8fy9r
-            record2 = structSet({ structIn: record2, field: "content", value: summarizeDocument.summary.summary }).structOut   //@n:ql9k0oc83lxycuiyizqz3wk3
+            record2.content = summarizeDocument.summary.summary   //@n:ql9k0oc83lxycuiyizqz3wk3
             const now3 = utilsDatetimeNow()   //@n:q2cbltadjb08t1j1ba9519n2
             let row = structSet({ structIn: record2, field: "indexed", value: now3.date }).structOut   //@n:a22a1br0nmgqkpwov1pz7p2x
-            row = structSet({ structIn: row, field: "path", value: rawPath({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) }) }).structOut   //@n:rf3rktm1f4ftyrwf0e16s8ft
-            row = structSet({ structIn: row, field: "file_name", value: filename({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), removeExtension: true }) }).structOut   //@n:fwdsh4rorfsp1hg0u33u0zgj
+            row.path = rawPath({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })   //@n:rf3rktm1f4ftyrwf0e16s8ft
+            row.file_name = filename({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), removeExtension: true })   //@n:fwdsh4rorfsp1hg0u33u0zgj
             const cUIDV2 = cuid()   //@n:k10gsxn3te6tqaxf8kw6x17z
-            row = structSet({ structIn: row, field: "reference_db", value: cUIDV2.cuid }).structOut   //@n:l6lsh3fdxpszz699wjzheoj0
+            row.reference_db = cUIDV2.cuid   //@n:l6lsh3fdxpszz699wjzheoj0
             insertLocalDb({ database: files, value: row })   //@n:ot9y4104njuph6loxwaeloj1
             const readToBytes2 = readToBytes({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })   //@n:ap9a2oq5jd56oppttnhntyz8
             const blake3Hash2 = utilsHashBlake3({ input: readToBytes2.content })   //@n:u10ggc3447y21xhr6chplfy3
             let row2 = structSet({ structIn: {}, field: "hash", value: blake3Hash2.hash }).structOut   //@n:dlmgbjk5lofic9h0qnlad8hf
-            row2 = structSet({ structIn: row2, field: "reference_db", value: cUIDV2.cuid }).structOut   //@n:j3ln3ged2q3y9im5i8hzznyf
+            row2.reference_db = cUIDV2.cuid   //@n:j3ln3ged2q3y9im5i8hzznyf
             const setExtension3 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })   //@n:i7syn55nzv508vu1vy9zjm0d
             writeString({ path: setExtension3.pathOut, content: valToString({ value: row2, pretty: false }) })   //@n:i988fpbssorl577cu81zakyi
             const openDatabase5 = openLocalDb({ name: cUIDV2.cuid, userScoped: true, batchSize: 1000 })   //@n:fzaqcxl9osvuwy0g9yxw8umg
@@ -155,7 +155,7 @@ indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
                 const chunkText = chunkText({ text: forEach2.value.content, model: embeddingModel, capacity: 8000, overlap: 20, markdown: true })   //@n:sixj9z0by3rq9q3ihg2s9n3j
                 for (const forEach3 of controlForEach({ array: chunkText.chunks })) {   //@n:j105jw40ombeqg414pr7swju
                     let record3 = structSet({ structIn: record4, field: "content", value: forEach3.value }).structOut   //@n:i6nh6fapa0j1wuszj87dit4y
-                    record3 = structSet({ structIn: record3, field: "chunk_id", value: forEach3.index }).structOut   //@n:jm47xl12ci20lk80zlvrbx40
+                    record3.chunk_id = forEach3.index   //@n:jm47xl12ci20lk80zlvrbx40
                     const embedDocument2 = embedDocument({ queryString: forEach3.value, model: embeddingModel })   //@n:xwoggws1xtccwwbdgfosmv61
                     let row3 = structSet({ structIn: record3, field: "vector", value: embedDocument2.vector }).structOut   //@n:q6suqnrf0jpevf6uy04ku267
                     insertLocalDb({ database: openDatabase5.database, value: row3 })   //@n:hpm2vd2nmzj8h7hi1awt6omg
@@ -367,7 +367,7 @@ listFilesInPath(path: string, payload: Struct) {   //@n:iuj7lsynep4xqxshgp8g3h4r
     const listPaths = pathListPaths({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })   //@n:qt2j96v0nx2rb0ps9tjpuw5x
     const listFolders = pathListFolders({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })   //@n:yly5sss0lnawgzelngi29khs
     let record5 = structSet({ structIn: {}, field: "files", value: listPaths.paths }).structOut   //@n:ndc55i1zej9krr8puvhma6mn
-    record5 = structSet({ structIn: record5, field: "folders", value: listFolders.folders }).structOut   //@n:hwwnb1e3boml2bganej5m98n
+    record5.folders = listFolders.folders   //@n:hwwnb1e3boml2bganej5m98n
     return record5   //@n:x8yuz6uqnn48da8aeq6cetjv
 }
 

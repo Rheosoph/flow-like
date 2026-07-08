@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::model::*;
 use crate::schema::{normalize_object_schema, normalize_schema};
-use crate::text::{quote_string, to_camel_case};
+use crate::text::{is_valid_identifier, quote_string, to_camel_case};
 
 /// Options controlling text rendering.
 #[derive(Debug, Clone)]
@@ -107,7 +107,13 @@ impl Writer<'_> {
         self.depth += 1;
         for field in &interface.fields {
             self.indent();
-            self.out.push_str(&field.name);
+            // JSON-schema property names are arbitrary strings; quote the ones that
+            // would not lex as identifiers so the interface stays parseable.
+            if is_valid_identifier(&field.name) {
+                self.out.push_str(&field.name);
+            } else {
+                self.out.push_str(&quote_string(&field.name));
+            }
             if field.optional {
                 self.out.push('?');
             }
@@ -270,6 +276,25 @@ impl Writer<'_> {
                 self.anchor("n", anchor.as_deref());
                 self.out.push('\n');
             }
+            Stmt::FieldAssign {
+                base,
+                path,
+                value,
+                anchor,
+            } => {
+                self.indent();
+                self.out.push_str(base);
+                // A bracket-rooted path (`base[0]`) has no separator; a named field (`base.field`)
+                // is dot-joined.
+                if !path.starts_with('[') {
+                    self.out.push('.');
+                }
+                self.out.push_str(path);
+                self.out.push_str(" = ");
+                self.out.push_str(&render_expr(value));
+                self.anchor("n", anchor.as_deref());
+                self.out.push('\n');
+            }
             Stmt::LocalAlias {
                 name,
                 value,
@@ -383,11 +408,14 @@ impl Writer<'_> {
                     self.out.push_str("}\n");
                 }
                 _ => {
-                    // Degenerate (no connected arms): emit an empty guarded block.
+                    // Degenerate (no connected arms): emit an empty guarded block. The brace
+                    // closes on its own line so a trailing anchor comment cannot swallow it.
                     self.out.push_str("if (");
                     self.out.push_str(&render_expr(cond));
                     self.out.push_str(") {");
                     self.anchor("n", anchor);
+                    self.out.push('\n');
+                    self.indent();
                     self.out.push_str("}\n");
                 }
             }
@@ -553,7 +581,15 @@ pub fn render_type_ref(ty: &TypeRef) -> String {
 pub fn render_interface_type(ty: &InterfaceType) -> String {
     match ty {
         InterfaceType::Named(name) => name.clone(),
-        InterfaceType::Array(inner) => format!("{}[]", render_interface_type(inner)),
+        InterfaceType::Array(inner) => {
+            let inner_text = render_interface_type(inner);
+            // `A | B[]` parses as `A | (B[])`; group union elements explicitly.
+            if matches!(**inner, InterfaceType::Union(_)) {
+                format!("({inner_text})[]")
+            } else {
+                format!("{inner_text}[]")
+            }
+        }
         InterfaceType::Map(inner) => format!("Map<string, {}>", render_interface_type(inner)),
         InterfaceType::Union(members) => members
             .iter()

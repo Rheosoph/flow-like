@@ -369,10 +369,10 @@ writeReport(title: string, shortSummary: string, report: string, payload: Struct
         reportCreated = true
         const now2 = utilsDatetimeNow()
         let record = structSet({ structIn: {}, field: "created", value: now2.date }).structOut
-        record = structSet({ structIn: record, field: "title", value: title }).structOut
-        record = structSet({ structIn: record, field: "report", value: report }).structOut
-        record = structSet({ structIn: record, field: "description", value: shortSummary }).structOut
-        record = structSet({ structIn: record, field: "report_id", value: reportID }).structOut
+        record.title = title
+        record.report = report
+        record.description = shortSummary
+        record.report_id = reportID
         const openDatabase6 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
         insertLocalDb({ database: openDatabase6.database, value: record })
         notifyUser({ title: title, description: "", link: stringFormat({ formatString: "/briefing?report_id={id}", id: reportID }), showDesktop: true })

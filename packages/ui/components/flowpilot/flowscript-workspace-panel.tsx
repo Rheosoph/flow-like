@@ -4,157 +4,27 @@ import Editor, { type Monaco } from "@monaco-editor/react";
 import { CheckCircle2, CopyIcon, FileCode2Icon, XIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+	FLOWSCRIPT_LANGUAGE_ID,
+	FLOWSCRIPT_THEME_DARK,
+	FLOWSCRIPT_THEME_LIGHT,
+	defineFlowScriptThemes,
+	registerFlowScriptLanguage,
+} from "../flow/flowscript/flowscript-language";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-
-export const FLOWSCRIPT_LANGUAGE_ID = "flowscript";
-let flowScriptLanguageRegistered = false;
 
 export function formatLineCount(source: string): string {
 	const lines = source ? source.split("\n").length : 0;
 	return `${lines} line${lines === 1 ? "" : "s"}`;
 }
 
-export function registerFlowScriptLanguage(monaco: Monaco, isDark: boolean) {
-	const hasRegisteredLanguage = monaco.languages
-		.getLanguages()
-		.some((language) => language.id === FLOWSCRIPT_LANGUAGE_ID);
-
-	if (!flowScriptLanguageRegistered && !hasRegisteredLanguage) {
-		monaco.languages.register({ id: FLOWSCRIPT_LANGUAGE_ID });
-		monaco.languages.setLanguageConfiguration(FLOWSCRIPT_LANGUAGE_ID, {
-			comments: { lineComment: "//" },
-			brackets: [
-				["{", "}"],
-				["[", "]"],
-				["(", ")"],
-			],
-			autoClosingPairs: [
-				{ open: "{", close: "}" },
-				{ open: "[", close: "]" },
-				{ open: "(", close: ")" },
-				{ open: '"', close: '"', notIn: ["string", "comment"] },
-			],
-			surroundingPairs: [
-				{ open: "{", close: "}" },
-				{ open: "[", close: "]" },
-				{ open: "(", close: ")" },
-				{ open: '"', close: '"' },
-			],
-			indentationRules: {
-				increaseIndentPattern: /^.*\{[^}"']*$/,
-				decreaseIndentPattern: /^\s*\}/,
-			},
-		});
-		monaco.languages.setMonarchTokensProvider(FLOWSCRIPT_LANGUAGE_ID, {
-			tokenizer: {
-				root: [
-					[/\/\/@[nvl]:.*$/, "comment.flow-anchor"],
-					[/\/\/.*$/, "comment"],
-					[/@"?[A-Za-z_$][\w$]*"?/, "annotation"],
-					[/"([^"\\]|\\.)*$/, "string.invalid"],
-					[/"/, "string", "@string"],
-					[/\b(const|let|function)\b/, "keyword.storage"],
-					[/\b(if|else|for|of|return)\b/, "keyword.control"],
-					[
-						/\b(string|int|float|bool|void|Date|Generic|Byte|PathBuf|Struct|Map|Set)\b/,
-						"type",
-					],
-					[/\b(true|false|null)\b/, "constant.language"],
-					[/\b-?\d+\.\d+([eE][+-]?\d+)?\b/, "number.float"],
-					[/\b-?\d+\b/, "number"],
-					[/[A-Za-z_$][\w$]*(?=\s*\()/, "entity.name.function"],
-					[/[A-Za-z_$][\w$]*(?=\s*:)/, "variable.parameter"],
-					[/[A-Za-z_$][\w$]*/, "identifier"],
-					[/===|!==|==|!=|>=|<=|>|<|&&|\|\||!|\+|-|\*|\/|%|=|\?/, "operator"],
-					[/[{}()[\]]/, "@brackets"],
-				],
-				string: [
-					[/[^\\"]+/, "string"],
-					[/\\(?:["\\/nrt]|u[0-9A-Fa-f]{4})/, "string.escape"],
-					[/"/, "string", "@pop"],
-				],
-			},
-		});
-		flowScriptLanguageRegistered = true;
-	} else if (hasRegisteredLanguage) {
-		flowScriptLanguageRegistered = true;
-	}
-
-	monaco.editor.defineTheme("flowpilot-flowscript-light", {
-		base: "vs",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "7a7f8a", fontStyle: "italic" },
-			{ token: "comment.flow-anchor", foreground: "2563eb", fontStyle: "bold" },
-			{ token: "annotation", foreground: "8b5cf6" },
-			{ token: "keyword", foreground: "b91c6b", fontStyle: "bold" },
-			{ token: "keyword.storage", foreground: "315ac5", fontStyle: "bold" },
-			{ token: "type", foreground: "6d55c7" },
-			{ token: "entity.name.function", foreground: "087ea4" },
-			{ token: "variable.parameter", foreground: "a56a00" },
-			{ token: "string", foreground: "159447" },
-			{ token: "number", foreground: "c2410c" },
-			{ token: "constant.language", foreground: "7c3aed" },
-			{ token: "operator", foreground: "5b6270" },
-		],
-		colors: {
-			"editor.background": "#fbfafc",
-			"editor.foreground": "#24252b",
-			"editorGutter.background": "#fbfafc",
-			"editorLineNumber.foreground": "#a6a8b3",
-			"editorLineNumber.activeForeground": "#6b7280",
-			"editorCursor.foreground": "#ec4899",
-			"editor.selectionBackground": "#8b5cf626",
-			"editor.inactiveSelectionBackground": "#8b5cf617",
-			"editor.lineHighlightBackground": "#11182708",
-			"editorIndentGuide.background1": "#11182712",
-			"editorIndentGuide.activeBackground1": "#8b5cf64a",
-			"editorBracketMatch.background": "#8b5cf61c",
-			"editorBracketMatch.border": "#8b5cf670",
-			"scrollbarSlider.background": "#71717a33",
-			"scrollbarSlider.hoverBackground": "#71717a4d",
-			"scrollbarSlider.activeBackground": "#71717a66",
-		},
-	});
-	monaco.editor.defineTheme("flowpilot-flowscript-dark", {
-		base: "vs-dark",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "a1a1aa", fontStyle: "italic" },
-			{ token: "comment.flow-anchor", foreground: "38bdf8", fontStyle: "bold" },
-			{ token: "annotation", foreground: "c084fc" },
-			{ token: "keyword", foreground: "f472b6", fontStyle: "bold" },
-			{ token: "keyword.storage", foreground: "60a5fa", fontStyle: "bold" },
-			{ token: "type", foreground: "a78bfa" },
-			{ token: "entity.name.function", foreground: "22d3ee" },
-			{ token: "variable.parameter", foreground: "facc15" },
-			{ token: "string", foreground: "86efac" },
-			{ token: "number", foreground: "fb923c" },
-			{ token: "constant.language", foreground: "c084fc" },
-			{ token: "operator", foreground: "d4d4d8" },
-		],
-		colors: {
-			"editor.background": "#111116",
-			"editor.foreground": "#e5e7eb",
-			"editorGutter.background": "#111116",
-			"editorLineNumber.foreground": "#686b76",
-			"editorLineNumber.activeForeground": "#d4d4d8",
-			"editorCursor.foreground": "#f472b6",
-			"editor.selectionBackground": "#a855f733",
-			"editor.inactiveSelectionBackground": "#a855f71f",
-			"editor.lineHighlightBackground": "#ffffff08",
-			"editorIndentGuide.background1": "#ffffff12",
-			"editorIndentGuide.activeBackground1": "#a855f65c",
-			"editorBracketMatch.background": "#a855f61f",
-			"editorBracketMatch.border": "#c084fc70",
-			"scrollbarSlider.background": "#a1a1aa33",
-			"scrollbarSlider.hoverBackground": "#a1a1aa4d",
-			"scrollbarSlider.activeBackground": "#a1a1aa66",
-		},
-	});
+/** Registers the shared FlowScript language + themes and applies the theme for this editor. */
+function setupFlowScriptEditor(monaco: Monaco, isDark: boolean) {
+	registerFlowScriptLanguage(monaco);
+	defineFlowScriptThemes(monaco);
 	monaco.editor.setTheme(
-		isDark ? "flowpilot-flowscript-dark" : "flowpilot-flowscript-light",
+		isDark ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT,
 	);
 }
 
@@ -196,14 +66,14 @@ export const FlowScriptWorkspacePanel = memo(function FlowScriptWorkspacePanel({
 	const handleBeforeMount = useCallback(
 		(monaco: Monaco) => {
 			monacoRef.current = monaco;
-			registerFlowScriptLanguage(monaco, isDark);
+			setupFlowScriptEditor(monaco, isDark);
 		},
 		[isDark],
 	);
 
 	useEffect(() => {
 		if (!monacoRef.current) return;
-		registerFlowScriptLanguage(monacoRef.current, isDark);
+		setupFlowScriptEditor(monacoRef.current, isDark);
 	}, [isDark]);
 
 	return (
@@ -279,11 +149,7 @@ export const FlowScriptWorkspacePanel = memo(function FlowScriptWorkspacePanel({
 						beforeMount={handleBeforeMount}
 						height="100%"
 						language={FLOWSCRIPT_LANGUAGE_ID}
-						theme={
-							isDark
-								? "flowpilot-flowscript-dark"
-								: "flowpilot-flowscript-light"
-						}
+						theme={isDark ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT}
 						value={source}
 						options={{
 							readOnly: true,

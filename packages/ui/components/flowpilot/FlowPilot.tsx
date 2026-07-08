@@ -452,7 +452,10 @@ function toCamelCase(value: string): string {
 }
 
 /** Mirror of the catalog `a2ui_instantiate_widget` dynamic pin naming, camelCased for FlowScript. */
-function widgetInstantiatePin(kind: "path" | "prop" | "cust", key: string): string {
+function widgetInstantiatePin(
+	kind: "path" | "prop" | "cust",
+	key: string,
+): string {
 	return toCamelCase(`dyn_${kind}_${key}`);
 }
 
@@ -1348,7 +1351,12 @@ function FlowPilotImpl({
 				}
 			}
 		},
-		[activeAppId, board?.id, backendContext.pageState, backendContext.widgetState],
+		[
+			activeAppId,
+			board?.id,
+			backendContext.pageState,
+			backendContext.widgetState,
+		],
 	);
 
 	const executeFrontendToolRequest = useCallback(

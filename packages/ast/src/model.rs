@@ -175,6 +175,18 @@ pub enum Stmt {
         value: Expr,
         anchor: Option<String>,
     },
+    /// `base.path = value` — a struct-field write (the readable surface of a single-field
+    /// `struct_set` accumulator, e.g. `preferences.coding_weight = 0.5`). `base` is the root
+    /// variable name; `path` is the field path WITHOUT a leading dot (`coding_weight`, `a.b`,
+    /// `items[0].name`, or a bracket-rooted `[0]`). Reconcile expands it to the
+    /// `structSet({ structIn: base, field: "path", value })` form and rebinds `base` to
+    /// `struct_out`; lowering re-sugars such an accumulator `struct_set` back to this.
+    FieldAssign {
+        base: String,
+        path: String,
+        value: Expr,
+        anchor: Option<String>,
+    },
     /// `let name = expr` — a function-local alias/mutable accumulator introduced by FlowScript.
     LocalAlias {
         name: String,

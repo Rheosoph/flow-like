@@ -36,6 +36,7 @@ import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
 	Eye,
+	FileCode2Icon,
 	FileTextIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
@@ -65,7 +66,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { ImperativePanelHandle } from "react-resizable-panels";
+import type {
+	ImperativePanelGroupHandle,
+	ImperativePanelHandle,
+} from "react-resizable-panels";
 import {
 	Button,
 	Sheet,
@@ -86,6 +90,7 @@ import {
 	type FlowNodeInfoOverlayHandle,
 } from "../../components/flow/flow-node/flow-node-info-overlay";
 import { FlowPages } from "../../components/flow/flow-pages";
+import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
@@ -323,6 +328,12 @@ const FlowCanvas = memo(function FlowCanvas({
 	);
 });
 
+// Index of each panel inside the outer horizontal ResizablePanelGroup, ordered by
+// their `order` prop: variables(0), main container(1), runs(2), flowscript(3), search(4).
+const MAIN_PANEL_INDEX = 1;
+const RUNS_PANEL_INDEX = 2;
+const FLOWSCRIPT_PANEL_INDEX = 3;
+
 export function FlowBoard({
 	appId,
 	boardId,
@@ -396,6 +407,8 @@ export function FlowBoard({
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
 
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
+	const flowScriptPanelRef = useRef<ImperativePanelHandle>(null);
+	const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
 	const shiftPressed = useKeyPress("Shift");
@@ -1070,6 +1083,8 @@ export function FlowBoard({
 
 	const [varsOpen, setVarsOpen] = useState(false);
 
+	const [flowScriptSheetOpen, setFlowScriptSheetOpen] = useState(false);
+	const [flowScriptPanelVisible, setFlowScriptPanelVisible] = useState(false);
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
@@ -1116,14 +1131,43 @@ export function FlowBoard({
 	}, [copilotOpen]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 
-	const { toggleVars, toggleRunHistory, toggleLogs } = useFlowPanels({
+	const { toggleVars, toggleLogs } = useFlowPanels({
 		varPanelRef,
-		runsPanelRef,
 		logPanelRef,
 		setVarsOpen,
-		setRunsOpen,
 		setLogsOpen,
 	});
+
+	// Runs and FlowScript are collapsible siblings on the right edge of the outer
+	// horizontal group. Collapsing one via the per-panel imperative API makes
+	// react-resizable-panels hand the freed width to its immediate neighbor, which
+	// un-collapses it (e.g. closing FlowScript surfaces Runs). Rewrite the whole
+	// layout instead and give the freed width back to the flexible main container.
+	const setSidePanelSize = useCallback((index: number, size: number) => {
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const layout = group.getLayout();
+		const current = layout[index] ?? 0;
+		if (Math.abs(current - size) < 0.01) return;
+		const next = [...layout];
+		next[index] = size;
+		next[MAIN_PANEL_INDEX] = Math.max(
+			0,
+			(next[MAIN_PANEL_INDEX] ?? 0) - (size - current),
+		);
+		group.setLayout(next);
+	}, []);
+
+	const toggleRunHistory = useCallback(() => {
+		if (isMobile) {
+			setRunsOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[RUNS_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(RUNS_PANEL_INDEX, open ? 30 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	const togglePages = useCallback(() => {
 		if (isMobile) {
@@ -1134,6 +1178,17 @@ export function FlowBoard({
 			setPagesOpen((v) => !v);
 		}
 	}, [isMobile]);
+
+	const toggleFlowScript = useCallback(() => {
+		if (isMobile) {
+			setFlowScriptSheetOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[FLOWSCRIPT_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, open ? 35 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	// Clear selections when version changes
 	useEffect(() => {
@@ -3289,6 +3344,13 @@ export function FlowBoard({
 							},
 						},
 						{
+							icon: <FileCode2Icon />,
+							title: "FlowScript",
+							onClick: async () => {
+								toggleFlowScript();
+							},
+						},
+						{
 							icon: <HistoryIcon />,
 							separator: "left",
 							title: "Run History",
@@ -3348,6 +3410,7 @@ export function FlowBoard({
 			)}
 
 			<ResizablePanelGroup
+				ref={panelGroupRef}
 				direction="horizontal"
 				className="flex grow flex-1 min-h-0 h-full overscroll-none"
 				style={{
@@ -3357,8 +3420,9 @@ export function FlowBoard({
 			>
 				{/* Desktop/Tablet side panels */}
 				<ResizablePanel
+					id="flow-variables"
+					order={1}
 					className="z-50 bg-background hidden md:block"
-					autoSave="flow-variables"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3375,7 +3439,7 @@ export function FlowBoard({
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
-				<ResizablePanel autoSave="flow-main-container">
+				<ResizablePanel id="flow-main-container" order={2}>
 					<ResizablePanelGroup
 						direction="vertical"
 						className="h-full flex grow"
@@ -3566,8 +3630,9 @@ export function FlowBoard({
 				</ResizablePanel>
 				<ResizableHandle withHandle />
 				<ResizablePanel
+					id="flow-runs"
+					order={3}
 					className="z-50 hidden md:block"
-					autoSave="flow-runs"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3585,10 +3650,36 @@ export function FlowBoard({
 						/>
 					)}
 				</ResizablePanel>
+				<ResizableHandle withHandle />
+				<ResizablePanel
+					id="flow-flowscript"
+					order={4}
+					className="z-50 hidden md:block"
+					defaultSize={0}
+					collapsible={true}
+					collapsedSize={0}
+					ref={flowScriptPanelRef}
+					onExpand={() => setFlowScriptPanelVisible(true)}
+					onCollapse={() => setFlowScriptPanelVisible(false)}
+				>
+					{board.data && flowScriptPanelVisible && (
+						<FlowScriptPanel
+							appId={appId}
+							boardId={boardId}
+							version={version}
+							boardUpdatedAt={board.dataUpdatedAt}
+							catalogNodes={catalog.data}
+							onApplyFlowScript={handleApplyFlowScript}
+							onClose={() => setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 0)}
+						/>
+					)}
+				</ResizablePanel>
 				{searchMode === "sidebar" && searchOpen && (
 					<>
 						<ResizableHandle withHandle />
 						<ResizablePanel
+							id="flow-search"
+							order={5}
 							className="z-50 hidden md:block min-w-[280px] max-w-[400px]"
 							defaultSize={20}
 							minSize={15}
@@ -3663,6 +3754,27 @@ export function FlowBoard({
 						{(!currentMetadata || !board.data) && (
 							<div className="h-[calc(80dvh-3.5rem)] w-full flex items-center justify-center text-sm text-muted-foreground p-6">
 								No run selected yet. Start a run to view logs here.
+							</div>
+						)}
+					</SheetContent>
+				</Sheet>
+				{/* FlowScript Sheet (mobile) */}
+				<Sheet open={flowScriptSheetOpen} onOpenChange={setFlowScriptSheetOpen}>
+					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
+						<SheetHeader className="px-4 pt-4">
+							<SheetTitle>FlowScript</SheetTitle>
+						</SheetHeader>
+						{board.data && flowScriptSheetOpen && (
+							<div className="h-[calc(90dvh-3.5rem)] w-full">
+								<FlowScriptPanel
+									appId={appId}
+									boardId={boardId}
+									version={version}
+									boardUpdatedAt={board.dataUpdatedAt}
+									catalogNodes={catalog.data}
+									onApplyFlowScript={handleApplyFlowScript}
+									onClose={() => setFlowScriptSheetOpen(false)}
+								/>
 							</div>
 						)}
 					</SheetContent>

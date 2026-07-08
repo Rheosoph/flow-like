@@ -24,9 +24,23 @@ pub fn to_camel_case(input: &str) -> String {
     }
     if out.is_empty() {
         "node".to_string()
+    } else if out.chars().next().is_some_and(|c| c.is_numeric()) {
+        // A digit-leading identifier lexes as a number and breaks the whole document.
+        // Both lowering and reconcile camelize through here, so names stay in sync.
+        format!("_{out}")
     } else {
         out
     }
+}
+
+/// Whether `s` lexes as a single FlowScript identifier (mirrors the lexer's rules).
+pub fn is_valid_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
 /// Quote and escape a string as a FlowScript double-quoted literal.
@@ -61,6 +75,7 @@ mod tests {
         assert_eq!(to_camel_case("kebab-case-thing"), "kebabCaseThing");
         assert_eq!(to_camel_case("Already Spaced"), "alreadySpaced");
         assert_eq!(to_camel_case(""), "node");
+        assert_eq!(to_camel_case("2fa enabled"), "_2faEnabled");
     }
 
     #[test]
