@@ -9,6 +9,7 @@ import {
 	IConnectionMode,
 	type IExecutionMode,
 	type IExecutionStage,
+	type IFlowScriptDiagnostic,
 	type IGenericCommand,
 	type IHub,
 	type IIntercomEvent,
@@ -1932,6 +1933,12 @@ export class BoardState implements IBoardState {
 			);
 			return response.flowscript;
 		}
+	}
+
+	async lintFlowScript(flowscript: string): Promise<IFlowScriptDiagnostic[]> {
+		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
+			flowscript,
+		});
 	}
 
 	async getExecutionElements(

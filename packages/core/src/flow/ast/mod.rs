@@ -17,8 +17,8 @@ pub use apply::{
     destructive_flowscript_command_summaries,
 };
 pub use flow_like_ast::{
-    BoardAst, DeclarationFile, NodeSchemas, RenderOptions, Signature, SignatureSet,
-    declarations_by_category, declarations_by_package, render, schema_sidecar,
+    BoardAst, DeclarationFile, NodeSchemas, ParseError, RenderOptions, Signature, SignatureSet,
+    declarations_by_category, declarations_by_package, parse, render, schema_sidecar,
 };
 pub use lower::lower_board;
 pub use reconcile::{

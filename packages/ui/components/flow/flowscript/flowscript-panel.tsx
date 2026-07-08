@@ -15,7 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { INode } from "../../../lib/schema/flow/node";
 import { useBackend } from "../../../state/backend-state";
-import type { IApplyFlowScriptResponse } from "../../../state/backend-state/board-state";
+import type {
+	IApplyFlowScriptResponse,
+	IFlowScriptDiagnostic,
+} from "../../../state/backend-state/board-state";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -32,12 +35,19 @@ import {
 	TooltipTrigger,
 } from "../../ui";
 import {
+	FLOWSCRIPT_DIAGNOSTIC_OWNER,
 	FLOWSCRIPT_LANGUAGE_ID,
-	registerFlowScriptCompletions,
+	FLOWSCRIPT_THEME_DARK,
+	FLOWSCRIPT_THEME_LIGHT,
+	computeFlowScriptDiagnostics,
+	defineFlowScriptThemes,
 	registerFlowScriptLanguage,
+	registerFlowScriptProviders,
 } from "./flowscript-language";
 
 const DESTRUCTIVE_BLOCK_PREFIX = "FlowScript edit would delete ";
+
+const LINT_DEBOUNCE_MS = 300;
 
 interface ApplyOptions {
 	allowDeletions?: boolean;
@@ -59,25 +69,23 @@ export interface FlowScriptPanelProps {
 	onClose: () => void;
 }
 
-function defineFlowScriptThemes(monaco: Monaco) {
-	monaco.editor.defineTheme("flowscript-dark", {
-		base: "vs-dark",
-		inherit: true,
-		rules: [
-			{ token: "comment.anchor", foreground: "4d7a78" },
-			{ token: "tag", foreground: "c586c0" },
-		],
-		colors: {},
-	});
-	monaco.editor.defineTheme("flowscript-light", {
-		base: "vs",
-		inherit: true,
-		rules: [
-			{ token: "comment.anchor", foreground: "7aa2a0" },
-			{ token: "tag", foreground: "af00db" },
-		],
-		colors: {},
-	});
+function rustDiagnosticToMarker(
+	monaco: Monaco,
+	text: string,
+	diagnostic: IFlowScriptDiagnostic,
+) {
+	const lineText = text.split("\n")[diagnostic.line - 1] ?? "";
+	return {
+		message: diagnostic.message,
+		severity:
+			diagnostic.severity === "error"
+				? monaco.MarkerSeverity.Error
+				: monaco.MarkerSeverity.Warning,
+		startLineNumber: diagnostic.line,
+		startColumn: diagnostic.col,
+		endLineNumber: diagnostic.line,
+		endColumn: Math.max(diagnostic.col + 1, lineText.length + 1),
+	};
 }
 
 export function FlowScriptPanel({
@@ -99,6 +107,7 @@ export function FlowScriptPanel({
 	const [applying, setApplying] = useState(false);
 	const [diagnostics, setDiagnostics] = useState<string[]>([]);
 	const [boardChangedBehindEdits, setBoardChangedBehindEdits] = useState(false);
+	const [editorReady, setEditorReady] = useState(false);
 	const [destructiveMessage, setDestructiveMessage] = useState<
 		string | undefined
 	>(undefined);
@@ -113,7 +122,9 @@ export function FlowScriptPanel({
 
 	const catalogRef = useRef<INode[] | undefined>(catalogNodes);
 	catalogRef.current = catalogNodes;
-	const completionDisposable = useRef<{ dispose: () => void } | null>(null);
+	const providersDisposable = useRef<{ dispose: () => void } | null>(null);
+	const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+	const monacoRef = useRef<Monaco | null>(null);
 
 	const load = useCallback(async () => {
 		setLoading(true);
@@ -164,8 +175,8 @@ export function FlowScriptPanel({
 
 	useEffect(
 		() => () => {
-			completionDisposable.current?.dispose();
-			completionDisposable.current = null;
+			providersDisposable.current?.dispose();
+			providersDisposable.current = null;
 		},
 		[],
 	);
@@ -208,22 +219,61 @@ export function FlowScriptPanel({
 	};
 
 	const handleEditorMount: OnMount = useCallback((editor, monaco) => {
+		editorRef.current = editor;
+		monacoRef.current = monaco;
 		registerFlowScriptLanguage(monaco);
 		defineFlowScriptThemes(monaco);
 		monaco.editor.setTheme(
 			document.documentElement.classList.contains("dark")
-				? "flowscript-dark"
-				: "flowscript-light",
+				? FLOWSCRIPT_THEME_DARK
+				: FLOWSCRIPT_THEME_LIGHT,
 		);
-		completionDisposable.current?.dispose();
-		completionDisposable.current = registerFlowScriptCompletions(
+		providersDisposable.current?.dispose();
+		providersDisposable.current = registerFlowScriptProviders(
 			monaco,
 			() => catalogRef.current,
 		);
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
 			applyRef.current();
 		});
+		setEditorReady(true);
 	}, []);
+
+	// Realtime linting: instant client-side structural markers everywhere, plus authoritative
+	// positioned diagnostics from the native parser where available (Flow-Like Studio / desktop).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: editorReady gates the first run once the editor mounts
+	useEffect(() => {
+		const monaco = monacoRef.current;
+		const editor = editorRef.current;
+		if (!monaco || !editor) return;
+		const model = editor.getModel();
+		if (!model) return;
+		const source = text;
+		const handle = setTimeout(async () => {
+			const clientMarkers = computeFlowScriptDiagnostics(
+				monaco,
+				source,
+				catalogRef.current,
+			).markers;
+			let nativeMarkers: unknown[] = [];
+			try {
+				const diagnostics = await backend.boardState.lintFlowScript?.(source);
+				if (diagnostics) {
+					nativeMarkers = diagnostics.map((diagnostic) =>
+						rustDiagnosticToMarker(monaco, source, diagnostic),
+					);
+				}
+			} catch {
+				// Linting transport is best-effort; ignore failures.
+			}
+			if (editor.getModel() !== model) return;
+			monaco.editor.setModelMarkers(model, FLOWSCRIPT_DIAGNOSTIC_OWNER, [
+				...clientMarkers,
+				...nativeMarkers,
+			] as Parameters<typeof monaco.editor.setModelMarkers>[2]);
+		}, LINT_DEBOUNCE_MS);
+		return () => clearTimeout(handle);
+	}, [text, catalogNodes, backend, editorReady]);
 
 	const handleCopy = useCallback(async () => {
 		await navigator.clipboard.writeText(textRef.current);
@@ -231,7 +281,8 @@ export function FlowScriptPanel({
 	}, []);
 
 	const editorTheme = useMemo(
-		() => (resolvedTheme === "dark" ? "flowscript-dark" : "flowscript-light"),
+		() =>
+			resolvedTheme === "dark" ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT,
 		[resolvedTheme],
 	);
 
@@ -343,6 +394,9 @@ export function FlowScriptPanel({
 							smoothScrolling: true,
 							quickSuggestions: true,
 							suggestOnTriggerCharacters: true,
+							tabCompletion: "on",
+							suggestSelection: "recentlyUsedByPrefix",
+							parameterHints: { enabled: true },
 						}}
 					/>
 				)}

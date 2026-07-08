@@ -139,6 +139,35 @@ pub async fn get_flowscript(
     Err(TauriFunctionError::new("Board not found"))
 }
 
+/// A positioned FlowScript diagnostic produced by the authoritative Rust parser.
+#[derive(serde::Serialize)]
+pub struct FlowScriptDiagnostic {
+    pub message: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column number.
+    pub col: usize,
+    /// "error" | "warning"
+    pub severity: String,
+}
+
+/// Parse-only FlowScript validation. Non-mutating: it never touches the board, so it is
+/// safe to call on every keystroke (debounced) for realtime linting in the studio.
+#[tauri::command(async)]
+pub async fn lint_flowscript(
+    flowscript: String,
+) -> Result<Vec<FlowScriptDiagnostic>, TauriFunctionError> {
+    match flow_like::flow::ast::parse(&flowscript) {
+        Ok(_) => Ok(Vec::new()),
+        Err(error) => Ok(vec![FlowScriptDiagnostic {
+            message: error.message,
+            line: error.line,
+            col: error.col,
+            severity: "error".to_string(),
+        }]),
+    }
+}
+
 #[tauri::command(async)]
 pub async fn close_board(handler: AppHandle, board_id: String) -> Result<(), TauriFunctionError> {
     let board_state = TauriFlowLikeState::construct(&handler).await?;

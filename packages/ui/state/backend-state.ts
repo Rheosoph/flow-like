@@ -17,6 +17,7 @@ import type { IBitState } from "./backend-state/bit-state";
 import type {
 	IApplyFlowScriptResponse,
 	IBoardState,
+	IFlowScriptDiagnostic,
 } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
@@ -82,6 +83,7 @@ export type {
 	IBitState,
 	IBoardState,
 	IApplyFlowScriptResponse,
+	IFlowScriptDiagnostic,
 	IEventState,
 	IHelperState,
 	IPageState,
