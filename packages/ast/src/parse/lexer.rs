@@ -182,15 +182,17 @@ impl Lexer {
             if c == '\n' {
                 break;
             }
-            // The renderer appends anchors to lines that may already end in a label
-            // comment (`{ // label   //@n:id`). End this comment token at an embedded
-            // anchor start so the anchor is scanned as its own Comment token.
+            // The renderer can put a trailing anchor on the same line as a label comment
+            // (`{ // exec_out   //@n:id`). Stop before an embedded anchor (`//@n:` / `//@v:` /
+            // `//@l:`) so it lexes as its own comment token — otherwise the anchor is swallowed
+            // by the label and the node counts as deleted on reconcile. Non-anchor `//@x`
+            // sequences (e.g. `//@todo`) stay part of the label text.
             if c == '/'
                 && !text.is_empty()
-                && self.peek(1) == Some('/')
-                && self.peek(2) == Some('@')
-                && matches!(self.peek(3), Some('n') | Some('v') | Some('l'))
-                && self.peek(4) == Some(':')
+                && self.chars.get(self.pos + 1) == Some(&'/')
+                && self.chars.get(self.pos + 2) == Some(&'@')
+                && matches!(self.chars.get(self.pos + 3).copied(), Some('n' | 'v' | 'l'))
+                && self.chars.get(self.pos + 4) == Some(&':')
             {
                 split_at_anchor = true;
                 break;
@@ -199,10 +201,12 @@ impl Lexer {
             self.advance();
         }
         // Drop a single leading space (renderer writes `// text` and `   //@n:id`).
-        let mut trimmed = text.strip_prefix(' ').unwrap_or(&text).to_string();
-        if split_at_anchor {
-            trimmed.truncate(trimmed.trim_end().len());
-        }
+        let trimmed = text.strip_prefix(' ').unwrap_or(&text);
+        let trimmed = if split_at_anchor {
+            trimmed.trim_end().to_string()
+        } else {
+            trimmed.to_string()
+        };
         Token {
             tok: Tok::Comment(trimmed),
             line: token_line,

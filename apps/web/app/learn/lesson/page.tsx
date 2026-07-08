@@ -764,6 +764,7 @@ function AppPaneContent({
 					nodeId={target.nodeId}
 					version={target.version}
 					sub={authSub}
+					externalAssistant
 				/>
 			</div>
 		);

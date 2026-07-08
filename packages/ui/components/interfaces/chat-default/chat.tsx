@@ -54,6 +54,8 @@ export interface IChatProps {
 	isStreamActive?: boolean;
 	activeInteractions?: IInteractionRequest[];
 	onRespondToInteraction?: (interactionId: string, value: any) => void;
+	/** Rendered pinned between the message feed and the input — e.g. tool approval prompts. */
+	inlinePrompt?: React.ReactNode;
 }
 
 export interface IChatRef {
@@ -77,6 +79,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			isStreamActive = false,
 			activeInteractions,
 			onRespondToInteraction,
+			inlinePrompt,
 		},
 		ref,
 	) => {
@@ -506,12 +509,18 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						<div ref={messagesEndRef} />
 					</div>
 
+					{inlinePrompt && (
+						<div className="w-full max-w-5xl mx-auto px-2 pt-1 shrink-0">
+							{inlinePrompt}
+						</div>
+					)}
+
 					{/* ChatBox */}
 					<div
-						className="bg-background px-2 pb-2 max-w-5xl w-full mx-auto"
+						className="bg-background px-3 max-w-5xl w-full mx-auto"
 						style={{
 							paddingBottom:
-								"calc(0.5rem + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
+								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 						}}
 					>
 						{defaultActiveTools && (

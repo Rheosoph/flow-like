@@ -807,7 +807,8 @@ impl Bit {
             return None;
         }
         let parameters =
-            flow_like_types::json::from_value::<SttModelParameters>(self.parameters.clone()).ok()?;
+            flow_like_types::json::from_value::<SttModelParameters>(self.parameters.clone())
+                .ok()?;
         if parameters.provider.provider_name == STT_LOCAL_PROVIDER {
             Some(parameters)
         } else {

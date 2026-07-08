@@ -76,6 +76,8 @@ export interface IMessage {
 	plan_steps?: IPlanStep[];
 	current_step_id?: string;
 	usage_stats?: IChatUsageStat[];
+	/** Apps this message acted on/referenced — rendered as clickable chips under the message. */
+	app_refs?: string[];
 }
 
 export interface ISession {

@@ -1,5 +1,6 @@
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
+import { applyCalendarUpdate, applyGanttUpdate } from "./planning-updates";
 import { applyStyleUpdate } from "./style-updates";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 
@@ -211,6 +212,24 @@ export function applyElementUpdate(
 				data: { literalOptions: existing },
 			});
 		}
+		case "setCalendarEvents":
+		case "addCalendarEvent":
+		case "updateCalendarEvent":
+		case "removeCalendarEvent":
+		case "setCalendarView":
+		case "setCalendarDate":
+		case "setCalendarConfig":
+			return applyCalendarUpdate(component, updateValue);
+		case "setGanttTasks":
+		case "addGanttTask":
+		case "updateGanttTask":
+		case "removeGanttTask":
+		case "setGanttProgress":
+		case "addGanttDependency":
+		case "removeGanttDependency":
+		case "setGanttView":
+		case "setGanttConfig":
+			return applyGanttUpdate(component, updateValue);
 		case "pushChild": {
 			const childId = updateValue.childId as string;
 			const childrenData = data.children as

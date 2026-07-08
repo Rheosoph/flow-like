@@ -189,6 +189,18 @@ export interface IBoardState {
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		/**
+		 * Sub-agent run spawned while another copilot session is mid-turn (e.g. the global
+		 * assistant's flowpilot_board). Agent-CLI backends use this to isolate the run in its
+		 * own CLI process — the copilot CLI serializes requests within one process.
+		 */
+		nested?: boolean,
+		/**
+		 * Read-only sub-run (flowpilot_board explain): the board copilot answers a question about
+		 * the board and emits no edits. Keeps it out of workflow-edit mode so its answer is streamed
+		 * and returned instead of being coerced into producing (and failing to produce) an edit.
+		 */
+		readOnly?: boolean,
 	): Promise<UnifiedCopilotResponse>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for a board */

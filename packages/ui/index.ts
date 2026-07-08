@@ -2,6 +2,7 @@
 export * from "./components/index";
 export * from "./hooks/index";
 export * from "./lib/index";
+export * from "./state/assistant-surface";
 export * from "./state/backend-state";
 export * from "./state/download-manager";
 export * from "./state/flow-board-parent-state";

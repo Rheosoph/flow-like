@@ -13,6 +13,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 pub const FLOWPILOT_FRONTEND_TOOL_EVENT: &str = "flowpilot://frontend-tool-request";
+pub const GLOBAL_FRONTEND_TOOL_EVENT: &str = "flowpilot://global-tool-request";
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 static PENDING_RESPONSES: Lazy<Mutex<HashMap<String, Sender<FrontendToolResponse>>>> =
@@ -22,6 +23,7 @@ static PENDING_RESPONSES: Lazy<Mutex<HashMap<String, Sender<FrontendToolResponse
 pub struct FrontendToolBridge {
     app_handle: AppHandle,
     timeout: Duration,
+    event: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,9 +92,17 @@ impl FrontendToolApproval {
 
 impl FrontendToolBridge {
     pub fn new(app_handle: AppHandle) -> Self {
+        Self::new_with_event(app_handle, FLOWPILOT_FRONTEND_TOOL_EVENT)
+    }
+
+    /// Build a bridge that emits its requests on a dedicated event channel. Used by the global
+    /// FlowPilot assistant so its tool requests are handled by its own listener instead of the
+    /// board copilot's, while sharing the single `flowpilot_frontend_tool_result` response command.
+    pub fn new_with_event(app_handle: AppHandle, event: impl Into<String>) -> Self {
         Self {
             app_handle,
             timeout: Duration::from_secs(600),
+            event: event.into(),
         }
     }
 
@@ -135,10 +145,11 @@ impl FrontendToolBridge {
         let (event_tx, event_rx) = mpsc::channel();
         let emit_handle = self.app_handle.clone();
         let emit_request = request.clone();
+        let event_name = self.event.clone();
 
         if let Err(error) = self.app_handle.run_on_main_thread(move || {
             let result = emit_handle
-                .emit(FLOWPILOT_FRONTEND_TOOL_EVENT, &emit_request)
+                .emit(&event_name, &emit_request)
                 .map_err(|error| error.to_string());
             let _ = event_tx.send(result);
         }) {
@@ -151,9 +162,16 @@ impl FrontendToolBridge {
         }
 
         match event_rx.recv_timeout(Duration::from_secs(30)) {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                println!(
+                    "[frontend-tool-bridge] '{tool_name}' dispatched (request {request_id}); waiting up to {timeout:?} for the frontend"
+                );
+            }
             Ok(Err(error)) => {
                 remove_pending_response(&request_id);
+                eprintln!(
+                    "[frontend-tool-bridge] '{tool_name}' emit failed (request {request_id}): {error}"
+                );
                 return json!({
                     "status": "error",
                     "tool": tool_name,
@@ -162,6 +180,9 @@ impl FrontendToolBridge {
             }
             Err(_) => {
                 remove_pending_response(&request_id);
+                eprintln!(
+                    "[frontend-tool-bridge] '{tool_name}' dispatch timed out (request {request_id}) — main thread busy?"
+                );
                 return json!({
                     "status": "timeout",
                     "tool": tool_name,
@@ -172,6 +193,10 @@ impl FrontendToolBridge {
 
         match rx.recv_timeout(timeout) {
             Ok(response) => {
+                println!(
+                    "[frontend-tool-bridge] '{tool_name}' answered (request {request_id}, approved: {})",
+                    response.approved
+                );
                 if !response.approved {
                     return json!({
                         "status": "denied",
@@ -192,6 +217,9 @@ impl FrontendToolBridge {
             }
             Err(_) => {
                 remove_pending_response(&request_id);
+                eprintln!(
+                    "[frontend-tool-bridge] '{tool_name}' timed out after {timeout:?} (request {request_id}) — no frontend response"
+                );
                 json!({
                     "status": "timeout",
                     "tool": tool_name,

@@ -33,7 +33,17 @@ const KNOWN_PROPS: Record<string, Set<string>> = {
 	box: new Set(["as", "semanticRole"]),
 	center: new Set(["inline"]),
 	spacer: new Set(["size", "flex", "direction", "flexible"]),
-	widgetInstance: new Set(["widgetId", "widgetInputs", "bindOutputs"]),
+	widgetInstance: new Set([
+		"widgetId",
+		"widgetInputs",
+		"bindOutputs",
+		"instanceId",
+		"appId",
+		"inlineWidgetDef",
+		"exposedPropValues",
+		"actionBindings",
+		"styleOverride",
+	]),
 
 	// Display
 	text: new Set([
@@ -771,6 +781,13 @@ export function validateComponents(
 			if (BASE_PROPS.has(key)) continue; // handled separately
 
 			if (knownForType.has(key)) {
+				// Widget-instance props are raw wiring data (ids, the inline widget definition,
+				// per-instance param/action values) — NOT BoundValue-wrapped component props, so
+				// keep them verbatim instead of coercing.
+				if (type === "widgetInstance") {
+					cleaned[key] = value;
+					continue;
+				}
 				if (type === "markdown" && key === "allowHtml") {
 					cleaned[key] = { literalBool: false };
 					warnings.push(`${componentId}: disabled HTML rendering for markdown`);

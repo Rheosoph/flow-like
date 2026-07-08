@@ -12,6 +12,7 @@ use crate::{
     ensure_permission,
     entity::{
         app_package, membership, meta, sea_orm_active_enums::WasmPackageVisibility, wasm_package,
+        wasm_package_version,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -337,7 +338,7 @@ pub async fn remove_package(
         (status = 200, description = "Package updated", body = AppPackageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Package not found in app")
+        (status = 404, description = "Package not found in app, or requested version not published")
     ),
     security(
         ("bearer_auth" = []),
@@ -375,6 +376,20 @@ pub async fn update_package(
     let mut active: app_package::ActiveModel = existing.into();
 
     if let Some(version) = request.version {
+        // Reject versions that don't exist as published records — a bad pin
+        // would silently drop the package's nodes from the app catalog.
+        let version_exists = wasm_package_version::Entity::find()
+            .filter(wasm_package_version::Column::PackageId.eq(&package_id))
+            .filter(wasm_package_version::Column::Version.eq(&version))
+            .one(&state.db)
+            .await?
+            .is_some();
+        if !version_exists {
+            return Err(ApiError::not_found(format!(
+                "Version '{}' not found for package '{}'",
+                version, package_id
+            )));
+        }
         active.version = Set(version);
     }
     if let Some(auto_update) = request.auto_update {
@@ -441,15 +456,29 @@ pub async fn get_patch_info(
         .await?
         .ok_or(ApiError::not_found("Package not in app"))?;
 
-    let wasm_pkg = wasm_package::Entity::find_by_id(&package_id)
+    // Return the node definitions for the PINNED version, not the package's
+    // latest snapshot (wasm_package.nodes). Patching a board against the latest
+    // nodes when the app is pinned to an older version would apply the wrong
+    // pin signatures. This mirrors how execution (wasm_resolve.rs) and the app
+    // catalog (wasm_catalog.rs) resolve per-version node definitions.
+    let version_record = wasm_package_version::Entity::find()
+        .filter(wasm_package_version::Column::PackageId.eq(&package_id))
+        .filter(wasm_package_version::Column::Version.eq(&app_pkg.version))
         .one(&state.db)
         .await?
-        .ok_or(ApiError::not_found("Package not found"))?;
+        .ok_or_else(|| {
+            tracing::error!(
+                package_id = %package_id,
+                version = %app_pkg.version,
+                "patch-info: pinned WASM package version not found"
+            );
+            ApiError::not_found("Pinned WASM package version not found")
+        })?;
 
     Ok(Json(PatchInfo {
         package_id,
         version: app_pkg.version,
-        nodes: wasm_pkg.nodes,
+        nodes: version_record.nodes,
     }))
 }
 

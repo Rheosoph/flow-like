@@ -14,7 +14,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { EVENT_CONFIG } from "../../lib/event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { useApplyForkBundle } from "../../lib/use-apply-fork-bundle";
 
 export default function Page() {

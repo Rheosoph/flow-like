@@ -104,7 +104,7 @@ export function HomeSwimlanes() {
 
 	if (error) {
 		return (
-			<div className="flex-1 min-h-0 items-center w-full overflow-auto p-4 grid grid-cols-6 justify-start gap-2">
+			<div className="items-center w-full p-4 grid grid-cols-6 justify-start gap-2 min-h-[60dvh]">
 				<div className="col-span-6">
 					<Alert variant="destructive">
 						<ExternalLink className="h-4 w-4" />
@@ -137,7 +137,7 @@ export function HomeSwimlanes() {
 
 	if (!data)
 		return (
-			<div className="flex-1 min-h-0 items-center w-full overflow-auto p-4 grid grid-cols-6 justify-start gap-2">
+			<div className="items-center w-full p-4 grid grid-cols-6 justify-start gap-2 min-h-[60dvh]">
 				<Skeleton className="col-span-6 h-full min-h-[30dvh]" />
 				<Skeleton className="col-span-3 h-full min-h-[20dvh]" />
 				<Skeleton className="col-span-3 h-full" />
@@ -148,7 +148,10 @@ export function HomeSwimlanes() {
 		);
 
 	return (
-		<div className="flex-1 min-h-0 w-full overflow-auto bg-background flex flex-col items-center">
+		// Flow content (the PAGE scrolls, not this block). Gradient veil instead of a solid slab:
+		// the hero's animated background bleeds softly into the content area (no hard seam), with
+		// the fade completing within the first ~14rem so everything below reads on solid ground.
+		<div className="w-full bg-linear-to-b from-background/0 via-background/90 via-[8rem] to-background to-[14rem] flex flex-col items-center">
 			<div className="w-full space-y-8 p-6 max-w-450">
 				{data?.map((swimlane) => (
 					<SwimlaneSection
@@ -615,7 +618,7 @@ function StaticCard({
 			target={isExternal ? "_blank" : "_self"}
 			rel={isExternal ? "noopener noreferrer external" : undefined}
 			data-open-external={isExternal ? "true" : undefined}
-			className={`group relative overflow-hidden rounded-xl border border-border/40 bg-card shadow-sm hover:shadow-xl hover:border-primary/30 transition-all duration-300 ${cardHeight} w-full`}
+			className={`group relative overflow-hidden rounded-xl border border-border/40 bg-card/80 backdrop-blur-sm shadow-sm hover:shadow-xl hover:border-primary/30 transition-all duration-300 ${cardHeight} w-full`}
 		>
 			<div className="absolute inset-0">
 				{item.image ? (

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { EVENT_CONFIG } from "../event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 
 describe("daemon event config", () => {
 	test("is available as a local-only simple event sink", () => {

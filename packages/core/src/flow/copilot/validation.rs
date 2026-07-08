@@ -656,6 +656,9 @@ pub async fn validate_emit_commands(
                 }
             }
             BoardCommand::RemoveComment { .. } => {}
+            // Function references are additive metadata resolved at apply time (the targets may be
+            // `$N` refs for nodes created in the same batch), so nothing to validate structurally.
+            BoardCommand::SetNodeFunctionRefs { .. } => {}
         }
     }
 

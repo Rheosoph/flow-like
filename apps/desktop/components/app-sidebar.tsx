@@ -130,6 +130,14 @@ const data = {
 			items: [],
 		},
 		{
+			title: "FlowPilot",
+			url: "/chat",
+			icon: AnimatedSparklesIcon,
+			isActive: false,
+			permission: false,
+			items: [],
+		},
+		{
 			title: "Explore Apps",
 			url: "/store/explore/apps",
 			icon: AnimatedExploreAppsIcon,
@@ -436,7 +444,7 @@ function InnerSidebar() {
 						</DropdownMenuContent>
 					</DropdownMenu>
 
-					<a href="/settings">
+					<Link href="/settings">
 						<MotionSidebarMenuButton
 							tooltip="Settings"
 							initial="initial"
@@ -449,7 +457,7 @@ function InnerSidebar() {
 								Settings
 							</span>
 						</MotionSidebarMenuButton>
-					</a>
+					</Link>
 					<MotionSidebarMenuButton
 						tooltip="Toggle Sidebar"
 						onClick={toggleSidebar}
@@ -726,7 +734,7 @@ function Profiles() {
 								Add profile
 							</div>
 						</DropdownMenuItem>
-						<a href="/settings/profiles">
+						<Link href="/settings/profiles">
 							<DropdownMenuItem className="gap-2 p-2">
 								<div className="flex size-6 items-center justify-center rounded-md border bg-background">
 									<Edit3Icon className="size-4" />
@@ -735,7 +743,7 @@ function Profiles() {
 									Edit profile
 								</div>
 							</DropdownMenuItem>
-						</a>
+						</Link>
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</SidebarMenuItem>
@@ -1185,23 +1193,23 @@ export function NavUser({
 									info.data?.tier.toUpperCase() === "FREE") && (
 									<>
 										<DropdownMenuGroup>
-											<a href="/subscription">
+											<Link href="/subscription">
 												<DropdownMenuItem className="gap-2">
 													<AnimatedSparklesIcon />
 													Upgrade to Pro
 												</DropdownMenuItem>
-											</a>
+											</Link>
 										</DropdownMenuGroup>
 										<DropdownMenuSeparator />
 									</>
 								)}
 								<DropdownMenuGroup>
-									<a href="/account">
+									<Link href="/account">
 										<DropdownMenuItem className="gap-2">
 											<BadgeCheck className="size-4" />
 											Account
 										</DropdownMenuItem>
-									</a>
+									</Link>
 									{profile.data && (
 										<DropdownMenuItem
 											className="gap-2"
@@ -1220,7 +1228,7 @@ export function NavUser({
 											Billing
 										</DropdownMenuItem>
 									)}
-									<a href="/notifications">
+									<Link href="/notifications">
 										<DropdownMenuItem className="gap-2 p-2">
 											<div className="flex size-4relative">
 												<BellIcon className="size-4" />
@@ -1233,25 +1241,25 @@ export function NavUser({
 											</div>
 											Notifications
 										</DropdownMenuItem>
-									</a>
-									<a href="/account/pat">
+									</Link>
+									<Link href="/account/pat">
 										<DropdownMenuItem className="gap-2 p-2">
 											<KeyIcon className="size-4" />
 											Token
 										</DropdownMenuItem>
-									</a>
-									<a href="/settings/sinks">
+									</Link>
+									<Link href="/settings/sinks">
 										<DropdownMenuItem className="gap-2 p-2">
 											<ZapIcon className="size-4" />
 											Active Sinks
 										</DropdownMenuItem>
-									</a>
-									<a href="/settings/statistics">
+									</Link>
+									<Link href="/settings/statistics">
 										<DropdownMenuItem className="gap-2 p-2">
 											<BarChart3 className="size-4" />
 											Board Statistics
 										</DropdownMenuItem>
-									</a>
+									</Link>
 								</DropdownMenuGroup>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem

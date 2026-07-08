@@ -8,6 +8,7 @@ import {
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { HeroSearchBarBubble } from "@flow-like/flow-like-ui/components/global-chat/hero-variants";
 import { useTauriInvoke } from "../components/useInvoke";
 
 export default function Home() {
@@ -74,8 +75,10 @@ export default function Home() {
 	}
 
 	return (
-		<main className="flex flex-col flex-1 w-full min-h-0 overflow-hidden">
+		// One page-level scroll: hero + swimlanes move together (the swimlanes are flow content).
+		<main className="flex flex-col flex-1 w-full min-h-0 overflow-y-auto">
 			<TutorialDialog />
+			<HeroSearchBarBubble />
 			<HomeSwimlanes />
 		</main>
 	);

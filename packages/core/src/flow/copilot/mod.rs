@@ -3,21 +3,33 @@
 //! This module provides the Copilot struct which enables natural language
 //! interaction with flow graphs, supporting both explanation and modification.
 
+pub mod assistant;
 mod context;
 mod declarations;
+pub mod memory;
+pub mod platform;
 mod provider;
 mod search;
+pub mod stream;
+pub mod tool_spec;
 mod tools;
 mod types;
 mod validation;
 
+pub use assistant::{
+    GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
+    global_assistant_system_prompt, open_board_section, run_platform_chat,
+};
 pub use context::{
     EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, prepare_context,
 };
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
+/// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
+/// backend-native tools from the shared rig definitions) without depending on rig directly.
+pub use rig::tool::Tool as RigTool;
 pub use search::{
-    SearchQueryAnalysis, analyze_search_query, enrich_node_metadata, score_catalog_metadata,
-    search_result_hint_lines,
+    SearchQueryAnalysis, analyze_search_query, enrich_node_metadata, render_catalog_search_results,
+    score_catalog_metadata, search_result_hint_lines,
 };
 pub use tools::{
     CatalogTool, EditFlowScriptArgs, EditFlowScriptTool, EmitCommandsArgs, EmitCommandsTool,
@@ -26,14 +38,16 @@ pub use tools::{
     GetNodeDetailsArgs, GetNodeDetailsTool, GetUnconfiguredNodesTool, ListBoardNodesTool,
     QueryLogsArgs, QueryLogsTool, SearchArgs, SearchByPinArgs, SearchByPinTool,
     SearchTemplatesArgs, SearchTemplatesTool, ThinkingArgs, board_has_no_nodes,
-    build_find_connectable_nodes_output, build_list_board_nodes_output,
+    build_find_connectable_nodes_output, build_list_board_nodes_output, build_node_details_output,
     build_unconfigured_nodes_output, get_tool_description, render_edit_flowscript_result,
+    tool_definition_parts,
 };
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,
     NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, PlanStep, PlanStepStatus,
     RunContext, StreamEvent, Suggestion, TemplateInfo,
 };
+pub use validation::{EmitValidationOutcome, ValidationIssue, validate_emit_commands};
 
 use std::sync::Arc;
 
@@ -359,10 +373,12 @@ impl Copilot {
         let max_iterations = 10u64;
         let max_discovery_rounds_before_emit = 4u64;
         let force_emit_instruction = "You have enough context. Stop searching or planning. In your next response, call edit_flowscript with the full edited FlowScript document. Preserve all existing //@n anchors you keep. Leave allow_deletions false unless the user explicitly asked to delete existing board items. Write new workflow nodes as concrete unanchored FlowScript calls inside a function/event block using declarations from get_declarations, and let edit_flowscript translate the text into commands. Do not submit TODOs, function stubs, implementation-plan comments, lists of node names, or top-level node-call assignments. Use emit_commands only for layout-only MoveNode or non-FlowScript visual/modeling changes. If edit_flowscript returns validation errors, fix the FlowScript and call edit_flowscript again; do not answer in text instead.";
+        let force_emit_escalation = "STOP analyzing. You were already instructed to submit the FlowScript and you called more read/analysis tools instead. In your NEXT response call edit_flowscript with your best complete draft — an imperfect draft that gets validated and fixed beats another analysis round. Do not call any other tool first.";
         let mut plan_step_counter = 0u32;
         let mut invalid_emit_attempts = 0u8;
         let mut discovery_rounds_without_emit = 0u64;
         let mut forced_emit_prompt_sent = false;
+        let mut forced_text_retries = 0u8;
         let mut last_emit_validation: Option<String> = None;
         let mut successful_emit_message: Option<String> = None;
         let mut last_flowscript_workspace: Option<String> = None;
@@ -372,19 +388,15 @@ impl Copilot {
             // Send iteration start event
             if let Some(ref callback) = on_token {
                 plan_step_counter += 1;
-                let step_event = StreamEvent::PlanStep(PlanStep {
-                    id: format!("iteration_{}", iteration),
-                    description: if iteration == 0 {
+                callback(stream::plan_step_frame(
+                    format!("iteration_{}", iteration),
+                    if iteration == 0 {
                         "Analyzing request...".to_string()
                     } else {
                         "Processing tool results...".to_string()
                     },
-                    status: PlanStepStatus::InProgress,
-                    tool_name: Some("analyze".to_string()),
-                });
-                callback(format!(
-                    "<plan_step>{}</plan_step>",
-                    serde_json::to_string(&step_event).unwrap_or_default()
+                    PlanStepStatus::InProgress,
+                    "analyze",
                 ));
             }
 
@@ -447,31 +459,22 @@ impl Copilot {
                                 reasoning_step_id =
                                     Some(format!("reasoning_{}", plan_step_counter));
                             }
-
-                            let step_event = StreamEvent::PlanStep(PlanStep {
-                                id: reasoning_step_id.clone().unwrap(),
-                                description: current_reasoning.trim().to_string(),
-                                status: PlanStepStatus::InProgress,
-                                tool_name: Some("think".to_string()),
-                            });
-                            callback(format!(
-                                "<plan_step>{}</plan_step>",
-                                serde_json::to_string(&step_event).unwrap_or_default()
+                            callback(stream::plan_step_frame(
+                                reasoning_step_id.clone().unwrap(),
+                                current_reasoning.trim().to_string(),
+                                PlanStepStatus::InProgress,
+                                "think",
                             ));
                         }
                     }
                     StreamedAssistantContent::Final(_) => {
                         // Mark reasoning step as completed
                         if let (Some(callback), Some(step_id)) = (&on_token, &reasoning_step_id) {
-                            let step_event = StreamEvent::PlanStep(PlanStep {
-                                id: step_id.clone(),
-                                description: current_reasoning.trim().to_string(),
-                                status: PlanStepStatus::Completed,
-                                tool_name: Some("think".to_string()),
-                            });
-                            callback(format!(
-                                "<plan_step>{}</plan_step>",
-                                serde_json::to_string(&step_event).unwrap_or_default()
+                            callback(stream::plan_step_frame(
+                                step_id.clone(),
+                                current_reasoning.trim().to_string(),
+                                PlanStepStatus::Completed,
+                                "think",
                             ));
                         }
                         reasoning_step_id = None;
@@ -486,16 +489,11 @@ impl Copilot {
                                 reasoning_step_id =
                                     Some(format!("reasoning_{}", plan_step_counter));
                             }
-
-                            let step_event = StreamEvent::PlanStep(PlanStep {
-                                id: reasoning_step_id.clone().unwrap(),
-                                description: current_reasoning.trim().to_string(),
-                                status: PlanStepStatus::InProgress,
-                                tool_name: Some("think".to_string()),
-                            });
-                            callback(format!(
-                                "<plan_step>{}</plan_step>",
-                                serde_json::to_string(&step_event).unwrap_or_default()
+                            callback(stream::plan_step_frame(
+                                reasoning_step_id.clone().unwrap(),
+                                current_reasoning.trim().to_string(),
+                                PlanStepStatus::InProgress,
+                                "think",
                             ));
                         }
                     }
@@ -504,33 +502,25 @@ impl Copilot {
 
             // Mark reasoning step as completed if stream ended while reasoning
             if let (Some(callback), Some(step_id)) = (&on_token, &reasoning_step_id) {
-                let step_event = StreamEvent::PlanStep(PlanStep {
-                    id: step_id.clone(),
-                    description: current_reasoning.trim().to_string(),
-                    status: PlanStepStatus::Completed,
-                    tool_name: Some("think".to_string()),
-                });
-                callback(format!(
-                    "<plan_step>{}</plan_step>",
-                    serde_json::to_string(&step_event).unwrap_or_default()
+                callback(stream::plan_step_frame(
+                    step_id.clone(),
+                    current_reasoning.trim().to_string(),
+                    PlanStepStatus::Completed,
+                    "think",
                 ));
             }
 
             // Mark iteration analysis as complete
             if let Some(ref callback) = on_token {
-                let step_event = StreamEvent::PlanStep(PlanStep {
-                    id: format!("iteration_{}", iteration),
-                    description: if iteration == 0 {
+                callback(stream::plan_step_frame(
+                    format!("iteration_{}", iteration),
+                    if iteration == 0 {
                         "Analysis complete".to_string()
                     } else {
                         "Tool results processed".to_string()
                     },
-                    status: PlanStepStatus::Completed,
-                    tool_name: Some("analyze".to_string()),
-                });
-                callback(format!(
-                    "<plan_step>{}</plan_step>",
-                    serde_json::to_string(&step_event).unwrap_or_default()
+                    PlanStepStatus::Completed,
+                    "analyze",
                 ));
             }
 
@@ -553,31 +543,29 @@ impl Copilot {
                 let command_count_before_round = all_commands.len();
                 let mut emit_attempted_this_round = false;
 
-                // Emit plan steps for all tool calls starting
-                let mut step_ids: Vec<(String, String, u32)> = Vec::new();
+                // Announce all tool calls starting
+                let mut frame_ids: Vec<String> = Vec::new();
                 for tool_call in &tool_calls {
                     plan_step_counter += 1;
-                    let step_id = format!("step_{}", plan_step_counter);
+                    let frame_id = if tool_call.id.is_empty() {
+                        format!("step_{}", plan_step_counter)
+                    } else {
+                        tool_call.id.clone()
+                    };
                     let step_description = get_tool_description(
                         &tool_call.function.name,
                         &tool_call.function.arguments,
                     );
 
                     if let Some(ref callback) = on_token {
-                        callback(format!("tool_call:{}", tool_call.function.name));
-                        let step_event = StreamEvent::PlanStep(PlanStep {
-                            id: step_id.clone(),
-                            description: step_description.clone(),
-                            status: PlanStepStatus::InProgress,
-                            tool_name: Some(tool_call.function.name.clone()),
-                        });
-                        callback(format!(
-                            "<plan_step>{}</plan_step>",
-                            serde_json::to_string(&step_event).unwrap_or_default()
+                        callback(stream::tool_start_frame(
+                            &frame_id,
+                            &tool_call.function.name,
+                            Some(&step_description),
                         ));
                     }
 
-                    step_ids.push((step_id, step_description, plan_step_counter));
+                    frame_ids.push(frame_id);
                 }
 
                 // Execute all tools in parallel
@@ -673,21 +661,9 @@ impl Copilot {
                         }
                     }
 
-                    // Emit plan step completion
-                    if let Some(ref callback) = on_token {
-                        if let Some((step_id, step_description, _)) = step_ids.get(i) {
-                            let step_event = StreamEvent::PlanStep(PlanStep {
-                                id: step_id.clone(),
-                                description: step_description.clone(),
-                                status: PlanStepStatus::Completed,
-                                tool_name: Some(name.clone()),
-                            });
-                            callback(format!(
-                                "<plan_step>{}</plan_step>",
-                                serde_json::to_string(&step_event).unwrap_or_default()
-                            ));
-                        }
-                        callback("tool_result:done".to_string());
+                    // Emit tool completion
+                    if let (Some(callback), Some(frame_id)) = (&on_token, frame_ids.get(i)) {
+                        callback(stream::tool_end_frame(frame_id, name, "done"));
                     }
                 }
 
@@ -696,18 +672,17 @@ impl Copilot {
                     break;
                 }
 
+                // Re-arm the force prompt on EVERY discovery round past the budget: weaker
+                // models routinely ignore a single nudge and keep calling read tools until
+                // the iteration cap, ending the run without ever submitting an edit.
                 let force_emit_next = if emit_attempted_this_round {
                     discovery_rounds_without_emit = 0;
                     false
                 } else {
                     discovery_rounds_without_emit = discovery_rounds_without_emit.saturating_add(1);
                     all_commands.is_empty()
-                        && !forced_emit_prompt_sent
                         && discovery_rounds_without_emit >= max_discovery_rounds_before_emit
                 };
-                if force_emit_next {
-                    forced_emit_prompt_sent = true;
-                }
 
                 // Add assistant message with tool calls to history
                 let assistant_msg = rig::message::Message::Assistant {
@@ -740,8 +715,15 @@ impl Copilot {
                         .collect();
 
                     if force_emit_next {
+                        // Escalate when the first instruction was ignored.
+                        let text = if forced_emit_prompt_sent {
+                            force_emit_escalation.to_string()
+                        } else {
+                            force_emit_instruction.to_string()
+                        };
+                        forced_emit_prompt_sent = true;
                         tool_result_contents.push(UserContent::Text(rig::message::Text {
-                            text: force_emit_instruction.to_string(),
+                            text,
                             additional_params: None,
                         }));
                     }
@@ -767,10 +749,18 @@ impl Copilot {
                     break;
                 }
             } else {
+                // Text-only round without an edit: push back up to twice — a single push is
+                // not enough for models that reply with a plan instead of calling tools.
                 if all_commands.is_empty()
-                    && !forced_emit_prompt_sent
+                    && forced_text_retries < 2
                     && iteration + 1 < max_iterations
                 {
+                    let text = if forced_emit_prompt_sent || forced_text_retries > 0 {
+                        force_emit_escalation.to_string()
+                    } else {
+                        force_emit_instruction.to_string()
+                    };
+                    forced_text_retries += 1;
                     forced_emit_prompt_sent = true;
                     current_history.push(current_prompt.clone());
                     current_history.push(rig::message::Message::Assistant {
@@ -784,7 +774,7 @@ impl Copilot {
                     });
                     current_prompt = rig::message::Message::User {
                         content: OneOrMany::one(UserContent::Text(rig::message::Text {
-                            text: force_emit_instruction.to_string(),
+                            text,
                             additional_params: None,
                         })),
                     };
@@ -890,69 +880,7 @@ impl Copilot {
             }
             "get_node_details" => {
                 if let Ok(args) = serde_json::from_value::<GetNodeDetailsArgs>(arguments) {
-                    // Find the node in the context
-                    let node = graph_context.nodes.iter().find(|n| n.id == args.node_id);
-
-                    match node {
-                        Some(node_ctx) => {
-                            // Build detailed output including all connections
-                            let incoming_edges: Vec<_> = graph_context
-                                .edges
-                                .iter()
-                                .filter(|e| e.to_node_id == args.node_id)
-                                .map(|e| {
-                                    json!({
-                                        "from_node": e.from_node_id,
-                                        "from_pin": e.from_pin_name,
-                                        "to_pin": e.to_pin_name
-                                    })
-                                })
-                                .collect();
-
-                            let outgoing_edges: Vec<_> = graph_context
-                                .edges
-                                .iter()
-                                .filter(|e| e.from_node_id == args.node_id)
-                                .map(|e| {
-                                    json!({
-                                        "from_pin": e.from_pin_name,
-                                        "to_node": e.to_node_id,
-                                        "to_pin": e.to_pin_name
-                                    })
-                                })
-                                .collect();
-
-                            let details = json!({
-                                "id": node_ctx.id,
-                                "node_type": node_ctx.node_type,
-                                "friendly_name": node_ctx.friendly_name,
-                                "position": { "x": node_ctx.position.0, "y": node_ctx.position.1 },
-                                "size": { "width": node_ctx.estimated_size.0, "height": node_ctx.estimated_size.1 },
-                                "inputs": node_ctx.inputs.iter().map(|p| {
-                                    json!({
-                                        "name": p.name,
-                                        "type": p.type_name,
-                                        "default_value": p.default_value
-                                    })
-                                }).collect::<Vec<_>>(),
-                                "outputs": node_ctx.outputs.iter().map(|p| {
-                                    json!({
-                                        "name": p.name,
-                                        "type": p.type_name
-                                    })
-                                }).collect::<Vec<_>>(),
-                                "incoming_connections": incoming_edges,
-                                "outgoing_connections": outgoing_edges,
-                                "is_selected": graph_context.selected_nodes.contains(&args.node_id)
-                            });
-
-                            serde_json::to_string_pretty(&details).unwrap_or_default()
-                        }
-                        None => format!(
-                            "Node with ID '{}' not found in the current graph",
-                            args.node_id
-                        ),
-                    }
+                    build_node_details_output(&args.node_id, graph_context)
                 } else {
                     "Failed to parse node ID".to_string()
                 }
@@ -998,7 +926,7 @@ impl Copilot {
             "catalog_search" => {
                 if let Ok(args) = serde_json::from_value::<SearchArgs>(arguments) {
                     let matches = self.catalog_provider.search(&args.query).await;
-                    serde_json::to_string(&matches).unwrap_or_default()
+                    render_catalog_search_results(&matches)
                 } else {
                     "[]".to_string()
                 }

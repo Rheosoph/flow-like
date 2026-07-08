@@ -850,11 +850,13 @@ impl<'a> Lowering<'a> {
                 };
             }
         }
-        // `events_generic_return_result` sugars to a `return <response>` statement.
+        // `events_generic_return_result` sugars to a `return <response>` statement. Keep the node
+        // id as the anchor so reconcile matches the existing result node instead of duplicating it.
         if node.name == EVENT_RETURN_RESULT {
             let value = self.input_expr(node, EVENT_RESPONSE_PIN);
             return Stmt::Return {
                 values: value.into_iter().collect(),
+                anchor: Some(node.id.clone()),
             };
         }
         if let Some(name) = self.bindings.get(&node.id) {

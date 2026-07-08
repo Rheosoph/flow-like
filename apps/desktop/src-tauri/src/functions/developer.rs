@@ -1496,7 +1496,7 @@ pub async fn developer_load_into_catalog(
         }
         registry.node_registry = Arc::new(inner);
         drop(registry);
-        let _ = app_handle.emit("catalog-updated", ());
+        emit_catalog_updated_on_main(&app_handle);
     }
 
     if let Some(manifest) = manifest {
@@ -1582,12 +1582,18 @@ pub async fn developer_check_staleness(
     Ok(result)
 }
 
-pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
+/// Collect WASM node pairs from all registered developer (local) projects
+/// without touching the global node registry. Pure — callers decide how to
+/// apply the nodes, emit `catalog-updated`, and register the packages. Shared
+/// by `load_all_developer_nodes` (append) and the registry rebuild path.
+pub async fn collect_developer_node_pairs(
+    app_handle: &AppHandle,
+) -> Vec<(Node, Arc<dyn NodeLogic>)> {
     let engine = match TauriWasmEngineState::construct(app_handle) {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!("Failed to get WasmEngine for developer node loading: {}", e);
-            return;
+            return Vec::new();
         }
     };
 
@@ -1598,25 +1604,16 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
         }
         Err(e) => {
             tracing::warn!("Failed to get settings for developer node loading: {}", e);
-            return;
+            return Vec::new();
         }
     };
 
     let store = load_store(&user_dir);
     if store.projects.is_empty() {
-        return;
+        return Vec::new();
     }
 
-    let flow_state = match TauriFlowLikeState::construct(app_handle).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("Failed to get flow state for developer node loading: {}", e);
-            return;
-        }
-    };
-
     let mut all_node_pairs: Vec<(Node, Arc<dyn NodeLogic>)> = Vec::new();
-    let mut manifests_to_register: Vec<(PathBuf, PackageManifest)> = Vec::new();
 
     for project in &store.projects {
         let project_path = PathBuf::from(&project.path);
@@ -1633,9 +1630,6 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
                             project.name
                         );
                         all_node_pairs.extend(pairs);
-                        if let Some(m) = manifest {
-                            manifests_to_register.push((wasm_path, m));
-                        }
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -1656,37 +1650,56 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
         }
     }
 
-    if !all_node_pairs.is_empty() {
+    all_node_pairs
+}
+
+/// Emit `catalog-updated` on the main thread to avoid a startup deadlock:
+/// calling `emit` from a tokio worker grabs Tauri's internal `webviews_lock`
+/// while iterating webviews and synchronously waits on the main loop for
+/// `Webview::eval`. If the main thread is concurrently servicing a URL-scheme
+/// task that also needs `webviews_lock` (likely during early startup) the two
+/// deadlock. Running the emit on the main thread keeps it serialized with
+/// URL-scheme handlers.
+pub fn emit_catalog_updated_on_main(app_handle: &AppHandle) {
+    let emit_handle = app_handle.clone();
+    if let Err(e) = app_handle.run_on_main_thread(move || {
+        let _ = emit_handle.emit("catalog-updated", ());
+    }) {
+        tracing::warn!(
+            "Failed to schedule catalog-updated emit on main thread: {:?}",
+            e
+        );
+    }
+}
+
+pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
+    let node_pairs = collect_developer_node_pairs(app_handle).await;
+    if node_pairs.is_empty() {
+        return;
+    }
+
+    let flow_state = match TauriFlowLikeState::construct(app_handle).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Failed to get flow state for developer node loading: {}", e);
+            return;
+        }
+    };
+
+    {
         let registry_guard = flow_state.node_registry.clone();
         let mut registry = registry_guard.write().await;
         let mut inner = flow_like::state::FlowNodeRegistryInner {
             registry: registry.node_registry.registry.clone(),
         };
-        for (node, logic) in all_node_pairs {
+        for (node, logic) in node_pairs {
             inner.insert(node, logic);
         }
         registry.node_registry = Arc::new(inner);
-        drop(registry);
-        // Dispatch the emit on the main thread to avoid a startup deadlock:
-        // calling `emit` here from a tokio worker grabs Tauri's internal
-        // `webviews_lock` while iterating webviews and synchronously waits on
-        // the main loop for `Webview::eval`. If the main thread is concurrently
-        // servicing a URL-scheme task that also needs `webviews_lock` (very
-        // likely during early startup) the two deadlock. Running the emit on
-        // the main thread keeps it serialized with URL-scheme handlers.
-        let emit_handle = app_handle.clone();
-        if let Err(e) = app_handle.run_on_main_thread(move || {
-            let _ = emit_handle.emit("catalog-updated", ());
-        }) {
-            tracing::warn!(
-                "Failed to schedule catalog-updated emit on main thread: {:?}",
-                e
-            );
-        }
-        tracing::info!("Developer nodes loaded into catalog");
     }
 
-    for (wasm_path, manifest) in manifests_to_register {
-        register_developer_package(app_handle, &wasm_path, manifest).await;
-    }
+    emit_catalog_updated_on_main(app_handle);
+    tracing::info!("Developer nodes loaded into catalog");
+
+    register_all_developer_packages(app_handle).await;
 }

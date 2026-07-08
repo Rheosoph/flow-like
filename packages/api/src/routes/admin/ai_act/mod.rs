@@ -1274,12 +1274,15 @@ pub async fn assist(
         .await?;
 
     let sub = user.sub()?;
+    // Hosted Bit models bill against the caller's token via this server's metered proxy.
+    let token = crate::routes::ai::copilot::user_access_token(&user);
     let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
         &state,
         &sub,
         &app_id,
         body.model_id,
         body.profile,
+        token,
     )
     .await?;
 

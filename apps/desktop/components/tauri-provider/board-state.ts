@@ -2016,6 +2016,8 @@ export class BoardState implements IBoardState {
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		nested?: boolean,
+		readOnly?: boolean,
 	): Promise<UnifiedCopilotResponse> {
 		console.log(
 			"[copilot_chat] Calling with scope:",
@@ -2047,6 +2049,8 @@ export class BoardState implements IBoardState {
 			token: actualToken,
 			runContext,
 			actionContext,
+			nested,
+			readOnly,
 		});
 	}
 

@@ -36,6 +36,7 @@ pub mod execution_event;
 pub mod execution_run;
 pub mod execution_usage_tracking;
 pub mod feedback;
+pub mod global_chat_tool_call;
 pub mod interaction;
 pub mod invitation;
 pub mod invite_link;

@@ -164,9 +164,7 @@ EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "op
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let matches = self.provider.search(&args.query).await;
-        // Use compact format for token efficiency
-        let compact: Vec<String> = matches.iter().map(|m| m.to_compact()).collect();
-        Ok(compact.join("\n"))
+        Ok(super::search::render_catalog_search_results(&matches))
     }
 }
 
@@ -367,7 +365,20 @@ impl Tool for ListBoardNodesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "list_board_nodes".to_string(),
-            description: r#"List all nodes and layers in the current workflow with IDs and positions. Use this first when modifying an existing graph."#.to_string(),
+            description: r#"List all nodes and layers in the current workflow with their IDs and positions.
+
+USE THIS FIRST to understand the workflow before making changes.
+
+RETURNS:
+- node_id: Use in get_node_details, ConnectPins, UpdateNodePin
+- node_type: The node's catalog type
+- friendly_name: Human-readable name
+- position: {x, y} - use to place new nodes nearby
+
+WORKFLOW:
+1. list_board_nodes → see all nodes and positions
+2. get_node_details on relevant node → get pin names
+3. get_declarations → find signatures, then edit_flowscript (or catalog_search + emit_commands for manual edits)"#.to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {},
@@ -399,7 +410,15 @@ impl Tool for GetUnconfiguredNodesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_unconfigured_nodes".to_string(),
-            description: r#"Find nodes that still have missing non-execution inputs. Use this after planning or after a failed emit_commands validation to see what the graph is missing."#.to_string(),
+            description: r#"Find nodes that need configuration - inputs with no value and no incoming connection.
+
+WHEN TO USE:
+- Check what needs to be configured in the workflow
+- Find nodes that aren't fully set up
+- Identify missing connections
+- After planning or after a failed emit_commands validation
+
+RETURNS: List of nodes with their unconfigured non-execution input pins"#.to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {},
@@ -474,20 +493,28 @@ impl Tool for GetNodeDetailsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_node_details".to_string(),
-            description: r#"Get full details about a node: all pins, connections, current values. Use when context summary is insufficient.
+            description:
+                r#"Get full details about a node including position, all pins, and connections.
 
-WHEN TO USE:
-- Need exact pin names for ConnectPins/UpdateNodePin
-- See what values are configured
-- Understand node's connections
+CRITICAL: Use this BEFORE connecting to existing nodes!
 
-RETURNS: Full pin list with names, types, current values, and all connections"#.to_string(),
+RETURNS:
+- position: {x, y} - use this to position new nodes nearby
+- inputs/outputs: Array of pins with {name, type, value}
+- incoming/outgoing: Current connections
+
+EXAMPLE USE:
+1. Call get_node_details on existing node
+2. Note its position (e.g., {x: 500, y: 200})
+3. Place new connected node at {x: 750, y: 200} (250px right)
+4. Use exact pin names from outputs/inputs in ConnectPins"#
+                    .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "node_id": {
                         "type": "string",
-                        "description": "The node ID from context (e.g., 'abc123')"
+                        "description": "The node ID to inspect (from list_board_nodes or context)"
                     }
                 },
                 "required": ["node_id"]
@@ -496,76 +523,82 @@ RETURNS: Full pin list with names, types, current values, and all connections"#.
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Find the node in the context
-        let node = self
-            .graph_context
-            .nodes
-            .iter()
-            .find(|n| n.id == args.node_id);
-
-        match node {
-            Some(node_ctx) => {
-                // Build detailed output including all connections
-                let incoming_edges: Vec<_> = self
-                    .graph_context
-                    .edges
-                    .iter()
-                    .filter(|e| e.to_node_id == args.node_id)
-                    .map(|e| {
-                        json!({
-                            "from_node": e.from_node_id,
-                            "from_pin": e.from_pin_name,
-                            "to_pin": e.to_pin_name
-                        })
-                    })
-                    .collect();
-
-                let outgoing_edges: Vec<_> = self
-                    .graph_context
-                    .edges
-                    .iter()
-                    .filter(|e| e.from_node_id == args.node_id)
-                    .map(|e| {
-                        json!({
-                            "from_pin": e.from_pin_name,
-                            "to_node": e.to_node_id,
-                            "to_pin": e.to_pin_name
-                        })
-                    })
-                    .collect();
-
-                let details = json!({
-                    "id": node_ctx.id,
-                    "node_type": node_ctx.node_type,
-                    "friendly_name": node_ctx.friendly_name,
-                    "position": { "x": node_ctx.position.0, "y": node_ctx.position.1 },
-                    "size": { "width": node_ctx.estimated_size.0, "height": node_ctx.estimated_size.1 },
-                    "inputs": node_ctx.inputs.iter().map(|p| {
-                        json!({
-                            "name": p.name,
-                            "type": p.type_name,
-                            "default_value": p.default_value
-                        })
-                    }).collect::<Vec<_>>(),
-                    "outputs": node_ctx.outputs.iter().map(|p| {
-                        json!({
-                            "name": p.name,
-                            "type": p.type_name
-                        })
-                    }).collect::<Vec<_>>(),
-                    "incoming_connections": incoming_edges,
-                    "outgoing_connections": outgoing_edges,
-                    "is_selected": self.graph_context.selected_nodes.contains(&args.node_id)
-                });
-
-                Ok(serde_json::to_string_pretty(&details).unwrap_or_default())
-            }
-            None => Err(GetNodeDetailsToolError(format!(
-                "Node with ID '{}' not found in the current graph",
-                args.node_id
-            ))),
-        }
+        Ok(build_node_details_output(
+            &args.node_id,
+            &self.graph_context,
+        ))
     }
+}
+
+/// Full JSON details of one node (pins, values, connections) or a not-found message. Single
+/// source for the `get_node_details` tool across every backend executor.
+pub fn build_node_details_output(node_id: &str, graph_context: &GraphContext) -> String {
+    let Some(node_ctx) = graph_context.nodes.iter().find(|n| n.id == node_id) else {
+        return format!("Node with ID '{}' not found in the current graph", node_id);
+    };
+
+    let incoming_edges: Vec<_> = graph_context
+        .edges
+        .iter()
+        .filter(|e| e.to_node_id == node_id)
+        .map(|e| {
+            json!({
+                "from_node": e.from_node_id,
+                "from_pin": e.from_pin_name,
+                "to_pin": e.to_pin_name
+            })
+        })
+        .collect();
+
+    let outgoing_edges: Vec<_> = graph_context
+        .edges
+        .iter()
+        .filter(|e| e.from_node_id == node_id)
+        .map(|e| {
+            json!({
+                "from_pin": e.from_pin_name,
+                "to_node": e.to_node_id,
+                "to_pin": e.to_pin_name
+            })
+        })
+        .collect();
+
+    let details = json!({
+        "id": node_ctx.id,
+        "node_type": node_ctx.node_type,
+        "friendly_name": node_ctx.friendly_name,
+        "position": { "x": node_ctx.position.0, "y": node_ctx.position.1 },
+        "size": { "width": node_ctx.estimated_size.0, "height": node_ctx.estimated_size.1 },
+        "inputs": node_ctx.inputs.iter().map(|p| {
+            json!({
+                "name": p.name,
+                "type": p.type_name,
+                "default_value": p.default_value
+            })
+        }).collect::<Vec<_>>(),
+        "outputs": node_ctx.outputs.iter().map(|p| {
+            json!({
+                "name": p.name,
+                "type": p.type_name
+            })
+        }).collect::<Vec<_>>(),
+        "incoming_connections": incoming_edges,
+        "outgoing_connections": outgoing_edges,
+        "is_selected": graph_context.selected_nodes.contains(&node_id.to_string())
+    });
+
+    serde_json::to_string_pretty(&details).unwrap_or_default()
+}
+
+/// The `(name, description, parameters)` triple of a rig tool definition, so non-rig adapters
+/// (Copilot SDK, MCP) can advertise exactly the same definition as the rig loop.
+pub async fn tool_definition_parts<T: Tool>(tool: &T) -> (String, String, serde_json::Value) {
+    let definition = tool.definition(String::new()).await;
+    (
+        definition.name,
+        definition.description,
+        definition.parameters,
+    )
 }
 
 // ============================================================================

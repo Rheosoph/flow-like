@@ -58,8 +58,8 @@ import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import {
 	type ComponentProps,
-	memo,
 	type ReactElement,
+	memo,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -131,14 +131,15 @@ import {
 	upsertCommentCommand,
 	upsertVariableCommand,
 } from "../../lib";
+import { getErrorMessage } from "../../lib/error-message";
 import { computeFlowLayout } from "../../lib/flow-auto-layout";
 import {
+	getFunctionReferenceNodeIdsFromEdge,
 	handleConnection,
 	handleEdgesChange,
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
-	getFunctionReferenceNodeIdsFromEdge,
 	removeFunctionReferenceCommandForEdge,
 } from "../../lib/flow-board-helpers";
 import {
@@ -149,7 +150,6 @@ import {
 	parseBoard,
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
-import { getErrorMessage } from "../../lib/error-message";
 import { toastError, toastSuccess } from "../../lib/messages";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
@@ -164,6 +164,10 @@ import { type INode, IVariableType } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
 import { convertJsonToUint8Array } from "../../lib/uint8";
+import {
+	type AssistantBoardSurface,
+	useAssistantSurface,
+} from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
@@ -180,17 +184,17 @@ import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
+import { FlowLayerIndicators } from "./flow-layer-indicators";
+import { PinEditModal } from "./flow-pin/edit-modal";
+import { FlowPresenceBar } from "./flow-presence-bar";
+import { FlowRuns } from "./flow-runs";
+import { FlowSearch } from "./flow-search";
 import {
 	type FlowElementOption,
 	createEmptyFlowSelectorData,
 	flattenPageElements,
 	indexBitsByRef,
 } from "./flow-selector-data";
-import { FlowLayerIndicators } from "./flow-layer-indicators";
-import { PinEditModal } from "./flow-pin/edit-modal";
-import { FlowPresenceBar } from "./flow-presence-bar";
-import { FlowRuns } from "./flow-runs";
-import { FlowSearch } from "./flow-search";
 import { FlowTemplateSelector } from "./flow-template-selector";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
@@ -308,7 +312,9 @@ const FlowCanvas = memo(function FlowCanvas({
 				nodeColor={miniMapNodeColor}
 			/>
 			<Background
-				variant={currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+				variant={
+					currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots
+				}
 				color={
 					currentLayer
 						? "color-mix(in oklch, var(--foreground) 5%, transparent)"
@@ -336,6 +342,7 @@ export function FlowBoard({
 	extraDockItems,
 	renderOverlay,
 	sub,
+	externalAssistant = false,
 }: Readonly<{
 	appId: string;
 	boardId: string;
@@ -351,6 +358,11 @@ export function FlowBoard({
 	}>;
 	renderOverlay?: () => React.ReactNode;
 	sub?: string;
+	/**
+	 * When true the host app provides the assistant (global chat) — FlowPilot launchers route to
+	 * requestOpenAssistant() and the embedded FlowCopilot panel/sheet are not mounted.
+	 */
+	externalAssistant?: boolean;
 }>) {
 	const {
 		pushCommand,
@@ -726,22 +738,25 @@ export function FlowBoard({
 			</Button>,
 		);
 
-		// FlowPilot button with fancy styling
-		right.push(
-			<Button
-				variant={"outline"}
-				size={"icon"}
-				aria-label="Open FlowPilot"
-				onClick={() => setCopilotOpen(true)}
-				className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
-			>
-				<div className="absolute inset-0 rounded-md bg-linear-to-br from-primary/20 via-violet-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-				<SparklesIcon className="w-4 h-4 text-primary relative z-10" />
-				{currentMetadata && (
-					<span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
-				)}
-			</Button>,
-		);
+		// FlowPilot button with fancy styling. When the host provides the global assistant, the
+		// floating FlowPilot bubble is the entry point instead, so skip this in-interface button.
+		if (!externalAssistant) {
+			right.push(
+				<Button
+					variant={"outline"}
+					size={"icon"}
+					aria-label="Open FlowPilot"
+					onClick={() => openAssistant()}
+					className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
+				>
+					<div className="absolute inset-0 rounded-md bg-linear-to-br from-primary/20 via-violet-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+					<SparklesIcon className="w-4 h-4 text-primary relative z-10" />
+					{currentMetadata && (
+						<span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
+					)}
+				</Button>,
+			);
+		}
 
 		if (currentLayer) {
 			left.push(
@@ -767,6 +782,7 @@ export function FlowBoard({
 		parentRegister.boardParents,
 		boardId,
 		updateHeader,
+		externalAssistant,
 	]);
 
 	const pinToNode = useCallback(
@@ -1090,6 +1106,19 @@ export function FlowBoard({
 		setCopilotInitialPrompt(undefined);
 		setCopilotWorkspaceVisible(false);
 	}, []);
+	// Single launcher: hosts with a global assistant (desktop) route to the shared surface store,
+	// everything else keeps the embedded FlowCopilot panel.
+	const openAssistant = useCallback(
+		(prompt?: string) => {
+			if (externalAssistant) {
+				useAssistantSurface.getState().requestOpenAssistant(prompt);
+				return;
+			}
+			if (prompt) setCopilotInitialPrompt(prompt);
+			setCopilotOpen(true);
+		},
+		[externalAssistant],
+	);
 	const handleClearRunContext = useCallback(
 		() => setCurrentMetadata(undefined),
 		[setCurrentMetadata],
@@ -1820,10 +1849,9 @@ export function FlowBoard({
 					? "Explain what this node does and how it works in the context of this flow."
 					: `Explain what these ${nodeCount} selected nodes do and how they work together in this flow.`;
 
-			setCopilotInitialPrompt(prompt);
-			setCopilotOpen(true);
+			openAssistant(prompt);
 		},
-		[setNodes],
+		[setNodes, openAssistant],
 	);
 
 	const placeNode = useCallback(
@@ -3081,10 +3109,49 @@ export function FlowBoard({
 		[applyFlowScript, currentLayer, catalog.data],
 	);
 
+	// Publish the live board surface for the global assistant while this board is
+	// mounted (old versions are read-only, so they never register).
+	useEffect(() => {
+		if (typeof version !== "undefined") return;
+		const surface: AssistantBoardSurface = {
+			appId,
+			boardId,
+			board: board.data,
+			currentLayer,
+			catalogNodes: catalog.data,
+			selectedNodeIds,
+			runContext: currentMetadata,
+			applyFlowScript: handleApplyFlowScript,
+			executeCommands: handleExecuteCommands,
+			focusNode,
+			selectNodes,
+			clearRunContext: handleClearRunContext,
+		};
+		useAssistantSurface.getState().setBoardSurface(surface);
+		return () => {
+			const store = useAssistantSurface.getState();
+			if (store.boardSurface === surface) store.setBoardSurface(null);
+		};
+	}, [
+		version,
+		appId,
+		boardId,
+		board.data,
+		currentLayer,
+		catalog.data,
+		selectedNodeIds,
+		currentMetadata,
+		handleApplyFlowScript,
+		handleExecuteCommands,
+		focusNode,
+		selectNodes,
+		handleClearRunContext,
+	]);
+
 	return (
 		<div className="w-full flex flex-1 grow flex-col min-h-0 relative overflow-hidden">
-			{/* Desktop FlowPilot floating panel */}
-			{copilotOpen && (
+			{/* Desktop FlowPilot floating panel (embedded hosts only) */}
+			{!externalAssistant && copilotOpen && (
 				<div className="hidden md:block fixed inset-0 z-100 pointer-events-none">
 					<div
 						className="absolute inset-y-0 right-0 pointer-events-auto transition-[width] duration-300 ease-out"
@@ -3316,13 +3383,19 @@ export function FlowBoard({
 								]
 							: []),
 						...(extraDockItems ?? []),
-						{
-							icon: <SparklesIcon className="text-white" />,
-							title: "FlowPilot",
-							separator: "left",
-							special: true,
-							onClick: () => setCopilotOpen(true),
-						},
+						// The floating FlowPilot bubble replaces this dock item when the host
+						// provides the global assistant.
+						...(externalAssistant
+							? []
+							: [
+									{
+										icon: <SparklesIcon className="text-white" />,
+										title: "FlowPilot",
+										separator: "left",
+										special: true,
+										onClick: () => openAssistant(),
+									},
+								]),
 					]}
 				/>
 				{renderOverlay?.()}
@@ -3721,9 +3794,9 @@ export function FlowBoard({
 						/>
 					</SheetContent>
 				</Sheet>
-				{/* Mobile FlowPilot Sheet */}
+				{/* Mobile FlowPilot Sheet (embedded hosts only) */}
 				<Sheet
-					open={copilotOpen && isMobile}
+					open={!externalAssistant && copilotOpen && isMobile}
 					onOpenChange={(open) => {
 						setCopilotOpen(open);
 						if (!open) setCopilotInitialPrompt(undefined);
