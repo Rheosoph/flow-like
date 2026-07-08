@@ -14,7 +14,6 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::flow::ast::{RenderOptions, board_to_flowscript};
-use flow_like_types::anyhow;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -59,16 +58,19 @@ pub async fn get_flowscript(
     let sub = permission.sub()?;
 
     let version_opt = if let Some(ver_str) = params.version {
+        // Malformed `version` is client input: map parse failures to 400 (not 500), and avoid
+        // relying on a `From<ParseIntError>` impl for `ApiError`.
         let parts = ver_str
             .split('_')
             .map(str::parse::<u32>)
-            .collect::<Result<Vec<u32>, _>>()?;
+            .collect::<Result<Vec<u32>, _>>()
+            .map_err(|e| ApiError::bad_request(format!("invalid version `{ver_str}`: {e}")))?;
         match parts.as_slice() {
             [maj, min, pat] => Some((*maj, *min, *pat)),
             _ => {
-                return Err(ApiError::internal_error(anyhow!(
-                    "version must be in MAJOR_MINOR_PATCH format"
-                )));
+                return Err(ApiError::bad_request(
+                    "version must be in MAJOR_MINOR_PATCH format",
+                ));
             }
         }
     } else {

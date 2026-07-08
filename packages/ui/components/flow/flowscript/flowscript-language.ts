@@ -61,7 +61,8 @@ export function toFlowScriptIdentifier(input: string): string {
 	let upcomingUpper = false;
 	let first = true;
 	for (const ch of input) {
-		if (/[a-zA-Z0-9]/.test(ch)) {
+		// Unicode letters/digits, mirroring Rust `char::is_alphanumeric` in `to_camel_case`.
+		if (/[\p{L}\p{N}]/u.test(ch)) {
 			if (first) {
 				out += ch.toLowerCase();
 				first = false;
@@ -634,7 +635,7 @@ function maskLiterals(text: string): string {
 	return out;
 }
 
-const IDENT_CHAR = /[A-Za-z0-9_$]/;
+const IDENT_CHAR = /[\p{L}\p{N}_$]/u;
 
 interface CallContext {
 	callName: string;
@@ -807,6 +808,7 @@ type MemberSource =
 type Schema = Record<string, unknown>;
 
 const schemaParseCache = new Map<string, Schema | null>();
+const SCHEMA_CACHE_LIMIT = 1000;
 
 function parseSchema(str: string): Schema | null {
 	const cached = schemaParseCache.get(str);
@@ -817,6 +819,12 @@ function parseSchema(str: string): Schema | null {
 		parsed = value && typeof value === "object" ? (value as Schema) : null;
 	} catch {
 		parsed = null;
+	}
+	// Bound the cache so long editing sessions with churning inline schemas
+	// don't leak unbounded memory; evict the oldest (Map preserves insertion order).
+	if (schemaParseCache.size >= SCHEMA_CACHE_LIMIT) {
+		const oldest = schemaParseCache.keys().next().value;
+		if (oldest !== undefined) schemaParseCache.delete(oldest);
 	}
 	schemaParseCache.set(str, parsed);
 	return parsed;

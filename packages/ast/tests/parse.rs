@@ -402,6 +402,19 @@ fn deep_nesting_errors_instead_of_overflowing() {
 }
 
 #[test]
+fn deep_parenthesized_interface_type_errors_instead_of_overflowing() {
+    // Parenthesised interface types recurse into `interface_type`; the recursion budget must
+    // cover them so `((((…))))` can't overflow the stack on user-authored input.
+    let mut ty = String::from("string");
+    for _ in 0..2000 {
+        ty = format!("({ty})");
+    }
+    let text = format!("interface Deep {{\n    field: {ty};\n}}\n\nconst d: Deep = {{}}\n");
+    let err = parse(&text).expect_err("deep parenthesised type must error, not crash");
+    assert!(err.message.contains("nesting too deep"));
+}
+
+#[test]
 fn trailing_at_comment_is_not_an_anchor() {
     let text = "function noop(a: int) {\n    logInfo({ message: a }) //@todo revisit\n}\n";
     let ast = parse(text).expect("parse should succeed");

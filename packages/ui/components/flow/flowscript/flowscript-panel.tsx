@@ -76,6 +76,9 @@ function rustDiagnosticToMarker(
 	diagnostic: IFlowScriptDiagnostic,
 ) {
 	const lineText = text.split("\n")[diagnostic.line - 1] ?? "";
+	// Underline the token at the error column (an identifier/number run) rather than the whole
+	// remainder of the line; fall back to a single character on a symbol or at end-of-line.
+	const token = /^[\w$]+/.exec(lineText.slice(diagnostic.col - 1))?.[0] ?? "";
 	return {
 		message: diagnostic.message,
 		severity:
@@ -85,7 +88,7 @@ function rustDiagnosticToMarker(
 		startLineNumber: diagnostic.line,
 		startColumn: diagnostic.col,
 		endLineNumber: diagnostic.line,
-		endColumn: Math.max(diagnostic.col + 1, lineText.length + 1),
+		endColumn: diagnostic.col + Math.max(token.length, 1),
 	};
 }
 
@@ -130,14 +133,20 @@ export function FlowScriptPanel({
 	const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 	const monacoRef = useRef<Monaco | null>(null);
 
+	// `version` is a fresh array reference every render; key on its stable string
+	// form so load() (and the effects depending on it) don't re-fire in a loop.
+	const versionKey = version?.join("_");
 	const load = useCallback(async () => {
 		setLoading(true);
 		setLoadError(undefined);
 		try {
+			const parsedVersion = versionKey
+				? (versionKey.split("_").map(Number) as [number, number, number])
+				: undefined;
 			const script = await backend.boardState.getFlowScript(
 				appId,
 				boardId,
-				version,
+				parsedVersion,
 				true,
 			);
 			setText(script);
@@ -150,7 +159,7 @@ export function FlowScriptPanel({
 		} finally {
 			setLoading(false);
 		}
-	}, [backend, appId, boardId, version]);
+	}, [backend, appId, boardId, versionKey]);
 
 	// Initial load and reload on board/version switch.
 	useEffect(() => {
@@ -270,7 +279,9 @@ export function FlowScriptPanel({
 			} catch {
 				// Linting transport is best-effort; ignore failures.
 			}
-			if (editor.getModel() !== model) return;
+			// Bail if the model was swapped, or the text moved on while we awaited the
+			// native lint — otherwise we'd paint stale markers at now-wrong positions.
+			if (editor.getModel() !== model || model.getValue() !== source) return;
 			monaco.editor.setModelMarkers(model, FLOWSCRIPT_DIAGNOSTIC_OWNER, [
 				...clientMarkers,
 				...nativeMarkers,

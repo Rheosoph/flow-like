@@ -430,9 +430,18 @@ impl Parser<'_> {
         let mut ty = match self.cur().clone() {
             // Grouping, e.g. `(string | null)[]` — the renderer parenthesises unions
             // under an array suffix so they don't reparse as `string | (null[])`.
+            // Count the group against the recursion budget: parenthesised types recurse into
+            // `interface_type`, so deeply nested `((((…))))` would otherwise bypass the limit
+            // and overflow the stack on user-authored input.
             Tok::LParen => {
+                if self.depth >= MAX_NESTING_DEPTH {
+                    return Err(self.err("interface type nesting too deep"));
+                }
+                self.depth += 1;
                 self.bump();
-                let inner = self.interface_type()?;
+                let inner = self.interface_type();
+                self.depth -= 1;
+                let inner = inner?;
                 self.expect(&Tok::RParen)?;
                 inner
             }
