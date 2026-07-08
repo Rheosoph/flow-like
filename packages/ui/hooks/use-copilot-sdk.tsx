@@ -157,7 +157,9 @@ export function useCopilotSDK(
 				invoke<CopilotModel[]>("flowpilot_agent_backend_list_models", {
 					backend,
 				}),
-				8_000,
+				// Above the backend's discovery bound (Claude Code's control
+				// handshake allows up to 12s) so cold starts don't fall back early.
+				15_000,
 				`Loading ${backend} models`,
 			);
 			setModels(result.length > 0 ? result : staticModelsForBackend(backend));

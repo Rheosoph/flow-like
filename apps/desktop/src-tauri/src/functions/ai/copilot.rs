@@ -2616,6 +2616,7 @@ struct ExternalAgentInvocation {
     args: Vec<String>,
     prompt: String,
     final_output_path: Option<std::path::PathBuf>,
+    envs: Vec<(String, String)>,
 }
 
 impl ExternalAgentInvocation {
@@ -2693,6 +2694,7 @@ impl ExternalAgentInvocation {
             args,
             prompt,
             final_output_path: None,
+            envs: Vec::new(),
         }
     }
 
@@ -2761,6 +2763,11 @@ impl ExternalAgentInvocation {
             path_dirs: cli.path_dirs,
             args,
             prompt: String::new(),
+            // Claude Code's MCP client aborts tool calls at MCP_TOOL_TIMEOUT
+            // (default 300s). FlowPilot's frontend-bridge tools (e.g. UI
+            // generation via flowpilot_widget) can legitimately run longer, so
+            // raise it to match Codex's 1800s bound and avoid premature aborts.
+            envs: vec![("MCP_TOOL_TIMEOUT".to_string(), "1800000".to_string())],
             final_output_path: Some(mcp_config_path),
         })
     }
@@ -2798,6 +2805,9 @@ fn run_external_agent_invocation_blocking(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in &invocation.envs {
+        command.env(key, value);
+    }
 
     let mut child = command.spawn().map_err(|e| {
         format!(
@@ -5750,6 +5760,19 @@ mod tests {
             invocation.args
         );
         assert!(invocation.args.contains(&"sonnet".to_string()));
+        assert!(
+            invocation.args.contains(&"--include-partial-messages".to_string()),
+            "claude invocation must stream partial messages for live tokens: {:?}",
+            invocation.args
+        );
+        assert!(
+            invocation
+                .envs
+                .iter()
+                .any(|(key, value)| key == "MCP_TOOL_TIMEOUT" && value == "1800000"),
+            "claude invocation must raise the MCP tool timeout above the 300s default: {:?}",
+            invocation.envs
+        );
 
         let config_path = invocation
             .final_output_path

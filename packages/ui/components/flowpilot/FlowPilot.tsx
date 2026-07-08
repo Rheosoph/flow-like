@@ -1528,7 +1528,10 @@ function FlowPilotImpl({
 				preferredModel =
 					currentModels.find((m) => m.id === "default") || currentModels[0];
 			} else if (normalizedProvider === "claude-code") {
+				// Honor the CLI's recommended "default" entry (from dynamic
+				// discovery) before falling back to Sonnet, matching Codex.
 				preferredModel =
+					currentModels.find((m) => m.id === "default") ||
 					currentModels.find((m) => m.id.includes("sonnet")) ||
 					currentModels[0];
 			} else {
