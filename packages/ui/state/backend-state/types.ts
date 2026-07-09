@@ -56,11 +56,15 @@ export interface IAppConnection {
 	status: IAppConnectionStatus;
 	role_id?: string | null;
 	role_name?: string | null;
+	/** Raw permission bits granted by the connection role. */
+	role_permissions?: number | null;
 	comment?: string | null;
 	requested_by_user_id?: string | null;
 	approved_by_user_id?: string | null;
 	app_name?: string | null;
 	app_description?: string | null;
+	/** Presigned icon URL of the other app. */
+	app_icon?: string | null;
 	created_at: number;
 	updated_at: number;
 }
@@ -127,15 +131,34 @@ export interface IProcessNote {
 	updated_at: number;
 }
 
+export interface IAppContentStats {
+	events: number;
+	pages: number;
+	templates: number;
+	widgets: number;
+}
+
 export interface IProcessGraphNode {
 	id: string;
 	name?: string | null;
 	description?: string | null;
 	icon?: string | null;
+	/** Presigned banner/thumbnail URL (null for masked apps). */
+	banner?: string | null;
 	unknown: boolean;
 	is_current: boolean;
 	can_annotate: boolean;
 	notes: IProcessNote[];
+	/** Descriptive tags from the app's metadata (empty for masked apps). */
+	tags: string[];
+	/** Primary category, e.g. "Productivity" (null for masked apps). */
+	category?: string | null;
+	/** External website URL from the app's metadata. */
+	website?: string | null;
+	/** Documentation URL from the app's metadata. */
+	docs_url?: string | null;
+	/** Summary of what the app contains (null for masked apps). */
+	content?: IAppContentStats | null;
 }
 
 export interface IProcessGraphEdge {
@@ -150,7 +173,14 @@ export interface IProcessGraphEdge {
 export interface IProcessFlow {
 	path: string[];
 	run_count: number;
+	/** How many of those runs failed/timed-out/were cancelled. */
+	failed_count: number;
+	/** Mean wall-clock duration of completed runs, in milliseconds. */
+	avg_duration_ms?: number | null;
 	last_run_at: number;
+	/** Event executed on the terminal app (null when that app is masked). */
+	event_name?: string | null;
+	event_type?: string | null;
 }
 
 export interface IProcessGraphResponse {

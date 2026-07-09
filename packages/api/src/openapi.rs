@@ -501,6 +501,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::connection::graph::ProcessGraphNode,
         crate::routes::app::connection::graph::ProcessGraphEdge,
         crate::routes::app::connection::graph::ProcessFlow,
+        crate::routes::app::connection::graph::AppContentStats,
         crate::routes::app::connection::graph::ProcessNoteInfo,
         crate::routes::app::connection::notes::UpsertProcessNoteRequest,
         crate::routes::app::connection::remote_events::RemoteEvent,

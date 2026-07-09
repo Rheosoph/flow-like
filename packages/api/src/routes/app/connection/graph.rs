@@ -12,12 +12,12 @@
 
 use crate::{
     ensure_permission,
-    entity::{app_connection, app_process_note},
+    entity::{app, app_connection, app_process_note, event, page, template, widget},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::connection::{
-        app_meta_lookup, role_name_lookup, role_permission_lookup, status_to_string,
+        AppMetaPreview, app_meta_lookup, role_name_lookup, role_permission_lookup, status_to_string,
     },
     state::AppState,
 };
@@ -25,9 +25,11 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use flow_like::bit::Metadata;
+use flow_like_storage::Path as FlowPath;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Statement,
+    QuerySelect, Statement, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -65,7 +67,10 @@ pub struct ProcessGraphNode {
     pub id: String,
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Presigned icon URL (withheld for masked apps)
     pub icon: Option<String>,
+    /// Presigned banner/thumbnail URL (withheld for masked apps)
+    pub banner: Option<String>,
     /// True if the requesting user has no access to this app; all metadata
     /// and notes are withheld and the id is pseudonymized.
     pub unknown: bool,
@@ -75,6 +80,27 @@ pub struct ProcessGraphNode {
     pub can_annotate: bool,
     /// Process documentation attached by the app's owners/admins
     pub notes: Vec<ProcessNoteInfo>,
+    /// Descriptive tags from the app's metadata (withheld for masked apps)
+    pub tags: Vec<String>,
+    /// Primary category, e.g. `Productivity` (withheld for masked apps)
+    pub category: Option<String>,
+    /// External website URL from the app's metadata
+    pub website: Option<String>,
+    /// Documentation URL from the app's metadata
+    pub docs_url: Option<String>,
+    /// Summary of what the app contains (withheld for masked apps)
+    pub content: Option<AppContentStats>,
+}
+
+/// Cheap Postgres-derived counts of the content an app holds. Excludes counts
+/// that would require per-app object-store/lancedb calls (boards, tables,
+/// files) — those are fetched lazily elsewhere, not in the graph endpoint.
+#[derive(Debug, Clone, Default, Serialize, ToSchema)]
+pub struct AppContentStats {
+    pub events: i64,
+    pub pages: i64,
+    pub templates: i64,
+    pub widgets: i64,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -97,8 +123,17 @@ pub struct ProcessFlow {
     /// recorded. Masked apps appear as their pseudonym.
     pub path: Vec<String>,
     pub run_count: i64,
+    /// How many of those runs ended in a failure/timeout/cancellation
+    pub failed_count: i64,
+    /// Mean wall-clock duration of completed runs, in milliseconds
+    pub avg_duration_ms: Option<f64>,
     /// Unix timestamp of the most recent run on this path
     pub last_run_at: i64,
+    /// Name of the event executed on the terminal app (withheld when the
+    /// terminal app is masked from the requester)
+    pub event_name: Option<String>,
+    /// Type of that event, e.g. `simple_chat`, `rest`, `mcp`
+    pub event_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -160,22 +195,48 @@ pub(crate) async fn collect_subgraph(
 pub(crate) struct ObservedFlow {
     pub path: Vec<String>,
     pub run_count: i64,
+    pub failed_count: i64,
+    pub avg_duration_ms: Option<f64>,
     pub last_run_at: i64,
+    pub event_name: Option<String>,
+    pub event_type: Option<String>,
 }
 
 fn flow_from_row(row: &sea_orm::QueryResult) -> Result<ObservedFlow, ApiError> {
     let chain: Vec<String> = row.try_get("", "callerAppChain")?;
     let app_id: String = row.try_get("", "appId")?;
     let run_count: i64 = row.try_get("", "run_count")?;
+    let failed_count: i64 = row.try_get("", "failed_count")?;
+    let avg_duration_ms: Option<f64> = row.try_get("", "avg_duration_ms")?;
     let last_run: chrono::NaiveDateTime = row.try_get("", "last_run")?;
+    let event_name: Option<String> = row.try_get("", "event_name")?;
+    let event_type: Option<String> = row.try_get("", "event_type")?;
     let mut path = chain;
     path.push(app_id);
     Ok(ObservedFlow {
         path,
         run_count,
+        failed_count,
+        avg_duration_ms,
         last_run_at: last_run.and_utc().timestamp(),
+        event_name,
+        event_type,
     })
 }
+
+/// The `SELECT`/`GROUP BY` shared by both observed-flow queries. Groups by the
+/// executed event so each row names the event, and casts the `status` enum to
+/// text to count failures.
+const OBSERVED_FLOW_SELECT: &str = r#"SELECT r."callerAppChain", r."appId", e.name AS event_name, e."eventType" AS event_type,
+              COUNT(*)::BIGINT AS run_count,
+              COUNT(*) FILTER (WHERE r.status IN ('FAILED', 'CANCELLED', 'TIMEOUT'))::BIGINT AS failed_count,
+              AVG((EXTRACT(EPOCH FROM (r."completedAt" - r."startedAt")) * 1000.0)::double precision)
+                  FILTER (WHERE r."completedAt" IS NOT NULL AND r."startedAt" IS NOT NULL) AS avg_duration_ms,
+              MAX(r."updatedAt") AS last_run
+       FROM "public"."ExecutionRun" r
+       LEFT JOIN "public"."Event" e ON e.id = r."eventId""#;
+const OBSERVED_FLOW_GROUP: &str =
+    r#"GROUP BY r."callerAppChain", r."appId", e.name, e."eventType""#;
 
 /// Observed chains an app participates in — as terminal app or anywhere in
 /// the recorded chain.
@@ -184,15 +245,17 @@ pub(crate) async fn observed_flows_for_app(
     app_id: &str,
     since: chrono::NaiveDateTime,
 ) -> Result<Vec<ObservedFlow>, ApiError> {
+    let sql = format!(
+        r#"{OBSERVED_FLOW_SELECT}
+           WHERE (r."callerAppChain" @> $1 OR (r."appId" = $2 AND array_length(r."callerAppChain", 1) > 0))
+             AND r."updatedAt" >= $3
+           {OBSERVED_FLOW_GROUP}
+           ORDER BY run_count DESC
+           LIMIT $4"#
+    );
     let stmt = Statement::from_sql_and_values(
         DatabaseBackend::Postgres,
-        r#"SELECT "callerAppChain", "appId", COUNT(*)::BIGINT AS run_count, MAX("updatedAt") AS last_run
-           FROM "public"."ExecutionRun"
-           WHERE ("callerAppChain" @> $1 OR ("appId" = $2 AND array_length("callerAppChain", 1) > 0))
-             AND "updatedAt" >= $3
-           GROUP BY "callerAppChain", "appId"
-           ORDER BY run_count DESC
-           LIMIT $4"#,
+        sql,
         [
             vec![app_id.to_string()].into(),
             app_id.into(),
@@ -210,20 +273,148 @@ pub(crate) async fn observed_flows_global(
     state: &AppState,
     since: chrono::NaiveDateTime,
 ) -> Result<Vec<ObservedFlow>, ApiError> {
+    let sql = format!(
+        r#"{OBSERVED_FLOW_SELECT}
+           WHERE array_length(r."callerAppChain", 1) > 0
+             AND r."updatedAt" >= $1
+           {OBSERVED_FLOW_GROUP}
+           ORDER BY run_count DESC
+           LIMIT $2"#
+    );
     let stmt = Statement::from_sql_and_values(
         DatabaseBackend::Postgres,
-        r#"SELECT "callerAppChain", "appId", COUNT(*)::BIGINT AS run_count, MAX("updatedAt") AS last_run
-           FROM "public"."ExecutionRun"
-           WHERE array_length("callerAppChain", 1) > 0
-             AND "updatedAt" >= $1
-           GROUP BY "callerAppChain", "appId"
-           ORDER BY run_count DESC
-           LIMIT $2"#,
+        sql,
         [since.into(), (MAX_FLOWS as i64).into()],
     );
 
     let rows = state.db.query_all(stmt).await?;
     rows.iter().map(flow_from_row).collect()
+}
+
+/// Batched Postgres counts of the content each app holds. Only cheap, indexed
+/// `appId` group-counts — no object-store/lancedb access.
+pub(crate) async fn content_stats(
+    state: &AppState,
+    app_ids: &[String],
+) -> Result<HashMap<String, AppContentStats>, ApiError> {
+    let mut stats: HashMap<String, AppContentStats> = HashMap::new();
+    if app_ids.is_empty() {
+        return Ok(stats);
+    }
+
+    let events: Vec<(String, i64)> = event::Entity::find()
+        .select_only()
+        .column(event::Column::AppId)
+        .column_as(Expr::col(event::Column::Id).count(), "cnt")
+        .filter(event::Column::AppId.is_in(app_ids.iter().cloned()))
+        .group_by(event::Column::AppId)
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+    for (app_id, cnt) in events {
+        stats.entry(app_id).or_default().events = cnt;
+    }
+
+    let pages: Vec<(String, i64)> = page::Entity::find()
+        .select_only()
+        .column(page::Column::AppId)
+        .column_as(Expr::col(page::Column::Id).count(), "cnt")
+        .filter(page::Column::AppId.is_in(app_ids.iter().cloned()))
+        .group_by(page::Column::AppId)
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+    for (app_id, cnt) in pages {
+        stats.entry(app_id).or_default().pages = cnt;
+    }
+
+    let templates: Vec<(String, i64)> = template::Entity::find()
+        .select_only()
+        .column(template::Column::AppId)
+        .column_as(Expr::col(template::Column::Id).count(), "cnt")
+        .filter(template::Column::AppId.is_in(app_ids.iter().cloned()))
+        .group_by(template::Column::AppId)
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+    for (app_id, cnt) in templates {
+        stats.entry(app_id).or_default().templates = cnt;
+    }
+
+    let widgets: Vec<(String, i64)> = widget::Entity::find()
+        .select_only()
+        .column(widget::Column::AppId)
+        .column_as(Expr::col(widget::Column::Id).count(), "cnt")
+        .filter(widget::Column::AppId.is_in(app_ids.iter().cloned()))
+        .group_by(widget::Column::AppId)
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+    for (app_id, cnt) in widgets {
+        stats.entry(app_id).or_default().widgets = cnt;
+    }
+
+    Ok(stats)
+}
+
+/// Batched lookup of each app's primary category (serialized to its variant
+/// name, e.g. `Productivity`). Best-effort — apps without a category are omitted.
+pub(crate) async fn app_category_lookup(
+    state: &AppState,
+    app_ids: &[String],
+) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    if app_ids.is_empty() {
+        return out;
+    }
+    let Ok(rows) = app::Entity::find()
+        .filter(app::Column::Id.is_in(app_ids.iter().cloned()))
+        .all(&state.db)
+        .await
+    else {
+        return out;
+    };
+    for row in rows {
+        if let Some(category) = row.primary_category
+            && let Ok(value) = serde_json::to_value(&category)
+            && let Some(label) = value.as_str()
+        {
+            out.insert(row.id, label.to_string());
+        }
+    }
+    out
+}
+
+/// Presigns the icon and banner (thumbnail) media keys of each app so clients
+/// receive usable URLs instead of raw storage keys. Best-effort: on any store
+/// error, apps are simply left without media rather than failing the request.
+pub(crate) async fn presign_media(
+    state: &AppState,
+    metas: &HashMap<String, AppMetaPreview>,
+) -> HashMap<String, (Option<String>, Option<String>)> {
+    let mut out: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    let store = match state.master_credentials().await {
+        Ok(creds) => match creds.to_store(false).await {
+            Ok(store) => store,
+            Err(_) => return out,
+        },
+        Err(_) => return out,
+    };
+
+    for (app_id, meta) in metas {
+        if meta.icon.is_none() && meta.banner.is_none() {
+            continue;
+        }
+        let mut metadata = Metadata {
+            icon: meta.icon.clone(),
+            thumbnail: meta.banner.clone(),
+            ..Default::default()
+        };
+        let prefix = FlowPath::from("media").child("apps").child(app_id.clone());
+        metadata.presign(prefix, &store).await;
+        out.insert(app_id.clone(), (metadata.icon, metadata.thumbnail));
+    }
+    out
 }
 
 pub(crate) async fn load_notes(
@@ -331,6 +522,9 @@ pub async fn get_connection_graph(
         .collect();
     let role_names = role_name_lookup(&state, &role_ids).await?;
     let role_permissions = role_permission_lookup(&state, &role_ids).await?;
+    let content = content_stats(&state, &visible_ids).await?;
+    let media = presign_media(&state, &app_meta).await;
+    let categories = app_category_lookup(&state, &visible_ids).await;
 
     let display_id = |id: &str| -> String {
         if accessible.contains(id) {
@@ -344,11 +538,13 @@ pub async fn get_connection_graph(
     for id in &node_ids {
         let visible = accessible.contains(id);
         let meta = if visible { app_meta.get(id) } else { None };
+        let media = if visible { media.get(id) } else { None };
         nodes.push(ProcessGraphNode {
             id: display_id(id),
             name: meta.map(|m| m.name.clone()),
             description: meta.and_then(|m| m.description.clone()),
-            icon: meta.and_then(|m| m.icon.clone()),
+            icon: media.and_then(|(icon, _)| icon.clone()),
+            banner: media.and_then(|(_, banner)| banner.clone()),
             unknown: !visible,
             is_current: id == &app_id,
             can_annotate: id == &app_id,
@@ -357,6 +553,11 @@ pub async fn get_connection_graph(
             } else {
                 Vec::new()
             },
+            tags: meta.map(|m| m.tags.clone()).unwrap_or_default(),
+            category: if visible { categories.get(id).cloned() } else { None },
+            website: meta.and_then(|m| m.website.clone()),
+            docs_url: meta.and_then(|m| m.docs_url.clone()),
+            content: if visible { content.get(id).cloned() } else { None },
         });
     }
 
@@ -381,10 +582,23 @@ pub async fn get_connection_graph(
 
     let flows = flows
         .into_iter()
-        .map(|flow| ProcessFlow {
-            path: flow.path.iter().map(|id| display_id(id)).collect(),
-            run_count: flow.run_count,
-            last_run_at: flow.last_run_at,
+        .map(|flow| {
+            // The event belongs to the terminal (last) app; withhold its name
+            // when that app is masked from the requester.
+            let terminal_visible = flow
+                .path
+                .last()
+                .map(|id| accessible.contains(id))
+                .unwrap_or(false);
+            ProcessFlow {
+                path: flow.path.iter().map(|id| display_id(id)).collect(),
+                run_count: flow.run_count,
+                failed_count: flow.failed_count,
+                avg_duration_ms: flow.avg_duration_ms,
+                last_run_at: flow.last_run_at,
+                event_name: terminal_visible.then_some(flow.event_name).flatten(),
+                event_type: terminal_visible.then_some(flow.event_type).flatten(),
+            }
         })
         .collect();
 

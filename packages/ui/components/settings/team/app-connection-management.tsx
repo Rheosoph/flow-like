@@ -68,6 +68,10 @@ import {
 } from "../../..";
 import type { IApp } from "../../../lib/schema/app/app";
 import type { IMetadata } from "../../../lib/schema/bit/bit";
+import {
+	CapabilityBadges,
+	deriveConnectionCapabilities,
+} from "../connections/capabilities";
 import { ProcessGraph } from "../connections/process-graph";
 
 interface AppConnectionManagementProps {
@@ -893,13 +897,23 @@ function ConnectionRow({
 }: Readonly<ConnectionRowProps>) {
 	const appLabel = connectionAppLabel(connection, otherAppId);
 	const isPending = connection.status === "PENDING";
+	const capabilities = useMemo(
+		() => deriveConnectionCapabilities(connection.role_permissions),
+		[connection.role_permissions],
+	);
 
 	return (
 		<div className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
 			<div className="flex items-center gap-3 min-w-0 flex-1">
-				<div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-					<Blocks className="h-5 w-5 text-primary" />
-				</div>
+				<Avatar className="h-10 w-10 rounded-lg">
+					<AvatarImage
+						src={connection.app_icon ?? undefined}
+						alt={`${appLabel} icon`}
+					/>
+					<AvatarFallback className="rounded-lg bg-primary/10 text-primary">
+						<Blocks className="h-5 w-5" />
+					</AvatarFallback>
+				</Avatar>
 				<div className="min-w-0 flex-1">
 					<div className="flex items-center gap-2">
 						<h3 className="font-medium text-sm truncate">{appLabel}</h3>
@@ -921,6 +935,7 @@ function ConnectionRow({
 							{new Date(connection.created_at * 1000).toLocaleDateString()}
 						</span>
 					</div>
+					<CapabilityBadges capabilities={capabilities} className="mt-1.5" />
 					{connection.app_description && (
 						<p className="text-xs text-muted-foreground mt-1 truncate">
 							{connection.app_description}

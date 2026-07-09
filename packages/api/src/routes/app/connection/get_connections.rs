@@ -5,7 +5,8 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::connection::{
-        AppConnectionInfo, app_meta_lookup, role_name_lookup, to_connection_info,
+        AppConnectionInfo, app_meta_lookup, graph::presign_media, role_name_lookup,
+        role_permission_lookup, to_connection_info,
     },
     state::AppState,
 };
@@ -78,7 +79,9 @@ pub async fn get_connections(
         .collect();
 
     let role_names = role_name_lookup(&state, &role_ids).await?;
+    let role_permissions = role_permission_lookup(&state, &role_ids).await?;
     let app_meta = app_meta_lookup(&state, &other_app_ids).await?;
+    let media = presign_media(&state, &app_meta).await;
 
     let mut incoming = Vec::new();
     let mut outgoing = Vec::new();
@@ -90,7 +93,14 @@ pub async fn get_connections(
         } else {
             connection.target_app_id.clone()
         };
-        let info = to_connection_info(connection, &role_names, &app_meta, &other_app_id);
+        let info = to_connection_info(
+            connection,
+            &role_names,
+            &role_permissions,
+            &app_meta,
+            &media,
+            &other_app_id,
+        );
         if is_incoming {
             incoming.push(info);
         } else {

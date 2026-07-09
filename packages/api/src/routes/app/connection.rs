@@ -77,6 +77,8 @@ pub struct AppConnectionInfo {
     pub status: String,
     pub role_id: Option<String>,
     pub role_name: Option<String>,
+    /// Raw permission bits granted by the connection role.
+    pub role_permissions: Option<i64>,
     pub comment: Option<String>,
     pub requested_by_user_id: Option<String>,
     pub approved_by_user_id: Option<String>,
@@ -84,6 +86,8 @@ pub struct AppConnectionInfo {
     pub app_name: Option<String>,
     /// Description of the other app
     pub app_description: Option<String>,
+    /// Presigned icon URL of the other app
+    pub app_icon: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -100,7 +104,13 @@ pub(crate) fn status_to_string(status: &AppConnectionStatus) -> String {
 pub(crate) struct AppMetaPreview {
     pub name: String,
     pub description: Option<String>,
+    /// Raw icon storage key (presign before returning to clients).
     pub icon: Option<String>,
+    /// Raw banner/thumbnail storage key (presign before returning to clients).
+    pub banner: Option<String>,
+    pub website: Option<String>,
+    pub docs_url: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// Fetches the preferred (English, falling back to any) metadata for a list
@@ -136,6 +146,10 @@ pub(crate) async fn app_meta_lookup(
                             name: m.name,
                             description: m.description,
                             icon: m.icon,
+                            banner: m.thumbnail,
+                            website: m.website,
+                            docs_url: m.docs_url,
+                            tags: m.tags.unwrap_or_default(),
                         },
                         is_english,
                     ),
@@ -183,13 +197,18 @@ pub(crate) async fn role_permission_lookup(
 pub(crate) fn to_connection_info(
     model: app_connection::Model,
     role_names: &std::collections::HashMap<String, String>,
+    role_permission_bits: &std::collections::HashMap<String, i64>,
     app_meta: &std::collections::HashMap<String, AppMetaPreview>,
+    media: &std::collections::HashMap<String, (Option<String>, Option<String>)>,
     other_app_id: &str,
 ) -> AppConnectionInfo {
     let (app_name, app_description) = app_meta
         .get(other_app_id)
         .map(|preview| (Some(preview.name.clone()), preview.description.clone()))
         .unwrap_or((None, None));
+    let app_icon = media
+        .get(other_app_id)
+        .and_then(|(icon, _)| icon.clone());
 
     AppConnectionInfo {
         id: model.id,
@@ -200,12 +219,17 @@ pub(crate) fn to_connection_info(
             .role_id
             .as_ref()
             .and_then(|id| role_names.get(id).cloned()),
+        role_permissions: model
+            .role_id
+            .as_ref()
+            .and_then(|id| role_permission_bits.get(id).copied()),
         role_id: model.role_id,
         comment: model.comment,
         requested_by_user_id: model.requested_by_user_id,
         approved_by_user_id: model.approved_by_user_id,
         app_name,
         app_description,
+        app_icon,
         created_at: model.created_at.and_utc().timestamp(),
         updated_at: model.updated_at.and_utc().timestamp(),
     }

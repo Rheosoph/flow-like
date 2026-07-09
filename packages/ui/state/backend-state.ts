@@ -132,6 +132,7 @@ export type {
 	IAppConnection,
 	IAppConnectionStatus,
 	IAppConnectionsResponse,
+	IAppContentStats,
 	IBackendRole,
 	IInvite,
 	IInviteLink,

@@ -7,7 +7,8 @@ use crate::{
         app_meta_lookup,
         graph::{
             ProcessFlow, ProcessGraphEdge, ProcessGraphNode, ProcessGraphQuery,
-            ProcessGraphResponse, flow_window, load_notes, observed_flows_global,
+            ProcessGraphResponse, app_category_lookup, content_stats, flow_window, load_notes,
+            observed_flows_global, presign_media,
         },
         role_name_lookup, role_permission_lookup, status_to_string,
     },
@@ -78,20 +79,30 @@ pub async fn get_global_connection_graph(
         .collect();
     let role_names = role_name_lookup(&state, &role_ids).await?;
     let role_permissions = role_permission_lookup(&state, &role_ids).await?;
+    let content = content_stats(&state, &node_ids).await?;
+    let media = presign_media(&state, &app_meta).await;
+    let categories = app_category_lookup(&state, &node_ids).await;
 
     let nodes = node_ids
         .iter()
         .map(|id| {
             let meta = app_meta.get(id);
+            let media = media.get(id);
             ProcessGraphNode {
                 id: id.clone(),
                 name: meta.map(|m| m.name.clone()),
                 description: meta.and_then(|m| m.description.clone()),
-                icon: meta.and_then(|m| m.icon.clone()),
+                icon: media.and_then(|(icon, _)| icon.clone()),
+                banner: media.and_then(|(_, banner)| banner.clone()),
                 unknown: false,
                 is_current: false,
                 can_annotate: true,
                 notes: notes.get(id).cloned().unwrap_or_default(),
+                tags: meta.map(|m| m.tags.clone()).unwrap_or_default(),
+                category: categories.get(id).cloned(),
+                website: meta.and_then(|m| m.website.clone()),
+                docs_url: meta.and_then(|m| m.docs_url.clone()),
+                content: content.get(id).cloned(),
             }
         })
         .collect();
@@ -118,7 +129,11 @@ pub async fn get_global_connection_graph(
         .map(|flow| ProcessFlow {
             path: flow.path,
             run_count: flow.run_count,
+            failed_count: flow.failed_count,
+            avg_duration_ms: flow.avg_duration_ms,
             last_run_at: flow.last_run_at,
+            event_name: flow.event_name,
+            event_type: flow.event_type,
         })
         .collect();
 
