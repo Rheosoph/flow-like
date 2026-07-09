@@ -210,6 +210,26 @@ export interface IProcessCasesResponse {
 	cases: IProcessCase[];
 }
 
+/** One run inside a case's causal tree, with timing for the waterfall. */
+export interface IProcessCaseRun {
+	run_id: string;
+	app_id: string;
+	parent_run_id?: string | null;
+	depth: number;
+	/** PENDING | RUNNING | COMPLETED | FAILED | CANCELLED | TIMEOUT */
+	status: string;
+	event_name?: string | null;
+	event_type?: string | null;
+	started_at: number;
+	completed_at?: number | null;
+	updated_at: number;
+	duration_ms?: number | null;
+}
+
+export interface IProcessCaseDetailResponse {
+	runs: IProcessCaseRun[];
+}
+
 export interface IInvite {
 	id: string;
 	user_id: string;

@@ -185,6 +185,20 @@ pub async fn invoke_event_async(
     if correlation.trace_id.is_none() {
         correlation.trace_id = parent_run_id.clone().or_else(|| Some(run_id.clone()));
     }
+    // Auto-extract business keys via the event's correlation mappings, then
+    // let explicitly passed keys win on conflict.
+    if let (Some(mappings), Some(payload)) = (
+        event
+            .correlation_mappings
+            .as_ref()
+            .filter(|mappings| !mappings.is_empty()),
+        params.payload.as_ref(),
+    ) {
+        let extracted = crate::correlation::extract_mapped_keys(payload, mappings);
+        if !extracted.is_empty() {
+            correlation = correlation.with_keys(&extracted);
+        }
+    }
     if let Some(keys) = params.correlation.as_ref().filter(|keys| !keys.is_empty()) {
         crate::correlation::validate_business_keys(keys).map_err(ApiError::bad_request)?;
         correlation = correlation.with_keys(keys);

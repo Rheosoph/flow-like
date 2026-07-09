@@ -41,6 +41,7 @@ pub fn routes() -> Router<AppState> {
         .route("/accessible", get(get_accessible::get_accessible_apps))
         .route("/graph", get(graph::get_connection_graph))
         .route("/cases", get(cases::list_process_cases))
+        .route("/cases/{case_id}", get(cases::get_process_case))
         .route("/notes", get(notes::list_notes).put(notes::create_note))
         .route(
             "/notes/{note_id}",

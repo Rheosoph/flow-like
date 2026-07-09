@@ -6,6 +6,7 @@ import type {
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCaseDetailResponse,
 	IProcessCasesResponse,
 	IProcessGraphResponse,
 	IProcessNote,
@@ -512,6 +513,24 @@ export class TeamState implements ITeamState {
 		return await fetcher(
 			this.backend.profile,
 			url,
+			{
+				method: "GET",
+			},
+			this.backend.auth,
+		);
+	}
+
+	async getProcessCaseRuns(
+		appId: string,
+		caseId: string,
+	): Promise<IProcessCaseDetailResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/connections/cases/${caseId}`,
 			{
 				method: "GET",
 			},

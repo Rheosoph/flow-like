@@ -76,6 +76,32 @@ pub struct ProcessCasesResponse {
     pub cases: Vec<ProcessCase>,
 }
 
+/// One run within a case's causal tree, with timing for waterfall rendering.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProcessCaseRun {
+    pub run_id: String,
+    /// App the run executed in (masked when inaccessible).
+    pub app_id: String,
+    pub parent_run_id: Option<String>,
+    /// Distance from the case root (0 = root).
+    pub depth: i32,
+    /// Run status: PENDING, RUNNING, COMPLETED, FAILED, CANCELLED, TIMEOUT.
+    pub status: String,
+    pub event_name: Option<String>,
+    pub event_type: Option<String>,
+    /// Unix timestamp the run started (falls back to creation time).
+    pub started_at: i64,
+    pub completed_at: Option<i64>,
+    /// Last update — end fallback for runs without a completion time.
+    pub updated_at: i64,
+    pub duration_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProcessCaseDetailResponse {
+    pub runs: Vec<ProcessCaseRun>,
+}
+
 struct RawCase {
     case_id: String,
     root_app_id: String,
@@ -248,4 +274,149 @@ pub async fn list_process_cases(
         .collect();
 
     Ok(Json(ProcessCasesResponse { cases }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/apps/{app_id}/connections/cases/{case_id}",
+    tag = "team",
+    description = "All runs of one process case as a causal tree with timing — the drill-down behind the case list.",
+    params(
+        ("app_id" = String, Path, description = "Application ID"),
+        ("case_id" = String, Path, description = "Case id (the root run id)")
+    ),
+    responses(
+        (status = 200, description = "Runs of the case in tree order", body = ProcessCaseDetailResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Case not found")
+    ),
+    security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
+)]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/connections/cases/{case_id}",
+    skip(state, user)
+)]
+pub async fn get_process_case(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app_id, case_id)): Path<(String, String)>,
+) -> Result<Json<ProcessCaseDetailResponse>, ApiError> {
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
+    let viewer_sub = permission.effective_user_id().ok();
+
+    // The anchor pins the case root to this app, so a case id from another
+    // app cannot be walked through this endpoint.
+    let stmt = Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"WITH RECURSIVE tree AS (
+               SELECT id, 0 AS depth
+               FROM "public"."ExecutionRun"
+               WHERE id = $2 AND "appId" = $1 AND "parentRunId" IS NULL
+             UNION ALL
+               SELECT r.id, t.depth + 1
+               FROM "public"."ExecutionRun" r
+               JOIN tree t ON r."parentRunId" = t.id
+               WHERE t.depth < $3
+           )
+           SELECT
+               r.id AS run_id,
+               r."appId" AS app_id,
+               r."parentRunId" AS parent_run_id,
+               t.depth,
+               r.status::text AS status,
+               e.name AS event_name,
+               e."eventType" AS event_type,
+               COALESCE(r."startedAt", r."createdAt") AS started_at,
+               r."completedAt" AS completed_at,
+               r."updatedAt" AS updated_at,
+               (EXTRACT(EPOCH FROM (r."completedAt" - r."startedAt")) * 1000.0)::double precision AS duration_ms
+           FROM tree t
+           JOIN "public"."ExecutionRun" r ON r.id = t.id
+           LEFT JOIN "public"."Event" e ON e.id = r."eventId"
+           ORDER BY t.depth ASC, started_at ASC
+           LIMIT 500"#,
+        [app_id.clone().into(), case_id.into(), MAX_CASE_DEPTH.into()],
+    );
+
+    let rows = state.db.query_all(stmt).await?;
+    if rows.is_empty() {
+        return Err(ApiError::not_found("Case not found"));
+    }
+
+    struct RawRun {
+        run_id: String,
+        app_id: String,
+        parent_run_id: Option<String>,
+        depth: i32,
+        status: String,
+        event_name: Option<String>,
+        event_type: Option<String>,
+        started_at: chrono::NaiveDateTime,
+        completed_at: Option<chrono::NaiveDateTime>,
+        updated_at: chrono::NaiveDateTime,
+        duration_ms: Option<f64>,
+    }
+
+    let mut raw_runs = Vec::with_capacity(rows.len());
+    let mut all_app_ids: HashSet<String> = HashSet::new();
+    for row in &rows {
+        let run_app_id: String = row.try_get("", "app_id")?;
+        all_app_ids.insert(run_app_id.clone());
+        raw_runs.push(RawRun {
+            run_id: row.try_get("", "run_id")?,
+            app_id: run_app_id,
+            parent_run_id: row.try_get("", "parent_run_id")?,
+            depth: row.try_get("", "depth")?,
+            status: row.try_get("", "status")?,
+            event_name: row.try_get("", "event_name")?,
+            event_type: row.try_get("", "event_type")?,
+            started_at: row.try_get("", "started_at")?,
+            completed_at: row.try_get("", "completed_at")?,
+            updated_at: row.try_get("", "updated_at")?,
+            duration_ms: row.try_get("", "duration_ms")?,
+        });
+    }
+
+    let mut accessible: HashSet<String> = HashSet::from([app_id.clone()]);
+    if let Some(sub) = &viewer_sub
+        && !all_app_ids.is_empty()
+    {
+        use crate::entity::membership;
+        let member_of: Vec<String> = membership::Entity::find()
+            .filter(membership::Column::UserId.eq(sub))
+            .filter(membership::Column::AppId.is_in(all_app_ids.iter().cloned()))
+            .select_only()
+            .column(membership::Column::AppId)
+            .into_tuple()
+            .all(&state.db)
+            .await?;
+        accessible.extend(member_of);
+    }
+    let display_id = |id: &str| -> String {
+        if accessible.contains(id) {
+            id.to_string()
+        } else {
+            mask_app_id(id, &app_id)
+        }
+    };
+
+    let runs = raw_runs
+        .into_iter()
+        .map(|raw| ProcessCaseRun {
+            run_id: raw.run_id,
+            app_id: display_id(&raw.app_id),
+            parent_run_id: raw.parent_run_id,
+            depth: raw.depth,
+            status: raw.status,
+            event_name: raw.event_name,
+            event_type: raw.event_type,
+            started_at: raw.started_at.and_utc().timestamp(),
+            completed_at: raw.completed_at.map(|dt| dt.and_utc().timestamp()),
+            updated_at: raw.updated_at.and_utc().timestamp(),
+            duration_ms: raw.duration_ms,
+        })
+        .collect();
+
+    Ok(Json(ProcessCaseDetailResponse { runs }))
 }

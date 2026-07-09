@@ -112,7 +112,10 @@ impl RemoteAppSession {
         let response = http_client()
             .post(&token_url)
             .bearer_auth(token.trim())
-            .json(&json!({}))
+            // The run id ties the minted token — and every run it triggers
+            // downstream — into this run's process case, even when the bearer
+            // is a user token instead of an executor JWT.
+            .json(&json!({ "run_id": context.run_id() }))
             .send()
             .await
             .map_err(|err| {

@@ -153,6 +153,12 @@ pub struct Event {
     /// apps via the app-connection proxy. Only meaningful for REST/MCP events.
     #[serde(default)]
     pub exposure: EventExposure,
+
+    /// Process-mining case-key mappings: business key name → dot-path into
+    /// the invocation payload (e.g. `order_id` → `order.id`). Extracted on
+    /// every run so cases group by business object automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_mappings: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]

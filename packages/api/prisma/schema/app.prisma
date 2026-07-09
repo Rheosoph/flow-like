@@ -433,6 +433,12 @@ model Event {
   /// Canary configuration for A/B testing
   canary Json?
 
+  /// Process-mining case-key mappings: business key name → dot-path into the
+  /// invocation payload (e.g. {"order_id": "order.id"}). Extracted
+  /// automatically on every run so cases group by business object without
+  /// callers having to pass correlation explicitly.
+  correlationMappings Json?
+
   sink EventSink?
 
   /// Status of the most recent remote setup run: "running", "ok", "error".

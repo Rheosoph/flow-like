@@ -127,6 +127,11 @@ const Y_GAP = 130;
 const TIME_WINDOWS = [7, 30, 90, 365] as const;
 
 export interface ProcessGraphProps {
+	/**
+	 * App whose process view this is — required for the case drill-down.
+	 * The admin (platform-wide) graph omits it and gets no cases tab content.
+	 */
+	appId?: string;
 	data?: IProcessGraphResponse;
 	/** Reconstructed end-to-end process cases (from the correlation spine). */
 	cases?: IProcessCase[];
@@ -1527,10 +1532,106 @@ function ProcessStats({
 	);
 }
 
+const RUN_STATUS_FAILED = new Set(["FAILED", "CANCELLED", "TIMEOUT"]);
+const RUN_STATUS_ACTIVE = new Set(["PENDING", "RUNNING"]);
+
+/**
+ * Waterfall timeline of one case's causal run tree: rows indented by depth,
+ * bars positioned on the case's wall-clock span. Loaded lazily on expand.
+ */
+function CaseWaterfall({
+	appId,
+	caseId,
+	nameOf,
+}: Readonly<{
+	appId: string;
+	caseId: string;
+	nameOf: (id: string) => string;
+}>) {
+	const backend = useBackend();
+	const detail = useInvoke(
+		backend.teamState.getProcessCaseRuns,
+		backend.teamState,
+		[appId, caseId],
+	);
+
+	if (detail.error) {
+		return (
+			<p className="border-t pt-2 text-xs text-muted-foreground">
+				Couldn&apos;t load the case timeline.
+			</p>
+		);
+	}
+	if (!detail.data) {
+		return (
+			<div className="space-y-1.5 border-t pt-2">
+				<Skeleton className="h-5 w-full" />
+				<Skeleton className="h-5 w-4/5" />
+			</div>
+		);
+	}
+	const runs = detail.data.runs;
+	if (runs.length === 0) return null;
+
+	const minStart = Math.min(...runs.map((run) => run.started_at));
+	const maxEnd = Math.max(
+		...runs.map((run) => run.completed_at ?? run.updated_at),
+	);
+	const span = Math.max(1, maxEnd - minStart);
+
+	return (
+		<div className="space-y-1 border-t pt-2">
+			{runs.map((run) => {
+				const left = ((run.started_at - minStart) / span) * 100;
+				const right =
+					(((run.completed_at ?? run.updated_at) - minStart) / span) * 100;
+				const width = Math.max(2, right - left);
+				const failed = RUN_STATUS_FAILED.has(run.status);
+				const active = RUN_STATUS_ACTIVE.has(run.status);
+				return (
+					<div
+						key={run.run_id}
+						className="flex items-center gap-2 text-xs"
+						title={`${run.status} · run ${run.run_id}`}
+					>
+						<span
+							className="w-44 shrink-0 truncate text-muted-foreground"
+							style={{ paddingLeft: `${Math.min(run.depth, 6) * 10}px` }}
+						>
+							{nameOf(run.app_id)}
+							{run.event_name ? ` · ${run.event_name}` : ""}
+						</span>
+						<div className="relative h-2.5 min-w-0 flex-1 overflow-hidden rounded bg-muted/50">
+							<div
+								className={cn(
+									"absolute inset-y-0 rounded",
+									failed
+										? "bg-destructive"
+										: active
+											? "animate-pulse bg-primary"
+											: "bg-primary/60",
+								)}
+								style={{
+									left: `${Math.min(left, 98)}%`,
+									width: `${Math.min(width, 100 - Math.min(left, 98))}%`,
+								}}
+							/>
+						</div>
+						<span className="w-14 shrink-0 text-right tabular-nums text-muted-foreground">
+							{run.duration_ms != null ? formatDuration(run.duration_ms) : "—"}
+						</span>
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
 const CASE_FILTERS = ["all", "Failed", "Running", "Completed"] as const;
 type CaseFilter = (typeof CASE_FILTERS)[number];
 
 interface ProcessCasesCardProps {
+	appId: string;
 	cases: IProcessCase[];
 	nodesById: Map<string, IProcessGraphNode>;
 	/** Hovering a case dims the canvas to its app path. */
@@ -1538,12 +1639,14 @@ interface ProcessCasesCardProps {
 }
 
 function ProcessCasesCard({
+	appId,
 	cases,
 	nodesById,
 	onHoverPath,
 }: Readonly<ProcessCasesCardProps>) {
 	const [statusFilter, setStatusFilter] = useState<CaseFilter>("all");
 	const [search, setSearch] = useState("");
+	const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
 
 	const nameOf = useCallback(
 		(appId: string) => {
@@ -1643,11 +1746,15 @@ function ProcessCasesCard({
 							const keys = processCase.correlation_keys
 								? Object.entries(processCase.correlation_keys)
 								: [];
+							const expanded = expandedCaseId === processCase.case_id;
 							return (
 								<div
 									key={processCase.case_id}
 									title={`Case ${processCase.case_id}`}
-									className="space-y-2 rounded-md border p-3 transition-colors hover:bg-muted/40"
+									className={cn(
+										"space-y-2 rounded-md border p-3 transition-colors hover:bg-muted/40",
+										expanded && "bg-muted/30",
+									)}
 									onMouseEnter={() => onHoverPath?.(processCase.apps)}
 									onMouseLeave={() => onHoverPath?.(null)}
 								>
@@ -1663,12 +1770,35 @@ function ProcessCasesCard({
 												</span>
 											)}
 										</div>
-										<span className="shrink-0 text-xs text-muted-foreground">
-											{formatDistanceToNow(
-												new Date(processCase.last_activity_at * 1000),
-												{ addSuffix: true },
-											)}
-										</span>
+										<div className="flex shrink-0 items-center gap-1">
+											<span className="text-xs text-muted-foreground">
+												{formatDistanceToNow(
+													new Date(processCase.last_activity_at * 1000),
+													{ addSuffix: true },
+												)}
+											</span>
+											<Button
+												variant="ghost"
+												size="icon"
+												className="h-6 w-6"
+												aria-label={
+													expanded ? "Collapse case" : "Inspect case timeline"
+												}
+												aria-expanded={expanded}
+												onClick={() =>
+													setExpandedCaseId(
+														expanded ? null : processCase.case_id,
+													)
+												}
+											>
+												<ChevronRight
+													className={cn(
+														"h-3.5 w-3.5 transition-transform",
+														expanded && "rotate-90",
+													)}
+												/>
+											</Button>
+										</div>
 									</div>
 
 									{processCase.apps.length > 1 && (
@@ -1719,6 +1849,14 @@ function ProcessCasesCard({
 											</span>
 										)}
 									</div>
+
+									{expanded && (
+										<CaseWaterfall
+											appId={appId}
+											caseId={processCase.case_id}
+											nameOf={nameOf}
+										/>
+									)}
 								</div>
 							);
 						})}
@@ -1730,6 +1868,7 @@ function ProcessCasesCard({
 }
 
 export function ProcessGraph({
+	appId,
 	data,
 	cases,
 	casesLoading,
@@ -2055,8 +2194,9 @@ export function ProcessGraph({
 			</div>
 
 			{bottomTab === "cases" ? (
-				cases ? (
+				cases && appId ? (
 					<ProcessCasesCard
+						appId={appId}
 						cases={cases}
 						nodesById={nodesById}
 						onHoverPath={setHoveredPath}

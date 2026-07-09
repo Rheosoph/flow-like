@@ -124,6 +124,11 @@ pub fn event_to_db_model(app_id: &str, event: &CoreEvent) -> event::ActiveModel 
         inputs: Set(inputs),
         notes: Set(notes),
         canary: Set(canary),
+        correlation_mappings: Set(event
+            .correlation_mappings
+            .as_ref()
+            .filter(|mappings| !mappings.is_empty())
+            .and_then(|mappings| serde_json::to_value(mappings).ok())),
         created_at: Set(chrono::DateTime::from_timestamp(
             event
                 .created_at
@@ -226,6 +231,9 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
         is_default: model.is_default,
         execution_mode: EventExecutionMode::parse(&model.execution_mode),
         exposure: EventExposure::parse(&model.exposure),
+        correlation_mappings: model
+            .correlation_mappings
+            .and_then(|value| serde_json::from_value(value).ok()),
     })
 }
 

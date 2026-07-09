@@ -139,6 +139,8 @@ export type {
 	IJoinRequest,
 	IMember,
 	IProcessCase,
+	IProcessCaseDetailResponse,
+	IProcessCaseRun,
 	IProcessCasesResponse,
 	IProcessFlow,
 	IProcessGraphEdge,

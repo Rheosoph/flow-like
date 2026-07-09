@@ -163,6 +163,9 @@ impl FromProto<flow_like_types::proto::Event> for Event {
                 .as_deref()
                 .map(EventExposure::parse)
                 .unwrap_or_default(),
+            // Not part of the proto schema yet; correlation mappings are
+            // persisted server-side (Postgres event row), not in local proto.
+            correlation_mappings: None,
         }
     }
 }

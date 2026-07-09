@@ -20,6 +20,12 @@ use utoipa::ToSchema;
 pub struct CreateAppConnectionTokenRequest {
     /// Token lifetime in seconds, clamped to [60, 900]. Defaults to 600.
     pub ttl_seconds: Option<i64>,
+    /// Run the token is minted for. Used when the caller authenticates with a
+    /// user token (local/desktop executions) instead of an executor JWT: the
+    /// run row — verified to belong to this app — supplies the app chain and
+    /// process correlation so cross-app cases stay connected.
+    #[serde(default)]
+    pub run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -111,6 +117,35 @@ pub async fn create_app_connection_token(
             executor.app_chain.clone().unwrap_or_default(),
             executor.correlation.clone(),
         )
+    } else if let Some(claimed_run_id) = payload.as_ref().and_then(|p| p.run_id.clone()) {
+        // Local/desktop executions authenticate with the user's token, so the
+        // run context can't come from an executor JWT. The claimed run id is
+        // only honored after verifying the run belongs to this app; the run
+        // row is then the source of truth for chain and correlation.
+        use crate::entity::execution_run;
+        match execution_run::Entity::find_by_id(&claimed_run_id)
+            .filter(execution_run::Column::AppId.eq(&app_id))
+            .one(&state.db)
+            .await?
+        {
+            Some(run) => {
+                let keys = run
+                    .correlation_keys
+                    .as_ref()
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+                    .unwrap_or_default();
+                let correlation = crate::correlation::CorrelationContext {
+                    trace_id: run.trace_id.clone().or_else(|| Some(run.id.clone())),
+                    keys,
+                };
+                (
+                    Some(run.id),
+                    run.caller_app_chain.unwrap_or_default(),
+                    Some(correlation),
+                )
+            }
+            None => (None, Vec::new(), None),
+        }
     } else {
         (None, Vec::new(), None)
     };

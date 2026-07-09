@@ -6,6 +6,7 @@ import type {
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCaseDetailResponse,
 	IProcessCasesResponse,
 	IProcessGraphResponse,
 	IProcessNote,
@@ -289,6 +290,16 @@ export class WebTeamState implements ITeamState {
 		if (days !== undefined) params.set("days", days.toString());
 		return await apiGet<IProcessCasesResponse>(
 			`apps/${appId}/connections/cases?${params}`,
+			this.backend.auth,
+		);
+	}
+
+	async getProcessCaseRuns(
+		appId: string,
+		caseId: string,
+	): Promise<IProcessCaseDetailResponse> {
+		return await apiGet<IProcessCaseDetailResponse>(
+			`apps/${appId}/connections/cases/${caseId}`,
 			this.backend.auth,
 		);
 	}

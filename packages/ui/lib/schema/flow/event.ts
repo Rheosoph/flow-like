@@ -21,6 +21,12 @@ export interface IEvent {
 	 * restricts it to connected apps via the app-connection proxy.
 	 */
 	exposure?: IEventExposure;
+	/**
+	 * Process-mining case-key mappings: business key name → dot-path into the
+	 * invocation payload (e.g. { order_id: "order.id" }). Extracted on every
+	 * run so process cases group by business object automatically.
+	 */
+	correlation_mappings?: { [key: string]: string } | null;
 	id: string;
 	/** Input pins copied from the node */
 	inputs?: IEventInput[];

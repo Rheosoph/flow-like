@@ -15,6 +15,54 @@ pub const MAX_CORRELATION_KEYS: usize = 8;
 pub const MAX_CORRELATION_KEY_LEN: usize = 64;
 pub const MAX_CORRELATION_VALUE_LEN: usize = 256;
 
+/// Extracts business keys from an invocation payload using an event's
+/// correlation mappings (key name → dot-path into the payload, e.g.
+/// `order_id` → `order.id` or `$.order.id`). Missing paths and non-scalar
+/// values are skipped; results respect the same caps as caller-supplied keys.
+pub fn extract_mapped_keys(
+    payload: &serde_json::Value,
+    mappings: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut keys = HashMap::new();
+    for (key, path) in mappings.iter().take(MAX_CORRELATION_KEYS) {
+        if key.is_empty() || key.len() > MAX_CORRELATION_KEY_LEN {
+            continue;
+        }
+        let mut cursor = payload;
+        let mut found = true;
+        let trimmed = path.trim().trim_start_matches("$.").trim_start_matches('$');
+        for segment in trimmed.split('.').filter(|segment| !segment.is_empty()) {
+            let next = cursor.get(segment).or_else(|| {
+                segment
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| cursor.get(index))
+            });
+            match next {
+                Some(value) => cursor = value,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if !found {
+            continue;
+        }
+        let value = match cursor {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Number(number) => number.to_string(),
+            serde_json::Value::Bool(flag) => flag.to_string(),
+            _ => continue,
+        };
+        if value.is_empty() || value.len() > MAX_CORRELATION_VALUE_LEN {
+            continue;
+        }
+        keys.insert(key.clone(), value);
+    }
+    keys
+}
+
 /// Validates caller-supplied business keys before they are stamped on a run
 /// and propagated through signed tokens.
 pub fn validate_business_keys(keys: &HashMap<String, String>) -> Result<(), String> {

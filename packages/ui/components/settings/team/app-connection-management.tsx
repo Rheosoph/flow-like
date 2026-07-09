@@ -344,6 +344,7 @@ export function AppConnectionManagement({
 
 			{view === "graph" && (
 				<ProcessGraph
+					appId={appId}
 					data={graph.data}
 					cases={cases.data?.cases}
 					casesLoading={cases.isFetching}
@@ -580,7 +581,7 @@ export function AppConnectionManagement({
 								placeholder="Why does this app need access?"
 								value={requestComment}
 								onChange={(e) => setRequestComment(e.target.value)}
-								className="min-h-[60px] resize-none"
+								className="min-h-15 resize-none"
 							/>
 							<p className="text-xs text-muted-foreground">
 								Optional message shown to the other app&apos;s admins

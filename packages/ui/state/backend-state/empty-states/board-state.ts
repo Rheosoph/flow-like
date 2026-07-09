@@ -89,6 +89,7 @@ export class EmptyBoardState implements IBoardState {
 		lastMeta?: ILogMetadata,
 		offset?: number,
 		limit?: number,
+		includeNodes?: boolean,
 	): Promise<ILogMetadata[]> {
 		throw new Error("Method not implemented.");
 	}

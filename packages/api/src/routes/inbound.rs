@@ -1720,6 +1720,19 @@ async fn dispatch_event_collect(
     if correlation.trace_id.is_none() {
         correlation.trace_id = parent_run_id.clone().or_else(|| Some(run_id.clone()));
     }
+    // Auto-extract business keys via the event's correlation mappings.
+    if let (Some(mappings), Some(payload_value)) = (
+        core_event
+            .correlation_mappings
+            .as_ref()
+            .filter(|mappings| !mappings.is_empty()),
+        payload.as_ref(),
+    ) {
+        let extracted = crate::correlation::extract_mapped_keys(payload_value, mappings);
+        if !extracted.is_empty() {
+            correlation = correlation.with_keys(&extracted);
+        }
+    }
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
