@@ -15,6 +15,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 	EmptyState,
+	ExploreHubHeader,
 	Input,
 	type InstalledPackage,
 	Label,
@@ -1171,12 +1172,10 @@ function PackagesHub() {
 	return (
 		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 			<div className="mx-auto w-full max-w-7xl space-y-6">
-				<div className="space-y-2">
-					<h1 className="text-2xl font-semibold tracking-tight">Packages</h1>
-					<p className="text-sm text-muted-foreground">
-						Discover, install, and manage WASM node packages
-					</p>
-				</div>
+				<ExploreHubHeader
+					active="packages"
+					subtitle="Discover, install, and manage WASM node packages."
+				/>
 
 				<Tabs value={tab} onValueChange={setTab}>
 					<TabsList>

@@ -22,7 +22,6 @@ import {
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
 	AnimatedLibraryIcon,
-	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
@@ -138,7 +137,7 @@ const data = {
 			items: [],
 		},
 		{
-			title: "Explore Apps",
+			title: "Explore",
 			url: "/store/explore/apps",
 			icon: AnimatedExploreAppsIcon,
 			isActive: false,
@@ -188,12 +187,6 @@ const data = {
 		},
 	],
 	navDev: [
-		{
-			title: "Package Registry",
-			url: "/store/packages",
-			icon: AnimatedPackageIcon,
-			isActive: false,
-		},
 		{
 			title: "Developer Tools",
 			url: "/developer/new",

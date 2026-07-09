@@ -57,6 +57,7 @@ export * from "./separator";
 export * from "./share-button";
 export * from "./sheet";
 export * from "./sidebar";
+export * from "./scroll-rail";
 export * from "./skeleton";
 export * from "./slider";
 export * from "./sonner";

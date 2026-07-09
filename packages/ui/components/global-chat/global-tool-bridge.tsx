@@ -332,8 +332,9 @@ function routeForView(args: Record<string, unknown>): string {
 		case "library":
 			return "/library";
 		case "store":
-		case "packages":
 			return "/store/explore/apps";
+		case "packages":
+			return "/store/packages";
 		case "settings":
 			return "/settings";
 		case "profile":

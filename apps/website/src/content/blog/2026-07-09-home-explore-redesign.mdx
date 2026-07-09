@@ -1,0 +1,40 @@
+---
+title: "Ask First, Browse Better: The New Home & Explore"
+description: "The home screen is now built around FlowPilot, categories are first-class, and apps and packages live in one Explore hub — plus a long list of quiet fixes."
+date: 2026-07-09
+tags: ["ux", "redesign", "home", "explore", "flowpilot"]
+cover: "/images/product/ChatUI.webp"
+draft: true
+---
+
+We spent the last weeks simplifying how you get around Flow-Like. Not a new feature drop this time — a rethink of the two surfaces you touch most: the home screen and Explore.
+
+## The home screen starts with a question
+
+The best part of the old landing page was the FlowPilot bubble, so we built the whole page around it. You land, you type what you want to build, and FlowPilot takes it from there — creating apps, finding packages, or just navigating you to the right place.
+
+Everything below the bubble got rebuilt:
+
+- **Browse by category.** A rail of all app categories sits right under the chat — each with its own color and icon, one click away from a filtered Explore view. As the catalog grows into very different corners (games next to BI dashboards next to health trackers), this is how you find your corner fast.
+- **Rails that actually scroll.** Curated sections are now proper horizontal rails with snap scrolling, edge fades, and hover arrows — no more squeezed or clipped cards.
+- **Top charts.** Ranked lists, store-style: the most popular apps per category and the newest arrivals, numbered so you can see at a glance what the community is using.
+- **A calmer page.** Sections reveal as you scroll (and stay put if you prefer reduced motion), the newest release gets a proper spotlight, and if our content CDN is unreachable your library and community apps still render instead of a blank error page.
+
+## One Explore, not three entry points
+
+Community apps and the WASM package registry used to be two separate sidebar entries backed by two nearly identical browse pages. They're now one **Explore** hub with a simple switch: **Apps | Packages**. Same search-and-category mental model on both sides, one place in the sidebar, and every existing deep link still works.
+
+The apps side got the bigger overhaul:
+
+- Every category is filterable now (it used to be 9 of 21), with color-coded chips that match the rest of the app.
+- The default view is a set of category rails in a stable, curated order — no more sections reshuffling under your cursor when more results load.
+- Filters live in the URL. `?category=Games&sort=newest` is a link you can share, bookmark, or let FlowPilot navigate to.
+- Search doesn't lose focus mid-keystroke anymore. Yes, that was a thing. We're sorry.
+
+## The quiet part
+
+Redesigns are a good excuse to pay down debt. Along the way we fixed a cache-key collision that could show you the wrong search results, "View all" links that led to pages that didn't exist, loading skeletons that never resolved when an app had been unpublished, phantom "No results found" flashes while results were still loading, and a store page that recommended the app you were already looking at — to itself. There are more; the changelog has the full list.
+
+## Tell us what you think
+
+This one is about feel as much as function, and feel is subjective. If the new home helps you find things faster — or if something got worse for you — we want to hear it on [Discord](https://discord.gg/KTWMrS2). The next iteration is already sketched: better package discovery inside the hub and smarter, personalized rails.

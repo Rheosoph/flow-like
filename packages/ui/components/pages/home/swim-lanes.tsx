@@ -1,10 +1,19 @@
 "use client";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { ArrowRight, ExternalLink } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
+import { ArrowRight, ArrowUpRight, CloudOff } from "lucide-react";
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Fragment, type ReactNode, useMemo } from "react";
 import { useInvoke } from "../../../hooks";
 import type { IApp, IAppCategory, IMetadata } from "../../../lib";
+import { formatAppCategory } from "../../../lib/app-category";
+import {
+	APP_CATEGORY_ORDER,
+	CATEGORY_ICONS,
+	categoryColor,
+} from "../../../lib/category-meta";
 import { IAppSearchSort } from "../../../lib/schema/app/app-search-query";
 import { type IBackendState, useBackend } from "../../../state/backend-state";
 import {
@@ -13,6 +22,7 @@ import {
 	AlertTitle,
 	BitCard,
 	DynamicImage,
+	ScrollRail,
 	Skeleton,
 } from "../../ui";
 import { AppCard } from "../../ui/app-card";
@@ -37,6 +47,8 @@ export interface ISwimlaneItem {
 export interface ISearchQuery {
 	id?: string;
 	type: "search";
+	/** Optional column heading, e.g. the category name in a top-charts lane. */
+	title?: string;
 	query?: string;
 	limit?: number;
 	offset?: number;
@@ -56,6 +68,20 @@ export interface ISwimlane {
 }
 
 const swimlanesUrl = "https://cdn.flow-like.com/swimlanes.json";
+
+const isExternalLink = (href?: string) =>
+	typeof href === "string" && /^(https?:|mailto:|tel:)/.test(href);
+
+// The CDN config may lag behind the app: rewrite links to routes that no
+// longer exist onto their current equivalents instead of a 404.
+const LEGACY_LINKS: Record<string, string> = {
+	"/apps/featured": "/store/explore/apps",
+	"/apps/recent": "/store/explore/apps?sort=newest",
+	"/store": "/store/explore/apps",
+	"/store?sort=newest": "/store/explore/apps?sort=newest",
+};
+
+const normalizeLink = (href: string) => LEGACY_LINKS[href] ?? href;
 
 function useSwimlanes() {
 	return useQuery<ISwimlane[]>({
@@ -94,79 +120,59 @@ export function HomeSwimlanes() {
 	]);
 	const router = useRouter();
 	const { data, error } = useSwimlanes();
-	const recentLibraryApps = (apps.data ?? [])
-		.toSorted(
-			([leftApp], [rightApp]) =>
-				(rightApp.updated_at?.secs_since_epoch ?? 0) -
-				(leftApp.updated_at?.secs_since_epoch ?? 0),
-		)
-		.slice(0, 6);
-
-	if (error) {
-		return (
-			<div className="items-center w-full p-4 grid grid-cols-6 justify-start gap-2 min-h-[60dvh]">
-				<div className="col-span-6">
-					<Alert variant="destructive">
-						<ExternalLink className="h-4 w-4" />
-						<AlertTitle>Connection Error</AlertTitle>
-						<AlertDescription>
-							Failed to load swimlanes. Please check your internet connection or
-							try again later.
-							{error.message && (
-								<details className="mt-2">
-									<summary className="cursor-pointer text-sm opacity-80 hover:opacity-100">
-										Technical details
-									</summary>
-									<code className="text-xs bg-background/50 px-2 py-1 rounded mt-1 block">
-										{error.message}
-									</code>
-								</details>
-							)}
-						</AlertDescription>
-					</Alert>
-				</div>
-				<Skeleton className="col-span-6 h-full min-h-[30dvh]" />
-				<Skeleton className="col-span-3 h-full min-h-[20dvh]" />
-				<Skeleton className="col-span-3 h-full" />
-				<Skeleton className="col-span-2 h-full" />
-				<Skeleton className="col-span-2 h-full" />
-				<Skeleton className="col-span-2 h-full" />
-			</div>
-		);
-	}
-
-	if (!data)
-		return (
-			<div className="items-center w-full p-4 grid grid-cols-6 justify-start gap-2 min-h-[60dvh]">
-				<Skeleton className="col-span-6 h-full min-h-[30dvh]" />
-				<Skeleton className="col-span-3 h-full min-h-[20dvh]" />
-				<Skeleton className="col-span-3 h-full" />
-				<Skeleton className="col-span-2 h-full" />
-				<Skeleton className="col-span-2 h-full" />
-				<Skeleton className="col-span-2 h-full" />
-			</div>
-		);
+	const ownedIds = useMemo(
+		() => new Set((apps.data ?? []).map(([app]) => app.id)),
+		[apps.data],
+	);
+	const recentLibraryApps = useMemo(
+		() =>
+			(apps.data ?? [])
+				.toSorted(
+					([leftApp], [rightApp]) =>
+						(rightApp.updated_at?.secs_since_epoch ?? 0) -
+						(leftApp.updated_at?.secs_since_epoch ?? 0),
+				)
+				.slice(0, 6),
+		[apps.data],
+	);
 
 	return (
 		// Flow content (the PAGE scrolls, not this block). Gradient veil instead of a solid slab:
 		// the hero's animated background bleeds softly into the content area (no hard seam), with
 		// the fade completing within the first ~14rem so everything below reads on solid ground.
 		<div className="w-full bg-linear-to-b from-background/0 via-background/90 via-[8rem] to-background to-[14rem] flex flex-col items-center">
-			<div className="w-full space-y-8 p-6 max-w-450">
+			<div className="w-full space-y-12 px-6 pt-2 pb-16 max-w-450">
+				<CategoryRail />
+
+				{error && !data && (
+					<Alert variant="destructive">
+						<CloudOff className="h-4 w-4" />
+						<AlertTitle>Couldn’t load highlights</AlertTitle>
+						<AlertDescription>
+							The curated sections are unavailable right now — check your
+							connection or try again later. Your library and community apps
+							below still work.
+						</AlertDescription>
+					</Alert>
+				)}
+
+				{!error && !data && <LanesSkeleton />}
+
 				{data?.map((swimlane) => (
 					<SwimlaneSection
 						key={swimlane.id}
 						swimlane={swimlane}
-						apps={apps}
+						ownedIds={ownedIds}
 						router={router}
 					/>
 				))}
+
 				<LibraryAppsSection
 					recentLibraryApps={recentLibraryApps}
 					router={router}
 				/>
 				<LatestUserAppsSection
-					apps={apps}
+					ownedIds={ownedIds}
 					latestApps={latestApps}
 					router={router}
 				/>
@@ -174,6 +180,123 @@ export function HomeSwimlanes() {
 		</div>
 	);
 }
+
+// ─── Section chrome ──────────────────────────────────────────────────────────
+
+function Reveal({ children }: Readonly<{ children: ReactNode }>) {
+	const reducedMotion = useReducedMotion();
+
+	if (reducedMotion) return <section>{children}</section>;
+
+	return (
+		<motion.section
+			initial={{ opacity: 0, y: 24 }}
+			whileInView={{ opacity: 1, y: 0 }}
+			viewport={{ once: true, margin: "-40px" }}
+			transition={{ duration: 0.5, ease: [0.21, 0.47, 0.32, 0.98] }}
+		>
+			{children}
+		</motion.section>
+	);
+}
+
+function SectionHeader({
+	title,
+	subtitle,
+	href,
+	linkLabel = "View all",
+}: Readonly<{
+	title: string;
+	subtitle?: string;
+	href?: string;
+	linkLabel?: string;
+}>) {
+	const external = isExternalLink(href);
+	const linkClass =
+		"group/link flex shrink-0 items-center gap-1.5 rounded-full border border-border/40 bg-card/60 px-4 py-1.5 text-sm font-medium text-muted-foreground transition-all hover:border-primary/30 hover:text-foreground hover:shadow-sm";
+	const linkContent = (
+		<>
+			{linkLabel}
+			{external ? (
+				<ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover/link:translate-x-0.5 group-hover/link:-translate-y-0.5" />
+			) : (
+				<ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/link:translate-x-0.5" />
+			)}
+		</>
+	);
+
+	return (
+		<div className="mb-5 flex items-end justify-between gap-4">
+			<div className="min-w-0 space-y-1">
+				<h2 className="text-xl md:text-2xl font-bold tracking-tight text-foreground">
+					{title}
+				</h2>
+				{subtitle && (
+					<p className="text-sm text-muted-foreground">{subtitle}</p>
+				)}
+			</div>
+			{href &&
+				(external ? (
+					<a
+						href={href}
+						target="_blank"
+						rel="noopener noreferrer external"
+						data-open-external="true"
+						className={linkClass}
+					>
+						{linkContent}
+					</a>
+				) : (
+					<Link href={normalizeLink(href)} className={linkClass}>
+						{linkContent}
+					</Link>
+				))}
+		</div>
+	);
+}
+
+// ─── Category rail ───────────────────────────────────────────────────────────
+
+function CategoryRail() {
+	return (
+		<Reveal>
+			<SectionHeader
+				title="Browse by category"
+				subtitle="Find the right app for every job."
+				href="/store/explore/apps"
+				linkLabel="Explore all"
+			/>
+			<ScrollRail>
+				{APP_CATEGORY_ORDER.map((category) => {
+					const label = formatAppCategory(category);
+					const color = categoryColor(category);
+					const Icon = CATEGORY_ICONS[category];
+					return (
+						<Link
+							key={category}
+							href={`/store/explore/apps?category=${category}`}
+							className="group flex shrink-0 snap-start items-center gap-2.5 rounded-full border border-border/40 bg-card/70 py-2 pl-2 pr-4 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
+						>
+							<span
+								className="flex h-7 w-7 items-center justify-center rounded-full transition-transform group-hover:scale-110"
+								style={{
+									backgroundColor: `color-mix(in oklab, ${color} 16%, transparent)`,
+								}}
+							>
+								<Icon className="h-3.5 w-3.5" style={{ color }} />
+							</span>
+							<span className="text-sm font-medium text-foreground/90 whitespace-nowrap">
+								{label}
+							</span>
+						</Link>
+					);
+				})}
+			</ScrollRail>
+		</Reveal>
+	);
+}
+
+// ─── Library / community sections ────────────────────────────────────────────
 
 function LibraryAppsSection({
 	recentLibraryApps,
@@ -187,26 +310,13 @@ function LibraryAppsSection({
 	}
 
 	return (
-		<section className="space-y-4">
-			<div className="flex items-center justify-between gap-4">
-				<div className="space-y-1">
-					<h2 className="text-2xl font-bold text-foreground">
-						From Your Library
-					</h2>
-					<p className="text-muted-foreground">
-						Jump back into the apps you updated most recently.
-					</p>
-				</div>
-				<a href="/library">
-					<button
-						type="button"
-						className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
-					>
-						Open Library
-						<ArrowRight className="w-4 h-4" />
-					</button>
-				</a>
-			</div>
+		<Reveal>
+			<SectionHeader
+				title="From your library"
+				subtitle="Jump back into the apps you updated most recently."
+				href="/library"
+				linkLabel="Open library"
+			/>
 			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 				{recentLibraryApps.map(([app, metadata]) => (
 					<AppCard
@@ -221,16 +331,16 @@ function LibraryAppsSection({
 					/>
 				))}
 			</div>
-		</section>
+		</Reveal>
 	);
 }
 
 function LatestUserAppsSection({
-	apps,
+	ownedIds,
 	latestApps,
 	router,
 }: Readonly<{
-	apps: IAppQuery;
+	ownedIds: Set<string>;
 	latestApps: IAppQuery;
 	router: AppRouterInstance;
 }>) {
@@ -240,20 +350,16 @@ function LatestUserAppsSection({
 		}
 
 		return (
-			<section className="space-y-4">
-				<div className="space-y-1">
-					<h2 className="text-2xl font-bold text-foreground">
-						Latest Community Apps
-					</h2>
-					<p className="text-muted-foreground">
-						Freshly published apps from the community.
-					</p>
-				</div>
+			<section>
+				<SectionHeader
+					title="Latest community apps"
+					subtitle="Freshly published apps from the community."
+				/>
 				<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-					{Array.from({ length: 6 }).map((_, index) => (
+					{["a", "b", "c", "d", "e", "f"].map((slot) => (
 						<Skeleton
-							key={`latest-app-skeleton-${index}`}
-							className="h-93.75 w-full rounded-lg"
+							key={`latest-app-skeleton-${slot}`}
+							className="h-93.75 w-full rounded-xl"
 						/>
 					))}
 				</div>
@@ -262,30 +368,16 @@ function LatestUserAppsSection({
 	}
 
 	return (
-		<section className="space-y-4">
-			<div className="flex items-center justify-between gap-4">
-				<div className="space-y-1">
-					<h2 className="text-2xl font-bold text-foreground">
-						Latest Community Apps
-					</h2>
-					<p className="text-muted-foreground">
-						Freshly published apps from the community.
-					</p>
-				</div>
-				<a href="/store?sort=newest">
-					<button
-						type="button"
-						className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
-					>
-						View All
-						<ArrowRight className="w-4 h-4" />
-					</button>
-				</a>
-			</div>
+		<Reveal>
+			<SectionHeader
+				title="Latest community apps"
+				subtitle="Freshly published apps from the community."
+				href="/store/explore/apps?sort=newest"
+			/>
 			<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 				{latestApps.data.map(([app, metadata]) => {
-					const isOwned =
-						apps.data?.some(([ownedApp]) => ownedApp.id === app.id) ?? false;
+					const isOwned = ownedIds.has(app.id);
+					const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
 
 					return (
 						<AppCard
@@ -295,282 +387,333 @@ function LatestUserAppsSection({
 							metadata={metadata}
 							variant="extended"
 							className="w-full h-full"
-							onClick={() =>
-								router.push(
-									isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`,
-								)
-							}
-							href={isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`}
+							onClick={() => router.push(href)}
+							href={href}
 						/>
 					);
 				})}
 			</div>
-		</section>
+		</Reveal>
 	);
 }
+
+// ─── CDN swimlanes ───────────────────────────────────────────────────────────
 
 function SwimlaneSection({
 	swimlane,
-	apps,
+	ownedIds,
 	router,
 }: Readonly<{
 	swimlane: ISwimlane;
-	apps: IAppQuery;
+	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
-	const getGridCols = () => {
-		switch (swimlane.size) {
-			case "large":
-				return "grid-cols-1 lg:grid-cols-2";
-			case "medium":
-				return "grid-cols-1 md:grid-cols-2 xl:grid-cols-3";
-			case "small":
-				return "grid-cols-1 md:grid-cols-2 lg:grid-cols-3";
-		}
-	};
-
-	const getItemSize = () => {
-		switch (swimlane.size) {
-			case "large":
-				return "extended";
-			case "medium":
-			case "small":
-				return "small";
-		}
-	};
+	if (!swimlane.items?.length) return null;
 
 	return (
-		<section className="space-y-4">
-			<SwimlaneHeader swimlane={swimlane} apps={apps} />
-			<div className={`grid ${getGridCols()} gap-4`}>
-				{swimlane.items?.map((item, index) => (
-					<SwimlaneSlot
-						key={`slot-${index}`}
-						items={Array.isArray(item) ? item : [item]}
-						size={swimlane.size}
-						variant={getItemSize()}
-						apps={apps}
-						router={router}
-					/>
-				))}
-			</div>
-		</section>
+		<Reveal>
+			<SectionHeader
+				title={swimlane.title}
+				subtitle={swimlane.subtitle}
+				href={swimlane.viewAllLink}
+			/>
+			{swimlane.size === "small" ? (
+				<SmallLane swimlane={swimlane} ownedIds={ownedIds} router={router} />
+			) : (
+				<CardLane swimlane={swimlane} ownedIds={ownedIds} router={router} />
+			)}
+		</Reveal>
 	);
 }
 
-function SwimlaneSlot({
-	items,
-	size,
-	variant,
-	apps,
+/**
+ * Large/medium lanes: a responsive grid of feature cards. Slots holding
+ * multiple items (arrays or expanded search results) become a snap rail
+ * inside their cell so nothing is squeezed or clipped.
+ */
+function CardLane({
+	swimlane,
+	ownedIds,
 	router,
 }: Readonly<{
-	items: (ISwimlaneItem | ISearchQuery)[];
-	size: "large" | "medium" | "small";
-	variant: "extended" | "small";
-	apps: IAppQuery;
+	swimlane: ISwimlane;
+	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
-	if (items.length === 1) {
-		return (
-			<SwimlaneItemOrSearch
-				item={items[0]}
-				size={size}
-				variant={variant}
-				apps={apps}
-				router={router}
-			/>
-		);
-	}
-
-	const isHorizontal = size === "large" || size === "medium";
-	const scrollClass = isHorizontal
-		? "flex gap-3 overflow-hidden scrollbar-hide pb-2 w-full flex-row justify-stretch"
-		: "flex flex-col gap-3 overflow-y-auto scrollbar-hide max-h-[600px]";
+	const isLarge = swimlane.size === "large";
+	const gridClass = isLarge
+		? "grid grid-cols-1 lg:grid-cols-2 gap-4"
+		: "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4";
+	const variant = isLarge ? "extended" : "small";
 
 	return (
-		<div className={scrollClass}>
-			{items.map((item) => (
-				<div key={item.id} className={isHorizontal ? "grow w-full" : ""}>
-					<SwimlaneItemOrSearch
-						item={item}
-						size={size}
+		<div className={gridClass}>
+			{swimlane.items?.map((slot, index) => {
+				const key = `${swimlane.id}-slot-${index}`;
+				if (Array.isArray(slot)) {
+					return (
+						<ScrollRail key={key}>
+							{slot.map((item, itemIndex) => (
+								<div
+									key={item.id ?? `${key}-${itemIndex}`}
+									className="w-[85%] min-w-64 shrink-0 snap-start sm:w-[70%]"
+								>
+									<SwimlaneItem
+										item={item}
+										size={swimlane.size}
+										variant={variant}
+										ownedIds={ownedIds}
+										router={router}
+									/>
+								</div>
+							))}
+						</ScrollRail>
+					);
+				}
+				if (slot.type === "search") {
+					return (
+						<SearchCards
+							key={key}
+							searchQuery={slot}
+							size={swimlane.size}
+							variant={variant}
+							ownedIds={ownedIds}
+							router={router}
+						/>
+					);
+				}
+				return (
+					<SwimlaneItem
+						key={slot.id ?? key}
+						item={slot}
+						size={swimlane.size}
 						variant={variant}
-						apps={apps}
+						ownedIds={ownedIds}
 						router={router}
 					/>
-				</div>
-			))}
+				);
+			})}
 		</div>
 	);
 }
 
-function SwimlaneItemOrSearch({
-	item,
-	size,
-	variant,
-	apps,
+/**
+ * Small lanes: static items render as a compact card grid; search slots render
+ * as ranked top-list columns (the classic store chart), numbered across slots
+ * via their query offsets.
+ */
+function SmallLane({
+	swimlane,
+	ownedIds,
 	router,
 }: Readonly<{
-	item: ISwimlaneItem | ISearchQuery;
-	size: "large" | "medium" | "small";
-	variant: "extended" | "small";
-	apps: IAppQuery;
+	swimlane: ISwimlane;
+	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
-	if (item.type === "search") {
-		return (
-			<SearchResults
-				searchQuery={item}
-				size={size}
-				variant={variant}
-				apps={apps}
-				router={router}
-			/>
-		);
-	}
-
 	return (
-		<SwimlaneItem
-			item={item}
-			size={size}
-			variant={variant}
-			apps={apps}
-			router={router}
-		/>
+		<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-4">
+			{swimlane.items?.map((slot, index) => {
+				const key = `${swimlane.id}-slot-${index}`;
+				if (!Array.isArray(slot) && slot.type === "search") {
+					return (
+						<RankedColumn
+							key={key}
+							searchQuery={slot}
+							ownedIds={ownedIds}
+							router={router}
+						/>
+					);
+				}
+				const items = Array.isArray(slot) ? slot : [slot];
+				return (
+					<Fragment key={key}>
+						{items.map((item, itemIndex) => (
+							<SwimlaneItem
+								key={item.id ?? `${key}-${itemIndex}`}
+								item={item}
+								size="small"
+								variant="small"
+								ownedIds={ownedIds}
+								router={router}
+							/>
+						))}
+					</Fragment>
+				);
+			})}
+		</div>
 	);
 }
 
-function SearchResults({
+const RANKED_FALLBACK_LIMIT = 5;
+
+function useLaneSearch(searchQuery: ISearchQuery, limit: number) {
+	const backend = useBackend();
+	// The slot `id` is a UI identity, NOT the searchApps app-id filter.
+	return useInvoke(backend.appState.searchApps, backend.appState, [
+		undefined,
+		searchQuery.query,
+		undefined,
+		searchQuery.category,
+		searchQuery.author,
+		searchQuery.sort,
+		searchQuery.tag,
+		searchQuery.offset,
+		searchQuery.limit ?? limit,
+	]);
+}
+
+function RankedColumn({
+	searchQuery,
+	ownedIds,
+	router,
+}: Readonly<{
+	searchQuery: ISearchQuery;
+	ownedIds: Set<string>;
+	router: AppRouterInstance;
+}>) {
+	const results = useLaneSearch(searchQuery, RANKED_FALLBACK_LIMIT);
+	const rankOffset = searchQuery.offset ?? 0;
+
+	if (!results.data) {
+		if (!results.isFetching) return null;
+		return (
+			<div className="flex flex-col gap-2">
+				<RankedColumnHeader searchQuery={searchQuery} />
+				{Array.from({
+					length: searchQuery.limit ?? RANKED_FALLBACK_LIMIT,
+				}).map((_, index) => (
+					<div
+						key={`rank-skel-${rankOffset + index}`}
+						className="flex items-center gap-3"
+					>
+						<span className="w-7 text-center text-lg font-bold tabular-nums text-muted-foreground/20">
+							{rankOffset + index + 1}
+						</span>
+						<Skeleton className="h-[74px] flex-1 rounded-xl" />
+					</div>
+				))}
+			</div>
+		);
+	}
+
+	if (results.data.length === 0) return null;
+
+	return (
+		<div className="flex flex-col gap-2">
+			<RankedColumnHeader searchQuery={searchQuery} />
+			{results.data.map(([app, metadata], index) => {
+				const isOwned = ownedIds.has(app.id);
+				const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
+				return (
+					<div key={app.id} className="flex min-w-0 items-center gap-3">
+						<span className="w-7 shrink-0 text-center text-lg font-bold tabular-nums text-muted-foreground/40">
+							{rankOffset + index + 1}
+						</span>
+						<AppCard
+							isOwned={isOwned}
+							app={app}
+							metadata={metadata}
+							variant="small"
+							className="flex-1 min-w-0"
+							onClick={() => router.push(href)}
+							href={href}
+						/>
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+function RankedColumnHeader({
+	searchQuery,
+}: Readonly<{ searchQuery: ISearchQuery }>) {
+	if (!searchQuery.title) return null;
+
+	return (
+		<div className="flex items-center gap-2 pb-1">
+			{searchQuery.category && (
+				<span
+					className="h-2 w-2 shrink-0 rounded-full"
+					style={{ backgroundColor: categoryColor(searchQuery.category) }}
+				/>
+			)}
+			<h3 className="text-sm font-semibold tracking-tight text-foreground">
+				{searchQuery.title}
+			</h3>
+		</div>
+	);
+}
+
+const SEARCH_CARD_LIMITS = { large: 3, medium: 4, small: 5 } as const;
+
+/** Search slot inside a card lane: results become a snap rail of app cards. */
+function SearchCards({
 	searchQuery,
 	size,
 	variant,
-	apps,
+	ownedIds,
 	router,
 }: Readonly<{
 	searchQuery: ISearchQuery;
 	size: "large" | "medium" | "small";
 	variant: "extended" | "small";
-	apps: IAppQuery;
+	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
-	const backend = useBackend();
-	const searchResults = useInvoke(
-		backend.appState.searchApps,
-		backend.appState,
-		[
-			searchQuery.id,
-			searchQuery.query,
-			undefined,
-			searchQuery.category,
-			searchQuery.author,
-			searchQuery.sort,
-			searchQuery.tag,
-			searchQuery.offset,
-			searchQuery.limit,
-		],
-	);
+	const results = useLaneSearch(searchQuery, SEARCH_CARD_LIMITS[size]);
 
-	const getMaxSearchItems = () => {
-		switch (size) {
-			case "large":
-				return 3;
-			case "medium":
-				return 4;
-			case "small":
-				return 5;
-		}
-	};
-
-	if (!searchResults.data || searchResults.data.length === 0) {
+	if (!results.data) {
+		if (!results.isFetching) return null;
 		return (
-			<div className="flex items-center justify-center h-32 text-muted-foreground">
-				<span>No results found</span>
-			</div>
+			<Skeleton
+				className={`w-full rounded-xl ${variant === "extended" ? "h-93.75" : "h-[74px]"}`}
+			/>
 		);
 	}
 
-	const searchItems = searchResults.data
-		.slice(0, getMaxSearchItems())
-		.map(([app, metadata], index) => ({
-			id: `search-${searchQuery.id}-${app.id}-${index}`,
-			type: "app" as const,
-			appId: app.id,
-		}));
-
-	const isHorizontal = size === "large" || size === "medium";
-	const scrollClass = isHorizontal
-		? "flex gap-3 overflow-hidden scrollbar-hide pb-2 w-full flex-row justify-stretch"
-		: "flex flex-col gap-3 overflow-y-auto scrollbar-hide max-h-[600px]";
+	if (results.data.length === 0) return null;
 
 	return (
-		<div className={scrollClass}>
-			{searchItems.map((item) => (
-				<div key={item.id} className={isHorizontal ? "grow w-full" : ""}>
-					<SwimlaneItem
-						item={item}
-						size={size}
-						variant={variant}
-						apps={apps}
-						router={router}
-					/>
-				</div>
-			))}
-		</div>
-	);
-}
-
-function SwimlaneHeader({
-	swimlane,
-	apps,
-}: Readonly<{ swimlane: ISwimlane; apps: IAppQuery }>) {
-	const isExternal = (href?: string) =>
-		typeof href === "string" && /^(https?:|mailto:|tel:)/.test(href);
-	return (
-		<div className="flex items-center justify-between">
-			<div className="space-y-1">
-				<h2 className="text-2xl font-bold text-foreground">{swimlane.title}</h2>
-				{swimlane.subtitle && (
-					<p className="text-muted-foreground">{swimlane.subtitle}</p>
-				)}
-			</div>
-			{swimlane.viewAllLink && (
-				<a
-					href={swimlane.viewAllLink}
-					target={isExternal(swimlane.viewAllLink) ? "_blank" : undefined}
-					rel={
-						isExternal(swimlane.viewAllLink)
-							? "noopener noreferrer external"
-							: undefined
-					}
-					data-open-external={
-						isExternal(swimlane.viewAllLink) ? "true" : undefined
-					}
-				>
-					<button
-						type="button"
-						className="flex items-center gap-2 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
+		<ScrollRail>
+			{results.data.map(([app, metadata]) => {
+				const isOwned = ownedIds.has(app.id);
+				const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
+				return (
+					<div
+						key={app.id}
+						className="w-[85%] min-w-64 shrink-0 snap-start sm:w-[70%]"
 					>
-						View All
-						<ArrowRight className="w-4 h-4" />
-					</button>
-				</a>
-			)}
-		</div>
+						<AppCard
+							isOwned={isOwned}
+							app={app}
+							metadata={metadata}
+							variant={variant}
+							className="w-full h-full"
+							onClick={() => router.push(href)}
+							href={href}
+						/>
+					</div>
+				);
+			})}
+		</ScrollRail>
 	);
 }
+
+// ─── Item renderers ──────────────────────────────────────────────────────────
 
 function SwimlaneItem({
 	item,
 	size,
 	variant,
-	apps,
+	ownedIds,
 	router,
 }: Readonly<{
 	item: ISwimlaneItem;
 	size: "large" | "medium" | "small";
 	variant: "extended" | "small";
-	apps: IAppQuery;
+	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
 	const backend = useBackend();
@@ -581,7 +724,7 @@ function SwimlaneItem({
 				appId={item.appId}
 				variant={variant}
 				backend={backend}
-				apps={apps}
+				ownedIds={ownedIds}
 				router={router}
 			/>
 		);
@@ -608,70 +751,95 @@ function StaticCard({
 	size: "large" | "medium" | "small";
 }>) {
 	const isLarge = size === "large";
-	const cardHeight = isLarge ? "h-[375px]" : "min-h-[200px]";
-	const isExternal =
-		typeof item.link === "string" && /^(https?:|mailto:|tel:)/.test(item.link);
+	const cardHeight = isLarge ? "h-[375px]" : "min-h-[210px]";
+	const external = isExternalLink(item.link);
 
-	return (
-		<a
-			href={item.link}
-			target={isExternal ? "_blank" : "_self"}
-			rel={isExternal ? "noopener noreferrer external" : undefined}
-			data-open-external={isExternal ? "true" : undefined}
-			className={`group relative overflow-hidden rounded-xl border border-border/40 bg-card/80 backdrop-blur-sm shadow-sm hover:shadow-xl hover:border-primary/30 transition-all duration-300 ${cardHeight} w-full`}
-		>
+	const body = (
+		<>
 			<div className="absolute inset-0">
 				{item.image ? (
 					<img
 						src={item.image}
-						alt={item.title}
-						className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+						alt=""
+						loading="lazy"
+						decoding="async"
+						className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
 					/>
 				) : (
 					<div
-						className={`w-full h-full bg-linear-to-br ${
+						className={`h-full w-full bg-linear-to-br ${
 							item.gradient || "from-primary/20 to-primary/40"
 						}`}
 					/>
 				)}
-				<div className="absolute inset-0 bg-linear-to-t from-black/20 via-black/5 dark:from-black/60 dark:via-black/20 to-transparent" />
+				<div className="absolute inset-0 bg-linear-to-t from-black/70 via-black/25 to-black/5 transition-opacity duration-300 group-hover:opacity-90" />
 			</div>
 
-			<div className="relative z-10 flex flex-col justify-between h-full p-6">
-				{item.badge && (
-					<div className="self-start">
-						<div className="bg-white/90 backdrop-blur-xs text-gray-900 rounded-full px-3 py-1 text-xs font-bold shadow-lg">
-							{item.badge}
-						</div>
+			<div className="relative z-10 flex h-full flex-col justify-between p-6">
+				{item.badge ? (
+					<div className="self-start rounded-full border border-white/25 bg-white/15 px-3 py-1 text-xs font-semibold text-white shadow-lg backdrop-blur-md">
+						{item.badge}
 					</div>
+				) : (
+					<span />
 				)}
 
-				<div className="space-y-3">
-					<div className="flex items-center gap-2">
+				<div className="space-y-2.5">
+					<div className="flex items-center gap-2.5">
 						{item.icon && (
-							<div className="p-2 bg-white/20 backdrop-blur-xs rounded-full text-white">
-								<DynamicImage url={item.icon} className="w-5 h-5 bg-white" />
+							<div className="rounded-full bg-white/20 p-2 text-white backdrop-blur-sm">
+								<DynamicImage
+									url={item.icon}
+									className="h-4.5 w-4.5 bg-white"
+								/>
 							</div>
 						)}
-						<h3 className="font-bold text-white text-left text-lg leading-tight">
+						<h3
+							className={`text-left font-bold leading-tight text-white ${isLarge ? "text-xl md:text-2xl" : "text-lg"}`}
+						>
 							{item.title}
 						</h3>
 					</div>
 					{item.description && (
-						<p className="text-white/90 text-left text-sm leading-relaxed max-w-md">
+						<p className="max-w-md text-left text-sm leading-relaxed text-white/85">
 							{item.description}
 						</p>
 					)}
+					{item.link && (
+						<div className="flex items-center gap-1.5 pt-1 text-sm font-medium text-white/70 transition-all duration-300 group-hover:gap-2.5 group-hover:text-white">
+							<span>{external ? "Learn more" : "Open"}</span>
+							<ArrowRight className="h-4 w-4" />
+						</div>
+					)}
 				</div>
-
-				{item.link && size === "large" && (
-					<div className="flex items-center gap-2 text-white/80 group-hover:text-white transition-colors">
-						<span className="text-sm font-medium">Learn More</span>
-						<ExternalLink className="w-4 h-4" />
-					</div>
-				)}
 			</div>
-		</a>
+		</>
+	);
+
+	const cardClass = `group relative block overflow-hidden rounded-2xl border border-border/40 bg-card/80 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl ${cardHeight} w-full`;
+
+	if (!item.link) {
+		return <div className={cardClass}>{body}</div>;
+	}
+
+	if (external) {
+		return (
+			<a
+				href={item.link}
+				target="_blank"
+				rel="noopener noreferrer external"
+				data-open-external="true"
+				className={cardClass}
+			>
+				{body}
+			</a>
+		);
+	}
+
+	return (
+		<Link href={normalizeLink(item.link)} className={cardClass}>
+			{body}
+		</Link>
 	);
 }
 
@@ -686,7 +854,8 @@ function BitCardLoading({
 	]);
 
 	if (!bit.data) {
-		return <Skeleton className="w-full h-full rounded-lg" />;
+		if (!bit.isFetching) return null;
+		return <Skeleton className="h-full min-h-[210px] w-full rounded-xl" />;
 	}
 
 	return <BitCard bit={bit.data} wide={false} />;
@@ -696,28 +865,30 @@ function AppCardLoading({
 	appId,
 	variant,
 	backend,
-	apps,
+	ownedIds,
 	router,
 }: Readonly<{
 	appId: string;
 	backend: IBackendState;
 	variant: "small" | "extended";
-	apps: UseQueryResult<[IApp, IMetadata | undefined][], Error>;
+	ownedIds: Set<string>;
 	router: AppRouterInstance;
 }>) {
 	const app = useInvoke(backend.appState.searchApps, backend.appState, [appId]);
 
-	if (!app.data || (app.data?.length ?? 0) <= 0) {
+	if (!app.data || app.data.length === 0) {
+		// A missing app (deleted/unpublished) is terminal — don't animate forever.
+		if (!app.isFetching) return null;
 		return (
 			<Skeleton
-				className={`w-full h-full rounded-lg ${variant === "extended" ? "min-w-72 h-93.75" : "h-15 min-w-1/3 w-full"}`}
+				className={`w-full rounded-xl ${variant === "extended" ? "min-w-72 h-93.75" : "h-[74px]"}`}
 			/>
 		);
 	}
 
-	const meta = app.data[0][1];
-	const data = app.data[0][0];
-	const isOwned = apps.data?.some((a) => a[0].id === data.id) ?? false;
+	const [data, meta] = app.data[0];
+	const isOwned = ownedIds.has(data.id);
+	const href = isOwned ? `/use?id=${data.id}` : `/store?id=${data.id}`;
 
 	return (
 		<AppCard
@@ -725,12 +896,33 @@ function AppCardLoading({
 			app={data}
 			metadata={meta}
 			variant={variant}
-			className={"w-full max-w-full h-full flex grow"}
-			onClick={async () => {
-				if (isOwned) return router.push(`/use?id=${data.id}`);
-				return router.push(`/store?id=${data.id}`);
-			}}
-			href={isOwned ? `/use?id=${data.id}` : `/store?id=${data.id}`}
+			className="w-full max-w-full h-full flex grow"
+			onClick={() => router.push(href)}
+			href={href}
 		/>
+	);
+}
+
+// ─── Skeletons ───────────────────────────────────────────────────────────────
+
+function LanesSkeleton() {
+	return (
+		<div className="space-y-12">
+			<div>
+				<Skeleton className="mb-5 h-7 w-56 rounded" />
+				<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+					<Skeleton className="h-93.75 w-full rounded-2xl" />
+					<Skeleton className="h-93.75 w-full rounded-2xl" />
+				</div>
+			</div>
+			<div>
+				<Skeleton className="mb-5 h-7 w-44 rounded" />
+				<div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+					<Skeleton className="h-[210px] w-full rounded-2xl" />
+					<Skeleton className="h-[210px] w-full rounded-2xl" />
+					<Skeleton className="hidden h-[210px] w-full rounded-2xl xl:block" />
+				</div>
+			</div>
+		</div>
 	);
 }

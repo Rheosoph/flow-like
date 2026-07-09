@@ -33,6 +33,7 @@ import {
 	type GenericFetcher,
 	StorePackageDetail,
 } from "../pages/store/store-package-detail";
+import { ExploreHubHeader } from "./explore-hub-header";
 import { Input } from "../ui/input";
 import type { CompileStatus } from "../ui/package-status-badge";
 import {
@@ -630,12 +631,10 @@ function PageContent({
 	return (
 		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 			<div className="mx-auto w-full max-w-7xl space-y-8">
-				<div className="space-y-2">
-					<h1 className="text-2xl font-semibold tracking-tight">Packages</h1>
-					<p className="text-sm text-muted-foreground">
-						Discover and install WASM node packages
-					</p>
-				</div>
+				<ExploreHubHeader
+					active="packages"
+					subtitle="Discover and install WASM node packages."
+				/>
 				<PackageListContent fetcher={fetcher} auth={auth} />
 			</div>
 		</main>

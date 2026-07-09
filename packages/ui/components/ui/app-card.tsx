@@ -218,6 +218,7 @@ function SmallAppCard({
 >) {
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
 	const { primaryHue, isDark } = useThemeInfo();
+	const [thumbFailed, setThumbFailed] = useState(false);
 	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		if (!onClick || event.defaultPrevented) return;
 		if (event.key === "Enter" || event.key === " ") {
@@ -260,17 +261,20 @@ function SmallAppCard({
 					</div>
 				)}
 				<div className="absolute left-0 top-0 bottom-0 w-32 opacity-20 group-hover:opacity-50 transition-all duration-300 overflow-hidden">
-					<img
-						src={metadata?.thumbnail ?? "/placeholder-thumbnail-small.jpg"}
-						alt={metadata?.name ?? app.id}
-						className="w-full h-full object-cover object-right"
-						width={1280}
-						height={640}
-						loading="lazy"
-						decoding="async"
-						fetchPriority="low"
-					/>
-					{!metadata?.thumbnail &&
+					{!thumbFailed && (
+						<img
+							src={metadata?.thumbnail ?? "/placeholder-thumbnail-small.jpg"}
+							alt={metadata?.name ?? app.id}
+							className="w-full h-full object-cover object-right"
+							width={1280}
+							height={640}
+							loading="lazy"
+							decoding="async"
+							fetchPriority="low"
+							onError={() => setThumbFailed(true)}
+						/>
+					)}
+					{(!metadata?.thumbnail || thumbFailed) &&
 						(() => {
 							const g = hashToGradient(app.id, primaryHue, isDark);
 							return (
@@ -386,6 +390,7 @@ function ExtendedAppCard({
 	const appIcon = metadata?.icon ?? "/app-logo.webp";
 	const hasRating = app.rating_count > 0;
 	const { primaryHue, isDark } = useThemeInfo();
+	const [thumbFailed, setThumbFailed] = useState(false);
 	const showSettingsButton =
 		(onSettingsClick || settingsHref) &&
 		(app.visibility === IAppVisibility.Offline ||
@@ -433,21 +438,24 @@ function ExtendedAppCard({
 					</div>
 				)}
 				<div className="relative w-full h-40 overflow-hidden">
-					<motion.img
-						className="absolute inset-0 w-full h-full object-cover "
-						src={metadata?.thumbnail ?? "/placeholder-thumbnail.webp"}
-						alt={appName}
-						width={1280}
-						height={640}
-						loading="lazy"
-						decoding="async"
-						fetchPriority="low"
-						variants={{
-							hover: { scale: 1.02 },
-						}}
-						transition={{ type: "spring", stiffness: 300 }}
-					/>
-					{!metadata?.thumbnail &&
+					{!thumbFailed && (
+						<motion.img
+							className="absolute inset-0 w-full h-full object-cover "
+							src={metadata?.thumbnail ?? "/placeholder-thumbnail.webp"}
+							alt={appName}
+							width={1280}
+							height={640}
+							loading="lazy"
+							decoding="async"
+							fetchPriority="low"
+							onError={() => setThumbFailed(true)}
+							variants={{
+								hover: { scale: 1.02 },
+							}}
+							transition={{ type: "spring", stiffness: 300 }}
+						/>
+					)}
+					{(!metadata?.thumbnail || thumbFailed) &&
 						(() => {
 							const g = hashToGradient(app.id, primaryHue, isDark);
 							return (
@@ -463,8 +471,8 @@ function ExtendedAppCard({
 					<div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
 
 					<div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-						{showSettingsButton && (
-							settingsHref ? (
+						{showSettingsButton &&
+							(settingsHref ? (
 								<MotionLink
 									href={settingsHref}
 									data-href={settingsHref}
@@ -503,8 +511,7 @@ function ExtendedAppCard({
 								>
 									<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
 								</motion.button>
-							)
-						)}
+							))}
 						<VisibilityIcon visibility={app.visibility} />
 					</div>
 
@@ -597,7 +604,24 @@ function Checkbox({
 	onCheckedChange,
 }: { checked: boolean; onCheckedChange: () => void }) {
 	return (
-		<div className="relative cursor-pointer" onClick={onCheckedChange}>
+		// biome-ignore lint/a11y/useSemanticElements: animated div checkbox; a native input cannot host the motion check mark
+		<div
+			role="checkbox"
+			aria-checked={checked}
+			tabIndex={0}
+			className="relative cursor-pointer"
+			onClick={(e) => {
+				e.stopPropagation();
+				onCheckedChange();
+			}}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					e.stopPropagation();
+					onCheckedChange();
+				}
+			}}
+		>
 			<motion.div
 				className={`w-5 h-5 rounded border-2 transition-all duration-200 ${
 					checked
