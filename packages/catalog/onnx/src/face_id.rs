@@ -13,7 +13,7 @@ use flow_like::flow::{
     pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_catalog_core::{FlowPath, NodeImage};
+use flow_like_catalog_core::{BoundingBox, FlowPath, NodeImage};
 #[cfg(feature = "execute")]
 use flow_like_types::create_id;
 use flow_like_types::{Result, anyhow, async_trait, json::json};
@@ -40,10 +40,8 @@ pub struct NodeFaceAnalyzer {
 /// One analyzed face: absolute-pixel geometry plus identity/attribute outputs.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct FaceIdResult {
-    /// Bounding box in pixels [x, y, width, height]
-    pub bbox: [f32; 4],
-    /// Detection confidence
-    pub score: f32,
+    /// Face bounding box in pixels (shared object-detection type; carries the detection score)
+    pub bbox: BoundingBox,
     /// 5-point landmarks in pixels [[x, y], ...], if the detector produced them
     pub landmarks: Option<Vec<[f32; 2]>>,
     /// 512-dimensional, L2-normalized identity embedding
@@ -421,14 +419,19 @@ impl NodeLogic for AnalyzeFacesNode {
                 .iter()
                 .map(|face| {
                     let detection = &face.detection;
-                    let bbox = &detection.bbox;
-                    let x1 = bbox.x1 * w;
-                    let y1 = bbox.y1 * h;
-                    let x2 = bbox.x2 * w;
-                    let y2 = bbox.y2 * h;
-                    FaceIdResult {
-                        bbox: [x1, y1, (x2 - x1).max(0.0), (y2 - y1).max(0.0)],
+                    // face_id reports relative (0..1) coords; scale to absolute pixels.
+                    let mut bbox = BoundingBox {
+                        x1: detection.bbox.x1,
+                        y1: detection.bbox.y1,
+                        x2: detection.bbox.x2,
+                        y2: detection.bbox.y2,
                         score: detection.score,
+                        class_name: Some("face".to_string()),
+                        ..Default::default()
+                    };
+                    bbox.scale(w, h);
+                    FaceIdResult {
+                        bbox,
                         landmarks: detection
                             .landmarks
                             .as_ref()
