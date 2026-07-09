@@ -169,6 +169,9 @@ pub struct ExecutorUser {
     /// that led to it (last element = the app that called this one). Threaded
     /// into outgoing app-connection tokens so chains stay transparent.
     pub app_chain: Option<Vec<String>>,
+    /// Process-mining correlation carried by the run, threaded into outgoing
+    /// app-connection tokens so downstream runs inherit the case.
+    pub correlation: Option<crate::correlation::CorrelationContext>,
 }
 
 /// Principal for app-to-app calls: a flow in `origin_app_id` acting on
@@ -185,6 +188,9 @@ pub struct ConnectedAppUser {
     pub app_chain: Vec<String>,
     pub technical_user_id: Option<String>,
     pub run_id: Option<String>,
+    /// Process-mining correlation inherited from the calling run (trace root +
+    /// business keys), so this run joins the same case.
+    pub correlation: Option<crate::correlation::CorrelationContext>,
 }
 
 #[derive(Debug, Clone)]
@@ -626,6 +632,7 @@ impl AppUser {
                     app_chain: app_chain.clone(),
                     technical_user_id: executor.technical_user_id.clone(),
                     run_id: Some(executor.run_id.clone()),
+                    correlation: executor.correlation.clone(),
                 };
                 return connected_app_permission(&connected, app_id, state).await;
             }
@@ -850,6 +857,7 @@ pub async fn jwt_middleware(
                     run_id,
                     technical_user_id,
                     app_chain,
+                    correlation,
                 } => {
                     let user = AppUser::Executor(ExecutorUser {
                         sub,
@@ -857,6 +865,7 @@ pub async fn jwt_middleware(
                         run_id,
                         technical_user_id,
                         app_chain,
+                        correlation,
                     });
                     request.extensions_mut().insert::<AppUser>(user);
                     return Ok(next.run(request).await);
@@ -868,6 +877,7 @@ pub async fn jwt_middleware(
                     app_chain,
                     technical_user_id,
                     run_id,
+                    correlation,
                     exp,
                 } => {
                     // App-connection tokens are short-lived; never honor a
@@ -885,6 +895,7 @@ pub async fn jwt_middleware(
                         app_chain,
                         technical_user_id,
                         run_id,
+                        correlation,
                     });
                     request.extensions_mut().insert::<AppUser>(user);
                     return Ok(next.run(request).await);
@@ -924,6 +935,7 @@ pub async fn jwt_middleware(
                     run_id: claims.run_id.clone(),
                     technical_user_id: claims.technical_user_id.clone(),
                     app_chain: claims.app_chain.clone(),
+                    correlation: claims.correlation.clone(),
                 },
             );
             let user = AppUser::Executor(ExecutorUser {
@@ -932,6 +944,7 @@ pub async fn jwt_middleware(
                 run_id: claims.run_id,
                 technical_user_id: claims.technical_user_id,
                 app_chain: claims.app_chain,
+                correlation: claims.correlation,
             });
             request.extensions_mut().insert::<AppUser>(user);
             return Ok(next.run(request).await);
@@ -948,6 +961,7 @@ pub async fn jwt_middleware(
                     app_chain: claims.app_chain.clone(),
                     technical_user_id: claims.technical_user_id.clone(),
                     run_id: claims.run_id.clone(),
+                    correlation: claims.correlation.clone(),
                     exp: claims.exp,
                 },
             );
@@ -958,6 +972,7 @@ pub async fn jwt_middleware(
                 app_chain: claims.app_chain,
                 technical_user_id: claims.technical_user_id,
                 run_id: claims.run_id,
+                correlation: claims.correlation,
             });
             request.extensions_mut().insert::<AppUser>(user);
             return Ok(next.run(request).await);

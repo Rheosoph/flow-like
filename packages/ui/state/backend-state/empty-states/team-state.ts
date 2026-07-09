@@ -5,6 +5,7 @@ import type {
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCasesResponse,
 	IProcessGraphResponse,
 	IProcessNote,
 	IRemoteEvent,
@@ -120,6 +121,12 @@ export class EmptyTeamState implements ITeamState {
 		appId: string,
 		days?: number,
 	): Promise<IProcessGraphResponse> {
+		throw new Error("Method not implemented.");
+	}
+	getProcessCases(
+		appId: string,
+		days?: number,
+	): Promise<IProcessCasesResponse> {
 		throw new Error("Method not implemented.");
 	}
 	getProcessNotes(appId: string): Promise<IProcessNote[]> {

@@ -100,6 +100,13 @@ export function AppConnectionManagement({
 		view === "graph",
 	);
 
+	const cases = useInvoke(
+		backend.teamState.getProcessCases,
+		backend.teamState,
+		[appId, days],
+		view === "graph",
+	);
+
 	const availableRoles = useMemo(
 		() =>
 			roles.data?.[1].filter((role) => {
@@ -167,7 +174,8 @@ export function AppConnectionManagement({
 
 	const handleRefreshGraph = useCallback(() => {
 		graph.refetch();
-	}, [graph]);
+		cases.refetch();
+	}, [graph, cases]);
 
 	const handleGrant = useCallback(async () => {
 		if (!grantAppId.trim() || !grantRoleId) {
@@ -337,6 +345,9 @@ export function AppConnectionManagement({
 			{view === "graph" && (
 				<ProcessGraph
 					data={graph.data}
+					cases={cases.data?.cases}
+					casesLoading={cases.isFetching}
+					casesError={Boolean(cases.error)}
 					isLoading={graph.isFetching}
 					days={days}
 					onDaysChange={setDays}

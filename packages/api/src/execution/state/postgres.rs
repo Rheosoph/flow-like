@@ -136,7 +136,7 @@ impl ExecutionStateStore for PostgresStateStore {
     ) -> Result<ExecutionRunRecord, StateStoreError> {
         let now = chrono::Utc::now().naive_utc();
         let model = execution_run::ActiveModel {
-            id: Set(input.id),
+            id: Set(input.id.clone()),
             board_id: Set(input.board_id),
             version: Set(input.version),
             event_id: Set(input.event_id),
@@ -156,7 +156,7 @@ impl ExecutionStateStore for PostgresStateStore {
             user_id: Set(input.user_id),
             technical_user_id: Set(input.technical_user_id),
             caller_app_chain: Set(None),
-            trace_id: Set(None),
+            trace_id: Set(Some(input.id.clone())),
             parent_run_id: Set(None),
             correlation_keys: Set(None),
             app_id: Set(input.app_id),

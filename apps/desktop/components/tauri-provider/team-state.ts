@@ -6,6 +6,7 @@ import type {
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCasesResponse,
 	IProcessGraphResponse,
 	IProcessNote,
 	IRemoteEvent,
@@ -481,6 +482,29 @@ export class TeamState implements ITeamState {
 		}
 
 		let url = `apps/${appId}/connections/graph`;
+		if (days !== undefined) {
+			url += `?days=${days}`;
+		}
+
+		return await fetcher(
+			this.backend.profile,
+			url,
+			{
+				method: "GET",
+			},
+			this.backend.auth,
+		);
+	}
+
+	async getProcessCases(
+		appId: string,
+		days?: number,
+	): Promise<IProcessCasesResponse> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+
+		let url = `apps/${appId}/connections/cases`;
 		if (days !== undefined) {
 			url += `?days=${days}`;
 		}

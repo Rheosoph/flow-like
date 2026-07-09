@@ -5,6 +5,7 @@ import type {
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCasesResponse,
 	IProcessGraphResponse,
 	IProcessNote,
 	IRemoteEvent,
@@ -65,6 +66,7 @@ export interface ITeamState {
 		appId: string,
 		days?: number,
 	): Promise<IProcessGraphResponse>;
+	getProcessCases(appId: string, days?: number): Promise<IProcessCasesResponse>;
 	getProcessNotes(appId: string): Promise<IProcessNote[]>;
 	createProcessNote(appId: string, content: string): Promise<IProcessNote>;
 	updateProcessNote(

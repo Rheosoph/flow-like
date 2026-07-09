@@ -138,6 +138,8 @@ export type {
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCase,
+	IProcessCasesResponse,
 	IProcessFlow,
 	IProcessGraphEdge,
 	IProcessGraphNode,

@@ -43,6 +43,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, Quer
 use serde_json::{Value, json};
 
 use crate::{
+    correlation::CorrelationContext,
     credentials::validate_path_component,
     entity::{
         event, event_remote_auth, event_remote_registration, event_sink, execution_run,
@@ -61,6 +62,18 @@ use crate::{
     state::AppState,
     utils::event_alias as alias_util,
 };
+
+/// Identity of the run that reached this event through the app-connection
+/// proxy. Threaded into the dispatched run so cross-app REST/MCP hops stay
+/// part of the caller's process case (chain, parent run, correlation) instead
+/// of showing up as unrelated root runs. Public inbound traffic uses
+/// `ProxyCallerContext::default()` — those runs are genuine roots.
+#[derive(Clone, Default)]
+pub(crate) struct ProxyCallerContext {
+    pub app_chain: Option<Vec<String>>,
+    pub parent_run_id: Option<String>,
+    pub correlation: Option<CorrelationContext>,
+}
 
 const INBOUND_RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 const MCP_DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -224,7 +237,17 @@ async fn dispatch_inbound_rest(
         .ok_or_else(|| ApiError::not_found("event not found"))?;
 
     dispatch_rest_for_event(
-        state, &event_row, slug_or_id, path, raw_query, headers, method, body, true, None,
+        state,
+        &event_row,
+        slug_or_id,
+        path,
+        raw_query,
+        headers,
+        method,
+        body,
+        true,
+        None,
+        &ProxyCallerContext::default(),
     )
     .await
 }
@@ -246,6 +269,7 @@ pub(crate) async fn dispatch_rest_for_event(
     body: &Bytes,
     enforce_registration_auth: bool,
     injected_auth: Option<Value>,
+    caller: &ProxyCallerContext,
 ) -> Result<Response, ApiError> {
     if !event_row.active || event_row.event_type != "rest" {
         return Err(ApiError::not_found("REST event not found or inactive"));
@@ -318,6 +342,7 @@ pub(crate) async fn dispatch_rest_for_event(
                 method,
                 body,
                 client,
+                caller,
             )
             .await?;
             Ok(materialize_response(result))
@@ -386,7 +411,17 @@ async fn dispatch_inbound_mcp(
         .ok_or_else(|| ApiError::not_found("event not found"))?;
 
     dispatch_mcp_for_event(
-        state, &event_row, slug_or_id, path, raw_query, headers, method, body, true, None,
+        state,
+        &event_row,
+        slug_or_id,
+        path,
+        raw_query,
+        headers,
+        method,
+        body,
+        true,
+        None,
+        &ProxyCallerContext::default(),
     )
     .await
 }
@@ -407,6 +442,7 @@ pub(crate) async fn dispatch_mcp_for_event(
     body: &Bytes,
     enforce_registration_auth: bool,
     injected_auth: Option<Value>,
+    caller: &ProxyCallerContext,
 ) -> Result<Response, ApiError> {
     if !event_row.active || event_row.event_type != "mcp" {
         return Err(ApiError::not_found("MCP event not found or inactive"));
@@ -473,7 +509,10 @@ pub(crate) async fn dispatch_mcp_for_event(
     let client = client_metadata("mcp", headers, auth_claims);
 
     if method == axum::http::Method::POST {
-        mcp_handle_post(state, event_row, &config, raw_query, headers, body, client).await
+        mcp_handle_post(
+            state, event_row, &config, raw_query, headers, body, client, caller,
+        )
+        .await
     } else if method == axum::http::Method::DELETE {
         Ok(mcp_handle_delete(raw_query, headers).await)
     } else if method == axum::http::Method::GET {
@@ -1528,6 +1567,7 @@ async fn dispatch_rest_fn(
     method: &axum::http::Method,
     body: &Bytes,
     client: Value,
+    caller: &ProxyCallerContext,
 ) -> Result<Value, ApiError> {
     let content_type = headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -1592,7 +1632,14 @@ async fn dispatch_rest_fn(
         }),
     );
 
-    dispatch_event_collect(state, event_row, target_node_id, Some(Value::Object(args))).await
+    dispatch_event_collect(
+        state,
+        event_row,
+        target_node_id,
+        Some(Value::Object(args)),
+        caller,
+    )
+    .await
 }
 
 async fn dispatch_event_collect(
@@ -1600,6 +1647,7 @@ async fn dispatch_event_collect(
     event_row: &event::Model,
     target_node_id: String,
     payload: Option<Value>,
+    caller: &ProxyCallerContext,
 ) -> Result<Value, ApiError> {
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
@@ -1665,6 +1713,13 @@ async fn dispatch_event_collect(
     };
 
     let run_id = flow_like_types::create_id();
+    // Tie the run into the caller's process case: proxied calls inherit the
+    // caller's trace/keys; public inbound traffic roots a fresh case.
+    let parent_run_id = caller.parent_run_id.clone();
+    let mut correlation = caller.correlation.clone().unwrap_or_default();
+    if correlation.trace_id.is_none() {
+        correlation.trace_id = parent_run_id.clone().or_else(|| Some(run_id.clone()));
+    }
     let callback_url =
         std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let executor_jwt = sign_execution_jwt(ExecutionJwtParams {
@@ -1674,7 +1729,8 @@ async fn dispatch_event_collect(
         app_id: event_row.app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_row.id.clone()),
-        app_chain: None,
+        app_chain: caller.app_chain.clone(),
+        correlation: correlation.clone().into_option(),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),
@@ -1736,10 +1792,10 @@ async fn dispatch_event_collect(
         expires_at: Set(Some(now + chrono::Duration::hours(24))),
         user_id: Set(actor_user_id),
         technical_user_id: Set(None),
-        caller_app_chain: Set(None),
-        trace_id: Set(None),
-        parent_run_id: Set(None),
-        correlation_keys: Set(None),
+        caller_app_chain: Set(caller.app_chain.clone()),
+        trace_id: Set(correlation.trace_id.clone()),
+        parent_run_id: Set(parent_run_id.clone()),
+        correlation_keys: Set(correlation.keys_json()),
         app_id: Set(event_row.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -2172,6 +2228,7 @@ async fn mcp_handle_post(
     headers: &HeaderMap,
     body: &Bytes,
     client: Value,
+    caller: &ProxyCallerContext,
 ) -> Result<Response, ApiError> {
     let payload: Value = serde_json::from_slice(body).map_err(|_| {
         ApiError::bad_request("MCP POST body must be a valid JSON-RPC object or array")
@@ -2283,7 +2340,7 @@ async fn mcp_handle_post(
         }
 
         if let Some(response) =
-            dispatch_mcp_json_rpc(state, event_row, config, item, &client).await?
+            dispatch_mcp_json_rpc(state, event_row, config, item, &client, caller).await?
         {
             responses.push(response);
         }
@@ -2537,6 +2594,7 @@ async fn dispatch_mcp_json_rpc(
     config: &Value,
     payload: &Value,
     client: &Value,
+    caller: &ProxyCallerContext,
 ) -> Result<Option<Value>, ApiError> {
     let id = payload.get("id").cloned();
     let method = payload.get("method").and_then(|v| v.as_str()).unwrap_or("");
@@ -2564,7 +2622,8 @@ async fn dispatch_mcp_json_rpc(
             })
         }
         "tools/call" => {
-            return mcp_tool_call_response(state, event_row, config, id, params, client).await;
+            return mcp_tool_call_response(state, event_row, config, id, params, client, caller)
+                .await;
         }
         "resources/list" => json!({
             "resources": mcp_resources(config).into_iter().map(|resource| {
@@ -2634,6 +2693,7 @@ async fn mcp_tool_call_response(
     id: Option<Value>,
     params: Value,
     client: &Value,
+    caller: &ProxyCallerContext,
 ) -> Result<Option<Value>, ApiError> {
     let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params
@@ -2659,7 +2719,15 @@ async fn mcp_tool_call_response(
         payload_with_client(normalized_arguments, client),
     );
     args.insert("_client".to_string(), client.clone());
-    match dispatch_event_collect(state, event_row, tool.node_id, Some(Value::Object(args))).await {
+    match dispatch_event_collect(
+        state,
+        event_row,
+        tool.node_id,
+        Some(Value::Object(args)),
+        caller,
+    )
+    .await
+    {
         Ok(value) => Ok(Some(json!({
             "jsonrpc": "2.0",
             "id": id,

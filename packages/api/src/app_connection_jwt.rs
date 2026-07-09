@@ -43,6 +43,10 @@ pub struct AppConnectionClaims {
     /// Optional run ID if minted during a flow execution
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// Process-mining correlation (trace root + business keys) propagated from
+    /// the calling run so the target inherits the case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<crate::correlation::CorrelationContext>,
     /// Token type - always AppConnection
     #[serde(rename = "typ")]
     pub token_type: TokenType,
@@ -72,6 +76,8 @@ pub struct AppConnectionJwtParams {
     pub app_chain: Vec<String>,
     pub technical_user_id: Option<String>,
     pub run_id: Option<String>,
+    /// Process-mining correlation propagated from the calling run, if any
+    pub correlation: Option<crate::correlation::CorrelationContext>,
     /// TTL in seconds, clamped to [60, MAX_APP_CONNECTION_TTL_SECONDS]
     pub ttl_seconds: Option<i64>,
 }
@@ -117,6 +123,7 @@ pub fn sign(params: AppConnectionJwtParams) -> Result<String, AppConnectionJwtEr
         app_chain,
         technical_user_id: params.technical_user_id,
         run_id: params.run_id,
+        correlation: params.correlation,
         token_type: TokenType::AppConnection,
         iss: issuer().to_string(),
         aud: TokenType::AppConnection.audience().to_string(),
@@ -197,6 +204,7 @@ mod tests {
         assert!(claims.app_chain.is_empty());
         assert_eq!(claims.technical_user_id, None);
         assert_eq!(claims.run_id, None);
+        assert_eq!(claims.correlation, None);
     }
 
     #[test]
@@ -205,6 +213,13 @@ mod tests {
             return;
         }
 
+        let correlation = crate::correlation::CorrelationContext {
+            trace_id: Some("run_root".to_string()),
+            keys: std::collections::HashMap::from([(
+                "order_id".to_string(),
+                "1234".to_string(),
+            )]),
+        };
         let params = AppConnectionJwtParams {
             sub: Some("user123".to_string()),
             origin_app_id: "app_origin".to_string(),
@@ -212,6 +227,7 @@ mod tests {
             app_chain: vec!["app_first".to_string(), "app_origin".to_string()],
             technical_user_id: None,
             run_id: Some("run456".to_string()),
+            correlation: Some(correlation.clone()),
             ttl_seconds: Some(300),
         };
 
@@ -223,5 +239,6 @@ mod tests {
         assert_eq!(claims.target_app_id, params.target_app_id);
         assert_eq!(claims.app_chain, params.app_chain);
         assert_eq!(claims.run_id, params.run_id);
+        assert_eq!(claims.correlation, Some(correlation));
     }
 }

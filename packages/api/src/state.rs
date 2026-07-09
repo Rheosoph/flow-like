@@ -58,6 +58,7 @@ pub enum CachedAuth {
         run_id: String,
         technical_user_id: Option<String>,
         app_chain: Option<Vec<String>>,
+        correlation: Option<crate::correlation::CorrelationContext>,
     },
     /// App-connection JWT: one app calling another app it is connected to.
     /// `exp` is re-checked on cache hits so short-lived tokens cannot outlive
@@ -69,6 +70,7 @@ pub enum CachedAuth {
         app_chain: Vec<String>,
         technical_user_id: Option<String>,
         run_id: Option<String>,
+        correlation: Option<crate::correlation::CorrelationContext>,
         exp: i64,
     },
     /// Invalid/expired token

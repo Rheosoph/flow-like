@@ -189,6 +189,27 @@ export interface IProcessGraphResponse {
 	flows: IProcessFlow[];
 }
 
+/** An end-to-end process case: a causal execution tree across apps/events. */
+export interface IProcessCase {
+	case_id: string;
+	root_app_id: string;
+	root_event_name?: string | null;
+	root_event_type?: string | null;
+	apps: string[];
+	run_count: number;
+	failed_count: number;
+	correlation_keys?: Record<string, string> | null;
+	/** "Completed" | "Running" | "Failed" */
+	status: string;
+	started_at?: number | null;
+	last_activity_at: number;
+	duration_ms?: number | null;
+}
+
+export interface IProcessCasesResponse {
+	cases: IProcessCase[];
+}
+
 export interface IInvite {
 	id: string;
 	user_id: string;

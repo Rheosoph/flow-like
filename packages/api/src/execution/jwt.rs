@@ -38,6 +38,10 @@ pub struct ExecutionClaims {
     /// through so tokens minted during this run keep the chain transparent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_chain: Option<Vec<String>>,
+    /// Process-mining correlation (trace root + business keys), propagated so
+    /// tokens minted during this run pass it to downstream apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<crate::correlation::CorrelationContext>,
     /// Callback URL for progress/event reporting
     pub callback_url: String,
     /// Token type - executor or user
@@ -68,6 +72,8 @@ pub struct ExecutionJwtParams {
     pub event_id: Option<String>,
     /// Chain of apps that led to this run via app connections, if any
     pub app_chain: Option<Vec<String>>,
+    /// Process-mining correlation to propagate downstream, if any
+    pub correlation: Option<crate::correlation::CorrelationContext>,
     pub callback_url: String,
     /// Token type - executor or user
     pub token_type: TokenType,
@@ -92,6 +98,7 @@ pub fn sign(params: ExecutionJwtParams) -> Result<String, ExecutionJwtError> {
         board_id: params.board_id,
         event_id: params.event_id,
         app_chain: params.app_chain,
+        correlation: params.correlation,
         callback_url: params.callback_url,
         token_type: params.token_type,
         iss: issuer().to_string(),
@@ -156,6 +163,7 @@ mod tests {
             board_id: "board012".to_string(),
             event_id: Some("event345".to_string()),
             app_chain: None,
+            correlation: None,
             callback_url: "http://localhost:8080".to_string(),
             token_type: TokenType::Executor,
             ttl_seconds: Some(3600),

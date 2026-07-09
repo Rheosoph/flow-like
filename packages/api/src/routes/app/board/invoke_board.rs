@@ -149,6 +149,10 @@ pub async fn invoke_board(
         AppUser::ConnectedApp(connected) => connected.run_id.clone(),
         _ => None,
     };
+    let inherited_correlation = match &user {
+        AppUser::ConnectedApp(connected) => connected.correlation.clone(),
+        _ => None,
+    };
 
     let run_id = create_id();
     let expires_at = chrono::Utc::now().naive_utc() + chrono::Duration::hours(24);
@@ -200,6 +204,13 @@ pub async fn invoke_board(
         None
     };
 
+    // Inherit the trace root & business keys from the caller, else this is root.
+    let mut correlation = inherited_correlation.unwrap_or_default();
+    if correlation.trace_id.is_none() {
+        correlation.trace_id = parent_run_id.clone().or_else(|| Some(run_id.clone()));
+    }
+    let correlation_keys = correlation.keys_json();
+
     // Build run record (insert happens later - sync for local, parallel for HTTP)
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
@@ -224,9 +235,9 @@ pub async fn invoke_board(
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
         caller_app_chain: Set(caller_app_chain.clone()),
-        trace_id: Set(parent_run_id.is_none().then(|| run_id.clone())),
+        trace_id: Set(correlation.trace_id.clone()),
         parent_run_id: Set(parent_run_id.clone()),
-        correlation_keys: Set(None),
+        correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -263,6 +274,7 @@ pub async fn invoke_board(
             board_id: board_id.clone(),
             event_id: None,
             app_chain: caller_app_chain.clone(),
+            correlation: None,
             callback_url: String::new(),
             token_type: TokenType::User,
             ttl_seconds: Some(60 * 60),
@@ -316,6 +328,7 @@ pub async fn invoke_board(
         board_id: board_id.clone(),
         event_id: None,
         app_chain: caller_app_chain.clone(),
+        correlation: correlation.clone().into_option(),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),

@@ -10,6 +10,7 @@ import {
 	type EdgeProps,
 	Handle,
 	MarkerType,
+	MiniMap,
 	type Node,
 	type NodeProps,
 	Position,
@@ -23,6 +24,7 @@ import {
 	ArrowRight,
 	Blocks,
 	BookOpen,
+	CheckCircle2,
 	ChevronRight,
 	Clock,
 	Database,
@@ -35,15 +37,21 @@ import {
 	LayoutTemplate,
 	Lock,
 	type LucideIcon,
+	Maximize2,
+	Minimize2,
 	Pencil,
+	PlayCircle,
 	Plus,
 	RefreshCw,
+	Search,
 	Shield,
 	Sparkles,
 	StickyNote,
 	Table2,
 	Trash2,
+	Workflow,
 	X,
+	XCircle,
 	Zap,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -59,6 +67,7 @@ import {
 import { toast } from "sonner";
 import type {
 	IAppContentStats,
+	IProcessCase,
 	IProcessFlow,
 	IProcessGraphNode,
 	IProcessGraphResponse,
@@ -85,6 +94,7 @@ import {
 	CardHeader,
 	CardTitle,
 	EmptyState,
+	Input,
 	RolePermissions,
 	ScrollArea,
 	Select,
@@ -118,6 +128,10 @@ const TIME_WINDOWS = [7, 30, 90, 365] as const;
 
 export interface ProcessGraphProps {
 	data?: IProcessGraphResponse;
+	/** Reconstructed end-to-end process cases (from the correlation spine). */
+	cases?: IProcessCase[];
+	casesLoading?: boolean;
+	casesError?: boolean;
 	isLoading?: boolean;
 	days: number;
 	onDaysChange: (days: number) => void;
@@ -1374,8 +1388,352 @@ function ObservedFlows({
 	);
 }
 
+/// Status is conveyed by icon + label (never color alone); the only reserved
+/// color is destructive for failures.
+const STATUS_META: Record<string, { icon: LucideIcon; className: string }> = {
+	Failed: { icon: XCircle, className: "text-destructive" },
+	Running: { icon: PlayCircle, className: "text-foreground" },
+	Completed: { icon: CheckCircle2, className: "text-muted-foreground" },
+};
+
+function CaseStatus({ status }: Readonly<{ status: string }>) {
+	const meta = STATUS_META[status] ?? STATUS_META.Completed;
+	const Icon = meta.icon;
+	return (
+		<span
+			className={cn(
+				"flex shrink-0 items-center gap-1 text-[11px] font-medium",
+				meta.className,
+			)}
+		>
+			<Icon className="h-3.5 w-3.5" />
+			{status}
+		</span>
+	);
+}
+
+function StatTile({
+	icon: Icon,
+	label,
+	value,
+	sub,
+	subTone,
+}: Readonly<{
+	icon: LucideIcon;
+	label: string;
+	value: string;
+	sub?: string;
+	subTone?: "destructive" | "muted";
+}>) {
+	return (
+		<div className="rounded-lg border bg-card px-3.5 py-3">
+			<div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+				<Icon className="h-3.5 w-3.5" />
+				{label}
+			</div>
+			<p className="mt-1.5 text-xl font-semibold leading-none tabular-nums">
+				{value}
+			</p>
+			<p
+				className={cn(
+					"mt-1 min-h-3.5 text-[11px] leading-none",
+					subTone === "destructive"
+						? "text-destructive"
+						: "text-muted-foreground",
+				)}
+			>
+				{sub ?? ""}
+			</p>
+		</div>
+	);
+}
+
+/** Summary-before-detail: the window's health at a glance. */
+function ProcessStats({
+	data,
+	cases,
+}: Readonly<{ data?: IProcessGraphResponse; cases?: IProcessCase[] }>) {
+	const stats = useMemo(() => {
+		if (!data) return null;
+		const connectedApps = data.nodes.filter((node) => !node.is_current).length;
+		const runs = data.flows.reduce((sum, flow) => sum + flow.run_count, 0);
+		const failedRuns = data.flows.reduce(
+			(sum, flow) => sum + flow.failed_count,
+			0,
+		);
+		const caseList = cases ?? [];
+		const failedCases = caseList.filter(
+			(processCase) => processCase.status === "Failed",
+		).length;
+		const durations = caseList
+			.map((processCase) => processCase.duration_ms)
+			.filter(
+				(duration): duration is number => duration != null && duration > 0,
+			);
+		const avgDuration =
+			durations.length > 0
+				? durations.reduce((sum, duration) => sum + duration, 0) /
+					durations.length
+				: null;
+		const successRate =
+			runs > 0 ? Math.round(((runs - failedRuns) / runs) * 100) : null;
+		return {
+			connectedApps,
+			runs,
+			failedRuns,
+			caseCount: caseList.length,
+			failedCases,
+			avgDuration,
+			successRate,
+		};
+	}, [data, cases]);
+
+	if (!stats) return null;
+
+	return (
+		<div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+			<StatTile
+				icon={Blocks}
+				label="Connected apps"
+				value={String(stats.connectedApps)}
+			/>
+			<StatTile
+				icon={Zap}
+				label="Observed runs"
+				value={String(stats.runs)}
+				sub={stats.failedRuns > 0 ? `${stats.failedRuns} failed` : undefined}
+				subTone="destructive"
+			/>
+			<StatTile
+				icon={CheckCircle2}
+				label="Success rate"
+				value={stats.successRate != null ? `${stats.successRate}%` : "—"}
+			/>
+			<StatTile
+				icon={Workflow}
+				label="Process cases"
+				value={String(stats.caseCount)}
+				sub={stats.failedCases > 0 ? `${stats.failedCases} failed` : undefined}
+				subTone="destructive"
+			/>
+			<StatTile
+				icon={Clock}
+				label="Avg case time"
+				value={
+					stats.avgDuration != null ? formatDuration(stats.avgDuration) : "—"
+				}
+			/>
+		</div>
+	);
+}
+
+const CASE_FILTERS = ["all", "Failed", "Running", "Completed"] as const;
+type CaseFilter = (typeof CASE_FILTERS)[number];
+
+interface ProcessCasesCardProps {
+	cases: IProcessCase[];
+	nodesById: Map<string, IProcessGraphNode>;
+	/** Hovering a case dims the canvas to its app path. */
+	onHoverPath?: (path: string[] | null) => void;
+}
+
+function ProcessCasesCard({
+	cases,
+	nodesById,
+	onHoverPath,
+}: Readonly<ProcessCasesCardProps>) {
+	const [statusFilter, setStatusFilter] = useState<CaseFilter>("all");
+	const [search, setSearch] = useState("");
+
+	const nameOf = useCallback(
+		(appId: string) => {
+			const node = nodesById.get(appId);
+			if (node) return appLabel(node);
+			return appId.startsWith("unknown::") ? "Unknown App" : appId;
+		},
+		[nodesById],
+	);
+
+	const counts = useMemo(() => {
+		const byStatus: Record<string, number> = {};
+		for (const processCase of cases) {
+			byStatus[processCase.status] = (byStatus[processCase.status] ?? 0) + 1;
+		}
+		return byStatus;
+	}, [cases]);
+
+	const visible = useMemo(() => {
+		const query = search.trim().toLowerCase();
+		return cases
+			.filter(
+				(processCase) =>
+					statusFilter === "all" || processCase.status === statusFilter,
+			)
+			.filter((processCase) => {
+				if (!query) return true;
+				const haystack = [
+					processCase.case_id,
+					processCase.root_event_name ?? "",
+					...processCase.apps.map(nameOf),
+					...Object.entries(processCase.correlation_keys ?? {}).flat(),
+				]
+					.join(" ")
+					.toLowerCase();
+				return haystack.includes(query);
+			})
+			.sort((a, b) => b.last_activity_at - a.last_activity_at);
+	}, [cases, statusFilter, search, nameOf]);
+
+	return (
+		<Card>
+			<CardHeader className="pb-3">
+				<CardTitle className="flex items-center gap-2 text-base">
+					<Workflow className="h-4 w-4" />
+					Process Cases
+				</CardTitle>
+				<CardDescription>
+					End-to-end cases this app started, reconstructed across apps and
+					events from the run correlation spine. Hover a case to trace its path
+					on the graph.
+				</CardDescription>
+				{cases.length > 0 && (
+					<div className="flex flex-wrap items-center gap-2 pt-2">
+						<div className="flex items-center gap-1">
+							{CASE_FILTERS.map((filter) => (
+								<Button
+									key={filter}
+									size="sm"
+									variant={statusFilter === filter ? "secondary" : "ghost"}
+									className="h-7 gap-1.5 px-2.5 text-xs"
+									onClick={() => setStatusFilter(filter)}
+								>
+									{filter === "all" ? "All" : filter}
+									<span className="tabular-nums text-muted-foreground">
+										{filter === "all" ? cases.length : (counts[filter] ?? 0)}
+									</span>
+								</Button>
+							))}
+						</div>
+						<div className="relative ml-auto">
+							<Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+							<Input
+								value={search}
+								onChange={(event) => setSearch(event.target.value)}
+								placeholder="Filter by key, event, or app"
+								className="h-8 w-60 pl-7 text-xs"
+							/>
+						</div>
+					</div>
+				)}
+			</CardHeader>
+			<CardContent>
+				{cases.length === 0 ? (
+					<p className="text-sm text-muted-foreground">
+						No process cases in this time window. Cases appear when this
+						app&apos;s events run — pass correlation keys at invoke time to
+						group them by business object.
+					</p>
+				) : visible.length === 0 ? (
+					<p className="text-sm text-muted-foreground">
+						No cases match the current filter.
+					</p>
+				) : (
+					<div className="space-y-2">
+						{visible.map((processCase) => {
+							const keys = processCase.correlation_keys
+								? Object.entries(processCase.correlation_keys)
+								: [];
+							return (
+								<div
+									key={processCase.case_id}
+									title={`Case ${processCase.case_id}`}
+									className="space-y-2 rounded-md border p-3 transition-colors hover:bg-muted/40"
+									onMouseEnter={() => onHoverPath?.(processCase.apps)}
+									onMouseLeave={() => onHoverPath?.(null)}
+								>
+									<div className="flex items-center justify-between gap-2">
+										<div className="flex min-w-0 items-center gap-2">
+											<CaseStatus status={processCase.status} />
+											<span className="truncate text-sm font-medium">
+												{nameOf(processCase.root_app_id)}
+											</span>
+											{processCase.root_event_name && (
+												<span className="truncate text-xs text-muted-foreground">
+													· {processCase.root_event_name}
+												</span>
+											)}
+										</div>
+										<span className="shrink-0 text-xs text-muted-foreground">
+											{formatDistanceToNow(
+												new Date(processCase.last_activity_at * 1000),
+												{ addSuffix: true },
+											)}
+										</span>
+									</div>
+
+									{processCase.apps.length > 1 && (
+										<div className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
+											{processCase.apps.map((appId, index) => (
+												<span
+													key={`${processCase.case_id}-${appId}`}
+													className="flex items-center gap-1"
+												>
+													{index > 0 && (
+														<ArrowRight className="h-3 w-3 shrink-0" />
+													)}
+													<span className="truncate">{nameOf(appId)}</span>
+												</span>
+											))}
+										</div>
+									)}
+
+									{keys.length > 0 && (
+										<div className="flex flex-wrap gap-1">
+											{keys.map(([key, value]) => (
+												<Badge
+													key={key}
+													variant="secondary"
+													className="gap-1 text-[10px] font-normal"
+												>
+													<span className="text-muted-foreground">{key}</span>
+													{String(value)}
+												</Badge>
+											))}
+										</div>
+									)}
+
+									<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+										<Badge variant="secondary">
+											{processCase.run_count}{" "}
+											{processCase.run_count === 1 ? "run" : "runs"}
+										</Badge>
+										{processCase.failed_count > 0 && (
+											<Badge variant="destructive">
+												{processCase.failed_count} failed
+											</Badge>
+										)}
+										{processCase.duration_ms != null && (
+											<span className="flex items-center gap-1">
+												<Clock className="h-3 w-3" />
+												{formatDuration(processCase.duration_ms)}
+											</span>
+										)}
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				)}
+			</CardContent>
+		</Card>
+	);
+}
+
 export function ProcessGraph({
 	data,
+	cases,
+	casesLoading,
+	casesError,
 	isLoading,
 	days,
 	onDaysChange,
@@ -1389,6 +1747,9 @@ export function ProcessGraph({
 		{ kind: "node"; id: string } | { kind: "edge"; id: string } | null
 	>(null);
 	const [hoveredPath, setHoveredPath] = useState<string[] | null>(null);
+	const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+	const [isExpanded, setIsExpanded] = useState(false);
+	const [bottomTab, setBottomTab] = useState<"cases" | "chains">("cases");
 	const fitViewRef = useRef<(() => void) | null>(null);
 
 	const colorMode = useMemo(
@@ -1426,16 +1787,35 @@ export function ProcessGraph({
 		return { baseNodes, baseEdges: buildEdges(data) };
 	}, [data]);
 
-	// Cross-highlight: hovering an observed chain dims everything off its path.
+	// Cross-highlight: hovering an observed chain / case dims everything off
+	// its path; hovering a node dims everything but the node's neighborhood.
 	const highlight = useMemo(() => {
-		if (!hoveredPath || hoveredPath.length === 0) return null;
-		const nodes = new Set(hoveredPath);
-		const edges = new Set<string>();
-		for (let i = 0; i < hoveredPath.length - 1; i++) {
-			edges.add(`edge-${hoveredPath[i]}-${hoveredPath[i + 1]}`);
+		if (hoveredPath && hoveredPath.length > 0) {
+			const nodes = new Set(hoveredPath);
+			const edges = new Set<string>();
+			for (let i = 0; i < hoveredPath.length - 1; i++) {
+				edges.add(`edge-${hoveredPath[i]}-${hoveredPath[i + 1]}`);
+			}
+			return { nodes, edges };
 		}
-		return { nodes, edges };
-	}, [hoveredPath]);
+		if (hoveredNodeId) {
+			const nodes = new Set([hoveredNodeId]);
+			const edges = new Set<string>();
+			for (const edge of baseEdges) {
+				const edgeData = edge.data as ConnectionEdgeData;
+				if (
+					edgeData.source === hoveredNodeId ||
+					edgeData.target === hoveredNodeId
+				) {
+					edges.add(edge.id);
+					nodes.add(edgeData.source);
+					nodes.add(edgeData.target);
+				}
+			}
+			return { nodes, edges };
+		}
+		return null;
+	}, [hoveredPath, hoveredNodeId, baseEdges]);
 
 	const flowNodes = useMemo(
 		() =>
@@ -1502,14 +1882,15 @@ export function ProcessGraph({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [selection]);
 
-	// Re-fit when the side panel opens/closes (it shrinks the canvas on md+).
+	// Re-fit when the canvas geometry changes (drawer toggles, expand toggles).
 	const panelOpen = selection !== null;
 	useEffect(() => {
-		// Read panelOpen so this re-fits whenever the drawer toggles.
+		// Read both so this re-fits whenever either toggles.
 		void panelOpen;
+		void isExpanded;
 		const timer = setTimeout(() => fitViewRef.current?.(), 60);
 		return () => clearTimeout(timer);
-	}, [panelOpen]);
+	}, [panelOpen, isExpanded]);
 
 	if (isLoading && !data) {
 		return (
@@ -1544,12 +1925,31 @@ export function ProcessGraph({
 					/>
 					Refresh
 				</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => setIsExpanded((expanded) => !expanded)}
+					aria-label={isExpanded ? "Collapse graph" : "Expand graph"}
+				>
+					{isExpanded ? (
+						<Minimize2 className="h-4 w-4" />
+					) : (
+						<Maximize2 className="h-4 w-4" />
+					)}
+				</Button>
 				<div className="ml-auto">
 					<GraphLegend />
 				</div>
 			</div>
 
-			<div className="relative flex h-130 w-full overflow-hidden rounded-lg border">
+			<ProcessStats data={data} cases={cases} />
+
+			<div
+				className={cn(
+					"relative flex w-full overflow-hidden rounded-lg border",
+					isExpanded ? "h-[78vh]" : "h-130",
+				)}
+			>
 				<div className="relative min-w-0 flex-1">
 					{empty ? (
 						<div className="flex h-full items-center justify-center">
@@ -1580,6 +1980,8 @@ export function ProcessGraph({
 								onNodeClick={handleNodeClick}
 								onEdgeClick={handleEdgeClick}
 								onPaneClick={handlePaneClick}
+								onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
+								onNodeMouseLeave={() => setHoveredNodeId(null)}
 								fitView
 								fitViewOptions={{ padding: 0.25 }}
 								minZoom={0.2}
@@ -1591,6 +1993,7 @@ export function ProcessGraph({
 									size={1}
 								/>
 								<Controls showInteractive={false} />
+								{flowNodes.length > 4 && <MiniMap pannable zoomable />}
 							</ReactFlow>
 						</ReactFlowProvider>
 					)}
@@ -1620,11 +2023,74 @@ export function ProcessGraph({
 				)}
 			</div>
 
-			<ObservedFlows
-				flows={data?.flows ?? []}
-				nodesById={nodesById}
-				onHoverPath={setHoveredPath}
-			/>
+			<div className="flex w-fit items-center gap-1 rounded-lg border bg-card p-1">
+				<Button
+					size="sm"
+					variant={bottomTab === "cases" ? "secondary" : "ghost"}
+					className="h-7 gap-1.5 px-2.5 text-xs"
+					onClick={() => setBottomTab("cases")}
+				>
+					<Workflow className="h-3.5 w-3.5" />
+					Process Cases
+					{cases && (
+						<span className="tabular-nums text-muted-foreground">
+							{cases.length}
+						</span>
+					)}
+				</Button>
+				<Button
+					size="sm"
+					variant={bottomTab === "chains" ? "secondary" : "ghost"}
+					className="h-7 gap-1.5 px-2.5 text-xs"
+					onClick={() => setBottomTab("chains")}
+				>
+					<GitBranch className="h-3.5 w-3.5" />
+					Observed Chains
+					{data && (
+						<span className="tabular-nums text-muted-foreground">
+							{data.flows.length}
+						</span>
+					)}
+				</Button>
+			</div>
+
+			{bottomTab === "cases" ? (
+				cases ? (
+					<ProcessCasesCard
+						cases={cases}
+						nodesById={nodesById}
+						onHoverPath={setHoveredPath}
+					/>
+				) : casesError ? (
+					<Card>
+						<CardContent className="flex items-center gap-3 p-4">
+							<XCircle className="h-4 w-4 shrink-0 text-destructive" />
+							<div className="text-sm">
+								<p className="font-medium">Process cases unavailable</p>
+								<p className="text-xs text-muted-foreground">
+									The cases endpoint returned an error. Make sure the API is
+									running the latest build and the database migration has been
+									applied, then refresh.
+								</p>
+							</div>
+						</CardContent>
+					</Card>
+				) : casesLoading ? (
+					<Skeleton className="h-24 w-full rounded-lg" />
+				) : (
+					<Card>
+						<CardContent className="p-4 text-sm text-muted-foreground">
+							No process cases loaded yet.
+						</CardContent>
+					</Card>
+				)
+			) : (
+				<ObservedFlows
+					flows={data?.flows ?? []}
+					nodesById={nodesById}
+					onHoverPath={setHoveredPath}
+				/>
+			)}
 		</div>
 	);
 }

@@ -218,7 +218,7 @@ pub async fn report_run(
             user_id: Set(Some(sub.clone())),
             technical_user_id: Set(None),
             caller_app_chain: Set(None),
-            trace_id: Set(None),
+            trace_id: Set(Some(body.run_id.clone())),
             parent_run_id: Set(None),
             correlation_keys: Set(None),
             app_id: Set(app_id.clone()),

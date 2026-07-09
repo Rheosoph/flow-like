@@ -443,8 +443,9 @@ pub(crate) async fn load_notes(
 
 /// Stable pseudonym for an app the viewer must not identify. Keyed by the
 /// viewing app so the same hidden app renders consistently within one view
-/// but cannot be correlated across apps.
-fn mask_app_id(app_id: &str, viewer_app_id: &str) -> String {
+/// but cannot be correlated across apps. Shared with the process-cases
+/// endpoint so masked apps resolve to the same graph node ids.
+pub(crate) fn mask_app_id(app_id: &str, viewer_app_id: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(viewer_app_id.as_bytes());
     hasher.update(b"::");

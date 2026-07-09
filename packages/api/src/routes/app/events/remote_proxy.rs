@@ -13,7 +13,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::inbound::{dispatch_mcp_for_event, dispatch_rest_for_event},
+    routes::inbound::{ProxyCallerContext, dispatch_mcp_for_event, dispatch_rest_for_event},
     state::AppState,
 };
 use axum::{
@@ -25,6 +25,19 @@ use axum::{
 };
 use flow_like_types::json::json;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+/// Process-mining caller identity for proxied calls: ties the dispatched run
+/// into the calling run's case (parent run, app chain, correlation).
+fn proxy_caller(user: &AppUser) -> ProxyCallerContext {
+    match user {
+        AppUser::ConnectedApp(app) => ProxyCallerContext {
+            app_chain: Some(app.app_chain.clone()),
+            parent_run_id: app.run_id.clone(),
+            correlation: app.correlation.clone(),
+        },
+        _ => ProxyCallerContext::default(),
+    }
+}
 
 fn caller_auth(user: &AppUser) -> flow_like_types::Value {
     match user {
@@ -68,6 +81,7 @@ async fn proxy_rest_inner(
     ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let event_row = load_event(&state, &app_id, &event_id).await?;
     let auth = caller_auth(&user);
+    let caller = proxy_caller(&user);
 
     dispatch_rest_for_event(
         &state,
@@ -80,6 +94,7 @@ async fn proxy_rest_inner(
         &body,
         false,
         Some(auth),
+        &caller,
     )
     .await
 }
@@ -150,6 +165,7 @@ pub async fn proxy_mcp(
     ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let event_row = load_event(&state, &app_id, &event_id).await?;
     let auth = caller_auth(&user);
+    let caller = proxy_caller(&user);
 
     dispatch_mcp_for_event(
         &state,
@@ -162,6 +178,7 @@ pub async fn proxy_mcp(
         &body,
         false,
         Some(auth),
+        &caller,
     )
     .await
 }

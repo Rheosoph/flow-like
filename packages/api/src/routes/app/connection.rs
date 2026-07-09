@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub mod add_connection;
+pub mod cases;
 pub mod get_accessible;
 pub mod get_connections;
 pub mod graph;
@@ -39,6 +40,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/accessible", get(get_accessible::get_accessible_apps))
         .route("/graph", get(graph::get_connection_graph))
+        .route("/cases", get(cases::list_process_cases))
         .route("/notes", get(notes::list_notes).put(notes::create_note))
         .route(
             "/notes/{note_id}",

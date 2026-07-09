@@ -105,13 +105,14 @@ pub async fn create_app_connection_token(
 
     // Extend the app chain: if this run itself was triggered through an app
     // connection, its executor JWT carries the upstream chain.
-    let (run_id, mut app_chain) = if let AppUser::Executor(executor) = &user {
+    let (run_id, mut app_chain, correlation) = if let AppUser::Executor(executor) = &user {
         (
             Some(executor.run_id.clone()),
             executor.app_chain.clone().unwrap_or_default(),
+            executor.correlation.clone(),
         )
     } else {
-        (None, Vec::new())
+        (None, Vec::new(), None)
     };
     app_chain.push(app_id.clone());
 
@@ -132,6 +133,7 @@ pub async fn create_app_connection_token(
         app_chain,
         technical_user_id: permission.technical_user_id().map(|id| id.to_string()),
         run_id,
+        correlation,
         ttl_seconds: Some(ttl_seconds),
     })
     .map_err(|err| {

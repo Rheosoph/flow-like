@@ -42,6 +42,7 @@ pub mod utils;
 
 pub mod app_connection_jwt;
 pub mod backend_jwt;
+pub mod correlation;
 pub mod compilation;
 pub mod execution;
 
