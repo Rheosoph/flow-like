@@ -5,6 +5,7 @@ pub mod get_board;
 pub mod get_board_versions;
 pub mod get_boards;
 pub mod get_execution_elements;
+pub mod get_flowscript;
 pub mod get_runs;
 pub mod invoke_board;
 pub mod invoke_board_async;
@@ -42,6 +43,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{board_id}/version",
             get(get_board_versions::get_board_versions),
+        )
+        .route(
+            "/{board_id}/flowscript",
+            get(get_flowscript::get_flowscript),
         )
         .route(
             "/{board_id}/flowscript/apply",

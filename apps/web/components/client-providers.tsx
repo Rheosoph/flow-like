@@ -6,6 +6,9 @@ import {
 	QueryClient,
 	ReactFlowProvider,
 } from "@flow-like/flow-like-ui";
+import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
+import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
+import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -91,6 +94,9 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
 													<ExecutionEngineProviderComponent>
 														<SpotlightWrapper>
 															<AppSidebar>{children}</AppSidebar>
+															<GlobalToolBridge />
+															<GlobalChatOverlay />
+															<FlowPilotBubbleButton />
 														</SpotlightWrapper>
 													</ExecutionEngineProviderComponent>
 												</ExecutionServiceProvider>

@@ -693,7 +693,14 @@ export function UsageStats({
 			</TooltipProvider>
 
 			<Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-				<SheetContent side="right" className="w-md sm:w-lg lg:w-xl sm:max-w-xl">
+				{/* This sheet is opened from inside the FlowPilot panels, which sit very high in the
+				    stacking order (embedded board panel z-100, global overlay z-9999). Raise the sheet
+				    (and its backdrop) above them so the stats aren't hidden behind the panel. */}
+				<SheetContent
+					side="right"
+					className="z-10000 w-md sm:w-lg lg:w-xl sm:max-w-xl"
+					overlayClassName="z-10000"
+				>
 					<SheetHeader className="px-2 shrink-0">
 						<SheetTitle className="flex items-center gap-2">
 							<ZapIcon className="w-4 h-4" />

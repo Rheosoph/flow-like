@@ -1,7 +1,6 @@
 "use client";
-import { createId } from "@paralleldrive/cuid2";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	AppGeneralSettings,
 	Badge,
 	Button,
 	Card,
@@ -10,12 +9,18 @@ import {
 	CardHeader,
 	CardTitle,
 	ChallengeRunner,
-	AppGeneralSettings,
 	type FlowLibraryBoardCreationState,
 	FlowLibraryBoardsSection,
 	FlowLibraryHeader,
+	type IApp,
+	type IEvent,
 	IExecutionStage,
 	ILogLevel,
+	type IMetadata,
+	type IOAuthProvider,
+	type IStoredOAuthToken,
+	LessonActionButton,
+	LessonContent,
 	ResizableHandle,
 	ResizablePanel,
 	ResizablePanelGroup,
@@ -24,21 +29,13 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 	UsePageContent,
-	LessonActionButton,
-	LessonContent,
 	buildLessonAction,
-	type IApp,
-	type IEvent,
-	type IMetadata,
-	type IOAuthProvider,
-	type IStoredOAuthToken,
 	isEqual,
 	useBackend,
 	useFlowBoardParentState,
 	useHub,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
-import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
 import type {
 	BoardSnapshot,
 	Challenge,
@@ -46,16 +43,19 @@ import type {
 	LessonAction,
 	LessonAppRef,
 } from "@flow-like/flow-like-ui";
+import { FlowWrapper } from "@flow-like/flow-like-ui/components/flow/flow-wrapper";
+import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
+import {
+	type PageData,
+	PagesSection,
+} from "@flow-like/flow-like-ui/components/settings/routes";
+import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
 import {
 	type UserLessonProgress,
 	translateId,
 } from "@flow-like/flow-like-ui/lib/learn/types";
-import { BOARD_BRIDGE_NATIVE_EVENT } from "@flow-like/flow-like-ui/lib/learn/board-bridge";
-import EventsPage from "@flow-like/flow-like-ui/components/settings/events/events-page";
-import {
-	PagesSection,
-	type PageData,
-} from "@flow-like/flow-like-ui/components/settings/routes";
+import { createId } from "@paralleldrive/cuid2";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import "@xyflow/react/dist/style.css";
 import {
 	ArrowLeft,
@@ -69,10 +69,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import type {
-	ImperativePanelGroupHandle,
-	ImperativePanelHandle,
-} from "react-resizable-panels";
 import {
 	Suspense,
 	useCallback,
@@ -82,8 +78,12 @@ import {
 	useState,
 } from "react";
 import { useAuth } from "react-oidc-context";
+import type {
+	ImperativePanelGroupHandle,
+	ImperativePanelHandle,
+} from "react-resizable-panels";
 import { toast } from "sonner";
-import { EVENT_CONFIG } from "../../../lib/event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { learnApi } from "../../../lib/learn-api";
 import { oauthConsentStore, oauthTokenStore } from "../../../lib/oauth-db";
 import { oauthService } from "../../../lib/oauth-service";
@@ -744,11 +744,7 @@ function LessonContentPage() {
 					autoSaveId="lesson-workspace-layout"
 					className="flex-1 min-h-0"
 				>
-					<ResizablePanel
-						defaultSize={50}
-						minSize={28}
-						className="min-h-0"
-					>
+					<ResizablePanel defaultSize={50} minSize={28} className="min-h-0">
 						<section className="h-full overflow-auto">{lessonBody}</section>
 					</ResizablePanel>
 					<ResizableHandle withHandle className="bg-border/60" />
@@ -759,9 +755,7 @@ function LessonContentPage() {
 						collapsible
 						collapsedSize={0}
 						onCollapse={() => setLessonMode("read")}
-						onExpand={() =>
-							setLessonMode((m) => (m === "read" ? "split" : m))
-						}
+						onExpand={() => setLessonMode((m) => (m === "read" ? "split" : m))}
 						className="min-h-0"
 					>
 						<AppPane
@@ -922,13 +916,16 @@ function AppPaneContent({
 					nodeId={target.nodeId}
 					version={target.version}
 					sub={authSub}
+					externalAssistant
 				/>
 			</div>
 		);
 	}
 
 	if (target.mode === "flows") {
-		return <AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />;
+		return (
+			<AppFlowsPane appId={target.appId} onTargetChange={onTargetChange} />
+		);
 	}
 
 	if (target.mode === "events") {
@@ -945,9 +942,7 @@ function AppPaneContent({
 					appId={target.appId}
 					eventId={target.eventId ?? null}
 					embedded
-					onEventIdChange={(eventId) =>
-						onTargetChange({ ...target, eventId })
-					}
+					onEventIdChange={(eventId) => onTargetChange({ ...target, eventId })}
 					onNavigateToFlow={(flow) =>
 						onTargetChange({
 							mode: "flow",
@@ -1057,28 +1052,25 @@ function AppPagesPane({
 		Boolean(appId),
 		[appId],
 	);
-	const pageData = useMemo<PageData[]>(
-		() => {
-			const timestamp = {
-				secs_since_epoch: Math.floor(Date.now() / 1000),
-				nanos_since_epoch: 0,
-			};
-			return (pages.data ?? []).map((page) => ({
-				appId,
-				pageId: page.pageId,
-				boardId: page.boardId ?? null,
-				metadata: {
-					name: page.name,
-					description: page.description ?? "",
-					preview_media: [],
-					tags: [],
-					created_at: timestamp,
-					updated_at: timestamp,
-				},
-			}));
-		},
-		[appId, pages.data],
-	);
+	const pageData = useMemo<PageData[]>(() => {
+		const timestamp = {
+			secs_since_epoch: Math.floor(Date.now() / 1000),
+			nanos_since_epoch: 0,
+		};
+		return (pages.data ?? []).map((page) => ({
+			appId,
+			pageId: page.pageId,
+			boardId: page.boardId ?? null,
+			metadata: {
+				name: page.name,
+				description: page.description ?? "",
+				preview_media: [],
+				tags: [],
+				created_at: timestamp,
+				updated_at: timestamp,
+			},
+		}));
+	}, [appId, pages.data]);
 
 	const handleDeletePage = useCallback(
 		async (pageId: string, boardId: string | null) => {

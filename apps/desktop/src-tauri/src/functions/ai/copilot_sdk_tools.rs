@@ -6,11 +6,12 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
+use super::internet_search::run_internet_search;
 pub use copilot_sdk::ToolHandler;
 use copilot_sdk::{Tool, ToolResultObject};
 use flow_like::flow::ast::{
@@ -18,8 +19,19 @@ use flow_like::flow::ast::{
     destructive_flowscript_command_summaries, reconcile_text_with_catalog,
 };
 use flow_like::flow::board::Board;
+use flow_like::flow::copilot::memory::AssistantMemory;
+use flow_like::flow::copilot::platform::run_memory_tool;
+use flow_like::flow::copilot::tool_spec::{
+    INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
+    find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
+    resolve_tool_approval,
+};
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, GraphContext, NodeMetadata, search_result_hint_lines,
+    BoardCommand, CatalogProvider, EmitCommandsArgs, EmitCommandsTool, GetCurrentFlowScriptTool,
+    GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool, GraphContext,
+    ListBoardNodesTool, NodeMetadata, ValidationIssue, build_list_board_nodes_output,
+    build_node_details_output, build_unconfigured_nodes_output, render_catalog_search_results,
+    tool_definition_parts, validate_emit_commands,
 };
 use flow_like::flow::pin::PinType;
 use flow_like_catalog::get_catalog;
@@ -38,8 +50,8 @@ pub fn create_board_tools(
 ) -> Vec<(Tool, ToolHandler)> {
     let mut tools = vec![
         create_catalog_search_tool(catalog_provider.clone()),
-        create_validate_commands_tool(graph_context.clone()),
-        create_emit_commands_tool(graph_context.clone()),
+        create_validate_commands_tool(graph_context.clone(), catalog_provider.clone()),
+        create_emit_commands_tool(graph_context.clone(), catalog_provider.clone()),
     ];
 
     if let Some(provider) = catalog_provider.clone() {
@@ -75,14 +87,107 @@ pub fn create_board_tools(
 /// These tools need browser/app context such as the active backend state, storage provider,
 /// approval dialogs, and execution service. The Rust SDK tool blocks until the frontend replies.
 pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
-    vec![
-        create_internet_search_tool(),
+    let mut tools = vec![
         create_database_tool(bridge.clone()),
         create_storage_tool(bridge.clone()),
         create_ui_inspect_tool(bridge.clone()),
         create_execute_event_tool(bridge.clone()),
-        create_ask_user_tool(bridge),
-    ]
+    ];
+    for name in [INTERNET_SEARCH_TOOL, "ask_user"] {
+        if let Some(spec) = find_global_tool_spec(name) {
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
+        }
+    }
+    tools
+}
+
+/// Adapt one shared platform tool spec to the Copilot SDK tool type.
+///
+/// Execution funnels through the frontend bridge with the spec's approval + timeout, except the
+/// host-local tools: `internet_search` runs in-process and the `_memory_*` tools run against the
+/// profile's `AssistantMemory`.
+pub fn sdk_tool_from_spec(
+    spec: &PlatformToolSpec,
+    bridge: FrontendToolBridge,
+    memory: Option<Arc<AssistantMemory>>,
+) -> (Tool, ToolHandler) {
+    let tool = Tool::new(spec.name)
+        .description(spec.description)
+        .schema((spec.schema)());
+    let spec = *spec;
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        if let Some(error) = missing_required_args(&spec, args) {
+            return ToolResultObject::text(
+                json!({ "status": "error", "error": error }).to_string(),
+            );
+        }
+        match spec.name {
+            INTERNET_SEARCH_TOOL => ToolResultObject::text(
+                serde_json::to_string_pretty(&run_blocking_tool(|| run_internet_search(args)))
+                    .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
+            ),
+            MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => ToolResultObject::text(block_on_tool(
+                run_memory_tool(spec.name, args, memory.as_deref()),
+            )),
+            _ => frontend_tool_result_with_timeout(
+                &bridge,
+                spec.name,
+                args.clone(),
+                approval_from_spec(&spec, args),
+                Duration::from_secs(spec.timeout_secs),
+            ),
+        }
+    });
+    (tool, handler)
+}
+
+pub fn approval_from_spec(spec: &PlatformToolSpec, args: &Value) -> FrontendToolApproval {
+    // Approval policy is resolved by core so the desktop (Tauri event) and the browser (SSE frame)
+    // enforce exactly the same rules; here it's just wrapped in the desktop's serialize type.
+    let resolved = resolve_tool_approval(spec, args);
+    FrontendToolApproval {
+        kind: resolved.kind,
+        title: resolved.title,
+        description: resolved.description,
+        session_key: resolved.session_key,
+    }
+}
+
+/// Copilot SDK tool handlers are synchronous and invoked on the async runtime; run the async
+/// host-local tools without stalling sibling tasks.
+fn block_on_tool<F: std::future::Future>(future: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+        Err(_) => tauri::async_runtime::block_on(future),
+    }
+}
+
+/// Run a blocking tool body without pinning the runtime worker it is called on.
+///
+/// The Copilot SDK invokes tool handlers synchronously on a runtime worker thread. A handler that
+/// blocks — network I/O (`internet_search`) or waiting on the frontend bridge (`list_apps`, …) —
+/// would pin that worker; with parallel tool calls that starves the runtime the frontend round-trip
+/// itself needs, deadlocking the batch. `block_in_place` hands this worker's other tasks to a
+/// sibling so the runtime keeps progressing while the closure blocks.
+fn run_blocking_tool<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => tokio::task::block_in_place(f),
+        Err(_) => f(),
+    }
+}
+
+/// Tool set for the global FlowPilot assistant, generated from the shared platform tool specs so
+/// every backend (Bits/rig, GitHub Copilot, Codex, Claude Code) advertises identical tools.
+/// App-scoped runtime tools (database/storage/execute_event) are excluded because the global
+/// assistant is not bound to a single app.
+pub fn create_global_assistant_tools(
+    bridge: FrontendToolBridge,
+    memory: Option<Arc<AssistantMemory>>,
+) -> Vec<(Tool, ToolHandler)> {
+    global_assistant_tool_specs(memory.is_some())
+        .iter()
+        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), memory.clone()))
+        .collect()
 }
 
 fn frontend_tool_result(
@@ -101,8 +206,9 @@ fn frontend_tool_result_with_timeout(
     approval: FrontendToolApproval,
     timeout: Duration,
 ) -> ToolResultObject {
+    let result = run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
     ToolResultObject::text(
-        serde_json::to_string_pretty(&bridge.call_with_timeout(tool_name, args, approval, timeout))
+        serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
     )
 }
@@ -161,157 +267,6 @@ fn flowscript_summary(flowscript: &str) -> Value {
     json!({
         "lines": if flowscript.is_empty() { 0 } else { flowscript.lines().count() },
         "chars": flowscript.chars().count(),
-    })
-}
-
-fn create_internet_search_tool() -> (Tool, ToolHandler) {
-    let tool = Tool::new("internet_search")
-        .description(
-            r#"Search the public web through Flow-Like's SearXNG instance at search.flow-like.com.
-
-Use this when current public information, documentation, examples, or external references would
-help build or debug the workflow. Prefer official docs and primary sources in your follow-up
-reasoning. Returns compact title/url/snippet/date results; fetch pages through workflow nodes only
-when the actual workflow needs fetching."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "Search query." },
-                "language": { "type": "string", "description": "SearXNG language code, default en-US." },
-                "page": { "type": "integer", "description": "1-based page number, default 1." },
-                "limit": { "type": "integer", "description": "Maximum results to return, default 8, max 20." }
-            },
-            "required": ["query"]
-        }));
-
-    let handler: ToolHandler = Arc::new(move |_name, args| {
-        ToolResultObject::text(
-            serde_json::to_string_pretty(&run_internet_search_tool(args))
-                .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
-        )
-    });
-
-    (tool, handler)
-}
-
-static SEARCH_CLIENT: LazyLock<Result<reqwest::blocking::Client, reqwest::Error>> =
-    LazyLock::new(|| {
-        reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .user_agent("FlowPilot/1.0")
-            .build()
-    });
-
-fn run_internet_search_tool(args: &Value) -> Value {
-    let query = arg_string(args, "query", "query");
-    if query.trim().is_empty() {
-        return json!({
-            "status": "error",
-            "tool": "internet_search",
-            "error": "internet_search requires a non-empty query."
-        });
-    }
-
-    let language = arg_string(args, "language", "language");
-    let language = if language.trim().is_empty() {
-        "en-US".to_string()
-    } else {
-        language
-    };
-    let page = args
-        .get("page")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .clamp(1, 100);
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(8)
-        .clamp(1, 20) as usize;
-    let url = format!(
-        "https://search.flow-like.com/search?q={}&format=json&pageno={}&language={}",
-        urlencoding::encode(&query),
-        page,
-        urlencoding::encode(&language)
-    );
-
-    let client = match SEARCH_CLIENT.as_ref() {
-        Ok(client) => client,
-        Err(error) => {
-            return json!({
-                "status": "error",
-                "tool": "internet_search",
-                "error": format!("Failed to create search client: {error}")
-            });
-        }
-    };
-
-    let response = match client.get(&url).send() {
-        Ok(response) => response,
-        Err(error) => {
-            return json!({
-                "status": "error",
-                "tool": "internet_search",
-                "query": query,
-                "error": format!("Search request failed: {error}")
-            });
-        }
-    };
-
-    let status = response.status();
-    if !status.is_success() {
-        return json!({
-            "status": "error",
-            "tool": "internet_search",
-            "query": query,
-            "http_status": status.as_u16(),
-            "error": format!("Search request failed with HTTP {status}")
-        });
-    }
-
-    let payload = match response.json::<Value>() {
-        Ok(payload) => payload,
-        Err(error) => {
-            return json!({
-                "status": "error",
-                "tool": "internet_search",
-                "query": query,
-                "error": format!("Search response was not valid JSON: {error}")
-            });
-        }
-    };
-
-    let results = payload
-        .get("results")
-        .and_then(Value::as_array)
-        .map(|results| {
-            results
-                .iter()
-                .take(limit)
-                .map(compact_search_result)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    json!({
-        "status": "ok",
-        "query": query,
-        "page": page,
-        "results": results
-    })
-}
-
-fn compact_search_result(result: &Value) -> Value {
-    let object = result.as_object();
-    json!({
-        "title": object.and_then(|item| item.get("title")).cloned().unwrap_or(Value::Null),
-        "url": object.and_then(|item| item.get("url")).cloned().unwrap_or(Value::Null),
-        "content": object.and_then(|item| item.get("content")).cloned().unwrap_or(Value::Null),
-        "publishedDate": object.and_then(|item| item.get("publishedDate")).cloned().unwrap_or(Value::Null),
-        "engine": object.and_then(|item| item.get("engine")).cloned().unwrap_or(Value::Null),
-        "category": object.and_then(|item| item.get("category")).cloned().unwrap_or(Value::Null),
-        "score": object.and_then(|item| item.get("score")).cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -516,51 +471,6 @@ this session"."#,
     (tool, handler)
 }
 
-fn create_ask_user_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
-    let tool = Tool::new("ask_user")
-        .description(
-            r#"Ask the user for one targeted input when placeholders/defaults are not enough.
-
-Prefer defaults and placeholder variables. Use this only for genuinely blocking choices. Supports
-freeform, single_choice, and multiple_choice modes. Include a recommended default whenever
-possible."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "question": { "type": "string" },
-                "mode": { "type": "string", "enum": ["freeform", "single_choice", "multiple_choice"] },
-                "choices": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "label": { "type": "string" },
-                            "value": {},
-                            "description": { "type": "string" }
-                        },
-                        "required": ["label"]
-                    }
-                },
-                "default_value": { "description": "Recommended default value/choice." },
-                "placeholder": { "type": "string" }
-            },
-            "required": ["question"]
-        }));
-
-    let handler: ToolHandler = Arc::new(move |_name, args| {
-        frontend_tool_result_with_timeout(
-            &bridge,
-            "ask_user",
-            args.clone(),
-            FrontendToolApproval::none(),
-            Duration::from_secs(600),
-        )
-    });
-
-    (tool, handler)
-}
-
 /// Catalog search tool - find nodes by functionality.
 fn create_catalog_search_tool(provider: Option<Arc<dyn CatalogProvider>>) -> (Tool, ToolHandler) {
     let tool = Tool::new("catalog_search")
@@ -591,131 +501,37 @@ EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "op
             .to_string();
 
         let results: Vec<NodeMetadata> = if let Some(provider) = provider {
-            futures::executor::block_on(provider.search(&query))
+            block_on_tool(provider.search(&query))
         } else {
             Vec::new()
         };
 
-        if results.is_empty() {
-            ToolResultObject::text("No nodes found matching your query. Try different keywords.")
-        } else {
-            let lines: Vec<String> = results
-                .iter()
-                .map(|meta| {
-                    let hints = search_result_hint_lines(meta);
-                    if hints.is_empty() {
-                        meta.to_compact()
-                    } else {
-                        format!("{} [{}]", meta.to_compact(), hints.join("; "))
-                    }
-                })
-                .collect();
-            ToolResultObject::text(lines.join("\n"))
-        }
+        ToolResultObject::text(render_catalog_search_results(&results))
     });
 
     (tool, handler)
 }
 
+/// Turn a core rig tool definition into the Copilot SDK tool type, so both loops advertise
+/// byte-identical name/description/schema.
+fn tool_from_rig_definition<T: flow_like::flow::copilot::RigTool>(rig_tool: &T) -> Tool {
+    let (name, description, parameters) = block_on_tool(tool_definition_parts(rig_tool));
+    Tool::new(name).description(description).schema(parameters)
+}
+
 /// Get node details - full info about a specific node
 fn create_get_node_details_tool(context: Arc<GraphContext>) -> (Tool, ToolHandler) {
-    let tool = Tool::new("get_node_details")
-        .description(
-            r#"Get full details about a node including position, all pins, and connections.
-
-CRITICAL: Use this BEFORE connecting to existing nodes!
-
-RETURNS:
-- position: {x, y} - use this to position new nodes nearby
-- inputs/outputs: Array of pins with {name, type, value}
-- incoming/outgoing: Current connections
-
-EXAMPLE USE:
-1. Call get_node_details on existing node
-2. Note its position (e.g., {x: 500, y: 200})
-3. Place new connected node at {x: 750, y: 200} (250px right)
-4. Use exact pin names from outputs/inputs in ConnectPins"#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "node_id": {
-                    "type": "string",
-                    "description": "The node ID to inspect (from list_board_nodes or context)"
-                }
-            },
-            "required": ["node_id"]
-        }));
+    let tool = tool_from_rig_definition(&GetNodeDetailsTool {
+        graph_context: context.clone(),
+    });
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
-        let ctx = context.clone();
         let node_id = args
             .get("node_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-
-        let node = ctx.nodes.iter().find(|n| n.id == node_id);
-
-        match node {
-            Some(node_ctx) => {
-                let incoming_edges: Vec<Value> = ctx
-                    .edges
-                    .iter()
-                    .filter(|e| e.to_node_id == node_id)
-                    .map(|e| {
-                        json!({
-                            "from_node": e.from_node_id,
-                            "from_pin": e.from_pin_name,
-                            "to_pin": e.to_pin_name
-                        })
-                    })
-                    .collect();
-
-                let outgoing_edges: Vec<Value> = ctx
-                    .edges
-                    .iter()
-                    .filter(|e| e.from_node_id == node_id)
-                    .map(|e| {
-                        json!({
-                            "from_pin": e.from_pin_name,
-                            "to_node": e.to_node_id,
-                            "to_pin": e.to_pin_name
-                        })
-                    })
-                    .collect();
-
-                let details = json!({
-                    "id": node_ctx.id,
-                    "node_type": node_ctx.node_type,
-                    "friendly_name": node_ctx.friendly_name,
-                    "position": { "x": node_ctx.position.0, "y": node_ctx.position.1 },
-                    "size": { "width": node_ctx.estimated_size.0, "height": node_ctx.estimated_size.1 },
-                    "inputs": node_ctx.inputs.iter().map(|p| {
-                        json!({
-                            "name": p.name,
-                            "type": p.type_name,
-                            "default_value": p.default_value
-                        })
-                    }).collect::<Vec<_>>(),
-                    "outputs": node_ctx.outputs.iter().map(|p| {
-                        json!({
-                            "name": p.name,
-                            "type": p.type_name
-                        })
-                    }).collect::<Vec<_>>(),
-                    "incoming_connections": incoming_edges,
-                    "outgoing_connections": outgoing_edges,
-                    "is_selected": ctx.selected_nodes.contains(&node_id)
-                });
-
-                ToolResultObject::text(serde_json::to_string_pretty(&details).unwrap_or_default())
-            }
-            None => ToolResultObject::text(format!(
-                "Error: Node with ID '{}' not found in the current graph",
-                node_id
-            )),
-        }
+        ToolResultObject::text(build_node_details_output(&node_id, &context))
     });
 
     (tool, handler)
@@ -723,14 +539,48 @@ EXAMPLE USE:
 
 const MAX_EMIT_COMMANDS: usize = 20;
 
-#[derive(Clone, Default)]
-struct KnownPins {
-    inputs: HashSet<String>,
-    outputs: HashSet<String>,
-    is_layer: bool,
+/// Run the shared core emit validation (the exact checks the rig/Bits path runs) and flatten the
+/// structured issues into model-facing strings: (errors, warnings). Validation is skipped when the
+/// board context or catalog provider is unavailable.
+fn run_emit_validation(
+    commands: &[BoardCommand],
+    explanation: &str,
+    graph_context: Option<&GraphContext>,
+    provider: Option<&Arc<dyn CatalogProvider>>,
+) -> (Vec<String>, Vec<String>) {
+    let (Some(graph_context), Some(provider)) = (graph_context, provider) else {
+        return (Vec::new(), Vec::new());
+    };
+    let args = EmitCommandsArgs {
+        commands: commands.to_vec(),
+        explanation: explanation.to_string(),
+    };
+    let outcome = block_on_tool(validate_emit_commands(
+        &args,
+        graph_context,
+        provider.as_ref(),
+    ));
+    (
+        outcome.errors.iter().map(format_validation_issue).collect(),
+        outcome
+            .warnings
+            .iter()
+            .map(format_validation_issue)
+            .collect(),
+    )
 }
 
-fn create_validate_commands_tool(graph_context: Option<Arc<GraphContext>>) -> (Tool, ToolHandler) {
+fn format_validation_issue(issue: &ValidationIssue) -> String {
+    match issue.command_index {
+        Some(index) => format!("[{}] command {}: {}", issue.code, index, issue.message),
+        None => format!("[{}] {}", issue.code, issue.message),
+    }
+}
+
+fn create_validate_commands_tool(
+    graph_context: Option<Arc<GraphContext>>,
+    provider: Option<Arc<dyn CatalogProvider>>,
+) -> (Tool, ToolHandler) {
     let tool = Tool::new("validate_commands")
         .description(
             r#"Validate a planned workflow command batch without queueing it for the user.
@@ -777,19 +627,25 @@ returns errors, fix the batch and validate again before calling emit_commands."#
             }
         };
 
-        let validation_errors =
-            validate_sdk_emit_commands(&parsed_commands, graph_context.as_deref());
+        let (validation_errors, validation_warnings) = run_emit_validation(
+            &parsed_commands,
+            explanation,
+            graph_context.as_deref(),
+            provider.as_ref(),
+        );
         let result = if validation_errors.is_empty() {
             json!({
                 "status": "valid",
                 "commands": commands,
                 "explanation": explanation,
+                "warnings": validation_warnings,
                 "message": "Command batch is valid. Call emit_commands with the same batch to queue it for review."
             })
         } else {
             json!({
                 "status": "validation_errors",
                 "errors": validation_errors,
+                "warnings": validation_warnings,
                 "commands": commands,
                 "explanation": explanation,
                 "message": "Command batch is invalid. Fix the listed errors and call validate_commands again."
@@ -803,66 +659,11 @@ returns errors, fix the batch and validate again before calling emit_commands."#
 }
 
 /// Emit commands tool - execute graph modifications
-fn create_emit_commands_tool(graph_context: Option<Arc<GraphContext>>) -> (Tool, ToolHandler) {
-    let tool = Tool::new("emit_commands")
-        .description(
-            r#"Execute graph modifications. Commands are batched and applied atomically.
-
-Prefer calling validate_commands first for non-trivial batches. emit_commands also validates
-and will not queue invalid commands.
-
-CRITICAL ORDER:
-1. AddNode commands FIRST (create nodes)
-2. UpdateNodePin commands NEXT (set literals/configuration that may create dynamic pins)
-3. ConnectPins commands LAST (wire execution + data after all pins exist)
-
-COMMAND SCHEMAS:
-AddNode: {"command_type": "AddNode", "node_type": "category::subcategory::name", "ref_id": "$0", "position": {"x": 300, "y": 200}, "summary": "description"}
-ConnectPins: {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "exec_out", "to_node": "$1", "to_pin": "exec_in", "summary": "Connect execution flow"}
-UpdateNodePin: {"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "url", "value": "https://example.com", "summary": "Set URL"}
-RemoveNode: {"command_type": "RemoveNode", "node_id": "existing_node_id", "summary": "Remove node"}
-
-POSITIONING:
-- Place new nodes NEAR related nodes (within 250px)
-- Horizontal flow: x+250 for each subsequent node
-- If connecting TO existing node at {x:500, y:200}, place new node at {x:250, y:200}
-- If connecting FROM existing node at {x:500, y:200}, place new node at {x:750, y:200}
-
-REF_IDS:
-- Use "$0", "$1", "$2" to reference new nodes in same batch
-- Can use ref_id as from_node/to_node in ConnectPins
-- Can use ref_id as node_id in UpdateNodePin
-
-EXAMPLE - HTTP request with JSON parsing:
-{
-  "commands": [
-    {"command_type": "AddNode", "node_type": "http::request::send_request", "ref_id": "$0", "position": {"x": 300, "y": 200}, "summary": "HTTP request"},
-    {"command_type": "AddNode", "node_type": "data::json::parse", "ref_id": "$1", "position": {"x": 550, "y": 200}, "summary": "Parse JSON"},
-    {"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "url", "value": "https://api.example.com", "summary": "Set URL"},
-    {"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "method", "value": "GET", "summary": "Set method"},
-    {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "exec_out", "to_node": "$1", "to_pin": "exec_in", "summary": "Execution flow"},
-    {"command_type": "ConnectPins", "from_node": "$0", "from_pin": "response_body", "to_node": "$1", "to_pin": "json_string", "summary": "Pass body"}
-  ],
-  "explanation": "HTTP GET request followed by JSON parsing"
-}"#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "commands": {
-                    "type": "array",
-                    "description": "Array of command objects. Each needs command_type + relevant fields.",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "explanation": {
-                    "type": "string",
-                    "description": "Brief description of what these commands accomplish"
-                }
-            },
-            "required": ["commands", "explanation"]
-        }));
+fn create_emit_commands_tool(
+    graph_context: Option<Arc<GraphContext>>,
+    provider: Option<Arc<dyn CatalogProvider>>,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&EmitCommandsTool);
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let commands = args.get("commands").cloned().unwrap_or(json!([]));
@@ -879,12 +680,17 @@ EXAMPLE - HTTP request with JSON parsing:
             }
         };
 
-        let validation_errors =
-            validate_sdk_emit_commands(&parsed_commands, graph_context.as_deref());
+        let (validation_errors, validation_warnings) = run_emit_validation(
+            &parsed_commands,
+            explanation,
+            graph_context.as_deref(),
+            provider.as_ref(),
+        );
         if !validation_errors.is_empty() {
             let result = json!({
                 "status": "validation_errors",
                 "errors": validation_errors,
+                "warnings": validation_warnings,
                 "commands": commands,
                 "explanation": explanation,
                 "message": format!(
@@ -954,6 +760,7 @@ EXAMPLE - HTTP request with JSON parsing:
             "status": "queued",
             "commands": commands,
             "explanation": explanation,
+            "warnings": validation_warnings,
             "summary": summary_lines.join("\n")
         });
 
@@ -965,27 +772,9 @@ EXAMPLE - HTTP request with JSON parsing:
 
 /// get_declarations tool - look up FlowScript `.flow.d` signatures by intent.
 fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, ToolHandler) {
-    let tool = Tool::new("get_declarations")
-        .description(
-            r#"Look up FlowScript node declarations (.flow.d) by intent.
-
-Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
-signatures for nodes matching your focused query, plus an `// impure` marker for side-effecting /
-control-flow nodes. Empty queries intentionally return guidance only, not the full catalog.
-
-Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
-typed arguments. Covers every package in the project's catalog."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Focused declaration search. Do not leave blank. Good examples: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
-                }
-            },
-            "required": ["query"]
-        }));
+    let tool = tool_from_rig_definition(&GetDeclarationsTool {
+        provider: provider.clone(),
+    });
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let provider = provider.clone();
@@ -995,7 +784,7 @@ typed arguments. Covers every package in the project's catalog."#,
             .unwrap_or("")
             .to_string();
 
-        let declarations = futures::executor::block_on(provider.get_declarations(&query));
+        let declarations = block_on_tool(provider.get_declarations(&query));
         ToolResultObject::text(declarations)
     });
 
@@ -1008,18 +797,9 @@ typed arguments. Covers every package in the project's catalog."#,
 /// and NOTHING is queued. Only a clean parse that yields commands queues them (status "queued"),
 /// where the main chat loop turns them into a reviewable `<commands>` envelope.
 fn create_get_current_flowscript_tool(board: Arc<Board>) -> (Tool, ToolHandler) {
-    let tool = Tool::new("get_current_flowscript")
-        .description(
-            r#"Return the current live board as anchored FlowScript.
-
-Use this before editing an existing board, especially after prior tool calls or validation errors.
-The returned document is the source you must edit and submit in full to `edit_flowscript`; preserve
-all `//@n:<id>` anchors on statements you keep."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {}
-        }));
+    let tool = tool_from_rig_definition(&GetCurrentFlowScriptTool {
+        board: board.clone(),
+    });
 
     let handler: ToolHandler = Arc::new(move |_name, _args| {
         let flowscript = board_to_flowscript(
@@ -1142,7 +922,7 @@ RULES:
 
         let catalog = provider
             .clone()
-            .map(|provider| futures::executor::block_on(provider.get_all_metadata()))
+            .map(|provider| block_on_tool(provider.get_all_metadata()))
             .unwrap_or_default();
 
         let result = reconcile_text_with_catalog(&board, flowscript, &catalog);
@@ -1214,543 +994,14 @@ RULES:
     (tool, handler)
 }
 
-fn validate_sdk_emit_commands(
-    commands: &[BoardCommand],
-    graph_context: Option<&GraphContext>,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    if commands.is_empty() {
-        errors.push("emit_commands requires at least one command".to_string());
-        return errors;
-    }
-    if commands.len() > MAX_EMIT_COMMANDS {
-        errors.push(format!(
-            "emit_commands is limited to {MAX_EMIT_COMMANDS} commands per turn"
-        ));
-    }
-
-    let mut known_entities: HashMap<String, KnownPins> = HashMap::new();
-    let mut known_layers: HashSet<String> = HashSet::new();
-    let mut known_variables: HashSet<String> = HashSet::new();
-    let mut proposed_connections: HashSet<(String, String, String, String)> = HashSet::new();
-    if let Some(ctx) = graph_context {
-        for node in &ctx.nodes {
-            known_entities.insert(
-                node.id.clone(),
-                KnownPins {
-                    inputs: node.inputs.iter().map(|pin| pin.name.clone()).collect(),
-                    outputs: node.outputs.iter().map(|pin| pin.name.clone()).collect(),
-                    is_layer: false,
-                },
-            );
-        }
-        for layer in &ctx.layers {
-            known_layers.insert(layer.id.clone());
-            known_entities.insert(
-                layer.id.clone(),
-                KnownPins {
-                    inputs: layer.inputs.iter().map(|pin| pin.name.clone()).collect(),
-                    outputs: layer.outputs.iter().map(|pin| pin.name.clone()).collect(),
-                    is_layer: true,
-                },
-            );
-        }
-        known_variables.extend(ctx.variables.iter().map(|variable| variable.id.clone()));
-        proposed_connections.extend(ctx.edges.iter().map(|edge| {
-            (
-                edge.from_node_id.clone(),
-                edge.from_pin_name.clone(),
-                edge.to_node_id.clone(),
-                edge.to_pin_name.clone(),
-            )
-        }));
-    }
-
-    let catalog = get_catalog();
-    let mut catalog_nodes = HashMap::new();
-    for logic in &catalog {
-        let node = logic.get_node();
-        catalog_nodes.insert(node.name.clone(), node);
-    }
-
-    for (index, command) in commands.iter().enumerate() {
-        match command {
-            BoardCommand::AddNode {
-                node_type,
-                ref_id,
-                position,
-                target_layer,
-                ..
-            } => {
-                if position.is_none() {
-                    errors.push(format!("Command {index}: AddNode requires a position"));
-                }
-                if ref_id.as_deref().unwrap_or_default().trim().is_empty() {
-                    errors.push(format!(
-                        "Command {index}: AddNode requires a ref_id like '$0'"
-                    ));
-                }
-                if let Some(layer_id) = target_layer
-                    && !known_layers.contains(layer_id)
-                {
-                    errors.push(format!(
-                        "Command {index}: target_layer '{layer_id}' is unknown"
-                    ));
-                }
-                let Some(node) = catalog_nodes.get(node_type) else {
-                    errors.push(format!(
-                        "Command {index}: node type '{node_type}' was not found in the catalog"
-                    ));
-                    continue;
-                };
-                if let Some(ref_id) = ref_id {
-                    if known_entities.contains_key(ref_id) {
-                        errors.push(format!(
-                            "Command {index}: ref_id '{ref_id}' is already in use"
-                        ));
-                    } else {
-                        known_entities.insert(
-                            ref_id.clone(),
-                            KnownPins {
-                                inputs: node
-                                    .pins
-                                    .values()
-                                    .filter(|pin| pin.pin_type == PinType::Input)
-                                    .map(|pin| pin.name.clone())
-                                    .collect(),
-                                outputs: node
-                                    .pins
-                                    .values()
-                                    .filter(|pin| pin.pin_type == PinType::Output)
-                                    .map(|pin| pin.name.clone())
-                                    .collect(),
-                                is_layer: false,
-                            },
-                        );
-                    }
-                }
-            }
-            BoardCommand::AddPlaceholder {
-                ref_id,
-                pins,
-                position,
-                target_layer,
-                ..
-            } => {
-                if position.is_none() {
-                    errors.push(format!(
-                        "Command {index}: AddPlaceholder requires a position"
-                    ));
-                }
-                if ref_id.as_deref().unwrap_or_default().trim().is_empty() {
-                    errors.push(format!(
-                        "Command {index}: AddPlaceholder requires a ref_id like '$0'"
-                    ));
-                }
-                if let Some(layer_id) = target_layer
-                    && !known_layers.contains(layer_id)
-                {
-                    errors.push(format!(
-                        "Command {index}: target_layer '{layer_id}' is unknown"
-                    ));
-                }
-                if let Some(ref_id) = ref_id {
-                    if known_entities.contains_key(ref_id) {
-                        errors.push(format!(
-                            "Command {index}: ref_id '{ref_id}' is already in use"
-                        ));
-                    } else {
-                        let mut entity = KnownPins {
-                            inputs: HashSet::from(["exec_in".to_string()]),
-                            outputs: HashSet::from(["exec_out".to_string()]),
-                            is_layer: true,
-                        };
-                        let mut seen_pins = HashSet::new();
-                        for pin in pins.as_deref().unwrap_or(&[]) {
-                            if pin.name.trim().is_empty() {
-                                errors.push(format!(
-                                    "Command {index}: placeholder pin names cannot be empty"
-                                ));
-                                continue;
-                            }
-                            if !seen_pins.insert(pin.name.clone()) {
-                                errors.push(format!(
-                                    "Command {index}: duplicate placeholder pin '{}'",
-                                    pin.name
-                                ));
-                            }
-                            if pin.pin_type.eq_ignore_ascii_case("input") {
-                                entity.inputs.insert(pin.name.clone());
-                            } else if pin.pin_type.eq_ignore_ascii_case("output") {
-                                entity.outputs.insert(pin.name.clone());
-                            } else {
-                                errors.push(format!(
-                                    "Command {index}: placeholder pin '{}' has invalid pin_type '{}'",
-                                    pin.name, pin.pin_type
-                                ));
-                            }
-                        }
-                        known_entities.insert(ref_id.clone(), entity);
-                        known_layers.insert(ref_id.clone());
-                    }
-                }
-            }
-            BoardCommand::ConnectPins {
-                from_node,
-                from_pin,
-                to_node,
-                to_pin,
-                ..
-            } => {
-                if from_node == to_node {
-                    errors.push(format!(
-                        "Command {index}: cannot connect node '{from_node}' to itself"
-                    ));
-                }
-                match known_entities.get(from_node) {
-                    Some(entity)
-                        if entity.outputs.contains(from_pin)
-                            || (entity.is_layer && entity.inputs.contains(from_pin)) => {}
-                    Some(entity) => errors.push(pin_lookup_error(
-                        index,
-                        from_node,
-                        from_pin,
-                        &entity.outputs,
-                        "source output",
-                    )),
-                    None => errors.push(format!(
-                        "Command {index}: source node '{from_node}' is unknown"
-                    )),
-                }
-                match known_entities.get(to_node) {
-                    Some(entity)
-                        if entity.inputs.contains(to_pin)
-                            || (entity.is_layer && entity.outputs.contains(to_pin)) => {}
-                    Some(entity) => errors.push(pin_lookup_error(
-                        index,
-                        to_node,
-                        to_pin,
-                        &entity.inputs,
-                        "target input",
-                    )),
-                    None => errors.push(format!(
-                        "Command {index}: target node '{to_node}' is unknown"
-                    )),
-                }
-                let connection_key = (
-                    from_node.clone(),
-                    from_pin.clone(),
-                    to_node.clone(),
-                    to_pin.clone(),
-                );
-                if !proposed_connections.insert(connection_key) {
-                    errors.push(format!(
-                        "Command {index}: duplicate connection '{from_node}.{from_pin}' -> '{to_node}.{to_pin}'"
-                    ));
-                }
-            }
-            BoardCommand::DisconnectPins {
-                from_node, to_node, ..
-            } => {
-                if !known_entities.contains_key(from_node) {
-                    errors.push(format!("Command {index}: node '{from_node}' is unknown"));
-                }
-                if !known_entities.contains_key(to_node) {
-                    errors.push(format!("Command {index}: node '{to_node}' is unknown"));
-                }
-            }
-            BoardCommand::MoveNode {
-                node_id,
-                target_layer,
-                ..
-            } => {
-                if !known_entities.contains_key(node_id) {
-                    errors.push(format!("Command {index}: node '{node_id}' is unknown"));
-                }
-                if let Some(layer_id) = target_layer
-                    && !known_layers.contains(layer_id)
-                {
-                    errors.push(format!(
-                        "Command {index}: target_layer '{layer_id}' is unknown"
-                    ));
-                }
-            }
-            BoardCommand::UpdateNodePin {
-                node_id, pin_id, ..
-            } => match known_entities.get(node_id) {
-                Some(entity) if entity.inputs.contains(pin_id) => {}
-                Some(entity) => errors.push(pin_lookup_error(
-                    index,
-                    node_id,
-                    pin_id,
-                    &entity.inputs,
-                    "input",
-                )),
-                None => errors.push(format!("Command {index}: node '{node_id}' is unknown")),
-            },
-            BoardCommand::RemoveNode { node_id, .. } => {
-                if !known_entities.contains_key(node_id) {
-                    errors.push(format!("Command {index}: node '{node_id}' is unknown"));
-                }
-            }
-            BoardCommand::CreateLayer {
-                name,
-                ref_id,
-                pins,
-                node_ids,
-                position,
-                target_layer,
-                ..
-            } => {
-                if node_ids.is_empty() && position.is_none() {
-                    errors.push(format!(
-                        "Command {index}: CreateLayer needs node_ids or a position"
-                    ));
-                }
-                for node_id in node_ids {
-                    if !known_entities.contains_key(node_id) {
-                        errors.push(format!(
-                            "Command {index}: layer references unknown node '{node_id}'"
-                        ));
-                    }
-                }
-                if let Some(layer_id) = target_layer
-                    && !known_layers.contains(layer_id)
-                {
-                    errors.push(format!(
-                        "Command {index}: target_layer '{layer_id}' is unknown"
-                    ));
-                }
-                if let Some(pins) = pins {
-                    let mut seen_pins = HashSet::new();
-                    for pin in pins {
-                        if pin.name.trim().is_empty() {
-                            errors
-                                .push(format!("Command {index}: layer pin names cannot be empty"));
-                            continue;
-                        }
-                        if !seen_pins.insert(pin.name.clone()) {
-                            errors.push(format!(
-                                "Command {index}: duplicate layer pin '{}'",
-                                pin.name
-                            ));
-                        }
-                        if !matches!(pin.pin_type.as_str(), "Input" | "Output") {
-                            errors.push(format!(
-                                "Command {index}: layer pin '{}' has invalid pin_type '{}'",
-                                pin.name, pin.pin_type
-                            ));
-                        }
-                    }
-                }
-                let key = ref_id
-                    .clone()
-                    .unwrap_or_else(|| format!("__new_layer_{index}"));
-                if !known_entities.contains_key(&key) {
-                    known_entities.insert(
-                        key.clone(),
-                        KnownPins {
-                            inputs: pins
-                                .as_ref()
-                                .map(|pins| {
-                                    pins.iter()
-                                        .filter(|pin| pin.pin_type == "Input")
-                                        .map(|pin| pin.name.clone())
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            outputs: pins
-                                .as_ref()
-                                .map(|pins| {
-                                    pins.iter()
-                                        .filter(|pin| pin.pin_type == "Output")
-                                        .map(|pin| pin.name.clone())
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            is_layer: true,
-                        },
-                    );
-                    known_layers.insert(key);
-                    known_layers.insert(name.clone());
-                }
-            }
-            BoardCommand::RemoveLayer { layer_id, .. } => {
-                if !known_layers.contains(layer_id) {
-                    errors.push(format!("Command {index}: layer '{layer_id}' is unknown"));
-                }
-            }
-            BoardCommand::CreateVariable {
-                name,
-                data_type,
-                value_type,
-                ..
-            } => {
-                if name.trim().is_empty()
-                    || data_type.trim().is_empty()
-                    || value_type.trim().is_empty()
-                {
-                    errors.push(format!(
-                        "Command {index}: CreateVariable requires name, data_type, and value_type"
-                    ));
-                }
-            }
-            BoardCommand::UpdateVariable {
-                variable_id,
-                name,
-                data_type,
-                value_type,
-                ..
-            } => {
-                if graph_context.is_some() && !known_variables.contains(variable_id) {
-                    errors.push(format!(
-                        "Command {index}: variable '{variable_id}' is unknown"
-                    ));
-                }
-                if name.as_deref().is_some_and(|name| name.trim().is_empty()) {
-                    errors.push(format!(
-                        "Command {index}: UpdateVariable cannot set an empty name"
-                    ));
-                }
-                if data_type
-                    .as_deref()
-                    .is_some_and(|data_type| data_type.trim().is_empty())
-                    || value_type
-                        .as_deref()
-                        .is_some_and(|value_type| value_type.trim().is_empty())
-                {
-                    errors.push(format!(
-                        "Command {index}: UpdateVariable cannot set an empty data_type or value_type"
-                    ));
-                }
-            }
-            BoardCommand::AddComment {
-                content,
-                target_layer,
-                ..
-            } => {
-                if content.trim().is_empty() {
-                    errors.push(format!(
-                        "Command {index}: CreateComment requires non-empty content"
-                    ));
-                }
-                if let Some(layer_id) = target_layer
-                    && !known_layers.contains(layer_id)
-                {
-                    errors.push(format!(
-                        "Command {index}: target_layer '{layer_id}' is unknown"
-                    ));
-                }
-            }
-            BoardCommand::RemoveVariable { variable_id, .. } => {
-                if graph_context.is_some() && !known_variables.contains(variable_id) {
-                    errors.push(format!(
-                        "Command {index}: variable '{variable_id}' is unknown"
-                    ));
-                }
-            }
-            BoardCommand::RemoveComment { .. } => {}
-        }
-    }
-
-    errors
-}
-
-fn pin_lookup_error(
-    command_index: usize,
-    node_id: &str,
-    requested_pin: &str,
-    available_pins: &HashSet<String>,
-    role: &str,
-) -> String {
-    if let Some(exact_pin) = available_pins
-        .iter()
-        .find(|pin| pin.eq_ignore_ascii_case(requested_pin))
-    {
-        return format!(
-            "Command {command_index}: {role} pin '{node_id}.{requested_pin}' is not exact. Pin names are case-sensitive; use '{exact_pin}'"
-        );
-    }
-
-    let mut available: Vec<_> = available_pins.iter().map(String::as_str).collect();
-    available.sort_unstable();
-    if available.is_empty() {
-        format!("Command {command_index}: {role} pin '{node_id}.{requested_pin}' is unknown")
-    } else {
-        format!(
-            "Command {command_index}: {role} pin '{node_id}.{requested_pin}' is unknown. Available pins: {}",
-            available.join(", ")
-        )
-    }
-}
-
 /// Get unconfigured nodes - find nodes with empty/unconnected required inputs
 fn create_get_unconfigured_nodes_tool(context: Arc<GraphContext>) -> (Tool, ToolHandler) {
-    let tool = Tool::new("get_unconfigured_nodes")
-        .description(
-            r#"Find nodes that need configuration - inputs with no value and no incoming connection.
-
-WHEN TO USE:
-- Check what needs to be configured in the workflow
-- Find nodes that aren't fully set up
-- Identify missing connections
-
-RETURNS: List of nodes with their unconfigured input pins"#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        }));
+    let tool = tool_from_rig_definition(&GetUnconfiguredNodesTool {
+        graph_context: context.clone(),
+    });
 
     let handler: ToolHandler = Arc::new(move |_name, _args| {
-        let ctx = context.clone();
-
-        // Build set of connected input pins
-        let connected_pins: std::collections::HashSet<(String, String)> = ctx
-            .edges
-            .iter()
-            .map(|e| (e.to_node_id.clone(), e.to_pin_name.clone()))
-            .collect();
-
-        let mut unconfigured: Vec<Value> = Vec::new();
-
-        for node in &ctx.nodes {
-            let mut missing_inputs: Vec<Value> = Vec::new();
-
-            for input in &node.inputs {
-                // Skip execution pins - they're optional flow control
-                if input.type_name == "Execution" {
-                    continue;
-                }
-
-                let has_connection =
-                    connected_pins.contains(&(node.id.clone(), input.name.clone()));
-                let has_value = input.default_value.is_some();
-
-                if !has_connection && !has_value {
-                    missing_inputs.push(json!({
-                        "pin": input.name,
-                        "type": input.type_name
-                    }));
-                }
-            }
-
-            if !missing_inputs.is_empty() {
-                unconfigured.push(json!({
-                    "node_id": node.id,
-                    "name": node.friendly_name,
-                    "type": node.node_type,
-                    "missing_inputs": missing_inputs
-                }));
-            }
-        }
-
-        if unconfigured.is_empty() {
-            ToolResultObject::text("All nodes are configured - no missing inputs found.")
-        } else {
-            ToolResultObject::text(serde_json::to_string_pretty(&unconfigured).unwrap_or_default())
-        }
+        ToolResultObject::text(build_unconfigured_nodes_output(&context))
     });
 
     (tool, handler)
@@ -1758,66 +1009,12 @@ RETURNS: List of nodes with their unconfigured input pins"#,
 
 /// List board nodes - get a compact overview of all nodes in the workflow
 fn create_list_board_nodes_tool(context: Arc<GraphContext>) -> (Tool, ToolHandler) {
-    let tool = Tool::new("list_board_nodes")
-        .description(
-            r#"List all nodes in the current workflow with their IDs and positions.
-
-USE THIS FIRST to understand the workflow before making changes.
-
-RETURNS:
-- node_id: Use in get_node_details, ConnectPins, UpdateNodePin
-- node_type: The node's catalog type
-- friendly_name: Human-readable name
-- position: {x, y} - use to place new nodes nearby
-
-WORKFLOW:
-1. list_board_nodes → see all nodes and positions
-2. get_node_details on relevant node → get pin names
-3. catalog_search → find new node types to add
-4. emit_commands → create nodes near existing ones + connect"#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {},
-            "required": []
-        }));
+    let tool = tool_from_rig_definition(&ListBoardNodesTool {
+        graph_context: context.clone(),
+    });
 
     let handler: ToolHandler = Arc::new(move |_name, _args| {
-        let ctx = context.clone();
-
-        if ctx.nodes.is_empty() {
-            return ToolResultObject::text(
-                "The board is empty - no nodes found. Use catalog_search to find nodes to add.",
-            );
-        }
-
-        let mut lines: Vec<String> = Vec::new();
-        lines.push(format!("Board has {} nodes:", ctx.nodes.len()));
-
-        for node in &ctx.nodes {
-            let selected = if ctx.selected_nodes.contains(&node.id) {
-                " [SELECTED]"
-            } else {
-                ""
-            };
-            let pos_str = format!("pos:({},{})", node.position.0, node.position.1);
-            lines.push(format!(
-                "- {} | {} | {} | {}{}",
-                node.id, node.node_type, node.friendly_name, pos_str, selected
-            ));
-        }
-
-        if !ctx.variables.is_empty() {
-            lines.push(format!("\nVariables ({}):", ctx.variables.len()));
-            for var in &ctx.variables {
-                lines.push(format!("- {}: {} ({})", var.id, var.name, var.data_type));
-            }
-        }
-
-        lines
-            .push("\n→ Use get_node_details(node_id) to get pin names for connections".to_string());
-
-        ToolResultObject::text(lines.join("\n"))
+        ToolResultObject::text(build_list_board_nodes_output(&context))
     });
 
     (tool, handler)
@@ -3193,41 +2390,5 @@ fn get_component_schema_doc(component_type: &str) -> String {
         )
     } else {
         base_doc
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn internet_search_requires_non_empty_query_without_network() {
-        let result = run_internet_search_tool(&json!({ "query": "   " }));
-
-        assert_eq!(result.get("status").and_then(Value::as_str), Some("error"));
-        assert_eq!(
-            result.get("tool").and_then(Value::as_str),
-            Some("internet_search")
-        );
-    }
-
-    #[test]
-    fn compact_search_result_keeps_only_model_relevant_fields() {
-        let result = compact_search_result(&json!({
-            "title": "Flow Like",
-            "url": "https://flow-like.com",
-            "content": "Workflow automation",
-            "publishedDate": "2026-06-04",
-            "engine": "test",
-            "category": "general",
-            "score": 1.25,
-            "huge": "drop me"
-        }));
-
-        assert_eq!(
-            result.get("title").and_then(Value::as_str),
-            Some("Flow Like")
-        );
-        assert!(result.get("huge").is_none());
     }
 }

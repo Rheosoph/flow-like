@@ -68,6 +68,7 @@ impl EventExecutionMode {
 /// app-connection proxy (gated by the connection role) and are never exposed
 /// publicly — so a public secret can never be bypassed via the proxy.
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventExposure {
     /// Public HTTP surface (REST/MCP), protected by the event's own auth.
     #[default]

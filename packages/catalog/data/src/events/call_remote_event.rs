@@ -1,6 +1,8 @@
+use super::chat_event::Attachment;
 use crate::data::path::FlowPath;
 use crate::remote_util::{RemoteAppSession, error_for_status, http_client, validate_path_id};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use flow_like_model_provider::history::History;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -102,6 +104,7 @@ struct PinSpec {
     data_type: VariableType,
     value_type: ValueType,
     schema: Option<String>,
+    enforce_schema: bool,
     valid_values: Option<Vec<String>>,
     default: Option<Value>,
 }
@@ -115,6 +118,7 @@ impl PinSpec {
             data_type,
             value_type: ValueType::Normal,
             schema: None,
+            enforce_schema: false,
             valid_values: None,
             default: None,
         }
@@ -130,6 +134,11 @@ impl PinSpec {
         self
     }
 
+    fn enforce(mut self) -> Self {
+        self.enforce_schema = true;
+        self
+    }
+
     fn dropdown(mut self, values: Vec<String>) -> Self {
         self.valid_values = Some(values);
         self
@@ -141,27 +150,36 @@ impl PinSpec {
     }
 }
 
+fn build_options(spec: &PinSpec) -> Option<PinOptions> {
+    if spec.valid_values.is_none() && !spec.enforce_schema {
+        return None;
+    }
+    let mut options = PinOptions::new();
+    if let Some(values) = &spec.valid_values {
+        options.set_valid_values(values.clone());
+    }
+    if spec.enforce_schema {
+        options.set_enforce_schema(true);
+    }
+    Some(options.build())
+}
+
 fn apply_spec(pin: &mut flow_like::flow::pin::Pin, spec: &PinSpec) {
     pin.value_type = spec.value_type.clone();
     pin.schema = spec.schema.clone();
-    pin.options = spec
-        .valid_values
-        .clone()
-        .map(|values| PinOptions::new().set_valid_values(values).build());
+    pin.options = build_options(spec);
 }
 
-/// Adds missing input pins, refreshes dropdown options in place (preserving
-/// selections), and removes input pins that are no longer desired.
+/// Adds missing input pins, refreshes the type/schema/options of existing pins
+/// in place (preserving the user's value & connections), and removes input pins
+/// that are no longer desired.
 fn reconcile_inputs(node: &mut Node, desired: &[PinSpec]) {
     for spec in desired {
         if let Some(pin) = node.pins.values_mut().find(|pin| pin.name == spec.name) {
-            // Keep the user's value & connections; only refresh dropdown options.
-            if spec.valid_values.is_some() {
-                pin.options = spec
-                    .valid_values
-                    .clone()
-                    .map(|values| PinOptions::new().set_valid_values(values).build());
-            }
+            pin.data_type = spec.data_type.clone();
+            pin.value_type = spec.value_type.clone();
+            pin.schema = spec.schema.clone();
+            pin.options = build_options(spec);
         } else {
             let pin = node.add_input_pin(
                 &spec.name,
@@ -269,20 +287,22 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
         PinSpec::new(
             "history",
             "History",
-            "Prior conversation messages",
-            VariableType::Generic,
-        ),
+            "Prior conversation history",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<History>())
+        .enforce(),
         PinSpec::new(
             "local_session",
             "Local Session",
             "Local session state",
-            VariableType::Generic,
+            VariableType::Struct,
         ),
         PinSpec::new(
             "global_session",
             "Global Session",
             "Global session state",
-            VariableType::Generic,
+            VariableType::Struct,
         ),
         PinSpec::new(
             "tools",
@@ -295,9 +315,11 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
             "attachments",
             "Attachments",
             "Attachments to include",
-            VariableType::Generic,
+            VariableType::Struct,
         )
-        .array(),
+        .array()
+        .schema(schema_string::<Attachment>())
+        .enforce(),
         timeout_spec(),
     ];
     let outputs = vec![
@@ -536,12 +558,16 @@ fn template_params(path: &str) -> Vec<String> {
         .collect()
 }
 
-fn flow_path_schema() -> String {
-    let schema = schemars::schema_for!(FlowPath);
+fn schema_string<T: schemars::JsonSchema>() -> String {
+    let schema = schemars::schema_for!(T);
     flow_like_types::json::to_value(&schema)
         .ok()
         .and_then(|value| flow_like_types::json::to_string(&value).ok())
         .unwrap_or_default()
+}
+
+fn flow_path_schema() -> String {
+    schema_string::<FlowPath>()
 }
 
 // ---------------------------------------------------------------------------
@@ -568,7 +594,7 @@ impl NodeLogic for CallRemoteEventNode {
             "Events/Remote",
         );
         node.add_icon("/flow/icons/event.svg");
-        node.set_version(2);
+        node.set_version(3);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         node.add_input_pin(
@@ -731,10 +757,18 @@ impl CallRemoteEventNode {
             .unwrap_or(Value::Null);
         let timeout = self.timeout_secs(context).await;
 
-        let mut messages: Vec<Value> = match history {
-            Value::Array(items) => items,
-            Value::Null => Vec::new(),
-            other => vec![other],
+        let mut messages: Vec<Value> = match &history {
+            Value::Array(items) => items.clone(),
+            Value::Object(obj) => {
+                if let Some(items) = obj.get("messages").and_then(|m| m.as_array()) {
+                    items.clone()
+                } else if obj.contains_key("role") {
+                    vec![history.clone()]
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
         };
         if !message.trim().is_empty() {
             messages.push(json!({ "role": "user", "content": message }));

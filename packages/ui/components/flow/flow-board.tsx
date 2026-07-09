@@ -36,6 +36,7 @@ import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
 	Eye,
+	FileCode2Icon,
 	FileTextIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
@@ -57,15 +58,18 @@ import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import {
 	type ComponentProps,
-	memo,
 	type ReactElement,
+	memo,
 	useCallback,
 	useEffect,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
-import type { ImperativePanelHandle } from "react-resizable-panels";
+import type {
+	ImperativePanelGroupHandle,
+	ImperativePanelHandle,
+} from "react-resizable-panels";
 import {
 	Button,
 	Sheet,
@@ -86,6 +90,7 @@ import {
 	type FlowNodeInfoOverlayHandle,
 } from "../../components/flow/flow-node/flow-node-info-overlay";
 import { FlowPages } from "../../components/flow/flow-pages";
+import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
@@ -126,14 +131,15 @@ import {
 	upsertCommentCommand,
 	upsertVariableCommand,
 } from "../../lib";
+import { getErrorMessage } from "../../lib/error-message";
 import { computeFlowLayout } from "../../lib/flow-auto-layout";
 import {
+	getFunctionReferenceNodeIdsFromEdge,
 	handleConnection,
 	handleEdgesChange,
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
-	getFunctionReferenceNodeIdsFromEdge,
 	removeFunctionReferenceCommandForEdge,
 } from "../../lib/flow-board-helpers";
 import {
@@ -144,7 +150,6 @@ import {
 	parseBoard,
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
-import { getErrorMessage } from "../../lib/error-message";
 import { toastError, toastSuccess } from "../../lib/messages";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
@@ -159,6 +164,10 @@ import { type INode, IVariableType } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
 import { convertJsonToUint8Array } from "../../lib/uint8";
+import {
+	type AssistantBoardSurface,
+	useAssistantSurface,
+} from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
@@ -175,17 +184,17 @@ import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
+import { FlowLayerIndicators } from "./flow-layer-indicators";
+import { PinEditModal } from "./flow-pin/edit-modal";
+import { FlowPresenceBar } from "./flow-presence-bar";
+import { FlowRuns } from "./flow-runs";
+import { FlowSearch } from "./flow-search";
 import {
 	type FlowElementOption,
 	createEmptyFlowSelectorData,
 	flattenPageElements,
 	indexBitsByRef,
 } from "./flow-selector-data";
-import { FlowLayerIndicators } from "./flow-layer-indicators";
-import { PinEditModal } from "./flow-pin/edit-modal";
-import { FlowPresenceBar } from "./flow-presence-bar";
-import { FlowRuns } from "./flow-runs";
-import { FlowSearch } from "./flow-search";
 import { FlowTemplateSelector } from "./flow-template-selector";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
@@ -303,7 +312,9 @@ const FlowCanvas = memo(function FlowCanvas({
 				nodeColor={miniMapNodeColor}
 			/>
 			<Background
-				variant={currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+				variant={
+					currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots
+				}
 				color={
 					currentLayer
 						? "color-mix(in oklch, var(--foreground) 5%, transparent)"
@@ -317,6 +328,12 @@ const FlowCanvas = memo(function FlowCanvas({
 	);
 });
 
+// Index of each panel inside the outer horizontal ResizablePanelGroup, ordered by
+// their `order` prop: variables(0), main container(1), runs(2), flowscript(3), search(4).
+const MAIN_PANEL_INDEX = 1;
+const RUNS_PANEL_INDEX = 2;
+const FLOWSCRIPT_PANEL_INDEX = 3;
+
 export function FlowBoard({
 	appId,
 	boardId,
@@ -325,6 +342,7 @@ export function FlowBoard({
 	extraDockItems,
 	renderOverlay,
 	sub,
+	externalAssistant = false,
 }: Readonly<{
 	appId: string;
 	boardId: string;
@@ -340,6 +358,11 @@ export function FlowBoard({
 	}>;
 	renderOverlay?: () => React.ReactNode;
 	sub?: string;
+	/**
+	 * When true the host app provides the assistant (global chat) — FlowPilot launchers route to
+	 * requestOpenAssistant() and the embedded FlowCopilot panel/sheet are not mounted.
+	 */
+	externalAssistant?: boolean;
 }>) {
 	const {
 		pushCommand,
@@ -384,6 +407,8 @@ export function FlowBoard({
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
 
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
+	const flowScriptPanelRef = useRef<ImperativePanelHandle>(null);
+	const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
 	const shiftPressed = useKeyPress("Shift");
@@ -713,22 +738,25 @@ export function FlowBoard({
 			</Button>,
 		);
 
-		// FlowPilot button with fancy styling
-		right.push(
-			<Button
-				variant={"outline"}
-				size={"icon"}
-				aria-label="Open FlowPilot"
-				onClick={() => setCopilotOpen(true)}
-				className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
-			>
-				<div className="absolute inset-0 rounded-md bg-linear-to-br from-primary/20 via-violet-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-				<SparklesIcon className="w-4 h-4 text-primary relative z-10" />
-				{currentMetadata && (
-					<span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
-				)}
-			</Button>,
-		);
+		// FlowPilot button with fancy styling. When the host provides the global assistant, the
+		// floating FlowPilot bubble is the entry point instead, so skip this in-interface button.
+		if (!externalAssistant) {
+			right.push(
+				<Button
+					variant={"outline"}
+					size={"icon"}
+					aria-label="Open FlowPilot"
+					onClick={() => openAssistant()}
+					className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
+				>
+					<div className="absolute inset-0 rounded-md bg-linear-to-br from-primary/20 via-violet-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+					<SparklesIcon className="w-4 h-4 text-primary relative z-10" />
+					{currentMetadata && (
+						<span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
+					)}
+				</Button>,
+			);
+		}
 
 		if (currentLayer) {
 			left.push(
@@ -754,6 +782,7 @@ export function FlowBoard({
 		parentRegister.boardParents,
 		boardId,
 		updateHeader,
+		externalAssistant,
 	]);
 
 	const pinToNode = useCallback(
@@ -1054,6 +1083,8 @@ export function FlowBoard({
 
 	const [varsOpen, setVarsOpen] = useState(false);
 
+	const [flowScriptSheetOpen, setFlowScriptSheetOpen] = useState(false);
+	const [flowScriptPanelVisible, setFlowScriptPanelVisible] = useState(false);
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
@@ -1075,6 +1106,19 @@ export function FlowBoard({
 		setCopilotInitialPrompt(undefined);
 		setCopilotWorkspaceVisible(false);
 	}, []);
+	// Single launcher: hosts with a global assistant (desktop) route to the shared surface store,
+	// everything else keeps the embedded FlowCopilot panel.
+	const openAssistant = useCallback(
+		(prompt?: string) => {
+			if (externalAssistant) {
+				useAssistantSurface.getState().requestOpenAssistant(prompt);
+				return;
+			}
+			if (prompt) setCopilotInitialPrompt(prompt);
+			setCopilotOpen(true);
+		},
+		[externalAssistant],
+	);
 	const handleClearRunContext = useCallback(
 		() => setCurrentMetadata(undefined),
 		[setCurrentMetadata],
@@ -1087,14 +1131,43 @@ export function FlowBoard({
 	}, [copilotOpen]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 
-	const { toggleVars, toggleRunHistory, toggleLogs } = useFlowPanels({
+	const { toggleVars, toggleLogs } = useFlowPanels({
 		varPanelRef,
-		runsPanelRef,
 		logPanelRef,
 		setVarsOpen,
-		setRunsOpen,
 		setLogsOpen,
 	});
+
+	// Runs and FlowScript are collapsible siblings on the right edge of the outer
+	// horizontal group. Collapsing one via the per-panel imperative API makes
+	// react-resizable-panels hand the freed width to its immediate neighbor, which
+	// un-collapses it (e.g. closing FlowScript surfaces Runs). Rewrite the whole
+	// layout instead and give the freed width back to the flexible main container.
+	const setSidePanelSize = useCallback((index: number, size: number) => {
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const layout = group.getLayout();
+		const current = layout[index] ?? 0;
+		if (Math.abs(current - size) < 0.01) return;
+		const next = [...layout];
+		next[index] = size;
+		next[MAIN_PANEL_INDEX] = Math.max(
+			0,
+			(next[MAIN_PANEL_INDEX] ?? 0) - (size - current),
+		);
+		group.setLayout(next);
+	}, []);
+
+	const toggleRunHistory = useCallback(() => {
+		if (isMobile) {
+			setRunsOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[RUNS_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(RUNS_PANEL_INDEX, open ? 30 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	const togglePages = useCallback(() => {
 		if (isMobile) {
@@ -1105,6 +1178,17 @@ export function FlowBoard({
 			setPagesOpen((v) => !v);
 		}
 	}, [isMobile]);
+
+	const toggleFlowScript = useCallback(() => {
+		if (isMobile) {
+			setFlowScriptSheetOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[FLOWSCRIPT_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, open ? 35 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	// Clear selections when version changes
 	useEffect(() => {
@@ -1765,10 +1849,9 @@ export function FlowBoard({
 					? "Explain what this node does and how it works in the context of this flow."
 					: `Explain what these ${nodeCount} selected nodes do and how they work together in this flow.`;
 
-			setCopilotInitialPrompt(prompt);
-			setCopilotOpen(true);
+			openAssistant(prompt);
 		},
-		[setNodes],
+		[setNodes, openAssistant],
 	);
 
 	const placeNode = useCallback(
@@ -3026,10 +3109,49 @@ export function FlowBoard({
 		[applyFlowScript, currentLayer, catalog.data],
 	);
 
+	// Publish the live board surface for the global assistant while this board is
+	// mounted (old versions are read-only, so they never register).
+	useEffect(() => {
+		if (typeof version !== "undefined") return;
+		const surface: AssistantBoardSurface = {
+			appId,
+			boardId,
+			board: board.data,
+			currentLayer,
+			catalogNodes: catalog.data,
+			selectedNodeIds,
+			runContext: currentMetadata,
+			applyFlowScript: handleApplyFlowScript,
+			executeCommands: handleExecuteCommands,
+			focusNode,
+			selectNodes,
+			clearRunContext: handleClearRunContext,
+		};
+		useAssistantSurface.getState().setBoardSurface(surface);
+		return () => {
+			const store = useAssistantSurface.getState();
+			if (store.boardSurface === surface) store.setBoardSurface(null);
+		};
+	}, [
+		version,
+		appId,
+		boardId,
+		board.data,
+		currentLayer,
+		catalog.data,
+		selectedNodeIds,
+		currentMetadata,
+		handleApplyFlowScript,
+		handleExecuteCommands,
+		focusNode,
+		selectNodes,
+		handleClearRunContext,
+	]);
+
 	return (
 		<div className="w-full flex flex-1 grow flex-col min-h-0 relative overflow-hidden">
-			{/* Desktop FlowPilot floating panel */}
-			{copilotOpen && (
+			{/* Desktop FlowPilot floating panel (embedded hosts only) */}
+			{!externalAssistant && copilotOpen && (
 				<div className="hidden md:block fixed inset-0 z-100 pointer-events-none">
 					<div
 						className="absolute inset-y-0 right-0 pointer-events-auto transition-[width] duration-300 ease-out"
@@ -3222,6 +3344,13 @@ export function FlowBoard({
 							},
 						},
 						{
+							icon: <FileCode2Icon />,
+							title: "FlowScript",
+							onClick: async () => {
+								toggleFlowScript();
+							},
+						},
+						{
 							icon: <HistoryIcon />,
 							separator: "left",
 							title: "Run History",
@@ -3254,13 +3383,19 @@ export function FlowBoard({
 								]
 							: []),
 						...(extraDockItems ?? []),
-						{
-							icon: <SparklesIcon className="text-white" />,
-							title: "FlowPilot",
-							separator: "left",
-							special: true,
-							onClick: () => setCopilotOpen(true),
-						},
+						// The floating FlowPilot bubble replaces this dock item when the host
+						// provides the global assistant.
+						...(externalAssistant
+							? []
+							: [
+									{
+										icon: <SparklesIcon className="text-white" />,
+										title: "FlowPilot",
+										separator: "left",
+										special: true,
+										onClick: () => openAssistant(),
+									},
+								]),
 					]}
 				/>
 				{renderOverlay?.()}
@@ -3275,6 +3410,7 @@ export function FlowBoard({
 			)}
 
 			<ResizablePanelGroup
+				ref={panelGroupRef}
 				direction="horizontal"
 				className="flex grow flex-1 min-h-0 h-full overscroll-none"
 				style={{
@@ -3284,8 +3420,9 @@ export function FlowBoard({
 			>
 				{/* Desktop/Tablet side panels */}
 				<ResizablePanel
+					id="flow-variables"
+					order={1}
 					className="z-50 bg-background hidden md:block"
-					autoSave="flow-variables"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3302,7 +3439,7 @@ export function FlowBoard({
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
-				<ResizablePanel autoSave="flow-main-container">
+				<ResizablePanel id="flow-main-container" order={2}>
 					<ResizablePanelGroup
 						direction="vertical"
 						className="h-full flex grow"
@@ -3493,8 +3630,9 @@ export function FlowBoard({
 				</ResizablePanel>
 				<ResizableHandle withHandle />
 				<ResizablePanel
+					id="flow-runs"
+					order={3}
 					className="z-50 hidden md:block"
-					autoSave="flow-runs"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3512,10 +3650,36 @@ export function FlowBoard({
 						/>
 					)}
 				</ResizablePanel>
+				<ResizableHandle withHandle />
+				<ResizablePanel
+					id="flow-flowscript"
+					order={4}
+					className="z-50 hidden md:block"
+					defaultSize={0}
+					collapsible={true}
+					collapsedSize={0}
+					ref={flowScriptPanelRef}
+					onExpand={() => setFlowScriptPanelVisible(true)}
+					onCollapse={() => setFlowScriptPanelVisible(false)}
+				>
+					{board.data && flowScriptPanelVisible && (
+						<FlowScriptPanel
+							appId={appId}
+							boardId={boardId}
+							version={version}
+							boardUpdatedAt={board.dataUpdatedAt}
+							catalogNodes={catalog.data}
+							onApplyFlowScript={handleApplyFlowScript}
+							onClose={() => setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 0)}
+						/>
+					)}
+				</ResizablePanel>
 				{searchMode === "sidebar" && searchOpen && (
 					<>
 						<ResizableHandle withHandle />
 						<ResizablePanel
+							id="flow-search"
+							order={5}
 							className="z-50 hidden md:block min-w-[280px] max-w-[400px]"
 							defaultSize={20}
 							minSize={15}
@@ -3594,6 +3758,27 @@ export function FlowBoard({
 						)}
 					</SheetContent>
 				</Sheet>
+				{/* FlowScript Sheet (mobile) */}
+				<Sheet open={flowScriptSheetOpen} onOpenChange={setFlowScriptSheetOpen}>
+					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
+						<SheetHeader className="px-4 pt-4">
+							<SheetTitle>FlowScript</SheetTitle>
+						</SheetHeader>
+						{board.data && flowScriptSheetOpen && (
+							<div className="h-[calc(90dvh-3.5rem)] w-full">
+								<FlowScriptPanel
+									appId={appId}
+									boardId={boardId}
+									version={version}
+									boardUpdatedAt={board.dataUpdatedAt}
+									catalogNodes={catalog.data}
+									onApplyFlowScript={handleApplyFlowScript}
+									onClose={() => setFlowScriptSheetOpen(false)}
+								/>
+							</div>
+						)}
+					</SheetContent>
+				</Sheet>
 				{/* Pages Sheet */}
 				<Sheet open={pagesOpen} onOpenChange={setPagesOpen}>
 					<SheetContent side="right" className="w-[400px] sm:w-[540px] p-0">
@@ -3609,9 +3794,9 @@ export function FlowBoard({
 						/>
 					</SheetContent>
 				</Sheet>
-				{/* Mobile FlowPilot Sheet */}
+				{/* Mobile FlowPilot Sheet (embedded hosts only) */}
 				<Sheet
-					open={copilotOpen && isMobile}
+					open={!externalAssistant && copilotOpen && isMobile}
 					onOpenChange={(open) => {
 						setCopilotOpen(open);
 						if (!open) setCopilotInitialPrompt(undefined);

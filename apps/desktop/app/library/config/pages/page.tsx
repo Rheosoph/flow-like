@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
-import { EVENT_CONFIG } from "../../../../lib/event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { oauthConsentStore, oauthTokenStore } from "../../../../lib/oauth-db";
 import { oauthService } from "../../../../lib/oauth-service";
 

@@ -334,6 +334,7 @@ fn renders_return_statement() {
             body: Block {
                 stmts: vec![Stmt::Return {
                     values: vec![Expr::Ref("title".to_string())],
+                    anchor: None,
                 }],
             },
         }],

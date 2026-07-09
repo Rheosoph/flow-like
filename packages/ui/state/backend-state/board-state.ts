@@ -31,6 +31,15 @@ export interface IApplyFlowScriptResponse {
 	diagnostics: string[];
 }
 
+export interface IFlowScriptDiagnostic {
+	message: string;
+	/** 1-based line number. */
+	line: number;
+	/** 1-based column number. */
+	col: number;
+	severity: "error" | "warning";
+}
+
 export interface IBoardState {
 	getBoards(appId: string): Promise<IBoard[]>;
 	getCatalog(appId: string): Promise<INode[]>;
@@ -141,6 +150,22 @@ export interface IBoardState {
 		allowDeletions?: boolean,
 	): Promise<IApplyFlowScriptResponse>;
 
+	/** Render the board as FlowScript source text (anchored by default for stable round-trips). */
+	getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string>;
+
+	/**
+	 * Authoritative parse-only FlowScript validation via the native (Rust) parser, returning
+	 * positioned diagnostics. Non-mutating, safe to call while typing. Optional — only present
+	 * where a native parser exists (Flow-Like Studio / desktop); elsewhere the editor relies on
+	 * the client-side structural linter.
+	 */
+	lintFlowScript?(flowscript: string): Promise<IFlowScriptDiagnostic[]>;
+
 	getExecutionElements(
 		appId: string,
 		boardId: string,
@@ -164,6 +189,18 @@ export interface IBoardState {
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		/**
+		 * Sub-agent run spawned while another copilot session is mid-turn (e.g. the global
+		 * assistant's flowpilot_board). Agent-CLI backends use this to isolate the run in its
+		 * own CLI process — the copilot CLI serializes requests within one process.
+		 */
+		nested?: boolean,
+		/**
+		 * Read-only sub-run (flowpilot_board explain): the board copilot answers a question about
+		 * the board and emits no edits. Keeps it out of workflow-edit mode so its answer is streamed
+		 * and returned instead of being coerced into producing (and failing to produce) an edit.
+		 */
+		readOnly?: boolean,
 	): Promise<UnifiedCopilotResponse>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for a board */

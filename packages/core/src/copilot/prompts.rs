@@ -32,13 +32,13 @@ Every response you give MUST include at least one tool call. You are a tool-call
 
 **MANDATORY TOOL USAGE BY REQUEST TYPE:**
 - User asks to CREATE/ADD/BUILD workflow behavior → call get_current_flowscript when a board exists, call get_declarations, then edit_flowscript when available
-- User asks to CREATE/ADD/BUILD UI → call validate_ui first when available, then emit_ui
-- User asks to MODIFY/CHANGE/UPDATE → call the relevant validate/emit tool sequence immediately
+- User asks to CREATE/ADD/BUILD UI → emit_ui DIRECTLY, building the components from the component docs you already have in context. Do NOT pre-validate or fetch schemas as a matter of course — a competent UI builder writes the tree in one pass. Only call get_component_schema for a SPECIFIC component whose props you genuinely don't know, and only call validate_ui if a prior emit_ui reported errors.
+- User asks to MODIFY/CHANGE/UPDATE → call the relevant emit tool immediately (skip redundant validation/schema round-trips)
 - User asks about the current board/workflow, asks "explain", "what does this do", "why is this
   wired like that", or asks for a review/debug read → use the Current Board FlowScript as the
   primary semantic view, call list_board_nodes or get_node_details for grounding, then answer
 - User asks about available nodes → call catalog_search
-- User asks about UI components → call get_component_schema then emit_ui
+- User needs one component whose exact props you don't already know → call get_component_schema for THAT component only, then emit_ui
 - User asks a question about the workflow → call exploration tools first, then answer
 - User asks for public/current information → call internet_search
 - User asks about app data/files/events → call database_tool, storage_tool, or execute_event
@@ -185,6 +185,32 @@ Keep dashboards clean with functions/layers: put each page's onLoad logic in its
 `function pageLoad() { … }` (it becomes a Function layer), and factor repeated work — querying a
 table, filling a container with widget instances — into small helper functions instead of one long
 event block. See the dashboard examples below.
+"#;
+
+/// A2UI page contract: how board logic pushes values into a live UI page. Prevents the recurring
+/// mistake of using page/global state (a scratch store) to drive on-screen `$.data.*` bindings.
+pub const A2UI_STATE_GUIDANCE: &str = r#"
+## A2UI PAGES: UPDATING WHAT A WIDGET SHOWS
+When a board drives an a2ui page (page-load or action event handlers writing to a UI surface),
+pick the write node by WHERE the value must appear. These are NOT interchangeable:
+
+- To change something visible on screen — any value a widget binds to via `$.data.<path>` — use
+  **Data Update** (`a2uiDataUpdate`). Its `path` is that binding path WITHOUT the `$.` prefix and
+  with `/` separators: a widget bound to `$.data.temperature` is fed by
+  `a2uiDataUpdate({{ path: "data/temperature", value }})`. `surfaceId` defaults to `"main"`; set it
+  to the surface the widget lives on. This streams a data-model update that re-renders bound widgets
+  immediately. This is the ONLY node that updates the live UI.
+- **Set Page State** (`a2uiSetPageState`) does NOT touch `$.data.*` bindings and will NOT update the
+  screen. Page state is a separate per-page key/value store that widgets never read; its value only
+  travels back to the board on the NEXT event, where **Get Page State** (`a2uiGetPageState`) reads
+  it. Use it for cross-event scratch data scoped to a page. Its `key` is a plain identifier (e.g.
+  `"lastQuery"`), never a `$.data...` path.
+- **Set/Get Global State** behave like page state but shared across pages — same rule, not for
+  display.
+
+Rule of thumb: value must be visible now -> `a2uiDataUpdate`. Value must survive to a later
+event/handler -> page/global state. When unsure, call `get_declarations` for "data update" and
+"page state" and read the signatures before writing.
 "#;
 
 /// Execution wiring contract shared by board prompts.
@@ -576,6 +602,8 @@ Use the lower-level `emit_commands` tool ONLY for things FlowScript text cannot 
 
 {database_guidance}
 
+{a2ui_guidance}
+
 {dashboard_guidance}
 
 {execution_guidance}
@@ -691,6 +719,7 @@ ALWAYS emit commands in this order:
         templates = templates_tool,
         logs = logs_tool,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
@@ -727,6 +756,7 @@ Wrap it in a ```json fence like this:
 - You MUST include the JSON block — text-only responses render nothing.
 - Put ALL components in ONE JSON block. Do NOT split across multiple blocks.
 - Generate the COMPLETE component tree in a single response.
+- The root component's id MUST be EXACTLY "root", and `rootComponentId` MUST be "root". Never use "page-root", "main", or any other id for the root — the surface will not render otherwise. (A widget's own tree likewise roots at id "root".)
 - Make design choices autonomously — do not ask questions.
 - You may include brief explanation text before or after the JSON block.
 
@@ -751,6 +781,34 @@ Wrap it in a ```json fence like this:
 ```json
 "children": {{"explicitList": ["child-id-1", "child-id-2"]}}
 ```
+
+## WIDGETS (reusable / repeated elements)
+When the page needs a REUSABLE or REPEATED element — a card in a list/grid, a project or save-state row, an email-list item, a stat card shown several times — build it as a WIDGET instead of duplicating components. A simple one-off layout (a dashboard with a chart and a table) needs NO widget; use plain components. Keep it to at most 1-2 widgets per page; only extract what is genuinely reused or data-repeated.
+
+Place a widget on the page as a `widgetInstance` component inside `components`, carrying its definition inline:
+```json
+{{"id": "project-card-1", "component": {{
+  "type": "widgetInstance",
+  "widgetId": "project-card",
+  "instanceId": "project-card-1",
+  "inlineWidgetDef": {{
+    "name": "Project Card",
+    "rootComponentId": "pc-root",
+    "components": [
+      {{"id": "pc-root", "component": {{"type": "column", "children": {{"explicitList": ["pc-title", "pc-desc"]}}}}}},
+      {{"id": "pc-title", "component": {{"type": "text", "content": {{"path": "$.item.name", "defaultValue": "Project"}}}}}},
+      {{"id": "pc-desc", "component": {{"type": "text", "content": {{"path": "$.item.description"}}}}}}
+    ],
+    "exposedProps": [
+      {{"id": "accent", "label": "Accent", "targetComponentId": "pc-root", "propertyPath": "style.className", "propType": "TailwindClass"}}
+    ]
+  }},
+  "exposedPropValues": {{"accent": "border-l-4 border-primary"}}
+}}}}
+```
+- `inlineWidgetDef` is the widget's OWN component tree (same format as the page) with its own `rootComponentId`. Define it ONCE; to reuse it, add more `widgetInstance` components with the SAME `widgetId` and a fresh `instanceId`.
+- `exposedProps` declares caller-settable parameters: `targetComponentId` (a component id INSIDE the widget) + `propertyPath` (`"content"`, `"style.className"`, `"data"`) + `propType` (`String`, `Number`, `Boolean`, `Color`, `TailwindClass`, `StyleObject`, `BoundValue`). Set them per instance in `exposedPropValues` (keyed by prop id).
+- For DYNAMIC data (a real list of items), bind the widget's inner components to the item with `{{"path": "$.item.field"}}` and drive the list from the app's board — do NOT hand-write one component per row.
 
 {component_docs}
 
@@ -806,12 +864,15 @@ For dashboards (a workflow that drives a page/widgets): call ui_inspect before a
 
 {dashboard_guidance}
 
+{a2ui_guidance}
+
 {execution_guidance}
 
 {explanation_guidance}
 
 {autonomy_guidance}"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
@@ -841,6 +902,8 @@ You MUST follow this sequence. Do not skip straight to emit_commands.
 {autonomy_guidance}
 
 {database_guidance}
+
+{a2ui_guidance}
 
 {dashboard_guidance}
 
@@ -923,6 +986,7 @@ Batch commands in this order:
 7. If `validate_commands` or `emit_commands` returns validation issues, treat that as a failed draft, fix the reported problems, and resend a corrected batch only"#,
         enforcement = TOOL_ENFORCEMENT_RULES,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
@@ -998,6 +1062,8 @@ before emitting.
 
 {database_guidance}
 
+{a2ui_guidance}
+
 {dashboard_guidance}
 
 {execution_guidance}
@@ -1030,6 +1096,7 @@ changes; validate_commands first)
         flowscript = flowscript,
         node_count = node_count,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
+        a2ui_guidance = A2UI_STATE_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,

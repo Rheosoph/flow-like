@@ -9,6 +9,7 @@ import {
 	IConnectionMode,
 	type IExecutionMode,
 	type IExecutionStage,
+	type IFlowScriptDiagnostic,
 	type IGenericCommand,
 	type IHub,
 	type IIntercomEvent,
@@ -1903,6 +1904,43 @@ export class BoardState implements IBoardState {
 		return result;
 	}
 
+	async getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors = true,
+	): Promise<string> {
+		try {
+			return await invoke<string>("get_flowscript", {
+				appId,
+				boardId,
+				version,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			if (version) params.set("version", version.join("_"));
+			params.set("anchors", String(anchors));
+			const response = await fetcher<{ flowscript: string }>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return response.flowscript;
+		}
+	}
+
+	async lintFlowScript(flowscript: string): Promise<IFlowScriptDiagnostic[]> {
+		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
+			flowscript,
+		});
+	}
+
 	async getExecutionElements(
 		appId: string,
 		boardId: string,
@@ -1978,6 +2016,8 @@ export class BoardState implements IBoardState {
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		nested?: boolean,
+		readOnly?: boolean,
 	): Promise<UnifiedCopilotResponse> {
 		console.log(
 			"[copilot_chat] Calling with scope:",
@@ -2009,6 +2049,8 @@ export class BoardState implements IBoardState {
 			token: actualToken,
 			runContext,
 			actionContext,
+			nested,
+			readOnly,
 		});
 	}
 

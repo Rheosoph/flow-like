@@ -155,6 +155,15 @@ export class EmptyBoardState implements IBoardState {
 		throw new Error("Method not implemented.");
 	}
 
+	getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string> {
+		throw new Error("Method not implemented.");
+	}
+
 	getExecutionElements(
 		appId: string,
 		boardId: string,
@@ -179,6 +188,7 @@ export class EmptyBoardState implements IBoardState {
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		nested?: boolean,
 	): Promise<UnifiedCopilotResponse> {
 		throw new Error("Method not implemented.");
 	}

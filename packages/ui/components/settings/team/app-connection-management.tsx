@@ -647,18 +647,42 @@ function AppSearchPicker({
 	>();
 	const activeSelection =
 		selected && selected[0].id === value ? selected : undefined;
-	const search = useDebounce(value.trim(), 400);
+	const search = useDebounce(value.trim(), 300);
 	const searchEnabled = !activeSelection && search.length > 0;
-	const appSearch = useInvoke(
+
+	const ownApps = useInvoke(backend.appState.getApps, backend.appState, []);
+	const storeSearch = useInvoke(
 		backend.appState.searchApps,
 		backend.appState,
 		[undefined, search],
 		searchEnabled,
 	);
-	const results = useMemo(
-		() => (appSearch.data ?? []).filter(([app]) => app.id !== currentAppId),
-		[appSearch.data, currentAppId],
-	);
+
+	const results = useMemo(() => {
+		if (!searchEnabled) return [];
+		const needle = search.toLowerCase();
+		const merged = new Map<string, [IApp, IMetadata | undefined]>();
+
+		for (const entry of ownApps.data ?? []) {
+			const [app, metadata] = entry;
+			if (app.id === currentAppId) continue;
+			const name = metadata?.name?.toLowerCase() ?? "";
+			if (app.id.toLowerCase().includes(needle) || name.includes(needle)) {
+				merged.set(app.id, entry);
+			}
+		}
+
+		for (const entry of storeSearch.data ?? []) {
+			const [app] = entry;
+			if (app.id !== currentAppId && !merged.has(app.id)) {
+				merged.set(app.id, entry);
+			}
+		}
+
+		return Array.from(merged.values());
+	}, [searchEnabled, search, ownApps.data, storeSearch.data, currentAppId]);
+
+	const isFetching = storeSearch.isFetching || ownApps.isFetching;
 
 	return (
 		<div className="space-y-2">
@@ -676,8 +700,8 @@ function AppSearchPicker({
 				<Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 			</div>
 			<p className="text-xs text-muted-foreground">
-				Search apps by name, or paste an app ID directly — private apps are not
-				searchable.
+				Search your apps by name, or paste any app ID directly to connect an app
+				you don&apos;t own.
 			</p>
 
 			{activeSelection && (
@@ -700,14 +724,14 @@ function AppSearchPicker({
 
 			{searchEnabled && (
 				<div className="space-y-2">
-					{appSearch.isFetching && (
+					{isFetching && results.length === 0 && (
 						<div className="flex items-center justify-center gap-2 py-4 text-muted-foreground">
 							<RefreshCw className="h-4 w-4 animate-spin" />
 							<span className="text-sm">Searching apps...</span>
 						</div>
 					)}
 
-					{!appSearch.isFetching && results.length > 0 && (
+					{results.length > 0 && (
 						<div className="max-h-48 space-y-2 overflow-y-auto pr-1">
 							{results.map(([app, metadata]) => (
 								<button
@@ -733,7 +757,7 @@ function AppSearchPicker({
 						</div>
 					)}
 
-					{!appSearch.isFetching && results.length === 0 && (
+					{!isFetching && results.length === 0 && (
 						<p className="py-2 text-center text-xs text-muted-foreground">
 							No apps found. You can still paste an app ID directly.
 						</p>

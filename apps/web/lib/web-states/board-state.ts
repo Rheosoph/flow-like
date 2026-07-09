@@ -672,6 +672,22 @@ export class WebBoardState implements IBoardState {
 		);
 	}
 
+	async getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors = true,
+	): Promise<string> {
+		const params = new URLSearchParams();
+		if (version) params.set("version", version.join("_"));
+		params.set("anchors", String(anchors));
+		const response = await apiGet<{ flowscript: string }>(
+			`apps/${appId}/board/${boardId}/flowscript?${params}`,
+			this.backend.auth,
+		);
+		return response.flowscript;
+	}
+
 	async getExecutionElements(
 		appId: string,
 		boardId: string,

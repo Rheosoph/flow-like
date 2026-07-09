@@ -5,6 +5,7 @@ import {
 	GithubIcon,
 	LayersIcon,
 	ServerIcon,
+	SparklesIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
 
@@ -63,7 +64,6 @@ export const ProviderSelector = memo(function ProviderSelector({
 	const handleProviderChange = useCallback(
 		async (newProvider: AIProvider) => {
 			const normalized = normalizeAIProvider(newProvider);
-			if (normalized === "claude-code") return;
 
 			onProviderChange(normalized);
 
@@ -104,6 +104,12 @@ export const ProviderSelector = memo(function ProviderSelector({
 			label: "Codex",
 			icon: Code2Icon,
 			tooltip: "Use a tool-capable Codex backend adapter",
+		},
+		{
+			id: "claude-code",
+			label: "Claude Code",
+			icon: SparklesIcon,
+			tooltip: "Use the Claude Code CLI through the shared FlowPilot MCP tools",
 		},
 	];
 

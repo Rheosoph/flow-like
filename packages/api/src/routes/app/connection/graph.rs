@@ -16,7 +16,9 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::connection::{app_meta_lookup, role_name_lookup, status_to_string},
+    routes::app::connection::{
+        app_meta_lookup, role_name_lookup, role_permission_lookup, status_to_string,
+    },
     state::AppState,
 };
 use axum::{
@@ -82,6 +84,9 @@ pub struct ProcessGraphEdge {
     /// "PENDING" or "ACTIVE"
     pub status: String,
     pub role_name: Option<String>,
+    /// Raw permission bits granted to the source app by the connection role.
+    /// Only present when the requester may see the target app's details.
+    pub role_permissions: Option<i64>,
 }
 
 /// An observed call chain: the apps a process actually traversed, aggregated
@@ -325,6 +330,7 @@ pub async fn get_connection_graph(
         .filter_map(|c| c.role_id.clone())
         .collect();
     let role_names = role_name_lookup(&state, &role_ids).await?;
+    let role_permissions = role_permission_lookup(&state, &role_ids).await?;
 
     let display_id = |id: &str| -> String {
         if accessible.contains(id) {
@@ -365,6 +371,11 @@ pub async fn get_connection_graph(
                 .as_ref()
                 .filter(|_| accessible.contains(&connection.target_app_id))
                 .and_then(|id| role_names.get(id).cloned()),
+            role_permissions: connection
+                .role_id
+                .as_ref()
+                .filter(|_| accessible.contains(&connection.target_app_id))
+                .and_then(|id| role_permissions.get(id).copied()),
         })
         .collect();
 

@@ -165,6 +165,21 @@ pub(crate) async fn role_name_lookup(
     Ok(roles.into_iter().map(|r| (r.id, r.name)).collect())
 }
 
+/// Loads the raw permission bits granted by the given role ids.
+pub(crate) async fn role_permission_lookup(
+    state: &AppState,
+    role_ids: &[String],
+) -> Result<std::collections::HashMap<String, i64>, ApiError> {
+    if role_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let roles = role::Entity::find()
+        .filter(role::Column::Id.is_in(role_ids.iter().cloned()))
+        .all(&state.db)
+        .await?;
+    Ok(roles.into_iter().map(|r| (r.id, r.permissions)).collect())
+}
+
 pub(crate) fn to_connection_info(
     model: app_connection::Model,
     role_names: &std::collections::HashMap<String, String>,

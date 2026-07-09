@@ -9,7 +9,7 @@ use crate::{
             ProcessFlow, ProcessGraphEdge, ProcessGraphNode, ProcessGraphQuery,
             ProcessGraphResponse, flow_window, load_notes, observed_flows_global,
         },
-        role_name_lookup, status_to_string,
+        role_name_lookup, role_permission_lookup, status_to_string,
     },
     state::AppState,
 };
@@ -77,6 +77,7 @@ pub async fn get_global_connection_graph(
         .filter_map(|c| c.role_id.clone())
         .collect();
     let role_names = role_name_lookup(&state, &role_ids).await?;
+    let role_permissions = role_permission_lookup(&state, &role_ids).await?;
 
     let nodes = node_ids
         .iter()
@@ -105,6 +106,10 @@ pub async fn get_global_connection_graph(
                 .role_id
                 .as_ref()
                 .and_then(|id| role_names.get(id).cloned()),
+            role_permissions: connection
+                .role_id
+                .as_ref()
+                .and_then(|id| role_permissions.get(id).copied()),
         })
         .collect();
 

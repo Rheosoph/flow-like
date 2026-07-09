@@ -27,6 +27,8 @@ const STRUCT_BREAK: &str = "struct_break";
 const STRUCT_SET: &str = "struct_set";
 const STRUCT_SET_IN_PIN: &str = "struct_in";
 const STRUCT_SET_OUT_PIN: &str = "struct_out";
+const STRUCT_SET_FIELD_PIN: &str = "field";
+const STRUCT_SET_VALUE_PIN: &str = "value";
 
 /// Array node types sugared to literals / index / member access.
 const MAKE_ARRAY: &str = "make_array";
@@ -42,7 +44,7 @@ const EVENT_RESPONSE_PIN: &str = "response";
 
 /// Dynamic-pin prefixes used by the schema struct nodes.
 const MAKE_STRUCT_PREFIX: &str = "__make_struct_field__";
-const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
+pub(crate) const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
 
 /// Loop node types and their FlowScript keyword. Each loops its `exec_out` exec output as the
 /// body and continues the enclosing chain from `done`.
@@ -819,6 +821,20 @@ impl<'a> Lowering<'a> {
             && let Some(target) = self.struct_accumulators.get(&node.id)
             && let Some(output) = self.struct_set_output_pin(node)
         {
+            // A single-field accumulator reassignment (`struct_in` reads the same variable the node
+            // rebinds and `field` is a literal) is the readable `base.path = value` struct-field
+            // write. Dynamic-field or cross-source updates keep the explicit `structSet({…})` form.
+            if self.previous_struct_set(node).is_some()
+                && let Some((path, value)) = struct_set_field_assign(&call, target)
+            {
+                return Stmt::FieldAssign {
+                    base: target.clone(),
+                    path,
+                    value,
+                    anchor: Some(node.id.clone()),
+                };
+            }
+
             let value = Expr::Field {
                 base: Box::new(Expr::Call(call)),
                 pin: output.name.clone(),
@@ -850,11 +866,13 @@ impl<'a> Lowering<'a> {
                 };
             }
         }
-        // `events_generic_return_result` sugars to a `return <response>` statement.
+        // `events_generic_return_result` sugars to a `return <response>` statement. Keep the node
+        // id as the anchor so reconcile matches the existing result node instead of duplicating it.
         if node.name == EVENT_RETURN_RESULT {
             let value = self.input_expr(node, EVENT_RESPONSE_PIN);
             return Stmt::Return {
                 values: value.into_iter().collect(),
+                anchor: Some(node.id.clone()),
             };
         }
         if let Some(name) = self.bindings.get(&node.id) {
@@ -1414,10 +1432,17 @@ fn var_decl_of(v: &Variable, refs: &HashMap<String, String>) -> VarDecl {
     VarDecl {
         name: util::to_camel_case(&v.name),
         ty: util::type_ref(&v.data_type, &v.value_type),
-        default: v
-            .default_value
-            .as_ref()
-            .and_then(|b| util::decode_default(b)),
+        // Secret values must never enter the text domain: rendered FlowScript is shown in
+        // editors, copied, and sent to LLMs. Reconcile lowers the live board through this
+        // same path, so both sides agree the decl is value-free and round-trips can neither
+        // leak nor clear the stored value.
+        default: if v.secret {
+            None
+        } else {
+            v.default_value
+                .as_ref()
+                .and_then(|b| util::decode_default(b))
+        },
         exposed: v.exposed,
         secret: v.secret,
         editable: v.editable,
@@ -1463,6 +1488,33 @@ fn ref_name_of_arg(args: &[Arg], pin: &str) -> Option<String> {
 
 fn is_impure(node: &Node) -> bool {
     node.pins.values().any(is_exec)
+}
+
+/// If a `struct_set` call is a single-field accumulator update of `target` — its `struct_in`
+/// reads the same variable the node rebinds and its `field` is a literal string — return the
+/// `(field_path, value_expr)` backing the `target.field = value` struct-field write sugar.
+/// Returns `None` (keep the explicit `structSet({…})` form) when the field is wired/dynamic or
+/// `struct_in` comes from a different source than `target`.
+fn struct_set_field_assign(call: &Call, target: &str) -> Option<(String, Expr)> {
+    let mut struct_in = None;
+    let mut field = None;
+    let mut value = None;
+    for arg in &call.args {
+        match arg.name.as_str() {
+            STRUCT_SET_IN_PIN => struct_in = Some(&arg.value),
+            STRUCT_SET_FIELD_PIN => field = Some(&arg.value),
+            STRUCT_SET_VALUE_PIN => value = Some(&arg.value),
+            _ => {}
+        }
+    }
+    match struct_in {
+        Some(Expr::Ref(name)) if name == target => {}
+        _ => return None,
+    }
+    let Some(Expr::Literal(Literal::String(path))) = field else {
+        return None;
+    };
+    Some((path.clone(), value?.clone()))
 }
 
 /// A trigger entry is a `start` node — an independent entry point (e.g. a generic event used as

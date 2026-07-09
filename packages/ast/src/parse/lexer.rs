@@ -63,7 +63,8 @@ struct Lexer {
 
 /// Multi-character operators, longest first so the scanner is greedy.
 const OPERATORS: &[&str] = &[
-    "===", "!==", "==", "!=", ">=", "<=", "&&", "||", ">", "<", "|", "+", "-", "*", "/", "%",
+    "===", "!==", "==", "!=", ">=", "<=", "&&", "||", "**", ">", "<", "|", "+", "-", "*", "/", "%",
+    "^",
 ];
 
 /// Tokenize a FlowScript source string.
@@ -176,15 +177,36 @@ impl Lexer {
         self.advance();
         self.advance();
         let mut text = String::new();
+        let mut split_at_anchor = false;
         while let Some(&c) = self.chars.get(self.pos) {
             if c == '\n' {
+                break;
+            }
+            // The renderer can put a trailing anchor on the same line as a label comment
+            // (`{ // exec_out   //@n:id`). Stop before an embedded anchor (`//@n:` / `//@v:` /
+            // `//@l:`) so it lexes as its own comment token — otherwise the anchor is swallowed
+            // by the label and the node counts as deleted on reconcile. Non-anchor `//@x`
+            // sequences (e.g. `//@todo`) stay part of the label text.
+            if c == '/'
+                && !text.is_empty()
+                && self.chars.get(self.pos + 1) == Some(&'/')
+                && self.chars.get(self.pos + 2) == Some(&'@')
+                && matches!(self.chars.get(self.pos + 3).copied(), Some('n' | 'v' | 'l'))
+                && self.chars.get(self.pos + 4) == Some(&':')
+            {
+                split_at_anchor = true;
                 break;
             }
             text.push(c);
             self.advance();
         }
         // Drop a single leading space (renderer writes `// text` and `   //@n:id`).
-        let trimmed = text.strip_prefix(' ').unwrap_or(&text).to_string();
+        let trimmed = text.strip_prefix(' ').unwrap_or(&text);
+        let trimmed = if split_at_anchor {
+            trimmed.trim_end().to_string()
+        } else {
+            trimmed.to_string()
+        };
         Token {
             tok: Tok::Comment(trimmed),
             line: token_line,
@@ -368,10 +390,12 @@ impl Lexer {
     }
 }
 
+// Unicode-aware: `to_camel_case` keeps any alphanumeric char, so rendered identifiers
+// (from user-named boards/variables/events) can carry non-ASCII letters.
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c == '$'
+    c.is_alphabetic() || c == '_' || c == '$'
 }
 
 fn is_ident_continue(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+    c.is_alphanumeric() || c == '_' || c == '$'
 }

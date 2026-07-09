@@ -143,6 +143,8 @@ export interface IProcessGraphEdge {
 	target: string;
 	status: IAppConnectionStatus;
 	role_name?: string | null;
+	/** Raw permission bits granted to the source app by the connection role. */
+	role_permissions?: number | null;
 }
 
 export interface IProcessFlow {

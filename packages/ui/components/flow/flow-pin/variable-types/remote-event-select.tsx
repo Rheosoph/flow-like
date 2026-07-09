@@ -62,9 +62,10 @@ export function RemoteEventSelect({
 	const [error, setError] = useState(false);
 	const selectedEventId = normalizeStringValue(value);
 
-	const remoteAppPin = Object.values(
-		boardRef?.current?.nodes?.[nodeId]?.pins ?? {},
-	).find((nodePin) => nodePin.name === REMOTE_APP_PIN_NAME);
+	const boardNodePins = boardRef?.current?.nodes?.[nodeId]?.pins ?? {};
+	const remoteAppPin = Object.values(boardNodePins).find(
+		(nodePin) => nodePin.name === REMOTE_APP_PIN_NAME,
+	);
 	const targetAppId = normalizeStringValue(remoteAppPin?.default_value);
 
 	const events =
@@ -73,6 +74,25 @@ export function RemoteEventSelect({
 	const selectedEvent = events.find((event) => event.id === selectedEventId);
 	const selectedEventMissing =
 		Boolean(selectedEventId) && eventsLoaded && !error && !selectedEvent;
+
+	// The meta pin caches the full event detail (including its name), so the
+	// selected event's name stays visible even before the events list is loaded.
+	const cachedEventName = (() => {
+		const metaPin = Object.values(boardNodePins).find(
+			(nodePin) => nodePin.name === REMOTE_EVENT_META_PIN_NAME,
+		);
+		const raw = normalizeStringValue(metaPin?.default_value);
+		if (!raw) return "";
+		try {
+			const detail = JSON.parse(raw);
+			return detail?.id === selectedEventId && typeof detail?.name === "string"
+				? detail.name
+				: "";
+		} catch {
+			return "";
+		}
+	})();
+	const selectedEventLabel = selectedEvent?.name || cachedEventName;
 
 	useEffect(() => {
 		if (!appId || !targetAppId || !open) return;
@@ -215,7 +235,7 @@ export function RemoteEventSelect({
 					<small className="text-start text-[10px] m-0! truncate">
 						{!targetAppId && "Select a project first"}
 						{targetAppId &&
-							(selectedEvent?.name || selectedEventId || "Select event")}
+							(selectedEventLabel || selectedEventId || "Select event")}
 					</small>
 					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
 				</SelectTrigger>
@@ -240,7 +260,7 @@ export function RemoteEventSelect({
 						))}
 						{selectedEventId && !selectedEvent && (
 							<SelectItem key={selectedEventId} value={selectedEventId}>
-								{selectedEventId}
+								{selectedEventLabel || selectedEventId}
 								{selectedEventMissing && (
 									<span className="text-muted-foreground">
 										{" "}

@@ -28,6 +28,7 @@ import {
 	Textarea,
 } from "../../ui";
 import { StreamingTextEditor } from "../../ui/streaming-text-editor";
+import { AppReferences } from "./app-references";
 import { FilePreview, type ProcessedAttachment } from "./attachment";
 import {
 	FileDialog,
@@ -728,7 +729,11 @@ export const MessageComponent = memo(
 						)}
 					>
 						{!isUser && planSteps.length > 0 && (
-							<PlanSteps steps={planSteps} currentStepId={currentPlanStepId} />
+							<PlanSteps
+								steps={planSteps}
+								currentStepId={currentPlanStepId}
+								loading={loading}
+							/>
 						)}
 						<div
 							ref={contentRef}
@@ -789,6 +794,9 @@ export const MessageComponent = memo(
 							onFileClick={handleFileClick}
 							onFullscreen={setFullscreenFile}
 						/>
+						{!isUser && (message.app_refs?.length ?? 0) > 0 && (
+							<AppReferences appIds={message.app_refs ?? []} />
+						)}
 						{hasUsageStats && (
 							<UsageStats stats={usageStats} className="mt-1" />
 						)}
