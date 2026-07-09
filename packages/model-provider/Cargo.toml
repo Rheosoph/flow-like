@@ -46,19 +46,17 @@ http = "1.4.0"
 reqwest = { workspace = true, optional = true }
 
 [target.'cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "android")))'.dependencies]
-# We can enable the standard ort crate again with the next release, when PR: https://github.com/pykeio/ort/pull/430 is merged and released.
-# ort = { version = "=2.0.0-rc.10", features = ["download-binaries", "copy-dylibs", "ndarray"] }
-#fastembed = { version = "5.2.0", default-features = false, features = ["ort-download-binaries"] }
-ort = { git = "https://github.com/Rheosoph/ort.git", rev = "1d64032", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
-fastembed = { git = "https://github.com/Rheosoph/fastembed-rs.git", rev = "784042c", default-features = false, features = ["ort-download-binaries"], optional = true }
+# Upstream ort >= rc.11 carries the iOS static-linking support (pykeio/ort#430) that
+# previously required the Rheosoph fork, so we track upstream rc.12 directly. face_id and
+# fastembed both pin =2.0.0-rc.12, keeping a single onnxruntime native link in the graph.
+ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = ["ort-download-binaries"], optional = true }
 
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))'.dependencies]
 # Mobile targets: no prebuilt binaries available for download, so disable download-binaries and copy-dylibs
-#ort = { version = "=2.0.0-rc.10", default-features = false, features=["ndarray"] }
-#fastembed = { version = "5.2.0", default-features = false, features = []}
-ort = { git = "https://github.com/Rheosoph/ort.git", rev = "1d64032", default-features = false, features=["ndarray"], optional = true }
-fastembed = { git = "https://github.com/Rheosoph/fastembed-rs.git", rev = "784042c", default-features = false, features = [], optional = true }
+ort = { version = "=2.0.0-rc.12", default-features = false, features=["ndarray"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = [], optional = true }
 
 [dev-dependencies]
 dotenv = "0.15.0"

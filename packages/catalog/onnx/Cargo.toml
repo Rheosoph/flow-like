@@ -8,7 +8,7 @@ default = []
 local-ml = ["flow-like-catalog-core/local-ml", "execute"]
 
 # Execution feature - enables heavy dependencies for node execution
-execute = ["flow-like-catalog-core/execute", "dep:tract-tflite", "dep:hound", "dep:tokenizers", "flow-like-model-provider/local-ml"]
+execute = ["flow-like-catalog-core/execute", "dep:tract-tflite", "dep:hound", "dep:tokenizers", "dep:face_id", "dep:reqwest", "flow-like-model-provider/local-ml"]
 
 # Execution Provider features - optional GPU/NPU acceleration
 # These are compile-time optional and gracefully fall back at runtime
@@ -44,6 +44,10 @@ hex = "0.4"
 tract-tflite = { git = "https://github.com/Rheosoph/tract", rev = "ed3b020", optional = true }
 hound = { version = "3.5", optional = true }
 tokenizers = { version = "0.22.2", optional = true }
+# face_id shares the workspace ort (=2.0.0-rc.12); default-features off drops hf-hub/clustering/serde
+# so it only builds the local-path SCRFD + ArcFace + gender/age analyzer.
+face_id = { version = "0.4.1", default-features = false, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"

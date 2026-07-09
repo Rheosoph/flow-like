@@ -110,24 +110,39 @@ pub fn get_ep_info() -> Option<ExecutionProviderInfo> {
     EP_INFO.read().ok().and_then(|guard| guard.clone())
 }
 
+/// Build the execution-provider dispatch list for the current platform and enabled features.
+///
+/// Returns the dispatch list, the names of the accelerators actually registered (CPU excluded),
+/// and any warnings. Shared by global ORT init and per-session builders (e.g. the face_id
+/// analyzer) so every session opts into the same acceleration instead of falling back to CPU.
 #[cfg(feature = "execute")]
-fn do_initialize_ort() -> ExecutionProviderInfo {
-    use flow_like_model_provider::ml::ort;
-    use tracing::info;
+pub(crate) fn collect_execution_providers() -> (
+    Vec<flow_like_model_provider::ml::ort::ep::ExecutionProviderDispatch>,
+    Vec<String>,
+    Vec<String>,
+) {
+    #[allow(unused_imports)]
+    use flow_like_model_provider::ml::ort::{self, ep::ExecutionProvider};
+    #[allow(unused_imports)]
+    use tracing::{info, warn};
 
+    #[allow(unused_mut)]
+    let mut eps = Vec::new();
+    #[allow(unused_mut)]
     let mut active_providers = Vec::new();
-    let warnings = Vec::new();
-    let eps: Vec<ort::execution_providers::ExecutionProviderDispatch> = Vec::new();
+    #[allow(unused_mut)]
+    let mut warnings = Vec::new();
 
-    // Try to register EPs in order of preference
-    // TensorRT > CUDA > CoreML > DirectML > XNNPACK > CPU
+    // Registered in order of preference: TensorRT > CUDA > CoreML > DirectML > XNNPACK > CPU.
+    // `is_available()` reports whether the onnxruntime binary was compiled with the EP; an
+    // unavailable/errored EP is skipped and the session falls back to the next one (ultimately CPU).
 
-    // TensorRT (NVIDIA, fastest)
     #[cfg(feature = "tensorrt")]
     {
-        if ort::execution_providers::TensorRTExecutionProvider::is_available() {
+        let provider = ort::ep::TensorRT::default();
+        if provider.is_available().unwrap_or(false) {
             info!("TensorRT execution provider available");
-            eps.push(ort::execution_providers::TensorRTExecutionProvider::default().build());
+            eps.push(provider.build());
             active_providers.push("TensorRT".to_string());
         } else {
             let msg = "TensorRT feature enabled but runtime not available";
@@ -136,12 +151,12 @@ fn do_initialize_ort() -> ExecutionProviderInfo {
         }
     }
 
-    // CUDA (NVIDIA)
     #[cfg(feature = "cuda")]
     {
-        if ort::execution_providers::CUDAExecutionProvider::is_available() {
+        let provider = ort::ep::CUDA::default();
+        if provider.is_available().unwrap_or(false) {
             info!("CUDA execution provider available");
-            eps.push(ort::execution_providers::CUDAExecutionProvider::default().build());
+            eps.push(provider.build());
             active_providers.push("CUDA".to_string());
         } else {
             let msg = "CUDA feature enabled but runtime not available";
@@ -150,12 +165,12 @@ fn do_initialize_ort() -> ExecutionProviderInfo {
         }
     }
 
-    // CoreML (Apple)
     #[cfg(feature = "coreml")]
     {
-        if ort::execution_providers::CoreMLExecutionProvider::is_available() {
+        let provider = ort::ep::CoreML::default();
+        if provider.is_available().unwrap_or(false) {
             info!("CoreML execution provider available");
-            eps.push(ort::execution_providers::CoreMLExecutionProvider::default().build());
+            eps.push(provider.build());
             active_providers.push("CoreML".to_string());
         } else {
             let msg = "CoreML feature enabled but not on Apple platform";
@@ -164,12 +179,12 @@ fn do_initialize_ort() -> ExecutionProviderInfo {
         }
     }
 
-    // DirectML (Windows)
     #[cfg(feature = "directml")]
     {
-        if ort::execution_providers::DirectMLExecutionProvider::is_available() {
+        let provider = ort::ep::DirectML::default();
+        if provider.is_available().unwrap_or(false) {
             info!("DirectML execution provider available");
-            eps.push(ort::execution_providers::DirectMLExecutionProvider::default().build());
+            eps.push(provider.build());
             active_providers.push("DirectML".to_string());
         } else {
             let msg = "DirectML feature enabled but not on Windows";
@@ -178,12 +193,12 @@ fn do_initialize_ort() -> ExecutionProviderInfo {
         }
     }
 
-    // XNNPACK (optimized CPU for ARM/x86)
     #[cfg(feature = "xnnpack")]
     {
-        if ort::execution_providers::XNNPACKExecutionProvider::is_available() {
+        let provider = ort::ep::XNNPACK::default();
+        if provider.is_available().unwrap_or(false) {
             info!("XNNPACK execution provider available");
-            eps.push(ort::execution_providers::XNNPACKExecutionProvider::default().build());
+            eps.push(provider.build());
             active_providers.push("XNNPACK".to_string());
         } else {
             let msg = "XNNPACK feature enabled but not available";
@@ -192,10 +207,19 @@ fn do_initialize_ort() -> ExecutionProviderInfo {
         }
     }
 
-    // CPU is always available as final fallback
-    active_providers.push("CPU".to_string());
+    (eps, active_providers, warnings)
+}
 
-    let accelerated = active_providers.iter().any(|p| p != "CPU");
+#[cfg(feature = "execute")]
+fn do_initialize_ort() -> ExecutionProviderInfo {
+    use flow_like_model_provider::ml::ort;
+    use tracing::info;
+
+    let (eps, mut active_providers, warnings) = collect_execution_providers();
+    let accelerated = !eps.is_empty();
+
+    // CPU is always available as the final fallback
+    active_providers.push("CPU".to_string());
 
     // Initialize ORT with the collected execution providers
     if eps.is_empty() {
@@ -229,13 +253,13 @@ fn do_initialize_ort() -> ExecutionProviderInfo {
 #[cfg(feature = "execute")]
 pub mod availability {
     #[allow(unused_imports)]
-    use flow_like_model_provider::ml::ort;
+    use flow_like_model_provider::ml::ort::{self, ep::ExecutionProvider};
 
     /// Check if CUDA is compiled in and available at runtime
     pub fn cuda_available() -> bool {
         #[cfg(feature = "cuda")]
         {
-            ort::execution_providers::CUDAExecutionProvider::is_available()
+            ort::ep::CUDA::default().is_available().unwrap_or(false)
         }
         #[cfg(not(feature = "cuda"))]
         {
@@ -247,7 +271,7 @@ pub mod availability {
     pub fn tensorrt_available() -> bool {
         #[cfg(feature = "tensorrt")]
         {
-            ort::execution_providers::TensorRTExecutionProvider::is_available()
+            ort::ep::TensorRT::default().is_available().unwrap_or(false)
         }
         #[cfg(not(feature = "tensorrt"))]
         {
@@ -259,7 +283,7 @@ pub mod availability {
     pub fn coreml_available() -> bool {
         #[cfg(feature = "coreml")]
         {
-            ort::execution_providers::CoreMLExecutionProvider::is_available()
+            ort::ep::CoreML::default().is_available().unwrap_or(false)
         }
         #[cfg(not(feature = "coreml"))]
         {
@@ -271,7 +295,7 @@ pub mod availability {
     pub fn directml_available() -> bool {
         #[cfg(feature = "directml")]
         {
-            ort::execution_providers::DirectMLExecutionProvider::is_available()
+            ort::ep::DirectML::default().is_available().unwrap_or(false)
         }
         #[cfg(not(feature = "directml"))]
         {
@@ -283,7 +307,7 @@ pub mod availability {
     pub fn xnnpack_available() -> bool {
         #[cfg(feature = "xnnpack")]
         {
-            ort::execution_providers::XNNPACKExecutionProvider::is_available()
+            ort::ep::XNNPACK::default().is_available().unwrap_or(false)
         }
         #[cfg(not(feature = "xnnpack"))]
         {

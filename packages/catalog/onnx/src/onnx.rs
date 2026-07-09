@@ -25,6 +25,8 @@ pub mod detection;
 pub mod execution_providers;
 /// ONNX Face Detection and Recognition Nodes
 pub mod face;
+/// face_id-backed face analysis (detection + recognition + gender/age)
+pub mod face_id;
 /// ONNX Image Feature Extractor Nodes
 pub mod feature;
 /// ONNX Model Loader Nodes

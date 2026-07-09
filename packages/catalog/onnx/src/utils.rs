@@ -122,35 +122,35 @@ impl NodeLogic for ModelInfoNode {
             let session = Session::builder()?.commit_from_memory(&bytes)?;
 
             let inputs: Vec<TensorInfo> = session
-                .inputs
+                .inputs()
                 .iter()
                 .map(|i| {
                     let shape = i
-                        .input_type
+                        .dtype()
                         .tensor_shape()
                         .map(|s| s.iter().copied().collect())
                         .unwrap_or_default();
                     TensorInfo {
-                        name: i.name.clone(),
+                        name: i.name().to_string(),
                         shape,
-                        dtype: format!("{:?}", i.input_type),
+                        dtype: format!("{:?}", i.dtype()),
                     }
                 })
                 .collect();
 
             let outputs: Vec<TensorInfo> = session
-                .outputs
+                .outputs()
                 .iter()
                 .map(|o| {
                     let shape = o
-                        .output_type
+                        .dtype()
                         .tensor_shape()
                         .map(|s| s.iter().copied().collect())
                         .unwrap_or_default();
                     TensorInfo {
-                        name: o.name.clone(),
+                        name: o.name().to_string(),
                         shape,
-                        dtype: format!("{:?}", o.output_type),
+                        dtype: format!("{:?}", o.dtype()),
                     }
                 })
                 .collect();
@@ -341,36 +341,36 @@ impl NodeLogic for SessionInfoNode {
 
             let inputs: Vec<TensorInfo> = session_guard
                 .session
-                .inputs
+                .inputs()
                 .iter()
                 .map(|i| {
                     let shape = i
-                        .input_type
+                        .dtype()
                         .tensor_shape()
                         .map(|s| s.iter().copied().collect())
                         .unwrap_or_default();
                     TensorInfo {
-                        name: i.name.clone(),
+                        name: i.name().to_string(),
                         shape,
-                        dtype: format!("{:?}", i.input_type),
+                        dtype: format!("{:?}", i.dtype()),
                     }
                 })
                 .collect();
 
             let outputs: Vec<TensorInfo> = session_guard
                 .session
-                .outputs
+                .outputs()
                 .iter()
                 .map(|o| {
                     let shape = o
-                        .output_type
+                        .dtype()
                         .tensor_shape()
                         .map(|s| s.iter().copied().collect())
                         .unwrap_or_default();
                     TensorInfo {
-                        name: o.name.clone(),
+                        name: o.name().to_string(),
                         shape,
-                        dtype: format!("{:?}", o.output_type),
+                        dtype: format!("{:?}", o.dtype()),
                     }
                 })
                 .collect();
