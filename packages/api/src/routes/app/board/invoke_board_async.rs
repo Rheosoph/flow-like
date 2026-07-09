@@ -117,6 +117,10 @@ pub async fn invoke_board_async(
         AppUser::ConnectedApp(connected) => Some(connected.app_chain.clone()),
         _ => None,
     };
+    let parent_run_id = match &user {
+        AppUser::ConnectedApp(connected) => connected.run_id.clone(),
+        _ => None,
+    };
 
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(anyhow!(
@@ -181,6 +185,9 @@ pub async fn invoke_board_async(
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
         caller_app_chain: Set(caller_app_chain.clone()),
+        trace_id: Set(parent_run_id.is_none().then(|| run_id.clone())),
+        parent_run_id: Set(parent_run_id.clone()),
+        correlation_keys: Set(None),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),

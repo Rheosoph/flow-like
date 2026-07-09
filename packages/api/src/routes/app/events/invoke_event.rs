@@ -72,6 +72,10 @@ pub struct InvokeEventRequest {
         Option<std::collections::HashMap<String, flow_like::flow::variable::Variable>>,
     /// Optional profile ID to select a specific user profile for execution
     pub profile_id: Option<String>,
+    /// Business/object correlation keys (e.g. `{"order_id": "1234"}`) tagging
+    /// the process case this run belongs to. Used for process mining.
+    #[serde(default)]
+    pub correlation: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Response from event invocation
@@ -147,6 +151,17 @@ pub async fn invoke_event(
         AppUser::ConnectedApp(connected) => Some(connected.app_chain.clone()),
         _ => None,
     };
+    // Process-mining correlation: the caller's run id is the parent; a run with
+    // no parent is a root of its causal tree and owns the trace id.
+    let parent_run_id = match &user {
+        AppUser::ConnectedApp(connected) => connected.run_id.clone(),
+        _ => None,
+    };
+    let correlation_keys = params
+        .correlation
+        .as_ref()
+        .filter(|keys| !keys.is_empty())
+        .and_then(|keys| serde_json::to_value(keys).ok());
 
     // Get event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
@@ -226,6 +241,9 @@ pub async fn invoke_event(
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
         caller_app_chain: Set(caller_app_chain.clone()),
+        trace_id: Set(parent_run_id.is_none().then(|| run_id.clone())),
+        parent_run_id: Set(parent_run_id.clone()),
+        correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),

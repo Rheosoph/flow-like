@@ -51,6 +51,19 @@ pub struct Model {
     pub technical_user_id: Option<String>,
     #[sea_orm(column_name = "callerAppChain")]
     pub caller_app_chain: Option<Vec<String>>,
+    /// Root run id of the causal execution tree. Set on root runs (those with no
+    /// parent); descendants leave it null and resolve the root by walking
+    /// `parent_run_id`. Populated end-to-end once trace propagation lands.
+    #[sea_orm(column_name = "traceId", column_type = "Text", nullable)]
+    pub trace_id: Option<String>,
+    /// The run that directly triggered this one (across apps/events). Null for
+    /// root runs. Walking this chain reconstructs an end-to-end process case.
+    #[sea_orm(column_name = "parentRunId", column_type = "Text", nullable)]
+    pub parent_run_id: Option<String>,
+    /// Business/object correlation keys (e.g. order_id, customer_id) tagged at
+    /// invoke time. The process-mining case notion is chosen from these.
+    #[sea_orm(column_name = "correlationKeys", column_type = "JsonBinary", nullable)]
+    pub correlation_keys: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

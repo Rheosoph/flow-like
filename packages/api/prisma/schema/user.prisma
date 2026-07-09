@@ -437,6 +437,15 @@ model ExecutionRun {
   /// index backs the process-graph "chains containing app X" aggregation.
   callerAppChain String[]
 
+  /// Process-mining correlation. `parentRunId` is the run that directly
+  /// triggered this one (null = root); walking it reconstructs an end-to-end
+  /// case across apps/events. `traceId` denormalizes the root run id.
+  /// `correlationKeys` holds business/object keys (order_id, customer_id, …)
+  /// tagged at invoke time — the case notion is chosen from these.
+  traceId         String?
+  parentRunId     String?
+  correlationKeys Json?
+
   /// Streaming events for this run
   events ExecutionEvent[]
 
@@ -448,4 +457,6 @@ model ExecutionRun {
   @@index([boardId])
   @@index([expiresAt])
   @@index([callerAppChain], type: Gin)
+  @@index([parentRunId])
+  @@index([traceId])
 }
