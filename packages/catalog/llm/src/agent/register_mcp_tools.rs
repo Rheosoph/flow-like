@@ -51,6 +51,7 @@ impl NodeLogic for RegisterMcpToolsNode {
             uri,
             tool_filter,
             auth_header: None,
+            custom_headers: Default::default(),
         });
 
         context

@@ -10,11 +10,14 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_types::async_trait;
-use std::collections::HashSet;
+#[cfg(feature = "execute")]
+use std::collections::{HashMap, HashSet};
 
 const PIN_REMOTE_APP_ID: &str = "_flow_remote_app_id";
 const PIN_REMOTE_EVENT: &str = "_flow_remote_event";
 const PIN_REMOTE_EVENT_META: &str = "_flow_remote_event_meta";
+#[cfg(feature = "execute")]
+const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
 
 #[crate::register_node]
 #[derive(Default)]
@@ -30,7 +33,7 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
             "AI/Agents/Builder",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(1);
+        node.set_version(2);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(5)
@@ -83,6 +86,14 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
         )
         .set_value_type(ValueType::Array);
 
+        node.add_input_pin(
+            "headers",
+            "Auth Headers",
+            "Static registration authentication headers (for example Authorization or x-api-key). HMAC auth is not supported because each MCP request requires a fresh signature.",
+            VariableType::Struct,
+        )
+        .set_schema::<std::collections::HashMap<String, String>>();
+
         node.add_output_pin(
             "agent_out",
             "Agent",
@@ -104,6 +115,8 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
             .evaluate_pin("tool_filter")
             .await
             .unwrap_or_default();
+        let registration_headers: HashMap<String, String> =
+            context.evaluate_pin("headers").await.unwrap_or_default();
 
         let remote_app_id = remote_app_id.trim();
         let event_id = event_id.trim();
@@ -124,11 +137,22 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
         } else {
             Some(tool_filter.into_iter().collect::<HashSet<String>>())
         };
+        let custom_headers = registration_headers
+            .into_iter()
+            .map(|(name, value)| {
+                if name.eq_ignore_ascii_case("authorization") {
+                    (PROXY_EVENT_AUTHORIZATION_HEADER.to_string(), value)
+                } else {
+                    (name, value)
+                }
+            })
+            .collect();
 
         agent.add_mcp_server(super::McpServerConfig {
             uri,
             tool_filter,
-            auth_header: Some(format!("Bearer {}", token)),
+            auth_header: Some(token),
+            custom_headers,
         });
 
         context

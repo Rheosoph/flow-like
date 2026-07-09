@@ -80,6 +80,11 @@ const MCP_DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 const MCP_WELL_KNOWN_OAUTH_PATH: &str = "/.well-known/oauth-protected-resource";
 const MCP_BROWSER_INSPECTOR_TEMPLATE: &str = include_str!("../../../../assets/mcp-inspector.html");
+/// The API bearer token occupies `Authorization` on app-connection proxy
+/// requests. Callers put registration-level Basic/Bearer/OAuth credentials in
+/// this header instead; the proxy restores them to `Authorization` only for
+/// the event registration auth check.
+pub(crate) const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
 
 pub fn rest_routes() -> Router<AppState> {
     Router::new()
@@ -217,6 +222,18 @@ fn enforce_exposure(event_row: &event::Model, is_public_surface: bool) -> Result
     Ok(())
 }
 
+fn registration_auth_headers(headers: &HeaderMap, is_public_surface: bool) -> HeaderMap {
+    let mut auth_headers = headers.clone();
+    if !is_public_surface {
+        let registration_authorization = auth_headers.remove(PROXY_EVENT_AUTHORIZATION_HEADER);
+        auth_headers.remove(axum::http::header::AUTHORIZATION);
+        if let Some(value) = registration_authorization {
+            auth_headers.insert(axum::http::header::AUTHORIZATION, value);
+        }
+    }
+    auth_headers
+}
+
 async fn dispatch_inbound_rest(
     state: &AppState,
     slug_or_id: &str,
@@ -253,10 +270,10 @@ async fn dispatch_inbound_rest(
 }
 
 /// Matches and executes a REST registration of an event. Used by the public
-/// inbound router (with per-registration auth) and by the authenticated
-/// app-connection proxy (`enforce_registration_auth = false` — the caller has
-/// already authorized the request through a connection role; `injected_auth`
-/// then lands in `_client.auth` so flows can attribute the caller).
+/// inbound router and by the authenticated app-connection proxy. Both surfaces
+/// enforce configured per-registration auth. The surface flag only controls
+/// PUBLIC/INTERNAL exposure; `injected_auth` is emitted separately as
+/// `_client.proxy` for caller attribution.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_rest_for_event(
     state: &AppState,
@@ -267,7 +284,7 @@ pub(crate) async fn dispatch_rest_for_event(
     headers: &HeaderMap,
     method: &axum::http::Method,
     body: &Bytes,
-    enforce_registration_auth: bool,
+    is_public_surface: bool,
     injected_auth: Option<Value>,
     caller: &ProxyCallerContext,
 ) -> Result<Response, ApiError> {
@@ -275,7 +292,7 @@ pub(crate) async fn dispatch_rest_for_event(
         return Err(ApiError::not_found("REST event not found or inactive"));
     }
 
-    if let Err(response) = enforce_exposure(&event_row, enforce_registration_auth) {
+    if let Err(response) = enforce_exposure(&event_row, is_public_surface) {
         return Ok(response);
     }
 
@@ -311,11 +328,11 @@ pub(crate) async fn dispatch_rest_for_event(
     .ok_or_else(|| {
         ApiError::not_found(format!("no registration matches {} {}", method, normalized))
     })?;
+    let registration_headers = registration_auth_headers(headers, is_public_surface);
 
-    // Auth check.
-    let auth_claims = if !enforce_registration_auth {
-        injected_auth
-    } else if let Some(auth_id) = &registration.auth_id {
+    // A connection role authorizes access to the proxy, but does not replace
+    // auth explicitly configured on the matched event registration.
+    let auth_claims = if let Some(auth_id) = &registration.auth_id {
         let auth = EventRemoteAuth::find_by_id(auth_id)
             .one(&state.db)
             .await
@@ -323,11 +340,19 @@ pub(crate) async fn dispatch_rest_for_event(
             .ok_or_else(|| {
                 ApiError::internal_error(flow_like_types::anyhow!("dangling auth_id"))
             })?;
-        verify_inbound_auth(state, &auth, headers, method, &normalized, body).await?
+        verify_inbound_auth(
+            state,
+            &auth,
+            &registration_headers,
+            method,
+            &normalized,
+            body,
+        )
+        .await?
     } else {
         None
     };
-    let client = client_metadata("rest", headers, auth_claims);
+    let client = client_metadata("rest", &registration_headers, auth_claims, injected_auth);
 
     match registration.kind.as_str() {
         "rest_fn" => {
@@ -338,7 +363,7 @@ pub(crate) async fn dispatch_rest_for_event(
                 &normalized,
                 raw_query,
                 &path_params,
-                headers,
+                &registration_headers,
                 method,
                 body,
                 client,
@@ -426,10 +451,9 @@ async fn dispatch_inbound_mcp(
     .await
 }
 
-/// Serves the MCP surface of an event. Used by the public inbound router
-/// (with per-registration auth) and by the authenticated app-connection proxy
-/// (`enforce_registration_auth = false` — the connection role authorizes;
-/// `injected_auth` lands in `_client.auth` for caller attribution).
+/// Serves the MCP surface of an event. Both the public router and authenticated
+/// app-connection proxy enforce configured per-registration auth. The surface
+/// flag only controls PUBLIC/INTERNAL exposure.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_mcp_for_event(
     state: &AppState,
@@ -440,7 +464,7 @@ pub(crate) async fn dispatch_mcp_for_event(
     headers: &HeaderMap,
     method: &axum::http::Method,
     body: &Bytes,
-    enforce_registration_auth: bool,
+    is_public_surface: bool,
     injected_auth: Option<Value>,
     caller: &ProxyCallerContext,
 ) -> Result<Response, ApiError> {
@@ -448,7 +472,7 @@ pub(crate) async fn dispatch_mcp_for_event(
         return Err(ApiError::not_found("MCP event not found or inactive"));
     }
 
-    if let Err(response) = enforce_exposure(&event_row, enforce_registration_auth) {
+    if let Err(response) = enforce_exposure(&event_row, is_public_surface) {
         return Ok(response);
     }
 
@@ -459,9 +483,10 @@ pub(crate) async fn dispatch_mcp_for_event(
     })?;
 
     let normalized = normalize_inbound_path(path);
+    let registration_headers = registration_auth_headers(headers, is_public_surface);
 
     if method == axum::http::Method::OPTIONS {
-        return Ok(mcp_options_response(headers));
+        return Ok(mcp_options_response(&registration_headers));
     }
 
     let registration = event_remote_registration::Entity::find()
@@ -478,10 +503,23 @@ pub(crate) async fn dispatch_mcp_for_event(
         .clone()
         .unwrap_or_else(|| json!({}));
 
-    let resource_url = mcp_resource_url(headers, slug_or_id);
+    let endpoint_path = if is_public_surface {
+        format!("/m/{}", urlencoding::encode(slug_or_id))
+    } else {
+        format!(
+            "/api/v1/apps/{}/events/{}/mcp",
+            urlencoding::encode(&event_row.app_id),
+            urlencoding::encode(&event_row.id)
+        )
+    };
+    let resource_url = mcp_resource_url(&registration_headers, &endpoint_path);
 
     if normalized == MCP_WELL_KNOWN_OAUTH_PATH && method == axum::http::Method::GET {
-        return Ok(mcp_oauth_metadata_response(headers, &config, &resource_url));
+        return Ok(mcp_oauth_metadata_response(
+            &registration_headers,
+            &config,
+            &resource_url,
+        ));
     }
 
     if normalized != "/" {
@@ -492,9 +530,7 @@ pub(crate) async fn dispatch_mcp_for_event(
             .into_response());
     }
 
-    let auth_claims = if !enforce_registration_auth {
-        injected_auth
-    } else if let Some(auth_id) = &registration.auth_id {
+    let auth_claims = if let Some(auth_id) = &registration.auth_id {
         let auth = EventRemoteAuth::find_by_id(auth_id)
             .one(&state.db)
             .await
@@ -502,21 +538,36 @@ pub(crate) async fn dispatch_mcp_for_event(
             .ok_or_else(|| {
                 ApiError::internal_error(flow_like_types::anyhow!("dangling auth_id"))
             })?;
-        verify_inbound_auth(state, &auth, headers, method, &normalized, body).await?
+        verify_inbound_auth(
+            state,
+            &auth,
+            &registration_headers,
+            method,
+            &normalized,
+            body,
+        )
+        .await?
     } else {
         None
     };
-    let client = client_metadata("mcp", headers, auth_claims);
+    let client = client_metadata("mcp", &registration_headers, auth_claims, injected_auth);
 
     if method == axum::http::Method::POST {
         mcp_handle_post(
-            state, event_row, &config, raw_query, headers, body, client, caller,
+            state,
+            event_row,
+            &config,
+            raw_query,
+            &registration_headers,
+            body,
+            client,
+            caller,
         )
         .await
     } else if method == axum::http::Method::DELETE {
-        Ok(mcp_handle_delete(raw_query, headers).await)
+        Ok(mcp_handle_delete(raw_query, &registration_headers).await)
     } else if method == axum::http::Method::GET {
-        Ok(mcp_handle_get(event_row, slug_or_id, raw_query, headers).await)
+        Ok(mcp_handle_get(event_row, &endpoint_path, raw_query, &registration_headers).await)
     } else {
         let mut resp = (
             StatusCode::METHOD_NOT_ALLOWED,
@@ -527,7 +578,7 @@ pub(crate) async fn dispatch_mcp_for_event(
             axum::http::header::ALLOW,
             axum::http::HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
         );
-        apply_mcp_cors(resp.headers_mut(), headers);
+        apply_mcp_cors(resp.headers_mut(), &registration_headers);
         Ok(resp)
     }
 }
@@ -1950,7 +2001,12 @@ fn inbound_remote_addr(headers: &HeaderMap) -> String {
         .unwrap_or_default()
 }
 
-fn client_metadata(protocol: &str, headers: &HeaderMap, oauth_claims: Option<Value>) -> Value {
+fn client_metadata(
+    protocol: &str,
+    headers: &HeaderMap,
+    oauth_claims: Option<Value>,
+    proxy_identity: Option<Value>,
+) -> Value {
     let mut client = serde_json::Map::new();
     client.insert(
         "remote_addr".to_string(),
@@ -1992,6 +2048,10 @@ fn client_metadata(protocol: &str, headers: &HeaderMap, oauth_claims: Option<Val
                 "claims": claims
             }),
         );
+    }
+
+    if let Some(proxy_identity) = proxy_identity {
+        client.insert("proxy".to_string(), proxy_identity);
     }
 
     Value::Object(client)
@@ -2073,7 +2133,7 @@ fn mcp_options_response(headers: &HeaderMap) -> Response {
                 .cloned()
                 .unwrap_or_else(|| {
                     axum::http::HeaderValue::from_static(
-                        "Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID, Accept",
+                        "Content-Type, Authorization, X-Flow-Like-Event-Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID, Accept",
                     )
                 }),
         );
@@ -2154,7 +2214,7 @@ fn mcp_oauth_metadata_response(headers: &HeaderMap, config: &Value, resource: &s
     resp
 }
 
-fn mcp_resource_url(headers: &HeaderMap, slug_or_id: &str) -> String {
+fn mcp_resource_url(headers: &HeaderMap, endpoint_path: &str) -> String {
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
@@ -2180,7 +2240,7 @@ fn mcp_resource_url(headers: &HeaderMap, slug_or_id: &str) -> String {
         .get(axum::http::header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost");
-    format!("{scheme}://{host}/m/{slug_or_id}")
+    format!("{scheme}://{host}{endpoint_path}")
 }
 
 fn mcp_session_id(raw_query: &str, headers: &HeaderMap) -> Option<String> {
@@ -2485,7 +2545,7 @@ async fn mcp_handle_delete(raw_query: &str, headers: &HeaderMap) -> Response {
 
 async fn mcp_handle_get(
     event_row: &event::Model,
-    slug_or_id: &str,
+    endpoint_path: &str,
     raw_query: &str,
     headers: &HeaderMap,
 ) -> Response {
@@ -2494,7 +2554,7 @@ async fn mcp_handle_get(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if accepts_html(accept) {
-        return mcp_browser_inspector_response(slug_or_id, headers);
+        return mcp_browser_inspector_response(endpoint_path, headers);
     }
 
     let (_, wants_sse) = parse_accept_types(accept);
@@ -2540,7 +2600,7 @@ async fn mcp_handle_get(
             sessions.insert(session_id.clone(), session);
             let endpoint = format!(
                 "{}?sessionId={}",
-                mcp_resource_url(headers, slug_or_id),
+                mcp_resource_url(headers, endpoint_path),
                 session_id
             );
             (session_id, rx, Some(endpoint))
@@ -2586,8 +2646,7 @@ async fn mcp_handle_get(
     resp
 }
 
-fn mcp_browser_inspector_response(slug_or_id: &str, headers: &HeaderMap) -> Response {
-    let endpoint_path = format!("/m/{}", urlencoding::encode(slug_or_id));
+fn mcp_browser_inspector_response(endpoint_path: &str, headers: &HeaderMap) -> Response {
     let endpoint_path_json =
         serde_json::to_string(&endpoint_path).unwrap_or_else(|_| "\"/m\"".to_string());
     let html =
@@ -3454,9 +3513,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        canonical_auth_kind, inbound_base_path, is_asymmetric_jwt_algorithm,
-        jwk_matches_oauth_header, mcp_resource_url, parse_query_single,
-        rest_args_from_body_and_query, with_inbound_openapi_server,
+        PROXY_EVENT_AUTHORIZATION_HEADER, canonical_auth_kind, client_metadata, inbound_base_path,
+        is_asymmetric_jwt_algorithm, jwk_matches_oauth_header, mcp_resource_url,
+        parse_query_single, registration_auth_headers, rest_args_from_body_and_query,
+        with_inbound_openapi_server,
     };
 
     #[test]
@@ -3538,8 +3598,98 @@ mod tests {
         );
 
         assert_eq!(
-            mcp_resource_url(&headers, "mcp-event"),
+            mcp_resource_url(&headers, "/m/mcp-event"),
             "http://localhost:8080/m/mcp-event"
         );
+        assert_eq!(
+            mcp_resource_url(&headers, "/api/v1/apps/target/events/mcp-event/mcp"),
+            "http://localhost:8080/api/v1/apps/target/events/mcp-event/mcp"
+        );
+    }
+
+    #[test]
+    fn proxy_registration_auth_replaces_only_the_api_authorization_for_auth_checks() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer app-connection-token"),
+        );
+        headers.insert(
+            PROXY_EVENT_AUTHORIZATION_HEADER,
+            axum::http::HeaderValue::from_static("Bearer registration-token"),
+        );
+
+        let auth_headers = registration_auth_headers(&headers, false);
+
+        assert_eq!(
+            auth_headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer registration-token")
+        );
+        assert!(!auth_headers.contains_key(PROXY_EVENT_AUTHORIZATION_HEADER));
+        assert_eq!(
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer app-connection-token")
+        );
+    }
+
+    #[test]
+    fn public_registration_auth_ignores_the_proxy_only_header() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer public-token"),
+        );
+        headers.insert(
+            PROXY_EVENT_AUTHORIZATION_HEADER,
+            axum::http::HeaderValue::from_static("Bearer proxy-token"),
+        );
+
+        let auth_headers = registration_auth_headers(&headers, true);
+
+        assert_eq!(
+            auth_headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer public-token")
+        );
+    }
+
+    #[test]
+    fn proxy_without_registration_authorization_does_not_forward_connection_bearer() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer app-connection-token"),
+        );
+
+        let auth_headers = registration_auth_headers(&headers, false);
+
+        assert!(!auth_headers.contains_key(axum::http::header::AUTHORIZATION));
+        assert!(!auth_headers.contains_key(PROXY_EVENT_AUTHORIZATION_HEADER));
+    }
+
+    #[test]
+    fn registration_oauth_and_proxy_identity_have_separate_client_metadata() {
+        let client = client_metadata(
+            "rest",
+            &axum::http::HeaderMap::new(),
+            Some(json!({
+                "sub": "registered-user",
+                "iss": "https://issuer.example"
+            })),
+            Some(json!({
+                "via": "app_connection",
+                "origin_app_id": "source-app"
+            })),
+        );
+
+        assert_eq!(client["sub"], json!("registered-user"));
+        assert_eq!(client["auth"]["type"], json!("oauth_bearer"));
+        assert_eq!(client["proxy"]["via"], json!("app_connection"));
+        assert_eq!(client["proxy"]["origin_app_id"], json!("source-app"));
     }
 }

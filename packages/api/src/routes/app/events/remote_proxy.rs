@@ -4,8 +4,11 @@
 //! (api keys, OAuth, …). These endpoints instead authenticate through the
 //! regular API auth — including app-connection tokens — so a connected app
 //! can call another app's REST routes and MCP server with the permissions of
-//! its connection role. The per-registration inbound auth is skipped; the
-//! caller identity is injected into `_client.auth` for attribution.
+//! its connection role. Configured per-registration auth is still required.
+//! Because the app-connection token occupies `Authorization`, callers forward
+//! registration-level Basic/Bearer/OAuth credentials through
+//! `x-flow-like-event-authorization`. The caller identity is injected into
+//! `_client.proxy`, separately from registration auth in `_client.auth`.
 
 use crate::{
     ensure_permission,
@@ -54,6 +57,16 @@ fn caller_auth(user: &AppUser) -> flow_like_types::Value {
     }
 }
 
+fn ensure_connected_app_proxy(user: &AppUser) -> Result<(), ApiError> {
+    if matches!(user, AppUser::ConnectedApp(_)) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(
+            "Internal event proxies may only be called by connected apps",
+        ))
+    }
+}
+
 async fn load_event(
     state: &AppState,
     app_id: &str,
@@ -78,6 +91,7 @@ async fn proxy_rest_inner(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    ensure_connected_app_proxy(&user)?;
     ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let event_row = load_event(&state, &app_id, &event_id).await?;
     let auth = caller_auth(&user);
@@ -147,8 +161,42 @@ pub async fn proxy_rest(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn proxy_mcp_inner(
+    state: AppState,
+    user: AppUser,
+    app_id: String,
+    event_id: String,
+    path: String,
+    raw_query: Option<String>,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    ensure_connected_app_proxy(&user)?;
+    ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
+    let event_row = load_event(&state, &app_id, &event_id).await?;
+    let auth = caller_auth(&user);
+    let caller = proxy_caller(&user);
+
+    dispatch_mcp_for_event(
+        &state,
+        &event_row,
+        &event_id,
+        &path,
+        raw_query.as_deref().unwrap_or(""),
+        &headers,
+        &method,
+        &body,
+        false,
+        Some(auth),
+        &caller,
+    )
+    .await
+}
+
 /// ANY /apps/{app_id}/events/{event_id}/mcp — the event's MCP server,
-/// reachable with regular API auth (users, API keys, app-connection tokens).
+/// reachable by connected apps with an ExecuteEvents connection role.
 #[tracing::instrument(
     name = "ANY /apps/{app_id}/events/{event_id}/mcp",
     skip(state, user, headers, body)
@@ -162,23 +210,37 @@ pub async fn proxy_mcp(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let event_row = load_event(&state, &app_id, &event_id).await?;
-    let auth = caller_auth(&user);
-    let caller = proxy_caller(&user);
+    proxy_mcp_inner(
+        state,
+        user,
+        app_id,
+        event_id,
+        "/".to_string(),
+        raw_query,
+        method,
+        headers,
+        body,
+    )
+    .await
+}
 
-    dispatch_mcp_for_event(
-        &state,
-        &event_row,
-        &event_id,
-        "/",
-        raw_query.as_deref().unwrap_or(""),
-        &headers,
-        &method,
-        &body,
-        false,
-        Some(auth),
-        &caller,
+/// ANY /apps/{app_id}/events/{event_id}/mcp/{*path} — auxiliary MCP paths,
+/// including OAuth protected-resource metadata discovery.
+#[tracing::instrument(
+    name = "ANY /apps/{app_id}/events/{event_id}/mcp/{*path}",
+    skip(state, user, headers, body)
+)]
+pub async fn proxy_mcp_path(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app_id, event_id, path)): Path<(String, String, String)>,
+    RawQuery(raw_query): RawQuery,
+    method: Method,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    proxy_mcp_inner(
+        state, user, app_id, event_id, path, raw_query, method, headers, body,
     )
     .await
 }

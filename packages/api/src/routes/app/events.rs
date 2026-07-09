@@ -19,7 +19,29 @@ use axum::{
     routing::{any, get, post, put},
 };
 
-use crate::state::AppState;
+use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
+
+fn connected_app_direct_event_allowed(event_type: &str, active: bool) -> bool {
+    active && event_type == "simple_chat"
+}
+
+/// Connected apps call REST/MCP events through the proxy so exposure and
+/// registration auth cannot be bypassed. Chat events have no public proxy
+/// surface and remain directly invocable through the generic handler.
+pub(crate) fn ensure_connected_app_direct_event_allowed(
+    user: &AppUser,
+    event_type: &str,
+    active: bool,
+) -> Result<(), ApiError> {
+    if matches!(user, AppUser::ConnectedApp(_))
+        && !connected_app_direct_event_allowed(event_type, active)
+    {
+        return Err(ApiError::forbidden(
+            "Connected apps may directly invoke only active simple-chat events; use the REST or MCP proxy for other event types",
+        ));
+    }
+    Ok(())
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -49,6 +71,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{event_id}/rest", any(remote_proxy::proxy_rest_root))
         .route("/{event_id}/rest/{*path}", any(remote_proxy::proxy_rest))
         .route("/{event_id}/mcp", any(remote_proxy::proxy_mcp))
+        .route("/{event_id}/mcp/{*path}", any(remote_proxy::proxy_mcp_path))
         .route("/{event_id}/alias", get(alias::list_aliases))
         .route(
             "/{event_id}/alias/{slug}",
@@ -60,4 +83,18 @@ pub fn routes() -> Router<AppState> {
             "/{event_id}/feedback",
             put(upsert_event_feedback::upsert_event_feedback),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connected_app_direct_event_allowed;
+
+    #[test]
+    fn connected_apps_can_directly_invoke_only_active_chat_events() {
+        assert!(connected_app_direct_event_allowed("simple_chat", true));
+        assert!(!connected_app_direct_event_allowed("simple_chat", false));
+        assert!(!connected_app_direct_event_allowed("rest", true));
+        assert!(!connected_app_direct_event_allowed("mcp", true));
+        assert!(!connected_app_direct_event_allowed("webhook", true));
+    }
 }

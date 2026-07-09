@@ -1,8 +1,10 @@
 use super::chat_event::Attachment;
 use crate::data::path::FlowPath;
-use crate::remote_util::{RemoteAppSession, error_for_status, http_client, validate_path_id};
+use crate::remote_util::{
+    RemoteAppSession, error_for_status, follow_get_redirect_without_credentials, http_client,
+    http_client_no_redirect, validate_path_id, with_event_registration_headers,
+};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use flow_like_model_provider::history::History;
 use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
@@ -10,10 +12,11 @@ use flow_like::flow::{
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
+use flow_like_model_provider::history::History;
 use flow_like_types::{Value, async_trait, json::json, tokio};
 use futures::StreamExt;
 use serde::Deserialize;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 /// Pin names special-cased by the flow editor. The project/event pins render
 /// interactive dropdowns; the meta pin is auto-filled with the event's typed
@@ -433,6 +436,13 @@ fn mcp_desired(node: &Node, meta: &EventMeta) -> (Vec<PinSpec>, Vec<PinSpec>) {
             MCP_MODE_READ_RESOURCE.to_string(),
         ])
         .default(json!(MCP_MODE_CALL_TOOL)),
+        PinSpec::new(
+            "headers",
+            "Auth Headers",
+            "Static registration authentication headers (for example Authorization or x-api-key). HMAC auth is not supported for MCP because every request needs a fresh signature.",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<HashMap<String, String>>()),
         timeout_spec(),
     ];
 
@@ -841,7 +851,7 @@ impl CallRemoteEventNode {
         ));
         let http_method = flow_like_types::reqwest::Method::from_bytes(method.as_bytes())
             .unwrap_or(flow_like_types::reqwest::Method::GET);
-        let mut request = http_client()
+        let mut request = http_client_no_redirect()
             .request(http_method, &url)
             .bearer_auth(&session.token);
 
@@ -852,22 +862,31 @@ impl CallRemoteEventNode {
                 .collect();
             request = request.query(&pairs);
         }
-        if let Some(header_obj) = headers.as_object() {
-            for (name, value) in header_obj {
-                if let Some(value) = value.as_str() {
-                    request = request.header(name, value);
-                }
-            }
-        }
+        request = with_event_registration_headers(request, &headers);
         if !body.is_null() {
             request = request.json(&body);
         }
 
-        let response = request
+        let mut response = request
             .send()
             .await
             .map_err(|err| flow_like_types::anyhow!("Remote REST call failed: {}", err))?;
-        let response = error_for_status(response, "Remote REST call").await?;
+
+        // Static file registrations redirect to a short-lived object-store URL.
+        // Follow it with a new request that carries neither the app token nor
+        // registration credentials. Custom headers are otherwise retained by
+        // reqwest across cross-origin redirects.
+        if is_file && response.status().is_redirection() {
+            response = follow_get_redirect_without_credentials(response).await?;
+        }
+
+        // Non-file redirects are returned to the flow as status + Location
+        // rather than followed with credentials or treated as API failures.
+        let response = if response.status().is_redirection() {
+            response
+        } else {
+            error_for_status(response, "Remote REST call").await?
+        };
 
         let status = response.status().as_u16() as i64;
         let header_map: flow_like_types::json::Map<String, Value> = response
@@ -916,6 +935,7 @@ impl CallRemoteEventNode {
         meta: &EventMeta,
     ) -> flow_like_types::Result<()> {
         let mode: String = context.evaluate_pin("mode").await.unwrap_or_default();
+        let headers: Value = context.evaluate_pin("headers").await.unwrap_or(Value::Null);
 
         if mode == MCP_MODE_READ_RESOURCE {
             let uri: String = context.evaluate_pin("resource").await.unwrap_or_default();
@@ -923,7 +943,7 @@ impl CallRemoteEventNode {
                 return Err(flow_like_types::anyhow!("No resource selected"));
             }
             let result = session
-                .mcp_request(event_id, "resources/read", json!({ "uri": uri }))
+                .mcp_request(event_id, "resources/read", json!({ "uri": uri }), &headers)
                 .await?;
             let contents = result
                 .get("contents")
@@ -995,6 +1015,7 @@ impl CallRemoteEventNode {
                 event_id,
                 "tools/call",
                 json!({ "name": tool, "arguments": arguments }),
+                &headers,
             )
             .await?;
 

@@ -31,10 +31,16 @@ pub struct McpServerConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_filter: Option<HashSet<String>>,
 
-    /// Optional value sent in the Authorization header of every request,
-    /// e.g. a bearer token for app-connection MCP proxies.
+    /// Optional bearer token (without the `Bearer ` prefix) sent in the
+    /// Authorization header of every request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_header: Option<String>,
+
+    /// Additional headers included with every MCP request. Connected-app MCP
+    /// proxies use this for registration auth while `auth_header` remains the
+    /// app-connection bearer token.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub custom_headers: HashMap<String, String>,
 }
 
 /// Builds the streamable-HTTP transport config for an MCP server,
@@ -46,7 +52,23 @@ pub(crate) fn mcp_transport_config(
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 
     let mut transport_config = StreamableHttpClientTransportConfig::with_uri(config.uri.clone());
-    transport_config.auth_header = config.auth_header.clone();
+    // RMCP expects the raw bearer token and adds the `Bearer` scheme itself.
+    // Accept the legacy serialized form to avoid double-prefixing saved agents.
+    transport_config.auth_header = config
+        .auth_header
+        .as_deref()
+        .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).to_string());
+    transport_config.custom_headers = config
+        .custom_headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let name =
+                flow_like_types::reqwest::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+            let value =
+                flow_like_types::reqwest::header::HeaderValue::from_bytes(value.as_bytes()).ok()?;
+            Some((name, value))
+        })
+        .collect();
     transport_config
 }
 
@@ -417,5 +439,52 @@ mod tests {
         let agent = Agent::new(Bit::default(), 4);
 
         assert!(agent.get_system_prompt().is_none());
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn mcp_transport_keeps_connection_bearer_and_registration_headers_separate() {
+        let config = McpServerConfig {
+            uri: "https://example.invalid/mcp".to_string(),
+            tool_filter: None,
+            auth_header: Some("connection-token".to_string()),
+            custom_headers: HashMap::from([
+                (
+                    "x-flow-like-event-authorization".to_string(),
+                    "Bearer registration-token".to_string(),
+                ),
+                ("x-api-key".to_string(), "secret".to_string()),
+            ]),
+        };
+
+        let transport = mcp_transport_config(&config);
+        let event_auth_header = flow_like_types::reqwest::header::HeaderName::from_static(
+            "x-flow-like-event-authorization",
+        );
+        let api_key_header = flow_like_types::reqwest::header::HeaderName::from_static("x-api-key");
+
+        assert_eq!(transport.auth_header.as_deref(), Some("connection-token"));
+        assert_eq!(transport.custom_headers.len(), 2);
+        assert_eq!(
+            transport
+                .custom_headers
+                .get(&event_auth_header)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer registration-token")
+        );
+        assert_eq!(
+            transport
+                .custom_headers
+                .get(&api_key_header)
+                .and_then(|value| value.to_str().ok()),
+            Some("secret")
+        );
+
+        let mut legacy = config;
+        legacy.auth_header = Some("Bearer legacy-token".to_string());
+        assert_eq!(
+            mcp_transport_config(&legacy).auth_header.as_deref(),
+            Some("legacy-token")
+        );
     }
 }

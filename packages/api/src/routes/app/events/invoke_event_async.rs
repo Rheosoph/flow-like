@@ -137,6 +137,7 @@ pub async fn invoke_event_async(
 
     // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
+    super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;

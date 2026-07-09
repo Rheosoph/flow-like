@@ -3,8 +3,10 @@
 //! behalf of the current app.
 
 use flow_like::flow::execution::context::ExecutionContext;
-use flow_like_types::{json::json, reqwest};
+use flow_like_types::{Value, json::json, reqwest};
 use std::sync::OnceLock;
+
+const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
 
 #[derive(Debug, flow_like_types::json::Deserialize)]
 struct AppConnectionTokenResponse {
@@ -34,6 +36,68 @@ pub(crate) fn api_base_url(hub: &str, secure: bool) -> Option<String> {
 pub(crate) fn http_client() -> reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(reqwest::Client::new).clone()
+}
+
+/// Client for requests carrying app-connection or registration credentials.
+/// Redirects are handled explicitly so custom auth headers cannot cross an
+/// origin boundary (reqwest only strips a limited set of standard headers).
+pub(crate) fn http_client_no_redirect() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("no-redirect HTTP client should build")
+        })
+        .clone()
+}
+
+/// Follow a GET redirect without copying any headers from the authenticated
+/// request that produced it. Used for signed object-store downloads.
+pub(crate) async fn follow_get_redirect_without_credentials(
+    response: reqwest::Response,
+) -> flow_like_types::Result<reqwest::Response> {
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            flow_like_types::anyhow!("Remote file redirect is missing a valid Location")
+        })?;
+    let redirect_url = response
+        .url()
+        .join(location)
+        .map_err(|err| flow_like_types::anyhow!("Remote file redirect URL is invalid: {}", err))?;
+
+    http_client()
+        .get(redirect_url)
+        .send()
+        .await
+        .map_err(|err| flow_like_types::anyhow!("Remote file download failed: {}", err))
+}
+
+/// Adds registration-level headers to a connected-app proxy request without
+/// replacing the app-connection bearer token used by the API middleware.
+/// Authorization-based registration auth is transported in a dedicated
+/// header and restored by the proxy before the registration auth check.
+pub(crate) fn with_event_registration_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &Value,
+) -> reqwest::RequestBuilder {
+    if let Some(header_obj) = headers.as_object() {
+        for (name, value) in header_obj {
+            if let Some(value) = value.as_str() {
+                let name = if name.eq_ignore_ascii_case("authorization") {
+                    PROXY_EVENT_AUTHORIZATION_HEADER
+                } else {
+                    name.as_str()
+                };
+                request = request.header(name, value);
+            }
+        }
+    }
+    request
 }
 
 pub(crate) async fn error_for_status(
@@ -141,6 +205,114 @@ impl RemoteAppSession {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        follow_get_redirect_without_credentials, http_client, http_client_no_redirect,
+        with_event_registration_headers,
+    };
+    use flow_like_types::tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use flow_like_types::tokio::net::TcpListener;
+    use flow_like_types::{json::json, reqwest};
+
+    #[test]
+    fn registration_authorization_does_not_replace_connection_bearer() {
+        let request = http_client()
+            .get("https://example.invalid")
+            .bearer_auth("connection-token");
+        let request = with_event_registration_headers(
+            request,
+            &json!({
+                "Authorization": "Bearer registration-token",
+                "x-api-key": "secret"
+            }),
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(flow_like_types::reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer connection-token")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-flow-like-event-authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer registration-token")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("secret")
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn authenticated_redirect_is_followed_without_credentials() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = flow_like_types::tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                requests.push(String::from_utf8_lossy(&request).to_ascii_lowercase());
+
+                let response = if index == 0 {
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: /download\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                };
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            requests
+        });
+
+        let response = http_client_no_redirect()
+            .get(format!("http://{address}/proxy"))
+            .bearer_auth("connection-token")
+            .header(
+                "x-flow-like-event-authorization",
+                "Bearer registration-token",
+            )
+            .header("x-api-key", "secret")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+
+        let response = follow_get_redirect_without_credentials(response)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+        let requests = server.await.unwrap();
+        assert!(requests[0].contains("authorization: bearer connection-token"));
+        assert!(requests[0].contains("x-flow-like-event-authorization: bearer registration-token"));
+        assert!(requests[0].contains("x-api-key: secret"));
+        assert!(!requests[1].contains("authorization:"));
+        assert!(!requests[1].contains("x-flow-like-event-authorization:"));
+        assert!(!requests[1].contains("x-api-key:"));
+    }
+}
+
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Parses an MCP HTTP response that may be either `application/json` or an SSE
@@ -188,13 +360,15 @@ impl RemoteAppSession {
         event_id: &str,
         session_id: Option<&str>,
         body: &flow_like_types::Value,
+        registration_headers: &flow_like_types::Value,
     ) -> flow_like_types::Result<(Option<flow_like_types::Value>, Option<String>)> {
         let url = self.url(&format!("events/{}/mcp", event_id));
-        let mut request = http_client()
+        let mut request = http_client_no_redirect()
             .post(&url)
             .bearer_auth(&self.token)
             .header(reqwest::header::ACCEPT, "application/json")
             .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+        request = with_event_registration_headers(request, registration_headers);
         if let Some(session_id) = session_id {
             request = request.header("Mcp-Session-Id", session_id);
         }
@@ -215,6 +389,7 @@ impl RemoteAppSession {
         event_id: &str,
         method: &str,
         params: flow_like_types::Value,
+        registration_headers: &flow_like_types::Value,
     ) -> flow_like_types::Result<flow_like_types::Value> {
         let init = json!({
             "jsonrpc": "2.0",
@@ -226,7 +401,9 @@ impl RemoteAppSession {
                 "clientInfo": { "name": "Flow-Like", "version": "alpha" }
             }
         });
-        let (_, session_id) = self.mcp_post(event_id, None, &init).await?;
+        let (_, session_id) = self
+            .mcp_post(event_id, None, &init, registration_headers)
+            .await?;
 
         let call = json!({
             "jsonrpc": "2.0",
@@ -235,7 +412,7 @@ impl RemoteAppSession {
             "params": params
         });
         let (response, _) = self
-            .mcp_post(event_id, session_id.as_deref(), &call)
+            .mcp_post(event_id, session_id.as_deref(), &call, registration_headers)
             .await?;
 
         let response = response

@@ -26,7 +26,21 @@ use axum::{
     routing::{get, patch, post},
 };
 
-use crate::state::AppState;
+use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
+
+/// Board invocation is also the execution surface used by interactive page
+/// actions. Human/API principals therefore keep the existing ExecuteEvents
+/// permission check in the handlers. Connected apps must never use this
+/// generic surface because it would let them choose arbitrary board/node IDs;
+/// they have to enter through a callable event instead.
+pub(crate) fn ensure_connected_app_board_invoke_denied(user: &AppUser) -> Result<(), ApiError> {
+    if matches!(user, AppUser::ConnectedApp(_)) {
+        return Err(ApiError::forbidden(
+            "Connected apps must invoke workflows through an event endpoint or proxy",
+        ));
+    }
+    Ok(())
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -72,4 +86,26 @@ pub fn routes() -> Router<AppState> {
             post(invoke_board_async::invoke_board_async),
         )
         .route("/{board_id}/workspace", get(workspace::workspace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_connected_app_board_invoke_denied;
+    use crate::middleware::jwt::{AppUser, ConnectedAppUser};
+
+    #[test]
+    fn connected_apps_cannot_invoke_arbitrary_boards_directly() {
+        let connected = AppUser::ConnectedApp(ConnectedAppUser {
+            sub: Some("user".to_string()),
+            origin_app_id: "source".to_string(),
+            target_app_id: "target".to_string(),
+            app_chain: vec!["source".to_string()],
+            technical_user_id: None,
+            run_id: None,
+            correlation: None,
+        });
+
+        assert!(ensure_connected_app_board_invoke_denied(&connected).is_err());
+        assert!(ensure_connected_app_board_invoke_denied(&AppUser::Unauthorized).is_ok());
+    }
 }

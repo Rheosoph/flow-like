@@ -106,6 +106,7 @@ pub async fn invoke_board_async(
     Path((app_id, board_id)): Path<(String, String)>,
     Json(params): Json<InvokeBoardAsyncRequest>,
 ) -> Result<Json<InvokeBoardAsyncResponse>, ApiError> {
+    super::ensure_connected_app_board_invoke_denied(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let sub = permission.effective_user_id().map_err(|_| {
         crate::error::ApiError::forbidden(
