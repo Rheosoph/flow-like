@@ -126,7 +126,7 @@ const data = {
 			items: [],
 		},
 		{
-			title: "Library",
+			title: "My Apps",
 			url: "/library",
 			icon: AnimatedLibraryIcon,
 			isActive: false,

@@ -272,7 +272,7 @@ export function LibraryPage({
 
 	useMobileHeader({
 		right: menuActions,
-		title: "Library",
+		title: "My Apps",
 	});
 
 	const isLoading = apps.isLoading || currentProfile.isLoading;
