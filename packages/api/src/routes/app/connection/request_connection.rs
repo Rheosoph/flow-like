@@ -62,7 +62,7 @@ pub async fn request_connection(
     }
 
     if let Some(comment) = &payload.comment
-        && comment.len() > 2048
+        && comment.chars().count() > 2048
     {
         return Err(ApiError::bad_request(
             "Comment must be at most 2048 characters",

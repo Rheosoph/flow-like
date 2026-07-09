@@ -16,7 +16,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     get,
     path = "/apps/{app_id}/connections/{target_app_id}/tables",
     tag = "team",
-    description = "List the shared database tables of a connected app. Requires an active connection whose role allows reading files.",
+    description = "List the shared database tables of a connected app. Requires an active connection whose role allows reading files or databases.",
     params(
         ("app_id" = String, Path, description = "Application ID (the connected/origin app)"),
         ("target_app_id" = String, Path, description = "The app whose tables should be listed")

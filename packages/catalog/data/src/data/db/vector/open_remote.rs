@@ -66,7 +66,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         node.add_input_pin(
             "write_access",
             "Write Access",
-            "Request write access to the remote database. Requires the connection role to allow writing files.",
+            "Request write access to the remote database. Requires the connection role to allow writing databases (or files).",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));

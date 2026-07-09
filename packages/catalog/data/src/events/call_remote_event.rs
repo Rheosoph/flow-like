@@ -1110,6 +1110,11 @@ async fn collect_sse_outcome(
         let chunk = chunk
             .map_err(|err| flow_like_types::anyhow!("Failed to read event stream: {}", err))?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
+        // SSE allows CRLF line endings; normalize so frame detection below
+        // ("\n\n") also matches "\r\n\r\n"-terminated frames.
+        if buffer.contains('\r') {
+            buffer = buffer.replace("\r\n", "\n");
+        }
 
         while let Some(pos) = buffer.find("\n\n") {
             let frame = buffer[..pos].to_string();
@@ -1197,11 +1202,19 @@ fn is_binary_content(content_type: &str) -> bool {
 }
 
 fn file_name(path: &str, content_type: &str) -> String {
-    let base = path
+    let base: String = path
         .rsplit('/')
         .find(|segment| !segment.is_empty())
         .unwrap_or("download")
-        .to_string();
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     if base.contains('.') {
         return base;
     }

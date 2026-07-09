@@ -185,9 +185,10 @@ pub async fn presign_db_access(
 ///
 /// Like `presign_db_access`, but for the **project** database
 /// (`apps/{app_id}/storage/db`) instead of the per-user database. Access is
-/// gated by `ReadFiles` (read) / `WriteFiles` (write) on the app — this also
-/// covers connected apps calling with an app-connection token, whose
-/// permissions come from the role assigned to the connection.
+/// gated by `ReadFiles` or `ReadDatabase` (read) / `WriteFiles` or
+/// `WriteDatabase` (write) on the app — this also covers connected apps
+/// calling with an app-connection token, whose permissions come from the
+/// role assigned to the connection.
 #[utoipa::path(
     post,
     path = "/apps/{app_id}/db/presign/project",

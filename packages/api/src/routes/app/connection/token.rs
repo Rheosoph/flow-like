@@ -144,7 +144,18 @@ pub async fn create_app_connection_token(
                     Some(correlation),
                 )
             }
-            None => (None, Vec::new(), None),
+            None => {
+                // Don't reject: fully-local runs may not have a server-side
+                // row until report_run, and the token itself stays valid —
+                // only the process-case linkage is lost. Warn so broken
+                // correlation is diagnosable instead of silent.
+                tracing::warn!(
+                    run_id = %claimed_run_id,
+                    app_id = %app_id,
+                    "Claimed run id not found for this app — minting connection token without run correlation"
+                );
+                (None, Vec::new(), None)
+            }
         }
     } else {
         (None, Vec::new(), None)

@@ -184,7 +184,14 @@ pub(crate) async fn collect_subgraph(
                     next_frontier.push(app_id.clone());
                 }
             }
-            edges.insert(connection.id.clone(), connection);
+            // Once the node cap is hit an endpoint may not have made it into
+            // the set — drop such edges so the graph never references a node
+            // that isn't returned.
+            if nodes.contains(&connection.source_app_id)
+                && nodes.contains(&connection.target_app_id)
+            {
+                edges.insert(connection.id.clone(), connection);
+            }
         }
         frontier = next_frontier;
     }
@@ -401,19 +408,25 @@ pub(crate) async fn presign_media(
         Err(_) => return out,
     };
 
-    for (app_id, meta) in metas {
-        if meta.icon.is_none() && meta.banner.is_none() {
-            continue;
-        }
-        let mut metadata = Metadata {
-            icon: meta.icon.clone(),
-            thumbnail: meta.banner.clone(),
-            ..Default::default()
-        };
-        let prefix = FlowPath::from("media").child("apps").child(app_id.clone());
-        metadata.presign(prefix, &store).await;
-        out.insert(app_id.clone(), (metadata.icon, metadata.thumbnail));
-    }
+    // Presigns are independent — run them concurrently instead of one
+    // object-store round trip at a time (the graph can hold up to 200 apps).
+    let tasks = metas
+        .iter()
+        .filter(|(_, meta)| meta.icon.is_some() || meta.banner.is_some())
+        .map(|(app_id, meta)| {
+            let store = &store;
+            async move {
+                let mut metadata = Metadata {
+                    icon: meta.icon.clone(),
+                    thumbnail: meta.banner.clone(),
+                    ..Default::default()
+                };
+                let prefix = FlowPath::from("media").child("apps").child(app_id.clone());
+                metadata.presign(prefix, store).await;
+                (app_id.clone(), (metadata.icon, metadata.thumbnail))
+            }
+        });
+    out.extend(futures::future::join_all(tasks).await);
     out
 }
 

@@ -32,7 +32,7 @@ fn validate_content(content: &str) -> Result<(), ApiError> {
     if content.is_empty() {
         return Err(ApiError::bad_request("Note content must not be empty"));
     }
-    if content.len() > MAX_NOTE_LENGTH {
+    if content.chars().count() > MAX_NOTE_LENGTH {
         return Err(ApiError::bad_request(format!(
             "Note content must be at most {} characters",
             MAX_NOTE_LENGTH
