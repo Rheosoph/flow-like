@@ -33,9 +33,7 @@ pub(crate) fn ensure_connected_app_direct_event_allowed(
     event_type: &str,
     active: bool,
 ) -> Result<(), ApiError> {
-    if matches!(user, AppUser::ConnectedApp(_))
-        && !connected_app_direct_event_allowed(event_type, active)
-    {
+    if user.is_connected_app() && !connected_app_direct_event_allowed(event_type, active) {
         return Err(ApiError::forbidden(
             "Connected apps may directly invoke only active simple-chat events; use the REST or MCP proxy for other event types",
         ));

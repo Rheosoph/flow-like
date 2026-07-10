@@ -271,6 +271,14 @@ impl AppPermissionResponse {
 }
 
 impl AppUser {
+    /// Whether this principal is another app acting through a connection token.
+    /// The single source of truth for the connected-app discrimination used by
+    /// the route-level guards, so a new connected-app-like variant only has to
+    /// be handled here.
+    pub fn is_connected_app(&self) -> bool {
+        matches!(self, AppUser::ConnectedApp(_))
+    }
+
     pub fn sub(&self) -> Result<String, AuthorizationError> {
         match self {
             AppUser::OpenID(user) => Ok(user.sub.clone()),

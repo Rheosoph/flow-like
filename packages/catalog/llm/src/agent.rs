@@ -62,11 +62,22 @@ pub(crate) fn mcp_transport_config(
         .custom_headers
         .iter()
         .filter_map(|(name, value)| {
-            let name =
-                flow_like_types::reqwest::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
-            let value =
-                flow_like_types::reqwest::header::HeaderValue::from_bytes(value.as_bytes()).ok()?;
-            Some((name, value))
+            match (
+                flow_like_types::reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                flow_like_types::reqwest::header::HeaderValue::from_bytes(value.as_bytes()),
+            ) {
+                (Ok(name), Ok(value)) => Some((name, value)),
+                _ => {
+                    // A dropped registration header would otherwise surface only
+                    // as a downstream 401 with no cause; log which header so a
+                    // stray control byte in a pasted credential is diagnosable.
+                    tracing::warn!(
+                        header = %name,
+                        "Skipping MCP custom header that is not a valid HTTP header name/value"
+                    );
+                    None
+                }
+            }
         })
         .collect();
     transport_config

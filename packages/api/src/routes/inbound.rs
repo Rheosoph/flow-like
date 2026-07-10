@@ -83,8 +83,11 @@ const MCP_BROWSER_INSPECTOR_TEMPLATE: &str = include_str!("../../../../assets/mc
 /// The API bearer token occupies `Authorization` on app-connection proxy
 /// requests. Callers put registration-level Basic/Bearer/OAuth credentials in
 /// this header instead; the proxy restores them to `Authorization` only for
-/// the event registration auth check.
-pub(crate) const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
+/// the event registration auth check. Single definition shared with the
+/// catalog nodes that send it (any rename here changes both sides at once).
+/// NOTE: the MCP CORS `Access-Control-Allow-Headers` list in
+/// `mcp_options_response` must include this header name verbatim.
+pub(crate) use flow_like_types::PROXY_EVENT_AUTHORIZATION_HEADER;
 
 pub fn rest_routes() -> Router<AppState> {
     Router::new()
@@ -222,16 +225,24 @@ fn enforce_exposure(event_row: &event::Model, is_public_surface: bool) -> Result
     Ok(())
 }
 
-fn registration_auth_headers(headers: &HeaderMap, is_public_surface: bool) -> HeaderMap {
-    let mut auth_headers = headers.clone();
-    if !is_public_surface {
-        let registration_authorization = auth_headers.remove(PROXY_EVENT_AUTHORIZATION_HEADER);
-        auth_headers.remove(axum::http::header::AUTHORIZATION);
-        if let Some(value) = registration_authorization {
-            auth_headers.insert(axum::http::header::AUTHORIZATION, value);
-        }
+/// Headers to use for the registration auth check and downstream forwarding.
+/// On the public surface this is the request's own header map (borrowed, no
+/// allocation on the hot path); on the internal proxy surface the forwarded
+/// registration credential is restored to `Authorization` in an owned copy.
+fn registration_auth_headers(
+    headers: &HeaderMap,
+    is_public_surface: bool,
+) -> std::borrow::Cow<'_, HeaderMap> {
+    if is_public_surface {
+        return std::borrow::Cow::Borrowed(headers);
     }
-    auth_headers
+    let mut auth_headers = headers.clone();
+    let registration_authorization = auth_headers.remove(PROXY_EVENT_AUTHORIZATION_HEADER);
+    auth_headers.remove(axum::http::header::AUTHORIZATION);
+    if let Some(value) = registration_authorization {
+        auth_headers.insert(axum::http::header::AUTHORIZATION, value);
+    }
+    std::borrow::Cow::Owned(auth_headers)
 }
 
 async fn dispatch_inbound_rest(

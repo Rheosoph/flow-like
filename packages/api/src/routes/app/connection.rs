@@ -366,7 +366,7 @@ pub(crate) async fn app_display_name(state: &AppState, app_id: &str) -> String {
 /// App connections must be managed by people (or their API keys), never by
 /// another app acting through a connection token.
 pub(crate) fn deny_connected_app(user: &crate::middleware::jwt::AppUser) -> Result<(), ApiError> {
-    if matches!(user, crate::middleware::jwt::AppUser::ConnectedApp(_)) {
+    if user.is_connected_app() {
         return Err(ApiError::forbidden(
             "Connected apps cannot manage app connections",
         ));

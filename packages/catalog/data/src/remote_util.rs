@@ -3,10 +3,8 @@
 //! behalf of the current app.
 
 use flow_like::flow::execution::context::ExecutionContext;
-use flow_like_types::{Value, json::json, reqwest};
+use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, json::json, reqwest};
 use std::sync::OnceLock;
-
-const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
 
 #[derive(Debug, flow_like_types::json::Deserialize)]
 struct AppConnectionTokenResponse {
@@ -86,6 +84,10 @@ pub(crate) fn with_event_registration_headers(
     headers: &Value,
 ) -> reqwest::RequestBuilder {
     if let Some(header_obj) = headers.as_object() {
+        // Header names are case-insensitive; dedup on the final name so two
+        // spellings (e.g. `Authorization` and `authorization`, both remapped
+        // to the proxy header) aren't sent twice — the proxy restores only one.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (name, value) in header_obj {
             if let Some(value) = value.as_str() {
                 let name = if name.eq_ignore_ascii_case("authorization") {
@@ -93,6 +95,9 @@ pub(crate) fn with_event_registration_headers(
                 } else {
                     name.as_str()
                 };
+                if !seen.insert(name.to_ascii_lowercase()) {
+                    continue;
+                }
                 request = request.header(name, value);
             }
         }

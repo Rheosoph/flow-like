@@ -133,6 +133,10 @@ pub async fn access(
     Extension(user): Extension<AppUser>,
     Path((app_id, board_id)): Path<(String, String)>,
 ) -> Result<Json<RealtimeParams>, ApiError> {
+    // Realtime collaboration mints a room encryption key + session JWT; a
+    // machine principal acting through a connection has no use for it, and it
+    // would be another arbitrary-board entry point.
+    super::ensure_connected_app_board_invoke_denied(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
     let sub = permission.sub()?;
 

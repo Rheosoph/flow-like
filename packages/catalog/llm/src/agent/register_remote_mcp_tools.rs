@@ -11,13 +11,13 @@ use flow_like::flow::{
 };
 use flow_like_types::async_trait;
 #[cfg(feature = "execute")]
+use flow_like_types::PROXY_EVENT_AUTHORIZATION_HEADER;
+#[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
 
 const PIN_REMOTE_APP_ID: &str = "_flow_remote_app_id";
 const PIN_REMOTE_EVENT: &str = "_flow_remote_event";
 const PIN_REMOTE_EVENT_META: &str = "_flow_remote_event_meta";
-#[cfg(feature = "execute")]
-const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
 
 #[crate::register_node]
 #[derive(Default)]

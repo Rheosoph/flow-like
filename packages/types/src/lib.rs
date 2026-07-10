@@ -52,6 +52,13 @@ pub mod json {
 
 pub mod dispatch;
 
+/// Header carrying registration-level credentials on app-connection proxy
+/// requests, where `Authorization` is occupied by the app-connection bearer.
+/// Shared across the API proxy (which restores it to `Authorization` for the
+/// registration auth check) and the catalog nodes that send it, so a rename
+/// can never silently desynchronize producer and consumer.
+pub const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";
+
 pub use bytes::Bytes;
 pub use tokio;
 pub mod sync {

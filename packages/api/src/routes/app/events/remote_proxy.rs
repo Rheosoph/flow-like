@@ -58,7 +58,7 @@ fn caller_auth(user: &AppUser) -> flow_like_types::Value {
 }
 
 fn ensure_connected_app_proxy(user: &AppUser) -> Result<(), ApiError> {
-    if matches!(user, AppUser::ConnectedApp(_)) {
+    if user.is_connected_app() {
         Ok(())
     } else {
         Err(ApiError::forbidden(

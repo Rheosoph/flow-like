@@ -28,15 +28,16 @@ use axum::{
 
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
 
-/// Board invocation is also the execution surface used by interactive page
-/// actions. Human/API principals therefore keep the existing ExecuteEvents
-/// permission check in the handlers. Connected apps must never use this
-/// generic surface because it would let them choose arbitrary board/node IDs;
-/// they have to enter through a callable event instead.
+/// Board invocation, prerun, and realtime access all take an arbitrary board
+/// id and either execute it or disclose its full definition. Human/API
+/// principals keep the existing permission checks in the handlers. Connected
+/// apps must never use these generic board surfaces because they would let a
+/// connected app choose arbitrary board/node IDs; they have to enter through a
+/// callable event or the proxy instead.
 pub(crate) fn ensure_connected_app_board_invoke_denied(user: &AppUser) -> Result<(), ApiError> {
-    if matches!(user, AppUser::ConnectedApp(_)) {
+    if user.is_connected_app() {
         return Err(ApiError::forbidden(
-            "Connected apps must invoke workflows through an event endpoint or proxy",
+            "Connected apps must reach workflows through an event endpoint or proxy, not the generic board surface",
         ));
     }
     Ok(())
