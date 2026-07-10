@@ -2,21 +2,29 @@
 
 import {
 	AlertCircle,
-	ArrowDownAZ,
-	ChevronDown,
-	Clock,
-	Filter,
-	Loader2,
-	Package,
+	ArrowRight,
+	PackageOpen,
+	RotateCw,
 	Search,
-	TrendingUp,
 	X,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import {
+	Suspense,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useInfiniteInvoke, useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { formatAppCategory } from "../../lib/app-category";
+import {
+	APP_CATEGORY_ORDER,
+	CATEGORY_ICONS,
+	categoryColor,
+} from "../../lib/category-meta";
 import type { IApp } from "../../lib/schema/app/app";
 import {
 	IAppCategory,
@@ -25,30 +33,21 @@ import {
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
-import {
-	CARD_MIN_W_DESKTOP,
-	CARD_MIN_W_MOBILE,
-	CATEGORY_COLORS,
-} from "../library/library-types";
-import { useGridColumns } from "../library/use-grid-columns";
+import { CARD_MIN_W_DESKTOP } from "../library/library-types";
 import { Alert, AlertDescription } from "../ui/alert";
 import { AppCard } from "../ui/app-card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { ScrollRail } from "../ui/scroll-rail";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-
-const FEATURED_CATEGORIES = [
-	IAppCategory.Productivity,
-	IAppCategory.Business,
-	IAppCategory.Education,
-	IAppCategory.Entertainment,
-	IAppCategory.Games,
-	IAppCategory.Communication,
-	IAppCategory.Utilities,
-	IAppCategory.Music,
-	IAppCategory.Health,
-];
+import { ExploreHubHeader } from "./explore-hub-header";
 
 type SortOption = "popular" | "newest" | "rated" | "updated";
 
@@ -59,39 +58,70 @@ const SORT_MAP: Record<SortOption, IAppSearchSort> = {
 	updated: IAppSearchSort.NewestUpdated,
 };
 
-const SORT_CYCLE: SortOption[] = ["popular", "newest", "rated", "updated"];
 const SORT_LABEL: Record<SortOption, string> = {
 	popular: "Most popular",
 	newest: "Newest first",
 	rated: "Best rated",
 	updated: "Recently updated",
 };
-const SORT_ICON: Record<
-	SortOption,
-	React.ComponentType<{ className?: string }>
-> = {
-	popular: TrendingUp,
-	newest: Clock,
-	rated: ArrowDownAZ,
-	updated: Clock,
-};
+
+const SORT_OPTIONS = Object.keys(SORT_MAP) as SortOption[];
+
+const isSortOption = (value: string | null): value is SortOption =>
+	!!value && value in SORT_MAP;
+
+const isCategory = (value: string | null): value is IAppCategory =>
+	!!value && (Object.values(IAppCategory) as string[]).includes(value);
+
+// Rail order lookup keyed by formatted label (the grouping key).
+const CATEGORY_LABEL_ORDER = new Map(
+	APP_CATEGORY_ORDER.map((category, index) => [
+		formatAppCategory(category),
+		index,
+	]),
+);
+
+type AppEntry = [IApp, IMetadata | undefined];
 
 export interface ExploreAppsPageProps {
 	eventConfig?: IEventMapping;
 }
 
-export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>) {
+export function ExploreAppsPage(props: Readonly<ExploreAppsPageProps>) {
+	return (
+		<Suspense
+			fallback={
+				<main className="flex flex-col w-full flex-1 min-h-0">
+					<ResultsSkeleton className="px-4 sm:px-8 pt-6" />
+				</main>
+			}
+		>
+			<ExploreAppsContent {...props} />
+		</Suspense>
+	);
+}
+
+function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 	const router = useRouter();
+	const pathname = usePathname();
+	const searchParams = useSearchParams();
 	const backend = useBackend();
 	const isMobile = useIsMobile();
 
-	const [searchQuery, setSearchQuery] = useState("");
-	const [debouncedQuery, setDebouncedQuery] = useState("");
+	const [searchQuery, setSearchQuery] = useState(
+		() => searchParams.get("q") ?? "",
+	);
+	const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
 	const [selectedCategory, setSelectedCategory] = useState<
 		IAppCategory | undefined
-	>();
-	const [sortKey, setSortKey] = useState<SortOption>("popular");
-	const [showCategories, setShowCategories] = useState(false);
+	>(() => {
+		const param = searchParams.get("category");
+		return isCategory(param) ? param : undefined;
+	});
+	const [sortKey, setSortKey] = useState<SortOption>(() => {
+		const param = searchParams.get("sort");
+		return isSortOption(param) ? param : "popular";
+	});
 
 	const userApps = useInvoke(backend.appState.getApps, backend.appState, []);
 
@@ -100,6 +130,52 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 		return () => clearTimeout(timeout);
 	}, [searchQuery]);
 
+	// Filters live in the URL (?q=…&category=…&sort=…) so they are shareable and
+	// deep-linkable. Two-way sync: URL changes we did not write ourselves
+	// (sidebar click, FlowPilot navigation) are adopted into state; state
+	// changes are written back via router.replace. The refs break the loop.
+	const lastParamsRef = useRef(searchParams.toString());
+	const adoptingRef = useRef(false);
+
+	useEffect(() => {
+		const current = searchParams.toString();
+		if (current === lastParamsRef.current) return;
+		lastParamsRef.current = current;
+		adoptingRef.current = true;
+		const q = searchParams.get("q") ?? "";
+		const category = searchParams.get("category");
+		const sort = searchParams.get("sort");
+		setSearchQuery(q);
+		setDebouncedQuery(q);
+		setSelectedCategory(isCategory(category) ? category : undefined);
+		setSortKey(isSortOption(sort) ? sort : "popular");
+	}, [searchParams]);
+
+	useEffect(() => {
+		if (adoptingRef.current) {
+			adoptingRef.current = false;
+			return;
+		}
+		const params = new URLSearchParams();
+		if (debouncedQuery) params.set("q", debouncedQuery);
+		if (selectedCategory) params.set("category", selectedCategory);
+		if (sortKey !== "popular") params.set("sort", sortKey);
+		const next = params.toString();
+		if (next !== searchParams.toString()) {
+			lastParamsRef.current = next;
+			router.replace(next ? `${pathname}?${next}` : pathname, {
+				scroll: false,
+			});
+		}
+	}, [
+		debouncedQuery,
+		selectedCategory,
+		sortKey,
+		pathname,
+		router,
+		searchParams,
+	]);
+
 	const {
 		data: searchResults,
 		hasNextPage,
@@ -107,6 +183,7 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 		isFetchingNextPage,
 		isLoading,
 		error,
+		refetch,
 	} = useInfiniteInvoke(backend.appState.searchApps, backend.appState, [
 		undefined,
 		debouncedQuery || undefined,
@@ -117,10 +194,18 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 		undefined,
 	]);
 
-	const combinedApps = useMemo(
-		() => searchResults?.pages.flat() ?? [],
-		[searchResults],
-	);
+	// Offset pagination can hand the same app back across page boundaries when
+	// the underlying order shifts between fetches — dedupe by id.
+	const combinedApps = useMemo(() => {
+		const seen = new Set<string>();
+		const deduped: AppEntry[] = [];
+		for (const entry of searchResults?.pages.flat() ?? []) {
+			if (seen.has(entry[0].id)) continue;
+			seen.add(entry[0].id);
+			deduped.push(entry);
+		}
+		return deduped;
+	}, [searchResults]);
 
 	const userAppIds = useMemo(
 		() => new Set(userApps.data?.map(([app]) => app.id) ?? []),
@@ -129,12 +214,12 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 
 	const usableEvents = useMemo(() => {
 		const set = new Set<string>();
-		Object.values(eventConfig ?? {}).forEach((config) => {
+		for (const config of Object.values(eventConfig ?? {})) {
 			const usable = Object.keys(config.useInterfaces);
 			for (const eventType of usable) {
 				if (config.eventTypes.includes(eventType)) set.add(eventType);
 			}
-		});
+		}
 		return set;
 	}, [eventConfig]);
 
@@ -178,57 +263,46 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 		[resolveUseHref, router],
 	);
 
-	const appHref = useCallback(
-		(appId: string) => `/store?id=${appId}`,
-		[],
-	);
+	const appHref = useCallback((appId: string) => `/store?id=${appId}`, []);
 
-	const hasActiveFilters =
+	const isFiltered =
 		!!debouncedQuery || !!selectedCategory || sortKey !== "popular";
 
 	const clearFilters = useCallback(() => {
 		setSearchQuery("");
+		setDebouncedQuery("");
 		setSelectedCategory(undefined);
 		setSortKey("popular");
 	}, []);
 
-	const cycleSortMode = useCallback(() => {
-		setSortKey((prev) => {
-			const idx = SORT_CYCLE.indexOf(prev);
-			return SORT_CYCLE[(idx + 1) % SORT_CYCLE.length];
-		});
-	}, []);
-
-	const categorizedApps = useMemo(() => {
-		if (selectedCategory || debouncedQuery) return null;
-		const groups = new Map<string, [IApp, IMetadata | undefined][]>();
+	const categoryRails = useMemo(() => {
+		if (isFiltered) return null;
+		const groups = new Map<string, AppEntry[]>();
 		for (const entry of combinedApps) {
-			const [app] = entry;
-			const label = formatAppCategory(app.primary_category);
+			const label = formatAppCategory(entry[0].primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(entry);
 			groups.set(label, existing);
 		}
 		return Array.from(groups.entries())
 			.map(([label, items]) => ({ label, items }))
-			.toSorted((a, b) => a.label.localeCompare(b.label));
-	}, [combinedApps, selectedCategory, debouncedQuery]);
-
-	const SortIcon = SORT_ICON[sortKey];
-
-	if (isLoading) {
-		return (
-			<main className="flex flex-col w-full flex-1 min-h-0">
-				<ExploreSkeleton />
-			</main>
-		);
-	}
+			.toSorted(
+				(a, b) =>
+					(CATEGORY_LABEL_ORDER.get(a.label) ?? Number.MAX_SAFE_INTEGER) -
+					(CATEGORY_LABEL_ORDER.get(b.label) ?? Number.MAX_SAFE_INTEGER),
+			);
+	}, [combinedApps, isFiltered]);
 
 	return (
 		<main className="flex flex-col w-full flex-1 min-h-0">
 			<div
-				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8 pb-4"}`}
+				className={`pt-6 pb-4 space-y-4 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 			>
+				<ExploreHubHeader
+					active="apps"
+					subtitle="Community apps, ready to use or fork."
+				/>
+
 				<div className="flex items-center gap-2">
 					<div className="relative flex-1 max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
@@ -241,6 +315,7 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 						{searchQuery && (
 							<button
 								type="button"
+								aria-label="Clear search"
 								onClick={() => setSearchQuery("")}
 								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
 							>
@@ -249,136 +324,85 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 						)}
 					</div>
 
-					<div className="flex items-center gap-1">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant="ghost"
-									size="icon"
-									className={`h-8 w-8 rounded-full ${
-										sortKey !== "popular"
-											? "text-foreground/80 bg-muted/40"
-											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-									}`}
-									onClick={cycleSortMode}
-								>
-									<SortIcon className="h-4 w-4" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{SORT_LABEL[sortKey]} · click to change
-							</TooltipContent>
-						</Tooltip>
+					<Select
+						value={sortKey}
+						onValueChange={(value) => setSortKey(value as SortOption)}
+					>
+						<SelectTrigger
+							aria-label="Sort results"
+							className="w-auto gap-1.5 rounded-full border-border/40 bg-muted/30 text-sm h-10"
+						>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{SORT_OPTIONS.map((option) => (
+								<SelectItem key={option} value={option}>
+									{SORT_LABEL[option]}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
 
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant={showCategories ? "secondary" : "ghost"}
-									size="icon"
-									className={`h-8 w-8 rounded-full ${
-										showCategories || selectedCategory
-											? "text-primary bg-primary/10"
-											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-									}`}
-									onClick={() => setShowCategories((v) => !v)}
-								>
-									<Filter className="h-4 w-4" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{showCategories ? "Hide categories" : "Filter by category"}
-							</TooltipContent>
-						</Tooltip>
-
-						{hasActiveFilters && (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button
-										variant="ghost"
-										size="icon"
-										className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-										onClick={clearFilters}
-									>
-										<X className="h-4 w-4" />
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent>Clear all filters</TooltipContent>
-							</Tooltip>
-						)}
-					</div>
+					{isFiltered && (
+						<Button
+							variant="ghost"
+							size="sm"
+							className="rounded-full text-muted-foreground/70 hover:text-foreground"
+							onClick={clearFilters}
+						>
+							<X className="h-3.5 w-3.5 mr-1" />
+							Clear
+						</Button>
+					)}
 				</div>
 
-				{showCategories && (
-					<div className="flex flex-wrap gap-1.5 animate-in fade-in-0 slide-in-from-top-2 duration-200">
-						{FEATURED_CATEGORIES.map((category) => {
-							const label = formatAppCategory(category);
-							const color = CATEGORY_COLORS[label] ?? CATEGORY_COLORS.Other;
-							const isSelected = selectedCategory === category;
-
-							return (
-								<button
-									key={category}
-									type="button"
-									className={`rounded-full px-3 py-1 text-xs transition-all flex items-center gap-1.5 ${
-										isSelected
-											? "bg-foreground/10 text-foreground ring-1 ring-foreground/20"
-											: "bg-muted/20 text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground/80"
-									}`}
-									onClick={() =>
-										setSelectedCategory(isSelected ? undefined : category)
-									}
-								>
-									<span
-										className="w-1.5 h-1.5 rounded-full shrink-0"
-										style={{
-											backgroundColor: color,
-											opacity: isSelected ? 1 : 0.6,
-										}}
-									/>
-									{label}
-								</button>
-							);
-						})}
-
-						{selectedCategory && (
-							<button
-								type="button"
-								className="rounded-full px-3 py-1 text-xs bg-foreground/10 text-foreground ring-1 ring-foreground/20 flex items-center gap-1.5"
-								onClick={() => setSelectedCategory(undefined)}
-							>
-								{formatAppCategory(selectedCategory)}
-								<X className="h-3 w-3" />
-							</button>
-						)}
-					</div>
-				)}
+				<CategoryChips
+					selected={selectedCategory}
+					onSelect={setSelectedCategory}
+					isMobile={isMobile}
+				/>
 			</div>
 
 			<div
-				className={`flex-1 overflow-auto pb-8 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				className={`flex-1 overflow-auto pb-10 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 			>
 				{error ? (
 					<Alert variant="destructive" className="mb-4">
 						<AlertCircle className="h-4 w-4" />
-						<AlertDescription>
+						<AlertDescription className="flex items-center gap-3">
 							Failed to load apps: {error.message}
+							<Button
+								variant="outline"
+								size="sm"
+								className="rounded-full"
+								onClick={() => refetch()}
+							>
+								<RotateCw className="h-3.5 w-3.5 mr-1" />
+								Retry
+							</Button>
 						</AlertDescription>
 					</Alert>
+				) : isLoading ? (
+					<ResultsSkeleton />
 				) : combinedApps.length === 0 ? (
-					<ExploreEmpty hasFilters={hasActiveFilters} />
-				) : categorizedApps && categorizedApps.length > 1 ? (
-					<div className={isMobile ? "space-y-5" : "space-y-10"}>
-						{categorizedApps.map(({ label, items }, idx) => (
-							<ExploreSection
+					<ExploreEmpty hasFilters={isFiltered} onClear={clearFilters} />
+				) : categoryRails ? (
+					<div className="space-y-10">
+						{categoryRails.map(({ label, items }) => (
+							<CategoryRailSection
 								key={label}
-								title={label}
+								label={label}
 								apps={items}
 								userAppIds={userAppIds}
 								onAppClick={handleAppClick}
 								appHref={appHref}
 								isMobile={isMobile}
-								categoryColor={CATEGORY_COLORS[label]}
-								defaultExpanded={idx === 0}
+								onSeeAll={() => {
+									const match = APP_CATEGORY_ORDER.find(
+										(category) => formatAppCategory(category) === label,
+									);
+									if (match) setSelectedCategory(match);
+								}}
 							/>
 						))}
 
@@ -391,14 +415,13 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 					</div>
 				) : (
 					<div className={isMobile ? "space-y-5" : "space-y-6"}>
-						{(selectedCategory || debouncedQuery) && (
-							<p className="text-xs text-muted-foreground/60">
-								{combinedApps.length} result
-								{combinedApps.length !== 1 ? "s" : ""}
-								{selectedCategory &&
-									` in ${formatAppCategory(selectedCategory)}`}
-							</p>
-						)}
+						<p className="text-xs text-muted-foreground/60">
+							Showing {combinedApps.length}
+							{hasNextPage ? "+" : ""} app
+							{combinedApps.length !== 1 ? "s" : ""}
+							{selectedCategory && ` in ${formatAppCategory(selectedCategory)}`}
+							{debouncedQuery && ` for “${debouncedQuery}”`}
+						</p>
 
 						<ExploreGrid
 							apps={combinedApps}
@@ -421,142 +444,113 @@ export function ExploreAppsPage({ eventConfig }: Readonly<ExploreAppsPageProps>)
 	);
 }
 
-function ExploreSection({
-	title,
+function CategoryChips({
+	selected,
+	onSelect,
+	isMobile,
+}: Readonly<{
+	selected?: IAppCategory;
+	onSelect: (category: IAppCategory | undefined) => void;
+	isMobile: boolean;
+}>) {
+	return (
+		<div
+			className={
+				isMobile
+					? "flex gap-1.5 overflow-x-auto scrollbar-hide -mx-4 px-4 pb-1"
+					: "flex flex-wrap gap-1.5"
+			}
+		>
+			{APP_CATEGORY_ORDER.map((category) => {
+				const label = formatAppCategory(category);
+				const color = categoryColor(category);
+				const Icon = CATEGORY_ICONS[category];
+				const isSelected = selected === category;
+
+				return (
+					<button
+						key={category}
+						type="button"
+						aria-pressed={isSelected}
+						className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs transition-all ${
+							isSelected
+								? "bg-foreground/10 text-foreground ring-1 ring-foreground/20"
+								: "bg-muted/20 text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground/80"
+						}`}
+						onClick={() => onSelect(isSelected ? undefined : category)}
+					>
+						<Icon
+							className="h-3 w-3 shrink-0"
+							style={{ color, opacity: isSelected ? 1 : 0.7 }}
+						/>
+						{label}
+						{isSelected && <X className="h-3 w-3" />}
+					</button>
+				);
+			})}
+		</div>
+	);
+}
+
+function CategoryRailSection({
+	label,
 	apps,
 	userAppIds,
 	onAppClick,
 	appHref,
 	isMobile,
-	categoryColor,
-	defaultExpanded = false,
+	onSeeAll,
 }: Readonly<{
-	title: string;
-	apps: [IApp, IMetadata | undefined][];
+	label: string;
+	apps: AppEntry[];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
-	appHref?: (id: string) => string;
+	appHref: (id: string) => string;
 	isMobile: boolean;
-	categoryColor?: string;
-	defaultExpanded?: boolean;
+	onSeeAll: () => void;
 }>) {
-	const containerRef = useRef<HTMLDivElement>(null);
-	const cardMin = isMobile ? CARD_MIN_W_MOBILE : CARD_MIN_W_DESKTOP;
-	const cols = useGridColumns(containerRef, cardMin);
-	const [expanded, setExpanded] = useState(defaultExpanded);
-
-	const collapsedCount = cols * 1;
-	const needsExpand = apps.length > collapsedCount;
-	const visibleApps = expanded ? apps : apps.slice(0, collapsedCount);
-	const hiddenCount = apps.length - collapsedCount;
-
 	if (apps.length === 0) return null;
-
-	if (isMobile) {
-		return (
-			<section>
-				<div className="flex items-center justify-between mb-2">
-					<div className="flex items-center gap-2">
-						{categoryColor && (
-							<span
-								className="w-2 h-2 rounded-full shrink-0"
-								style={{ backgroundColor: categoryColor, opacity: 0.6 }}
-							/>
-						)}
-						<h2 className="text-base font-bold tracking-tight text-foreground">
-							{title}
-						</h2>
-						<span className="text-xs text-muted-foreground/40">
-							{apps.length}
-						</span>
-					</div>
-					{needsExpand && !expanded && (
-						<button
-							type="button"
-							onClick={() => setExpanded(true)}
-							className="text-sm font-medium text-primary"
-						>
-							See All
-						</button>
-					)}
-				</div>
-				<div className="divide-y divide-border/30">
-					{visibleApps.map(([app, metadata]) => (
-						<AppCard
-							key={app.id}
-							isOwned={userAppIds.has(app.id)}
-							app={app}
-							metadata={metadata}
-							variant="small"
-							onClick={() => onAppClick(app.id)}
-							className="w-full rounded-none border-0 shadow-none bg-transparent"
-						/>
-					))}
-				</div>
-				{needsExpand && expanded && (
-					<div className="flex justify-center mt-2">
-						<button
-							type="button"
-							onClick={() => setExpanded(false)}
-							className="flex items-center gap-1.5 text-xs text-muted-foreground/60 hover:text-foreground px-4 py-1.5 rounded-full border border-border/30 hover:border-border/50 hover:bg-muted/30 transition-colors"
-						>
-							Less
-						</button>
-					</div>
-				)}
-			</section>
-		);
-	}
+	const color = categoryColor(label);
 
 	return (
 		<section>
-			<div className="flex items-center gap-2 mb-3">
-				{categoryColor && (
+			<div className="mb-3 flex items-center justify-between gap-3">
+				<div className="flex items-center gap-2 min-w-0">
 					<span
-						className="w-2 h-2 rounded-full shrink-0"
-						style={{ backgroundColor: categoryColor, opacity: 0.6 }}
+						className="h-2 w-2 shrink-0 rounded-full"
+						style={{ backgroundColor: color }}
 					/>
-				)}
-				<h2 className="text-xs font-medium uppercase tracking-widest text-muted-foreground/60">
-					{title}
-				</h2>
-				<span className="text-xs text-muted-foreground/30">{apps.length}</span>
-			</div>
-
-			<div
-				ref={containerRef}
-				className="grid gap-3"
-				style={{
-					gridTemplateColumns: `repeat(auto-fill, minmax(${cardMin}px, 1fr))`,
-				}}
-			>
-				{visibleApps.map(([app, metadata]) => (
-					<AppCard
-						key={app.id}
-						isOwned={userAppIds.has(app.id)}
-						app={app}
-						metadata={metadata}
-						variant="extended"
-						onClick={() => onAppClick(app.id)}
-						className="w-full"
-					/>
-				))}
-			</div>
-
-			{needsExpand && (
-				<div className="flex justify-center mt-3">
-					<button
-						type="button"
-						onClick={() => setExpanded((e) => !e)}
-						className="flex items-center gap-1.5 text-xs text-muted-foreground/60 hover:text-foreground px-4 py-1.5 rounded-full border border-border/30 hover:border-border/50 hover:bg-muted/30 transition-colors"
-					>
-						{expanded ? "Less" : `${hiddenCount} more`}
-						<ChevronDown
-							className={`h-3 w-3 transition-transform ${expanded ? "rotate-180" : ""}`}
-						/>
-					</button>
+					<h2 className="truncate text-base font-bold tracking-tight text-foreground">
+						{label}
+					</h2>
 				</div>
-			)}
+				<button
+					type="button"
+					onClick={onSeeAll}
+					className="group/link flex shrink-0 items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+				>
+					See all
+					<ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/link:translate-x-0.5" />
+				</button>
+			</div>
+			<ScrollRail>
+				{apps.map(([app, metadata]) => (
+					<div
+						key={app.id}
+						className={`shrink-0 snap-start ${isMobile ? "w-56" : "w-64"}`}
+					>
+						<AppCard
+							isOwned={userAppIds.has(app.id)}
+							app={app}
+							metadata={metadata}
+							variant="extended"
+							onClick={() => onAppClick(app.id)}
+							href={appHref(app.id)}
+							className="w-full"
+						/>
+					</div>
+				))}
+			</ScrollRail>
 		</section>
 	);
 }
@@ -568,15 +562,12 @@ function ExploreGrid({
 	appHref,
 	isMobile,
 }: Readonly<{
-	apps: [IApp, IMetadata | undefined][];
+	apps: AppEntry[];
 	userAppIds: Set<string>;
 	onAppClick: (id: string) => void;
-	appHref?: (id: string) => string;
+	appHref: (id: string) => string;
 	isMobile: boolean;
 }>) {
-	const containerRef = useRef<HTMLDivElement>(null);
-	const cardMin = isMobile ? CARD_MIN_W_MOBILE : CARD_MIN_W_DESKTOP;
-
 	if (isMobile) {
 		return (
 			<div className="divide-y divide-border/30">
@@ -588,7 +579,7 @@ function ExploreGrid({
 						metadata={metadata}
 						variant="small"
 						onClick={() => onAppClick(app.id)}
-						href={appHref?.(app.id)}
+						href={appHref(app.id)}
 						className="w-full rounded-none border-0 shadow-none bg-transparent"
 					/>
 				))}
@@ -598,10 +589,9 @@ function ExploreGrid({
 
 	return (
 		<div
-			ref={containerRef}
 			className="grid gap-3"
 			style={{
-				gridTemplateColumns: `repeat(auto-fill, minmax(${cardMin}px, 1fr))`,
+				gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN_W_DESKTOP}px, 1fr))`,
 			}}
 		>
 			{apps.map(([app, metadata]) => (
@@ -612,7 +602,7 @@ function ExploreGrid({
 					metadata={metadata}
 					variant="extended"
 					onClick={() => onAppClick(app.id)}
-					href={appHref?.(app.id)}
+					href={appHref(app.id)}
 					className="w-full"
 				/>
 			))}
@@ -620,20 +610,33 @@ function ExploreGrid({
 	);
 }
 
-function ExploreEmpty({ hasFilters }: { hasFilters: boolean }) {
+function ExploreEmpty({
+	hasFilters,
+	onClear,
+}: Readonly<{ hasFilters: boolean; onClear: () => void }>) {
 	return (
 		<div className="flex flex-col items-center justify-center py-32 text-center">
 			<div className="rounded-full bg-muted/30 p-5 mb-5">
-				<Package className="h-7 w-7 text-muted-foreground/40" />
+				<PackageOpen className="h-7 w-7 text-muted-foreground/40" />
 			</div>
 			<p className="text-sm text-foreground/60 mb-1">
 				{hasFilters ? "No apps match your filters" : "No apps found"}
 			</p>
-			<p className="text-xs text-muted-foreground/60">
+			<p className="text-xs text-muted-foreground/60 mb-4">
 				{hasFilters
 					? "Try adjusting your search or filters"
 					: "Check back later for new community apps"}
 			</p>
+			{hasFilters && (
+				<Button
+					variant="outline"
+					size="sm"
+					className="rounded-full"
+					onClick={onClear}
+				>
+					Clear filters
+				</Button>
+			)}
 		</div>
 	);
 }
@@ -641,10 +644,10 @@ function ExploreEmpty({ hasFilters }: { hasFilters: boolean }) {
 function LoadMoreButton({
 	isFetching,
 	onFetch,
-}: {
+}: Readonly<{
 	isFetching: boolean;
 	onFetch: () => void;
-}) {
+}>) {
 	return (
 		<div className="flex justify-center mt-3">
 			<button
@@ -655,7 +658,7 @@ function LoadMoreButton({
 			>
 				{isFetching ? (
 					<>
-						<Loader2 className="h-3 w-3 animate-spin" />
+						<RotateCw className="h-3 w-3 animate-spin" />
 						Loading…
 					</>
 				) : (
@@ -666,33 +669,28 @@ function LoadMoreButton({
 	);
 }
 
-function ExploreSkeleton() {
+const SKELETON_KEYS = {
+	rows: ["row-a", "row-b"],
+	cards: ["card-a", "card-b", "card-c", "card-d", "card-e"],
+};
+
+function ResultsSkeleton({ className }: Readonly<{ className?: string }>) {
 	return (
-		<div className="space-y-8 md:space-y-12 px-4 sm:px-8 pt-6">
-			<Skeleton className="h-10 w-full max-w-lg rounded-full" />
-			{Array.from({ length: 3 }).map((_, row) => (
-				<div key={`skel-row-${row.toString()}`} className="space-y-3">
-					<Skeleton className="h-4 w-28 rounded" />
-					<div className="hidden md:grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-						{Array.from({ length: 5 }).map((_, i) => (
+		<div className={`space-y-10 ${className ?? ""}`}>
+			{SKELETON_KEYS.rows.map((row) => (
+				<div key={row} className="space-y-3">
+					<Skeleton className="h-5 w-32 rounded" />
+					<div
+						className="grid gap-3"
+						style={{
+							gridTemplateColumns: `repeat(auto-fill, minmax(${CARD_MIN_W_DESKTOP}px, 1fr))`,
+						}}
+					>
+						{SKELETON_KEYS.cards.map((card) => (
 							<Skeleton
-								key={`skel-${row}-${i.toString()}`}
-								className="h-72 rounded-xl"
+								key={`${row}-${card}`}
+								className="h-[375px] rounded-xl"
 							/>
-						))}
-					</div>
-					<div className="md:hidden space-y-0 divide-y divide-border/20">
-						{Array.from({ length: 3 }).map((_, i) => (
-							<div
-								key={`skel-m-${row}-${i.toString()}`}
-								className="flex items-center gap-3 py-3"
-							>
-								<Skeleton className="h-12 w-12 rounded-xl shrink-0" />
-								<div className="flex-1 space-y-1.5">
-									<Skeleton className="h-3.5 w-32 rounded" />
-									<Skeleton className="h-3 w-48 rounded" />
-								</div>
-							</div>
 						))}
 					</div>
 				</div>

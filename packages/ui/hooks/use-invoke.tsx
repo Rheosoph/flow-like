@@ -11,6 +11,15 @@ import { useBackend } from "../state/backend-state";
 
 type BackendFunction<T, Args extends any[]> = (...args: Args) => Promise<T>;
 
+// Undefined args are mapped to null (JSON-stable) instead of being dropped:
+// dropping them erases argument positions, so e.g. searchApps(query: "X") and
+// searchApps(category: "X") would collide on the same cache key.
+function toQueryKey(parts: readonly unknown[]): unknown[] {
+	const key = parts.map((part) => (typeof part === "undefined" ? null : part));
+	while (key.length > 1 && key[key.length - 1] === null) key.pop();
+	return key;
+}
+
 /**
  * Custom hook to invoke an asynchronous backend function using React Query.
  * Handles functions with multiple arguments passed as an array.
@@ -36,11 +45,11 @@ export function useInvoke<T, Args extends any[]>(
 ): UseQueryResult<T, Error> {
 	const backend = useBackend();
 	const query = useQuery<T, Error>({
-		queryKey: [
+		queryKey: toQueryKey([
 			backendFn.name || "backendFn",
 			...args,
 			...additionalDeps,
-		].filter((arg) => typeof arg !== "undefined"),
+		]),
 		queryFn: async () => {
 			try {
 				const boundFn = backendFn.bind(backendContext ?? backend);
@@ -98,12 +107,12 @@ export function useInfiniteInvoke<T, Args extends any[]>(
 	const backend = useBackend();
 
 	const query = useInfiniteQuery<T, Error>({
-		queryKey: [
+		queryKey: toQueryKey([
 			backendFn.name || "infiniteBackendFn",
 			...args,
 			pageSize,
 			...additionalDeps,
-		].filter((arg) => typeof arg !== "undefined"),
+		]),
 		queryFn: async ({ pageParam = 0 }) => {
 			try {
 				const boundFn = backendFn.bind(backendContext ?? backend);
@@ -127,13 +136,12 @@ export function useInfiniteInvoke<T, Args extends any[]>(
 			}
 		},
 		getNextPageParam: (lastPage, allPages) => {
-			// Assuming the response has a way to determine if there are more pages
-			// You might need to adjust this based on your API response structure
 			const currentOffset = (allPages.length - 1) * pageSize;
 			const nextOffset = currentOffset + pageSize;
 
-			// If lastPage is an array and has more than 0 items, we've reached the end
-			if (Array.isArray(lastPage) && lastPage.length === 0) {
+			// A short page means the source is exhausted — asking again would just
+			// issue a request that returns [].
+			if (Array.isArray(lastPage) && lastPage.length < pageSize) {
 				return undefined;
 			}
 
@@ -186,12 +194,12 @@ export function useInvalidateInfiniteInvoke() {
 		pageSize = 50,
 		additionalDeps: any[] = [],
 	): Promise<void> => {
-		const queryKeyPrefix = [
+		const queryKeyPrefix = toQueryKey([
 			backendFn.name || "infiniteBackendFn",
 			...args,
 			pageSize,
 			...additionalDeps,
-		].filter((arg) => typeof arg !== "undefined");
+		]);
 		return queryClient.invalidateQueries({
 			queryKey: queryKeyPrefix,
 		});
@@ -225,11 +233,11 @@ export function useInvalidateInvoke() {
 		args: Args,
 		additionalDeps: any[] = [],
 	): Promise<void> => {
-		const queryKeyPrefix = [
+		const queryKeyPrefix = toQueryKey([
 			backendFn.name || "backendFn",
 			...args,
 			...additionalDeps,
-		].filter((arg) => typeof arg !== "undefined");
+		]);
 		return queryClient.invalidateQueries({
 			queryKey: queryKeyPrefix,
 		});
@@ -245,11 +253,11 @@ export function injectData<T, Args extends any[]>(
 	data: T,
 	additionalDeps: any[] = [],
 ): UseQueryResult<T, Error> {
-	const queryKey = [
+	const queryKey = toQueryKey([
 		backendFn.name || "backendFn",
 		...args,
 		...additionalDeps,
-	].filter((arg) => typeof arg !== "undefined");
+	]);
 
 	// Immediately set the data in the cache
 	queryClient.setQueryData(queryKey, data);
@@ -278,11 +286,11 @@ export async function injectDataFunction<T, Args extends any[]>(
 	try {
 		const boundLambda = lambda.bind(context);
 		const result = await boundLambda();
-		const queryKey = [
+		const queryKey = toQueryKey([
 			backendFn.name || "backendFn",
 			...args,
 			...additionalDeps,
-		].filter((arg) => typeof arg !== "undefined");
+		]);
 
 		if (!isEqual(result, oldData)) {
 			queryClient?.setQueryData(queryKey, result);
@@ -321,10 +329,10 @@ export function invalidateData<T, Args extends any[]>(
 	args: Args,
 	additionalDeps: any[] = [],
 ): void {
-	const queryKey = [
+	const queryKey = toQueryKey([
 		backendFn.name || "backendFn",
 		...args,
 		...additionalDeps,
-	].filter((arg) => typeof arg !== "undefined");
+	]);
 	queryClient.invalidateQueries({ queryKey });
 }

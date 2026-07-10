@@ -1,8 +1,8 @@
 [
 	{
 		"id": "featured",
-		"title": "Featured Apps",
-		"subtitle": "Discover the most popular and trending applications",
+		"title": "Featured",
+		"subtitle": "Hand-picked apps and the latest from Flow-Like.",
 		"size": "large",
 		"items": [
 			[
@@ -18,23 +18,59 @@
 				}
 			],
 			{
-				"id": "featured-3",
+				"id": "spotlight-beta",
 				"type": "static",
-				"title": "Get Started with Flow Like",
-				"description": "New to Flow Like? Follow our quick-start guide to build your first workflow in minutes",
-				"image": "/placeholder-thumbnail.webp",
-				"link": "https://docs.flow-like.com/start/getting-started/",
-				"badge": "Guide",
-				"icon": "https://cdn.flow-like.com/media/play.svg",
-				"gradient": "from-blue-500 to-purple-600"
+				"title": "Beta v0.1.0 — We Made It to Beta",
+				"description": "Custom WASM nodes in 15+ languages, RPA automation, agents with memory, user-scoped databases, and the iOS app",
+				"badge": "Latest Release",
+				"icon": "/base-logo.svg",
+				"gradient": "from-violet-500 to-fuchsia-600",
+				"image": "https://cdn.flow-like.com/swimlanes/wasm-nodes.jpg",
+				"link": "https://flow-like.com/blog/beta-0-1-0/"
 			}
 		],
-		"viewAllLink": "/apps/featured"
+		"viewAllLink": "/store/explore/apps"
+	},
+	{
+		"id": "top-charts",
+		"title": "Top Charts",
+		"subtitle": "The most popular community apps, by category.",
+		"size": "small",
+		"items": [
+			{
+				"id": "top-productivity",
+				"type": "search",
+				"title": "Productivity",
+				"category": "Productivity",
+				"sort": "MostPopular",
+				"limit": 5,
+				"offset": 0
+			},
+			{
+				"id": "top-business",
+				"type": "search",
+				"title": "Business",
+				"category": "Business",
+				"sort": "MostPopular",
+				"limit": 5,
+				"offset": 0
+			},
+			{
+				"id": "top-utilities",
+				"type": "search",
+				"title": "Utilities",
+				"category": "Utilities",
+				"sort": "MostPopular",
+				"limit": 5,
+				"offset": 0
+			}
+		],
+		"viewAllLink": "/store/explore/apps"
 	},
 	{
 		"id": "ai-models",
 		"title": "AI Models",
-		"subtitle": "Cutting-edge embedding and image processing models",
+		"subtitle": "Embedding and vision models that power your flows.",
 		"size": "medium",
 		"items": [
 			{
@@ -66,20 +102,9 @@
 	{
 		"id": "whats-new",
 		"title": "What's New",
-		"subtitle": "Latest releases and announcements",
+		"subtitle": "Releases and stories from the Flow-Like team.",
 		"size": "medium",
 		"items": [
-			{
-				"id": "release-010",
-				"type": "static",
-				"title": "Beta v0.1.0 — We Made It to Beta",
-				"description": "Custom WASM nodes in 15+ languages, RPA automation, agents with memory, user-scoped databases, and the iOS app",
-				"badge": "Latest Release",
-				"icon": "/base-logo.svg",
-				"gradient": "from-violet-500 to-fuchsia-600",
-				"image": "https://cdn.flow-like.com/swimlanes/wasm-nodes.jpg",
-				"link": "https://flow-like.com/blog/beta-0-1-0/"
-			},
 			{
 				"id": "release-008",
 				"type": "static",
@@ -90,6 +115,17 @@
 				"gradient": "from-sky-500 to-indigo-600",
 				"image": "https://cdn.flow-like.com/swimlanes/0-7.jpg",
 				"link": "https://flow-like.com/blog/alpha-0-0-8/"
+			},
+			{
+				"id": "post-mobile",
+				"type": "static",
+				"title": "Your Workflow Engine Runs on Your Phone",
+				"description": "The actual engine runs on your device — offline-capable, Rust-powered, no cloud required",
+				"badge": "From the Blog",
+				"icon": "/base-logo.svg",
+				"gradient": "from-rose-500 to-orange-500",
+				"image": "https://flow-like.com/images/phone.jpg",
+				"link": "https://flow-like.com/blog/flow-like-on-your-phone/"
 			},
 			{
 				"id": "release-007",
@@ -108,9 +144,20 @@
 	{
 		"id": "learn",
 		"title": "Learn & Explore",
-		"subtitle": "Guides, tutorials, and resources to level up your workflows",
+		"subtitle": "Guides and resources to level up your workflows.",
 		"size": "small",
 		"items": [
+			{
+				"id": "learn-start",
+				"type": "static",
+				"title": "Get Started with Flow-Like",
+				"description": "New here? Follow the quick-start guide and build your first workflow in minutes",
+				"badge": "Start Here",
+				"icon": "https://cdn.flow-like.com/media/play.svg",
+				"gradient": "from-blue-500 to-purple-600",
+				"image": "/placeholder-thumbnail.webp",
+				"link": "https://docs.flow-like.com/start/getting-started/"
+			},
 			{
 				"id": "learn-studio",
 				"type": "static",
@@ -121,17 +168,6 @@
 				"gradient": "from-blue-500 to-cyan-500",
 				"image": "https://cdn.flow-like.com/swimlanes/studio.jpg",
 				"link": "https://docs.flow-like.com/studio/overview/"
-			},
-			{
-				"id": "learn-selfhost",
-				"type": "static",
-				"title": "Self-Hosting Guide",
-				"description": "Run Flow Like on your own infrastructure with Docker Compose or Kubernetes",
-				"badge": "Docs",
-				"icon": "https://cdn.flow-like.com/media/play.svg",
-				"gradient": "from-teal-500 to-green-500",
-				"image": "https://cdn.flow-like.com/swimlanes/self-hosting.jpg",
-				"link": "https://docs.flow-like.com/self-hosting/overview/"
 			},
 			{
 				"id": "learn-community",
@@ -150,6 +186,7 @@
 	{
 		"id": "recent",
 		"title": "Recently Added",
+		"subtitle": "The newest community apps, ranked.",
 		"size": "small",
 		"items": [
 			{
@@ -171,6 +208,6 @@
 				"offset": 10
 			}
 		],
-		"viewAllLink": "/apps/recent"
+		"viewAllLink": "/store/explore/apps?sort=newest"
 	}
 ]

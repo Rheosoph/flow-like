@@ -14,11 +14,11 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { formatAppCategory } from "../../lib/app-category";
+import { categoryColor } from "../../lib/category-meta";
 import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
-import { Badge } from "./badge";
 
 const MotionLink = motion.create(Link);
 
@@ -218,6 +218,7 @@ function SmallAppCard({
 >) {
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
 	const { primaryHue, isDark } = useThemeInfo();
+	const [thumbFailed, setThumbFailed] = useState(false);
 	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		if (!onClick || event.defaultPrevented) return;
 		if (event.key === "Enter" || event.key === " ") {
@@ -234,6 +235,7 @@ function SmallAppCard({
 
 	return (
 		<motion.div
+			className="w-full h-full min-w-0"
 			variants={itemVariants}
 			whileHover="hover"
 			whileTap={{ scale: 0.98 }}
@@ -256,21 +258,24 @@ function SmallAppCard({
 						<Checkbox
 							checked={multiSelected ?? false}
 							onCheckedChange={onClick}
+							label={`Select ${metadata?.name ?? app.id}`}
 						/>
 					</div>
 				)}
 				<div className="absolute left-0 top-0 bottom-0 w-32 opacity-20 group-hover:opacity-50 transition-all duration-300 overflow-hidden">
-					<img
-						src={metadata?.thumbnail ?? "/placeholder-thumbnail-small.jpg"}
-						alt={metadata?.name ?? app.id}
-						className="w-full h-full object-cover object-right"
-						width={1280}
-						height={640}
-						loading="lazy"
-						decoding="async"
-						fetchPriority="low"
-					/>
-					{!metadata?.thumbnail &&
+					{metadata?.thumbnail && !thumbFailed ? (
+						<img
+							src={metadata.thumbnail}
+							alt={metadata.name ?? app.id}
+							className="w-full h-full object-cover object-right"
+							width={1280}
+							height={640}
+							loading="lazy"
+							decoding="async"
+							fetchPriority="low"
+							onError={() => setThumbFailed(true)}
+						/>
+					) : (
 						(() => {
 							const g = hashToGradient(app.id, primaryHue, isDark);
 							return (
@@ -282,7 +287,8 @@ function SmallAppCard({
 									}}
 								/>
 							);
-						})()}
+						})()
+					)}
 					<div className="absolute inset-0 bg-gradient-to-r from-transparent to-card" />
 				</div>
 
@@ -386,6 +392,13 @@ function ExtendedAppCard({
 	const appIcon = metadata?.icon ?? "/app-logo.webp";
 	const hasRating = app.rating_count > 0;
 	const { primaryHue, isDark } = useThemeInfo();
+	const [thumbFailed, setThumbFailed] = useState(false);
+	const [iconFailed, setIconFailed] = useState(false);
+	const hasThumb = Boolean(metadata?.thumbnail) && !thumbFailed;
+	const grad = hashToGradient(app.id, primaryHue, isDark);
+	const eyebrowColor = app.primary_category
+		? categoryColor(app.primary_category)
+		: "var(--primary)";
 	const showSettingsButton =
 		(onSettingsClick || settingsHref) &&
 		(app.visibility === IAppVisibility.Offline ||
@@ -407,6 +420,7 @@ function ExtendedAppCard({
 
 	return (
 		<motion.div
+			className="w-full h-full min-w-0"
 			variants={itemVariants}
 			whileHover="hover"
 			whileTap={{ scale: 0.98 }}
@@ -420,171 +434,173 @@ function ExtendedAppCard({
 				data-href={href}
 				data-title={metadata?.name ?? app.id}
 				className={cn(
-					"group cursor-pointer relative flex flex-col transition-all duration-300 rounded-xl border border-border/40 bg-card/80 backdrop-blur-sm shadow-sm hover:shadow-lg hover:border-primary/20 hover:bg-card/95 w-72 h-[375px] overflow-hidden",
+					"group relative flex min-h-95 w-72 cursor-pointer flex-col justify-end overflow-hidden rounded-xl border border-border/40 bg-card shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl",
 					className,
 				)}
 			>
+				{/* full-bleed cover art (or the app's icon as ambient art) behind everything */}
+				<div className="absolute inset-0">
+					{hasThumb ? (
+						<motion.img
+							className="absolute inset-0 h-full w-full object-cover"
+							src={metadata?.thumbnail ?? ""}
+							alt=""
+							width={1280}
+							height={640}
+							loading="lazy"
+							decoding="async"
+							fetchPriority="low"
+							onError={() => setThumbFailed(true)}
+							variants={{ hover: { scale: 1.04 } }}
+							transition={{ type: "spring", stiffness: 200 }}
+						/>
+					) : (
+						<>
+							<div
+								className="absolute inset-0"
+								style={{
+									background: `linear-gradient(${grad.angle}deg, ${grad.from}, ${grad.to})`,
+									opacity: grad.opacity,
+								}}
+							/>
+							{appIcon && !iconFailed && (
+								<img
+									src={appIcon}
+									alt=""
+									aria-hidden="true"
+									loading="lazy"
+									decoding="async"
+									className="absolute left-1/2 top-[38%] h-[150%] w-[150%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-40 blur-2xl saturate-150"
+									onError={() => setIconFailed(true)}
+								/>
+							)}
+						</>
+					)}
+					<div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/45 to-black/5" />
+				</div>
+
 				{typeof multiSelected !== "undefined" && onClick && (
-					<div className="relative shrink-0 z-10">
+					<div className="absolute left-3 top-3 z-20">
 						<Checkbox
 							checked={multiSelected ?? false}
 							onCheckedChange={onClick}
+							label={`Select ${appName}`}
 						/>
 					</div>
 				)}
-				<div className="relative w-full h-40 overflow-hidden">
-					<motion.img
-						className="absolute inset-0 w-full h-full object-cover "
-						src={metadata?.thumbnail ?? "/placeholder-thumbnail.webp"}
-						alt={appName}
-						width={1280}
-						height={640}
-						loading="lazy"
-						decoding="async"
-						fetchPriority="low"
-						variants={{
-							hover: { scale: 1.02 },
-						}}
-						transition={{ type: "spring", stiffness: 300 }}
-					/>
-					{!metadata?.thumbnail &&
-						(() => {
-							const g = hashToGradient(app.id, primaryHue, isDark);
-							return (
-								<div
-									className="absolute inset-0"
-									style={{
-										background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
-										opacity: g.opacity,
-									}}
-								/>
-							);
-						})()}
-					<div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
 
-					<div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-						{showSettingsButton && (
-							settingsHref ? (
-								<MotionLink
-									href={settingsHref}
-									data-href={settingsHref}
-									aria-label={`Open settings for ${appName}`}
-									onClick={(e) => {
-										e.stopPropagation();
-										onSettingsClick?.();
-									}}
-									onPointerDown={(e) => {
-										e.stopPropagation();
-									}}
-									onKeyDown={(e) => {
-										e.stopPropagation();
-									}}
-									className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300 cursor-pointer"
-									whileHover={{ scale: 1.05 }}
-									whileTap={{ scale: 0.95 }}
-								>
-									<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
-								</MotionLink>
-							) : (
-								<motion.button
-									type="button"
-									aria-label={`Open settings for ${appName}`}
-									onClick={(e) => {
-										e.preventDefault();
-										e.stopPropagation();
-										onSettingsClick?.();
-									}}
-									onPointerDown={(e) => {
-										e.stopPropagation();
-									}}
-									className="relative bg-white/20 dark:bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/30 dark:border-white/20 shadow-lg hover:shadow-xl hover:bg-white/30 dark:hover:bg-white/15 transition-all duration-300 cursor-pointer"
-									whileHover={{ scale: 1.05 }}
-									whileTap={{ scale: 0.95 }}
-								>
-									<Settings className="w-3.5 h-3.5 text-white drop-shadow-xs" />
-								</motion.button>
-							)
-						)}
-						<VisibilityIcon visibility={app.visibility} />
-					</div>
-
-					<div className="absolute bottom-3 left-3 right-3 flex items-end justify-between">
-						<Avatar className="w-16 h-16 shadow-lg bg-white/10 backdrop-blur-md">
-							<motion.div
-								variants={{
-									hover: { scale: 0.9 },
+				<div className="absolute right-3 top-3 z-20 flex items-center gap-2">
+					{showSettingsButton &&
+						(settingsHref ? (
+							<MotionLink
+								href={settingsHref}
+								data-href={settingsHref}
+								aria-label={`Open settings for ${appName}`}
+								onClick={(e) => {
+									e.stopPropagation();
+									onSettingsClick?.();
 								}}
+								onPointerDown={(e) => {
+									e.stopPropagation();
+								}}
+								onKeyDown={(e) => {
+									e.stopPropagation();
+								}}
+								className="relative cursor-pointer rounded-full border border-white/30 bg-white/20 p-2 shadow-lg backdrop-blur-md transition-all duration-300 hover:bg-white/30 hover:shadow-xl"
+								whileHover={{ scale: 1.05 }}
+								whileTap={{ scale: 0.95 }}
+							>
+								<Settings className="h-3.5 w-3.5 text-white drop-shadow-xs" />
+							</MotionLink>
+						) : (
+							<motion.button
+								type="button"
+								aria-label={`Open settings for ${appName}`}
+								onClick={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									onSettingsClick?.();
+								}}
+								onPointerDown={(e) => {
+									e.stopPropagation();
+								}}
+								className="relative cursor-pointer rounded-full border border-white/30 bg-white/20 p-2 shadow-lg backdrop-blur-md transition-all duration-300 hover:bg-white/30 hover:shadow-xl"
+								whileHover={{ scale: 1.05 }}
+								whileTap={{ scale: 0.95 }}
+							>
+								<Settings className="h-3.5 w-3.5 text-white drop-shadow-xs" />
+							</motion.button>
+						))}
+					<VisibilityIcon visibility={app.visibility} />
+				</div>
+
+				{/* meta overlaid on the scrim at the bottom */}
+				<div className="relative z-10 flex flex-col gap-2.5 p-5">
+					<div className="flex items-center gap-3">
+						<Avatar className="size-11 shrink-0 rounded-xl border border-white/15 bg-white/10 shadow-lg backdrop-blur-md">
+							<motion.div
+								variants={{ hover: { scale: 0.92 } }}
 								transition={{ type: "spring", stiffness: 300 }}
 							>
 								<AvatarImage
-									className="scale-100"
 									src={appIcon}
 									alt={`${appName} icon`}
+									className="rounded-xl"
 								/>
 							</motion.div>
-							<AvatarFallback className="text-lg font-bold bg-white/20 backdrop-blur-md text-white border border-white/30">
+							<AvatarFallback className="rounded-xl bg-white/15 text-sm font-bold text-white">
 								{appName.substring(0, 2).toUpperCase()}
 							</AvatarFallback>
 						</Avatar>
-						{app.visibility === IAppVisibility.Public && (
-							<div className="mb-2">
-								{app.price && app.price > 0 ? (
-									<div className="bg-white/90 backdrop-blur-xs text-gray-900 rounded-full px-3 py-1 text-sm font-bold shadow-lg">
-										{formatPrice(app.price)}
-									</div>
-								) : isOwned ? (
-									<div className="bg-emerald-500/20 backdrop-blur-xs text-emerald-400/90 rounded-full px-3 py-1 text-sm font-medium shadow-lg border border-white/30 flex flex-row items-center gap-2">
-										<HeartFilledIcon className="size-4" />
-										Yours
-									</div>
-								) : (
-									<div className="bg-white/20 backdrop-blur-xs text-white/90 rounded-full px-3 py-1 text-sm font-medium shadow-lg border border-white/30">
-										GET
-									</div>
-								)}
+						<div className="min-w-0">
+							<div
+								className="truncate text-[11px] font-semibold uppercase tracking-wider"
+								style={{ color: eyebrowColor }}
+							>
+								{formatAppCategory(app.primary_category)}
 							</div>
-						)}
-					</div>
-				</div>
-
-				<div className="flex flex-col p-5 flex-1">
-					<h3 className="font-bold text-lg text-foreground text-left leading-tight line-clamp-1 min-h-6 mb-2">
-						{appName}
-					</h3>
-
-					<div className="flex items-center gap-2 mb-3">
-						<Badge variant="default" className="text-xs px-2 py-1">
-							{formatAppCategory(app.primary_category)}
-						</Badge>
-						<Badge variant="outline" className="text-xs px-2 py-1">
-							{metadata?.age_rating ?? 0}+
-						</Badge>
+							<h3 className="truncate text-lg font-bold leading-tight text-white">
+								{appName}
+							</h3>
+						</div>
 					</div>
 
-					<p className="text-sm text-muted-foreground text-left line-clamp-3 leading-relaxed min-h-[4.4rem] mb-3 overflow-hidden">
+					{/* reserve two lines so the title + medallion sit at the same height on every card */}
+					<p className="line-clamp-2 min-h-12 text-sm leading-relaxed text-white/75">
 						{metadata?.description ?? "No description available"}
 					</p>
 
-					<div className="flex items-center justify-between">
-						<div className="flex items-center gap-2 h-5">
+					<div className="mt-1 flex items-center justify-between gap-2">
+						<div className="flex items-center gap-1.5 text-sm text-white/90">
 							{hasRating ? (
 								<>
-									<div className="flex items-center gap-1">
-										<Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />
-										<span className="font-semibold text-sm">
-											{(app.avg_rating ?? 0).toFixed(1)}
-										</span>
-									</div>
-									<span className="text-xs text-muted-foreground">
+									<Star className="size-4 fill-yellow-400 text-yellow-400" />
+									<span className="font-semibold">
+										{(app.avg_rating ?? 0).toFixed(1)}
+									</span>
+									<span className="text-xs text-white/50">
 										({app.rating_count.toLocaleString()})
 									</span>
 								</>
 							) : (
-								<span className="text-xs text-muted-foreground">
-									No ratings yet
-								</span>
+								<span className="text-xs text-white/50">No ratings yet</span>
 							)}
 						</div>
+						{app.visibility === IAppVisibility.Public &&
+							(app.price && app.price > 0 ? (
+								<span className="rounded-full bg-white/90 px-3 py-1 text-xs font-bold text-gray-900 shadow-lg backdrop-blur-xs">
+									{formatPrice(app.price)}
+								</span>
+							) : isOwned ? (
+								<span className="flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 backdrop-blur-xs">
+									<HeartFilledIcon className="size-3.5" />
+									Yours
+								</span>
+							) : (
+								<span className="rounded-full border border-white/25 bg-white/15 px-3 py-1 text-xs font-semibold text-white backdrop-blur-xs">
+									GET
+								</span>
+							))}
 					</div>
 				</div>
 			</div>
@@ -592,12 +608,226 @@ function ExtendedAppCard({
 	);
 }
 
+function formatCompact(n: number): string {
+	if (n >= 1_000_000)
+		return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+	return `${n}`;
+}
+
+/**
+ * Wide, editorial "featured" card: a cover/ambient media panel beside a body that
+ * leads with the app's use case, real tags and stats. Stacks vertically on narrow
+ * widths. Apps with no thumbnail fall back to their own icon blurred as ambient art
+ * (never a flat gradient slab).
+ */
+export function SpotlightCard({
+	app,
+	metadata,
+	isOwned,
+	onClick,
+	href,
+	className,
+}: Readonly<
+	Pick<
+		AppCardProps,
+		"app" | "metadata" | "isOwned" | "onClick" | "href" | "className"
+	>
+>) {
+	const { primaryHue, isDark } = useThemeInfo();
+	const [thumbFailed, setThumbFailed] = useState(false);
+	const [iconFailed, setIconFailed] = useState(false);
+
+	const appName = metadata?.name ?? app.id;
+	const appIcon = metadata?.icon ?? "/app-logo.webp";
+	const hasThumb = Boolean(metadata?.thumbnail) && !thumbFailed;
+	const useCase = metadata?.use_case?.trim() || metadata?.description || "";
+	const tags = (metadata?.tags ?? []).filter(Boolean).slice(0, 4);
+	const author = app.authors?.find(Boolean);
+	const hasRating = app.rating_count > 0;
+	const grad = hashToGradient(app.id, primaryHue, isDark);
+
+	const cta = isOwned ? (
+		<span className="flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-400">
+			<HeartFilledIcon className="size-3.5" />
+			Yours
+		</span>
+	) : (
+		<span className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-xs font-bold text-primary-foreground shadow-sm transition-transform group-hover:scale-[1.03]">
+			{app.price && app.price > 0 ? `€${(app.price / 100).toFixed(2)}` : "Get"}
+		</span>
+	);
+
+	const body = (
+		<>
+			<div className="relative min-h-40 overflow-hidden sm:min-h-0">
+				{hasThumb ? (
+					// real cover art speaks for itself — the icon lives in the body title
+					<img
+						src={metadata?.thumbnail ?? ""}
+						alt=""
+						loading="lazy"
+						decoding="async"
+						className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-105"
+						onError={() => setThumbFailed(true)}
+					/>
+				) : (
+					// no thumbnail → the app's own icon becomes blurred ambient art,
+					// with a crisp medallion on top (never a flat gradient slab)
+					<>
+						<div
+							className="absolute inset-0"
+							style={{
+								background: `linear-gradient(${grad.angle}deg, ${grad.from}, ${grad.to})`,
+								opacity: grad.opacity,
+							}}
+						/>
+						{appIcon && !iconFailed && (
+							<img
+								src={appIcon}
+								alt=""
+								aria-hidden="true"
+								loading="lazy"
+								decoding="async"
+								className="absolute left-1/2 top-1/2 h-[200%] w-[200%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-45 blur-2xl saturate-150"
+								onError={() => setIconFailed(true)}
+							/>
+						)}
+						<div className="absolute inset-0 grid place-items-center">
+							<Avatar className="size-16 rounded-2xl border border-white/15 bg-white/10 shadow-lg backdrop-blur-md">
+								<AvatarImage
+									src={appIcon}
+									alt={`${appName} icon`}
+									className="rounded-2xl"
+								/>
+								<AvatarFallback className="rounded-2xl bg-white/15 text-lg font-bold text-white">
+									{appName.substring(0, 2).toUpperCase()}
+								</AvatarFallback>
+							</Avatar>
+						</div>
+					</>
+				)}
+				<div className="absolute inset-0 bg-linear-to-t from-card/80 via-card/10 to-transparent sm:bg-linear-to-r sm:from-transparent sm:to-card/40" />
+			</div>
+
+			<div className="flex min-w-0 flex-col p-5">
+				<div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider">
+					<span className="truncate text-primary">
+						{formatAppCategory(app.primary_category)}
+					</span>
+					<span className="shrink-0 text-muted-foreground/50">· Featured</span>
+				</div>
+
+				<div className="mt-1.5 flex items-baseline gap-2">
+					<h3 className="truncate text-xl font-bold tracking-tight text-foreground">
+						{appName}
+					</h3>
+					{author && (
+						<span className="shrink-0 truncate text-xs text-muted-foreground">
+							by {author}
+						</span>
+					)}
+				</div>
+
+				{useCase && (
+					<p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+						{useCase}
+					</p>
+				)}
+
+				{tags.length > 0 && (
+					<div className="mt-3 flex flex-wrap gap-1.5">
+						{tags.map((tag) => (
+							<span
+								key={tag}
+								className="rounded-md border border-border bg-muted/40 px-2 py-1 text-[11px] text-foreground/80"
+							>
+								{tag}
+							</span>
+						))}
+					</div>
+				)}
+
+				<div className="mt-auto flex items-center justify-between gap-3 pt-4">
+					<div className="flex items-center gap-3.5 text-xs tabular-nums text-muted-foreground">
+						{hasRating && (
+							<span className="flex items-center gap-1 font-semibold text-foreground">
+								<Star className="size-3.5 fill-yellow-400 text-yellow-400" />
+								{(app.avg_rating ?? 0).toFixed(1)}
+							</span>
+						)}
+						{app.download_count > 0 && (
+							<span>{formatCompact(app.download_count)} installs</span>
+						)}
+						{app.version && <span>v{app.version}</span>}
+					</div>
+					{cta}
+				</div>
+			</div>
+		</>
+	);
+
+	const cardClass = cn(
+		"group grid h-full grid-cols-1 overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-sm backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl sm:grid-cols-[200px_1fr]",
+		className,
+	);
+
+	return (
+		<motion.div
+			className="w-full min-w-0"
+			whileHover={{ scale: 1 }}
+			transition={{ type: "spring", stiffness: 300 }}
+		>
+			{href ? (
+				<Link href={href} className={cardClass} onClick={onClick}>
+					{body}
+				</Link>
+			) : (
+				<div
+					role={onClick ? "button" : undefined}
+					tabIndex={onClick ? 0 : undefined}
+					onClick={onClick}
+					onKeyDown={(event) => {
+						if (!onClick) return;
+						if (event.key === "Enter" || event.key === " ") {
+							event.preventDefault();
+							onClick();
+						}
+					}}
+					className={cardClass}
+				>
+					{body}
+				</div>
+			)}
+		</motion.div>
+	);
+}
+
 function Checkbox({
 	checked,
 	onCheckedChange,
-}: { checked: boolean; onCheckedChange: () => void }) {
+	label,
+}: { checked: boolean; onCheckedChange: () => void; label?: string }) {
 	return (
-		<div className="relative cursor-pointer" onClick={onCheckedChange}>
+		// biome-ignore lint/a11y/useSemanticElements: animated div checkbox; a native input cannot host the motion check mark
+		<div
+			role="checkbox"
+			aria-checked={checked}
+			aria-label={label ?? "Select item"}
+			tabIndex={0}
+			className="relative cursor-pointer"
+			onClick={(e) => {
+				e.stopPropagation();
+				onCheckedChange();
+			}}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					e.stopPropagation();
+					onCheckedChange();
+				}
+			}}
+		>
 			<motion.div
 				className={`w-5 h-5 rounded border-2 transition-all duration-200 ${
 					checked

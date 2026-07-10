@@ -1,6 +1,4 @@
 "use client";
-import { createId } from "@paralleldrive/cuid2";
-import * as Sentry from "@sentry/nextjs";
 import {
 	AnimatedBrainIcon,
 	AnimatedBugIcon,
@@ -9,7 +7,6 @@ import {
 	AnimatedFlowsIcon,
 	AnimatedHomeIcon,
 	AnimatedLibraryIcon,
-	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSidebarIcon,
 	AnimatedSparklesIcon,
@@ -66,6 +63,8 @@ import {
 	useInvoke,
 	useSidebar,
 } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
+import * as Sentry from "@sentry/nextjs";
 import { motion } from "framer-motion";
 import {
 	BadgeCheck,
@@ -110,7 +109,7 @@ const data = {
 			items: [],
 		},
 		{
-			title: "Explore Apps",
+			title: "Explore",
 			url: "/store/explore/apps",
 			icon: AnimatedExploreAppsIcon,
 			isActive: false,
@@ -126,7 +125,7 @@ const data = {
 			items: [],
 		},
 		{
-			title: "Library",
+			title: "My Apps",
 			url: "/library",
 			icon: AnimatedLibraryIcon,
 			isActive: false,
@@ -159,15 +158,7 @@ const data = {
 			items: [],
 		},
 	],
-	navDev: [
-		{
-			title: "Package Registry",
-			url: "/store/packages",
-			icon: AnimatedPackageIcon,
-			isActive: false,
-			items: [],
-		},
-	],
+	navDev: [],
 };
 
 interface IUser {
@@ -862,24 +853,26 @@ function NavMain({
 						)}
 				</SidebarMenu>
 			</SidebarGroup>
-			<SidebarGroup>
-				<SidebarGroupLabel>Development</SidebarGroupLabel>
-				<SidebarMenu>
-					{devItems.map((item) =>
-						item.items && item.items.length > 0 ? (
-							<NavCollapsible
-								key={item.title}
-								item={item}
-								pathname={pathname}
-								sidebarOpen={open}
-								onNavigate={router.push}
-							/>
-						) : (
-							<NavFlatItem key={item.title} item={item} pathname={pathname} />
-						),
-					)}
-				</SidebarMenu>
-			</SidebarGroup>
+			{devItems.length > 0 && (
+				<SidebarGroup>
+					<SidebarGroupLabel>Development</SidebarGroupLabel>
+					<SidebarMenu>
+						{devItems.map((item) =>
+							item.items && item.items.length > 0 ? (
+								<NavCollapsible
+									key={item.title}
+									item={item}
+									pathname={pathname}
+									sidebarOpen={open}
+									onNavigate={router.push}
+								/>
+							) : (
+								<NavFlatItem key={item.title} item={item} pathname={pathname} />
+							),
+						)}
+					</SidebarMenu>
+				</SidebarGroup>
+			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
 					<SidebarGroupLabel>Admin Area</SidebarGroupLabel>

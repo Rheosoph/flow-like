@@ -487,9 +487,16 @@ button.hero-bubble-icon {
 		max-width: 100%;
 	}
 }
-/* phones: compact the composer so text + controls fit a narrow bubble */
+/* phones: a big, near-square idle bubble that fills most of the screen */
 @media (max-width: 560px) {
-	.hero-bubble-wrap { height: 200px; }
+	.hero-bubble-wrap {
+		height: min(92vw, 26rem);
+		transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	/* the composer only needs a comfortable input height — collapse the big idle
+	   bubble when open so the field + controls sit together instead of spreading
+	   across the whole sphere */
+	.hero-bubble-wrap.hero-bubble-open { height: 15rem; }
 	/* small insets; the send orb moves to the bottom-right corner */
 	.hero-bubble-content {
 		inset: 14px 14px 12px 14px;
@@ -603,6 +610,13 @@ const SATELLITES = HERO_SUGGESTIONS.map((label, index) => ({
 }));
 
 const ROTATING_WORDS = ["build", "do", "know", "automate"];
+// the widest verb reserves the heading's height so the rotating word can never
+// reflow it from one line to two (no layout shift as the word cycles)
+const LONGEST_ROTATING_WORD = ROTATING_WORDS.reduce((a, b) =>
+	b.length > a.length ? b : a,
+);
+const HERO_HEADING_CLASS =
+	"text-[26px] sm:text-3xl md:text-4xl font-bold tracking-tight text-balance";
 
 const HINT_TEXT = "Click to ask FlowPilot";
 
@@ -926,7 +940,10 @@ export function HeroSearchBarBubble() {
 			const rectBx = (wrap.clientWidth / 2 - 14) / halfH;
 			const rectBy = (wrap.clientHeight / 2 - 16) / halfH;
 			const k = Math.min(Math.max(morph, 0), 1.15);
-			const bx = rectBx * (0.4 + 0.6 * k);
+			// phones use a near-square wrap: start the bubble round (bx≈by) rather than the
+			// wide desktop pill, else the tall box's corner radius pinches into a pointed lens
+			const narrow = wrap.clientWidth <= 560;
+			const bx = rectBx * (narrow ? 0.92 + 0.08 * k : 0.4 + 0.6 * k);
 			const by = rectBy * (0.92 + 0.08 * k);
 			gl.uniform2f(uRes, canvas.width, canvas.height);
 			gl.uniform1f(uTime, ms / 1000);
@@ -1038,13 +1055,23 @@ export function HeroSearchBarBubble() {
 	);
 
 	return (
-		<div className="w-full flex flex-col items-center gap-5 px-4 pt-14 pb-8 shrink-0">
+		<div className="w-full flex flex-col items-center gap-5 px-4 pt-14 pb-8 shrink-0 overflow-x-clip">
 			<style>{HERO_BUBBLE_CSS}</style>
 			<div className="flex flex-col items-center gap-2 text-center">
-				<h1 className="text-[26px] sm:text-3xl md:text-4xl font-bold tracking-tight text-balance">
-					What do you want to <span className="sr-only">build</span>
-					<RotatingWord />?
-				</h1>
+				<div className="grid w-full">
+					{/* invisible spacer sized to the widest verb: locks the heading height
+					    so the rotating word can't reflow it (the real h1 carries the a11y text) */}
+					<div
+						aria-hidden="true"
+						className={`invisible [grid-area:1/1] ${HERO_HEADING_CLASS}`}
+					>
+						What do you want to {LONGEST_ROTATING_WORD}?
+					</div>
+					<h1 className={`[grid-area:1/1] ${HERO_HEADING_CLASS}`}>
+						What do you want to <span className="sr-only">build</span>
+						<RotatingWord />?
+					</h1>
+				</div>
 				<p className="text-sm md:text-base text-muted-foreground">
 					Ask FlowPilot to create apps, find packages, or navigate Flow-Like.
 				</p>
