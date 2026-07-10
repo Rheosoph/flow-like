@@ -59,6 +59,9 @@ impl NodeLogic for SetMapNode {
         let key: String = context.evaluate_pin("key").await?;
         let value: Value = context.evaluate_pin("value").await?;
 
+        let value_type = context.get_pin_by_name("value").await?.data_type.clone();
+        super::validate_value_type(&value, &value_type)?;
+
         let mut map_out = match map_in {
             Value::Object(m) => m,
             _ => flow_like_types::json::Map::new(),

@@ -17,6 +17,7 @@ import { GenericVariable } from "./generic-variable";
 import { IntegerArrayVariable } from "./integer-array-variable";
 import { IntegerSetVariable } from "./integer-set-variable";
 import { IntegerVariable } from "./integer-variable";
+import { MapVariable } from "./map-variable";
 import { PathbufArrayVariable } from "./pathbuf-array-variable";
 import { PathbufSetVariable } from "./pathbuf-set-variable";
 import { PathbufVariable } from "./pathbuf-variable";
@@ -42,6 +43,18 @@ export function VariablesMenuEdit({
 		if (intermediateValue === variable) return;
 		updateVariable(intermediateValue);
 	}, [intermediateValue]);
+
+	// HashMap keys are always strings; the value type is the variable's data
+	// type, so a single editor covers every data type (including Generic).
+	if (variable.value_type === IValueType.HashMap) {
+		return (
+			<MapVariable
+				disabled={disabled}
+				variable={intermediateValue}
+				onChange={setIntermediateValue}
+			/>
+		);
+	}
 
 	if (
 		variable.data_type === IVariableType.String &&
