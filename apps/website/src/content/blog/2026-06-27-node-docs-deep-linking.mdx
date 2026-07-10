@@ -1,0 +1,55 @@
+---
+title: "Every Node Is One Click From Its Docs"
+description: "Flow-Like's node info panel now deep-links straight to each node's documentation page — reconstructed from the node itself, with no lookup table — plus a faster search on the docs site."
+date: 2026-06-27
+tags: ["documentation", "developer-experience", "node-catalog", "pagefind-search", "flow-like"]
+cover: "/images/node-docs.jpg"
+draft: true
+---
+
+{/* Cover image prompt: A clean, modern tech illustration — a glowing node card from a visual flow editor connected by a bright dashed line to an open documentation page rendered inside a browser window, with a floating command-palette search bar (Ctrl+K) hovering above. Isometric perspective, dark slate background with electric-blue and violet accents, subtle grid, crisp thin-line icons, a sense of two surfaces (app and docs) linking together. Minimal, professional, high contrast. No text. */}
+
+Flow-Like ships **1,600-plus** documentation pages — one for every node in the catalog, auto-generated straight from the source. That's a great library. It's less great if you can't find the page for the node under your cursor. This release closes that gap: open a node's info panel and its documentation is right there.
+
+## The docs come to the node
+
+Open the info overlay on any node and, on desktop, you now get an inline preview of that node's doc page in a side panel; on mobile it renders as a section with an "Open full documentation" button. No searching, no guessing — the docs for *this* node, immediately.
+
+The interesting part is how the app knows which page to open. There's no lookup table and no network round-trip to resolve it. The URL is **reconstructed from the node itself** — its name and category — using the exact same slugify algorithm the docs generator uses to name the pages. Get the node, get the URL:
+
+```typescript
+export function buildNodeDocsUrl(node: INode): string {
+  const docsUrl = safeDocsUrl(node.docs);
+  if (docsUrl) return docsUrl;
+  const categoryPath = categorySegments(node.category).map(safeSegment).join("/");
+  const nodeSlug = safeSegment(node.name);
+  return `${DOCS_BASE_URL}/nodes/${categoryPath}/${nodeSlug}/`;
+}
+```
+
+The `safeSegment` function is a character-for-character port of the Rust `safe_segment` in the docs generator. Because both sides slug identically, a node named `agent_invoke` in category `AI/Agents` always resolves to `docs.flow-like.com/nodes/ai/agents/agent-invoke/` — and that page is guaranteed to exist, because the generator built it from the same catalog. Every one of the 1,600 pages is reachable this way, for free.
+
+This replaced an older, buggy helper that turned `node.name` into title-cased words with spaces, producing URLs like `.../Http Set Bearer Auth` that matched nothing. The new path is boring in the best way: deterministic, tested, and correct.
+
+## Trust, but verify the URL
+
+A node *can* carry its own `docs` field pointing at a custom page. That's a small trust boundary, so the resolver only accepts `http:` and `https:` URLs — anything else (a stray `javascript:`, say) is ignored and the safe, generated slug is used instead:
+
+```typescript
+function safeDocsUrl(value?: string | null): string | null {
+  const docsUrl = value?.trim();
+  if (!docsUrl) return null;
+  try {
+    const url = new URL(docsUrl);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch { return null; }
+}
+```
+
+And the embedded preview iframe was tightened to `sandbox="allow-scripts"` — dropping same-origin access — so even a compromised or spoofed docs page can't reach into the app's WebView.
+
+## Faster search on the docs site
+
+While we were in there, the documentation site's search got a tune-up. It's a custom [Pagefind](https://pagefind.app/)-backed component that now **prewarms on idle** instead of waiting until you open it: when the browser is quiet, it quietly loads the index so that the first `⌘/Ctrl+K` opens instantly. It also picked up cleaner sub-results and trailing-slash-normalized links along the way.
+
+None of this is a from-scratch docs rewrite — the pages and the generator were already there. What changed is the connective tissue: the app now links precisely into the docs, and the docs are quicker to search. Small pieces, but they're the ones you hit every day.

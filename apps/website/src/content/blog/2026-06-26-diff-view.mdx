@@ -1,0 +1,54 @@
+---
+title: "A Diff Viewer You Can Drag Onto a Page"
+description: "The new diffView element brings side-by-side, unified and inline diffs — for text, code, markdown, JSON and documents — into the Flow-Like widget builder, with syntax highlighting."
+date: 2026-06-26
+tags: ["a2ui", "diff-viewer", "widget-builder", "syntax-highlighting", "ui-builder", "flow-like"]
+cover: "/images/diff-view.jpg"
+draft: true
+---
+
+{/* Cover image prompt: A clean, modern developer-tool UI illustration of a side-by-side code diff viewer floating in a dark editor canvas — left panel showing removed lines tinted soft red, right panel showing added lines tinted soft green, syntax-highlighted TypeScript, line numbers, and a small toolbar of split/unified/inline toggle icons. Subtle grid background, glassy panels, crisp monospaced type, cool teal-and-violet accent palette, sharp vector style, high detail, techy and minimal. No text labels. */}
+
+"Show the user what changed" is one of those deceptively simple requirements. An approval flow wants to show the before and after of a document. An AI-review app wants to highlight what the model rewrote. A config tool wants to preview an edit before it's applied. Until now, building that in Flow-Like meant hand-rolling a component. Now it's a element you drag onto the canvas.
+
+Say hello to **`diffView`**.
+
+## One element, five kinds of content
+
+`diffView` takes two strings — an `original` and a `modified` — and renders a rich, readable diff between them. It handles more than plain text:
+
+- **text** — a straight line-by-line diff
+- **code** — with syntax highlighting via [shiki](https://shiki.style/)
+- **markdown** — diff the source, or render both sides and diff the prose
+- **json** — pretty-printed and then diffed, so formatting noise doesn't drown the real change
+- **document** — when both sides are URLs, show them side-by-side in sandboxed iframes
+
+You don't have to pick, either. Leave `kind` on `auto` and the component figures it out: two URLs become a document view, a set language becomes code, two parseable JSON blobs become a JSON diff, and everything else falls back to text.
+
+There are three layouts — **split**, **unified**, and **inline** — and the viewer ships a little toolbar so end users can flip between them live, toggle word-wrap, and collapse the unchanged regions to just a few lines of context. Changed *words* inside a line are highlighted, not just changed lines: additions glow green, deletions red, right down to the token.
+
+## Drop it in, or drive it from a flow
+
+Because it's a first-class A2UI element, `diffView` shows up in the component palette (look for the "Diff View" entry) with sensible defaults, and FlowPilot knows about it too — ask the AI builder for a diff and it can emit one for you.
+
+To update a diff at runtime, there's a matching catalog node, **Set Diff Content**. Wire your `original` and `modified` strings into it, point it at the element, and it pushes both in a single update:
+
+```rust
+let update_value = json!({
+    "type": "setProps",
+    "props": { "original": original, "modified": modified }
+});
+context.upsert_element(&element_id, update_value).await?;
+```
+
+So a flow can pull the last saved version of a file, generate a new one, and show the user exactly what moved — no custom UI code.
+
+## The details that make it trustworthy
+
+A diff viewer is only useful if you trust what it shows, so a couple of the sharper edges got attention:
+
+- **Bare filenames stay text.** Early on, a string like `README.md` was treated as a document and loaded into an iframe. Now the "is this a URL?" check requires an explicit protocol or an absolute path (`https:`, `data:`, `file:`, `storage:`, `/…`), so `README.md` diffs as text like you'd expect, and only real URLs open a preview.
+- **Document previews are sandboxed.** The side-by-side URL view runs each side in a sandboxed iframe, so an untrusted document can't reach into your app.
+- **No pathological slowdowns.** Syntax highlighting is skipped above 200,000 characters, and the whitespace-trimming pass was rewritten as a plain linear scan to avoid the classic regex blow-up on huge inputs.
+
+It's built on the well-worn `diff` library plus a custom renderer, so it's fast and predictable rather than a heavyweight editor embed. Small element, big quality-of-life upgrade — go find it in the builder.

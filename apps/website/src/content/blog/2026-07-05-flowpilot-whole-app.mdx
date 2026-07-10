@@ -1,0 +1,74 @@
+---
+title: "FlowPilot Now Drives the Whole App"
+description: "FlowPilot graduated from an in-editor helper to a platform-level assistant: it creates apps, builds pages, wires workflows, works with databases, and remembers — through one shared tool set."
+date: 2026-07-05
+tags: ["flowpilot", "ai-assistant", "agentic-tools", "global-chat", "flowscript", "flow-like"]
+cover: "/images/flowpilot-whole-app.jpg"
+draft: true
+---
+
+{/* Cover image prompt: A clean, modern tech illustration of an AI 'pilot' orb hovering over an entire application workspace, not just one panel. Center: a glowing translucent soap-film bubble (iridescent blues, violets, soft cyan) sending fine light-threads outward to several floating UI cards — an app-list card, a navigation map, a node-graph 'board', a page/widget builder, and a small database cylinder. The threads suggest one assistant orchestrating many surfaces. Dark studio background with subtle grid, crisp depth-of-field, minimal flat-vector shapes with soft glass reflections. Palette: deep slate navy background, electric blue and violet accents, warm white highlights. Intelligent, calm, in-control, futuristic. No text, no logos. */}
+
+FlowPilot used to live inside a single board. It was good at what it did — reading your nodes, suggesting edits, explaining a graph — but it was trapped in the editor. It couldn't create an app. It couldn't take you to a page. It had no idea the rest of Flow-Like existed.
+
+That changed. FlowPilot is now a **platform-level assistant**: one chat, floating in a docked bubble, that can act across the entire app. Ask it to build something and it will create the app, build the pages, wire the workflow, hook up an event, and drop you on a working screen — end to end.
+
+## One assistant, one tool set
+
+Under the hood, FlowPilot advertises a single, shared set of **15 platform tools** (plus two optional memory tools), defined in one place so every backend behaves identically. The tools are the interesting part, because they're the verbs FlowPilot can now speak:
+
+- `list_apps`, `describe_app_interface` — see what exists and how it's shaped
+- `navigate_view` — move you around the app
+- `create_app` — make a new one
+- `flowpilot_board` — everything about a specific workflow's *logic*
+- `flowpilot_widget` — build pages and reusable widgets (the *UI* specialist)
+- `open_app_page`, `open_app_chat` — embed another app's page or chat inline, like an artifact
+- `call_app_event`, `call_app_chat` — run an app's events or talk to its chat, headless
+- `upsert_event`, `delete_event`, `set_page_load_event` — manage triggers and routes
+- `ask_user`, `internet_search` — ask you a question, or look something up
+
+The last two of the seventeen, `_memory_store` and `_memory_search`, only appear when you've picked an embedding model — more on memory below.
+
+## It delegates instead of pretending
+
+The clever bit is that FlowPilot doesn't try to be an expert at everything. The old in-editor board and widget copilots didn't get deleted — they got **promoted to specialists**. When FlowPilot needs to edit a workflow's logic, it calls `flowpilot_board`; when it needs to build UI, it calls `flowpilot_widget`. Those run the deep, domain-specific copilots as sub-agents, and their plan steps stream live into the main conversation as indented sub-steps so you can watch the work happen.
+
+The platform assistant is explicitly told to stay in its lane — *"Never author FlowScript or explain a board's internals yourself"* — and to hand that work to the board specialist. It orchestrates; the specialists execute.
+
+That orchestration follows a deliberate recipe when you ask for a whole app:
+
+1. `create_app`
+2. `flowpilot_widget` — build the page and widgets **first**
+3. `flowpilot_board` — wire the logic (which returns the event nodes it created)
+4. `set_page_load_event` — make the page do something on load
+5. `upsert_event` — give it a reachable route
+
+UI comes first because the workflow references the page's actions and routes — so those have to exist before the logic can point at them.
+
+## Approvals you can trust
+
+Because FlowPilot can now *do* things, not just talk, actions carry an approval level. It's a simple three-way distinction: read-only calls need no approval, **mutating** calls (creating an app, changing an event) ask first, and **execute** calls (running an event, applying a board edit) ask first too. Asking a board to *explain* itself is forced to no-approval; asking it to *edit* is not. You stay in control of anything with side effects.
+
+## Edits are batched — and undoable
+
+When FlowPilot changes a workflow, it doesn't poke the graph node by node. It works through [FlowScript](/blog/flowscript/), our textual representation of a board, and applies the whole change as **one reconciled command batch** — which means one entry in your undo history. If the result isn't what you wanted, one ⌘Z takes it all back.
+
+And it can't quietly delete your work. FlowScript edits that would remove existing nodes are **blocked by default**:
+
+> FlowScript edit would delete N existing board item(s)... Deletions are blocked by default so incomplete model edits cannot remove existing work.
+
+An incomplete or overeager edit fails safe instead of eating your graph.
+
+## It works with data — and it remembers
+
+FlowPilot learned to work with databases. It builds flows around Flow-Like's LanceDB-backed local store — opening a database, then bulk-inserting or upserting rows — so "generate 50,000 test records and load them into the app database" is a thing you can just ask for.
+
+It also has **memory**, when you want it. Point FlowPilot at an embedding model and each profile gets its own private semantic memory: it can store facts and recall the most relevant ones into its context on later turns. Memory is off unless you opt in by choosing that model — no silent accumulation.
+
+## The same brain, on desktop and in the browser
+
+One design decision runs through all of this: the desktop app (over Tauri) and the browser (over a streaming HTTP endpoint) run the **exact same tool set and the same agent loop**. The browser can't use Tauri's event channel, so the web build coordinates tool calls through a database row — the streaming run posts a pending request, the tool result flips it to done — but the tools, the approval prompts, and the behavior are identical. Learn FlowPilot once, use it everywhere.
+
+(One caveat worth stating plainly: the coding-agent backends — Claude Code, Codex, GitHub Copilot — are desktop-only. The browser runs on your profile's own models. More on those backends in [the next post](/blog/claude-code-codex-providers/).)
+
+FlowPilot stopped being a feature of the editor and became the way you drive Flow-Like. Open the bubble and tell it what you want to build.
