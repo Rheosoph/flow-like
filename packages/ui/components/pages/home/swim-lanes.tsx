@@ -25,7 +25,7 @@ import {
 	ScrollRail,
 	Skeleton,
 } from "../../ui";
-import { AppCard } from "../../ui/app-card";
+import { AppCard, SpotlightCard } from "../../ui/app-card";
 
 type IAppQuery = UseQueryResult<[IApp, IMetadata | undefined][], Error>;
 
@@ -67,7 +67,8 @@ export interface ISwimlane {
 	viewAllLink?: string;
 }
 
-const swimlanesUrl = "https://cdn.flow-like.com/swimlanes.json";
+// const swimlanesUrl = "https://cdn.flow-like.com/swimlanes.json";
+const swimlanesUrl = "/swimlanes/swimlanes.json";
 
 const isExternalLink = (href?: string) =>
 	typeof href === "string" && /^(https?:|mailto:|tel:)/.test(href);
@@ -419,6 +420,12 @@ function SwimlaneSection({
 			/>
 			{swimlane.size === "small" ? (
 				<SmallLane swimlane={swimlane} ownedIds={ownedIds} router={router} />
+			) : swimlane.size === "large" ? (
+				<SpotlightLane
+					swimlane={swimlane}
+					ownedIds={ownedIds}
+					router={router}
+				/>
 			) : (
 				<CardLane swimlane={swimlane} ownedIds={ownedIds} router={router} />
 			)}
@@ -494,6 +501,170 @@ function CardLane({
 				);
 			})}
 		</div>
+	);
+}
+
+/**
+ * Large lanes: the featured showcase. App items render as wide, editorial
+ * Spotlight cards (use case + tags + stats); static items stay banners. Arrays
+ * and search results are flattened into the same responsive two-column grid.
+ */
+function SpotlightLane({
+	swimlane,
+	ownedIds,
+	router,
+}: Readonly<{
+	swimlane: ISwimlane;
+	ownedIds: Set<string>;
+	router: AppRouterInstance;
+}>) {
+	return (
+		<div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+			{swimlane.items?.map((slot, index) => {
+				const key = `${swimlane.id}-slot-${index}`;
+				if (Array.isArray(slot)) {
+					return (
+						<Fragment key={key}>
+							{slot.map((item, itemIndex) => (
+								<SpotlightItem
+									key={item.id ?? `${key}-${itemIndex}`}
+									item={item}
+									ownedIds={ownedIds}
+									router={router}
+								/>
+							))}
+						</Fragment>
+					);
+				}
+				if (slot.type === "search") {
+					return (
+						<SpotlightSearch
+							key={key}
+							searchQuery={slot}
+							ownedIds={ownedIds}
+							router={router}
+						/>
+					);
+				}
+				return (
+					<SpotlightItem
+						key={slot.id ?? key}
+						item={slot}
+						ownedIds={ownedIds}
+						router={router}
+					/>
+				);
+			})}
+		</div>
+	);
+}
+
+function SpotlightItem({
+	item,
+	ownedIds,
+	router,
+}: Readonly<{
+	item: ISwimlaneItem;
+	ownedIds: Set<string>;
+	router: AppRouterInstance;
+}>) {
+	const backend = useBackend();
+
+	if (item.type === "app" && item.appId) {
+		return (
+			<SpotlightAppLoading
+				appId={item.appId}
+				backend={backend}
+				ownedIds={ownedIds}
+				router={router}
+			/>
+		);
+	}
+	if (item.type === "static") {
+		// promo banners run full width beneath the app spotlights
+		return (
+			<div className="xl:col-span-2">
+				<StaticCard item={item} size="medium" />
+			</div>
+		);
+	}
+	if (item.type === "model" && item.modelId && item.hub) {
+		return (
+			<BitCardLoading backend={backend} bitId={item.modelId} hub={item.hub} />
+		);
+	}
+	return null;
+}
+
+function SpotlightAppLoading({
+	appId,
+	backend,
+	ownedIds,
+	router,
+}: Readonly<{
+	appId: string;
+	backend: IBackendState;
+	ownedIds: Set<string>;
+	router: AppRouterInstance;
+}>) {
+	const app = useInvoke(backend.appState.searchApps, backend.appState, [appId]);
+
+	if (!app.data || app.data.length === 0) {
+		if (!app.isFetching) return null;
+		return <Skeleton className="h-61 w-full rounded-2xl" />;
+	}
+
+	const [data, meta] = app.data[0];
+	const isOwned = ownedIds.has(data.id);
+	const href = isOwned ? `/use?id=${data.id}` : `/store?id=${data.id}`;
+
+	return (
+		<SpotlightCard
+			app={data}
+			metadata={meta}
+			isOwned={isOwned}
+			href={href}
+			onClick={() => router.push(href)}
+			className="h-full"
+		/>
+	);
+}
+
+function SpotlightSearch({
+	searchQuery,
+	ownedIds,
+	router,
+}: Readonly<{
+	searchQuery: ISearchQuery;
+	ownedIds: Set<string>;
+	router: AppRouterInstance;
+}>) {
+	const results = useLaneSearch(searchQuery, 4);
+
+	if (!results.data) {
+		if (!results.isFetching) return null;
+		return <Skeleton className="h-61 w-full rounded-2xl" />;
+	}
+	if (results.data.length === 0) return null;
+
+	return (
+		<>
+			{results.data.map(([app, metadata]) => {
+				const isOwned = ownedIds.has(app.id);
+				const href = isOwned ? `/use?id=${app.id}` : `/store?id=${app.id}`;
+				return (
+					<SpotlightCard
+						key={app.id}
+						app={app}
+						metadata={metadata}
+						isOwned={isOwned}
+						href={href}
+						onClick={() => router.push(href)}
+						className="h-full"
+					/>
+				);
+			})}
+		</>
 	);
 }
 
