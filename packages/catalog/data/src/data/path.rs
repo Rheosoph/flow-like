@@ -35,6 +35,13 @@ impl FlowPath {
         }
     }
 
+    /// Clones this path, pointing at `path` within the same store/cache layer.
+    pub fn with_path(&self, path: &str) -> Self {
+        let mut clone = self.clone();
+        clone.path = path.to_string();
+        clone
+    }
+
     pub async fn get(
         &self,
         context: &mut ExecutionContext,

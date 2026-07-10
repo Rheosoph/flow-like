@@ -166,24 +166,27 @@ impl FlowLikeStore {
     }
 
     pub async fn hash(&self, path: &Path) -> Result<String> {
-        let store = self.as_generic();
-        let meta = store.head(path).await?;
+        let meta = self.as_generic().head(path).await?;
 
         if let Some(hash) = meta.e_tag {
             return Ok(hash);
         }
 
-        let mut hash = blake3::Hasher::new();
+        self.content_hash(path).await
+    }
+
+    /// Blake3 hash of the object's bytes, always reading the body regardless of
+    /// any ETag. Blake3 is chosen over SHA for throughput on large files.
+    pub async fn content_hash(&self, path: &Path) -> Result<String> {
+        let store = self.as_generic();
+        let mut hasher = blake3::Hasher::new();
         let mut reader = store.get(path).await?.into_stream();
 
         while let Some(data) = reader.next().await {
-            let data = data?;
-            hash.update(&data);
+            hasher.update(&data?);
         }
 
-        let finalized = hash.finalize();
-        let finalized = finalized.to_hex().to_lowercase().to_string();
-        Ok(finalized)
+        Ok(hasher.finalize().to_hex().to_lowercase().to_string())
     }
 
     pub async fn put(&self, path: &Path, data: impl Into<object_store::PutPayload>) -> Result<()> {
