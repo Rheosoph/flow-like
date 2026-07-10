@@ -78,7 +78,7 @@ impl NodeLogic for WriteManifestNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: DirDiffSession = context.evaluate_pin("session").await?;
-        let bytes = flow_like_types::json::to_vec_pretty(&session.manifest_content)?;
+        let bytes = flow_like_types::json::to_vec(&session.manifest_content)?;
 
         session.manifest.put(context, bytes, false).await?;
 

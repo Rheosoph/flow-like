@@ -35,6 +35,11 @@ pub struct ManifestEntry {
 pub struct DirManifest {
     #[serde(default)]
     pub version: u32,
+    /// Whether the snapshot was taken recursively. Diffs against a manifest with a
+    /// different scope skip deletion detection to avoid falsely reporting
+    /// out-of-scope files as deleted.
+    #[serde(default)]
+    pub recursive: bool,
     #[serde(default)]
     pub entries: Vec<ManifestEntry>,
 }

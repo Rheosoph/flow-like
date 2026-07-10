@@ -8,7 +8,7 @@ use flow_like::flow::{
 };
 use flow_like_types::{Error, async_trait, json::json};
 use futures::{StreamExt, stream};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Bounded parallelism when Blake3-hashing file bodies (Checksum mode / weak ETags).
 const HASH_CONCURRENCY: usize = 16;
@@ -29,7 +29,7 @@ impl NodeLogic for GetChangesNode {
         let mut node = Node::new(
             "path_get_changes",
             "Diff Directory",
-            "Diffs a folder against a manifest, emitting added, updated and deleted files without rehashing unchanged content (ETag-based)",
+            "Diffs a folder against a manifest, emitting added, updated and deleted files. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents",
             "Data/Files/Operations",
         );
         node.add_icon("/flow/icons/path.svg");
@@ -145,12 +145,25 @@ impl NodeLogic for GetChangesNode {
         let mode: String = context.evaluate_pin("mode").await?;
         let checksum = mode.eq_ignore_ascii_case("checksum");
 
-        let previous_manifest = load_manifest(&manifest_path, context).await;
-        let mut previous: HashMap<String, ManifestEntry> = previous_manifest
-            .entries
-            .into_iter()
-            .map(|entry| (entry.path.clone(), entry))
-            .collect();
+        let previous_manifest = load_manifest(&manifest_path, context).await?;
+        // Only diff against a manifest taken with the same scan scope; otherwise
+        // out-of-scope files would be reported as deleted (a data-loss footgun if
+        // the `deleted` pin drives a delete node).
+        let scope_matches =
+            previous_manifest.entries.is_empty() || previous_manifest.recursive == recursive;
+        let mut previous: HashMap<String, ManifestEntry> = if scope_matches {
+            previous_manifest
+                .entries
+                .into_iter()
+                .map(|entry| (entry.path.clone(), entry))
+                .collect()
+        } else {
+            context.log_message(
+                "Manifest scan scope (recursive) changed; treating all files as new to avoid false deletions",
+                LogLevel::Warn,
+            );
+            HashMap::new()
+        };
 
         let runtime = root.to_runtime(context).await?;
         let store = runtime.store.clone();
@@ -171,10 +184,15 @@ impl NodeLogic for GetChangesNode {
                 .objects
         };
 
-        // Skip the manifest file itself when it lives inside the scanned root.
+        // Skip the manifest file itself only when it lives in the same store as the
+        // scanned root; an identical path in a different store is a real file. Compare
+        // normalized object-store paths so a stray leading/trailing slash never leaks
+        // the manifest back into the scan as phantom churn.
+        let same_store = root.store_ref == manifest_path.store_ref;
+        let manifest_key = flow_like_storage::Path::from(manifest_path.path.as_str());
         let candidates: Vec<_> = objects
             .into_iter()
-            .filter(|object| object.location.as_ref() != manifest_path.path)
+            .filter(|object| !same_store || object.location != manifest_key)
             .collect();
 
         // Only read file bodies when we cannot trust the ETag: Checksum mode, or
@@ -191,6 +209,7 @@ impl NodeLogic for GetChangesNode {
             .collect();
 
         let mut hashes: HashMap<String, String> = HashMap::with_capacity(to_hash.len());
+        let mut hash_failed: HashSet<String> = HashSet::new();
         if !to_hash.is_empty() {
             let results: Vec<(String, flow_like_types::Result<String>)> = stream::iter(to_hash)
                 .map(|(key, location)| {
@@ -206,8 +225,13 @@ impl NodeLogic for GetChangesNode {
                     Ok(hash) => {
                         hashes.insert(key, hash);
                     }
-                    Err(err) => context
-                        .log_message(&format!("Failed to hash {}: {}", key, err), LogLevel::Warn),
+                    Err(err) => {
+                        context.log_message(
+                            &format!("Failed to hash {}: {}", key, err),
+                            LogLevel::Warn,
+                        );
+                        hash_failed.insert(key);
+                    }
                 }
             }
         }
@@ -226,9 +250,15 @@ impl NodeLogic for GetChangesNode {
                 last_modified: object.last_modified.to_string(),
             };
 
+            // A file selected for hashing whose read failed must never be reported as
+            // unchanged: treat it as changed rather than falling back to size/mtime,
+            // which can miss same-size same-mtime edits (the case Checksum mode and
+            // weak-ETag hashing exist to catch).
             let flow_path = root.with_path(&key);
             match previous.remove(&key) {
-                Some(prev) if entry_changed(&prev, &entry) => updated.push(flow_path),
+                Some(prev) if hash_failed.contains(&key) || entry_changed(&prev, &entry) => {
+                    updated.push(flow_path)
+                }
                 Some(_) => {}
                 None => added.push(flow_path),
             }
@@ -245,6 +275,7 @@ impl NodeLogic for GetChangesNode {
             manifest: manifest_path,
             manifest_content: DirManifest {
                 version: MANIFEST_VERSION,
+                recursive,
                 entries,
             },
         };
@@ -259,22 +290,44 @@ impl NodeLogic for GetChangesNode {
     }
 }
 
-/// Reads and parses the manifest, tolerating a missing or malformed file by
-/// returning an empty manifest (so every file is reported as added).
-async fn load_manifest(manifest: &FlowPath, context: &mut ExecutionContext) -> DirManifest {
-    let bytes = match manifest.get(context, false).await {
-        Ok(bytes) => bytes,
-        Err(_) => return DirManifest::default(),
-    };
+/// Reads and parses the manifest. A genuinely missing manifest (the store reports
+/// `NotFound`) yields an empty one, so every file is reported as added; malformed
+/// JSON is tolerated the same way with a warning. Any other store error (network,
+/// permission, throttling, …) is propagated instead of silently producing an empty
+/// baseline that would report every file as added.
+async fn load_manifest(
+    manifest: &FlowPath,
+    context: &mut ExecutionContext,
+) -> flow_like_types::Result<DirManifest> {
+    let runtime = manifest.to_runtime(context).await?;
+    match runtime.store.as_generic().head(&runtime.path).await {
+        Ok(_) => {}
+        Err(flow_like_storage::object_store::Error::NotFound { .. }) => {
+            return Ok(DirManifest::default());
+        }
+        Err(err) => return Err(Error::from(err)),
+    }
+
+    let bytes = manifest.get(context, false).await?;
 
     match flow_like_types::json::from_slice::<DirManifest>(&bytes) {
-        Ok(manifest) => manifest,
+        Ok(manifest) if manifest.version <= MANIFEST_VERSION => Ok(manifest),
+        Ok(manifest) => {
+            context.log_message(
+                &format!(
+                    "Manifest version {} is newer than supported {}, treating as empty",
+                    manifest.version, MANIFEST_VERSION
+                ),
+                LogLevel::Warn,
+            );
+            Ok(DirManifest::default())
+        }
         Err(err) => {
             context.log_message(
                 &format!("Failed to parse manifest, treating as empty: {}", err),
                 LogLevel::Warn,
             );
-            DirManifest::default()
+            Ok(DirManifest::default())
         }
     }
 }
