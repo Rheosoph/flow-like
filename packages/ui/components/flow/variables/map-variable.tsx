@@ -205,7 +205,6 @@ function MapValueInput({
 				</div>
 			);
 		case IVariableType.Integer:
-		case IVariableType.Byte:
 			return (
 				<Input
 					disabled={disabled}
@@ -223,6 +222,30 @@ function MapValueInput({
 						if (raw === "") return onChange("", false);
 						const num = Number.parseInt(raw, 10);
 						onChange(Number.isNaN(num) ? raw : num, !Number.isNaN(num));
+					}}
+				/>
+			);
+		case IVariableType.Byte:
+			return (
+				<Input
+					disabled={disabled}
+					type={secret ? "password" : "number"}
+					step={1}
+					min={0}
+					max={255}
+					placeholder="0-255..."
+					className="flex-1 min-w-0"
+					value={
+						value === "" || value === undefined || value === null
+							? ""
+							: String(value)
+					}
+					onChange={(e) => {
+						const raw = e.target.value;
+						if (raw === "") return onChange("", false);
+						const num = Number.parseInt(raw, 10);
+						const valid = !Number.isNaN(num) && num >= 0 && num <= 255;
+						onChange(Number.isNaN(num) ? raw : num, valid);
 					}}
 				/>
 			);
@@ -420,7 +443,9 @@ export function MapVariable({
 								</span>
 								<span className="text-muted-foreground shrink-0">:</span>
 								<span className="flex-1 wrap-break-word min-w-0 font-mono text-xs">
-									{renderValueDisplay(dataType, value)}
+									{variable.secret
+										? "••••••••"
+										: renderValueDisplay(dataType, value)}
 								</span>
 								<Button
 									size="icon"

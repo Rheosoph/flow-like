@@ -35,7 +35,11 @@ pub fn validate_value_type(value: &Value, expected: &VariableType) -> flow_like_
         VariableType::Boolean => value.is_boolean(),
         VariableType::PathBuf => value.is_string() || value.is_object(),
         VariableType::Struct => value.is_object(),
-        VariableType::Byte => value.is_number() || value.is_array() || value.is_string(),
+        // A single byte value is an integer in 0..=255.
+        VariableType::Byte => value
+            .as_i64()
+            .or_else(|| value.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))
+            .is_some_and(|n| (0..=255).contains(&n)),
     };
 
     if matches {
