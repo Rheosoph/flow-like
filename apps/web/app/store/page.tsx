@@ -50,7 +50,10 @@ export default function Page() {
 	}, [id, searchParams, router]);
 
 	useEffect(() => {
-		if (!purchaseStatus) return;
+		if (!purchaseStatus) {
+			handledPurchaseRef.current = null;
+			return;
+		}
 		if (handledPurchaseRef.current === purchaseStatus) return;
 		handledPurchaseRef.current = purchaseStatus;
 

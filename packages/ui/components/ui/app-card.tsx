@@ -258,14 +258,15 @@ function SmallAppCard({
 						<Checkbox
 							checked={multiSelected ?? false}
 							onCheckedChange={onClick}
+							label={`Select ${metadata?.name ?? app.id}`}
 						/>
 					</div>
 				)}
 				<div className="absolute left-0 top-0 bottom-0 w-32 opacity-20 group-hover:opacity-50 transition-all duration-300 overflow-hidden">
-					{!thumbFailed && (
+					{metadata?.thumbnail && !thumbFailed ? (
 						<img
-							src={metadata?.thumbnail ?? "/placeholder-thumbnail-small.jpg"}
-							alt={metadata?.name ?? app.id}
+							src={metadata.thumbnail}
+							alt={metadata.name ?? app.id}
 							className="w-full h-full object-cover object-right"
 							width={1280}
 							height={640}
@@ -274,8 +275,7 @@ function SmallAppCard({
 							fetchPriority="low"
 							onError={() => setThumbFailed(true)}
 						/>
-					)}
-					{(!metadata?.thumbnail || thumbFailed) &&
+					) : (
 						(() => {
 							const g = hashToGradient(app.id, primaryHue, isDark);
 							return (
@@ -287,7 +287,8 @@ function SmallAppCard({
 									}}
 								/>
 							);
-						})()}
+						})()
+					)}
 					<div className="absolute inset-0 bg-gradient-to-r from-transparent to-card" />
 				</div>
 
@@ -483,6 +484,7 @@ function ExtendedAppCard({
 						<Checkbox
 							checked={multiSelected ?? false}
 							onCheckedChange={onClick}
+							label={`Select ${appName}`}
 						/>
 					</div>
 				)}
@@ -804,12 +806,14 @@ export function SpotlightCard({
 function Checkbox({
 	checked,
 	onCheckedChange,
-}: { checked: boolean; onCheckedChange: () => void }) {
+	label,
+}: { checked: boolean; onCheckedChange: () => void; label?: string }) {
 	return (
 		// biome-ignore lint/a11y/useSemanticElements: animated div checkbox; a native input cannot host the motion check mark
 		<div
 			role="checkbox"
 			aria-checked={checked}
+			aria-label={label ?? "Select item"}
 			tabIndex={0}
 			className="relative cursor-pointer"
 			onClick={(e) => {
