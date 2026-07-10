@@ -3,30 +3,30 @@ use flow_like::flow::{
     node::{Node, NodeLogic},
     variable::VariableType,
 };
-use flow_like_types::async_trait;
+use flow_like_types::{Value, async_trait};
 
-use super::{CachedChatResponse, ChatStreamingResponse};
+use super::{CachedChatResponse, ChatStreamingResponse, ChatWidget};
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct RemoveStepNode {}
+pub struct PushWidgetNode {}
 
-impl RemoveStepNode {
+impl PushWidgetNode {
     pub fn new() -> Self {
-        RemoveStepNode {}
+        PushWidgetNode {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for RemoveStepNode {
+impl NodeLogic for PushWidgetNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "events_chat_remove_step",
-            "Remove Step",
-            "Removes a step from the plan by its ID",
+            "events_chat_push_widget",
+            "Push Widget",
+            "Embeds an a2ui widget instance into the chat message. Connect the Element Ref of an Instantiate Widget node.",
             "Events/Chat",
         );
-        node.add_icon("/flow/icons/event.svg");
+        node.add_icon("/flow/icons/a2ui.svg");
         node.set_event_callback(true);
 
         node.add_input_pin(
@@ -37,10 +37,10 @@ impl NodeLogic for RemoveStepNode {
         );
 
         node.add_input_pin(
-            "step_id",
-            "Step ID",
-            "ID of the step to remove",
-            VariableType::Integer,
+            "element_ref",
+            "Widget",
+            "Widget instance to embed (from Instantiate Widget)",
+            VariableType::Struct,
         );
 
         node.add_output_pin(
@@ -56,31 +56,28 @@ impl NodeLogic for RemoveStepNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let step_id: u32 = context.evaluate_pin("step_id").await?;
+        let element_ref: Value = context.evaluate_pin("element_ref").await?;
+        let widget = ChatWidget::from_element_ref(&element_ref)?;
 
         let cached_response = CachedChatResponse::load(context).await?;
         {
-            let mut mutable_reasoning = cached_response.reasoning.lock().await;
-
-            // Remove step from plan
-            mutable_reasoning.plan.retain(|(id, _)| *id != step_id);
+            let mut mutable_response = cached_response.response.lock().await;
+            mutable_response.widgets.push(widget.clone());
         }
 
-        let reasoning_ref = cached_response.reasoning.lock().await;
         let streaming_response = ChatStreamingResponse {
             actions: vec![],
             attachments: vec![],
             chunk: None,
-            plan: Some(reasoning_ref.clone()),
-            widgets: vec![],
+            plan: None,
+            widgets: vec![widget],
         };
-        drop(reasoning_ref);
 
         context
             .stream_response("chat_stream_partial", streaming_response)
             .await?;
         context.activate_exec_pin("exec_out").await?;
 
-        return Ok(());
+        Ok(())
     }
 }

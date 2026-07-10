@@ -4,6 +4,7 @@ import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import type {
 	IAttachment,
 	IChatUsageStat,
+	IChatWidget,
 	IMessage,
 	IPlanStep,
 } from "./chat-db";
@@ -237,6 +238,21 @@ export function processChatEvents(
 		responseMessage.files = Array.from(attachments.values());
 	};
 
+	const addWidgets = (newWidgets: IChatWidget[] | undefined) => {
+		if (!newWidgets?.length) return;
+		const byId = new Map(
+			(responseMessage.widgets ?? []).map((widget) => [
+				widget.instance_id,
+				widget,
+			]),
+		);
+		for (const widget of newWidgets) {
+			if (!widget?.instance_id) continue;
+			byId.set(widget.instance_id, widget);
+		}
+		responseMessage.widgets = Array.from(byId.values());
+	};
+
 	for (const ev of events) {
 		if (ev.event_type === "chat_stream_partial") {
 			if (done) continue;
@@ -276,6 +292,12 @@ export function processChatEvents(
 				addAttachments(ev.payload.attachments);
 				shouldUpdate = true;
 			}
+
+			// Handle embedded widgets
+			if (ev.payload.widgets) {
+				addWidgets(ev.payload.widgets);
+				shouldUpdate = true;
+			}
 			continue;
 		}
 		if (ev.event_type === "chat_stream") {
@@ -298,6 +320,10 @@ export function processChatEvents(
 				responseMessage.current_step_id = currentStepId;
 				shouldUpdate = true;
 			}
+			if (ev.payload.widgets) {
+				addWidgets(ev.payload.widgets);
+				shouldUpdate = true;
+			}
 			continue;
 		}
 		if (ev.event_type === "chat_out") {
@@ -317,6 +343,11 @@ export function processChatEvents(
 
 			if (ev.payload.attachments) {
 				addAttachments(ev.payload.attachments);
+				shouldUpdate = true;
+			}
+
+			if (ev.payload.widgets) {
+				addWidgets(ev.payload.widgets);
 				shouldUpdate = true;
 			}
 

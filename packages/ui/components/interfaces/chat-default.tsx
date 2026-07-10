@@ -29,9 +29,9 @@ import {
 	IRole,
 	Response,
 } from "../../lib";
+import { getCurrentPageContext } from "../../lib/page-context";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import { useSetQueryParams } from "../../lib/set-query-params";
-import { getCurrentPageContext } from "../../lib/page-context";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
@@ -60,10 +60,14 @@ import {
 	type IMessage,
 	chatDb,
 } from "./chat-default/chat-db";
+import {
+	ChatWidgetExecutionProvider,
+	type RunWidgetAction,
+} from "./chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
-import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatHistory } from "./chat-default/history";
+import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
@@ -1478,6 +1482,141 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		setQueryParams("message", undefined);
 	}, [setQueryParams]);
 
+	// Runs a widget/page action triggered from an embedded chat widget. The run
+	// streams through the chat engine so its a2ui events (forwarded via
+	// onA2UIEvents) update the widget in place, while any chat pushes from the
+	// triggered workflow are rendered as a new assistant message.
+	const runWidgetAction = useCallback<RunWidgetAction>(
+		(runPayload, onA2UIEvents) => {
+			const streamId = `widget-action-${createId()}`;
+			const responseMessage = createResponseMessage(
+				sessionIdParameter,
+				appId,
+				event.name,
+			);
+			let intermediateResponse = Response.default();
+			const attachments = new Map<string, IAttachment>();
+			const subscriberId = `widget-${responseMessage.id}`;
+
+			// The triggering widget button shows its own spinner for the run's
+			// duration, so the assistant bubble is deferred until real chat
+			// content actually streams in (see the shouldUpdate branch below).
+			processedCompletedStreams.current.delete(streamId);
+
+			const executionPromise = executionEngine.executeEvent(streamId, {
+				appId,
+				eventId: event.id,
+				payload: runPayload,
+				streamState: false,
+				onExecutionStart: () => {},
+				path: `${pathname}?id=${appId}&eventId=${event.id}&sessionId=${sessionIdParameter}`,
+				title: event.name || "Chat",
+				interfaceType: "chat",
+				onIncrementalSave: createChatIncrementalSaver(
+					responseMessage,
+					{ current: null },
+					{ current: null },
+				),
+				saveIntervalEvents: 10,
+			});
+
+			executionEngine.subscribeToEventStream(
+				streamId,
+				subscriberId,
+				(events) => {
+					handleNavigationEvents(events);
+					onA2UIEvents?.(events);
+
+					const result = processChatEvents(events, {
+						intermediateResponse,
+						responseMessage,
+						attachments,
+						tmpLocalState: null,
+						tmpGlobalState: null,
+						done: false,
+						appId,
+						eventId: event.id,
+						sessionId: sessionIdParameter,
+					});
+
+					intermediateResponse = result.intermediateResponse;
+					Object.assign(responseMessage, result.responseMessage);
+
+					if (result.interactions?.length) {
+						addInteractions(result.interactions);
+					}
+
+					if (result.shouldUpdate) {
+						chatRef.current?.pushCurrentMessageUpdate({
+							...result.responseMessage,
+						});
+						chatRef.current?.scrollToBottom();
+					}
+				},
+				async (events) => {
+					handleNavigationEvents(events);
+					executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
+
+					if (processedCompletedStreams.current.has(streamId)) return;
+					processedCompletedStreams.current.add(streamId);
+
+					// Rebuild the final message from the full event set in a fresh
+					// clone — a2ui events already updated the widget in place during
+					// streaming, so they must not be re-applied here.
+					const finalMessage =
+						cloneResponseMessageForCompletion(responseMessage);
+					finalMessage.widgets = undefined;
+					const result = processChatEvents(events, {
+						intermediateResponse: Response.default(),
+						responseMessage: finalMessage,
+						attachments: new Map(),
+						tmpLocalState: null,
+						tmpGlobalState: null,
+						done: false,
+						appId,
+						eventId: event.id,
+						sessionId: sessionIdParameter,
+					});
+
+					if (result.interactions?.length) {
+						addInteractions(result.interactions);
+					}
+
+					const msg = result.responseMessage;
+					const textContent =
+						typeof msg.inner.content === "string"
+							? msg.inner.content.trim()
+							: (msg.inner.content?.length ?? 0);
+					const hasContent = Boolean(
+						textContent ||
+							msg.files?.length ||
+							msg.widgets?.length ||
+							msg.plan_steps?.length,
+					);
+
+					// Only surface a new assistant message when the action produced
+					// chat content; a pure in-place widget update leaves no residue.
+					if (hasContent) {
+						await chatDb.messages.put(msg);
+					}
+					chatRef.current?.clearCurrentMessageUpdate();
+					chatRef.current?.scrollToBottom();
+				},
+			);
+
+			return executionPromise;
+		},
+		[
+			executionEngine,
+			appId,
+			event,
+			sessionIdParameter,
+			pathname,
+			addInteractions,
+			handleNavigationEvents,
+		],
+	);
+
 	return (
 		<>
 			{!messagesLoaded ? (
@@ -1495,17 +1634,22 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					isSending={isSendingFromWelcome}
 				/>
 			) : (
-				<Chat
-					ref={chatRef}
-					sessionId={sessionIdParameter}
-					messages={messages}
-					onSendMessage={handleSendMessage}
-					onMessageUpdate={onMessageUpdate}
-					config={config}
-					isStreamActive={isStreamActive}
-					activeInteractions={activeInteractions}
-					onRespondToInteraction={handleRespondToInteraction}
-				/>
+				<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+					<Chat
+						ref={chatRef}
+						sessionId={sessionIdParameter}
+						messages={messages}
+						onSendMessage={handleSendMessage}
+						onMessageUpdate={onMessageUpdate}
+						config={config}
+						isStreamActive={isStreamActive}
+						activeInteractions={activeInteractions}
+						onRespondToInteraction={handleRespondToInteraction}
+						appId={appId}
+						boardId={event.board_id}
+						eventId={event.id}
+					/>
+				</ChatWidgetExecutionProvider>
 			)}
 			<AlertDialog
 				open={showPrefilledConfirm}

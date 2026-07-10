@@ -34,6 +34,8 @@ pub mod push_stat;
 pub mod push_stats;
 pub mod push_step;
 pub mod push_text_to_step;
+pub mod push_widget;
+pub mod push_widgets;
 pub mod remove_step;
 
 /// URL processing utilities for converting Tauri local file URLs to base64 data URLs
@@ -566,6 +568,57 @@ pub struct Chat {
     pub attachments: Option<Vec<Attachment>>,
 }
 
+/// An a2ui widget instance embedded inside a chat message. `component` is the
+/// self-contained `widgetInstance` component (with `inlineWidgetDef` and
+/// `actionBindings`) produced by the Instantiate Widget node, so the chat can
+/// render it without touching the a2ui surface channel.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct ChatWidget {
+    pub instance_id: String,
+    pub widget_id: String,
+    pub surface_id: String,
+    pub component: Value,
+}
+
+impl ChatWidget {
+    /// Build a `ChatWidget` from an `element_ref` produced by the Instantiate
+    /// Widget node. The ref carries the self-contained `widgetInstance` component
+    /// under `component`, which the chat renders directly.
+    pub fn from_element_ref(value: &Value) -> flow_like_types::Result<Self> {
+        let instance_id = value
+            .get("instanceId")
+            .or_else(|| value.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Widget reference is missing 'instanceId'"))?
+            .to_string();
+
+        let widget_id = value
+            .get("widgetId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let surface_id = value
+            .get("surfaceId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| instance_id.clone());
+
+        let component = value.get("component").cloned().ok_or_else(|| {
+            anyhow!(
+                "Widget reference is missing 'component'. Re-add the Instantiate Widget node (requires version 4 or newer)."
+            )
+        })?;
+
+        Ok(ChatWidget {
+            instance_id,
+            widget_id,
+            surface_id,
+            component,
+        })
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct ChatResponse {
     pub response: Response,
@@ -574,6 +627,8 @@ pub struct ChatResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub model_id: Option<String>,
+    #[serde(default)]
+    pub widgets: Vec<ChatWidget>,
 }
 
 #[derive(Clone)]
@@ -596,6 +651,7 @@ impl CachedChatResponse {
             response: Response::new(),
             actions: vec![],
             attachments: vec![],
+            widgets: vec![],
             global_session: flow_like_types::json::from_str("{}")?,
             local_session: flow_like_types::json::from_str("{}")?,
             model_id: None,
@@ -641,6 +697,8 @@ pub struct ChatStreamingResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub plan: Option<Reasoning>,
+    #[serde(default)]
+    pub widgets: Vec<ChatWidget>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]

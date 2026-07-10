@@ -94,6 +94,7 @@ impl NodeLogic for PushStepNode {
             attachments: vec![],
             chunk: None,
             plan: Some(reasoning_ref.clone()),
+            widgets: vec![],
         };
         drop(reasoning_ref);
 

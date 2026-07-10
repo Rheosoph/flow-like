@@ -38,6 +38,7 @@ import {
 } from "./attachment-dialog";
 import type { IAttachment, IMessage } from "./chat-db";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
+import { MessageWidgets } from "./message-widgets";
 import { PlanSteps } from "./plan-steps";
 import { UsageStats } from "./usage-stats";
 
@@ -48,6 +49,12 @@ interface MessageProps {
 		messageId: string,
 		updates: Partial<IMessage>,
 	) => void | Promise<void>;
+	/** App id owning the chat — needed to render + trigger embedded widgets. */
+	appId?: string;
+	/** Board id of the chat event — target for widget action workflows. */
+	boardId?: string;
+	/** Chat event id — forwarded to embedded widget surfaces. */
+	eventId?: string;
 }
 
 const MessageActionButton = ({
@@ -485,6 +492,9 @@ export const MessageComponent = memo(
 		message,
 		loading,
 		onMessageUpdate,
+		appId,
+		boardId,
+		eventId,
 	}: Readonly<MessageProps>) {
 		const isUser = message.inner.role === IRole.User;
 		const [isExpanded, setIsExpanded] = useState(false);
@@ -794,6 +804,14 @@ export const MessageComponent = memo(
 							onFileClick={handleFileClick}
 							onFullscreen={setFullscreenFile}
 						/>
+						{(message.widgets?.length ?? 0) > 0 && (
+							<MessageWidgets
+								widgets={message.widgets}
+								appId={appId}
+								boardId={boardId}
+								eventId={eventId}
+							/>
+						)}
 						{!isUser && (message.app_refs?.length ?? 0) > 0 && (
 							<AppReferences appIds={message.app_refs ?? []} />
 						)}
@@ -876,6 +894,10 @@ export const MessageComponent = memo(
 			prev.message.plan_steps === next.message.plan_steps &&
 			prev.message.current_step_id === next.message.current_step_id &&
 			prev.message.usage_stats === next.message.usage_stats &&
+			prev.message.widgets === next.message.widgets &&
+			prev.appId === next.appId &&
+			prev.boardId === next.boardId &&
+			prev.eventId === next.eventId &&
 			prev.loading === next.loading &&
 			prev.onMessageUpdate === next.onMessageUpdate
 		);

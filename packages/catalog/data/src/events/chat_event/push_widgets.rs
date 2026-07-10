@@ -1,33 +1,32 @@
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::PinOptions,
     variable::VariableType,
 };
-use flow_like_types::async_trait;
+use flow_like_types::{Value, async_trait};
 
-use super::{Attachment, CachedChatResponse, ChatStreamingResponse};
+use super::{CachedChatResponse, ChatStreamingResponse, ChatWidget};
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct PushAttachmentsNode {}
+pub struct PushWidgetsNode {}
 
-impl PushAttachmentsNode {
+impl PushWidgetsNode {
     pub fn new() -> Self {
-        PushAttachmentsNode {}
+        PushWidgetsNode {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for PushAttachmentsNode {
+impl NodeLogic for PushWidgetsNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "events_chat_push_attachments",
-            "Push Attachments",
-            "Pushes a response chunk to the chat",
+            "events_chat_push_widgets",
+            "Push Widgets",
+            "Embeds multiple a2ui widget instances into the chat message. Add an Element Ref pin for each Instantiate Widget node.",
             "Events/Chat",
         );
-        node.add_icon("/flow/icons/paperclip.svg");
+        node.add_icon("/flow/icons/a2ui.svg");
         node.set_event_callback(true);
 
         node.add_input_pin(
@@ -38,14 +37,11 @@ impl NodeLogic for PushAttachmentsNode {
         );
 
         node.add_input_pin(
-            "attachments",
-            "Attachments",
-            "Attachment to the Chat",
+            "element_ref",
+            "Widget",
+            "Widget instance to embed (from Instantiate Widget). Add more pins for multiple widgets.",
             VariableType::Struct,
-        )
-        .set_schema::<Attachment>()
-        .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_options(PinOptions::new().set_enforce_schema(true).build());
+        );
 
         node.add_output_pin(
             "exec_out",
@@ -60,19 +56,33 @@ impl NodeLogic for PushAttachmentsNode {
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
-        let attachments: Vec<Attachment> = context.evaluate_pin("attachments").await?;
+        let pins = context.get_pins_by_name("element_ref").await?;
+        let mut widgets = Vec::with_capacity(pins.len());
+        for pin in pins {
+            let value: Value = context.evaluate_pin_ref(pin).await?;
+            if value.is_null() {
+                continue;
+            }
+            widgets.push(ChatWidget::from_element_ref(&value)?);
+        }
+
+        if widgets.is_empty() {
+            context.activate_exec_pin("exec_out").await?;
+            return Ok(());
+        }
+
         let cached_response = CachedChatResponse::load(context).await?;
         {
             let mut mutable_response = cached_response.response.lock().await;
-            mutable_response.attachments.extend(attachments.clone());
+            mutable_response.widgets.extend(widgets.clone());
         }
 
         let streaming_response = ChatStreamingResponse {
             actions: vec![],
-            attachments,
+            attachments: vec![],
             chunk: None,
             plan: None,
-            widgets: vec![],
+            widgets,
         };
 
         context
@@ -80,6 +90,6 @@ impl NodeLogic for PushAttachmentsNode {
             .await?;
         context.activate_exec_pin("exec_out").await?;
 
-        return Ok(());
+        Ok(())
     }
 }
