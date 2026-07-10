@@ -811,8 +811,9 @@ impl ServerRegistry {
             .count(&self.db)
             .await? as i64;
 
-        // Sum all download counts
-        let downloads_result: Option<i64> = wasm_package::Entity::find()
+        // Sum all download counts. SUM over zero rows is NULL, so the decoded
+        // value must be Option<i64>; `.one()` adds the outer row Option.
+        let downloads_result: Option<Option<i64>> = wasm_package::Entity::find()
             .select_only()
             .expr_as(
                 Expr::cust(r#"CAST(SUM("downloadCount") AS BIGINT)"#),
@@ -825,7 +826,7 @@ impl ServerRegistry {
         Ok(RegistryStats {
             total_packages,
             total_versions,
-            total_downloads: downloads_result.unwrap_or(0),
+            total_downloads: downloads_result.flatten().unwrap_or(0),
             pending_review,
             active_packages,
             rejected_packages,

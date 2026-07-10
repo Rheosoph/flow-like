@@ -350,6 +350,7 @@ function FlowPinInnerComponent({
 						nodeName={node.name}
 						pin={pin}
 						appId={appId}
+						boardId={typeof version === "undefined" ? boardId : undefined}
 						boardRef={boardRef}
 						defaultValue={defaultValue}
 						changeDefaultValue={setDefaultValue}

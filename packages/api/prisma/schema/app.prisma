@@ -100,6 +100,11 @@ model App {
   forkedAt     DateTime?
 
   technicalUsers TechnicalUser[]
+
+  outgoingAppConnections AppConnection[] @relation("outgoingAppConnections")
+  incomingAppConnections AppConnection[] @relation("incomingAppConnections")
+  processNotes           AppProcessNote[]
+
   llmUsage       LLMUsageTracking[]
   usageLimits    AppUsageLimit[]
   executionUsage ExecutionUsageTracking[]
@@ -409,6 +414,10 @@ model Event {
   /// config (URLs, credentials, tutorials) is unambiguous.
   executionMode String @default("Local")
 
+  /// Reachability: "PUBLIC" (public REST/MCP surface with its own auth) or
+  /// "INTERNAL" (only callable by connected apps via the app-connection proxy).
+  exposure String @default("PUBLIC")
+
   /// Variables for this event (JSON blob)
   variables Json?
 
@@ -423,6 +432,12 @@ model Event {
 
   /// Canary configuration for A/B testing
   canary Json?
+
+  /// Process-mining case-key mappings: business key name → dot-path into the
+  /// invocation payload (e.g. {"order_id": "order.id"}). Extracted
+  /// automatically on every run so cases group by business object without
+  /// callers having to pass correlation explicitly.
+  correlationMappings Json?
 
   sink EventSink?
 

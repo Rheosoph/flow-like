@@ -72,6 +72,10 @@ pub struct InvokeEventRequest {
         Option<std::collections::HashMap<String, flow_like::flow::variable::Variable>>,
     /// Optional profile ID to select a specific user profile for execution
     pub profile_id: Option<String>,
+    /// Business/object correlation keys (e.g. `{"order_id": "1234"}`) tagging
+    /// the process case this run belongs to. Used for process mining.
+    #[serde(default)]
+    pub correlation: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Response from event invocation
@@ -135,11 +139,32 @@ pub async fn invoke_event(
     Json(params): Json<InvokeEventRequest>,
 ) -> Result<Response, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.effective_user_id()?;
+    let sub = permission.effective_user_id().map_err(|_| {
+        crate::error::ApiError::forbidden(
+            "Invoking requires a caller that is linked to a user account",
+        )
+    })?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+    // If invoked through an app connection, keep the caller app chain so the
+    // run (and any tokens it mints) stays attributable across apps.
+    let caller_app_chain = match &user {
+        AppUser::ConnectedApp(connected) => Some(connected.app_chain.clone()),
+        _ => None,
+    };
+    // Process-mining correlation: the caller's run id is the parent; a run with
+    // no parent is a root of its causal tree and owns the trace id.
+    let parent_run_id = match &user {
+        AppUser::ConnectedApp(connected) => connected.run_id.clone(),
+        _ => None,
+    };
+    let inherited_correlation = match &user {
+        AppUser::ConnectedApp(connected) => connected.correlation.clone(),
+        _ => None,
+    };
 
     // Get event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
+    super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
@@ -194,6 +219,32 @@ pub async fn invoke_event(
         None
     };
 
+    // Resolve this run's correlation: inherit the trace root & business keys
+    // from the caller, otherwise this run is the root of its own trace.
+    let mut correlation = inherited_correlation.unwrap_or_default();
+    if correlation.trace_id.is_none() {
+        correlation.trace_id = parent_run_id.clone().or_else(|| Some(run_id.clone()));
+    }
+    // Auto-extract business keys via the event's correlation mappings, then
+    // let explicitly passed keys win on conflict.
+    if let (Some(mappings), Some(payload)) = (
+        event
+            .correlation_mappings
+            .as_ref()
+            .filter(|mappings| !mappings.is_empty()),
+        params.payload.as_ref(),
+    ) {
+        let extracted = crate::correlation::extract_mapped_keys(payload, mappings);
+        if !extracted.is_empty() {
+            correlation = correlation.with_keys(&extracted);
+        }
+    }
+    if let Some(keys) = params.correlation.as_ref().filter(|keys| !keys.is_empty()) {
+        crate::correlation::validate_business_keys(keys).map_err(ApiError::bad_request)?;
+        correlation = correlation.with_keys(keys);
+    }
+    let correlation_keys = correlation.keys_json();
+
     // Build run record (insert happens later - sync for local/isolated, parallel for HTTP)
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
@@ -215,6 +266,10 @@ pub async fn invoke_event(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
+        caller_app_chain: Set(caller_app_chain.clone()),
+        trace_id: Set(correlation.trace_id.clone()),
+        parent_run_id: Set(parent_run_id.clone()),
+        correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -247,6 +302,8 @@ pub async fn invoke_event(
             app_id: app_id.clone(),
             board_id: board_id.clone(),
             event_id: Some(event_id),
+            app_chain: caller_app_chain.clone(),
+            correlation: None,
             callback_url: String::new(),
             token_type: TokenType::User,
             ttl_seconds: Some(60 * 60),
@@ -288,6 +345,8 @@ pub async fn invoke_event(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
+        app_chain: caller_app_chain.clone(),
+        correlation: correlation.clone().into_option(),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),

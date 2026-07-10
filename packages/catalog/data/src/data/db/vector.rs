@@ -26,6 +26,7 @@ pub mod list;
 pub mod list_indices;
 pub mod list_tables;
 pub mod make_column_optional;
+pub mod open_remote;
 pub mod optimize;
 pub mod purge;
 pub mod schema;

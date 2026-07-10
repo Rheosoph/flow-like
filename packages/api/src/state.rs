@@ -57,6 +57,21 @@ pub enum CachedAuth {
         app_id: String,
         run_id: String,
         technical_user_id: Option<String>,
+        app_chain: Option<Vec<String>>,
+        correlation: Option<crate::correlation::CorrelationContext>,
+    },
+    /// App-connection JWT: one app calling another app it is connected to.
+    /// `exp` is re-checked on cache hits so short-lived tokens cannot outlive
+    /// their expiry through the auth cache.
+    AppConnection {
+        sub: Option<String>,
+        origin_app_id: String,
+        target_app_id: String,
+        app_chain: Vec<String>,
+        technical_user_id: Option<String>,
+        run_id: Option<String>,
+        correlation: Option<crate::correlation::CorrelationContext>,
+        exp: i64,
     },
     /// Invalid/expired token
     Invalid,
@@ -653,7 +668,7 @@ impl State {
         role_id: &str,
         app_id: &str,
     ) -> flow_like_types::Result<()> {
-        use crate::entity::membership;
+        use crate::entity::{app_connection, membership};
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
         let user_ids: Vec<String> = membership::Entity::find()
@@ -667,6 +682,22 @@ impl State {
 
         for user_id in &user_ids {
             self.invalidate_permission(user_id, app_id);
+        }
+
+        let source_app_ids: Vec<String> = app_connection::Entity::find()
+            .filter(app_connection::Column::RoleId.eq(role_id))
+            .filter(app_connection::Column::TargetAppId.eq(app_id))
+            .select_only()
+            .column(app_connection::Column::SourceAppId)
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+
+        for source_app_id in &source_app_ids {
+            self.invalidate_permission(
+                &crate::middleware::jwt::app_connection_cache_sub(source_app_id),
+                app_id,
+            );
         }
 
         Ok(())

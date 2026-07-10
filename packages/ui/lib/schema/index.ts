@@ -58,7 +58,7 @@ export type {
 	ICanaryEvent,
 	IReleaseNotes,
 } from "./flow/event";
-export { IEventExecutionMode } from "./flow/event";
+export { IEventExecutionMode, IEventExposure } from "./flow/event";
 export type { IEventPayload } from "./flow/event-payload";
 export type { IEventPayloadMail } from "./flow/event-payload-mail";
 export type { IEventPayloadChat } from "./flow/event-payload-chat";

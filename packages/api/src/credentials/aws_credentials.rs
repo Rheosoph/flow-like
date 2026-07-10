@@ -163,6 +163,7 @@ impl AwsRuntimeCredentials {
         let client = aws_sdk_sts::Client::new(&state.aws_client);
 
         let apps_prefix = format!("apps/{}", app_id);
+        let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let runs_prefix = format!("runs/{}", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
@@ -197,6 +198,8 @@ impl AwsRuntimeCredentials {
             CredentialsAccess::ReadApp => read_app_policy(self, &apps_prefix),
             CredentialsAccess::ReadAppContent => read_app_content_policy(self, &apps_prefix),
             CredentialsAccess::EditAppContent => edit_app_content_policy(self, &apps_prefix),
+            CredentialsAccess::ReadAppDb => read_app_content_policy(self, &db_prefix),
+            CredentialsAccess::EditAppDb => edit_app_content_policy(self, &db_prefix),
             CredentialsAccess::EditUser => edit_user_policy(self, &user_prefix),
             CredentialsAccess::ReadUser => read_user_policy(self, &user_prefix),
             CredentialsAccess::InvokeNone => {
@@ -276,6 +279,8 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::ReadAppDb
+            | CredentialsAccess::EditAppDb
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute

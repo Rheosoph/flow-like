@@ -1,4 +1,3 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	type ChatImage,
 	type CopilotScope,
@@ -37,6 +36,7 @@ import {
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
@@ -1486,6 +1486,7 @@ export class BoardState implements IBoardState {
 		lastMeta?: ILogMetadata,
 		offset?: number,
 		limit?: number,
+		includeNodes?: boolean,
 	): Promise<ILogMetadata[]> {
 		let localRuns: ILogMetadata[] = [];
 		// Fetch local runs
@@ -1524,6 +1525,7 @@ export class BoardState implements IBoardState {
 				if (status !== undefined) params.set("status", status.toString());
 				if (limit) params.set("limit", limit.toString());
 				if (offset) params.set("offset", offset.toString());
+				if (includeNodes) params.set("include_nodes", "true");
 
 				const queryString = params.toString();
 				const path = `apps/${appId}/board/${boardId}/runs${queryString ? `?${queryString}` : ""}`;

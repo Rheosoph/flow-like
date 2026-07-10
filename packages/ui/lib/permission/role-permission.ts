@@ -83,6 +83,12 @@ export class RolePermissions {
 	static readonly WriteRoutes = new RolePermissions(
 		0b00000010_00000000_00000000_00000000n,
 	);
+	static readonly ReadDatabase = new RolePermissions(
+		0b00000100_00000000_00000000_00000000n,
+	);
+	static readonly WriteDatabase = new RolePermissions(
+		0b00001000_00000000_00000000_00000000n,
+	);
 
 	/**
 	 * Permission set a member's (default) role must grant for the

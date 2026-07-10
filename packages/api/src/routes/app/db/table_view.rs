@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -52,7 +52,13 @@ pub async fn table_view(
     Path((app_id, table)): Path<(String, String)>,
     Query(params): Query<ScopedPaginationParams>,
 ) -> Result<Json<TableViewResponse>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
     validate_table_name(&table)?;
 
     let offset = params.offset.unwrap_or(0).min(100_000) as usize;

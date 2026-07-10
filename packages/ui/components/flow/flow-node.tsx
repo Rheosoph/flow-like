@@ -138,7 +138,7 @@ const FlowNodeInner = memo(
 		const { pushCommand } = useUndoRedo(props.data.appId, props.data.boardId);
 		const { resolvedTheme } = useTheme();
 		const invalidate = useInvalidateInvoke();
-		const { currentMetadata } = useLogAggregation();
+		const { currentMetadata, heatmapEnabled, heatmap } = useLogAggregation();
 
 		const [payload, setPayload] = useState({
 			open: false,
@@ -194,6 +194,17 @@ const FlowNodeInner = memo(
 
 			return [false, severity];
 		}, [props.data.node, currentMetadata]);
+
+		// Aggregated many-runs activity for the heatmap overlay: visit count,
+		// error count, and an intensity bucket relative to the busiest node.
+		const nodeHeat = useMemo(() => {
+			if (!heatmapEnabled || !heatmap) return undefined;
+			const heat = heatmap.nodes[props.data.node.id];
+			if (!heat) return undefined;
+			const intensity =
+				heatmap.maxVisits > 0 ? heat.visits / heatmap.maxVisits : 0;
+			return { ...heat, intensity };
+		}, [heatmapEnabled, heatmap, props.data.node.id]);
 
 		const isReroute = useMemo(() => {
 			return props.data.node.name === "reroute";
@@ -923,6 +934,31 @@ const FlowNodeInner = memo(
 							<TriangleAlertIcon className="w-3 h-3 text-yellow-500" />
 						)}
 					</div>
+				)}
+				{nodeHeat && !isReroute && (
+					<>
+						<div
+							className="pointer-events-none absolute inset-0 rounded-md"
+							style={{
+								boxShadow: `inset 0 0 0 2px color-mix(in srgb, var(--primary) ${Math.round(
+									20 + nodeHeat.intensity * 80,
+								)}%, transparent)`,
+							}}
+						/>
+						<div
+							className="absolute bottom-0 left-0 z-10 flex translate-y-[calc(50%)] translate-x-[calc(-30%)] items-center gap-1"
+							title={`${nodeHeat.visits} ${nodeHeat.visits === 1 ? "run" : "runs"} visited this node${nodeHeat.errors > 0 ? ` · ${nodeHeat.errors} with errors` : ""}`}
+						>
+							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">
+								{nodeHeat.visits}×
+							</span>
+							{nodeHeat.errors > 0 && (
+								<span className="rounded-full bg-destructive px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-destructive-foreground">
+									{nodeHeat.errors}!
+								</span>
+							)}
+						</div>
+					</>
 				)}
 				{props.data.node.comment && (
 					<div className="absolute top-0 translate-y-[calc(-100%-0.5rem)] left-3 right-3 mb-2 text-center bg-foreground/70 text-background p-1 rounded-md">

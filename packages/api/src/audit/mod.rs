@@ -30,6 +30,7 @@ pub fn actor_type_from_user(user: &AppUser) -> AuditActorType {
         AppUser::PAT(_) => AuditActorType::User,
         AppUser::APIKey(_) => AuditActorType::ApiKey,
         AppUser::Executor(_) => AuditActorType::Executor,
+        AppUser::ConnectedApp(_) => AuditActorType::System,
         AppUser::Unauthorized => AuditActorType::System,
     }
 }

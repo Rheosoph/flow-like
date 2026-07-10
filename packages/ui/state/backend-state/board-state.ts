@@ -97,6 +97,8 @@ export interface IBoardState {
 		lastMeta?: ILogMetadata,
 		offset?: number,
 		limit?: number,
+		/** Load per-node activity summaries (heatmap only — extra query). */
+		includeNodes?: boolean,
 	): Promise<ILogMetadata[]>;
 	queryRun(
 		logMeta: ILogMetadata,

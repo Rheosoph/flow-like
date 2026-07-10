@@ -47,7 +47,12 @@ impl NodeLogic for RegisterMcpToolsNode {
             None
         };
 
-        agent.add_mcp_server(super::McpServerConfig { uri, tool_filter });
+        agent.add_mcp_server(super::McpServerConfig {
+            uri,
+            tool_filter,
+            auth_header: None,
+            custom_headers: Default::default(),
+        });
 
         context
             .set_pin_value("agent_out", json::json!(agent))

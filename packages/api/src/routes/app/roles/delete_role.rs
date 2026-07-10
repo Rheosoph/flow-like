@@ -1,6 +1,6 @@
 use crate::{
     audit_branch, ensure_permission,
-    entity::{app, membership, role},
+    entity::{app, app_connection, membership, role},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -11,7 +11,8 @@ use axum::{
     extract::{Path, State},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, TransactionTrait, prelude::Expr,
+    ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+    prelude::Expr,
 };
 
 #[utoipa::path(
@@ -73,6 +74,26 @@ pub async fn delete_role(
         return Err(ApiError::FORBIDDEN);
     }
 
+    // Collect cache keys before the delete: the membership reassignment and
+    // the AppConnection SetNull cascade clear the role references, so a
+    // post-commit lookup by role id would find nothing to invalidate.
+    let affected_user_ids: Vec<String> = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app_id.clone()))
+        .filter(membership::Column::RoleId.eq(role_id.clone()))
+        .select_only()
+        .column(membership::Column::UserId)
+        .into_tuple()
+        .all(&txn)
+        .await?;
+    let affected_connection_sources: Vec<String> = app_connection::Entity::find()
+        .filter(app_connection::Column::TargetAppId.eq(app_id.clone()))
+        .filter(app_connection::Column::RoleId.eq(role_id.clone()))
+        .select_only()
+        .column(app_connection::Column::SourceAppId)
+        .into_tuple()
+        .all(&txn)
+        .await?;
+
     membership::Entity::update_many()
         .filter(membership::Column::AppId.eq(app_id.clone()))
         .filter(membership::Column::RoleId.eq(role_id.clone()))
@@ -84,6 +105,16 @@ pub async fn delete_role(
     role.delete(&txn).await?;
 
     txn.commit().await?;
+
+    for user_id in &affected_user_ids {
+        state.invalidate_permission(user_id, &app_id);
+    }
+    for source_app_id in &affected_connection_sources {
+        state.invalidate_permission(
+            &crate::middleware::jwt::app_connection_cache_sub(source_app_id),
+            &app_id,
+        );
+    }
 
     if let Err(e) = state.invalidate_role_permissions(&role_id, &app_id).await {
         tracing::warn!(error = %e, "Failed to invalidate permission cache after role deletion");

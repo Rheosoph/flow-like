@@ -1,6 +1,5 @@
 "use client";
 
-import { createId } from "@paralleldrive/cuid2";
 import {
 	Badge,
 	Button,
@@ -21,6 +20,7 @@ import {
 	EventTypeConfiguration,
 	type IEvent,
 	IEventExecutionMode,
+	IEventExposure,
 	type IEventInput,
 	type IEventMapping,
 	type IOAuthProvider,
@@ -62,6 +62,7 @@ import {
 	parseUint8ArrayToJson,
 } from "@flow-like/flow-like-ui/lib/uint8";
 import type { PageListItem } from "@flow-like/flow-like-ui/state/backend-state/page-state";
+import { createId } from "@paralleldrive/cuid2";
 import {
 	AlertTriangle,
 	Cloud,
@@ -72,8 +73,10 @@ import {
 	FileTextIcon,
 	FormInputIcon,
 	GitBranchIcon,
+	Globe,
 	LayersIcon,
 	Loader2,
+	Lock,
 	Monitor,
 	Pause,
 	Play,
@@ -320,6 +323,7 @@ export default function EventsPage({
 				notes: null,
 				execution_mode:
 					(newEvent as any)?.execution_mode ?? IEventExecutionMode.Local,
+				exposure: (newEvent as any)?.exposure ?? IEventExposure.Public,
 			};
 
 			let savedEvent: IEvent | null = null;
@@ -704,6 +708,38 @@ function EventConfiguration({
 	}, []);
 	const [routePathDraft, setRoutePathDraft] = useState<string>("/");
 	const [routePathError, setRoutePathError] = useState<string | null>(null);
+	// Case-key mapping rows are edited locally (index-stable, so typing a key
+	// name never collides mid-edit) and committed to formData on every change.
+	const [caseKeyRows, setCaseKeyRows] = useState<
+		Array<{ key: string; path: string }>
+	>([]);
+
+	useEffect(() => {
+		setCaseKeyRows(
+			Object.entries(event.correlation_mappings ?? {}).map(([key, path]) => ({
+				key,
+				path,
+			})),
+		);
+	}, [event.id, event.correlation_mappings]);
+
+	const commitCaseKeyRows = useCallback(
+		(rows: Array<{ key: string; path: string }>) => {
+			setCaseKeyRows(rows);
+			const mappings: Record<string, string> = {};
+			for (const row of rows) {
+				const key = row.key.trim();
+				const path = row.path.trim();
+				if (key && path) mappings[key] = path;
+			}
+			setFormData((previous) => ({
+				...previous,
+				correlation_mappings:
+					Object.keys(mappings).length > 0 ? mappings : null,
+			}));
+		},
+		[],
+	);
 
 	const routes = useInvoke(
 		backend.routeState.getRoutes,
@@ -1183,8 +1219,8 @@ function EventConfiguration({
 			{/* Content */}
 			<div className="space-y-6 pb-24">
 				{/* Status */}
-				<div className="flex items-center gap-3 overflow-x-auto rounded-lg border bg-card/80 px-4 py-3">
-					<div className="flex shrink-0 items-center gap-2.5 pr-3 border-r">
+				<div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border bg-card/80 px-4 py-3">
+					<div className="flex shrink-0 items-center gap-2.5">
 						<div
 							className={`w-2.5 h-2.5 rounded-full ${formData.active ? "bg-green-500" : "bg-orange-500"}`}
 						/>
@@ -1242,44 +1278,98 @@ function EventConfiguration({
 							</div>
 						);
 					})()}
-					<div className="ml-auto" />
-					{board.data?.nodes?.[formData.node_id] && formData.node_id && (
-						<EventTypeConfiguration
-							eventConfig={eventMapping}
-							disabled={!isEditing}
-							node={board.data?.nodes?.[formData.node_id]}
-							event={formData}
-							onUpdate={(type) => {
-								if (!isEditing) enterEdit();
-								handleInputChange("event_type", type);
-							}}
-							hub={hub}
-							canExecuteLocally={canExecuteLocally}
-							eventExecutionMode={
-								formData.execution_mode ?? IEventExecutionMode.Local
-							}
-							compact
-						/>
-					)}
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={() => {
-							if (!isEditing) enterEdit();
-							handleInputChange("active", !formData.active);
-						}}
-						className="shrink-0 gap-2"
-					>
-						{formData.active ? (
-							<>
-								<Pause className="h-4 w-4" /> Deactivate
-							</>
-						) : (
-							<>
-								<Play className="h-4 w-4" /> Activate
-							</>
+					{(formData.event_type === "rest" || formData.event_type === "mcp") &&
+						(() => {
+							const currentExposure =
+								formData.exposure ?? IEventExposure.Public;
+							return (
+								<div className="flex shrink-0 items-center gap-2">
+									<Label className="text-xs text-muted-foreground">
+										Exposure
+									</Label>
+									<Select
+										value={currentExposure}
+										onValueChange={(value) => {
+											if (!isEditing) enterEdit();
+											handleInputChange("exposure", value as IEventExposure);
+										}}
+										disabled={!isEditing}
+									>
+										<SelectTrigger
+											size="sm"
+											className="w-32 text-xs"
+											title={
+												currentExposure === IEventExposure.Internal
+													? "Only callable by connected apps — no public endpoint."
+													: "Reachable on its public endpoint with the configured auth."
+											}
+										>
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value={IEventExposure.Public}>
+												<span className="inline-flex items-center gap-1.5">
+													<Globe className="h-3 w-3" /> Public
+												</span>
+											</SelectItem>
+											<SelectItem value={IEventExposure.Internal}>
+												<span className="inline-flex items-center gap-1.5">
+													<Lock className="h-3 w-3" /> Internal
+												</span>
+											</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+							);
+						})()}
+					<div className="ml-auto flex shrink-0 items-center gap-2">
+						{board.data?.nodes?.[formData.node_id] && formData.node_id && (
+							<EventTypeConfiguration
+								eventConfig={eventMapping}
+								disabled={!isEditing}
+								node={board.data?.nodes?.[formData.node_id]}
+								event={formData}
+								onUpdate={(type) => {
+									if (!isEditing) enterEdit();
+									handleInputChange("event_type", type);
+								}}
+								hub={hub}
+								canExecuteLocally={canExecuteLocally}
+								eventExecutionMode={
+									formData.execution_mode ?? IEventExecutionMode.Local
+								}
+								compact
+							/>
 						)}
-					</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={() => {
+								if (!isEditing) enterEdit();
+								handleInputChange("active", !formData.active);
+							}}
+							className="shrink-0 gap-2"
+						>
+							{formData.active ? (
+								<>
+									<Pause className="h-4 w-4" /> Deactivate
+								</>
+							) : (
+								<>
+									<Play className="h-4 w-4" /> Activate
+								</>
+							)}
+						</Button>
+					</div>
+					{(formData.event_type === "rest" ||
+						formData.event_type === "mcp") && (
+						<p className="basis-full text-[0.7rem] leading-tight text-muted-foreground">
+							{(formData.exposure ?? IEventExposure.Public) ===
+							IEventExposure.Internal
+								? "Internal — only callable by connected apps through the app-connection proxy; no public endpoint."
+								: "Public — reachable on its public endpoint with the configured auth."}
+						</p>
+					)}
 				</div>
 
 				{/* Main Configuration */}
@@ -1371,6 +1461,108 @@ function EventConfiguration({
 									<p className="mt-1 text-sm text-muted-foreground font-mono">
 										{event.id}
 									</p>
+								</div>
+								<div>
+									<Label>Case Keys</Label>
+									<p className="mt-0.5 text-xs text-muted-foreground">
+										Tie every run to a business object for process mining: each
+										key is read from the payload at the given path (e.g.{" "}
+										<span className="font-mono">order.id</span>) and groups runs
+										into cases across apps.
+									</p>
+									{isEditing ? (
+										<div className="mt-2 space-y-2">
+											{caseKeyRows.map((row, index) => (
+												<div
+													key={`case-key-${String(index)}`}
+													className="flex items-center gap-2"
+												>
+													<Input
+														value={row.key}
+														placeholder="order_id"
+														className="h-8 w-36 font-mono text-xs"
+														onChange={(e) => {
+															const rows = [...caseKeyRows];
+															rows[index] = { ...row, key: e.target.value };
+															commitCaseKeyRows(rows);
+														}}
+													/>
+													<span className="text-xs text-muted-foreground">
+														←
+													</span>
+													<Input
+														value={row.path}
+														placeholder="order.id"
+														className="h-8 flex-1 font-mono text-xs"
+														onChange={(e) => {
+															const rows = [...caseKeyRows];
+															rows[index] = { ...row, path: e.target.value };
+															commitCaseKeyRows(rows);
+														}}
+													/>
+													<Button
+														variant="ghost"
+														size="icon"
+														className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+														aria-label="Remove case key"
+														onClick={() =>
+															commitCaseKeyRows(
+																caseKeyRows.filter(
+																	(_, rowIndex) => rowIndex !== index,
+																),
+															)
+														}
+													>
+														<Trash2 className="h-3.5 w-3.5" />
+													</Button>
+												</div>
+											))}
+											<Button
+												variant="outline"
+												size="sm"
+												disabled={caseKeyRows.length >= 8}
+												onClick={() =>
+													commitCaseKeyRows([
+														...caseKeyRows,
+														{ key: "", path: "" },
+													])
+												}
+											>
+												<Plus className="mr-1.5 h-3.5 w-3.5" />
+												Add case key
+											</Button>
+										</div>
+									) : (
+										<button
+											type="button"
+											className="mt-1 w-full rounded px-2 py-1 -mx-2 text-left transition-colors hover:bg-muted/60"
+											onClick={enterEdit}
+										>
+											{Object.keys(event.correlation_mappings ?? {}).length >
+											0 ? (
+												<span className="flex flex-wrap gap-1">
+													{Object.entries(event.correlation_mappings ?? {}).map(
+														([key, path]) => (
+															<Badge
+																key={key}
+																variant="secondary"
+																className="gap-1 font-mono text-[10px] font-normal"
+															>
+																{key}
+																<span className="text-muted-foreground">
+																	← {path}
+																</span>
+															</Badge>
+														),
+													)}
+												</span>
+											) : (
+												<span className="text-sm text-muted-foreground">
+													No case keys — click to configure process mining
+												</span>
+											)}
+										</button>
+									)}
 								</div>
 							</CardContent>
 						</Card>

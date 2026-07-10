@@ -533,6 +533,7 @@ export class WebBoardState implements IBoardState {
 		lastMeta?: ILogMetadata,
 		offset?: number,
 		limit?: number,
+		includeNodes?: boolean,
 	): Promise<ILogMetadata[]> {
 		const params = new URLSearchParams();
 		if (nodeId) params.set("node_id", nodeId);
@@ -541,6 +542,7 @@ export class WebBoardState implements IBoardState {
 		if (status) params.set("status", status);
 		if (offset !== undefined) params.set("offset", offset.toString());
 		if (limit !== undefined) params.set("limit", limit.toString());
+		if (includeNodes) params.set("include_nodes", "true");
 
 		const queryString = params.toString();
 		try {
@@ -667,7 +669,11 @@ export class WebBoardState implements IBoardState {
 	): Promise<IApplyFlowScriptResponse> {
 		return apiPost<IApplyFlowScriptResponse>(
 			`apps/${appId}/board/${boardId}/flowscript/apply`,
-			{ flowscript, current_layer: currentLayer, allow_deletions: allowDeletions },
+			{
+				flowscript,
+				current_layer: currentLayer,
+				allow_deletions: allowDeletions,
+			},
 			this.backend.auth,
 		);
 	}

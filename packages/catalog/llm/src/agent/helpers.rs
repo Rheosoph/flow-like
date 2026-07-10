@@ -1133,8 +1133,9 @@ pub async fn execute_agent_streaming(
     let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
     for mcp_config in &agent.mcp_servers {
-        let transport =
-            rmcp::transport::StreamableHttpClientTransport::from_uri(mcp_config.uri.as_str());
+        let transport = rmcp::transport::StreamableHttpClientTransport::from_config(
+            crate::agent::mcp_transport_config(mcp_config),
+        );
         let client = match client_info.clone().serve(transport).await {
             Ok(c) => c,
             Err(e) => {

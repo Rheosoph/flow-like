@@ -1,9 +1,17 @@
 import type { ITeamState } from "@flow-like/flow-like-ui";
 import type {
+	IAccessibleApp,
+	IAppConnectionsResponse,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCaseDetailResponse,
+	IProcessCasesResponse,
+	IProcessGraphResponse,
+	IProcessNote,
+	IRemoteEvent,
+	IRemoteEventDetail,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import {
 	type WebBackendRef,
@@ -150,5 +158,186 @@ export class WebTeamState implements ITeamState {
 
 	async removeUser(appId: string, user_id: string): Promise<void> {
 		await apiDelete(`apps/${appId}/team/${user_id}`, this.backend.auth);
+	}
+
+	async getAppConnections(appId: string): Promise<IAppConnectionsResponse> {
+		return await apiGet<IAppConnectionsResponse>(
+			`apps/${appId}/connections`,
+			this.backend.auth,
+		);
+	}
+
+	async addAppConnection(
+		appId: string,
+		sourceAppId: string,
+		roleId: string,
+	): Promise<void> {
+		await apiPost(
+			`apps/${appId}/connections`,
+			{ source_app_id: sourceAppId, role_id: roleId },
+			this.backend.auth,
+		);
+	}
+
+	async requestAppConnection(
+		appId: string,
+		targetAppId: string,
+		comment?: string,
+	): Promise<void> {
+		await apiPut(
+			`apps/${appId}/connections/request`,
+			{ target_app_id: targetAppId, comment },
+			this.backend.auth,
+		);
+	}
+
+	async acceptAppConnection(
+		appId: string,
+		connectionId: string,
+		roleId: string,
+	): Promise<void> {
+		await apiPost(
+			`apps/${appId}/connections/queue/${connectionId}`,
+			{ role_id: roleId },
+			this.backend.auth,
+		);
+	}
+
+	async rejectAppConnection(
+		appId: string,
+		connectionId: string,
+	): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/connections/queue/${connectionId}`,
+			this.backend.auth,
+		);
+	}
+
+	async updateAppConnectionRole(
+		appId: string,
+		connectionId: string,
+		roleId: string,
+	): Promise<void> {
+		await apiPut(
+			`apps/${appId}/connections/${connectionId}`,
+			{ role_id: roleId },
+			this.backend.auth,
+		);
+	}
+
+	async removeAppConnection(
+		appId: string,
+		connectionId: string,
+	): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/connections/${connectionId}`,
+			this.backend.auth,
+		);
+	}
+
+	async getAccessibleApps(appId: string): Promise<IAccessibleApp[]> {
+		return await apiGet<IAccessibleApp[]>(
+			`apps/${appId}/connections/accessible`,
+			this.backend.auth,
+		);
+	}
+
+	async getRemoteTables(appId: string, targetAppId: string): Promise<string[]> {
+		return await apiGet<string[]>(
+			`apps/${appId}/connections/${targetAppId}/tables`,
+			this.backend.auth,
+		);
+	}
+
+	async getRemoteEvents(
+		appId: string,
+		targetAppId: string,
+	): Promise<IRemoteEvent[]> {
+		return await apiGet<IRemoteEvent[]>(
+			`apps/${appId}/connections/${targetAppId}/events`,
+			this.backend.auth,
+		);
+	}
+
+	async getRemoteEventDetail(
+		appId: string,
+		targetAppId: string,
+		eventId: string,
+	): Promise<IRemoteEventDetail> {
+		return await apiGet<IRemoteEventDetail>(
+			`apps/${appId}/connections/${targetAppId}/events/${eventId}/detail`,
+			this.backend.auth,
+		);
+	}
+
+	async getConnectionGraph(
+		appId: string,
+		days?: number,
+	): Promise<IProcessGraphResponse> {
+		const params = new URLSearchParams();
+		if (days !== undefined) params.set("days", days.toString());
+		return await apiGet<IProcessGraphResponse>(
+			`apps/${appId}/connections/graph?${params}`,
+			this.backend.auth,
+		);
+	}
+
+	async getProcessCases(
+		appId: string,
+		days?: number,
+	): Promise<IProcessCasesResponse> {
+		const params = new URLSearchParams();
+		if (days !== undefined) params.set("days", days.toString());
+		return await apiGet<IProcessCasesResponse>(
+			`apps/${appId}/connections/cases?${params}`,
+			this.backend.auth,
+		);
+	}
+
+	async getProcessCaseRuns(
+		appId: string,
+		caseId: string,
+	): Promise<IProcessCaseDetailResponse> {
+		return await apiGet<IProcessCaseDetailResponse>(
+			`apps/${appId}/connections/cases/${caseId}`,
+			this.backend.auth,
+		);
+	}
+
+	async getProcessNotes(appId: string): Promise<IProcessNote[]> {
+		return await apiGet<IProcessNote[]>(
+			`apps/${appId}/connections/notes`,
+			this.backend.auth,
+		);
+	}
+
+	async createProcessNote(
+		appId: string,
+		content: string,
+	): Promise<IProcessNote> {
+		return await apiPut<IProcessNote>(
+			`apps/${appId}/connections/notes`,
+			{ content },
+			this.backend.auth,
+		);
+	}
+
+	async updateProcessNote(
+		appId: string,
+		noteId: string,
+		content: string,
+	): Promise<IProcessNote> {
+		return await apiPut<IProcessNote>(
+			`apps/${appId}/connections/notes/${noteId}`,
+			{ content },
+			this.backend.auth,
+		);
+	}
+
+	async deleteProcessNote(appId: string, noteId: string): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/connections/notes/${noteId}`,
+			this.backend.auth,
+		);
 	}
 }

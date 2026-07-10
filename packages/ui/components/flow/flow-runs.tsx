@@ -7,6 +7,7 @@ import {
 	CloudIcon,
 	CornerRightUpIcon,
 	EllipsisVerticalIcon,
+	FlameIcon,
 	HardDriveIcon,
 	Loader2Icon,
 	LogsIcon,
@@ -136,6 +137,8 @@ const FlowRunsComponent = ({
 		setFilter,
 		refetchLogs,
 		isLoading,
+		heatmapEnabled,
+		setHeatmapEnabled,
 	} = useLogAggregation();
 	const [localFilter, setLocalFilter] = useState<ILogAggregationFilter>({
 		appId,
@@ -265,13 +268,30 @@ const FlowRunsComponent = ({
 		<div className="flex flex-col gap-2 p-4 bg-background grow h-full max-h-full overflow-hidden">
 			<div className="flex flex-row items-center justify-between">
 				<h3>Runs</h3>
-				<Button
-					variant={"outline"}
-					size={"icon"}
-					onClick={() => refetchLogs(backend)}
-				>
-					<RefreshCcwIcon className="w-4 h-4" />
-				</Button>
+				<div className="flex flex-row items-center gap-1.5">
+					<Button
+						variant={heatmapEnabled ? "default" : "outline"}
+						size={"icon"}
+						title="Activity heatmap — overlay run counts and errors per node"
+						aria-pressed={heatmapEnabled}
+						onClick={() => {
+							const next = !heatmapEnabled;
+							setHeatmapEnabled(next);
+							// Remote runs only carry per-node summaries when explicitly
+							// requested — refetch once so the heatmap has data.
+							if (next) void refetchLogs(backend);
+						}}
+					>
+						<FlameIcon className="w-4 h-4" />
+					</Button>
+					<Button
+						variant={"outline"}
+						size={"icon"}
+						onClick={() => refetchLogs(backend)}
+					>
+						<RefreshCcwIcon className="w-4 h-4" />
+					</Button>
+				</div>
 			</div>
 			<div className="flex flex-row items-center gap-2">
 				<Select

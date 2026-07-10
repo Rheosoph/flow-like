@@ -8,7 +8,10 @@ import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
 import { IExecutionMode } from "../../lib/schema/flow/board";
-import { IEventExecutionMode } from "../../lib/schema/flow/event";
+import {
+	IEventExecutionMode,
+	IEventExposure,
+} from "../../lib/schema/flow/event";
 import type { IHub } from "../../lib/schema/hub/hub";
 import { convertJsonToUint8Array } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
@@ -89,6 +92,8 @@ export function EventForm({
 		execution_mode:
 			(event?.execution_mode as IEventExecutionMode | undefined) ??
 			IEventExecutionMode.Local,
+		exposure:
+			(event?.exposure as IEventExposure | undefined) ?? IEventExposure.Public,
 	});
 	const [pathError, setPathError] = useState<string | null>(null);
 

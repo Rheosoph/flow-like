@@ -7,6 +7,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"api",
 	"board",
 	"comments",
+	"connections",
 	"data",
 	"db",
 	"events",
@@ -133,7 +134,7 @@ export async function apiFetch<T>(
 	};
 
 	if (auth?.user?.access_token) {
-		headers["Authorization"] = `Bearer ${auth.user.access_token}`;
+		headers.Authorization = `Bearer ${auth.user.access_token}`;
 	}
 
 	const url = constructApiUrl(path);

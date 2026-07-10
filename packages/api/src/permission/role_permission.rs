@@ -30,6 +30,13 @@ bitflags! {
         const ReadWidgets       =   0b00000000_10000000_00000000_00000000;
         const WriteWidgets      =   0b00000001_00000000_00000000_00000000;
         const WriteRoutes       =   0b00000010_00000000_00000000_00000000;
+        /// Database-only read access: query/list the app's databases without
+        /// being able to read its files. `ReadFiles` also implies database
+        /// read access for backwards compatibility.
+        const ReadDatabase      =   0b00000100_00000000_00000000_00000000;
+        /// Database-only write access, without file write access.
+        /// `WriteFiles` also implies database write access.
+        const WriteDatabase     =   0b00001000_00000000_00000000_00000000;
     }
 }
 
