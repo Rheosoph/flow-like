@@ -15,6 +15,35 @@ export type IAttachment =
 			page?: number;
 	  };
 
+/**
+ * An a2ui widget instance embedded in a chat message. `component` is the
+ * self-contained `widgetInstance` component (with `inlineWidgetDef` and
+ * `actionBindings`) produced by the backend Push Widget node, rendered inline
+ * via A2UIRenderer.
+ */
+export interface IChatWidget {
+	instance_id: string;
+	widget_id: string;
+	surface_id: string;
+	component: Record<string, unknown>;
+	/**
+	 * Ordered a2ui update messages targeting this widget (raw wire payloads).
+	 * Replayed over `component` at render time so element nodes work both
+	 * before the push (attached by the backend) and after it (streamed live).
+	 */
+	updates?: unknown[];
+	/**
+	 * Originating run context, set when the widget is embedded outside its own
+	 * app chat (e.g. the global chat calling an app's chat event). Widget
+	 * actions execute against this board instead of the hosting chat's context.
+	 */
+	origin?: {
+		appId: string;
+		boardId?: string;
+		eventId?: string;
+	};
+}
+
 export type PlanStepStatus = "planned" | "progress" | "done" | "failed";
 
 export interface IPlanStep {
@@ -78,6 +107,8 @@ export interface IMessage {
 	usage_stats?: IChatUsageStat[];
 	/** Apps this message acted on/referenced — rendered as clickable chips under the message. */
 	app_refs?: string[];
+	/** a2ui widgets embedded in this message (from the Push Widget node). */
+	widgets?: IChatWidget[];
 }
 
 export interface ISession {

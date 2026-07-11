@@ -1337,17 +1337,28 @@ export function useExecuteAction() {
 						const actionId = context.actionId as string | undefined;
 						if (!actionId) {
 							console.warn("[A2UI] widget_event missing actionId");
+							toast.warning("Widget action has no action id configured.");
 							break;
 						}
 
 						// Look up the binding from the widget instance's action bindings
 						const binding = widgetInstance?.actionBindings[actionId];
 						if (!binding) {
+							const available = Object.keys(
+								widgetInstance?.actionBindings ?? {},
+							);
 							console.warn(
 								"[A2UI] widget_event: no binding found for actionId:",
 								actionId,
 								"available bindings:",
 								widgetInstance?.actionBindings,
+							);
+							toast.warning(
+								`Widget action '${actionId}' is not bound to a workflow${
+									available.length
+										? ` (bound: ${available.join(", ")})`
+										: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed."
+								}`,
 							);
 							break;
 						}
@@ -1356,6 +1367,9 @@ export function useExecuteAction() {
 							console.warn(
 								"[A2UI] widget_event: only workflow bindings are supported for execution, got:",
 								binding,
+							);
+							toast.warning(
+								`Widget action '${actionId}' has a non-workflow binding and cannot run here.`,
 							);
 							break;
 						}
@@ -1448,6 +1462,11 @@ export function useExecuteAction() {
 								);
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event:", error);
+								toast.error(
+									`Widget action '${actionId}' failed: ${
+										error instanceof Error ? error.message : String(error)
+									}`,
+								);
 							}
 						} else {
 							console.warn(
@@ -1456,6 +1475,9 @@ export function useExecuteAction() {
 									appId: effectiveAppId,
 									boardId: effectiveBoardId,
 								},
+							);
+							toast.warning(
+								"Widget action cannot run: missing app or board context.",
 							);
 						}
 						break;

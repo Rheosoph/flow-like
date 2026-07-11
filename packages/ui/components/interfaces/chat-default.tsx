@@ -29,10 +29,11 @@ import {
 	IRole,
 	Response,
 } from "../../lib";
+import { getCurrentPageContext } from "../../lib/page-context";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import { useSetQueryParams } from "../../lib/set-query-params";
-import { getCurrentPageContext } from "../../lib/page-context";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
+import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import {
@@ -60,10 +61,14 @@ import {
 	type IMessage,
 	chatDb,
 } from "./chat-default/chat-db";
+import {
+	ChatWidgetExecutionProvider,
+	type RunWidgetAction,
+} from "./chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
-import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatHistory } from "./chat-default/history";
+import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
@@ -286,6 +291,7 @@ function cloneResponseMessageForCompletion(
 	clonedMessage.plan_steps = undefined;
 	clonedMessage.current_step_id = undefined;
 	clonedMessage.usage_stats = undefined;
+	clonedMessage.widgets = undefined;
 
 	return clonedMessage;
 }
@@ -1110,10 +1116,45 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				const lastMessages =
 					messagesRef.current?.slice(-history_elements) ?? [];
 
+				// Let vision-capable models see the rendered UI: snapshot the
+				// latest assistant message's embedded widgets and attach them to
+				// the outgoing turn only — the persisted user message stays clean.
+				let payloadHistoryMessage = historyMessage;
+				if (config?.attach_widget_snapshots !== false) {
+					try {
+						const latestWidgets = [...lastMessages]
+							.reverse()
+							.find(
+								(message) =>
+									message.inner.role === IRole.Assistant &&
+									message.widgets?.length,
+							)?.widgets;
+						if (latestWidgets?.length) {
+							const snapshots = await captureWidgetSnapshots(
+								latestWidgets.map((widget) => widget.instance_id),
+							);
+							if (snapshots.length) {
+								payloadHistoryMessage = {
+									...historyMessage,
+									content: [
+										...(historyMessage.content as IContent[]),
+										...snapshots.map((url) => ({
+											type: IContentType.IImageURL,
+											image_url: { url },
+										})),
+									],
+								};
+							}
+						}
+					} catch (error) {
+						console.warn("[Chat] widget snapshot failed:", error);
+					}
+				}
+
 				const payload = createPayload(
 					userMessage,
 					lastMessages,
-					historyMessage,
+					payloadHistoryMessage,
 					localState,
 					globalState,
 					activeTools ?? [],
@@ -1478,6 +1519,111 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		setQueryParams("message", undefined);
 	}, [setQueryParams]);
 
+	// Runs a widget action triggered from an embedded chat widget. Like the app
+	// view, this is a plain BOARD run starting at the bound node (payload.id) —
+	// never the chat event, whose node would reject the widget payload. The
+	// run executes against the widget's own app/board (for widgets of this
+	// chat that equals appId/event.board_id; a widget `origin` may point
+	// elsewhere). Its a2ui events (forwarded via onA2UIEvents) update the
+	// widget in place; toasts surface via the executeBoard transport; and any
+	// chat pushes from the triggered workflow become a new assistant message.
+	const runWidgetAction = useCallback<RunWidgetAction>(
+		async (actionAppId, actionBoardId, runPayload, onA2UIEvents) => {
+			const responseMessage = createResponseMessage(
+				sessionIdParameter,
+				appId,
+				event.name,
+			);
+			let intermediateResponse = Response.default();
+			const attachments = new Map<string, IAttachment>();
+
+			const result = await backend.boardState.executeBoard(
+				actionAppId,
+				actionBoardId,
+				runPayload,
+				false,
+				undefined,
+				(events) => {
+					if (events.length) {
+						console.debug(
+							"[ChatWidget] action run events:",
+							events.map((e) => e.event_type),
+						);
+					}
+					handleNavigationEvents(events);
+					onA2UIEvents?.(events);
+
+					const processed = processChatEvents(events, {
+						intermediateResponse,
+						responseMessage,
+						attachments,
+						tmpLocalState: null,
+						tmpGlobalState: null,
+						done: false,
+						appId,
+						eventId: event.id,
+						sessionId: sessionIdParameter,
+					});
+
+					intermediateResponse = processed.intermediateResponse;
+					Object.assign(responseMessage, processed.responseMessage);
+
+					if (processed.interactions?.length) {
+						addInteractions(processed.interactions);
+					}
+
+					// The assistant bubble appears only once the action actually
+					// streams chat content — a pure widget update shows nothing.
+					if (processed.shouldUpdate) {
+						chatRef.current?.pushCurrentMessageUpdate({
+							...processed.responseMessage,
+						});
+						chatRef.current?.scrollToBottom();
+					}
+				},
+			);
+
+			// LogLevel::Error = 3 — a node failure inside the run resolves normally
+			// (errors are run logs, not exceptions), so surface it explicitly.
+			if ((result?.log_level ?? 0) >= 3) {
+				toast.error(
+					"Widget action failed — check the flow's Runs panel for the failing node.",
+				);
+			}
+
+			const textContent =
+				typeof responseMessage.inner.content === "string"
+					? responseMessage.inner.content.trim()
+					: (responseMessage.inner.content?.length ?? 0);
+			const hasContent = Boolean(
+				textContent ||
+					responseMessage.files?.length ||
+					responseMessage.widgets?.length ||
+					responseMessage.plan_steps?.length,
+			);
+
+			// Only persist a new assistant message when the action produced chat
+			// content; a pure in-place widget update leaves no residue.
+			if (hasContent) {
+				await chatDb.messages.put(responseMessage);
+			}
+			chatRef.current?.clearCurrentMessageUpdate();
+			if (hasContent) {
+				chatRef.current?.scrollToBottom();
+			}
+
+			return result;
+		},
+		[
+			backend,
+			appId,
+			event,
+			sessionIdParameter,
+			addInteractions,
+			handleNavigationEvents,
+		],
+	);
+
 	return (
 		<>
 			{!messagesLoaded ? (
@@ -1495,17 +1641,22 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					isSending={isSendingFromWelcome}
 				/>
 			) : (
-				<Chat
-					ref={chatRef}
-					sessionId={sessionIdParameter}
-					messages={messages}
-					onSendMessage={handleSendMessage}
-					onMessageUpdate={onMessageUpdate}
-					config={config}
-					isStreamActive={isStreamActive}
-					activeInteractions={activeInteractions}
-					onRespondToInteraction={handleRespondToInteraction}
-				/>
+				<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+					<Chat
+						ref={chatRef}
+						sessionId={sessionIdParameter}
+						messages={messages}
+						onSendMessage={handleSendMessage}
+						onMessageUpdate={onMessageUpdate}
+						config={config}
+						isStreamActive={isStreamActive}
+						activeInteractions={activeInteractions}
+						onRespondToInteraction={handleRespondToInteraction}
+						appId={appId}
+						boardId={event.board_id}
+						eventId={event.id}
+					/>
+				</ChatWidgetExecutionProvider>
 			)}
 			<AlertDialog
 				open={showPrefilledConfirm}

@@ -2349,9 +2349,7 @@ impl<'a> StructuralPlanner<'a> {
         };
         let node = find_board_node(self.existing, node_id)?;
         let base_input = match node.name.as_str() {
-            "struct_get"
-                if node_pin_literal_string(node, "field").as_deref() == Some(field) =>
-            {
+            "struct_get" if node_pin_literal_string(node, "field").as_deref() == Some(field) => {
                 "struct"
             }
             "struct_break"
@@ -2922,9 +2920,7 @@ impl<'a> StructuralPlanner<'a> {
                     self.lower_struct_field_access(base_source, field, target_layer)
                 }
             }
-            Expr::Index { base, index } => {
-                self.lower_array_index_access(base, index, target_layer)
-            }
+            Expr::Index { base, index } => self.lower_array_index_access(base, index, target_layer),
             Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } | Expr::Binary { .. } => None,
             Expr::Literal(_) => None,
         }
@@ -4040,10 +4036,7 @@ mod tests {
             .collect();
         assert_eq!(
             updates,
-            vec![(
-                second_id,
-                flow_like_types::Value::String("c".to_string())
-            )],
+            vec![(second_id, flow_like_types::Value::String("c".to_string()))],
             "editing the second occurrence must update exactly the second pin, by id"
         );
     }

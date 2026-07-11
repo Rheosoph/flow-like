@@ -6,6 +6,51 @@ import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
 
 type ComponentData = Record<string, unknown>;
 
+const BOUND_VALUE_KEYS = [
+	"literalString",
+	"literalNumber",
+	"literalBool",
+	"literalJson",
+	"literalOptions",
+	"path",
+] as const;
+
+function isBoundValueLike(value: unknown): boolean {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		BOUND_VALUE_KEYS.some((key) => key in (value as Record<string, unknown>))
+	);
+}
+
+/**
+ * Normalize a `setGeoMapViewport` payload into the BoundValue shape the GeoMap
+ * component resolves. The Update GeoMap node emits a flat `{latitude,
+ * longitude, zoom?, bearing?, pitch?}` object, while the component expects a
+ * bound `{center: {latitude, longitude}, zoom?, bearing?, pitch?}` — stored
+ * raw it resolves to `undefined` and the update silently no-ops.
+ */
+export function normalizeGeoMapViewport(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return undefined;
+	if (isBoundValueLike(raw)) return raw;
+
+	const obj = raw as Record<string, unknown>;
+	const center =
+		(obj.center as Record<string, unknown> | undefined) ??
+		(obj.latitude !== undefined && obj.longitude !== undefined
+			? { latitude: obj.latitude, longitude: obj.longitude }
+			: undefined);
+	if (!center) return undefined;
+
+	const normalized: Record<string, unknown> = { center };
+	for (const key of ["zoom", "bearing", "pitch"] as const) {
+		if (obj[key] !== undefined && obj[key] !== null) {
+			normalized[key] = obj[key];
+		}
+	}
+	return { literalJson: JSON.stringify(normalized) };
+}
+
 function getComponentData(component: SurfaceComponent): ComponentData {
 	return component.component as unknown as ComponentData;
 }
@@ -109,7 +154,7 @@ export function applyElementUpdate(
 		case "setGeoMapViewport":
 			return withComponentData(component, {
 				...data,
-				viewport: updateValue.viewport as { literalJson?: string } | undefined,
+				viewport: normalizeGeoMapViewport(updateValue.viewport),
 			});
 		case "setChartData":
 		case "setNivoData":
@@ -344,6 +389,90 @@ export function applyElementUpdate(
 	}
 }
 
+interface InlineWidgetChildDef {
+	id: string;
+	component: Record<string, unknown>;
+	style?: SurfaceComponent["style"];
+}
+
+/**
+ * Apply an element update to a child living inside a widget instance's
+ * `inlineWidgetDef.components`. Widget-internal children are not part of
+ * `surface.components`, so plain lookups miss them — this bridges element
+ * nodes (Set Element Value, Update GeoMap, Push CSV To Chart, …) to widget
+ * internals. Returns the next surface, or null when no widget owns the child.
+ */
+function applyWidgetInternalUpdate(
+	surface: Surface,
+	childId: string,
+	updateValue: Record<string, unknown>,
+): Surface | null {
+	const suffix = `-${childId}`;
+
+	for (const [hostId, host] of Object.entries(surface.components)) {
+		const hostData = getComponentData(host);
+		if (hostData.type !== "widgetInstance") continue;
+
+		const inlineDef = hostData.inlineWidgetDef as
+			| { components?: InlineWidgetChildDef[] }
+			| undefined;
+		const children = inlineDef?.components;
+		if (!children?.length) continue;
+
+		// Exact id first — a suffix hit (e.g. "title-text" for "text") must
+		// never shadow an exact-id child later in the array. createComponent
+		// keeps HEAD's create-top-level semantics unless the id is an exact
+		// widget child.
+		let index = children.findIndex((c) => c?.id === childId);
+		if (index < 0 && updateValue.type !== "createComponent") {
+			index = children.findIndex((c) => c?.id?.endsWith(suffix) ?? false);
+		}
+		if (index < 0) continue;
+
+		const child = children[index];
+		let nextChild: InlineWidgetChildDef;
+
+		if (updateValue.type === "createComponent") {
+			nextChild = {
+				id: child.id,
+				component: updateValue.component as Record<string, unknown>,
+				style: (updateValue.style as SurfaceComponent["style"]) ?? child.style,
+			};
+		} else {
+			const updated = applyElementUpdate(
+				{
+					id: child.id,
+					component:
+						child.component as unknown as SurfaceComponent["component"],
+					style: child.style,
+				},
+				updateValue,
+			);
+			nextChild = {
+				id: child.id,
+				component: updated.component as unknown as Record<string, unknown>,
+				style: updated.style,
+			};
+		}
+
+		const nextChildren = [...children];
+		nextChildren[index] = nextChild;
+
+		return {
+			...surface,
+			components: {
+				...surface.components,
+				[hostId]: withComponentData(host, {
+					...hostData,
+					inlineWidgetDef: { ...inlineDef, components: nextChildren },
+				}),
+			},
+		};
+	}
+
+	return null;
+}
+
 /**
  * Apply a single a2ui server message to one surface and return the next surface
  * (unchanged if the message targets a different surface or is a non-surface
@@ -450,6 +579,17 @@ export function applyA2UIMessage(
 			const updateValue = (value ?? {}) as Record<string, unknown>;
 			const component = surface.components[componentId];
 
+			// The target may live inside a widget instance's inline definition
+			// rather than as a top-level component.
+			if (!component) {
+				const nested = applyWidgetInternalUpdate(
+					surface,
+					componentId,
+					updateValue,
+				);
+				if (nested) return nested;
+			}
+
 			// createComponent creates the element if missing and replaces it if
 			// present, so it is handled here rather than in applyElementUpdate.
 			if (updateValue.type === "createComponent") {
@@ -478,5 +618,51 @@ export function applyA2UIMessage(
 		}
 		default:
 			return surface;
+	}
+}
+
+/**
+ * Normalize a runtime a2ui event payload (Rust serde: snake_case fields,
+ * `DataEntry { key, value }`) into the camelCase shapes `applyA2UIMessage`
+ * reads. `upsertElement` uses `element_id` on both sides and passes through.
+ */
+export function normalizeA2UIWireMessage(payload: unknown): A2UIServerMessage {
+	const raw = payload as Record<string, unknown>;
+	if (!raw || typeof raw !== "object") {
+		return raw as unknown as A2UIServerMessage;
+	}
+
+	switch (raw.type) {
+		case "dataModelUpdate": {
+			const surfaceId = (raw.surfaceId ?? raw.surface_id) as string;
+			const path = raw.path as string | undefined;
+			const rawContents =
+				(raw.contents as Array<Record<string, unknown>>) ?? [];
+			const contents = rawContents.map((entry) => ({
+				path: (entry.path ?? path ?? entry.key) as string,
+				value: entry.value,
+			}));
+			return {
+				type: "dataModelUpdate",
+				surfaceId,
+				contents,
+			} as A2UIServerMessage;
+		}
+		case "createElement":
+			return {
+				type: "createElement",
+				surfaceId: (raw.surfaceId ?? raw.surface_id) as string,
+				parentId: (raw.parentId ?? raw.parent_id) as string,
+				component: raw.component,
+				index: raw.index,
+			} as A2UIServerMessage;
+		case "removeElement":
+			return {
+				type: "removeElement",
+				surfaceId: (raw.surfaceId ?? raw.surface_id) as string,
+				elementId: (raw.elementId ?? raw.element_id) as string,
+			} as A2UIServerMessage;
+		default:
+			return raw as unknown as A2UIServerMessage;
 	}
 }

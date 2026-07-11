@@ -21,6 +21,7 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { normalizeGeoMapViewport } from "./apply-a2ui-message";
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
 import { applyStyleUpdate } from "./style-updates";
@@ -372,9 +373,6 @@ function RouteDialogRenderer({
 			} else if (updateType === "setMediaSource") {
 				updatedComponent = applyMediaSourceUpdate(component, updateValue);
 			} else if (updateType === "setGeoMapViewport") {
-				const viewport = updateValue.viewport as
-					| { literalJson?: string }
-					| undefined;
 				const componentData = component.component as unknown as Record<
 					string,
 					unknown
@@ -383,7 +381,7 @@ function RouteDialogRenderer({
 					...component,
 					component: {
 						...componentData,
-						viewport,
+						viewport: normalizeGeoMapViewport(updateValue.viewport),
 					} as unknown as SurfaceComponent["component"],
 				};
 			} else if (updateType === "setProps") {

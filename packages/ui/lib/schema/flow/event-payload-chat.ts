@@ -23,6 +23,7 @@ export interface IVoiceConfig {
 
 export interface IEventPayloadChat {
 	allow_file_upload?: boolean | null;
+	attach_widget_snapshots?: boolean | null;
 	allow_voice_input?: boolean | null;
 	allow_voice_output?: boolean | null;
 	allow_voice_mode?: boolean | null;

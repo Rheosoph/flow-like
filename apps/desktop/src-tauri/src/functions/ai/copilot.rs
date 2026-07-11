@@ -337,17 +337,32 @@ fn copilot_attachment_extension(media_type: &str) -> &'static str {
     }
 }
 
-fn build_copilot_attachments(images: &[ChatImage]) -> Result<Vec<UserMessageAttachment>, String> {
+const MAX_PROMPT_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Decode base64 prompt images and persist them as hash-deduped temp files.
+/// Shared by every provider that attaches images by path (GitHub Copilot
+/// SDK attachments, Codex `--image` flags).
+fn write_chat_image_temp_files(images: &[ChatImage]) -> Result<Vec<std::path::PathBuf>, String> {
     use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 
     let attachment_dir = std::env::temp_dir().join("flow-like-copilot-attachments");
     std::fs::create_dir_all(&attachment_dir)
-        .map_err(|e| format!("Failed to create Copilot attachment directory: {}", e))?;
+        .map_err(|e| format!("Failed to create attachment directory: {}", e))?;
 
     images
         .iter()
         .enumerate()
         .map(|(index, image)| {
+            // Bound the decoded size before allocating: base64 inflates by 4/3.
+            let estimated_bytes = image.data.len() / 4 * 3;
+            if estimated_bytes > MAX_PROMPT_IMAGE_BYTES {
+                return Err(format!(
+                    "Prompt image {} is too large ({} MB, max {} MB)",
+                    index + 1,
+                    estimated_bytes / (1024 * 1024),
+                    MAX_PROMPT_IMAGE_BYTES / (1024 * 1024)
+                ));
+            }
             let bytes = STANDARD
                 .decode(&image.data)
                 .map_err(|e| format!("Failed to decode prompt image {}: {}", index + 1, e))?;
@@ -357,21 +372,32 @@ fn build_copilot_attachments(images: &[ChatImage]) -> Result<Vec<UserMessageAtta
 
             if !file_path.exists() {
                 std::fs::write(&file_path, &bytes).map_err(|e| {
-                    format!(
-                        "Failed to write Copilot attachment {}: {}",
-                        file_path.display(),
-                        e
-                    )
+                    format!("Failed to write attachment {}: {}", file_path.display(), e)
                 })?;
             }
 
-            Ok(UserMessageAttachment {
+            Ok(file_path)
+        })
+        .collect()
+}
+
+fn build_copilot_attachments(images: &[ChatImage]) -> Result<Vec<UserMessageAttachment>, String> {
+    let paths = write_chat_image_temp_files(images)?;
+    Ok(paths
+        .into_iter()
+        .enumerate()
+        .map(|(index, file_path)| {
+            let extension = file_path
+                .extension()
+                .map(|e| e.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "bin".to_string());
+            UserMessageAttachment {
                 attachment_type: AttachmentType::File,
                 path: file_path.to_string_lossy().into_owned(),
                 display_name: format!("prompt-image-{}.{}", index + 1, extension),
-            })
+            }
         })
-        .collect()
+        .collect())
 }
 
 /// Unified copilot chat command that handles both board and UI generation
@@ -450,6 +476,7 @@ pub async fn copilot_chat(
                     selected_node_ids.as_deref().unwrap_or(&[]),
                     current_surface.as_ref(),
                     user_prompt,
+                    current_images,
                     history.unwrap_or_default(),
                     channel,
                     None,
@@ -903,6 +930,7 @@ pub async fn global_chat(
                     &[],
                     None,
                     user_prompt,
+                    current_images,
                     history,
                     sink,
                     Some(context),
@@ -1124,6 +1152,7 @@ async fn external_code_agent_chat_internal(
     selected_node_ids: &[String],
     current_surface: Option<&Vec<SurfaceComponent>>,
     user_prompt: String,
+    current_images: Option<Vec<ChatImage>>,
     history: Vec<UnifiedChatMessage>,
     channel: Channel<String>,
     global: Option<String>,
@@ -1188,6 +1217,7 @@ async fn external_code_agent_chat_internal(
                 &mcp_bridge.url,
                 prompt,
                 tool_names,
+                current_images.as_deref().unwrap_or_default(),
             ) {
                 Ok(invocation) => {
                     send_external_progress_event(
@@ -2627,13 +2657,14 @@ impl ExternalAgentInvocation {
         mcp_url: &str,
         prompt: String,
         tool_names: Vec<String>,
+        images: &[ChatImage],
     ) -> Result<Self, String> {
         match backend {
             FlowPilotAgentBackendKind::Codex => {
-                Ok(Self::codex(backend, cli, model_id, mcp_url, prompt))
+                Self::codex(backend, cli, model_id, mcp_url, prompt, images)
             }
             FlowPilotAgentBackendKind::ClaudeCode => {
-                Self::claude(backend, cli, model_id, mcp_url, prompt, tool_names)
+                Self::claude(backend, cli, model_id, mcp_url, prompt, tool_names, images)
             }
             FlowPilotAgentBackendKind::GithubCopilot => Err(
                 "GitHub Copilot uses the direct SDK backend, not the external runner.".to_string(),
@@ -2647,7 +2678,8 @@ impl ExternalAgentInvocation {
         model_id: &str,
         mcp_url: &str,
         prompt: String,
-    ) -> Self {
+        images: &[ChatImage],
+    ) -> Result<Self, String> {
         // Mirrors @openai/codex-sdk's stdio protocol: spawn
         // `codex exec --experimental-json`, pass config overrides as repeated
         // --config entries, and stream JSONL events from stdout.
@@ -2686,8 +2718,17 @@ impl ExternalAgentInvocation {
         if !model_id.trim().is_empty() && model_id != "default" {
             args.extend(["--model".to_string(), model_id.to_string()]);
         }
+        // `codex exec` attaches images to the initial prompt via repeated
+        // `--image` flags; the prompt itself stays on stdin. The `=` form is
+        // required: bare `--image <file>` parses greedily (num_args=1..) and
+        // would swallow any argument appended after it.
+        if !images.is_empty() {
+            for path in write_chat_image_temp_files(images)? {
+                args.push(format!("--image={}", path.display()));
+            }
+        }
 
-        Self {
+        Ok(Self {
             backend,
             executable: cli.executable,
             path_dirs: cli.path_dirs,
@@ -2695,7 +2736,7 @@ impl ExternalAgentInvocation {
             prompt,
             final_output_path: None,
             envs: Vec::new(),
-        }
+        })
     }
 
     fn claude(
@@ -2705,6 +2746,7 @@ impl ExternalAgentInvocation {
         mcp_url: &str,
         prompt: String,
         tool_names: Vec<String>,
+        images: &[ChatImage],
     ) -> Result<Self, String> {
         let mcp_config_path = std::env::temp_dir().join(format!(
             "flowpilot-claude-mcp-{}.json",
@@ -2755,14 +2797,44 @@ impl ExternalAgentInvocation {
         if !model_id.trim().is_empty() && model_id != "default" {
             args.extend(["--model".to_string(), model_id.to_string()]);
         }
-        args.push(prompt.clone());
+
+        // Text-only turns keep the positional-prompt form. Image turns switch
+        // to stream-json stdin input so the user message can carry Anthropic
+        // image content blocks (requires --output-format stream-json, already
+        // set above). The stdin writer thread sends `prompt` and closes the
+        // pipe, which ends the turn.
+        let stdin_prompt = if images.is_empty() {
+            args.push(prompt.clone());
+            String::new()
+        } else {
+            args.extend(["--input-format".to_string(), "stream-json".to_string()]);
+            let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
+            for image in images {
+                content.push(serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image.media_type,
+                        "data": image.data,
+                    }
+                }));
+            }
+            let message = serde_json::json!({
+                "type": "user",
+                "message": { "role": "user", "content": content }
+            });
+            let mut line = serde_json::to_string(&message)
+                .map_err(|e| format!("Failed to serialize Claude user message: {e}"))?;
+            line.push('\n');
+            line
+        };
 
         Ok(Self {
             backend,
             executable: cli.executable,
             path_dirs: cli.path_dirs,
             args,
-            prompt: String::new(),
+            prompt: stdin_prompt,
             // Claude Code's MCP client aborts tool calls at MCP_TOOL_TIMEOUT
             // (default 300s). FlowPilot's frontend-bridge tools (e.g. UI
             // generation via flowpilot_widget) can legitimately run longer, so
@@ -4070,7 +4142,11 @@ fn codex_binary_name() -> &'static str {
 }
 
 fn claude_binary_name() -> &'static str {
-    if cfg!(windows) { "claude.exe" } else { "claude" }
+    if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    }
 }
 
 fn codex_target() -> Option<(&'static str, &'static str)> {
@@ -4287,9 +4363,8 @@ fn claude_ide_extension_binaries(home: &Path) -> Vec<PathBuf> {
             .collect();
         // Sort by parsed version (numeric, newest first) — a lexical sort would
         // rank "2.1.9" above "2.1.204".
-        extension_dirs.sort_by(|a, b| {
-            claude_extension_version_key(b).cmp(&claude_extension_version_key(a))
-        });
+        extension_dirs
+            .sort_by(|a, b| claude_extension_version_key(b).cmp(&claude_extension_version_key(a)));
         for dir in extension_dirs {
             let candidate = dir
                 .join("resources")
@@ -4986,7 +5061,10 @@ fn parse_claude_model_catalog(entries: &[serde_json::Value]) -> Vec<CopilotModel
         else {
             continue;
         };
-        if models.iter().any(|existing: &CopilotModelInfo| existing.id == id) {
+        if models
+            .iter()
+            .any(|existing: &CopilotModelInfo| existing.id == id)
+        {
             continue;
         }
         let name = entry
@@ -5594,6 +5672,7 @@ mod tests {
             "http://127.0.0.1:12345/mcp",
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
+            &[],
         )
         .expect("codex invocation should build");
 
@@ -5658,6 +5737,7 @@ mod tests {
             "http://127.0.0.1:12345/mcp",
             "hello".to_string(),
             vec!["edit_flowscript".to_string()],
+            &[],
         )
         .expect("codex invocation should build");
 
@@ -5713,7 +5793,11 @@ mod tests {
 
         let models = parse_claude_model_catalog(&entries);
 
-        assert_eq!(models.len(), 3, "duplicate value and value-less entries drop");
+        assert_eq!(
+            models.len(),
+            3,
+            "duplicate value and value-less entries drop"
+        );
         assert_eq!(models[0].id, "default");
         assert_eq!(models[0].name, "Default (recommended)");
         assert_eq!(models[1].id, "sonnet");
@@ -5742,6 +5826,7 @@ mod tests {
                 "get_declarations".to_string(),
                 "edit_flowscript".to_string(),
             ],
+            &[],
         )
         .expect("claude invocation should build");
 
@@ -5761,7 +5846,9 @@ mod tests {
         );
         assert!(invocation.args.contains(&"sonnet".to_string()));
         assert!(
-            invocation.args.contains(&"--include-partial-messages".to_string()),
+            invocation
+                .args
+                .contains(&"--include-partial-messages".to_string()),
             "claude invocation must stream partial messages for live tokens: {:?}",
             invocation.args
         );
@@ -5782,6 +5869,94 @@ mod tests {
         assert!(config.contains("flowpilot"));
         assert!(config.contains("127.0.0.1:23456/mcp"));
         let _ = std::fs::remove_file(config_path);
+    }
+
+    // 1x1 transparent PNG — enough for arg/stdin plumbing assertions (real
+    // snapshots must be larger for the model to perceive them).
+    fn test_chat_image() -> ChatImage {
+        ChatImage {
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+            media_type: "image/png".to_string(),
+        }
+    }
+
+    #[test]
+    fn codex_invocation_attaches_images_via_image_flag() {
+        let invocation = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::Codex,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/codex"),
+                CliResolutionSource::Path,
+            ),
+            "default",
+            "http://127.0.0.1:12345/mcp",
+            "hello".to_string(),
+            vec!["edit_flowscript".to_string()],
+            &[test_chat_image()],
+        )
+        .expect("codex invocation should build");
+
+        // `--image=<path>` single-arg form: the bare two-arg form parses
+        // greedily and would swallow trailing arguments as image paths.
+        assert!(
+            invocation
+                .args
+                .iter()
+                .any(|arg| arg.starts_with("--image=") && arg.ends_with(".png")),
+            "codex invocation must attach images via --image=<path>: {:?}",
+            invocation.args
+        );
+        assert!(
+            invocation.prompt.contains("hello"),
+            "codex prompt must stay on stdin"
+        );
+    }
+
+    #[test]
+    fn claude_invocation_sends_images_as_stream_json_stdin() {
+        let invocation = ExternalAgentInvocation::new(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            CliResolution::new(
+                std::path::PathBuf::from("/usr/bin/claude"),
+                CliResolutionSource::Path,
+            ),
+            "default",
+            "http://127.0.0.1:23456/mcp",
+            "hello".to_string(),
+            vec![],
+            &[test_chat_image()],
+        )
+        .expect("claude invocation should build");
+
+        assert!(
+            invocation
+                .args
+                .windows(2)
+                .any(|args| args == ["--input-format", "stream-json"]),
+            "image turns must switch Claude to stream-json stdin input: {:?}",
+            invocation.args
+        );
+        assert!(
+            !invocation.args.contains(&"hello".to_string()),
+            "image turns must not also pass the prompt positionally: {:?}",
+            invocation.args
+        );
+
+        let line: serde_json::Value = serde_json::from_str(invocation.prompt.trim())
+            .expect("stdin prompt is a single JSON user message line");
+        assert_eq!(line["type"], "user");
+        let content = line["message"]["content"]
+            .as_array()
+            .expect("content blocks");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "hello");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+
+        if let Some(config_path) = invocation.final_output_path.as_ref() {
+            let _ = std::fs::remove_file(config_path);
+        }
     }
 
     #[test]
@@ -5996,7 +6171,8 @@ mod tests {
             "type": "assistant",
             "message": { "content": [{ "type": "text", "text": "hello there" }] }
         });
-        let result = serde_json::json!({ "type": "result", "subtype": "success", "result": "hello there" });
+        let result =
+            serde_json::json!({ "type": "result", "subtype": "success", "result": "hello there" });
         assert_eq!(claude_agent_message_delta(&thinking, &mut state), None);
         assert_eq!(claude_agent_message_delta(&assistant, &mut state), None);
         assert_eq!(claude_agent_message_delta(&result, &mut state), None);
@@ -6035,7 +6211,11 @@ mod tests {
         });
 
         let starts = claude_agent_tool_events(&tool_use, &mut state);
-        assert_eq!(starts.len(), 1, "only the tool_use block frames a tool_start");
+        assert_eq!(
+            starts.len(),
+            1,
+            "only the tool_use block frames a tool_start"
+        );
         assert!(
             starts[0].contains("tool_start")
                 && starts[0].contains("\"tool\":\"edit_flowscript\"")
@@ -6176,7 +6356,11 @@ mod tests {
             "flowpilot-claude-ext-test-{}",
             uuid::Uuid::new_v4()
         ));
-        let binary_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+        let binary_name = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
         let make = |version: &str| -> std::io::Result<PathBuf> {
             let dir = temp_home
                 .join(".vscode/extensions")

@@ -93,6 +93,7 @@ impl NodeLogic for PushChunkNode {
             attachments: vec![],
             chunk: Some(chunk),
             plan,
+            widgets: vec![],
         };
 
         context

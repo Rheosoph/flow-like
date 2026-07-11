@@ -24,6 +24,7 @@ import { PathbufVariable } from "./pathbuf-variable";
 import { StringArrayVariable } from "./string-array-variable";
 import { StringSetVariable } from "./string-set-variable";
 import { StringVariable } from "./string-variable";
+import { StructArrayVariable } from "./struct-array-variable";
 import { StructVariable } from "./struct-variable";
 
 export function VariablesMenuEdit({
@@ -306,6 +307,21 @@ export function VariablesMenuEdit({
 	) {
 		return (
 			<StructVariable
+				disabled={disabled}
+				variable={intermediateValue}
+				onChange={setIntermediateValue}
+				refs={refs}
+			/>
+		);
+	}
+
+	if (
+		variable.data_type === IVariableType.Struct &&
+		(variable.value_type === IValueType.Array ||
+			variable.value_type === IValueType.HashSet)
+	) {
+		return (
+			<StructArrayVariable
 				disabled={disabled}
 				variable={intermediateValue}
 				onChange={setIntermediateValue}
