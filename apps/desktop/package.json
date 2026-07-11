@@ -7,7 +7,7 @@
 		"dev:xcode": "bun tauri ios dev --open --host",
 		"dev:android-studio": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android dev --open",
 		"build:xcode": "bun tauri ios build --open ",
-		"build:android": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android build --open ",
+		"build:android": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android build --target aarch64 --open",
 		"dev": "dotenv -- next dev --turbopack -H 0.0.0.0",
 		"dev:all": "dotenv -- bun run tauri dev & bun run --watch ./scripts/translation-server.ts",
 		"dev:ios": "dotenv -- bun run tauri ios dev 'iPhone 16' ",

@@ -523,15 +523,15 @@ impl NodeLogic for LoadOnnxNode {
 
         node.add_output_pin(
             "accelerated",
-            "Accelerated",
-            "Whether GPU/NPU acceleration is active",
+            "Acceleration Configured",
+            "Whether a GPU/NPU execution provider was configured; individual sessions may still fall back to CPU",
             VariableType::Boolean,
         );
 
         node.add_output_pin(
             "active_provider",
-            "Active Provider",
-            "The execution provider(s) that are actually in use",
+            "Configured Providers",
+            "Execution providers configured in priority order, including CPU fallback",
             VariableType::String,
         );
 

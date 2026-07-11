@@ -71,9 +71,9 @@ pub struct NodeOnnxSession {
 pub struct SessionWithMeta {
     pub session: Session,
     pub provider: Provider,
-    /// The execution providers that are actually active
+    /// Execution providers configured in priority order, including CPU fallback
     pub ep_active: Vec<String>,
-    /// Whether GPU/NPU acceleration is active
+    /// Whether a GPU/NPU provider was configured
     pub accelerated: bool,
 }
 

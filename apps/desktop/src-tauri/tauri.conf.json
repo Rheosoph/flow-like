@@ -83,7 +83,7 @@
 			}
 		},
 		"iOS": {
-			"minimumSystemVersion": "13.0",
+			"minimumSystemVersion": "15.1",
 			"developmentTeam": "VVT9DYMA6M"
 		},
 		"homepage": "https://flow-like.com",

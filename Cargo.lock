@@ -7367,9 +7367,8 @@ checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 
 [[package]]
 name = "face_id"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f54a3d8f37f8cb28471200c0b927848570018cb55fc3777d23c8e90fe067a8d"
+version = "0.4.2"
+source = "git+https://github.com/Rheosoph/face_id-rs?rev=2c5b26dba986be8615c5d6701392940a558dce4a#2c5b26dba986be8615c5d6701392940a558dce4a"
 dependencies = [
  "bon",
  "image",
@@ -7491,6 +7490,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "545e4fb17fc48768ff36c2a3854aa5b0b809d0ed595ab5530fa8ac94f31bd0ea"
 dependencies = [
  "anyhow",
+ "image",
  "ndarray 0.17.2",
  "ort",
  "safetensors 0.8.0",
@@ -8198,6 +8198,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "tokenizers 0.22.2",
  "tokio",
  "tracing",

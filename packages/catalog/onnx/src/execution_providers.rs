@@ -40,25 +40,24 @@
 //! - CUDA/TensorRT require the NVIDIA runtime on the target system
 //! - XNNPACK works on all platforms with ARM or x86 CPUs
 
-use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
-/// Track whether ORT has been initialized
-static ORT_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-/// Information about the active execution providers after initialization
+/// Information about the execution providers configured during initialization.
+/// Individual sessions or operators may still fall back to CPU if registration or model
+/// compatibility prevents use of an accelerator.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionProviderInfo {
-    /// List of active execution providers (in priority order)
+    /// Configured execution providers in priority order (including CPU fallback)
     pub active_providers: Vec<String>,
-    /// Whether any GPU/NPU acceleration is active
+    /// Whether at least one non-CPU provider was configured
     pub accelerated: bool,
     /// Warnings during initialization
     pub warnings: Vec<String>,
 }
 
-/// Global EP info set during initialization (using RwLock for thread safety)
-static EP_INFO: RwLock<Option<ExecutionProviderInfo>> = RwLock::new(None);
+/// Global EP info. `OnceLock` makes concurrent first callers wait until both the ORT
+/// environment and this metadata are fully initialized.
+static EP_INFO: OnceLock<ExecutionProviderInfo> = OnceLock::new();
 
 /// Initialize ONNX Runtime with the best available execution providers.
 ///
@@ -67,56 +66,36 @@ static EP_INFO: RwLock<Option<ExecutionProviderInfo>> = RwLock::new(None);
 ///
 /// # Returns
 ///
-/// Information about which execution providers were registered.
+/// Information about which execution providers were configured.
 ///
 /// # Example
 ///
 /// ```ignore
 /// let info = initialize_ort();
-/// println!("Active providers: {:?}", info.active_providers);
-/// println!("GPU acceleration: {}", info.accelerated);
+/// println!("Configured providers: {:?}", info.active_providers);
+/// println!("Acceleration configured: {}", info.accelerated);
 /// ```
 pub fn initialize_ort() -> ExecutionProviderInfo {
-    // Only initialize once
-    if ORT_INITIALIZED.swap(true, Ordering::SeqCst) {
-        // Already initialized, return cached info
-        return EP_INFO
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .unwrap_or_default();
-    }
-
-    let info = do_initialize_ort();
-
-    // Cache the info
-    if let Ok(mut guard) = EP_INFO.write() {
-        *guard = Some(info.clone());
-    }
-
-    info
+    EP_INFO.get_or_init(do_initialize_ort).clone()
 }
 
 /// Check if ORT has been initialized
 pub fn is_initialized() -> bool {
-    ORT_INITIALIZED.load(Ordering::SeqCst)
+    EP_INFO.get().is_some()
 }
 
 /// Get the current execution provider info (returns None if not initialized)
 pub fn get_ep_info() -> Option<ExecutionProviderInfo> {
-    if !is_initialized() {
-        return None;
-    }
-    EP_INFO.read().ok().and_then(|guard| guard.clone())
+    EP_INFO.get().cloned()
 }
 
 /// Build the execution-provider dispatch list for the current platform and enabled features.
 ///
-/// Returns the dispatch list, the names of the accelerators actually registered (CPU excluded),
-/// and any warnings. Shared by global ORT init and per-session builders (e.g. the face_id
-/// analyzer) so every session opts into the same acceleration instead of falling back to CPU.
+/// Returns the dispatch list, the names of the configured accelerators (CPU excluded), and any
+/// warnings. Sessions inherit this list from the process-wide ORT environment and may still
+/// fall back to CPU for unsupported models or unavailable device dependencies.
 #[cfg(feature = "execute")]
-pub(crate) fn collect_execution_providers() -> (
+fn collect_execution_providers() -> (
     Vec<flow_like_model_provider::ml::ort::ep::ExecutionProviderDispatch>,
     Vec<String>,
     Vec<String>,
@@ -213,24 +192,64 @@ pub(crate) fn collect_execution_providers() -> (
 #[cfg(feature = "execute")]
 fn do_initialize_ort() -> ExecutionProviderInfo {
     use flow_like_model_provider::ml::ort;
-    use tracing::info;
+    use tracing::{info, warn};
 
-    let (eps, mut active_providers, warnings) = collect_execution_providers();
-    let accelerated = !eps.is_empty();
+    let (eps, mut active_providers, mut warnings) = collect_execution_providers();
+    let mut accelerated = !eps.is_empty();
 
     // CPU is always available as the final fallback
     active_providers.push("CPU".to_string());
 
-    // Initialize ORT with the collected execution providers
-    if eps.is_empty() {
+    let available_threads = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    let thread_count = if cfg!(any(
+        target_os = "android",
+        target_os = "ios",
+        target_os = "tvos"
+    )) {
+        available_threads.clamp(1, 2)
+    } else {
+        // This is one process-wide pool shared by every ORT session, so using the
+        // scheduler-visible CPU budget does not multiply threads per model/session.
+        available_threads
+    };
+    let thread_pool = ort::environment::GlobalThreadPoolOptions::default()
+        .with_intra_threads(thread_count)
+        .and_then(|options| options.with_inter_threads(1))
+        .and_then(|options| options.with_spin_control(false));
+
+    let builder = if eps.is_empty() {
         info!("No GPU/NPU acceleration available, using CPU");
-        ort::init().commit();
+        ort::init()
     } else {
         info!(
             "Initializing ORT with execution providers: {:?}",
             active_providers
         );
-        ort::init().with_execution_providers(eps).commit();
+        ort::init().with_execution_providers(eps)
+    };
+    let committed = match thread_pool {
+        Ok(thread_pool) => builder.with_global_thread_pool(thread_pool).commit(),
+        Err(error) => {
+            let warning = format!(
+                "Failed to configure the shared ONNX Runtime thread pool; using per-session defaults: {error}"
+            );
+            warn!("{warning}");
+            warnings.push(warning);
+            builder.commit()
+        }
+    };
+
+    if !committed {
+        let warning = "ONNX Runtime was initialized before FlowLike configured its execution providers; existing process-wide provider settings will be used";
+        warn!("{warning}");
+        warnings.push(warning.to_string());
+        active_providers = vec![
+            "Existing ORT environment (configuration unknown)".to_string(),
+            "CPU".to_string(),
+        ];
+        accelerated = false;
     }
 
     ExecutionProviderInfo {

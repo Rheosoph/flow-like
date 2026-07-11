@@ -76,7 +76,6 @@
 		DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = thirdparty/onnxruntime.xcframework; sourceTree = "<group>"; };
 		DC29A1BD2FB3412A009DF63B /* icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = icon.icon; sourceTree = "<group>"; };
 		DC29A1BF2FB341A6009DF63B /* splash.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = splash.png; sourceTree = "<group>"; };
-		DC380F432E7A0CAE00C066A7 /* libonnxruntime.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libonnxruntime.a; path = ../../../../../thirdparty/onnxruntime/ios/libonnxruntime.a; sourceTree = "<group>"; };
 		DC6672892F6BE19D00160C5D /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		DC66728E2F6BE81E00160C5D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		DC6672902F6BE83700160C5D /* flow-like-desktop_iOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "flow-like-desktop_iOS-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -192,7 +191,6 @@
 			isa = PBXGroup;
 			children = (
 				DC1EA3742E7C10EC00431604 /* onnxruntime.xcframework */,
-				DC380F432E7A0CAE00C066A7 /* libonnxruntime.a */,
 				5E3B45C68E5B4FCEB6240D47 /* Accelerate.framework */,
 				4C0F0E1D2C3B4A5968776655 /* CoreFoundation.framework */,
 				F2764F91BCC1150304FB91AC /* CoreGraphics.framework */,
@@ -551,7 +549,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -608,7 +606,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

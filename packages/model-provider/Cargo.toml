@@ -49,14 +49,14 @@ reqwest = { workspace = true, optional = true }
 # Upstream ort >= rc.11 carries the iOS static-linking support (pykeio/ort#430) that
 # previously required the Rheosoph fork, so we track upstream rc.12 directly. face_id and
 # fastembed both pin =2.0.0-rc.12, keeping a single onnxruntime native link in the graph.
-ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "copy-dylibs", "ndarray"], optional = true }
-fastembed = { version = "=5.17.2", default-features = false, features = ["ort-download-binaries"], optional = true }
+ort = { version = "=2.0.0-rc.12", features = ["api-24", "download-binaries", "copy-dylibs", "ndarray"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = ["image-models", "ort-download-binaries"], optional = true }
 
 
 [target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))'.dependencies]
-# Mobile targets: no prebuilt binaries available for download, so disable download-binaries and copy-dylibs
-ort = { version = "=2.0.0-rc.12", default-features = false, features=["ndarray"], optional = true }
-fastembed = { version = "=5.17.2", default-features = false, features = [], optional = true }
+# Mobile targets use the vendored ORT 1.24.3 runtime and must not download or copy host binaries.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "ndarray"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = ["image-models"], optional = true }
 
 [dev-dependencies]
 dotenv = "0.15.0"
