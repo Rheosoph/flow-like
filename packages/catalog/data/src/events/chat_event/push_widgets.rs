@@ -57,13 +57,22 @@ impl NodeLogic for PushWidgetsNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let pins = context.get_pins_by_name("element_ref").await?;
+        let (update_log, truncated) = context.get_a2ui_update_log().await;
+        if truncated {
+            context.log_message(
+                "The a2ui update log hit its cap; element updates streamed before this push may be missing from the widgets.",
+                flow_like::flow::execution::LogLevel::Warn,
+            );
+        }
         let mut widgets = Vec::with_capacity(pins.len());
         for pin in pins {
             let value: Value = context.evaluate_pin_ref(pin).await?;
             if value.is_null() {
                 continue;
             }
-            widgets.push(ChatWidget::from_element_ref(&value)?);
+            let mut widget = ChatWidget::from_element_ref(&value)?;
+            widget.attach_update_log(&update_log);
+            widgets.push(widget);
         }
 
         if widgets.is_empty() {

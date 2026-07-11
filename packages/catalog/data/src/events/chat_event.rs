@@ -578,6 +578,12 @@ pub struct ChatWidget {
     pub widget_id: String,
     pub surface_id: String,
     pub component: Value,
+    /// Ordered a2ui update messages targeting this widget that were streamed
+    /// earlier in the run (before the push). The frontend replays them over the
+    /// snapshot so element nodes (Set Element Value, Update GeoMap, Push CSV To
+    /// Chart, …) work in the same run that pushes the widget.
+    #[serde(default)]
+    pub updates: Vec<Value>,
 }
 
 impl ChatWidget {
@@ -615,7 +621,58 @@ impl ChatWidget {
             widget_id,
             surface_id,
             component,
+            updates: vec![],
         })
+    }
+
+    fn inline_child_ids(&self) -> Vec<String> {
+        self.component
+            .get("inlineWidgetDef")
+            .and_then(|def| def.get("components"))
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("id").and_then(|id| id.as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Collects the run's a2ui updates that target this widget (its instance,
+    /// a `{instance}/{child}` qualified element, one of its inline children by
+    /// bare id, or its surface's data model) so the frontend can replay them
+    /// over the pushed snapshot. All matching entries are kept — including full
+    /// re-registrations of the instance — because the replay must end at
+    /// exactly the state the emission order produces.
+    pub fn attach_update_log(&mut self, log: &[flow_like::a2ui::A2UIServerMessage]) {
+        use flow_like::a2ui::A2UIServerMessage as Msg;
+
+        let child_ids = self.inline_child_ids();
+        let qualified_prefix = format!("{}/", self.instance_id);
+
+        for message in log {
+            let relevant = match message {
+                Msg::UpsertElement { element_id, .. } => {
+                    element_id == &self.instance_id
+                        || element_id.starts_with(&qualified_prefix)
+                        || (!element_id.contains('/') && {
+                            let suffix = format!("-{element_id}");
+                            child_ids
+                                .iter()
+                                .any(|c| c == element_id || c.ends_with(&suffix))
+                        })
+                }
+                Msg::DataModelUpdate { surface_id, .. }
+                | Msg::CreateElement { surface_id, .. }
+                | Msg::RemoveElement { surface_id, .. } => surface_id == &self.surface_id,
+                _ => false,
+            };
+
+            if relevant && let Ok(value) = flow_like_types::json::to_value(message) {
+                self.updates.push(value);
+            }
+        }
     }
 }
 

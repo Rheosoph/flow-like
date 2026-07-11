@@ -186,6 +186,24 @@ export function SimpleChatConfig({
 			</div>
 
 			<div className="space-y-4">
+				<div className="flex items-center space-x-2">
+					<Switch
+						disabled={!isEditing}
+						id="attach_widget_snapshots"
+						checked={config?.attach_widget_snapshots ?? true}
+						onCheckedChange={(checked) => {
+							setValue("attach_widget_snapshots", checked);
+						}}
+					/>
+					<Label htmlFor="attach_widget_snapshots">Widget Snapshots</Label>
+				</div>
+				<p className="text-sm text-muted-foreground">
+					Attach images of embedded widgets to the model&apos;s context so
+					vision-capable models can react to the rendered UI
+				</p>
+			</div>
+
+			<div className="space-y-4">
 				<div className="space-y-3">
 					<Label htmlFor="voice_mode">Voice Input</Label>
 					{renderVoiceSelect(

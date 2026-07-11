@@ -57,6 +57,7 @@ import {
 } from "../../index";
 import { getApiOrigin } from "../../lib/api-url";
 import { isTauri } from "../../lib/platform";
+import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import {
 	type IMessage,
 	globalChatDb,
@@ -90,6 +91,7 @@ import {
 } from "../flowpilot/types";
 import { fileToAttachment } from "../interfaces/chat-default/attachment";
 import { Chat, type IChatRef } from "../interfaces/chat-default/chat";
+import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
 import { GlobalChatHistory } from "./global-chat-history";
@@ -97,6 +99,7 @@ import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
 import { PendingComponentsCard } from "./pending-components-card";
+import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
 
 // The streaming engine (parse the FlowPilot protocol → message content + plan_steps → store) lives
 // in lib/global-chat-stream.ts, OUTSIDE this component, so a turn survives the page↔overlay morph
@@ -175,6 +178,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const pendingComponents = useGlobalChatStore((s) => s.pendingComponents);
 	// Live board surface (open canvas) the assistant can see and edit — shown as a context chip.
 	const boardSurface = useAssistantSurface((s) => s.boardSurface);
+	const runWidgetAction = useGlobalChatRunWidgetAction();
 
 	// Remember the active conversation, and restore it after a hard reload (e.g. a dev refresh or a
 	// bot-triggered navigation that reloads the window) — otherwise the transcript looks "lost" even
@@ -410,6 +414,35 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				content: typeof m.inner.content === "string" ? m.inner.content : "",
 			}));
 
+			// Snapshot the latest assistant message's embedded widgets so the
+			// model can see the rendered UI state the user is reacting to.
+			// Travels as base64 ChatImages on this turn only (vision-capable
+			// providers; external code agents drop them).
+			const widgetImages: { data: string; media_type: string }[] = [];
+			try {
+				const latestWidgets = [...priorMessages]
+					.reverse()
+					.find(
+						(m) => m.inner.role === IRole.Assistant && m.widgets?.length,
+					)?.widgets;
+				if (latestWidgets?.length) {
+					const snapshots = await captureWidgetSnapshots(
+						latestWidgets.map((widget) => widget.instance_id),
+					);
+					for (const dataUrl of snapshots) {
+						const [header, data] = dataUrl.split(",", 2);
+						if (!data) continue;
+						widgetImages.push({
+							data,
+							media_type:
+								header?.match(/^data:(.+?);base64$/)?.[1] ?? "image/png",
+						});
+					}
+				}
+			} catch (error) {
+				console.warn("[GlobalChat] widget snapshot failed:", error);
+			}
+
 			const authUser = authRef.current?.user;
 			const userContext =
 				authUser?.profile?.name ??
@@ -458,6 +491,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 										)
 									: undefined,
 							history: historyPayload,
+							currentImages: widgetImages.length > 0 ? widgetImages : undefined,
 							modelId: effectiveModelId,
 							embeddingModelId: state.embeddingModelId || undefined,
 							token: authUser?.access_token ?? undefined,
@@ -473,6 +507,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								scope: "Frontend",
 								user_prompt: trimmed,
 								history: historyPayload,
+								current_images:
+									widgetImages.length > 0 ? widgetImages : undefined,
 								model_id: effectiveModelId,
 								embedding_model_id: state.embeddingModelId || undefined,
 								user_context: userContext ?? undefined,
@@ -918,21 +954,25 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							</div>
 						</div>
 					)}
-					<Chat
-						ref={chatRef}
-						sessionId={activeConversationId}
-						messages={messages}
-						onSendMessage={handleSendMessage}
-						isStreamActive={isStreaming}
-						config={{ allow_file_upload: true, tools: [] }}
-						activeInteractions={activeInteractions}
-						onRespondToInteraction={handleRespondToInteraction}
-						inlinePrompt={
-							toolPrompt ? (
-								<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
-							) : undefined
-						}
-					/>
+					{/* Embedded-widget actions (ActionHandler's widget_event) route through
+					    runWidgetAction to the widget's originating use-case board. */}
+					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+						<Chat
+							ref={chatRef}
+							sessionId={activeConversationId}
+							messages={messages}
+							onSendMessage={handleSendMessage}
+							isStreamActive={isStreaming}
+							config={{ allow_file_upload: true, tools: [] }}
+							activeInteractions={activeInteractions}
+							onRespondToInteraction={handleRespondToInteraction}
+							inlinePrompt={
+								toolPrompt ? (
+									<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
+								) : undefined
+							}
+						/>
+					</ChatWidgetExecutionProvider>
 				</div>
 				{showWorkspace && flowscriptWorkspace && (
 					<FlowScriptWorkspacePanel

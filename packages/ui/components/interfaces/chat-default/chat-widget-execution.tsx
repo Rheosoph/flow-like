@@ -10,12 +10,17 @@ import {
 } from "../../../state/execution-service-context";
 
 /**
- * Runs a widget/page action inside the chat. `runPayload` targets the bound
- * workflow node; `onA2UIEvents` receives every run event so the clicked widget
- * updates in place, while the chat also renders any pushed chat content as a
- * new assistant message. Returns when the run completes.
+ * Runs a widget/page action inside the chat. `appId`/`boardId` identify the
+ * board the action executes against — for cross-app embeds (global chat) they
+ * come from the clicked widget's `origin`, so the run lands on the original
+ * use-case board. `runPayload` targets the bound workflow node; `onA2UIEvents`
+ * receives every run event so the clicked widget updates in place, while the
+ * chat also renders any pushed chat content as a new assistant message.
+ * Returns when the run completes.
  */
 export type RunWidgetAction = (
+	appId: string,
+	boardId: string,
 	runPayload: IRunPayload,
 	onA2UIEvents?: (events: IIntercomEvent[]) => void,
 ) => Promise<ILogMetadata | undefined>;
@@ -40,13 +45,13 @@ export function ChatWidgetExecutionProvider({
 
 	const value = useMemo<ExecutionServiceContextValue>(() => {
 		const executeBoard: ExecutionServiceContextValue["executeBoard"] = (
-			_appId,
-			_boardId,
+			appId,
+			boardId,
 			payload,
 			_streamState,
 			_eventId,
 			cb,
-		) => runWidgetAction(payload, cb);
+		) => runWidgetAction(appId, boardId, payload, cb);
 
 		const executeEvent: ExecutionServiceContextValue["executeEvent"] =
 			base?.executeEvent ??

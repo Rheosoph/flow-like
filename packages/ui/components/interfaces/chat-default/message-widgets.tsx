@@ -3,13 +3,17 @@
 import { Maximize2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib";
+import { widgetSnapshotAttribute } from "../../../lib/widget-snapshot";
 import {
 	A2UIRenderer,
 	type A2UIServerMessage,
 	type Surface,
 	type SurfaceComponent,
 } from "../../a2ui";
-import { applyA2UIMessage } from "../../a2ui/apply-a2ui-message";
+import {
+	applyA2UIMessage,
+	normalizeA2UIWireMessage,
+} from "../../a2ui/apply-a2ui-message";
 import { Dialog, DialogContent, DialogTitle } from "../../ui";
 import type { IChatWidget } from "./chat-db";
 
@@ -47,23 +51,42 @@ function MessageWidget({
 	boardId,
 	eventId,
 }: MessageWidgetProps) {
+	// Content keys: Dexie liveQuery re-materializes message objects on every
+	// table write, so object identity is NOT stable across renders of unchanged
+	// widgets — string equality is. Reseeding only on real content change keeps
+	// unpersisted action-feedback state (applied via onA2UIMessage) alive.
 	const componentKey = useMemo(
 		() => JSON.stringify(widget.component),
 		[widget.component],
 	);
+	const updatesKey = useMemo(
+		() => JSON.stringify(widget.updates ?? []),
+		[widget.updates],
+	);
 
-	const [surface, setSurface] = useState<Surface>(() => buildSurface(widget));
+	// Snapshot + ordered replay of the widget's a2ui updates (attached by the
+	// backend for pre-push updates, appended by the stream reducer for live
+	// ones).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on serialized content, not object identity
+	const seededSurface = useMemo(() => {
+		let next = buildSurface(widget);
+		for (const update of widget.updates ?? []) {
+			next = applyA2UIMessage(next, normalizeA2UIWireMessage(update));
+		}
+		return next;
+	}, [componentKey, updatesKey]);
+
+	const [surface, setSurface] = useState<Surface>(seededSurface);
 	const [maximized, setMaximized] = useState(false);
 
-	// Re-seed the local surface only when the pushed widget definition actually
-	// changes, so live in-place a2ui updates are not wiped on every stream tick.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the serialized component
 	useEffect(() => {
-		setSurface(buildSurface(widget));
-	}, [componentKey]);
+		setSurface(seededSurface);
+	}, [seededSurface]);
 
 	const onA2UIMessage = useCallback((message: A2UIServerMessage) => {
-		setSurface((prev) => applyA2UIMessage(prev, message));
+		setSurface((prev) =>
+			applyA2UIMessage(prev, normalizeA2UIWireMessage(message)),
+		);
 	}, []);
 
 	const renderer = (
@@ -88,7 +111,12 @@ function MessageWidget({
 			>
 				<Maximize2 className="w-3.5 h-3.5" />
 			</button>
-			<div className="max-h-120 overflow-auto">{renderer}</div>
+			<div
+				className="max-h-120 overflow-auto"
+				{...widgetSnapshotAttribute(widget.instance_id)}
+			>
+				{renderer}
+			</div>
 
 			<Dialog open={maximized} onOpenChange={setMaximized}>
 				<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]! flex flex-col">
@@ -125,9 +153,9 @@ export function MessageWidgets({
 				<MessageWidget
 					key={widget.instance_id}
 					widget={widget}
-					appId={appId}
-					boardId={boardId}
-					eventId={eventId}
+					appId={widget.origin?.appId ?? appId}
+					boardId={widget.origin?.boardId ?? boardId}
+					eventId={widget.origin?.eventId ?? eventId}
 				/>
 			))}
 		</div>

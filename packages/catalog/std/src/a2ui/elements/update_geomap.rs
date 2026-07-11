@@ -112,9 +112,18 @@ impl NodeLogic for UpdateGeoMap {
             }
             "Viewport" => {
                 let viewport: GeoMapViewport = context.evaluate_pin("viewport").await?;
+                // The GeoMap component consumes viewport as a BoundValue with a
+                // nested center — mirror the Markers/Routes arms' literalJson
+                // wrapping (the frontend reducer also normalizes legacy flat
+                // payloads).
                 let mut props = flow_like_types::json::Map::new();
-                props.insert("latitude".to_string(), json!(viewport.latitude));
-                props.insert("longitude".to_string(), json!(viewport.longitude));
+                props.insert(
+                    "center".to_string(),
+                    json!({
+                        "latitude": viewport.latitude,
+                        "longitude": viewport.longitude,
+                    }),
+                );
                 if let Some(z) = viewport.zoom {
                     props.insert("zoom".to_string(), json!(z));
                 }
@@ -124,7 +133,10 @@ impl NodeLogic for UpdateGeoMap {
                 if let Some(p) = viewport.pitch {
                     props.insert("pitch".to_string(), json!(p));
                 }
-                json!({ "type": "setGeoMapViewport", "viewport": props })
+                json!({
+                    "type": "setGeoMapViewport",
+                    "viewport": { "literalJson": flow_like_types::json::to_string(&props)? }
+                })
             }
             _ => return Err(flow_like_types::anyhow!("Unknown property: {}", property)),
         };
@@ -160,6 +172,9 @@ impl NodeLogic for UpdateGeoMap {
                     .set_value_type(flow_like::flow::pin::ValueType::Array)
                     .set_schema::<GeoMapMarker>()
                     .set_options(PinOptions::new().set_enforce_schema(false).build());
+                } else if let Some(pin) = node.get_pin_mut_by_name("markers") {
+                    // Heal pins created before the schema existed.
+                    pin.set_schema::<GeoMapMarker>();
                 }
             }
             "Routes" => {
@@ -175,6 +190,8 @@ impl NodeLogic for UpdateGeoMap {
                     .set_value_type(flow_like::flow::pin::ValueType::Array)
                     .set_schema::<GeoMapRoute>()
                     .set_options(PinOptions::new().set_enforce_schema(false).build());
+                } else if let Some(pin) = node.get_pin_mut_by_name("routes") {
+                    pin.set_schema::<GeoMapRoute>();
                 }
             }
             "Viewport" => {
@@ -188,6 +205,8 @@ impl NodeLogic for UpdateGeoMap {
                         VariableType::Struct,
                     )
                     .set_schema::<GeoMapViewport>();
+                } else if let Some(pin) = node.get_pin_mut_by_name("viewport") {
+                    pin.set_schema::<GeoMapViewport>();
                 }
             }
             _ => {}

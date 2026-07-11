@@ -192,6 +192,10 @@ pub struct ChatEventParameters {
     pub tools: Option<Vec<String>>,
     pub default_tools: Option<Vec<String>>,
     pub example_messages: Option<Vec<String>>,
+    /// Attach PNG snapshots of the latest assistant message's embedded widgets
+    /// to the outgoing user turn so vision-capable models see the rendered UI.
+    /// Defaults to enabled.
+    pub attach_widget_snapshots: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]

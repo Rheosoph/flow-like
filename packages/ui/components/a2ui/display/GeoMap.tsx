@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import {
 	Map,
 	MapControls,
 	MapMarker,
 	MapPopup,
+	type MapRef,
 	MapRoute,
 	MarkerContent,
 	MarkerLabel,
@@ -85,15 +86,48 @@ export function A2UIGeoMap({
 
 	const [activePopupId, setActivePopupId] = useState<string | null>(null);
 
-	const mapViewport = useMemo(() => {
-		if (!viewport) return undefined;
-		return {
-			center: toMapCoord(viewport.center),
-			zoom: viewport.zoom,
-			bearing: viewport.bearing ?? 0,
-			pitch: viewport.pitch ?? 0,
-		};
-	}, [viewport]);
+	const mapRef = useRef<MapRef | null>(null);
+	const programmaticMoveRef = useRef(false);
+
+	// resolve() re-parses literalJson into a fresh object every render, so
+	// viewport changes are detected by value, not identity.
+	const viewportKey = useMemo(
+		() => (viewport?.center ? JSON.stringify(viewport) : ""),
+		[viewport],
+	);
+	const initialViewportKeyRef = useRef(viewportKey);
+	const sawFirstViewportRef = useRef(false);
+
+	// Fly (animated) to viewport updates streamed after the initial render.
+	// The map itself stays uncontrolled: the controlled-mode sync would jump
+	// without animation and snap back after user pans.
+	useEffect(() => {
+		if (!viewportKey) return;
+		if (!sawFirstViewportRef.current) {
+			sawFirstViewportRef.current = true;
+			// The map is constructed at the initial viewport — no flight needed.
+			if (viewportKey === initialViewportKeyRef.current) return;
+		}
+
+		const map = mapRef.current;
+		if (!map) return;
+
+		const next = JSON.parse(viewportKey) as GeoMapViewport;
+		programmaticMoveRef.current = true;
+		map.once("moveend", () => {
+			programmaticMoveRef.current = false;
+		});
+		map.flyTo({
+			center: toMapCoord(next.center),
+			...(next.zoom !== undefined && next.zoom !== null
+				? { zoom: next.zoom }
+				: {}),
+			bearing: next.bearing ?? 0,
+			pitch: next.pitch ?? 0,
+			duration: 1500,
+			essential: true,
+		});
+	}, [viewportKey]);
 
 	const handleViewportChange = useCallback(
 		(vp: {
@@ -102,6 +136,9 @@ export function A2UIGeoMap({
 			bearing: number;
 			pitch: number;
 		}) => {
+			// Programmatic flights fire `move` per animation frame — those are
+			// not user interactions.
+			if (programmaticMoveRef.current) return;
 			if (!onAction) return;
 			onAction({
 				type: "userAction",
@@ -238,14 +275,15 @@ export function A2UIGeoMap({
 			}}
 		>
 			<Map
+				ref={mapRef}
 				className="w-full h-full rounded-lg overflow-hidden border border-border/50 shadow-sm"
-				{...(mapViewport
-					? { viewport: mapViewport, onViewportChange: handleViewportChange }
-					: {
-							center: viewport ? toMapCoord(viewport.center) : [0, 20],
-							zoom: viewport?.zoom ?? 2,
-						})}
+				center={viewport?.center ? toMapCoord(viewport.center) : [0, 20]}
+				zoom={viewport?.zoom ?? 2}
+				onViewportChange={handleViewportChange}
 				interactive={interactive}
+				// Keep the WebGL buffer readable so chat-widget snapshots don't
+				// rasterize the map as a blank canvas.
+				canvasContextAttributes={{ preserveDrawingBuffer: true }}
 			>
 				{showControls && (
 					<MapControls

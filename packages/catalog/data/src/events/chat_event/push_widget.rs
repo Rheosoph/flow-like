@@ -57,7 +57,15 @@ impl NodeLogic for PushWidgetNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let element_ref: Value = context.evaluate_pin("element_ref").await?;
-        let widget = ChatWidget::from_element_ref(&element_ref)?;
+        let mut widget = ChatWidget::from_element_ref(&element_ref)?;
+        let (update_log, truncated) = context.get_a2ui_update_log().await;
+        if truncated {
+            context.log_message(
+                "The a2ui update log hit its cap; element updates streamed before this push may be missing from the widget.",
+                flow_like::flow::execution::LogLevel::Warn,
+            );
+        }
+        widget.attach_update_log(&update_log);
 
         let cached_response = CachedChatResponse::load(context).await?;
         {
