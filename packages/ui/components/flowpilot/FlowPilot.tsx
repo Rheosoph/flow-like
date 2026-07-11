@@ -210,8 +210,6 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Editing FlowScript";
 		case "catalog_search":
 			return "Searching catalog";
-		case "validate_commands":
-			return "Validating board changes";
 		case "emit_commands":
 			return "Queueing board changes";
 		case "emit_ui":
@@ -1305,6 +1303,20 @@ function FlowPilotImpl({
 					if (!match) throw new Error(`Widget '${selector}' not found.`);
 					const widget = await widgetState.getWidget(toolAppId, match[0]);
 					return { status: "ok", widget: summarizeWidget(widget) };
+				}
+				case "widgets": {
+					const list = await widgetState.getWidgets(toolAppId);
+					const widgets = await Promise.all(
+						list.map(async ([id, name]) => {
+							try {
+								const widget = await widgetState.getWidget(toolAppId, id);
+								return summarizeWidget(widget);
+							} catch {
+								return { widget_id: id, name, error: "failed to load" };
+							}
+						}),
+					);
+					return { status: "ok", widgets };
 				}
 				default: {
 					const [pageList, widgetList] = await Promise.all([

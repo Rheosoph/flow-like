@@ -33,8 +33,6 @@ use flow_like::flow::copilot::{
     build_node_details_output, build_unconfigured_nodes_output, render_catalog_search_results,
     tool_definition_parts, validate_emit_commands,
 };
-use flow_like::flow::pin::PinType;
-use flow_like_catalog::get_catalog;
 use serde_json::{Value, json};
 
 /// Create all Copilot SDK tools for board context.
@@ -50,8 +48,11 @@ pub fn create_board_tools(
 ) -> Vec<(Tool, ToolHandler)> {
     let mut tools = vec![
         create_catalog_search_tool(catalog_provider.clone()),
-        create_validate_commands_tool(graph_context.clone(), catalog_provider.clone()),
-        create_emit_commands_tool(graph_context.clone(), catalog_provider.clone()),
+        create_emit_commands_tool(
+            graph_context.clone(),
+            catalog_provider.clone(),
+            side_effect_commands.clone(),
+        ),
     ];
 
     if let Some(provider) = catalog_provider.clone() {
@@ -241,6 +242,13 @@ fn database_operation_requires_approval(operation: &str) -> bool {
 fn flowscript_validation_message(diagnostics: &[String]) -> &'static str {
     if diagnostics
         .iter()
+        .any(|diagnostic| diagnostic.contains("nodes (max"))
+    {
+        return "FlowScript validation failed: a layer would exceed the 50-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 50-node budget — and call the helpers from the parent flow.";
+    }
+
+    if diagnostics
+        .iter()
         .any(|diagnostic| diagnostic.contains("labelled branch requires a call condition"))
     {
         return "FlowScript validation failed: labelled branch syntax (`if (...) { // label ... }`) requires the condition to be a catalog/control-node call. For ordinary boolean checks, remove the trailing branch labels/comments and use plain `if (condition) { ... } else { ... }`, or use exact control-node declarations from get_declarations.";
@@ -405,6 +413,8 @@ Operations:
 - list (default): every page (id, name, route, onLoad event) and every widget (selector, description).
 - page: full element reference list for one page. An `elementRef` used by `a2uiSetElementText`,
   `a2uiGetElement`, `a2uiGetElementValue`, `a2uiPushToContainer`, etc. is `"<page_id>/<component_id>"`.
+- widgets: instantiation surface for ALL widgets in ONE call — prefer this over per-widget lookups
+  when a dashboard uses more than one widget.
 - widget: instantiation surface for one widget — the `widgetSelector` plus the `dynPath*`/`dynProp*`
   (camelCase) input pins `a2uiInstantiateWidget` exposes for its bound data paths and exposed props,
   and the action names usable for `fnRefs`."#,
@@ -412,7 +422,7 @@ Operations:
         .schema(json!({
             "type": "object",
             "properties": {
-                "operation": { "type": "string", "enum": ["list", "page", "widget"] },
+                "operation": { "type": "string", "enum": ["list", "page", "widgets", "widget"] },
                 "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
                 "board_id": { "type": "string", "description": "Restrict pages to this board. Optional." },
                 "page_id": { "type": "string", "description": "Page id for operation 'page'." },
@@ -526,18 +536,40 @@ fn create_get_node_details_tool(context: Arc<GraphContext>) -> (Tool, ToolHandle
     });
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
-        let node_id = args
-            .get("node_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        ToolResultObject::text(build_node_details_output(&node_id, &context))
+        let mut ids: Vec<String> = args
+            .get("node_ids")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(id) = args.get("node_id").and_then(Value::as_str) {
+            let id = id.trim();
+            if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
+                ids.insert(0, id.to_string());
+            }
+        }
+        if ids.is_empty() {
+            return ToolResultObject::text(
+                "get_node_details needs `node_id` or a `node_ids` array.",
+            );
+        }
+        let details = ids
+            .iter()
+            .map(|id| build_node_details_output(id, &context))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        ToolResultObject::text(details)
     });
 
     (tool, handler)
 }
-
-const MAX_EMIT_COMMANDS: usize = 20;
 
 /// Run the shared core emit validation (the exact checks the rig/Bits path runs) and flatten the
 /// structured issues into model-facing strings: (errors, warnings). Validation is skipped when the
@@ -577,91 +609,16 @@ fn format_validation_issue(issue: &ValidationIssue) -> String {
     }
 }
 
-fn create_validate_commands_tool(
-    graph_context: Option<Arc<GraphContext>>,
-    provider: Option<Arc<dyn CatalogProvider>>,
-) -> (Tool, ToolHandler) {
-    let tool = Tool::new("validate_commands")
-        .description(
-            r#"Validate a planned workflow command batch without queueing it for the user.
-
-Use this immediately before emit_commands when building or modifying workflows. If validation
-returns errors, fix the batch and validate again before calling emit_commands."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "commands": {
-                    "type": "array",
-                    "maxItems": MAX_EMIT_COMMANDS,
-                    "description": "Array of workflow commands in the same format used by emit_commands.",
-                    "items": { "type": "object" }
-                },
-                "explanation": {
-                    "type": "string",
-                    "description": "Brief description of what these commands accomplish"
-                }
-            },
-            "required": ["commands", "explanation"]
-        }));
-
-    let handler: ToolHandler = Arc::new(move |_name, args| {
-        let commands = args.get("commands").cloned().unwrap_or(json!([]));
-        let explanation = args
-            .get("explanation")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Command validation");
-
-        let parsed_commands: Vec<BoardCommand> = match serde_json::from_value(commands.clone()) {
-            Ok(cmds) => cmds,
-            Err(e) => {
-                let result = json!({
-                    "status": "validation_errors",
-                    "errors": [format!("Error parsing commands: {}", e)],
-                    "commands": commands,
-                    "explanation": explanation
-                });
-                return ToolResultObject::text(
-                    serde_json::to_string_pretty(&result).unwrap_or_default(),
-                );
-            }
-        };
-
-        let (validation_errors, validation_warnings) = run_emit_validation(
-            &parsed_commands,
-            explanation,
-            graph_context.as_deref(),
-            provider.as_ref(),
-        );
-        let result = if validation_errors.is_empty() {
-            json!({
-                "status": "valid",
-                "commands": commands,
-                "explanation": explanation,
-                "warnings": validation_warnings,
-                "message": "Command batch is valid. Call emit_commands with the same batch to queue it for review."
-            })
-        } else {
-            json!({
-                "status": "validation_errors",
-                "errors": validation_errors,
-                "warnings": validation_warnings,
-                "commands": commands,
-                "explanation": explanation,
-                "message": "Command batch is invalid. Fix the listed errors and call validate_commands again."
-            })
-        };
-
-        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
-    });
-
-    (tool, handler)
-}
-
-/// Emit commands tool - execute graph modifications
+/// Emit commands tool - execute graph modifications. Validates internally: an invalid batch
+/// queues nothing and reports the errors, so no separate validation round-trip is needed.
+///
+/// Queued commands are also pushed to `side_effect_commands` so transports that cannot parse
+/// tool results (the external-agent MCP bridge for Claude Code/Codex) still surface them; the
+/// SDK event loop extracts from tool results first and only drains the store as a fallback.
 fn create_emit_commands_tool(
     graph_context: Option<Arc<GraphContext>>,
     provider: Option<Arc<dyn CatalogProvider>>,
+    side_effect_commands: Option<Arc<Mutex<Vec<BoardCommand>>>>,
 ) -> (Tool, ToolHandler) {
     let tool = tool_from_rig_definition(&EmitCommandsTool);
 
@@ -687,14 +644,15 @@ fn create_emit_commands_tool(
             provider.as_ref(),
         );
         if !validation_errors.is_empty() {
+            // No command echo: the model already knows the batch it sent; the errors reference
+            // command indices. Echoing the batch only bloats every retry's context.
             let result = json!({
                 "status": "validation_errors",
                 "errors": validation_errors,
                 "warnings": validation_warnings,
-                "commands": commands,
                 "explanation": explanation,
                 "message": format!(
-                    "Validation failed. Fix these issues and call emit_commands again:\n- {}",
+                    "Validation failed, nothing was queued. Fix these issues and call emit_commands again:\n- {}",
                     validation_errors.join("\n- ")
                 )
             });
@@ -755,10 +713,18 @@ fn create_emit_commands_tool(
 
         summary_lines.push(format!("\nExplanation: {}", explanation));
 
-        // Serialize commands to be returned (the frontend will apply them)
+        let queued_count = parsed_commands.len();
+        if let Some(store) = &side_effect_commands
+            && let Ok(mut queued) = store.lock()
+        {
+            queued.extend(parsed_commands);
+        }
+
+        // The queued batch travels through the side-effect store (the chat loop drains it into a
+        // <commands> frame); echoing it back to the model would only duplicate its own input.
         let result = json!({
             "status": "queued",
-            "commands": commands,
+            "queued_count": queued_count,
             "explanation": explanation,
             "warnings": validation_warnings,
             "summary": summary_lines.join("\n")
@@ -778,13 +744,35 @@ fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, To
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let provider = provider.clone();
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let mut queries: Vec<String> = args
+            .get("queries")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|query| !query.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(query) = args.get("query").and_then(Value::as_str) {
+            let query = query.trim();
+            if !query.is_empty() && !queries.iter().any(|existing| existing == query) {
+                queries.insert(0, query.to_string());
+            }
+        }
 
-        let declarations = block_on_tool(provider.get_declarations(&query));
+        let declarations = if queries.is_empty() {
+            block_on_tool(provider.get_declarations(""))
+        } else {
+            let mut sections = Vec::with_capacity(queries.len());
+            for query in &queries {
+                sections.push(block_on_tool(provider.get_declarations(query)));
+            }
+            sections.join("\n")
+        };
         ToolResultObject::text(declarations)
     });
 
@@ -862,12 +850,11 @@ RULES:
   continue from `exec_done`.
 - For loops, the body is the `exec_out` path and the next statement continues from `done` /
   `exec_done`; make sure the loop's `array` input receives the array being iterated.
-- Prefer writing impure/sequential logic INLINE in the event or loop body over extracting it into a
-  helper `function`. A called function's body does not yet receive an execution entry from its call
-  site, so impure nodes inside a helper (for example `cuid`, `structSet`, `arrayPushRef`) are created
-  but left with no incoming execution connection and never run. For per-iteration work inside
-  `controlForEach`, write the statements directly in the loop body instead of calling a `buildRow`-style
-  helper.
+- Helper `function` declarations are fully supported: calling `helperName(args)` creates a Call
+  Function node wired to that function's layer, impure bodies chain from the layer's `exec_in`
+  boundary pin, and `return` values surface as call-node outputs. USE THEM — a single layer
+  (root, event scope, or one function) is hard-capped at 50 nodes and edits exceeding it are
+  rejected, so split big flows into small helper functions with focused responsibilities.
 - Charts (`a2uiPushCsvToChart`) read their data from a `format`-specific pin. With `format: "CSV"`, wire
   a DataFusion query's `table` output into the chart's `table` input (both are the same tabular struct)
   and set `chartType` (for example "Bar" / "Line" / "Pie"). The `data` input is ONLY for
@@ -974,19 +961,30 @@ RULES:
             }
         }
 
-        // Clean parse with derived commands → queue them for review.
-        let commands_value = serde_json::to_value(&result.commands).unwrap_or(json!([]));
+        // Clean parse with derived commands → queue them for review. The batch travels through
+        // the side-effect store (the chat loop drains it into a <commands> frame); the model
+        // gets the count plus any non-fatal diagnostics/warnings to react to, not an echo of
+        // the commands derived from its own submission.
+        let queued_count = result.commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut commands) = store.lock()
         {
-            commands.extend(result.commands.clone());
+            commands.extend(result.commands);
         }
         let payload = json!({
             "status": "queued",
-            "commands": commands_value,
-            "explanation": format!("Reconciled {} change(s) from edited FlowScript.", result.commands.len()),
+            "queued_count": queued_count,
+            "explanation": format!("Reconciled {queued_count} change(s) from edited FlowScript."),
             "diagnostics": result.diagnostics,
             "flowscript_workspace_summary": flowscript_summary(flowscript),
+            "message": if result.diagnostics.is_empty() {
+                format!("Queued {queued_count} board change(s) for user review.")
+            } else {
+                format!(
+                    "Queued {queued_count} board change(s) for user review, with {} non-fatal warning(s) listed in `diagnostics` — address them if they affect the requested behavior.",
+                    result.diagnostics.len()
+                )
+            },
         });
         ToolResultObject::text(serde_json::to_string_pretty(&payload).unwrap_or_default())
     });
@@ -1024,12 +1022,27 @@ fn create_list_board_nodes_tool(context: Arc<GraphContext>) -> (Tool, ToolHandle
 // FRONTEND (A2UI) TOOLS
 // =============================================================================
 
-/// Create all Copilot SDK tools for frontend/A2UI context
-pub fn create_frontend_tools() -> Vec<(Tool, ToolHandler)> {
+/// A UI tree successfully emitted via `emit_ui`, captured for transports that cannot parse tool
+/// results (the external-agent MCP bridge): the run's response drains the last one into
+/// `components`/`canvas_settings`/`root_component_id`.
+#[derive(Clone)]
+pub struct EmittedSurface {
+    pub root_component_id: String,
+    pub canvas_settings: Value,
+    pub components: Value,
+}
+
+/// Create all Copilot SDK tools for frontend/A2UI context.
+///
+/// `emit_ui` validates internally (an invalid tree is never rendered), so there is no separate
+/// validate tool; `get_component_schema` remains as a fallback for components missing from the
+/// documentation embedded in the system prompt.
+pub fn create_frontend_tools(
+    emitted_surfaces: Option<Arc<Mutex<Vec<EmittedSurface>>>>,
+) -> Vec<(Tool, ToolHandler)> {
     vec![
         create_get_component_schema_tool(),
-        create_validate_ui_tool(),
-        create_emit_ui_tool(),
+        create_emit_ui_tool(emitted_surfaces),
     ]
 }
 
@@ -1055,59 +1068,16 @@ fn emit_ui_schema() -> Value {
     })
 }
 
-fn create_validate_ui_tool() -> (Tool, ToolHandler) {
-    let tool = Tool::new("validate_ui")
-        .description(
-            r#"Validate an A2UI component tree without rendering it.
-
-Use this immediately before emit_ui for non-trivial interfaces. If validation returns errors,
-repair the full component tree and validate again before calling emit_ui."#,
-        )
-        .schema(emit_ui_schema());
-
-    let handler: ToolHandler = Arc::new(move |_name, args| {
-        let root_id = args
-            .get("rootComponentId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("root");
-        let canvas = args.get("canvasSettings").cloned().unwrap_or(json!({}));
-        let components = args.get("components").cloned().unwrap_or(json!([]));
-        let (validated_components, validation_errors) =
-            validate_ui_components(root_id, &canvas, &components);
-
-        let result = if validation_errors.is_empty() {
-            json!({
-                "status": "valid",
-                "rootComponentId": root_id,
-                "canvasSettings": canvas,
-                "components": validated_components,
-                "message": "UI tree is valid. Call emit_ui with the same tree to render it."
-            })
-        } else {
-            json!({
-                "status": "validation_errors",
-                "errors": validation_errors,
-                "rootComponentId": root_id,
-                "canvasSettings": canvas,
-                "components": validated_components,
-                "message": "UI tree is invalid. Fix the listed errors and call validate_ui again."
-            })
-        };
-
-        ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
-    });
-
-    (tool, handler)
-}
-
 /// Emit UI tool - output A2UI JSON components
-fn create_emit_ui_tool() -> (Tool, ToolHandler) {
+fn create_emit_ui_tool(
+    emitted_surfaces: Option<Arc<Mutex<Vec<EmittedSurface>>>>,
+) -> (Tool, ToolHandler) {
     let tool = Tool::new("emit_ui")
         .description(
             r#"Output A2UI components to render in the interface. This is NOT file editing - it generates JSON that renders directly in the app.
 
-Prefer calling validate_ui first for non-trivial component trees. emit_ui also validates
-and will not render invalid component trees.
+emit_ui validates before rendering: an invalid component tree renders nothing and the errors are
+returned — fix them and call emit_ui again.
 
 OUTPUT FORMAT:
 {
@@ -1195,14 +1165,14 @@ EXAMPLE - Simple card:
 
         if !validation_errors.is_empty() {
             let error_list = validation_errors.join("\n- ");
+            // No tree echo: the errors name the offending component ids, and the model already
+            // has the tree it submitted. Echoing 100+ components per retry drowns the loop.
             let result = json!({
                 "status": "validation_errors",
                 "errors": validation_errors,
                 "rootComponentId": root_id,
-                "canvasSettings": canvas,
-                "components": validated_components,
                 "message": format!(
-                    "UI rendered with {} validation error(s). Fix these and call emit_ui again:\n- {}",
+                    "Nothing was rendered — {} validation error(s). Fix these and call emit_ui again with the full corrected tree:\n- {}",
                     validation_errors.len(),
                     error_list
                 )
@@ -1210,13 +1180,38 @@ EXAMPLE - Simple card:
             return ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default());
         }
 
-        let result = json!({
-            "status": "rendered",
-            "rootComponentId": root_id,
-            "canvasSettings": canvas,
-            "components": validated_components,
-            "message": "UI components have been rendered successfully"
-        });
+        let component_count = validated_components
+            .as_array()
+            .map(|components| components.len())
+            .unwrap_or_default();
+
+        // The rendered tree travels through the emitted-surfaces store (the chat loop drains it
+        // into a <components> frame); the model only needs the outcome. Without a store (no
+        // consumer to drain it), fall back to echoing the tree so it is not lost.
+        let result = match &emitted_surfaces {
+            Some(store) => {
+                if let Ok(mut surfaces) = store.lock() {
+                    surfaces.push(EmittedSurface {
+                        root_component_id: root_id.to_string(),
+                        canvas_settings: canvas.clone(),
+                        components: validated_components,
+                    });
+                }
+                json!({
+                    "status": "rendered",
+                    "rootComponentId": root_id,
+                    "component_count": component_count,
+                    "message": format!("Rendered {component_count} UI component(s) successfully.")
+                })
+            }
+            None => json!({
+                "status": "rendered",
+                "rootComponentId": root_id,
+                "canvasSettings": canvas,
+                "components": validated_components,
+                "message": "UI components have been rendered successfully"
+            }),
+        };
 
         ToolResultObject::text(serde_json::to_string(&result).unwrap_or_default())
     });
@@ -1228,18 +1223,15 @@ EXAMPLE - Simple card:
 fn create_get_component_schema_tool() -> (Tool, ToolHandler) {
     let tool = Tool::new("get_component_schema")
         .description(
-            r#"Look up the detailed schema for one or more A2UI component types. Call this BEFORE generating components you haven't used before.
+            r#"FALLBACK detail lookup for a few A2UI component types. The component documentation embedded in your system prompt is the authoritative reference — do NOT call this for components already documented there.
 
 Returns: Full property list with types, required fields, BoundValue format, and a working example.
 
-AVAILABLE TYPES:
-Layout: column, row, grid, stack, scrollArea, box, center, spacer, absolute, aspectRatio, overlay
-Display: text, image, icon, video, lottie, markdown, badge, avatar, progress, spinner, divider, skeleton, iframe
-Interactive: button, textField, select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, link
-Container: card, modal, tabs, accordion, drawer, tooltip, popover
-Data: table, nivoChart, plotlyChart, filePreview
-Vision: boundingBoxOverlay, imageLabeler, imageHotspot
-Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap"#,
+DETAILED PAGES EXIST ONLY FOR:
+column, row, grid, text, button, feedback, appLink, card, userProfile, textField, select, image,
+icon, diffView, calendar, gantt, checkbox, switch, tabs, modal
+Style categories: spacing, colors, effects, layout, responsive, typography
+All other types return a pointer back to the embedded documentation."#,
         )
         .schema(json!({
             "type": "object",
@@ -1303,7 +1295,17 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         "center" => Some(&["inline"]),
         "spacer" => Some(&["size", "flex", "direction", "flexible"]),
         "overlay" => Some(&["baseComponentId", "overlays"]),
-        "widgetInstance" => Some(&["widgetId", "widgetInputs", "bindOutputs"]),
+        // Mirrors WidgetInstanceComponent in packages/ui/components/a2ui/types.ts plus the
+        // inline-definition form the prompts document (A2UIWidgetInstance.tsx).
+        "widgetInstance" => Some(&[
+            "instanceId",
+            "widgetId",
+            "appId",
+            "inlineWidgetDef",
+            "exposedPropValues",
+            "actionBindings",
+            "styleOverride",
+        ]),
         "text" => Some(&[
             "content", "variant", "size", "weight", "color", "align", "truncate", "maxLines",
         ]),
@@ -1826,7 +1828,7 @@ fn validate_ui_components(
         let known = known_props_for_type(comp_type);
         if known.is_none() {
             errors.push(format!(
-                "{}: unknown component type '{}'. Use get_component_schema to look up available types.",
+                "{}: unknown component type '{}'. Use one of the component types listed in the component documentation in your system prompt.",
                 id, comp_type
             ));
             continue;
@@ -1867,8 +1869,11 @@ fn validate_ui_components(
                 let k = key.as_str();
                 if !BASE_PROPS.contains(&k) && !known_set.contains(&k) {
                     errors.push(format!(
-                        "{}: unknown prop '{}' on '{}'. Use get_component_schema(\"{}\") to see valid props.",
-                        id, k, comp_type, comp_type
+                        "{}: unknown prop '{}' on '{}'. Valid props: {}. Check the component documentation in your system prompt.",
+                        id,
+                        k,
+                        comp_type,
+                        known.map(|props| props.join(", ")).unwrap_or_default()
                     ));
                 }
             }

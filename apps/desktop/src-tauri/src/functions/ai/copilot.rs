@@ -1238,13 +1238,44 @@ async fn external_code_agent_chat_internal(
         (None, false) => text,
     };
 
+    // `emit_ui` results are invisible to the MCP transport, so rendered surfaces are drained from
+    // the shared store — the LAST successful emit wins, matching the SDK path's extraction.
+    let emitted_surface = surface
+        .emitted_surfaces
+        .lock()
+        .ok()
+        .and_then(|mut surfaces| surfaces.drain(..).last());
+    let (components, canvas_settings, root_component_id) = match emitted_surface {
+        Some(emitted) => (
+            serde_json::from_value::<Vec<SurfaceComponent>>(emitted.components)
+                .unwrap_or_default(),
+            Some(emitted.canvas_settings),
+            Some(emitted.root_component_id),
+        ),
+        None => (Vec::new(), None, None),
+    };
+    if !components.is_empty() {
+        let comp_event = format!(
+            "<components>{}</components>",
+            serde_json::to_string(&components).unwrap_or_default()
+        );
+        let _ = channel.send(comp_event);
+        if let Some(canvas) = &canvas_settings {
+            let canvas_event = format!(
+                "<canvas_settings>{}</canvas_settings>",
+                serde_json::to_string(canvas).unwrap_or_default()
+            );
+            let _ = channel.send(canvas_event);
+        }
+    }
+
     Ok(UnifiedCopilotResponse {
         message,
         commands: drain_side_effect_commands(&surface.side_effect_commands),
         suggestions: Vec::new(),
-        components: Vec::new(),
-        canvas_settings: None,
-        root_component_id: None,
+        components,
+        canvas_settings,
+        root_component_id,
         flowscript_workspace: None,
         active_scope: scope,
     })
@@ -1286,6 +1317,7 @@ async fn copilot_sdk_chat_internal(
         read_only,
     );
     let side_effect_commands = surface.side_effect_commands.clone();
+    let emitted_surfaces = surface.emitted_surfaces.clone();
     let workflow_edit_request = surface.workflow_edit_request;
 
     let tools = build_flowpilot_sdk_tools(app_handle, scope, &surface, global.is_some(), memory);
@@ -1447,6 +1479,10 @@ async fn copilot_sdk_chat_internal(
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
     let mut open_tool_call_ids: HashSet<String> = HashSet::new();
     let mut session_error_note: Option<String> = None;
+    // Most recent mutating tool call that failed validation: (tool name, errors). Cleared when a
+    // later call queues/renders. Feeds the idle-continuation nudge so a model that stops after a
+    // failed edit gets told exactly what to fix instead of a generic "try again".
+    let mut last_validation_errors: Option<(String, Vec<String>)> = None;
     // Token usage the SDK reports per turn (assistant.usage) — accumulated into one usage_stat frame
     // so the chat shows the agent's own model usage (mirrors the Bits/rig path in platform.rs).
     let mut usage_prompt_tokens: u64 = 0;
@@ -1628,44 +1664,88 @@ async fn copilot_sdk_chat_internal(
                             }
                         }
 
-                        // Extract commands from emit_commands tool (status: "queued")
-                        if status == Some("queued")
-                            && let Some(cmds) = parsed.get("commands")
-                            && let Ok(commands) =
-                                serde_json::from_value::<Vec<BoardCommand>>(cmds.clone())
-                        {
-                            let cmd_event = format!(
-                                "<commands>{}</commands>",
-                                serde_json::to_string(&commands).unwrap_or_default()
-                            );
-                            let _ = channel.send(cmd_event);
-                            extracted_commands.extend(commands);
-                            last_validated_commands = None;
+                        // Track validation outcomes so idle handling can nudge with the exact
+                        // failure instead of a generic "try again".
+                        if status == Some("validation_errors") {
+                            let errors: Vec<String> = parsed
+                                .get("errors")
+                                .and_then(|value| value.as_array())
+                                .map(|entries| {
+                                    entries
+                                        .iter()
+                                        .filter_map(|entry| entry.as_str().map(str::to_string))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            last_validation_errors =
+                                Some((completed_tool_name.clone(), errors));
+                        } else if matches!(status, Some("queued" | "rendered")) {
+                            last_validation_errors = None;
                         }
-                        // Extract components from emit_ui tool (status: "rendered")
+
+                        // Queued board commands travel via the side-effect store (tool results no
+                        // longer echo the batch). Drain it here so the frontend gets a live
+                        // <commands> frame; keep the legacy result-echo parse as a fallback.
+                        if status == Some("queued") {
+                            let mut commands = drain_side_effect_commands(&side_effect_commands);
+                            if commands.is_empty()
+                                && let Some(cmds) = parsed.get("commands")
+                                && let Ok(parsed_commands) =
+                                    serde_json::from_value::<Vec<BoardCommand>>(cmds.clone())
+                            {
+                                commands = parsed_commands;
+                            }
+                            if !commands.is_empty() {
+                                send_commands_event(&channel, &commands);
+                                extracted_commands.extend(commands);
+                                last_validated_commands = None;
+                            }
+                        }
+                        // Rendered UI travels via the emitted-surfaces store (tool results no
+                        // longer echo the tree). Drain the newest surface; keep the legacy
+                        // result-echo parse as a fallback.
                         if status == Some("rendered") {
-                            // Extract canvasSettings
-                            if let Some(canvas) = parsed.get("canvasSettings") {
-                                extracted_canvas_settings = Some(canvas.clone());
+                            let emitted = emitted_surfaces
+                                .lock()
+                                .ok()
+                                .and_then(|mut surfaces| surfaces.drain(..).last());
+                            let (components, canvas, root_id) = match emitted {
+                                Some(surface) => (
+                                    serde_json::from_value::<Vec<SurfaceComponent>>(
+                                        surface.components,
+                                    )
+                                    .unwrap_or_default(),
+                                    Some(surface.canvas_settings),
+                                    Some(surface.root_component_id),
+                                ),
+                                None => (
+                                    parsed
+                                        .get("components")
+                                        .cloned()
+                                        .and_then(|comps| {
+                                            serde_json::from_value::<Vec<SurfaceComponent>>(comps)
+                                                .ok()
+                                        })
+                                        .unwrap_or_default(),
+                                    parsed.get("canvasSettings").cloned(),
+                                    parsed
+                                        .get("rootComponentId")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::to_string),
+                                ),
+                            };
+                            if let Some(canvas) = canvas {
+                                extracted_canvas_settings = Some(canvas);
                             }
-                            // Extract rootComponentId
-                            if let Some(root_id) =
-                                parsed.get("rootComponentId").and_then(|v| v.as_str())
-                            {
-                                extracted_root_component_id = Some(root_id.to_string());
+                            if let Some(root_id) = root_id {
+                                extracted_root_component_id = Some(root_id);
                             }
-                            // Extract components
-                            if let Some(comps) = parsed.get("components")
-                                && let Ok(components) =
-                                    serde_json::from_value::<Vec<SurfaceComponent>>(comps.clone())
-                            {
-                                // Send components WITH canvas settings to frontend
+                            if !components.is_empty() {
                                 let comp_event = format!(
                                     "<components>{}</components>",
                                     serde_json::to_string(&components).unwrap_or_default()
                                 );
                                 let _ = channel.send(comp_event);
-                                // Also send canvas settings
                                 if let Some(ref canvas) = extracted_canvas_settings {
                                     let canvas_event = format!(
                                         "<canvas_settings>{}</canvas_settings>",
@@ -1763,8 +1843,15 @@ async fn copilot_sdk_chat_internal(
                         extracted_components = components;
                     }
 
-                    if workflow_edit_request
+                    // Nudge the model to finish when it stalled mid-task: either a workflow-edit
+                    // request that queued nothing, or ANY scope whose last mutating call failed
+                    // validation and produced no successful follow-up (models often stop right
+                    // after a failed edit_flowscript/emit_ui instead of fixing and retrying).
+                    let failed_attempt_pending = last_validation_errors.is_some()
                         && extracted_commands.is_empty()
+                        && extracted_components.is_empty();
+                    if ((workflow_edit_request && extracted_commands.is_empty())
+                        || failed_attempt_pending)
                         && workflow_idle_continuations < MAX_WORKFLOW_IDLE_CONTINUATIONS
                     {
                         workflow_idle_continuations = workflow_idle_continuations.saturating_add(1);
@@ -1773,6 +1860,7 @@ async fn copilot_sdk_chat_internal(
                             &original_user_prompt,
                             extracted_flowscript_workspace.as_deref(),
                             workflow_idle_continuations,
+                            last_validation_errors.as_ref(),
                         );
                         match session
                             .send(MessageOptions {
@@ -1878,6 +1966,33 @@ async fn copilot_sdk_chat_internal(
         if !commands.is_empty() {
             send_commands_event(&channel, &commands);
             extracted_commands.extend(commands);
+        }
+    }
+
+    // Same fallback for rendered UI: if the session ended before the "rendered" tool event was
+    // observed, the emitted-surfaces store still holds the tree.
+    if extracted_components.is_empty()
+        && let Some(surface) = emitted_surfaces
+            .lock()
+            .ok()
+            .and_then(|mut surfaces| surfaces.drain(..).last())
+    {
+        let components =
+            serde_json::from_value::<Vec<SurfaceComponent>>(surface.components).unwrap_or_default();
+        if !components.is_empty() {
+            let comp_event = format!(
+                "<components>{}</components>",
+                serde_json::to_string(&components).unwrap_or_default()
+            );
+            let _ = channel.send(comp_event);
+            let canvas_event = format!(
+                "<canvas_settings>{}</canvas_settings>",
+                serde_json::to_string(&surface.canvas_settings).unwrap_or_default()
+            );
+            let _ = channel.send(canvas_event);
+            extracted_canvas_settings = Some(surface.canvas_settings);
+            extracted_root_component_id = Some(surface.root_component_id);
+            extracted_components = components;
         }
     }
 
@@ -2398,7 +2513,7 @@ fn build_flowpilot_sdk_tools(
             surface.catalog_provider.clone(),
             Some(surface.side_effect_commands.clone()),
         ),
-        CopilotScope::Frontend => create_frontend_tools(),
+        CopilotScope::Frontend => create_frontend_tools(Some(surface.emitted_surfaces.clone())),
         CopilotScope::Both => {
             let mut all_tools = create_board_tools(
                 surface.graph_context.clone(),
@@ -2406,7 +2521,9 @@ fn build_flowpilot_sdk_tools(
                 surface.catalog_provider.clone(),
                 Some(surface.side_effect_commands.clone()),
             );
-            all_tools.extend(create_frontend_tools());
+            all_tools.extend(create_frontend_tools(Some(
+                surface.emitted_surfaces.clone(),
+            )));
             all_tools
         }
     };
@@ -2743,11 +2860,17 @@ impl ExternalAgentInvocation {
                 .map(|name| format!("mcp__flowpilot__{name}"))
                 .collect::<Vec<_>>()
                 .join(",");
+            // Do NOT pass `--tools` here: it controls which tools are visible in
+            // context and only understands built-in tool names, so listing MCP
+            // tools there hides the whole toolset and the agent degrades to
+            // text-only answers. Allow the FlowPilot MCP tools, auto-deny
+            // everything else via `dontAsk`, and strip the built-in file/shell
+            // tools from context entirely so headless runs cannot stall on them.
             args.extend([
-                "--tools".to_string(),
-                allowed_mcp_tools.clone(),
                 "--allowedTools".to_string(),
                 allowed_mcp_tools,
+                "--disallowedTools".to_string(),
+                "Task,Bash,Glob,Grep,Read,Edit,Write,NotebookEdit,WebFetch,WebSearch".to_string(),
                 "--permission-mode".to_string(),
                 "dontAsk".to_string(),
             ]);
@@ -2755,14 +2878,15 @@ impl ExternalAgentInvocation {
         if !model_id.trim().is_empty() && model_id != "default" {
             args.extend(["--model".to_string(), model_id.to_string()]);
         }
-        args.push(prompt.clone());
 
         Ok(Self {
             backend,
             executable: cli.executable,
             path_dirs: cli.path_dirs,
             args,
-            prompt: String::new(),
+            // Delivered via stdin (`-p` reads it when no positional prompt is given): the prompt
+            // embeds the whole board as FlowScript and can exceed OS argv length limits.
+            prompt,
             // Claude Code's MCP client aborts tool calls at MCP_TOOL_TIMEOUT
             // (default 300s). FlowPilot's frontend-bridge tools (e.g. UI
             // generation via flowpilot_widget) can legitimately run longer, so
@@ -2873,9 +2997,19 @@ fn run_external_agent_invocation_blocking(
                 fatal_error.get_or_insert(error);
             }
 
-            if let Some(workspace_event) = external_agent_flowscript_workspace_event(&value) {
-                let _ = channel.send(workspace_event);
+            // A failed FlowPilot MCP connection leaves the agent tool-less: it will answer in
+            // plain text and "succeed" without ever editing the board. Surface it loudly
+            // instead of letting the run masquerade as a normal reply.
+            if let Some(error) = external_agent_mcp_connect_failure(&value) {
+                send_external_progress_event(&channel, EXTERNAL_AGENT_TOOL_CALL_ID, &error);
+                fatal_error.get_or_insert(error);
             }
+
+            // NOTE: no flowscript_workspace frames on the external path. The frontend ignores
+            // response.commands whenever a workspace event was seen, and only Codex ever emitted
+            // one (Claude's tool_use frames were never translated) — so the two CLIs diverged and
+            // Codex's already-validated commands were re-transpiled instead of applied. External
+            // agents rely on drained response.commands only.
 
             let tool_events = if invocation.backend == FlowPilotAgentBackendKind::ClaudeCode {
                 claude_agent_tool_events(&value, &mut stream_state)
@@ -3049,6 +3183,42 @@ fn external_agent_process_event(value: &serde_json::Value) -> Option<String> {
     ))
 }
 
+/// Detect a failed FlowPilot MCP server connection in Claude Code's `system`/`init` frame
+/// (`{"type":"system","subtype":"init","mcp_servers":[{"name":…,"status":…}]}`).
+fn external_agent_mcp_connect_failure(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(serde_json::Value::as_str) != Some("system")
+        || value.get("subtype").and_then(serde_json::Value::as_str) != Some("init")
+    {
+        return None;
+    }
+    let servers = value.get("mcp_servers")?.as_array()?;
+    let failed: Vec<String> = servers
+        .iter()
+        .filter_map(|server| {
+            let name = server.get("name").and_then(serde_json::Value::as_str)?;
+            let status = server
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            (status != "connected")
+                .then(|| format!("`{name}` (status: {status})"))
+        })
+        .collect();
+    if failed.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "MCP server connection failed: {} — the FlowPilot tools are unavailable, so this run cannot edit the board or UI",
+        failed.join(", ")
+    ))
+}
+
+/// Translate a Codex `mcp_tool_call` edit_flowscript item into a workspace preview frame.
+///
+/// Retained for tests/documentation of the Codex event shape; the external run loop no longer
+/// emits these frames (see the note there) because a workspace frame makes the frontend ignore
+/// the drained `response.commands`.
+#[cfg_attr(not(test), allow(dead_code))]
 fn external_agent_flowscript_workspace_event(value: &serde_json::Value) -> Option<String> {
     let event_type = value
         .get("type")
@@ -3540,11 +3710,14 @@ fn external_agent_error_text(value: &serde_json::Value) -> Option<String> {
 }
 
 fn external_agent_result_text(
-    backend: FlowPilotAgentBackendKind,
+    _backend: FlowPilotAgentBackendKind,
     value: &serde_json::Value,
 ) -> Option<String> {
-    if backend == FlowPilotAgentBackendKind::Codex {
-        return codex_agent_result_text(value);
+    // Codex item.completed agent messages match first; every backend then falls back to the
+    // generic result/final extraction (`{"type":"result","message":…}` frames). mcp_tool_call
+    // outputs never reach the fallback — their event type carries neither "result" nor "final".
+    if let Some(text) = codex_agent_result_text(value) {
+        return Some(text);
     }
 
     let event_type = value
@@ -3552,10 +3725,6 @@ fn external_agent_result_text(
         .or_else(|| value.get("event"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-
-    if let Some(text) = codex_agent_result_text(value) {
-        return Some(text);
-    }
 
     if !event_type.contains("result") && !event_type.contains("final") {
         return None;
@@ -3657,19 +3826,30 @@ fn workflow_edit_continuation_prompt(
     original_user_prompt: &str,
     latest_workspace: Option<&str>,
     attempt: u8,
+    validation_failure: Option<&(String, Vec<String>)>,
 ) -> String {
+    let failure_note = match validation_failure {
+        Some((tool, errors)) if !errors.is_empty() => format!(
+            "\nYour last `{tool}` call FAILED validation and nothing was applied. Fix exactly these errors and resubmit the corrected full document/batch:\n- {}\n",
+            errors.join("\n- ")
+        ),
+        Some((tool, _)) => format!(
+            "\nYour last `{tool}` call FAILED validation and nothing was applied. Fix the reported problems and resubmit.\n"
+        ),
+        None => String::new(),
+    };
     let workspace_note = if latest_workspace.is_some() {
         "You already submitted a FlowScript draft, but it did not queue board commands. Use the validation/tool result context, fix the FlowScript, and call edit_flowscript again."
     } else {
-        "You did not produce a FlowScript workspace or board commands yet."
+        "You did not finish the requested change yet."
     };
 
     format!(
         r#"INTERNAL FLOWPILOT CONTINUATION #{attempt}
 {workspace_note}
-
+{failure_note}
 Do not ask the user to confirm. Do not say "Create draft", "go ahead", "tell me if", or similar.
-Use placeholders for unknown credentials/data. Your next assistant turn must call tools, and for workflow behavior it must end by calling edit_flowscript with the full FlowScript document. The turn is not complete until board commands are queued or FlowScript validation diagnostics are visible in the workspace.
+Use placeholders for unknown credentials/data. Your next assistant turn must call tools: for workflow behavior it must end with an edit_flowscript call that queues board commands, and for UI work it must end with an emit_ui call that renders. The turn is not complete until that succeeds or the blocking validation diagnostics have been addressed.
 
 Original user request:
 {original_user_prompt}"#
@@ -3776,7 +3956,7 @@ impl FlowPilotAgentCapabilitySet {
         let mut tool_names: Vec<&'static str> = Vec::new();
 
         if matches!(scope, CopilotScope::Board | CopilotScope::Both) {
-            tool_names.extend(["catalog_search", "validate_commands", "emit_commands"]);
+            tool_names.extend(["catalog_search", "emit_commands"]);
             tool_names.push("get_declarations");
             if has_board {
                 tool_names.push("edit_flowscript");
@@ -3791,7 +3971,7 @@ impl FlowPilotAgentCapabilitySet {
         }
 
         if matches!(scope, CopilotScope::Frontend | CopilotScope::Both) {
-            tool_names.extend(["validate_ui", "emit_ui", "get_component_schema"]);
+            tool_names.extend(["emit_ui", "get_component_schema"]);
         }
 
         tool_names.extend([
@@ -3824,6 +4004,9 @@ struct FlowPilotAgentSurface {
     board_arc: Option<Arc<Board>>,
     catalog_provider: Option<Arc<dyn CatalogProvider>>,
     side_effect_commands: Arc<StdMutex<Vec<BoardCommand>>>,
+    /// UI trees captured from successful `emit_ui` calls, for transports that cannot parse tool
+    /// results (external-agent MCP bridge).
+    emitted_surfaces: Arc<StdMutex<Vec<super::copilot_sdk_tools::EmittedSurface>>>,
     system_content: String,
     workflow_edit_request: bool,
     capabilities: FlowPilotAgentCapabilitySet,
@@ -3906,17 +4089,20 @@ fn build_flowpilot_agent_surface(
                 None => flow_like::copilot::prompts::board_sdk_system_prompt(),
             },
             CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
-            CopilotScope::Both => {
-                let mut prompt = flow_like::copilot::prompts::general_system_prompt();
-                if let Some(flowscript) = board_flowscript.as_deref() {
+            CopilotScope::Both => match board_flowscript.as_deref() {
+                // flowscript_board_context embeds the shared guidance blocks itself; the lean
+                // header avoids duplicating them (~3.5k tokens).
+                Some(flowscript) => {
+                    let mut prompt = flow_like::copilot::prompts::general_system_prompt_lean();
                     prompt.push_str("\n\n");
                     prompt.push_str(&flow_like::copilot::prompts::flowscript_board_context(
                         flowscript,
                         catalog_node_count,
                     ));
+                    prompt
                 }
-                prompt
-            }
+                None => flow_like::copilot::prompts::general_system_prompt(),
+            },
         }
     };
 
@@ -3965,6 +4151,7 @@ fn build_flowpilot_agent_surface(
         board_arc,
         catalog_provider,
         side_effect_commands: Arc::new(StdMutex::new(Vec::new())),
+        emitted_surfaces: Arc::new(StdMutex::new(Vec::new())),
         system_content,
         workflow_edit_request,
         capabilities,
@@ -5560,9 +5747,7 @@ mod tests {
         for tool in [
             "get_declarations",
             "edit_flowscript",
-            "validate_commands",
             "emit_commands",
-            "validate_ui",
             "emit_ui",
             "internet_search",
             "database_tool",
@@ -5750,6 +5935,20 @@ mod tests {
         assert!(invocation.args.contains(&"stream-json".to_string()));
         assert!(invocation.args.contains(&"--strict-mcp-config".to_string()));
         assert!(invocation.args.contains(&"--allowedTools".to_string()));
+        assert!(
+            !invocation.args.contains(&"--tools".to_string()),
+            "--tools only understands built-in tool names; passing MCP names there hides the whole toolset"
+        );
+        assert!(invocation.args.contains(&"--disallowedTools".to_string()));
+        assert!(invocation.args.contains(&"dontAsk".to_string()));
+        assert_eq!(
+            invocation.prompt, "hello",
+            "prompt must be delivered via stdin"
+        );
+        assert!(
+            !invocation.args.contains(&"hello".to_string()),
+            "prompt must not be passed as argv (OS arg-length limits on large boards)"
+        );
         assert!(
             invocation
                 .args

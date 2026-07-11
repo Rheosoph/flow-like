@@ -78,7 +78,40 @@ pub struct ThinkingArgs {
 
 #[derive(Deserialize)]
 pub struct GetNodeDetailsArgs {
+    #[serde(default)]
     pub node_id: String,
+    /// Batch form: inspect several nodes in ONE call.
+    #[serde(default)]
+    pub node_ids: Vec<String>,
+}
+
+/// Merge the single `node_id` and batch `node_ids` forms into the list of nodes to inspect.
+pub fn node_detail_ids(args: &GetNodeDetailsArgs) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    if !args.node_id.trim().is_empty() {
+        ids.push(args.node_id.clone());
+    }
+    for id in &args.node_ids {
+        if !id.trim().is_empty() && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
+/// Render details for every requested node, joined into one response.
+pub fn build_multi_node_details_output(
+    args: &GetNodeDetailsArgs,
+    graph_context: &GraphContext,
+) -> String {
+    let ids = node_detail_ids(args);
+    if ids.is_empty() {
+        return "get_node_details needs `node_id` or a `node_ids` array.".to_string();
+    }
+    ids.iter()
+        .map(|id| build_node_details_output(id, graph_context))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 #[derive(Deserialize)]
@@ -107,7 +140,42 @@ pub struct QueryLogsArgs {
 pub struct GetDeclarationsArgs {
     /// Free-text search for the kinds of nodes you want to call in FlowScript
     /// (e.g. "http request", "parse json", "invoke agent").
+    #[serde(default)]
     pub query: String,
+    /// Batch form: several focused searches answered in ONE call. Prefer this over
+    /// multiple get_declarations round-trips.
+    #[serde(default)]
+    pub queries: Vec<String>,
+}
+
+/// Merge the single `query` and batch `queries` forms into the list of searches to run.
+pub fn declaration_queries(args: &GetDeclarationsArgs) -> Vec<String> {
+    let mut queries: Vec<String> = Vec::new();
+    if !args.query.trim().is_empty() {
+        queries.push(args.query.clone());
+    }
+    for query in &args.queries {
+        if !query.trim().is_empty() && !queries.iter().any(|q| q == query) {
+            queries.push(query.clone());
+        }
+    }
+    queries
+}
+
+/// Run every declaration query against the provider and join the rendered sections.
+pub async fn run_declaration_queries(
+    provider: &Arc<dyn CatalogProvider>,
+    args: &GetDeclarationsArgs,
+) -> String {
+    let queries = declaration_queries(args);
+    if queries.is_empty() {
+        return provider.get_declarations("").await;
+    }
+    let mut sections = Vec::with_capacity(queries.len());
+    for query in &queries {
+        sections.push(provider.get_declarations(query).await);
+    }
+    sections.join("\n")
 }
 
 #[derive(Deserialize)]
@@ -494,39 +562,40 @@ impl Tool for GetNodeDetailsTool {
         ToolDefinition {
             name: "get_node_details".to_string(),
             description:
-                r#"Get full details about a node including position, all pins, and connections.
+                r#"Get full details about nodes including position, all pins, and connections. BATCH-FIRST: pass every node you plan to touch in ONE call via `node_ids`.
 
 CRITICAL: Use this BEFORE connecting to existing nodes!
 
-RETURNS:
+RETURNS (per node):
 - position: {x, y} - use this to position new nodes nearby
 - inputs/outputs: Array of pins with {name, type, value}
 - incoming/outgoing: Current connections
 
 EXAMPLE USE:
-1. Call get_node_details on existing node
-2. Note its position (e.g., {x: 500, y: 200})
-3. Place new connected node at {x: 750, y: 200} (250px right)
+1. Call get_node_details once with node_ids: [all nodes you will connect or configure]
+2. Note their positions (e.g., {x: 500, y: 200})
+3. Place new connected nodes 250px to the right
 4. Use exact pin names from outputs/inputs in ConnectPins"#
                     .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
+                    "node_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "PREFERRED. All node IDs to inspect in one call (from list_board_nodes or context)."
+                    },
                     "node_id": {
                         "type": "string",
-                        "description": "The node ID to inspect (from list_board_nodes or context)"
+                        "description": "Single-node fallback. Prefer `node_ids` with every relevant node batched."
                     }
-                },
-                "required": ["node_id"]
+                }
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Ok(build_node_details_output(
-            &args.node_id,
-            &self.graph_context,
-        ))
+        Ok(build_multi_node_details_output(&args, &self.graph_context))
     }
 }
 
@@ -1174,11 +1243,16 @@ impl Tool for GetDeclarationsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_declarations".to_string(),
-            description: r#"Look up FlowScript node declarations (.flow.d) by intent.
+            description: r#"Look up FlowScript node declarations (.flow.d) by intent. BATCH-FIRST: pass ALL the searches your plan needs in ONE call via `queries`.
 
 Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
-signatures for nodes matching your focused query, plus an `// impure` marker for side-effecting /
-control-flow nodes. Empty queries intentionally return guidance only, not the full catalog.
+signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. Empty
+queries intentionally return guidance only, not the full catalog.
+
+WORKFLOW: sketch the whole flow first, list every node capability it needs, then make ONE
+get_declarations call with all of those searches in `queries`, e.g.
+{"queries": ["open local database", "datafusion sql query", "for each loop", "instantiate widget",
+"string format", "http fetch"]}. Only call again for signatures that were genuinely missing.
 
 Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
 typed arguments. This covers every package in the project's catalog, including third-party ones."#
@@ -1186,18 +1260,22 @@ typed arguments. This covers every package in the project's catalog, including t
             parameters: json!({
                 "type": "object",
                 "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "PREFERRED. Several focused declaration searches answered in one call — one entry per node capability the planned flow needs. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                    },
                     "query": {
                         "type": "string",
-                        "description": "Focused declaration search. Do not leave blank. Good examples: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                        "description": "Single-search fallback. Prefer `queries` with every needed search batched into one call."
                     }
-                },
-                "required": ["query"]
+                }
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Ok(self.provider.get_declarations(&args.query).await)
+        Ok(run_declaration_queries(&self.provider, &args).await)
     }
 }
 

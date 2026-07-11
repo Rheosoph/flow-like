@@ -502,12 +502,13 @@ impl FlowScriptApplyPlanner {
                             .push((node_id, pin_id.clone(), value.clone()));
                         continue;
                     };
+                    let value = self.resolve_layer_reference_pin_value(board, &node, &pin_id, value);
                     let Some(pin) = node.pins.get_mut(&pin_id) else {
                         return Err(flow_like_types::anyhow!(
                             "Pin `{pin_id}` not found on node `{node_id}`"
                         ));
                     };
-                    pin.default_value = Some(flow_like_types::json::to_vec(value)?);
+                    pin.default_value = Some(flow_like_types::json::to_vec(&value)?);
                     self.staged_nodes.insert(node_id.clone(), node.clone());
                     generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
                 }
@@ -538,6 +539,10 @@ impl FlowScriptApplyPlanner {
                 }
             };
             let pin_id = resolve_pin_id_in_node(node, &pin_ref, Some(PinType::Input))?;
+            let value = {
+                let node_ref = &*node;
+                self.resolve_layer_reference_pin_value(board, node_ref, &pin_id, &value)
+            };
             let Some(pin) = node.pins.get_mut(&pin_id) else {
                 return Err(flow_like_types::anyhow!(
                     "Pin `{pin_ref}` not found on node `{node_id}` after node update"
@@ -829,6 +834,30 @@ impl FlowScriptApplyPlanner {
         }
 
         Ok(generic_commands)
+    }
+
+    /// `function_layer_id` pins (on `control_call_function` nodes) authored from FlowScript carry
+    /// a `$n` ref or function name for layers created in the same batch; resolve it to the real
+    /// layer id. Other pins pass through untouched.
+    fn resolve_layer_reference_pin_value(
+        &self,
+        board: &Board,
+        node: &Node,
+        pin_id: &str,
+        value: &flow_like_types::Value,
+    ) -> flow_like_types::Value {
+        let is_layer_ref_pin = node
+            .pins
+            .get(pin_id)
+            .map(|pin| pin.name == "function_layer_id")
+            .unwrap_or(pin_id == "function_layer_id");
+        if is_layer_ref_pin
+            && let Some(reference) = value.as_str()
+            && let Ok(resolved) = self.resolve_node_id(board, reference)
+        {
+            return flow_like_types::Value::String(resolved);
+        }
+        value.clone()
     }
 
     /// If `id` refers to a layer (e.g. an authored FlowScript function), return the id of its

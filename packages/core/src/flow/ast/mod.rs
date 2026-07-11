@@ -22,8 +22,8 @@ pub use flow_like_ast::{
 };
 pub use lower::lower_board;
 pub use reconcile::{
-    MetadataEnricher, ReconcileResult, reconcile, reconcile_text, reconcile_text_with_catalog,
-    reconcile_text_with_catalog_enriched, reconcile_with_catalog,
+    MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileResult, reconcile, reconcile_text,
+    reconcile_text_with_catalog, reconcile_text_with_catalog_enriched, reconcile_with_catalog,
 };
 pub use signatures::{node_to_signature, node_to_signature_in};
 

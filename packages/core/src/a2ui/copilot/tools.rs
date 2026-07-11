@@ -501,7 +501,7 @@ Example:
         .to_string(),
 
         _ => format!(
-            "Unknown component type: {}. Available types: column, row, grid, stack, text, image, icon, button, textField, select, checkbox, switch, slider, card, modal, tabs, accordion, divider, badge, avatar, userProfile, progress, spinner, skeleton",
+            "No detailed schema page for component type: {}. Detailed pages exist for: column, row, grid, text, button, feedback, appLink, card, userProfile, textField, select, image, icon, diffView, calendar, gantt, checkbox, switch, tabs, modal (plus style categories spacing, colors, effects, layout, responsive, typography). For every other component, use the component documentation embedded in your system prompt — it is the authoritative reference.",
             component_type
         ),
     }

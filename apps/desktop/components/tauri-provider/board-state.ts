@@ -51,17 +51,17 @@ import {
 	requestRpaAutomationConsent,
 } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
+import {
+	getRemoteBoardSkipReason,
+	shouldApplyRemoteBoard,
+} from "./board-merge";
+import { mergeBoardOffThread } from "./board-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 interface DiffEntry {
 	path: string;
 	local: any;
 	remote: any;
-}
-
-interface SystemTimeLike {
-	secs_since_epoch?: number;
-	nanos_since_epoch?: number;
 }
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
@@ -174,7 +174,18 @@ const getDeepDifferences = (
 	return differences;
 };
 
+// The full recursive diff below costs hundreds of ms on large boards — only
+// run it when explicitly enabled for debugging board sync issues.
+const isBoardSyncDebugEnabled = (): boolean => {
+	try {
+		return localStorage.getItem("flow-debug-board-sync") === "1";
+	} catch {
+		return false;
+	}
+};
+
 const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
+	if (!isBoardSyncDebugEnabled()) return;
 	const differences = getDeepDifferences(localBoard, remoteBoard);
 
 	if (differences.length === 0) {
@@ -206,88 +217,6 @@ const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
 		console.groupEnd();
 	});
 };
-const preserveSecretValues = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): IBoard => {
-	if (!localBoard) return remoteBoard;
-
-	for (const [varId, remoteVar] of Object.entries(remoteBoard.variables)) {
-		const localVar = localBoard.variables[varId];
-		if (
-			localVar?.secret &&
-			remoteVar.secret &&
-			remoteVar.default_value == null &&
-			localVar.default_value != null
-		) {
-			remoteVar.default_value = localVar.default_value;
-		}
-	}
-
-	return remoteBoard;
-};
-
-const comparableNodeWithoutRuntimeHash = (
-	node: INode,
-	localNode?: INode,
-): INode => {
-	const comparable = structuredClone(node);
-	comparable.hash = undefined;
-
-	if (comparable.wasm == null && localNode?.wasm != null) {
-		comparable.wasm = structuredClone(localNode.wasm);
-	}
-
-	return comparable;
-};
-
-const preserveNodeRuntimeFields = (
-	remoteNode: INode,
-	localNode?: INode,
-): INode => {
-	if (!localNode) return remoteNode;
-
-	const nodesMatchIgnoringRuntimeHash = isEqual(
-		comparableNodeWithoutRuntimeHash(remoteNode, localNode),
-		comparableNodeWithoutRuntimeHash(localNode),
-	);
-
-	if (
-		localNode.hash != null &&
-		(remoteNode.hash == null || nodesMatchIgnoringRuntimeHash)
-	) {
-		remoteNode.hash = localNode.hash;
-	}
-
-	if (remoteNode.wasm == null && localNode.wasm != null) {
-		remoteNode.wasm = structuredClone(localNode.wasm);
-	}
-
-	return remoteNode;
-};
-
-const preserveBoardRuntimeFields = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): IBoard => {
-	if (!localBoard) return remoteBoard;
-
-	for (const [nodeId, remoteNode] of Object.entries(remoteBoard.nodes)) {
-		preserveNodeRuntimeFields(remoteNode, localBoard.nodes[nodeId]);
-	}
-
-	for (const [layerId, remoteLayer] of Object.entries(remoteBoard.layers)) {
-		const localLayer = localBoard.layers[layerId];
-		if (!localLayer) continue;
-
-		for (const [nodeId, remoteNode] of Object.entries(remoteLayer.nodes)) {
-			preserveNodeRuntimeFields(remoteNode, localLayer.nodes[nodeId]);
-		}
-	}
-
-	return remoteBoard;
-};
-
 const getAppPackageCatalogNodes = (
 	catalogNodes: INode[] | undefined,
 ): INode[] | undefined => {
@@ -296,67 +225,6 @@ const getAppPackageCatalogNodes = (
 	);
 
 	return packageNodes?.length ? packageNodes : undefined;
-};
-
-const cloneBoard = (board: IBoard): IBoard => structuredClone(board);
-
-const systemTimeToNumber = (time?: SystemTimeLike): number => {
-	if (!time) return 0;
-	return (
-		(time.secs_since_epoch ?? 0) * 1_000_000_000 + (time.nanos_since_epoch ?? 0)
-	);
-};
-
-const hasIncompletePageIds = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): boolean =>
-	(remoteBoard.page_ids?.length ?? 0) === 0 &&
-	(localBoard?.page_ids?.length ?? 0) > 0;
-
-const shouldApplyRemoteBoard = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): boolean => {
-	if (!localBoard) return true;
-
-	if (hasIncompletePageIds(remoteBoard, localBoard)) {
-		return false;
-	}
-
-	const remoteUpdated = systemTimeToNumber(remoteBoard.updated_at);
-	const localUpdated = systemTimeToNumber(localBoard.updated_at);
-
-	if (remoteUpdated > 0 && localUpdated > 0 && remoteUpdated < localUpdated) {
-		return false;
-	}
-
-	return true;
-};
-
-const mergeRemoteBoard = (remoteBoard: IBoard, localBoard?: IBoard): IBoard => {
-	const merged = preserveBoardRuntimeFields(
-		preserveSecretValues(cloneBoard(remoteBoard), localBoard),
-		localBoard,
-	);
-
-	if (hasIncompletePageIds(merged, localBoard)) {
-		merged.page_ids = localBoard?.page_ids ?? merged.page_ids;
-	}
-
-	return merged;
-};
-
-const boardsDifferIgnoringUpdatedAt = (
-	incomingBoard: IBoard,
-	currentBoard?: IBoard,
-): boolean => {
-	if (!currentBoard) return true;
-
-	const comparableBoard = cloneBoard(incomingBoard);
-	comparableBoard.updated_at = currentBoard.updated_at;
-
-	return !isEqual(comparableBoard, currentBoard);
 };
 
 const decodePinDefaultValue = (defaultValue?: number[] | null): unknown => {
@@ -405,26 +273,6 @@ const summarizeBoardElementRefs = (board: IBoard) => {
 	}
 
 	return summaries;
-};
-
-const getRemoteBoardSkipReason = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): string | null => {
-	if (!localBoard) return null;
-
-	if (hasIncompletePageIds(remoteBoard, localBoard)) {
-		return "remote page_ids empty while local board still has pages";
-	}
-
-	const remoteUpdated = systemTimeToNumber(remoteBoard.updated_at);
-	const localUpdated = systemTimeToNumber(localBoard.updated_at);
-
-	if (remoteUpdated > 0 && localUpdated > 0 && remoteUpdated < localUpdated) {
-		return "remote board updated_at is older than local board";
-	}
-
-	return null;
 };
 
 export class BoardState implements IBoardState {
@@ -591,40 +439,44 @@ export class BoardState implements IBoardState {
 
 				for (const board of remoteData) {
 					const localBoard = mergedBoards.get(board.id);
-					const skipReason = getRemoteBoardSkipReason(board, localBoard);
-					const nextBoard = shouldApplyRemoteBoard(board, localBoard)
-						? mergeRemoteBoard(board, localBoard)
-						: (localBoard ?? mergeRemoteBoard(board, localBoard));
 
-					if (localBoard && nextBoard === localBoard) {
+					if (localBoard && !shouldApplyRemoteBoard(board, localBoard)) {
 						console.warn(
 							"Skipping stale or incomplete remote board during board list sync:",
 							{
 								boardId: board.id,
-								skipReason,
+								skipReason: getRemoteBoardSkipReason(board, localBoard),
 								localPageIds: localBoard.page_ids,
 								remotePageIds: board.page_ids,
 								localUpdatedAt: localBoard.updated_at,
 								remoteUpdatedAt: board.updated_at,
 							},
 						);
+						continue;
 					}
 
-					if (boardsDifferIgnoringUpdatedAt(nextBoard, localBoard)) {
+					const { merged, changed } = await mergeBoardOffThread(
+						board,
+						localBoard,
+					);
+
+					if (changed) {
 						console.log("Board data changed, updating local state:");
 						await invoke("upsert_board", {
 							appId: appId,
-							boardId: nextBoard.id,
-							name: nextBoard.name,
-							description: nextBoard.description,
-							logLevel: nextBoard.log_level,
-							stage: nextBoard.stage,
-							executionMode: nextBoard.execution_mode,
-							boardData: nextBoard,
+							boardId: merged.id,
+							name: merged.name,
+							description: merged.description,
+							logLevel: merged.log_level,
+							stage: merged.stage,
+							executionMode: merged.execution_mode,
+							boardData: merged,
 						});
 					}
 
-					mergedBoards.set(board.id, nextBoard);
+					// Keep the local reference when content is unchanged so downstream
+					// deep-equality checks short-circuit on identity.
+					mergedBoards.set(board.id, changed ? merged : (localBoard ?? merged));
 				}
 
 				return Array.from(mergedBoards.values());
@@ -748,11 +600,11 @@ export class BoardState implements IBoardState {
 				);
 
 				if (remoteData) {
-					const merged = mergeRemoteBoard(remoteData, board);
-					if (
-						boardsDifferIgnoringUpdatedAt(merged, board) &&
-						typeof version === "undefined"
-					) {
+					const { merged, changed } = await mergeBoardOffThread(
+						remoteData,
+						board,
+					);
+					if (changed && typeof version === "undefined") {
 						console.log("[BoardState] forceFresh: updating local board:", {
 							boardId,
 						});
@@ -777,8 +629,9 @@ export class BoardState implements IBoardState {
 							].filter((arg) => typeof arg !== "undefined");
 							this.backend.queryClient.setQueryData(queryKey, merged);
 						}
+						return merged;
 					}
-					return merged;
+					return board;
 				}
 			} catch (e) {
 				console.warn(
@@ -842,18 +695,12 @@ export class BoardState implements IBoardState {
 					throw new Error("Failed to fetch board data");
 				}
 
-				const shouldUseRemote = shouldApplyRemoteBoard(remoteData, board);
-				const skipReason = getRemoteBoardSkipReason(remoteData, board);
-				const merged = shouldUseRemote
-					? mergeRemoteBoard(remoteData, board)
-					: board;
-
-				if (!shouldUseRemote) {
+				if (!shouldApplyRemoteBoard(remoteData, board)) {
 					console.warn(
 						"Skipping stale or incomplete remote board during board sync:",
 						{
 							boardId,
-							skipReason,
+							skipReason: getRemoteBoardSkipReason(remoteData, board),
 							localPageIds: board.page_ids,
 							remotePageIds: remoteData.page_ids,
 							localUpdatedAt: board.updated_at,
@@ -865,10 +712,12 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
-				if (
-					boardsDifferIgnoringUpdatedAt(merged, board) &&
-					typeof version === "undefined"
-				) {
+				const { merged, changed } = await mergeBoardOffThread(
+					remoteData,
+					board,
+				);
+
+				if (changed && typeof version === "undefined") {
 					console.log("Board Missmatch, updating local state:");
 
 					logBoardDifferences(board, merged);
@@ -884,11 +733,13 @@ export class BoardState implements IBoardState {
 						boardData: merged,
 					});
 					dispatchRemoteBoardApplied(appId, boardId);
-				} else {
-					console.log("Board data is up to date, no update needed.");
+					return merged;
 				}
 
-				return merged;
+				console.log("Board data is up to date, no update needed.");
+				// Same reference → the caller's deep-equality check short-circuits and
+				// the query cache keeps identity, so the board is not re-parsed.
+				return board;
 			},
 			this,
 			this.backend.queryClient,

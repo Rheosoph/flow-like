@@ -380,8 +380,14 @@ export function FlowBoard({
 	const edgeReconnectSuccessful = useRef(true);
 	const { isOver, setNodeRef, active } = useDroppable({ id: "flow" });
 	const parentRegister = useFlowBoardParentState();
-	const { refetchLogs, setCurrentMetadata, currentMetadata } =
-		useLogAggregation();
+	// Field selectors: the log store also holds currentLogs/isLoading, which
+	// churn during runs — subscribing to the whole store re-renders the entire
+	// board on every log tick.
+	const refetchLogs = useLogAggregation((state) => state.refetchLogs);
+	const setCurrentMetadata = useLogAggregation(
+		(state) => state.setCurrentMetadata,
+	);
+	const currentMetadata = useLogAggregation((state) => state.currentMetadata);
 	const flowRef = useRef<any>(null);
 	const initialVersionKey = initialVersion?.join(".");
 	const [version, setVersion] = useState<[number, number, number] | undefined>(
@@ -2310,7 +2316,7 @@ export function FlowBoard({
 
 		setNodes(parsed.nodes);
 		setEdges(parsed.edges);
-		setPinCache(new Map(parsed.cache));
+		setPinCache(parsed.cache);
 	}, [
 		board.data,
 		currentLayer,

@@ -199,6 +199,7 @@ fn reconcile_inner(
         }
     }
     let new_anchors: HashSet<&String> = new_calls.keys().collect();
+    let mut removed_ids: HashSet<String> = HashSet::new();
     for anchor in visible.keys() {
         if new_anchors.contains(anchor) {
             continue;
@@ -206,6 +207,7 @@ fn reconcile_inner(
         let Some(node) = find_board_node(existing, anchor) else {
             continue;
         };
+        removed_ids.insert(anchor.clone());
         result.commands.push(BoardCommand::RemoveNode {
             node_id: anchor.clone(),
             summary: Some(format!("Remove {}", node.friendly_name)),
@@ -229,7 +231,206 @@ fn reconcile_inner(
         );
     }
 
+    // Bridge severed exec chains AFTER structural planning merged: when a removed statement was
+    // REPLACED, the planner already re-targeted the predecessor's exec output (exec outputs are
+    // single-target replace at apply), so a bridge from that same source would steal the new
+    // node's wiring and orphan it. Skip sources the merged plan already drives.
+    if !removed_ids.is_empty() {
+        let occupied_sources: HashSet<(String, String)> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    ..
+                } => Some((from_node.clone(), from_pin.clone())),
+                _ => None,
+            })
+            .collect();
+        bridge_removed_exec_chains(
+            existing,
+            &removed_ids,
+            &occupied_sources,
+            &mut result.commands,
+            &mut result.diagnostics,
+        );
+    }
+
+    // Layer-size gate LAST, over the merged command set: a violating edit queues nothing.
+    if let Some(violations) = layer_node_limit_violations(existing, &result.commands) {
+        result.commands.clear();
+        result.diagnostics.extend(violations);
+    }
+
     result
+}
+
+/// Re-join execution chains severed by deletions: for each removed segment whose predecessor and
+/// (transitive) successor survive, emit the bridging ConnectPins so the tail keeps running.
+/// Layer boundary pins count as endpoints — deleting the first statement of a function body
+/// re-joins its layer's `exec_in` to the surviving successor. Sources the merged plan already
+/// drives (`occupied_sources`) are skipped: the planner's replacement wiring wins. Ambiguous
+/// shapes (multiple predecessors or successors) get a diagnostic instead of a guess.
+fn bridge_removed_exec_chains(
+    existing: &Board,
+    removed: &HashSet<String>,
+    occupied_sources: &HashSet<(String, String)>,
+    commands: &mut Vec<BoardCommand>,
+    diagnostics: &mut Vec<String>,
+) {
+    // pin id → (owner ref for commands, pin, walkable node when the owner is a node).
+    let mut pin_owner: HashMap<&str, (String, &Pin, Option<&Node>)> = HashMap::new();
+    for node in all_board_nodes(existing) {
+        for pin in node.pins.values() {
+            pin_owner.insert(pin.id.as_str(), (node.id.clone(), pin, Some(node)));
+        }
+    }
+    for layer in existing.layers.values() {
+        for pin in layer.pins.values() {
+            pin_owner.insert(pin.id.as_str(), (layer.id.clone(), pin, None));
+        }
+    }
+
+    for node_id in removed {
+        let Some(node) = find_board_node(existing, node_id) else {
+            continue;
+        };
+        // Only bridge from a segment head: its predecessor survives the edit. Mid-segment
+        // removed nodes are covered by their head's forward walk.
+        let mut preds: Vec<(String, String)> = node
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Input && is_exec_pin(pin))
+            .flat_map(|pin| pin.depends_on.iter())
+            .filter_map(|pin_id| pin_owner.get(pin_id.as_str()))
+            .filter(|(owner_id, _, _)| !removed.contains(owner_id))
+            .map(|(owner_id, pin, _)| (owner_id.clone(), pin.name.clone()))
+            .collect();
+        preds.sort();
+        preds.dedup();
+        let [(pred_node, pred_pin)] = preds.as_slice() else {
+            continue;
+        };
+        if occupied_sources.contains(&(pred_node.clone(), pred_pin.clone())) {
+            continue;
+        }
+
+        let mut frontier = vec![node];
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut successors: Vec<(String, String)> = Vec::new();
+        while let Some(current) = frontier.pop() {
+            if !visited.insert(current.id.clone()) {
+                continue;
+            }
+            for pin in current
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Output && is_exec_pin(pin))
+            {
+                for target_pin_id in &pin.connected_to {
+                    let Some((owner_id, target_pin, owner_node)) =
+                        pin_owner.get(target_pin_id.as_str())
+                    else {
+                        continue;
+                    };
+                    if removed.contains(owner_id) {
+                        if let Some(owner_node) = owner_node {
+                            frontier.push(owner_node);
+                        }
+                    } else {
+                        successors.push((owner_id.clone(), target_pin.name.clone()));
+                    }
+                }
+            }
+        }
+        successors.sort();
+        successors.dedup();
+
+        match successors.as_slice() {
+            [] => {}
+            [(succ_node, succ_pin)] => {
+                commands.push(BoardCommand::ConnectPins {
+                    from_node: pred_node.clone(),
+                    from_pin: pred_pin.clone(),
+                    to_node: succ_node.clone(),
+                    to_pin: succ_pin.clone(),
+                    summary: Some(format!(
+                        "Re-join execution around removed {}",
+                        node.friendly_name
+                    )),
+                });
+            }
+            _ => diagnostics.push(format!(
+                "removing `{}` leaves multiple execution successors; the chain after it was not re-joined automatically — reconnect the intended successor explicitly",
+                node.friendly_name
+            )),
+        }
+    }
+}
+
+/// Enforce [`MAX_NODES_PER_LAYER`]: existing per-layer populations plus the edit's additions
+/// (minus its removals) must stay within the cap. Returns violation diagnostics, or `None` when
+/// the edit fits.
+fn layer_node_limit_violations(
+    existing: &Board,
+    commands: &[BoardCommand],
+) -> Option<Vec<String>> {
+    let mut counts: HashMap<Option<String>, i64> = HashMap::new();
+    let mut layer_names: HashMap<String, String> = HashMap::new();
+    let mut node_layers: HashMap<&str, Option<String>> = HashMap::new();
+
+    for node in existing.nodes.values() {
+        *counts.entry(node.layer.clone()).or_default() += 1;
+        node_layers.insert(node.id.as_str(), node.layer.clone());
+    }
+    for layer in existing.layers.values() {
+        layer_names.insert(layer.id.clone(), layer.name.clone());
+        for node in layer.nodes.values() {
+            *counts.entry(Some(layer.id.clone())).or_default() += 1;
+            node_layers.insert(node.id.as_str(), Some(layer.id.clone()));
+        }
+    }
+
+    for command in commands {
+        match command {
+            BoardCommand::AddNode { target_layer, .. } => {
+                *counts.entry(target_layer.clone()).or_default() += 1;
+            }
+            BoardCommand::CreateLayer {
+                ref_id: Some(ref_id),
+                name,
+                ..
+            } => {
+                layer_names.insert(ref_id.clone(), name.clone());
+            }
+            BoardCommand::RemoveNode { node_id, .. } => {
+                if let Some(layer) = node_layers.get(node_id.as_str()) {
+                    *counts.entry(layer.clone()).or_default() -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut violations: Vec<String> = counts
+        .iter()
+        .filter(|(_, count)| **count > MAX_NODES_PER_LAYER as i64)
+        .map(|(layer, count)| {
+            let scope = match layer {
+                Some(id) => format!(
+                    "function/layer `{}`",
+                    layer_names.get(id).cloned().unwrap_or_else(|| id.clone())
+                ),
+                None => "the root layer".to_string(),
+            };
+            format!(
+                "this edit would leave {scope} with {count} nodes (max {MAX_NODES_PER_LAYER}). Nothing was queued. Split the logic into smaller `function name(...) {{ ... }}` declarations — each function layer has its own {MAX_NODES_PER_LAYER}-node budget — and call them instead"
+            )
+        })
+        .collect();
+    violations.sort();
+    (!violations.is_empty()).then_some(violations)
 }
 
 /// Convert an AST [`Literal`] into the JSON value a [`BoardCommand::UpdateNodePin`] carries.
@@ -476,16 +677,89 @@ fn variable_value_type(var: &VarDecl) -> &'static str {
     }
 }
 
-fn function_layer_pins(func: &FnDecl) -> Vec<LayerPinMetadata> {
-    func.params
-        .iter()
-        .map(|param| layer_pin_from_param(param, "Input"))
+/// Boundary execution pin names on function layers, mirrored onto `control_call_function` call
+/// nodes by that node's `on_update`.
+const FUNCTION_EXEC_IN: &str = "exec_in";
+const FUNCTION_EXEC_OUT: &str = "exec_out";
+/// The catalog node that invokes a function layer (`function_layer_id` holds the target layer).
+const CALL_FUNCTION_NODE_TYPE: &str = "control_call_function";
+const FUNCTION_LAYER_ID_PIN: &str = "function_layer_id";
+
+/// Hard ceiling on nodes per layer (root, event scope, or one function layer). Oversized layers
+/// make boards unreadable; reconcile rejects edits that would exceed it so the agent splits the
+/// work into function layers instead.
+pub const MAX_NODES_PER_LAYER: usize = 50;
+
+fn function_layer_pins(func: &FnDecl, impure: bool) -> Vec<LayerPinMetadata> {
+    let exec_pins = impure
+        .then(|| {
+            vec![
+                LayerPinMetadata {
+                    name: FUNCTION_EXEC_IN.to_string(),
+                    friendly_name: "Exec In".to_string(),
+                    data_type: "Execution".to_string(),
+                    value_type: "Normal".to_string(),
+                    pin_type: "Input".to_string(),
+                },
+                LayerPinMetadata {
+                    name: FUNCTION_EXEC_OUT.to_string(),
+                    friendly_name: "Exec Out".to_string(),
+                    data_type: "Execution".to_string(),
+                    value_type: "Normal".to_string(),
+                    pin_type: "Output".to_string(),
+                },
+            ]
+        })
+        .unwrap_or_default();
+    exec_pins
+        .into_iter()
+        .chain(func.params.iter().map(|param| layer_pin_from_param(param, "Input")))
         .chain(
             func.returns
                 .iter()
                 .map(|param| layer_pin_from_param(param, "Output")),
         )
         .collect()
+}
+
+fn execution_pin_metadata(name: &str, friendly_name: &str) -> PinMetadata {
+    PinMetadata {
+        name: name.to_string(),
+        friendly_name: friendly_name.to_string(),
+        description: String::new(),
+        data_type: "Execution".to_string(),
+        value_type: "Normal".to_string(),
+        default_value: None,
+        schema: None,
+        is_generic: false,
+        valid_values: None,
+        enforce_schema: false,
+    }
+}
+
+fn param_pin_metadata(param: &Param) -> PinMetadata {
+    PinMetadata {
+        name: param.name.clone(),
+        friendly_name: param.name.clone(),
+        description: String::new(),
+        data_type: type_ref_data_type(&param.ty).to_string(),
+        value_type: type_ref_value_type(&param.ty).to_string(),
+        default_value: None,
+        schema: None,
+        is_generic: false,
+        valid_values: None,
+        enforce_schema: false,
+    }
+}
+
+/// A FlowScript `function` declaration resolved to its (existing or planned) layer, captured
+/// before events/bodies are planned so call sites anywhere in the document can target it.
+#[derive(Clone)]
+struct PlannedFunction {
+    entity: NodeEntity,
+    impure: bool,
+    params: Vec<Param>,
+    returns: Vec<Param>,
 }
 
 fn layer_pin_from_param(param: &Param, pin_type: &str) -> LayerPinMetadata {
@@ -786,9 +1060,20 @@ fn exec_output_pin(node: &Node) -> Option<String> {
 }
 
 fn metadata_input_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a PinMetadata> {
+    metadata_input_pin_at(meta, name, 0)
+}
+
+/// The `occurrence`-th input pin matching `name` — multi-pins (several inputs sharing one name,
+/// e.g. `bool_or`'s two `boolean` pins) pair positionally with same-named call arguments.
+fn metadata_input_pin_at<'a>(
+    meta: &'a NodeMetadata,
+    name: &str,
+    occurrence: usize,
+) -> Option<&'a PinMetadata> {
     meta.inputs
         .iter()
-        .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .filter(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
+        .nth(occurrence)
 }
 
 /// Node types whose `on_update` mints one input pin per template placeholder, paired with the
@@ -1132,6 +1417,13 @@ struct PlannedStmt {
     entity: NodeEntity,
     next_exec_pin: Option<String>,
     input_sources: Vec<ValueSource>,
+    /// Additional execution tails the NEXT statement must also wire from — the final cursors of
+    /// branch arms. Execution inputs are legal fan-in points, so `if (x) { a() } b()` wires `b`
+    /// from BOTH the untaken `false` pin and `a`'s exec output.
+    extra_exec_tails: Vec<ExecCursor>,
+    /// The statement's own entity does not continue the chain (a fully-armed branch): only
+    /// `extra_exec_tails` carry execution forward.
+    suppress_self_continuation: bool,
 }
 
 impl PlannedStmt {
@@ -1140,27 +1432,27 @@ impl PlannedStmt {
             entity,
             next_exec_pin: None,
             input_sources: Vec::new(),
+            extra_exec_tails: Vec::new(),
+            suppress_self_continuation: false,
         }
     }
 
     fn with_next_exec_pin(entity: NodeEntity, next_exec_pin: Option<String>) -> Self {
         Self {
-            entity,
             next_exec_pin,
-            input_sources: Vec::new(),
+            ..Self::new(entity)
         }
     }
 
     fn with_input_sources(entity: NodeEntity, input_sources: Vec<ValueSource>) -> Self {
         Self {
-            entity,
-            next_exec_pin: None,
             input_sources,
+            ..Self::new(entity)
         }
     }
 
-    fn next_cursor(self) -> ExecCursor {
-        ExecCursor::with_output(self.entity, self.next_exec_pin)
+    fn next_cursor(&self) -> ExecCursor {
+        ExecCursor::with_output(self.entity.clone(), self.next_exec_pin.clone())
     }
 }
 
@@ -1355,6 +1647,9 @@ struct StructuralPlanner<'a> {
     /// nodes. Held separately so they emit after the add/connect commands (the applier resolves the
     /// referenced targets — function layers, events — once those nodes exist).
     fn_ref_commands: Vec<BoardCommand>,
+    /// Declared FlowScript functions by camelCase name, pre-created before events/bodies are
+    /// planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
+    planned_functions: HashMap<String, PlannedFunction>,
     /// Optional hook to materialize a node's dynamic (`on_update`-generated) pins for a call, so a
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
@@ -1386,6 +1681,7 @@ impl<'a> StructuralPlanner<'a> {
             next_position: 0,
             pending_exec_splices: Vec::new(),
             fn_ref_commands: Vec::new(),
+            planned_functions: HashMap::new(),
             enricher,
         }
     }
@@ -1410,11 +1706,14 @@ impl<'a> StructuralPlanner<'a> {
     fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
         self.push_scope();
         self.seed_top_level_variables(ast);
+        // Function layers are created (and their impurity decided) up front so call sites in
+        // events and other functions resolve regardless of declaration order.
+        self.prepare_functions(ast);
         for event in &ast.events {
-            self.plan_event(event);
+            self.plan_event(event, None);
         }
         for func in &ast.functions {
-            self.plan_function(func);
+            self.plan_function_body(func);
         }
         self.pop_scope();
 
@@ -1431,24 +1730,156 @@ impl<'a> StructuralPlanner<'a> {
         self.result
     }
 
-    fn plan_event(&mut self, event: &EventBlock) {
+    fn prepare_functions(&mut self, ast: &BoardAst) {
+        for func in &ast.functions {
+            let mut seen = HashSet::new();
+            seen.insert(func.name.clone());
+            let impure = self.function_body_is_impure(ast, &func.body, &mut seen);
+            let entity = self.function_layer_entity(func, impure);
+            self.planned_functions.insert(
+                func.name.clone(),
+                PlannedFunction {
+                    entity,
+                    impure,
+                    params: func.params.clone(),
+                    returns: func.returns.clone(),
+                },
+            );
+        }
+    }
+
+    /// Static prescan: does this function body contain anything that needs an execution chain
+    /// (impure catalog calls, control flow, board-variable writes, or calls to other impure
+    /// functions)? Decides whether the layer gets `exec_in`/`exec_out` boundary pins — a pure
+    /// function must NOT carry them (the runtime would then look for an entry node), and an
+    /// impure one must (or its body never runs when called).
+    fn function_body_is_impure(
+        &self,
+        ast: &BoardAst,
+        block: &Block,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        block.stmts.iter().any(|stmt| match stmt {
+            Stmt::Branch { .. } | Stmt::Loop { .. } => true,
+            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+                self.call_is_impure(ast, call, seen)
+            }
+            Stmt::Assign { target, value, .. } => {
+                self.assignment_targets_board_variable(ast, target)
+                    || self.expr_contains_impure_call(ast, value, seen)
+            }
+            // `base.path = value` plans as an Assign to `base` (struct_set accumulator) — a
+            // board-variable base ends in an impure variable_set node just like a plain Assign.
+            Stmt::FieldAssign { base, value, .. } => {
+                self.assignment_targets_board_variable(ast, base)
+                    || self.expr_contains_impure_call(ast, value, seen)
+            }
+            Stmt::LocalAlias { value, .. } => self.expr_contains_impure_call(ast, value, seen),
+            Stmt::Return { values, .. } => values
+                .iter()
+                .any(|value| self.expr_contains_impure_call(ast, value, seen)),
+            Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => false,
+        })
+    }
+
+    fn call_is_impure(&self, ast: &BoardAst, call: &Call, seen: &mut HashSet<String>) -> bool {
+        // Impure calls hidden inside the ARGUMENTS make the enclosing statement impure no matter
+        // what the callee is — they get exec-spliced ahead of it at plan time.
+        let args_impure = call
+            .args
+            .iter()
+            .any(|arg| self.expr_contains_impure_call(ast, &arg.value, seen));
+        if let Some(func) = ast
+            .functions
+            .iter()
+            .find(|func| func.name == call.display)
+        {
+            let body_impure = seen.insert(func.name.clone())
+                && self.function_body_is_impure(ast, &func.body, seen);
+            return body_impure || args_impure;
+        }
+        let impure_by_meta = self
+            .catalog
+            .resolve_call(call)
+            .ok()
+            .is_some_and(|meta| metadata_exec_input_pin(&meta).is_some());
+        impure_by_meta || args_impure
+    }
+
+    fn expr_contains_impure_call(
+        &self,
+        ast: &BoardAst,
+        expr: &Expr,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        match expr {
+            Expr::Call(call) => self.call_is_impure(ast, call, seen),
+            Expr::Field { base, .. } | Expr::Member { base, .. } => {
+                self.expr_contains_impure_call(ast, base, seen)
+            }
+            Expr::Object(fields) => fields
+                .iter()
+                .any(|field| self.expr_contains_impure_call(ast, &field.value, seen)),
+            Expr::Array(items) => items
+                .iter()
+                .any(|item| self.expr_contains_impure_call(ast, item, seen)),
+            Expr::Index { base, index } => {
+                self.expr_contains_impure_call(ast, base, seen)
+                    || self.expr_contains_impure_call(ast, index, seen)
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.expr_contains_impure_call(ast, cond, seen)
+                    || self.expr_contains_impure_call(ast, then, seen)
+                    || self.expr_contains_impure_call(ast, otherwise, seen)
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                self.expr_contains_impure_call(ast, lhs, seen)
+                    || self.expr_contains_impure_call(ast, rhs, seen)
+            }
+            Expr::Ref(_) | Expr::Literal(_) => false,
+        }
+    }
+
+    fn assignment_targets_board_variable(&self, ast: &BoardAst, target: &str) -> bool {
+        ast.variables.iter().any(|var| var.name == target)
+            || self.variable_refs.resolve(target).is_some()
+    }
+
+    fn plan_event(&mut self, event: &EventBlock, target_layer: Option<String>) {
         let entry = match &event.anchor {
             Some(anchor) => {
-                find_board_node(self.existing, anchor).map(|_| NodeEntity::Existing(anchor.clone()))
+                let entry = find_board_node(self.existing, anchor)
+                    .map(|_| NodeEntity::Existing(anchor.clone()));
+                if entry.is_none() {
+                    self.result.diagnostics.push(format!(
+                        "event `{}` anchors to `{anchor}`, which no longer exists on the board; its body was planned without an execution entry",
+                        event.name
+                    ));
+                }
+                entry
             }
-            None => self.add_entry_node(&event.name),
+            None => {
+                self.add_entry_node(&event.name, target_layer.clone(), !event.params.is_empty())
+            }
         };
 
         self.push_scope();
         if let Some(entry) = &entry {
             self.seed_params_from_entity(&event.params, entry);
         }
-        self.plan_block(&event.body, entry.map(ExecCursor::new), None);
+        self.plan_block(&event.body, entry.map(ExecCursor::new), target_layer);
         self.pop_scope();
     }
 
-    fn plan_function(&mut self, func: &FnDecl) {
-        let layer = self.function_layer_entity(func);
+    fn plan_function_body(&mut self, func: &FnDecl) {
+        let Some(planned) = self.planned_functions.get(&func.name).cloned() else {
+            return;
+        };
+        let layer = planned.entity.clone();
         let target_layer = Some(layer.node_ref());
         self.push_scope();
         self.seed_function_params(&func.params, &layer);
@@ -1459,18 +1890,111 @@ impl<'a> StructuralPlanner<'a> {
                 .map(|param| param.name.clone())
                 .collect(),
         ));
-        self.plan_block(&func.body, None, target_layer);
+        let entry = if planned.impure {
+            self.function_entry_cursor(&layer, &func.name)
+        } else {
+            None
+        };
+        let final_cursors = self.plan_block(&func.body, entry, target_layer);
+        if planned.impure {
+            for cursor in final_cursors {
+                self.wire_function_exit(&layer, cursor);
+            }
+        }
         self.function_return_targets.pop();
         self.pop_scope();
     }
 
+    /// Execution entry for an impure function body: the layer's `exec_in` boundary pin. The
+    /// runtime `control_call_function` node finds the body's entry node by following exactly this
+    /// edge, so without it the body would never run.
+    fn function_entry_cursor(&mut self, layer: &NodeEntity, name: &str) -> Option<ExecCursor> {
+        match layer {
+            NodeEntity::Layer { .. } => Some(ExecCursor::with_output(
+                layer.clone(),
+                Some(FUNCTION_EXEC_IN.to_string()),
+            )),
+            NodeEntity::Existing(id) => {
+                let exec_in = self.existing.layers.get(id).and_then(|existing_layer| {
+                    existing_layer
+                        .pins
+                        .values()
+                        .find(|pin| {
+                            pin.pin_type == PinType::Input
+                                && pin.data_type == VariableType::Execution
+                        })
+                        .map(|pin| pin.name.clone())
+                });
+                match exec_in {
+                    Some(pin) => Some(ExecCursor::with_output(layer.clone(), Some(pin))),
+                    None => {
+                        self.result.diagnostics.push(format!(
+                            "function `{name}` has impure statements but its existing layer has no execution boundary pins; its body will not run when called. Recreate the function (delete and re-add the `function` declaration) to migrate it"
+                        ));
+                        None
+                    }
+                }
+            }
+            NodeEntity::New { .. } => None,
+        }
+    }
+
+    /// Close an impure function body: wire a final statement's execution output to the layer's
+    /// `exec_out` boundary pin so the graph reads (and renders) as a complete chain. Called once
+    /// per final cursor — branch tails legally fan into the boundary pin.
+    fn wire_function_exit(&mut self, layer: &NodeEntity, cursor: ExecCursor) {
+        if matches!(&cursor.entity, NodeEntity::Existing(_))
+            && matches!(layer, NodeEntity::Existing(_))
+        {
+            return;
+        }
+        let Some(from_pin) = cursor
+            .output_pin
+            .clone()
+            .or_else(|| self.entity_exec_output_pin(&cursor.entity))
+        else {
+            return;
+        };
+        // The body's first statement wires FROM the layer's exec_in; if the body is empty the
+        // cursor still points at the layer itself — nothing to close then.
+        if cursor.entity.node_ref() == layer.node_ref() {
+            return;
+        }
+        let to_pin = match layer {
+            NodeEntity::Layer { .. } => Some(FUNCTION_EXEC_OUT.to_string()),
+            NodeEntity::Existing(id) => self.existing.layers.get(id).and_then(|existing_layer| {
+                existing_layer
+                    .pins
+                    .values()
+                    .find(|pin| {
+                        pin.pin_type == PinType::Output
+                            && pin.data_type == VariableType::Execution
+                    })
+                    .map(|pin| pin.name.clone())
+            }),
+            NodeEntity::New { .. } => None,
+        };
+        let Some(to_pin) = to_pin else { return };
+        self.connect_commands.push(BoardCommand::ConnectPins {
+            from_node: cursor.entity.node_ref(),
+            from_pin,
+            to_node: layer.node_ref(),
+            to_pin,
+            summary: Some("Connect function body to its exec out".to_string()),
+        });
+    }
+
+    /// Plan a statement block. Returns the final execution cursors — where the chain "ends" — so
+    /// function bodies can close onto their layer's `exec_out` boundary pin. The cursor SET
+    /// models fan-in: after `if (x) { a() }`, the next statement wires from both the untaken
+    /// `false` pin and `a`'s exec output.
     fn plan_block(
         &mut self,
         block: &Block,
         entry: Option<ExecCursor>,
         target_layer: Option<String>,
-    ) {
-        let mut previous_exec = entry;
+    ) -> Vec<ExecCursor> {
+        let mut previous_execs: Vec<ExecCursor> = entry.into_iter().collect();
         // The `(node, pin)` exec edge the current insertion streak branched off from — set
         // when a NEW node is first wired after an EXISTING one, and used to splice out only
         // that predecessor's old edge when the chain reaches the next existing node.
@@ -1491,7 +2015,7 @@ impl<'a> StructuralPlanner<'a> {
             // exec chain ahead of the statement that consumes their outputs, innermost first,
             // so they actually execute at runtime.
             for splice in std::mem::take(&mut self.pending_exec_splices) {
-                if let Some(previous) = &previous_exec {
+                for previous in &previous_execs {
                     let connected_edge =
                         self.connect_exec(previous, &splice, insertion_origin.as_ref());
                     if let Some(edge) = connected_edge
@@ -1502,7 +2026,7 @@ impl<'a> StructuralPlanner<'a> {
                         insertion_origin = Some(edge);
                     }
                 }
-                previous_exec = Some(ExecCursor::new(splice));
+                previous_execs = vec![ExecCursor::new(splice)];
             }
 
             let Some(current) = planned else {
@@ -1514,42 +2038,54 @@ impl<'a> StructuralPlanner<'a> {
                 || (accepts_exec && !self.entity_exec_output_pins(&current.entity).is_empty());
 
             if accepts_exec {
-                if let Some(previous) = &previous_exec {
-                    let preferred_output = self.preferred_exec_output_for_input_sources(
-                        &previous.entity,
-                        &current.input_sources,
-                    );
-                    // Only a streaming-preferred branch (on_stream/on_chunk/…) is a side-chain
-                    // that must not advance the main exec cursor. A cursor that merely carries a
-                    // non-default continuation pin (loop body entry, loop "done") IS the main
-                    // chain — gating on the cursor's own pin left every statement after a loop
-                    // with unconnected exec pins.
-                    let used_branch_output = preferred_output.is_some()
-                        && self.entity_exec_output_pin(&previous.entity) != preferred_output;
-                    let previous = match preferred_output {
-                        Some(output_pin) => {
-                            ExecCursor::with_output(previous.entity.clone(), Some(output_pin))
-                        }
-                        None => previous.clone(),
-                    };
-                    let connected_edge =
-                        self.connect_exec(&previous, &current.entity, insertion_origin.as_ref());
-                    if let Some(edge) = connected_edge
-                        && !used_branch_output
-                        && insertion_origin.is_none()
-                        && matches!(previous.entity, NodeEntity::Existing(_))
-                        && matches!(current.entity, NodeEntity::New { .. })
-                    {
-                        insertion_origin = Some(edge);
-                    }
-                    if used_branch_output {
-                        continue;
-                    }
-                } else {
+                if previous_execs.is_empty() {
                     // No execution predecessor to wire from (e.g. a function body's first node):
                     // exempt it from the dangling-execution warning.
                     if let NodeEntity::New { ref_id, .. } = &current.entity {
                         self.exec_check_exempt.insert(ref_id.clone());
+                    }
+                } else {
+                    // The streaming side-chain special case only exists for a single linear
+                    // predecessor; fan-in sets (branch tails) never stream.
+                    let single_previous = previous_execs.len() == 1;
+                    let mut statement_is_side_chain = false;
+                    for previous in previous_execs.clone() {
+                        let preferred_output = self.preferred_exec_output_for_input_sources(
+                            &previous.entity,
+                            &current.input_sources,
+                        );
+                        // Only a streaming-preferred branch (on_stream/on_chunk/…) is a
+                        // side-chain that must not advance the main exec cursor. A cursor that
+                        // merely carries a non-default continuation pin (loop body entry, loop
+                        // "done") IS the main chain.
+                        let used_branch_output = single_previous
+                            && preferred_output.is_some()
+                            && self.entity_exec_output_pin(&previous.entity) != preferred_output;
+                        let previous = match preferred_output {
+                            Some(output_pin) => {
+                                ExecCursor::with_output(previous.entity.clone(), Some(output_pin))
+                            }
+                            None => previous,
+                        };
+                        let connected_edge = self.connect_exec(
+                            &previous,
+                            &current.entity,
+                            insertion_origin.as_ref(),
+                        );
+                        if let Some(edge) = connected_edge
+                            && !used_branch_output
+                            && insertion_origin.is_none()
+                            && matches!(previous.entity, NodeEntity::Existing(_))
+                            && matches!(current.entity, NodeEntity::New { .. })
+                        {
+                            insertion_origin = Some(edge);
+                        }
+                        if used_branch_output {
+                            statement_is_side_chain = true;
+                        }
+                    }
+                    if statement_is_side_chain {
+                        continue;
                     }
                 }
             }
@@ -1557,12 +2093,18 @@ impl<'a> StructuralPlanner<'a> {
             if matches!(current.entity, NodeEntity::Existing(_)) {
                 insertion_origin = None;
             }
-            if continues_exec {
-                previous_exec = Some(current.next_cursor());
-            } else if accepts_exec {
-                previous_exec = None;
+
+            let mut next_cursors = current.extra_exec_tails.clone();
+            if continues_exec && !current.suppress_self_continuation {
+                next_cursors.push(current.next_cursor());
+            }
+            if !next_cursors.is_empty() {
+                previous_execs = next_cursors;
+            } else if accepts_exec || current.suppress_self_continuation {
+                previous_execs = Vec::new();
             }
         }
+        previous_execs
     }
 
     fn plan_stmt(
@@ -1742,6 +2284,7 @@ impl<'a> StructuralPlanner<'a> {
                 arms,
                 anchor,
             } => {
+                let mut synthesized_branch = false;
                 let entity = if let Some(bind) = bind
                     && is_placeholder_call(call)
                 {
@@ -1754,6 +2297,25 @@ impl<'a> StructuralPlanner<'a> {
                             None
                         }
                     }
+                } else if anchor.is_none()
+                    && bind.is_none()
+                    && is_placeholder_call(call)
+                    && condition.is_some()
+                {
+                    // New `if (cond) { ... } [else { ... }]` sugar: synthesize the
+                    // `control_branch` node and wire the condition through the normal
+                    // argument machinery. Arm labels True/False match its exec pins.
+                    synthesized_branch = true;
+                    let branch_call = Call {
+                        node_type: "control_branch".to_string(),
+                        display: "controlBranch".to_string(),
+                        args: vec![Arg {
+                            name: "condition".to_string(),
+                            value: condition.clone().expect("condition checked above"),
+                        }],
+                        anchor: None,
+                    };
+                    self.plan_call_statement(&branch_call, None, target_layer.clone())
                 } else {
                     let entity =
                         self.plan_call_statement(call, anchor.as_deref(), target_layer.clone());
@@ -1769,28 +2331,45 @@ impl<'a> StructuralPlanner<'a> {
                     entity
                 };
 
-                if anchor.is_none() && bind.is_none() {
+                if anchor.is_none() && bind.is_none() && !synthesized_branch {
                     self.result.diagnostics.push(
                         "new FlowScript branch statements are not yet converted automatically; use the control_branch declaration or emit_commands for complex branch wiring".to_string(),
                     );
                 }
                 if let Some(cond) = condition {
                     // Anchored (existing) branches already have their condition wired on the
-                    // board; resolving it again would duplicate the pure helpers feeding it.
-                    if !matches!(entity, Some(NodeEntity::Existing(_))) {
+                    // board; a synthesized branch wired it through its own call arguments.
+                    if !matches!(entity, Some(NodeEntity::Existing(_))) && !synthesized_branch {
                         let _ = self.resolve_expr(cond, target_layer.clone());
                     }
                 }
                 // The branch's own argument/condition splices must chain BEFORE the branch
                 // node, not inside an arm — stash them across the nested blocks.
                 let mut stashed_splices = std::mem::take(&mut self.pending_exec_splices);
+                let mut arm_tails: Vec<ExecCursor> = Vec::new();
                 for arm in arms {
                     self.push_scope();
-                    self.plan_block(
-                        &arm.body,
-                        entity.clone().map(ExecCursor::new),
-                        target_layer.clone(),
-                    );
+                    // Each arm chains from ITS labelled exec output. Wiring every arm from the
+                    // default/policy pin would make later arms silently steal earlier arms' (and
+                    // the default continuation's) single-target exec edge.
+                    let arm_cursor = entity.clone().and_then(|entity| {
+                        match self.resolve_arm_exec_pin(&entity, &arm.label) {
+                            Some(pin) => Some(ExecCursor::with_output(entity, Some(pin))),
+                            None => {
+                                if !arm.body.stmts.is_empty() {
+                                    self.result.diagnostics.push(format!(
+                                        "branch arm label `{}` does not match an execution output on `{}`; its body was not wired — use the exact exec pin name as the arm label",
+                                        arm.label, call.display
+                                    ));
+                                }
+                                None
+                            }
+                        }
+                    });
+                    // Each arm's final cursors carry execution to whatever follows the branch
+                    // (exec inputs are fan-in points). An empty arm's tail is the labelled pin
+                    // itself — the pass-through case.
+                    arm_tails.extend(self.plan_block(&arm.body, arm_cursor, target_layer.clone()));
                     self.pop_scope();
                 }
                 stashed_splices.append(&mut self.pending_exec_splices);
@@ -1798,7 +2377,30 @@ impl<'a> StructuralPlanner<'a> {
                 if bind.is_some() && is_placeholder_call(call) {
                     None
                 } else {
-                    entity.map(PlannedStmt::new)
+                    entity.map(|entity| {
+                        // The statement AFTER a branch continues from the arm tails plus the one
+                        // exec output no arm claimed (e.g. `false` for a lone `if`). When every
+                        // output is claimed, only the arm tails carry execution forward.
+                        let arm_pins: HashSet<String> = arms
+                            .iter()
+                            .filter_map(|arm| self.resolve_arm_exec_pin(&entity, &arm.label))
+                            .collect();
+                        let remaining: Vec<String> = self
+                            .entity_exec_output_pins(&entity)
+                            .into_iter()
+                            .filter(|pin| !arm_pins.contains(pin))
+                            .collect();
+                        let mut planned = PlannedStmt::new(entity);
+                        planned.extra_exec_tails = arm_tails;
+                        match remaining.as_slice() {
+                            [single] => planned.next_exec_pin = Some(single.clone()),
+                            [] => planned.suppress_self_continuation = true,
+                            // Several unclaimed outputs (a bare multi-output call with one
+                            // labelled arm): leave the default policy machinery to decide.
+                            _ => {}
+                        }
+                        planned
+                    })
                 }
             }
             Stmt::Loop {
@@ -1843,7 +2445,9 @@ impl<'a> StructuralPlanner<'a> {
                 })
             }
             Stmt::Handler(event) => {
-                self.plan_event(event);
+                // A nested handler is an independent entry point but lives (and counts) in the
+                // enclosing scope's layer.
+                self.plan_event(event, target_layer);
                 None
             }
             Stmt::Return { values, anchor } => {
@@ -1853,14 +2457,14 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
-    fn function_layer_entity(&mut self, func: &FnDecl) -> NodeEntity {
+    fn function_layer_entity(&mut self, func: &FnDecl, impure: bool) -> NodeEntity {
         if let Some(anchor) = &func.anchor {
             return NodeEntity::Existing(anchor.clone());
         }
 
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
-        let pins = function_layer_pins(func);
+        let pins = function_layer_pins(func, impure);
         let position = self.next_position();
         self.add_commands.push(BoardCommand::CreateLayer {
             name: func.name.clone(),
@@ -2057,13 +2661,25 @@ impl<'a> StructuralPlanner<'a> {
         self.add_call_node_with_sources(call, target_layer)
     }
 
-    fn add_entry_node(&mut self, display: &str) -> Option<NodeEntity> {
+    /// Resolve an event block's entry node. Arbitrary event names intentionally fall back to a
+    /// simple event; that is only worth a diagnostic when declared payload params get dropped.
+    fn add_entry_node(
+        &mut self,
+        display: &str,
+        target_layer: Option<String>,
+        dropped_params: bool,
+    ) -> Option<NodeEntity> {
         match self.catalog.resolve_display(display) {
-            Ok(meta) => Some(self.queue_add_node(meta, None)),
+            Ok(meta) => Some(self.queue_add_node(meta, target_layer)),
             Err(err) => {
                 for fallback in ["eventsSimple", "eventsGeneric"] {
                     if let Ok(meta) = self.catalog.resolve_display(fallback) {
-                        return Some(self.queue_add_node(meta, None));
+                        if dropped_params {
+                            self.result.diagnostics.push(format!(
+                                "event `{display}` does not match a catalog entry node; created a `{fallback}` entry instead and its declared payload params were not carried over"
+                            ));
+                        }
+                        return Some(self.queue_add_node(meta, target_layer));
                     }
                 }
                 self.result.diagnostics.push(err);
@@ -2082,6 +2698,12 @@ impl<'a> StructuralPlanner<'a> {
         call: &Call,
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
+        // `functionName(...)` calling a FlowScript `function` declaration: create a
+        // `control_call_function` node targeting that function's layer instead of resolving
+        // against the catalog.
+        if self.planned_functions.contains_key(&call.display) {
+            return self.add_function_call_node(call, target_layer);
+        }
         let meta = match self.catalog.resolve_call(call) {
             Ok(meta) => meta,
             Err(err) => {
@@ -2099,6 +2721,73 @@ impl<'a> StructuralPlanner<'a> {
         Some((entity, input_sources))
     }
 
+    /// Create the `control_call_function` node for a call to a FlowScript `function` declaration.
+    ///
+    /// The synthetic metadata mirrors what the node's `on_update` will mint once its
+    /// `function_layer_id` pin is set (the layer's params as inputs, returns as outputs, exec
+    /// boundary pins when the function is impure), so argument and execution wiring plan against
+    /// the pins that will exist at apply time.
+    fn add_function_call_node(
+        &mut self,
+        call: &Call,
+        target_layer: Option<String>,
+    ) -> Option<(NodeEntity, Vec<ValueSource>)> {
+        let planned = self.planned_functions.get(&call.display).cloned()?;
+        let Some(base) = self.catalog.by_type.get(CALL_FUNCTION_NODE_TYPE).cloned() else {
+            self.result.diagnostics.push(format!(
+                "cannot call function `{}`: `{CALL_FUNCTION_NODE_TYPE}` is missing from the catalog",
+                call.display
+            ));
+            return None;
+        };
+
+        let mut meta = base;
+        meta.friendly_name = format!("Call {}", call.display);
+        // The call node's `on_update` mirrors the layer's ACTUAL boundary pins, so for an
+        // existing layer trust its pins over the prescan (legacy function layers may predate
+        // exec boundary pins).
+        let impure = match &planned.entity {
+            NodeEntity::Existing(id) => self
+                .existing
+                .layers
+                .get(id)
+                .map(|layer| {
+                    layer.pins.values().any(|pin| {
+                        pin.pin_type == PinType::Input
+                            && pin.data_type == VariableType::Execution
+                    })
+                })
+                .unwrap_or(planned.impure),
+            _ => planned.impure,
+        };
+        if impure {
+            meta.inputs
+                .push(execution_pin_metadata(FUNCTION_EXEC_IN, "Exec In"));
+            meta.outputs
+                .push(execution_pin_metadata(FUNCTION_EXEC_OUT, "Exec Out"));
+        }
+        for param in &planned.params {
+            meta.inputs.push(param_pin_metadata(param));
+        }
+        for ret in &planned.returns {
+            meta.outputs.push(param_pin_metadata(ret));
+        }
+
+        let entity = self.queue_add_node(meta.clone(), target_layer.clone());
+        if let Some(input) = metadata_input_pin(&meta, FUNCTION_LAYER_ID_PIN) {
+            // For a new layer this is its `$n` ref; the applier resolves it to the real layer id.
+            self.queue_update_input(
+                &entity,
+                input,
+                flow_like_types::Value::String(planned.entity.node_ref()),
+                &meta,
+            );
+        }
+
+        let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
+        Some((entity, input_sources))
+    }
+
     fn plan_call_arguments(
         &mut self,
         call: &Call,
@@ -2108,13 +2797,35 @@ impl<'a> StructuralPlanner<'a> {
         include_direct_literals: bool,
     ) -> Vec<ValueSource> {
         let mut input_sources = Vec::new();
+        let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
         for arg in &call.args {
+            // Multi-pins (several inputs sharing one name) pair positionally with the
+            // same-named args, mirroring the order lowering emitted them in.
+            let occurrence = {
+                let counter = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+                let index = *counter;
+                *counter += 1;
+                index
+            };
+            if occurrence > 0
+                && matches!(entity, NodeEntity::New { .. })
+                && metadata_input_pin_at(meta, &arg.name, occurrence).is_some()
+            {
+                // Board commands address pins by NAME, so a second same-named pin on a node
+                // created in this same batch cannot be targeted yet — surface it instead of
+                // silently collapsing both args onto the first pin.
+                self.result.diagnostics.push(format!(
+                    "`{}` uses the multi-pin argument `{}` more than once; repeated same-named arguments on a NEW node are not supported through FlowScript yet — configure the extra pin afterwards or via emit_commands",
+                    call.display, arg.name
+                ));
+                continue;
+            }
             // Pins minted by a node's `on_update` (for example each `{placeholder}` of a
             // `string_format` node) are absent from the STATIC catalog metadata used to plan a NEW
             // node, so they must be predicted from the call's own config args. `synthesized_pin`
             // backs the `&PinMetadata` borrow for such a predicted dynamic pin.
             let synthesized_pin;
-            let input = match metadata_input_pin(meta, &arg.name) {
+            let input = match metadata_input_pin_at(meta, &arg.name, occurrence) {
                 Some(pin) => pin,
                 None => {
                     // `tools:`/`fnRefs:` carry a node's function references, not pin values — they
@@ -2447,11 +3158,23 @@ impl<'a> StructuralPlanner<'a> {
         let source_node = find_board_node(self.existing, source_node_id)?;
         // Always describe the reused node by ITS OWN pins: catalog metadata is a per-type sample
         // and misses instance pins of dynamic nodes (string_format placeholders, added pins).
-        let meta = match self.catalog.resolve_call(call) {
-            Ok(meta) if meta.name == source_node.name => node_to_metadata(source_node),
-            Ok(_) => return None,
-            Err(_) if call_matches_node(call, source_node) => node_to_metadata(source_node),
-            Err(_) => return None,
+        // A call to a declared FlowScript function reuses the existing `control_call_function`
+        // node that targets that function's layer (catalog resolution can never match it, and
+        // recreating it on every reconcile would duplicate call nodes).
+        let is_function_call_reuse = source_node.name == CALL_FUNCTION_NODE_TYPE
+            && self.planned_functions.get(&call.display).is_some_and(|planned| {
+                node_pin_literal_string(source_node, FUNCTION_LAYER_ID_PIN)
+                    .is_some_and(|layer_id| layer_id == planned.entity.node_ref())
+            });
+        let meta = if is_function_call_reuse {
+            node_to_metadata(source_node)
+        } else {
+            match self.catalog.resolve_call(call) {
+                Ok(meta) if meta.name == source_node.name => node_to_metadata(source_node),
+                Ok(_) => return None,
+                Err(_) if call_matches_node(call, source_node) => node_to_metadata(source_node),
+                Err(_) => return None,
+            }
         };
         let entity = NodeEntity::Existing(source_node_id.clone());
         self.plan_call_arguments(call, &entity, &meta, target_layer, true);
@@ -2717,6 +3440,14 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// Resolve a branch arm's label to an exec output pin. Labels come in two shapes: lowered
+    /// text uses raw pin names (`exec_out_exists`), while the if/else sugar uses `True`/`False`
+    /// — so the camelized label is tried as well (`True` → `true`).
+    fn resolve_arm_exec_pin(&self, entity: &NodeEntity, label: &str) -> Option<String> {
+        let camel = to_camel_case(label);
+        self.entity_exec_output_pin_named(entity, &[label, camel.as_str()])
+    }
+
     fn entity_exec_output_pin_named(&self, entity: &NodeEntity, names: &[&str]) -> Option<String> {
         match entity {
             NodeEntity::Existing(id) => {
@@ -2891,13 +3622,21 @@ impl<'a> StructuralPlanner<'a> {
                 let mut source = match self.resolve_expr(base, target_layer.clone())? {
                     SymbolValue::Source(source) => source,
                     SymbolValue::VariableRef { variable_id } => {
-                        self.add_variable_get_source(&variable_id, target_layer)?
+                        self.add_variable_get_source(&variable_id, target_layer.clone())?
                     }
                     SymbolValue::Literal(_) => return None,
                 };
-                let output = self.resolve_entity_output_pin(&source.node, Some(pin))?;
-                source.output_pin = Some(output);
-                Some(SymbolValue::Source(source))
+                match self.resolve_entity_output_pin(&source.node, Some(pin)) {
+                    Some(output) => {
+                        source.output_pin = Some(output);
+                        Some(SymbolValue::Source(source))
+                    }
+                    // The name is not an output pin: models routinely write camelCase struct
+                    // DATA keys (`mail.subject`), which the parser classifies as Field. Fall
+                    // back to the struct_get lowering the Member arm uses instead of dropping
+                    // the connection.
+                    None => self.lower_struct_field_access(source, pin, target_layer),
+                }
             }
             Expr::Call(call) => self.add_call_node(call, target_layer).map(|node| {
                 // Impure calls in expression position only get data wiring here; queue them so
@@ -5242,6 +5981,470 @@ mod tests {
                         && to_pin == "message"
             )
         }));
+    }
+
+    #[test]
+    fn impure_function_gets_exec_boundary_pins_and_body_wiring() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "log",
+            "Log",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("message", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function notify(message: string) {
+    log({ message: message })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::CreateLayer { name, pins: Some(pins), .. }
+                if name == "notify"
+                    && pins.iter().any(|pin| pin.name == "exec_in"
+                        && pin.pin_type == "Input"
+                        && pin.data_type == "Execution")
+                    && pins.iter().any(|pin| pin.name == "exec_out"
+                        && pin.pin_type == "Output"
+                        && pin.data_type == "Execution")
+        ));
+        // Body entry: layer exec_in → log exec_in; exit: log exec_out → layer exec_out.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$0" && from_pin == "exec_in" && to_node == "$1" && to_pin == "exec_in"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$1" && from_pin == "exec_out" && to_node == "$0" && to_pin == "exec_out"
+        )));
+    }
+
+    #[test]
+    fn pure_function_layer_stays_free_of_exec_pins() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value
+}
+"#,
+            &string_format_dynamic_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::CreateLayer { pins: Some(pins), .. }
+                if pins.iter().all(|pin| pin.data_type != "Execution")
+        ));
+    }
+
+    #[test]
+    fn calling_a_declared_function_creates_call_function_node() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"run() {
+    notify({ message: "hi" })
+}
+
+function notify(message: string) {
+    log({ message: message })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // Layer $0 (prepared first), event $1, call node $2, body log node $3.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, ref_id, target_layer, .. }
+                if node_type == "control_call_function"
+                    && ref_id.as_deref() == Some("$2")
+                    && target_layer.is_none()
+        )));
+        // The call node targets the new function layer by its ref.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "$2"
+                    && pin_id == "function_layer_id"
+                    && value == &flow_like_types::Value::String("$0".to_string())
+        )));
+        // The call's literal argument lands on the mirrored `message` pin.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "$2"
+                    && pin_id == "message"
+                    && value == &flow_like_types::Value::String("hi".to_string())
+        )));
+        // The call node joins the event's execution chain.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$1" && from_pin == "exec_out" && to_node == "$2" && to_pin == "exec_in"
+        )));
+        // And the function body chains from the layer's exec boundary.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$0" && from_pin == "exec_in" && to_node == "$3" && to_pin == "exec_in"
+        )));
+    }
+
+    #[test]
+    fn new_if_else_sugar_synthesizes_control_branch_with_labeled_arms() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"run() {
+    if (true) {
+        log({ message: "yes" })
+    } else {
+        log({ message: "no" })
+    }
+    log({ message: "after" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // Event $0, branch $1, then-arm log $2, else-arm log $3, after log $4.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, ref_id, .. }
+                if node_type == "control_branch" && ref_id.as_deref() == Some("$1")
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "$1"
+                    && pin_id == "condition"
+                    && value == &flow_like_types::Value::Bool(true)
+        )));
+        // Each arm wires from ITS labeled exec pin.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$1" && from_pin == "true" && to_node == "$2" && to_pin == "exec_in"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$1" && from_pin == "false" && to_node == "$3" && to_pin == "exec_in"
+        )));
+        // Fully-armed branch: the statement after the if/else must NOT steal an arm pin.
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, to_node, .. }
+                if from_node == "$1" && to_node == "$4"
+        )));
+    }
+
+    #[test]
+    fn lone_if_continues_following_statement_from_false_pin() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"run() {
+    if (true) {
+        log({ message: "yes" })
+    }
+    log({ message: "after" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        // Event $0, branch $1, then-arm log $2, after log $3: the statement after a lone `if`
+        // continues from the unclaimed `false` pin.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$1" && from_pin == "false" && to_node == "$3" && to_pin == "exec_in"
+        )));
+    }
+
+    /// Board: event → log_mid → log_tail (execution chain with anchored nodes).
+    fn board_with_exec_chain() -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut mid = Node::new("log", "Log", "", "debug");
+        mid.id = "log_mid".to_string();
+        let mid_in = mid
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let mid_out = mid
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        mid.add_input_pin("text", "Text", "", VariableType::String)
+            .default_value = Some(b"\"mid\"".to_vec());
+        board.nodes.insert(mid.id.clone(), mid);
+
+        let mut tail = Node::new("log", "Log", "", "debug");
+        tail.id = "log_tail".to_string();
+        let tail_in = tail
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        tail.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        tail.add_input_pin("text", "Text", "", VariableType::String)
+            .default_value = Some(b"\"tail\"".to_vec());
+        board.nodes.insert(tail.id.clone(), tail);
+
+        connect(&mut board, "event", &event_out, "log_mid", &mid_in);
+        connect(&mut board, "log_mid", &mid_out, "log_tail", &tail_in);
+        board
+    }
+
+    fn exec_chain_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn deleting_mid_chain_statement_bridges_execution() {
+        let board = board_with_exec_chain();
+        let text = crate::flow::ast::board_to_flowscript(
+            &board,
+            &crate::flow::ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let edited: String = text
+            .lines()
+            .filter(|line| !line.contains("//@n:log_mid"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let result = reconcile_text_with_catalog(&board, &edited, &exec_chain_catalog());
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::RemoveNode { node_id, .. } if node_id == "log_mid"
+        )));
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "event"
+                        && from_pin == "exec_out"
+                        && to_node == "log_tail"
+                        && to_pin == "exec_in"
+            )),
+            "deletion must re-join the severed chain: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn replacing_mid_chain_statement_does_not_bridge_over_the_replacement() {
+        let board = board_with_exec_chain();
+        let text = crate::flow::ast::board_to_flowscript(
+            &board,
+            &crate::flow::ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let edited: String = text
+            .lines()
+            .map(|line| {
+                if line.contains("//@n:log_mid") {
+                    "    log({ text: \"replacement\" })".to_string()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let result = reconcile_text_with_catalog(&board, &edited, &exec_chain_catalog());
+        // The replacement node takes over the chain...
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                if from_node == "event" && from_pin == "exec_out" && to_node.starts_with('$')
+        )));
+        // ...so no bridge may steal the event's exec output back to the old successor
+        // (exec outputs are single-target: a later bridge would orphan the replacement).
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                    if from_node == "event" && from_pin == "exec_out" && to_node == "log_tail"
+            )),
+            "bridge must skip sources the plan already drives: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn layer_node_limit_rejects_oversized_edit() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let mut flowscript = String::from("run() {\n");
+        for index in 0..MAX_NODES_PER_LAYER {
+            flowscript.push_str(&format!("    log({{ message: \"{index}\" }})\n"));
+        }
+        flowscript.push_str("}\n");
+
+        let result = reconcile_text_with_catalog(&board, &flowscript, &catalog);
+        assert!(
+            result.commands.is_empty(),
+            "oversized edit must queue nothing"
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("max 50")),
+            "{:?}",
+            result.diagnostics
+        );
     }
 
     /// Catalog for a `string_format` node exactly as its `get_node()` declares it: a `format_string`

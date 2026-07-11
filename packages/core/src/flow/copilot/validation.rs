@@ -6,6 +6,7 @@ use super::context::GraphContext;
 use super::provider::CatalogProvider;
 use super::tools::EmitCommandsArgs;
 use super::types::{BoardCommand, PinMetadata, PlaceholderPinDef};
+use crate::flow::ast::MAX_NODES_PER_LAYER;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidationIssue {
@@ -69,15 +70,18 @@ pub async fn validate_emit_commands(
             "error",
             "too-many-commands",
             None,
-            format!("emit_commands is limited to {MAX_EMIT_COMMANDS} commands per turn"),
+            format!(
+                "emit_commands is limited to {MAX_EMIT_COMMANDS} commands per call — split the batch into several emit_commands calls (nodes+connections first, then follow-up batches)"
+            ),
         ));
     }
 
     let mut entities = build_known_entities(graph_context);
+    // Layers are addressable by id AND by name (apply resolves both).
     let mut known_layer_refs: HashSet<String> = graph_context
         .layers
         .iter()
-        .map(|layer| layer.id.clone())
+        .flat_map(|layer| [layer.id.clone(), layer.name.clone()])
         .collect();
     let known_variables: HashSet<String> = graph_context
         .variables
@@ -104,6 +108,43 @@ pub async fn validate_emit_commands(
         .collect();
     let mut explicit_values: HashSet<(String, String)> = HashSet::new();
     let mut entities_to_check: BTreeSet<String> = BTreeSet::new();
+
+    // An execution OUTPUT drives exactly one target (the board replaces the previous edge on a
+    // second connect). Track occupancy so a batch cannot silently rewire an existing chain.
+    let mut exec_outgoing: HashMap<(String, String), (String, String)> = graph_context
+        .edges
+        .iter()
+        .filter(|edge| {
+            entities
+                .get(&edge.from_node_id)
+                .and_then(|entity| find_pin(entity, &edge.from_pin_name))
+                .is_some_and(|pin| pin.data_type == "Execution")
+        })
+        .map(|edge| {
+            (
+                (edge.from_node_id.clone(), edge.from_pin_name.clone()),
+                (edge.to_node_id.clone(), edge.to_pin_name.clone()),
+            )
+        })
+        .collect();
+
+    // Per-layer node population (None = root) for the MAX_NODES_PER_LAYER gate.
+    let mut node_layer: HashMap<String, Option<String>> = HashMap::new();
+    let mut layer_counts: HashMap<Option<String>, i64> = HashMap::new();
+    let mut layer_display: HashMap<String, String> = HashMap::new();
+    for layer in &graph_context.layers {
+        layer_display.insert(layer.id.clone(), layer.name.clone());
+        *layer_counts.entry(Some(layer.id.clone())).or_default() += layer.node_ids.len() as i64;
+        for node_id in &layer.node_ids {
+            node_layer.insert(node_id.clone(), Some(layer.id.clone()));
+        }
+    }
+    for node in &graph_context.nodes {
+        if !node_layer.contains_key(&node.id) {
+            node_layer.insert(node.id.clone(), None);
+            *layer_counts.entry(None).or_default() += 1;
+        }
+    }
 
     for (index, command) in args.commands.iter().enumerate() {
         match command {
@@ -157,6 +198,9 @@ pub async fn validate_emit_commands(
                     ));
                     continue;
                 }
+
+                *layer_counts.entry(target_layer.clone()).or_default() += 1;
+                node_layer.insert(key.clone(), target_layer.clone());
 
                 let Some(metadata) = provider.get_node_metadata(node_type).await else {
                     errors.push(issue(
@@ -236,6 +280,21 @@ pub async fn validate_emit_commands(
                         Some(index),
                         format!("Cannot remove unknown node '{}'", node_id),
                     ));
+                } else {
+                    if let Some(layer) = node_layer.get(node_id).cloned() {
+                        *layer_counts.entry(layer).or_default() -= 1;
+                    }
+                    // Removal frees the node's connections: later ConnectPins re-using its exec
+                    // sources must not false-positive as occupied, and later commands that still
+                    // reference the removed node must error.
+                    entities.remove(node_id);
+                    exec_outgoing.retain(|(from_node, _), (to_node, _)| {
+                        from_node != node_id && to_node != node_id
+                    });
+                    proposed_connections.retain(|(from_node, _, to_node, _)| {
+                        from_node != node_id && to_node != node_id
+                    });
+                    incoming_inputs.retain(|(target_node, _)| target_node != node_id);
                 }
             }
             BoardCommand::ConnectPins {
@@ -361,6 +420,29 @@ pub async fn validate_emit_commands(
                     continue;
                 }
 
+                if source_pin.data_type == "Execution" {
+                    let exec_key = (from_entity.key.clone(), source_pin.name.clone());
+                    if let Some((occupied_node, occupied_pin)) = exec_outgoing.get(&exec_key) {
+                        errors.push(issue(
+                            "error",
+                            "exec-output-already-connected",
+                            Some(index),
+                            format!(
+                                "Execution output '{}.{}' already drives {}.{} — an exec output has exactly ONE target, so this connect would silently rewire that chain. DisconnectPins the existing edge first if the rewire is intended, or continue from a different execution output",
+                                from_entity.display_name,
+                                source_pin.name,
+                                occupied_node,
+                                occupied_pin,
+                            ),
+                        ));
+                        continue;
+                    }
+                    exec_outgoing.insert(
+                        exec_key,
+                        (to_entity.key.clone(), target_pin.name.clone()),
+                    );
+                }
+
                 proposed_connections.insert(connection_key);
                 incoming_inputs.insert((to_entity.key.clone(), target_pin.name.clone()));
                 entities_to_check.insert(from_entity.key.clone());
@@ -403,10 +485,14 @@ pub async fn validate_emit_commands(
                         ),
                     ));
                 }
+                exec_outgoing.remove(&(key.0.clone(), key.1.clone()));
                 proposed_connections.remove(&key);
             }
             BoardCommand::UpdateNodePin {
-                node_id, pin_id, ..
+                node_id,
+                pin_id,
+                value,
+                ..
             } => {
                 let Some(entity) = entities.get(node_id) else {
                     errors.push(issue(
@@ -440,6 +526,21 @@ pub async fn validate_emit_commands(
                     ));
                 }
 
+                if pin.name == "function_layer_id"
+                    && let Some(target) = value.as_str()
+                    && !known_layer_refs.contains(target)
+                {
+                    errors.push(issue(
+                        "error",
+                        "unknown-function-layer",
+                        Some(index),
+                        format!(
+                            "'{}.function_layer_id' targets '{}', which is not a known function layer (use a layer id/name or a CreateLayer ref from this batch)",
+                            entity.display_name, target
+                        ),
+                    ));
+                }
+
                 explicit_values.insert((entity.key.clone(), pin.name.clone()));
                 entities_to_check.insert(entity.key.clone());
             }
@@ -455,6 +556,14 @@ pub async fn validate_emit_commands(
                         Some(index),
                         format!("Cannot move unknown node '{}'", node_id),
                     ));
+                } else if let Some(new_layer) = target_layer {
+                    if let Some(old_layer) = node_layer.get(node_id).cloned() {
+                        *layer_counts.entry(old_layer).or_default() -= 1;
+                    }
+                    *layer_counts
+                        .entry(Some(new_layer.clone()))
+                        .or_default() += 1;
+                    node_layer.insert(node_id.clone(), Some(new_layer.clone()));
                 }
                 validate_target_layer(index, target_layer, &known_layer_refs, &mut errors);
             }
@@ -518,6 +627,7 @@ pub async fn validate_emit_commands(
                     entities.insert(key.clone(), entity_from_layer(&key, name, pins));
                     known_layer_refs.insert(key.clone());
                     known_layer_refs.insert(name.clone());
+                    layer_display.insert(key.clone(), name.clone());
                     if matches!(layer_type.as_deref(), Some("Function")) {
                         entities_to_check.insert(key);
                     }
@@ -692,6 +802,26 @@ pub async fn validate_emit_commands(
                     "'{}' is still missing required inputs: {}",
                     entity.display_name,
                     missing_inputs.join(", ")
+                ),
+            ));
+        }
+    }
+
+    for (layer, count) in &layer_counts {
+        if *count > MAX_NODES_PER_LAYER as i64 {
+            let scope = match layer {
+                Some(id) => format!(
+                    "function/layer '{}'",
+                    layer_display.get(id).cloned().unwrap_or_else(|| id.clone())
+                ),
+                None => "the root layer".to_string(),
+            };
+            errors.push(issue(
+                "error",
+                "layer-node-limit",
+                None,
+                format!(
+                    "this batch would leave {scope} with {count} nodes (max {MAX_NODES_PER_LAYER}). Split the logic into function layers — each has its own {MAX_NODES_PER_LAYER}-node budget — and place nodes there via target_layer"
                 ),
             ));
         }
