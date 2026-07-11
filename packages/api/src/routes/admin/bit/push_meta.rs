@@ -86,6 +86,7 @@ pub async fn push_meta(
         template_id: Set(None),
         widget_id: Set(None),
         wasm_package_id: Set(None),
+        group_id: Set(None),
     };
 
     new_meta.insert(&state.db).await?;

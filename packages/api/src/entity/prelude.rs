@@ -8,6 +8,8 @@ pub use super::app_analytics_daily::Entity as AppAnalyticsDaily;
 pub use super::app_board_score::Entity as AppBoardScore;
 pub use super::app_connection::Entity as AppConnection;
 pub use super::app_discount::Entity as AppDiscount;
+pub use super::app_group::Entity as AppGroup;
+pub use super::app_group_member::Entity as AppGroupMember;
 pub use super::app_package::Entity as AppPackage;
 pub use super::app_process_note::Entity as AppProcessNote;
 pub use super::app_purchase::Entity as AppPurchase;

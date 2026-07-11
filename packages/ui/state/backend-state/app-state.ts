@@ -14,6 +14,7 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "../../lib/schema/app/fork";
+import type { IGroup } from "./types";
 
 export type IMediaItem = "icon" | "thumbnail" | "preview";
 
@@ -69,6 +70,10 @@ export interface IAppState {
 		offset?: number,
 		limit?: number,
 	): Promise<[IApp, IMetadata | undefined][]>;
+	getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]>;
+	getStoreGroup(groupId: string): Promise<IGroup>;
+	/** Suites across all apps the caller is a member of (for the library). */
+	getMyGroups(): Promise<IGroup[]>;
 	getApps(): Promise<[IApp, IMetadata | undefined][]>;
 	getApp(appId: string): Promise<IApp>;
 	updateApp(app: IApp): Promise<void>;

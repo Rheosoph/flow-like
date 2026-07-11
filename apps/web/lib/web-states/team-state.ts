@@ -2,6 +2,9 @@ import type { ITeamState } from "@flow-like/flow-like-ui";
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMembershipRequest,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -12,6 +15,7 @@ import type {
 	IProcessNote,
 	IRemoteEvent,
 	IRemoteEventDetail,
+	IUpdateGroupPayload,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import {
 	type WebBackendRef,
@@ -337,6 +341,89 @@ export class WebTeamState implements ITeamState {
 	async deleteProcessNote(appId: string, noteId: string): Promise<void> {
 		await apiDelete(
 			`apps/${appId}/connections/notes/${noteId}`,
+			this.backend.auth,
+		);
+	}
+
+	async createGroup(
+		appId: string,
+		payload: ICreateGroupPayload,
+	): Promise<IGroup> {
+		return await apiPost<IGroup>(
+			`apps/${appId}/groups`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async listGroups(appId: string): Promise<IGroup[]> {
+		return await apiGet<IGroup[]>(`apps/${appId}/groups`, this.backend.auth);
+	}
+
+	async getGroup(appId: string, groupId: string): Promise<IGroup> {
+		return await apiGet<IGroup>(
+			`apps/${appId}/groups/${groupId}`,
+			this.backend.auth,
+		);
+	}
+
+	async updateGroup(
+		appId: string,
+		groupId: string,
+		payload: IUpdateGroupPayload,
+	): Promise<IGroup> {
+		return await apiPut<IGroup>(
+			`apps/${appId}/groups/${groupId}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async deleteGroup(appId: string, groupId: string): Promise<void> {
+		await apiDelete(`apps/${appId}/groups/${groupId}`, this.backend.auth);
+	}
+
+	async addGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<IGroup> {
+		return await apiPost<IGroup>(
+			`apps/${appId}/groups/${groupId}/members`,
+			{ member_app_id: memberAppId },
+			this.backend.auth,
+		);
+	}
+
+	async removeGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/groups/${groupId}/members/${memberAppId}`,
+			this.backend.auth,
+		);
+	}
+
+	async listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]> {
+		return await apiGet<IGroupMembershipRequest[]>(
+			`apps/${appId}/groups/requests`,
+			this.backend.auth,
+		);
+	}
+
+	async acceptGroupRequest(appId: string, memberId: string): Promise<void> {
+		await apiPost(
+			`apps/${appId}/groups/requests/${memberId}`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async declineGroupRequest(appId: string, memberId: string): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/groups/requests/${memberId}`,
 			this.backend.auth,
 		);
 	}

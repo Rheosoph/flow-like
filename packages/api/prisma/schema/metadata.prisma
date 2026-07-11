@@ -40,6 +40,9 @@ model Meta {
   wasmPackage   WasmPackage? @relation(fields: [wasmPackageId], references: [id], onDelete: Cascade)
   wasmPackageId String?
 
+  group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

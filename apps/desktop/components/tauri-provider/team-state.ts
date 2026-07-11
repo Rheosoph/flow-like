@@ -2,6 +2,9 @@ import type { ITeamState } from "@flow-like/flow-like-ui";
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMembershipRequest,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -12,6 +15,7 @@ import type {
 	IProcessNote,
 	IRemoteEvent,
 	IRemoteEventDetail,
+	IUpdateGroupPayload,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -603,6 +607,141 @@ export class TeamState implements ITeamState {
 			{
 				method: "DELETE",
 			},
+			this.backend.auth,
+		);
+	}
+
+	async createGroup(
+		appId: string,
+		payload: ICreateGroupPayload,
+	): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups`,
+			{ method: "POST", body: JSON.stringify(payload) },
+			this.backend.auth,
+		);
+	}
+
+	async listGroups(appId: string): Promise<IGroup[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async getGroup(appId: string, groupId: string): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async updateGroup(
+		appId: string,
+		groupId: string,
+		payload: IUpdateGroupPayload,
+	): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}`,
+			{ method: "PUT", body: JSON.stringify(payload) },
+			this.backend.auth,
+		);
+	}
+
+	async deleteGroup(appId: string, groupId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async addGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/members`,
+			{ method: "POST", body: JSON.stringify({ member_app_id: memberAppId }) },
+			this.backend.auth,
+		);
+	}
+
+	async removeGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/members/${memberAppId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/requests`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async acceptGroupRequest(appId: string, memberId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/requests/${memberId}`,
+			{ method: "POST" },
+			this.backend.auth,
+		);
+	}
+
+	async declineGroupRequest(appId: string, memberId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/requests/${memberId}`,
+			{ method: "DELETE" },
 			this.backend.auth,
 		);
 	}

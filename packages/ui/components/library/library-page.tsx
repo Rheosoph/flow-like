@@ -7,6 +7,7 @@ import {
 	Eye,
 	EyeOff,
 	FilesIcon,
+	Layers,
 	LayoutGridIcon,
 	Plus,
 	Search,
@@ -67,6 +68,11 @@ export function LibraryPage({
 		[],
 	);
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
+	const myGroups = useInvoke(
+		backend.appState.getMyGroups,
+		backend.appState,
+		[],
+	);
 	const bits = useInvoke(backend.bitState.searchBits, backend.bitState, [
 		{
 			bit_types: [IBitTypes.Embedding, IBitTypes.ImageEmbedding],
@@ -85,6 +91,15 @@ export function LibraryPage({
 		if (typeof window === "undefined") return;
 		window.localStorage.setItem("library.sortMode", sortMode);
 	}, [sortMode]);
+	const [groupMode, setGroupMode] = useState<"category" | "suite">(() => {
+		if (typeof window === "undefined") return "category";
+		const stored = window.localStorage.getItem("library.groupMode");
+		return stored === "suite" ? "suite" : "category";
+	});
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		window.localStorage.setItem("library.groupMode", groupMode);
+	}, [groupMode]);
 	const isMobile = useIsMobile();
 
 	const handleAppClick = useCallback(
@@ -241,6 +256,44 @@ export function LibraryPage({
 			}))
 			.sort((a, b) => a.label.localeCompare(b.label));
 	}, [itemsForDisplay, sortMode]);
+
+	const suiteSections = useMemo(() => {
+		const groups = myGroups.data ?? [];
+		if (groups.length === 0) return [];
+		const byId = new Map(
+			itemsForDisplay.map((item): [string, LibraryItem] => [item.id, item]),
+		);
+		const claimed = new Set<string>();
+		const sections = groups
+			.map((group) => {
+				const items: LibraryItem[] = [];
+				for (const member of group.members) {
+					const item = byId.get(member.app_id);
+					if (item) {
+						items.push(item);
+						claimed.add(item.id);
+					}
+				}
+				return {
+					label: group.use_case || group.name || "Suite",
+					items: sortItems(items, sortMode),
+				};
+			})
+			.filter((section) => section.items.length > 0)
+			.sort((a, b) => a.label.localeCompare(b.label));
+		const ungrouped = itemsForDisplay.filter((item) => !claimed.has(item.id));
+		if (ungrouped.length > 0) {
+			sections.push({
+				label: "Not in a suite",
+				items: sortItems(ungrouped, sortMode),
+			});
+		}
+		return sections;
+	}, [myGroups.data, itemsForDisplay, sortMode]);
+
+	const hasSuites = (myGroups.data?.length ?? 0) > 0;
+	const sectionsToRender =
+		groupMode === "suite" && hasSuites ? suiteSections : categorizedItems;
 
 	const { addAll, removeAll, clearSearch, search, searchResults } =
 		useMiniSearch(itemsForDisplay, {
@@ -465,6 +518,31 @@ export function LibraryPage({
 							</TooltipContent>
 						</Tooltip>
 
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									disabled={!hasSuites}
+									className={`h-8 w-8 rounded-full ${
+										groupMode === "suite"
+											? "text-primary bg-primary/10"
+											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+									}`}
+									onClick={() =>
+										setGroupMode((m) => (m === "suite" ? "category" : "suite"))
+									}
+								>
+									<Layers className="h-4 w-4" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{groupMode === "suite"
+									? "Grouped by suite · click for category"
+									: "Group by suite"}
+							</TooltipContent>
+						</Tooltip>
+
 						<JoinInline />
 
 						{extraToolbarActions}
@@ -584,10 +662,10 @@ export function LibraryPage({
 						)}
 
 						{recentItems.length > 0 &&
-							categorizedItems.length > 0 &&
+							sectionsToRender.length > 0 &&
 							!isMobile && <div className="border-t border-border/10" />}
 
-						{categorizedItems.map(({ label, items }) => (
+						{sectionsToRender.map(({ label, items }) => (
 							<Section
 								key={label}
 								title={label}

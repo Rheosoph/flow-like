@@ -1,6 +1,9 @@
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMembershipRequest,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -12,6 +15,7 @@ import type {
 	IRemoteEvent,
 	IRemoteEventDetail,
 	ITeamState,
+	IUpdateGroupPayload,
 } from "@flow-like/flow-like-ui";
 
 export class EmptyTeamState implements ITeamState {
@@ -150,6 +154,48 @@ export class EmptyTeamState implements ITeamState {
 		throw new Error("Method not implemented.");
 	}
 	deleteProcessNote(appId: string, noteId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	createGroup(appId: string, payload: ICreateGroupPayload): Promise<IGroup> {
+		throw new Error("Method not implemented.");
+	}
+	listGroups(appId: string): Promise<IGroup[]> {
+		throw new Error("Method not implemented.");
+	}
+	getGroup(appId: string, groupId: string): Promise<IGroup> {
+		throw new Error("Method not implemented.");
+	}
+	updateGroup(
+		appId: string,
+		groupId: string,
+		payload: IUpdateGroupPayload,
+	): Promise<IGroup> {
+		throw new Error("Method not implemented.");
+	}
+	deleteGroup(appId: string, groupId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	addGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<IGroup> {
+		throw new Error("Method not implemented.");
+	}
+	removeGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]> {
+		throw new Error("Method not implemented.");
+	}
+	acceptGroupRequest(appId: string, memberId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	declineGroupRequest(appId: string, memberId: string): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
 }

@@ -1,6 +1,9 @@
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMembershipRequest,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -11,6 +14,7 @@ import type {
 	IProcessNote,
 	IRemoteEvent,
 	IRemoteEventDetail,
+	IUpdateGroupPayload,
 } from "./types";
 
 export interface ITeamState {
@@ -80,4 +84,27 @@ export interface ITeamState {
 		content: string,
 	): Promise<IProcessNote>;
 	deleteProcessNote(appId: string, noteId: string): Promise<void>;
+	// App groups (curated store "suites")
+	createGroup(appId: string, payload: ICreateGroupPayload): Promise<IGroup>;
+	listGroups(appId: string): Promise<IGroup[]>;
+	getGroup(appId: string, groupId: string): Promise<IGroup>;
+	updateGroup(
+		appId: string,
+		groupId: string,
+		payload: IUpdateGroupPayload,
+	): Promise<IGroup>;
+	deleteGroup(appId: string, groupId: string): Promise<void>;
+	addGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<IGroup>;
+	removeGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<void>;
+	listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]>;
+	acceptGroupRequest(appId: string, memberId: string): Promise<void>;
+	declineGroupRequest(appId: string, memberId: string): Promise<void>;
 }

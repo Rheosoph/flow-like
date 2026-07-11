@@ -10,6 +10,8 @@ pub mod app_analytics_daily;
 pub mod app_board_score;
 pub mod app_connection;
 pub mod app_discount;
+pub mod app_group;
+pub mod app_group_member;
 pub mod app_package;
 pub mod app_process_note;
 pub mod app_purchase;

@@ -1750,6 +1750,7 @@ impl ServerRegistry {
                 preview_media: Set(None),
                 age_rating: Set(None),
                 wasm_package_id: Set(Some(manifest.id.clone())),
+                group_id: Set(None),
                 app_id: Set(None),
                 bit_id: Set(None),
                 course_id: Set(None),

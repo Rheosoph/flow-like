@@ -1808,6 +1808,7 @@ pub async fn fork_app_with_visibility(
                         template_id: Set(None),
                         widget_id: Set(None),
                         wasm_package_id: Set(None),
+                        group_id: Set(None),
                         created_at: Set(now),
                         updated_at: Set(now),
                     };
@@ -2001,6 +2002,7 @@ pub async fn fork_app_with_visibility(
                         template_id: Set(None),
                         widget_id: Set(dst_widget_id),
                         wasm_package_id: Set(None),
+                        group_id: Set(None),
                         created_at: Set(now),
                         updated_at: Set(now),
                     };
@@ -2070,6 +2072,7 @@ pub async fn fork_app_with_visibility(
                         template_id: Set(dst_template_id),
                         widget_id: Set(None),
                         wasm_package_id: Set(None),
+                        group_id: Set(None),
                         created_at: Set(now),
                         updated_at: Set(now),
                     };
