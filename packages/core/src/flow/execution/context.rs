@@ -41,10 +41,11 @@ const A2UI_UPDATE_LOG_CAP: usize = 1024;
 
 /// Run-scoped, ordered log of surface-mutating a2ui messages. Shared across
 /// nodes via the execution cache so snapshot consumers (e.g. Push Widget) can
-/// replay updates emitted earlier in the run.
+/// replay updates emitted earlier in the run. The lock is never held across an
+/// await, so a sync mutex suffices.
 #[derive(Clone, Default)]
 pub struct A2UIUpdateLog {
-    pub entries: Arc<Mutex<Vec<crate::a2ui::A2UIServerMessage>>>,
+    pub entries: Arc<std::sync::Mutex<Vec<crate::a2ui::A2UIServerMessage>>>,
     pub truncated: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -1211,13 +1212,14 @@ impl ExecutionContext {
             }
         };
 
-        let mut entries = log.entries.lock().await;
-        if entries.len() >= A2UI_UPDATE_LOG_CAP {
-            log.truncated
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            return;
+        if let Ok(mut entries) = log.entries.lock() {
+            if entries.len() >= A2UI_UPDATE_LOG_CAP {
+                log.truncated
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+            entries.push(message.clone());
         }
-        entries.push(message.clone());
     }
 
     /// Returns all surface-mutating a2ui messages streamed so far in this run,
@@ -1225,7 +1227,13 @@ impl ExecutionContext {
     pub async fn get_a2ui_update_log(&self) -> (Vec<crate::a2ui::A2UIServerMessage>, bool) {
         match self.get_cache(A2UI_UPDATE_LOG_KEY).await {
             Some(cached) => match cached.as_any().downcast_ref::<A2UIUpdateLog>() {
-                Some(log) => (log.entries.lock().await.clone(), log.is_truncated()),
+                Some(log) => (
+                    log.entries
+                        .lock()
+                        .map(|entries| entries.clone())
+                        .unwrap_or_default(),
+                    log.is_truncated(),
+                ),
                 None => (Vec::new(), false),
             },
             None => (Vec::new(), false),

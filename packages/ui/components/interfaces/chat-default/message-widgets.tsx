@@ -74,7 +74,7 @@ function MessageWidget({
 			next = applyA2UIMessage(next, normalizeA2UIWireMessage(update));
 		}
 		return next;
-	}, [componentKey, updatesKey]);
+	}, [componentKey, updatesKey, widget.surface_id, widget.instance_id]);
 
 	const [surface, setSurface] = useState<Surface>(seededSurface);
 	const [maximized, setMaximized] = useState(false);

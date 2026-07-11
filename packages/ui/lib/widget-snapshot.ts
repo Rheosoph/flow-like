@@ -37,14 +37,13 @@ export async function captureWidgetSnapshot(
 export async function captureWidgetSnapshots(
 	instanceIds: string[],
 ): Promise<string[]> {
-	const snapshots: string[] = [];
-	for (const instanceId of instanceIds) {
-		const element = document.querySelector<HTMLElement>(
-			`[${WIDGET_ATTRIBUTE}="${CSS.escape(instanceId)}"]`,
-		);
-		if (!element) continue;
-		const snapshot = await captureWidgetSnapshot(element);
-		if (snapshot) snapshots.push(snapshot);
-	}
-	return snapshots;
+	const snapshots = await Promise.all(
+		instanceIds.map((instanceId) => {
+			const element = document.querySelector<HTMLElement>(
+				`[${WIDGET_ATTRIBUTE}="${CSS.escape(instanceId)}"]`,
+			);
+			return element ? captureWidgetSnapshot(element) : null;
+		}),
+	);
+	return snapshots.filter((snapshot): snapshot is string => snapshot !== null);
 }

@@ -88,6 +88,7 @@ export function A2UIGeoMap({
 
 	const mapRef = useRef<MapRef | null>(null);
 	const programmaticMoveRef = useRef(false);
+	const flightIdRef = useRef(0);
 
 	// resolve() re-parses literalJson into a fresh object every render, so
 	// viewport changes are detected by value, not identity.
@@ -113,10 +114,8 @@ export function A2UIGeoMap({
 		if (!map) return;
 
 		const next = JSON.parse(viewportKey) as GeoMapViewport;
+		const flightId = ++flightIdRef.current;
 		programmaticMoveRef.current = true;
-		map.once("moveend", () => {
-			programmaticMoveRef.current = false;
-		});
 		map.flyTo({
 			center: toMapCoord(next.center),
 			...(next.zoom !== undefined && next.zoom !== null
@@ -126,6 +125,14 @@ export function A2UIGeoMap({
 			pitch: next.pitch ?? 0,
 			duration: 1500,
 			essential: true,
+		});
+		// Registered after flyTo: interrupting a prior flight fires a synchronous
+		// moveend that must not consume this listener, and stale listeners from
+		// superseded flights must not clear the flag mid-flight.
+		map.once("moveend", () => {
+			if (flightId === flightIdRef.current) {
+				programmaticMoveRef.current = false;
+			}
 		});
 	}, [viewportKey]);
 
