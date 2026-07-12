@@ -9,6 +9,7 @@ use crate::interop::{
     ReasoningData, ToolCallData, ToolResultData, VideoData,
 };
 use crate::Context;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use futures::stream;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage,
@@ -24,11 +25,81 @@ use rig::streaming::{
 use rig::tool::Tool;
 use rig::OneOrMany;
 
+const UNKNOWN_MEDIA_TYPE: &str = "application/octet-stream";
+
 fn rig_text(text: impl Into<String>) -> Text {
     Text {
         text: text.into(),
         additional_params: None,
     }
+}
+
+/// Encode every Rig source kind into the string-only SDK media representation without losing
+/// source semantics. The host bridge understands these data-URI markers and `file_id:` values.
+fn source_to_sdk_url(source: &DocumentSourceKind, media_type: Option<&str>) -> String {
+    let media_type = media_type.unwrap_or(UNKNOWN_MEDIA_TYPE);
+    match source {
+        DocumentSourceKind::Url(url) => url.clone(),
+        DocumentSourceKind::Base64(data) => format!("data:{media_type};base64,{data}"),
+        DocumentSourceKind::FileId(file_id) => format!("file_id:{file_id}"),
+        DocumentSourceKind::Raw(bytes) => format!(
+            "data:{media_type};flow-like-source=raw;base64,{}",
+            BASE64_STANDARD.encode(bytes)
+        ),
+        DocumentSourceKind::String(value) => format!(
+            "data:{media_type};flow-like-source=string;base64,{}",
+            BASE64_STANDARD.encode(value.as_bytes())
+        ),
+        DocumentSourceKind::Unknown => String::new(),
+        _ => String::new(),
+    }
+}
+
+/// Decode the SDK's string-only media representation back into the corresponding Rig source.
+fn source_from_sdk_url(value: &str) -> (DocumentSourceKind, Option<&str>) {
+    if value.is_empty() {
+        return (DocumentSourceKind::Unknown, None);
+    }
+
+    if let Some(data_uri) = value.strip_prefix("data:") {
+        if let Some((metadata, payload)) = data_uri.split_once(";base64,") {
+            let mut metadata_parts = metadata.split(';');
+            let media_type = metadata_parts.next().filter(|mime| !mime.is_empty());
+            let source_kind = metadata_parts.find_map(|part| {
+                part.strip_prefix("flow-like-source=")
+                    .map(str::to_ascii_lowercase)
+            });
+            let source = match source_kind.as_deref() {
+                Some("raw") => BASE64_STANDARD
+                    .decode(payload)
+                    .map(DocumentSourceKind::Raw)
+                    .unwrap_or_else(|_| DocumentSourceKind::Base64(payload.to_string())),
+                Some("string") => BASE64_STANDARD
+                    .decode(payload)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .map(DocumentSourceKind::String)
+                    .unwrap_or_else(|| DocumentSourceKind::Base64(payload.to_string())),
+                _ => DocumentSourceKind::Base64(payload.to_string()),
+            };
+            return (source, media_type);
+        }
+    }
+
+    if let Some(file_id) = value.strip_prefix("file_id:") {
+        return (DocumentSourceKind::FileId(file_id.to_string()), None);
+    }
+
+    (DocumentSourceKind::Url(value.to_string()), None)
+}
+
+fn media_type_from_sdk<T: MimeType>(
+    wire_media_type: Option<&str>,
+    explicit_media_type: Option<&str>,
+) -> Option<T> {
+    wire_media_type
+        .and_then(T::from_mime_type)
+        .or_else(|| explicit_media_type.and_then(T::from_mime_type))
 }
 
 // =============================================================================
@@ -42,26 +113,38 @@ fn rig_user_content_to_part(uc: &UserContent) -> ContentPart {
         },
         UserContent::Image(img) => ContentPart::Image {
             image: ImageData {
-                url: img.data.to_string(),
+                url: source_to_sdk_url(
+                    &img.data,
+                    img.media_type.as_ref().map(MimeType::to_mime_type),
+                ),
                 media_type: img.media_type.as_ref().map(|m| m.to_mime_type().into()),
                 detail: img.detail.as_ref().map(|d| format!("{d:?}").to_lowercase()),
             },
         },
         UserContent::Audio(aud) => ContentPart::Audio {
             audio: AudioData {
-                url: aud.data.to_string(),
+                url: source_to_sdk_url(
+                    &aud.data,
+                    aud.media_type.as_ref().map(MimeType::to_mime_type),
+                ),
                 media_type: aud.media_type.as_ref().map(|m| m.to_mime_type().into()),
             },
         },
         UserContent::Video(vid) => ContentPart::Video {
             video: VideoData {
-                url: vid.data.to_string(),
+                url: source_to_sdk_url(
+                    &vid.data,
+                    vid.media_type.as_ref().map(MimeType::to_mime_type),
+                ),
                 media_type: vid.media_type.as_ref().map(|m| m.to_mime_type().into()),
             },
         },
         UserContent::Document(doc) => ContentPart::Document {
             document: DocumentData {
-                url: doc.data.to_string(),
+                url: source_to_sdk_url(
+                    &doc.data,
+                    doc.media_type.as_ref().map(MimeType::to_mime_type),
+                ),
                 media_type: doc.media_type.as_ref().map(|m| m.to_mime_type().into()),
             },
         },
@@ -134,7 +217,10 @@ fn rig_assistant_content_to_parts(
             AssistantContent::Image(img) => {
                 parts.push(ContentPart::Image {
                     image: ImageData {
-                        url: img.data.to_string(),
+                        url: source_to_sdk_url(
+                            &img.data,
+                            img.media_type.as_ref().map(MimeType::to_mime_type),
+                        ),
                         media_type: img.media_type.as_ref().map(|m| m.to_mime_type().into()),
                         detail: img.detail.as_ref().map(|d| format!("{d:?}").to_lowercase()),
                     },
@@ -424,27 +510,42 @@ fn parse_llm_response(text: &str) -> ParsedLlmResponse {
 fn content_part_to_user_content(part: &ContentPart) -> UserContent {
     match part {
         ContentPart::Text { text } => UserContent::Text(rig_text(text.clone())),
-        ContentPart::Image { image } => UserContent::Image(Image {
-            data: DocumentSourceKind::url(&image.url),
-            media_type: None,
-            detail: None,
-            additional_params: None,
-        }),
-        ContentPart::Audio { audio } => UserContent::Audio(Audio {
-            data: DocumentSourceKind::url(&audio.url),
-            media_type: None,
-            additional_params: None,
-        }),
-        ContentPart::Video { video } => UserContent::Video(Video {
-            data: DocumentSourceKind::url(&video.url),
-            media_type: None,
-            additional_params: None,
-        }),
-        ContentPart::Document { document } => UserContent::Document(Document {
-            data: DocumentSourceKind::url(&document.url),
-            media_type: None,
-            additional_params: None,
-        }),
+        ContentPart::Image { image } => {
+            let (data, wire_media_type) = source_from_sdk_url(&image.url);
+            UserContent::Image(Image {
+                data,
+                media_type: media_type_from_sdk(wire_media_type, image.media_type.as_deref()),
+                detail: image
+                    .detail
+                    .as_deref()
+                    .and_then(|detail| detail.parse().ok()),
+                additional_params: None,
+            })
+        }
+        ContentPart::Audio { audio } => {
+            let (data, wire_media_type) = source_from_sdk_url(&audio.url);
+            UserContent::Audio(Audio {
+                data,
+                media_type: media_type_from_sdk(wire_media_type, audio.media_type.as_deref()),
+                additional_params: None,
+            })
+        }
+        ContentPart::Video { video } => {
+            let (data, wire_media_type) = source_from_sdk_url(&video.url);
+            UserContent::Video(Video {
+                data,
+                media_type: media_type_from_sdk(wire_media_type, video.media_type.as_deref()),
+                additional_params: None,
+            })
+        }
+        ContentPart::Document { document } => {
+            let (data, wire_media_type) = source_from_sdk_url(&document.url);
+            UserContent::Document(Document {
+                data,
+                media_type: media_type_from_sdk(wire_media_type, document.media_type.as_deref()),
+                additional_params: None,
+            })
+        }
         ContentPart::ToolResult { tool_result } => UserContent::ToolResult(ToolResult {
             id: tool_result.id.clone(),
             call_id: None,
@@ -453,12 +554,12 @@ fn content_part_to_user_content(part: &ContentPart) -> UserContent {
             ))),
         }),
         ContentPart::ToolCall { tool_call } => UserContent::Text(rig_text(format!(
-                "[tool_call: {} {}({})]",
-                tool_call.id, tool_call.name, tool_call.arguments
-            ))),
-        ContentPart::Reasoning { reasoning } => UserContent::Text(rig_text(
-            reasoning.text.join("\n"),
-        )),
+            "[tool_call: {} {}({})]",
+            tool_call.id, tool_call.name, tool_call.arguments
+        ))),
+        ContentPart::Reasoning { reasoning } => {
+            UserContent::Text(rig_text(reasoning.text.join("\n")))
+        }
     }
 }
 
@@ -493,24 +594,29 @@ pub fn chat_messages_to_rig(messages: &[ChatMessage]) -> (Option<String>, Vec<Me
                 match &msg.content {
                     ChatContent::Text { content } => {
                         if !content.is_empty() {
-                            assistant_contents.push(AssistantContent::Text(rig_text(
-                                content.clone(),
-                            )));
+                            assistant_contents
+                                .push(AssistantContent::Text(rig_text(content.clone())));
                         }
                     }
                     ChatContent::Parts { parts } => {
                         for part in parts {
                             match part {
                                 ContentPart::Text { text } => {
-                                    assistant_contents.push(AssistantContent::Text(rig_text(
-                                        text.clone(),
-                                    )));
+                                    assistant_contents
+                                        .push(AssistantContent::Text(rig_text(text.clone())));
                                 }
                                 ContentPart::Image { image } => {
+                                    let (data, wire_media_type) = source_from_sdk_url(&image.url);
                                     assistant_contents.push(AssistantContent::Image(Image {
-                                        data: DocumentSourceKind::url(&image.url),
-                                        media_type: None,
-                                        detail: None,
+                                        data,
+                                        media_type: media_type_from_sdk(
+                                            wire_media_type,
+                                            image.media_type.as_deref(),
+                                        ),
+                                        detail: image
+                                            .detail
+                                            .as_deref()
+                                            .and_then(|detail| detail.parse().ok()),
                                         additional_params: None,
                                     }));
                                 }
@@ -1135,6 +1241,9 @@ impl Tool for FlowPathListTool {
 mod tests {
     use super::*;
     use crate::interop::{ChatContent, ContentPart, ToolCallData};
+    use rig::message::{
+        AudioMediaType, DocumentMediaType, ImageDetail, ImageMediaType, VideoMediaType,
+    };
     use serde_json::json;
 
     #[test]
@@ -1195,8 +1304,88 @@ mod tests {
     }
 
     #[test]
+    fn test_media_source_wire_roundtrip_preserves_every_source_kind() {
+        let cases = [
+            DocumentSourceKind::Url("https://example.com/image.png".into()),
+            DocumentSourceKind::Base64("aW1hZ2U=".into()),
+            DocumentSourceKind::FileId("file-123".into()),
+            DocumentSourceKind::Raw(vec![1, 2, 3, 4]),
+            DocumentSourceKind::String("literal document text".into()),
+        ];
+
+        for source in cases {
+            let encoded = source_to_sdk_url(&source, Some("image/png"));
+            let (decoded, _) = source_from_sdk_url(&encoded);
+            assert_eq!(decoded, source, "source changed via {encoded}");
+        }
+    }
+
+    #[test]
+    fn test_rig_sdk_multimodal_roundtrip_preserves_sources_mime_and_detail() {
+        let rig_msg = Message::User {
+            content: OneOrMany::many(vec![
+                UserContent::Image(Image {
+                    data: DocumentSourceKind::Base64("aW1hZ2U=".into()),
+                    media_type: Some(ImageMediaType::PNG),
+                    detail: Some(ImageDetail::High),
+                    additional_params: None,
+                }),
+                UserContent::Audio(Audio {
+                    data: DocumentSourceKind::FileId("audio-123".into()),
+                    media_type: Some(AudioMediaType::MP3),
+                    additional_params: None,
+                }),
+                UserContent::Video(Video {
+                    data: DocumentSourceKind::Raw(vec![1, 2, 3, 4]),
+                    media_type: Some(VideoMediaType::MP4),
+                    additional_params: None,
+                }),
+                UserContent::Document(Document {
+                    data: DocumentSourceKind::String("literal document text".into()),
+                    media_type: Some(DocumentMediaType::TXT),
+                    additional_params: None,
+                }),
+            ])
+            .unwrap(),
+        };
+
+        let sdk_msg = rig_message_to_chat(&rig_msg);
+        let ChatContent::Parts { parts } = &sdk_msg.content else {
+            panic!("Expected multimodal SDK parts")
+        };
+        assert!(matches!(
+            &parts[0],
+            ContentPart::Image { image }
+                if image.url == "data:image/png;base64,aW1hZ2U="
+                    && image.media_type.as_deref() == Some("image/png")
+                    && image.detail.as_deref() == Some("high")
+        ));
+        assert!(matches!(
+            &parts[1],
+            ContentPart::Audio { audio }
+                if audio.url == "file_id:audio-123"
+                    && audio.media_type.as_deref() == Some("audio/mp3")
+        ));
+        assert!(matches!(
+            &parts[2],
+            ContentPart::Video { video }
+                if video.url == "data:video/mp4;flow-like-source=raw;base64,AQIDBA=="
+        ));
+        assert!(matches!(
+            &parts[3],
+            ContentPart::Document { document }
+                if document.url
+                    == "data:text/plain;flow-like-source=string;base64,bGl0ZXJhbCBkb2N1bWVudCB0ZXh0"
+        ));
+
+        let (_, roundtripped) = chat_messages_to_rig(&[sdk_msg]);
+        assert_eq!(roundtripped, vec![rig_msg]);
+    }
+
+    #[test]
     fn test_completion_request_to_messages() {
         let request = CompletionRequest {
+            model: None,
             preamble: Some("Be concise.".into()),
             chat_history: OneOrMany::one(Message::User {
                 content: OneOrMany::one(UserContent::Text(rig_text("What is 2+2?"))),
@@ -1207,6 +1396,7 @@ mod tests {
             max_tokens: None,
             tool_choice: None,
             additional_params: None,
+            output_schema: None,
         };
 
         let msgs = completion_request_to_messages(&request);
@@ -1275,9 +1465,7 @@ mod tests {
             content: OneOrMany::one(UserContent::ToolResult(ToolResult {
                 id: "call_1".into(),
                 call_id: None,
-                content: OneOrMany::one(ToolResultContent::Text(rig_text(
-                    "25°C, sunny",
-                ))),
+                content: OneOrMany::one(ToolResultContent::Text(rig_text("25°C, sunny"))),
             })),
         };
 

@@ -98,6 +98,13 @@
             "null"
           ]
         },
+        "content_parts": {
+          "description": "Ordered structured content returned by Rig when the assistant response contains media.\nText-only responses continue to use `content` alone for OpenAI compatibility.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Content"
+          }
+        },
         "refusal": {
           "type": [
             "string",
@@ -139,6 +146,140 @@
       "required": [
         "role",
         "tool_calls"
+      ]
+    },
+    "Content": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "image_url": {
+              "$ref": "#/$defs/ImageUrl"
+            }
+          },
+          "required": [
+            "type",
+            "image_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "audio_url": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
+          },
+          "required": [
+            "type",
+            "audio_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "video_url": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
+          },
+          "required": [
+            "type",
+            "video_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "document_url": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
+          },
+          "required": [
+            "type",
+            "document_url"
+          ]
+        }
+      ]
+    },
+    "ContentType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "image_url",
+        "audio_url",
+        "video_url",
+        "document_url"
+      ]
+    },
+    "ImageUrl": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "additional_params": true
+      },
+      "required": [
+        "url"
       ]
     },
     "Annotation": {

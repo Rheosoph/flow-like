@@ -857,8 +857,11 @@ fn video_media_type_from_mime(value: &str) -> Option<VideoMediaType> {
 fn document_media_type_from_mime(value: &str) -> Option<DocumentMediaType> {
     match value.to_ascii_lowercase().as_str() {
         "application/rtf" => Some(DocumentMediaType::RTF),
-        "application/javascript" | "text/javascript" => Some(DocumentMediaType::Javascript),
-        "text/x-markdown" => Some(DocumentMediaType::MARKDOWN),
+        "application/javascript" | "text/javascript" | "text/x-javascript" => {
+            Some(DocumentMediaType::Javascript)
+        }
+        "text/md" | "text/x-markdown" => Some(DocumentMediaType::MARKDOWN),
+        "text/x-python" => Some(DocumentMediaType::Python),
         "application/xml" => Some(DocumentMediaType::XML),
         mime_type => DocumentMediaType::from_mime_type(mime_type),
     }
@@ -1636,6 +1639,26 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn chat_upload_mime_aliases_map_to_rig_types() {
+        assert_eq!(
+            audio_media_type_from_mime("audio/mpeg3"),
+            Some(AudioMediaType::MP3)
+        );
+        assert_eq!(
+            document_media_type_from_mime("text/md"),
+            Some(DocumentMediaType::MARKDOWN)
+        );
+        assert_eq!(
+            document_media_type_from_mime("text/x-javascript"),
+            Some(DocumentMediaType::Javascript)
+        );
+        assert_eq!(
+            document_media_type_from_mime("text/x-python"),
+            Some(DocumentMediaType::Python)
+        );
     }
 
     #[test]

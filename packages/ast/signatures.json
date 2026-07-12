@@ -6999,6 +6999,78 @@
           },
           "optional": true,
           "doc": "Message content type"
+        },
+        {
+          "name": "text",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Text content"
+        },
+        {
+          "name": "image",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Image URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "audio",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Audio URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "video",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Video URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "document",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Document URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "detail",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Image resolution detail level"
+        },
+        {
+          "name": "mime",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Auto infers MIME from a URL or data URI; select a type for bare base64"
+        },
+        {
+          "name": "tool_call_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Tool Call Identifier"
         }
       ],
       "outputs": [
@@ -7190,6 +7262,69 @@
           },
           "optional": true,
           "doc": "Content type"
+        },
+        {
+          "name": "text",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Text content"
+        },
+        {
+          "name": "image",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Image URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "audio",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Audio URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "video",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Video URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "document",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Document URL, data URI, file_id reference, or bare base64 payload"
+        },
+        {
+          "name": "detail",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Image resolution detail level"
+        },
+        {
+          "name": "mime",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Auto infers MIME from a URL or data URI; select a type for bare base64"
         }
       ],
       "outputs": [

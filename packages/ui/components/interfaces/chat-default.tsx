@@ -203,6 +203,7 @@ function createHistoryMessage(content: string, attachments: IAttachment[]) {
 				"audio/wave",
 				"audio/mp3",
 				"audio/mpeg",
+				"audio/mpeg3",
 				"audio/aiff",
 				"audio/x-aiff",
 				"audio/aac",
@@ -252,6 +253,7 @@ function createHistoryMessage(content: string, attachments: IAttachment[]) {
 				"text/html",
 				"text/css",
 				"text/markdown",
+				"text/md",
 				"text/x-markdown",
 				"text/csv",
 				"text/xml",
@@ -259,7 +261,9 @@ function createHistoryMessage(content: string, attachments: IAttachment[]) {
 				"application/x-javascript",
 				"application/javascript",
 				"text/javascript",
+				"text/x-javascript",
 				"application/x-python",
+				"text/x-python",
 			].includes(mime) ||
 			(canInferFromExtension &&
 				/\.(pdf|txt|rtf|html?|css|md|markdown|csv|xml|m?js|cjs|py)$/.test(

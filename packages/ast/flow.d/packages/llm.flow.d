@@ -473,9 +473,17 @@ declare function aiGenerativeSetSystemPromptMessage({ history: Struct, message?:
  * Creates a chat message with text, image, audio, video, or document content and optional tool metadata
  * @param role (optional) — Author role
  * @param type (optional) — Message content type
+ * @param text (optional) — Text content
+ * @param image (optional) — Image URL, data URI, file_id reference, or bare base64 payload
+ * @param audio (optional) — Audio URL, data URI, file_id reference, or bare base64 payload
+ * @param video (optional) — Video URL, data URI, file_id reference, or bare base64 payload
+ * @param document (optional) — Document URL, data URI, file_id reference, or bare base64 payload
+ * @param detail (optional) — Image resolution detail level
+ * @param mime (optional) — Auto infers MIME from a URL or data URI; select a type for bare base64
+ * @param toolCallId (optional) — Tool Call Identifier
  * @returns message — Newly constructed chat message
  */
-declare function aiGenerativeMakeHistoryMessage({ role?: string, type?: string }): Struct;
+declare function aiGenerativeMakeHistoryMessage({ role?: string, type?: string, text?: string, image?: string, audio?: string, video?: string, document?: string, detail?: string, mime?: string, toolCallId?: string }): Struct;
 
 /**
  * Extracts text content from a chat message, flattening multi-part payloads
@@ -493,10 +501,17 @@ declare function aiGenerativeMessageExtractContent({ message: Struct }): { conte
  * Appends text, image, audio, video, or document parts onto a chat message
  * @param message — Message to extend
  * @param type (optional) — Content type
+ * @param text (optional) — Text content
+ * @param image (optional) — Image URL, data URI, file_id reference, or bare base64 payload
+ * @param audio (optional) — Audio URL, data URI, file_id reference, or bare base64 payload
+ * @param video (optional) — Video URL, data URI, file_id reference, or bare base64 payload
+ * @param document (optional) — Document URL, data URI, file_id reference, or bare base64 payload
+ * @param detail (optional) — Image resolution detail level
+ * @param mime (optional) — Auto infers MIME from a URL or data URI; select a type for bare base64
  * @returns messageOut — Updated message with additional content
  * @impure has side effects / drives control flow
  */
-declare function aiGenerativePushContent({ message: Struct, type?: string }): Struct;
+declare function aiGenerativePushContent({ message: Struct, type?: string, text?: string, image?: string, audio?: string, video?: string, document?: string, detail?: string, mime?: string }): Struct;
 
 
 // === AI/Generative/Preferences ===

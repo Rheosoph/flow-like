@@ -264,7 +264,14 @@
             },
             "audio_url": {
               "type": "string"
-            }
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
           },
           "required": [
             "type",
@@ -279,7 +286,14 @@
             },
             "video_url": {
               "type": "string"
-            }
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
           },
           "required": [
             "type",
@@ -294,7 +308,14 @@
             },
             "document_url": {
               "type": "string"
-            }
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
           },
           "required": [
             "type",
@@ -324,7 +345,14 @@
             "string",
             "null"
           ]
-        }
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "additional_params": true
       },
       "required": [
         "url"

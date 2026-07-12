@@ -5,6 +5,7 @@
 use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::WasmCapabilities;
+use crate::llm_message::sdk_message_content;
 use crate::memory::WasmAllocator;
 use flow_like_storage::object_store::path::Path;
 use std::sync::Arc;
@@ -971,11 +972,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         &write_id,
                         &data,
                     );
-                    if ok {
-                        0
-                    } else {
-                        -1
-                    }
+                    if ok { 0 } else { -1 }
                 })
             },
         )
@@ -1835,55 +1832,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             _ => flow_like_model_provider::history::Role::User,
                         };
 
-                        let content =
-                            if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                                flow_like_model_provider::history::MessageContent::String(
-                                    c.to_string(),
-                                )
-                            } else if let Some(parts) =
-                                msg.get("parts").and_then(|v| v.as_array())
-                            {
-                                let mut contents = Vec::new();
-                                for part in parts {
-                                    if let Some(text) =
-                                        part.get("text").and_then(|t| t.as_str())
-                                    {
-                                        contents.push(
-                                            flow_like_model_provider::history::Content::Text {
-                                                content_type:
-                                                    flow_like_model_provider::history::ContentType::Text,
-                                                text: text.to_string(),
-                                            },
-                                        );
-                                    } else if let Some(reasoning) = part
-                                        .get("reasoning")
-                                        .and_then(|reasoning| reasoning.get("text"))
-                                        .and_then(|text| text.as_array())
-                                    {
-                                        let text = reasoning
-                                            .iter()
-                                            .filter_map(|entry| entry.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join("\n");
-                                        if !text.is_empty() {
-                                            contents.push(
-                                                flow_like_model_provider::history::Content::Text {
-                                                    content_type:
-                                                        flow_like_model_provider::history::ContentType::Text,
-                                                    text,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                flow_like_model_provider::history::MessageContent::Contents(
-                                    contents,
-                                )
-                            } else {
-                                flow_like_model_provider::history::MessageContent::String(
-                                    String::new(),
-                                )
-                            };
+                        let content = sdk_message_content(msg);
 
                         let tool_calls = msg
                             .get("tool_calls")
@@ -2209,37 +2158,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             "tool" => flow_like_model_provider::history::Role::Tool,
                             _ => flow_like_model_provider::history::Role::User,
                         };
-                        let content = if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                            flow_like_model_provider::history::MessageContent::String(c.to_string())
-                        } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
-                            let contents = parts.iter().filter_map(|part| {
-                                part
-                                    .get("text")
-                                    .and_then(|t| t.as_str())
-                                    .map(|text| text.to_string())
-                                    .or_else(|| {
-                                        part
-                                            .get("reasoning")
-                                            .and_then(|reasoning| reasoning.get("text"))
-                                            .and_then(|text| text.as_array())
-                                            .map(|entries| {
-                                                entries
-                                                    .iter()
-                                                    .filter_map(|entry| entry.as_str())
-                                                    .collect::<Vec<_>>()
-                                                    .join("\n")
-                                            })
-                                    })
-                                    .filter(|text| !text.is_empty())
-                                    .map(|text| flow_like_model_provider::history::Content::Text {
-                                        content_type: flow_like_model_provider::history::ContentType::Text,
-                                        text,
-                                    })
-                            }).collect();
-                            flow_like_model_provider::history::MessageContent::Contents(contents)
-                        } else {
-                            flow_like_model_provider::history::MessageContent::String(String::new())
-                        };
+                        let content = sdk_message_content(msg);
                         let tool_calls = msg.get("tool_calls").and_then(|v| v.as_array()).map(|tcs| {
                             tcs.iter().filter_map(|tc| {
                                 let id = tc.get("id")?.as_str()?.to_string();
