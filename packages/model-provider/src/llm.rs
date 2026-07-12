@@ -212,6 +212,10 @@ pub trait ModelLogic: Send + Sync {
         let mut history = history.clone();
         self.transform_history(&mut history);
         history.normalize_for_alternation();
+        let should_stream = lambda.is_some() && history.stream.unwrap_or(true);
+        // The transport method, rather than an additional provider parameter, is authoritative.
+        // Keeping this in sync also prevents a non-stream request from carrying `stream: true`.
+        history.stream = Some(should_stream);
 
         let model_name = self
             .default_model()
@@ -268,13 +272,24 @@ pub trait ModelLogic: Send + Sync {
         model_additional_params = apply_usage_reporting(
             model_additional_params,
             self.usage_reporting(),
-            lambda.is_some(),
+            should_stream,
         );
 
-        if let Some(callback) = lambda {
-            invoke_with_stream(builder, callback, &model_name, model_additional_params).await
+        if should_stream {
+            invoke_with_stream(
+                builder,
+                lambda.expect("streaming requires a callback"),
+                &model_name,
+                model_additional_params,
+            )
+            .await
         } else {
-            invoke_without_stream(builder, &model_name, model_additional_params).await
+            let response =
+                invoke_without_stream(builder, &model_name, model_additional_params).await?;
+            if let Some(callback) = lambda {
+                emit_response_to_callback(&response, callback, &model_name).await?;
+            }
+            Ok(response)
         }
     }
 }
@@ -618,6 +633,40 @@ async fn invoke_without_stream<'a>(
     response.model = Some(model_name.to_string());
     response.usage = ResponseUsage::from_rig(completion.usage);
     Ok(response)
+}
+
+/// Replays a structured non-stream response through the callback interface. Rig's stream API has
+/// no media event, so this is also how callers that explicitly disable streaming can still observe
+/// a generated image before the finish chunk.
+pub(crate) async fn emit_response_to_callback(
+    response: &Response,
+    callback: LLMCallback,
+    model_name: &str,
+) -> Result<()> {
+    if let Message::Assistant { content, .. } = response.to_rig_message()? {
+        for item in content.iter() {
+            let chunk = match item {
+                rig::message::AssistantContent::Text(text) => {
+                    ResponseChunk::from_text(&text.text, model_name)
+                }
+                rig::message::AssistantContent::ToolCall(tool_call) => {
+                    ResponseChunk::from_tool_call(tool_call, model_name)
+                }
+                rig::message::AssistantContent::Reasoning(reasoning) => {
+                    ResponseChunk::from_reasoning(&reasoning.display_text(), model_name)
+                }
+                rig::message::AssistantContent::Image(image) => ResponseChunk::from_content_part(
+                    super::history::Content::from_rig_image(image.clone()),
+                    model_name,
+                ),
+            };
+            callback(chunk).await?;
+        }
+    }
+
+    let mut finish = ResponseChunk::finish(model_name, None);
+    finish.usage = Some(response.usage.clone());
+    callback(finish).await
 }
 
 #[allow(deprecated)]

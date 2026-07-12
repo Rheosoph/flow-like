@@ -249,6 +249,8 @@ impl NodeLogic for LLMHealTemplateNode {
                 image_url: HistoryImageUrl {
                     url: format!("data:image/png;base64,{}", screenshot),
                     detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
                 },
             },
             Content::Image {
@@ -256,6 +258,8 @@ impl NodeLogic for LLMHealTemplateNode {
                 image_url: HistoryImageUrl {
                     url: format!("data:image/png;base64,{}", template),
                     detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
                 },
             },
             Content::Text {

@@ -693,6 +693,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -761,6 +763,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -983,6 +987,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -1052,6 +1058,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),

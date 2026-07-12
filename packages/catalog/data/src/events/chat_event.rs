@@ -268,6 +268,15 @@ impl ChatEventNode {
         ChatEventNode {}
     }
 
+    fn create_chat_history(messages: Vec<HistoryMessage>) -> History {
+        let mut history = History::new("".to_string(), messages);
+        // Rig's streaming response contract has no media event. Chat histories therefore
+        // default to a non-stream request so generated images reach the UI; the invoke layer
+        // still replays the completed response through the normal chunk callback.
+        history.stream = Some(false);
+        history
+    }
+
     async fn process_history_messages(
         messages: Vec<HistoryMessage>,
         mut context: Option<&mut ExecutionContext>,
@@ -294,7 +303,63 @@ impl ChatEventNode {
                                     image_url: ImageUrl {
                                         url: processed_url,
                                         detail: image_url.detail.clone(),
+                                        media_type: image_url.media_type.clone(),
+                                        additional_params: image_url.additional_params.clone(),
                                     },
+                                });
+                            }
+                        }
+                        Content::Audio {
+                            content_type,
+                            audio_url,
+                            media_type,
+                            additional_params,
+                        } => {
+                            let processed_url =
+                                url_processing::process_url(audio_url, context.as_deref_mut())
+                                    .await;
+                            if !processed_url.is_empty() {
+                                processed_contents.push(Content::Audio {
+                                    content_type: content_type.clone(),
+                                    audio_url: processed_url,
+                                    media_type: media_type.clone(),
+                                    additional_params: additional_params.clone(),
+                                });
+                            }
+                        }
+                        Content::Video {
+                            content_type,
+                            video_url,
+                            media_type,
+                            additional_params,
+                        } => {
+                            let processed_url =
+                                url_processing::process_url(video_url, context.as_deref_mut())
+                                    .await;
+                            if !processed_url.is_empty() {
+                                processed_contents.push(Content::Video {
+                                    content_type: content_type.clone(),
+                                    video_url: processed_url,
+                                    media_type: media_type.clone(),
+                                    additional_params: additional_params.clone(),
+                                });
+                            }
+                        }
+                        Content::Document {
+                            content_type,
+                            document_url,
+                            media_type,
+                            additional_params,
+                        } => {
+                            let processed_url =
+                                url_processing::process_url(document_url, context.as_deref_mut())
+                                    .await;
+                            if !processed_url.is_empty() {
+                                processed_contents.push(Content::Document {
+                                    content_type: content_type.clone(),
+                                    document_url: processed_url,
+                                    media_type: media_type.clone(),
+                                    additional_params: additional_params.clone(),
                                 });
                             }
                         }
@@ -405,7 +470,7 @@ impl NodeLogic for ChatEventNode {
         context
             .set_pin_value(
                 "history",
-                json!(History::new("".to_string(), processed_messages)),
+                json!(Self::create_chat_history(processed_messages)),
             )
             .await?;
         context
@@ -794,6 +859,61 @@ mod tests {
         assert!(!is_tauri_asset_url("https://example.com/file.png"));
         assert!(!is_tauri_asset_url("http://example.com/file.png"));
         assert!(!is_tauri_asset_url("data:image/png;base64,iVBORw0KG..."));
+    }
+
+    #[tokio::test]
+    async fn process_history_keeps_every_remote_media_type() {
+        let message = HistoryMessage {
+            role: flow_like_model_provider::history::Role::User,
+            content: MessageContent::Contents(vec![
+                Content::Audio {
+                    content_type: flow_like_model_provider::history::ContentType::AudioUrl,
+                    audio_url: "https://example.com/input.mp3".to_string(),
+                    media_type: Some("audio/mpeg".to_string()),
+                    additional_params: None,
+                },
+                Content::Video {
+                    content_type: flow_like_model_provider::history::ContentType::VideoUrl,
+                    video_url: "https://example.com/input.mp4".to_string(),
+                    media_type: Some("video/mp4".to_string()),
+                    additional_params: None,
+                },
+                Content::Document {
+                    content_type: flow_like_model_provider::history::ContentType::DocumentUrl,
+                    document_url: "https://example.com/input.pdf".to_string(),
+                    media_type: Some("application/pdf".to_string()),
+                    additional_params: None,
+                },
+            ]),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            annotations: None,
+        };
+
+        let processed = ChatEventNode::process_history_messages(vec![message], None).await;
+        let MessageContent::Contents(parts) = &processed[0].content else {
+            panic!("expected content parts")
+        };
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            &parts[0],
+            Content::Audio { audio_url, .. } if audio_url.ends_with("input.mp3")
+        ));
+        assert!(matches!(
+            &parts[1],
+            Content::Video { video_url, .. } if video_url.ends_with("input.mp4")
+        ));
+        assert!(matches!(
+            &parts[2],
+            Content::Document { document_url, .. } if document_url.ends_with("input.pdf")
+        ));
+    }
+
+    #[test]
+    fn chat_history_defaults_to_media_safe_non_streaming() {
+        let history = ChatEventNode::create_chat_history(Vec::new());
+        assert_eq!(history.stream, Some(false));
     }
 
     #[test]

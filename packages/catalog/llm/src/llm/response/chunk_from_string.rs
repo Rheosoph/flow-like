@@ -74,6 +74,7 @@ impl NodeLogic for ChunkFromStringNode {
             delta: Some(Delta {
                 role: Some("assistant".to_string()),
                 content: Some(message),
+                content_parts: None,
                 tool_calls: None,
                 refusal: None,
                 reasoning: None,

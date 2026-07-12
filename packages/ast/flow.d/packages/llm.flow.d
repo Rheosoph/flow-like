@@ -103,6 +103,18 @@ declare function agentRegisterMcpTools({ agentIn: Struct, uri: string, mode?: st
 declare function agentRegisterMemory({ agentIn: Struct, memoryConfig: Struct }): Struct;
 
 /**
+ * Adds a connected app's MCP event as agent tools. Uses a short-lived app-to-app token (valid ~15 minutes) that is refreshed on every run.
+ * @param agentIn — Agent object to add the remote MCP tools to
+ * @param flowRemoteAppId (optional) — Connected project that hosts the MCP event
+ * @param flowRemoteEvent (optional) — MCP event of the selected project
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected
+ * @param toolFilter — Optional list of tool names to include. Empty = all tools.
+ * @param headers — Static registration authentication headers (for example Authorization or x-api-key). HMAC auth is not supported because each MCP request requires a fresh signature.
+ * @returns agentOut — Agent object with the remote MCP tools registered
+ */
+declare function agentRegisterRemoteMcpTools({ agentIn: Struct, flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, toolFilter: string[], headers: Struct }): Struct;
+
+/**
  * Enables Rig's built-in Thinking tool for reasoning capabilities
  * @param agentIn — Agent object to enable thinking on
  * @returns agentOut — Agent object with thinking tool enabled
@@ -186,7 +198,7 @@ declare function aiGenerativeAddHeaders({ model: Struct, header?: Struct }): Str
 declare function aiGenerativeFindModel({ preferences?: Struct }): Struct;
 
 /**
- * Invokes the configured model with the provided chat history and streams back chunks.
+ * Invokes the configured model with the provided chat history. Set history streaming off to preserve and replay structured media responses.
  * @param model — Model
  * @param history — Chat History
  * @returns chunk
@@ -197,16 +209,19 @@ declare function aiGenerativeFindModel({ preferences?: Struct }): Struct;
 declare function aiGenerativeInvoke({ model: Struct, history: Struct }): { chunk: Struct, result: Struct, stats: Struct };
 
 /**
- * Invokes an LLM with a single system prompt + user prompt and streams back tokens.
+ * Invokes an LLM with a system prompt and user prompt, returning text and the full structured response.
  * @param model — Bit describing the provider/model to execute
  * @param systemPrompt (optional) — Optional system instructions to prime the assistant
  * @param prompt (optional) — User message that will be sent to the model
+ * @param stream (optional) — Stream text tokens when possible. Disable to preserve structured media responses and replay them as rich chunks.
  * @returns token — Most recently streamed token or chunk
+ * @returns chunk — Most recent structured stream or replay chunk, including media content parts
  * @returns result — Final assistant message extracted from the response
+ * @returns response — Full structured model response, including media content parts and reasoning
  * @returns stats — Token usage, cost, and model statistics
  * @impure has side effects / drives control flow
  */
-declare function aiGenerativeInvokeSimple({ model: Struct, systemPrompt?: string, prompt?: string }): { token: string, result: string, stats: Struct };
+declare function aiGenerativeInvokeSimple({ model: Struct, systemPrompt?: string, prompt?: string, stream?: bool }): { token: string, chunk: Struct, result: string, response: Struct, stats: Struct };
 
 /**
  * Summarizes long text using an LLM with configurable strategies. Supports Map-Reduce (parallel, fast), Refine (sequential, coherent), Hierarchical (structure-aware), Hybrid (parallel + coherent), and Sliding Window (memory-efficient). Optional Chain of Density post-processing for optimal information density.
@@ -455,7 +470,7 @@ declare function aiGenerativeSetSystemPromptMessage({ history: Struct, message?:
 // === AI/Generative/History/Message ===
 
 /**
- * Creates a chat message with text or image content and optional tool metadata
+ * Creates a chat message with text, image, audio, video, or document content and optional tool metadata
  * @param role (optional) — Author role
  * @param type (optional) — Message content type
  * @returns message — Newly constructed chat message
@@ -466,11 +481,16 @@ declare function aiGenerativeMakeHistoryMessage({ role?: string, type?: string }
  * Extracts text content from a chat message, flattening multi-part payloads
  * @param message — Message whose text content will be extracted
  * @returns content — Concatenated text content
+ * @returns parts — Ordered text and media content parts
+ * @returns images — Image URLs or data URIs
+ * @returns audio — Audio URLs or data URIs
+ * @returns videos — Video URLs or data URIs
+ * @returns documents — Document URLs or data URIs
  */
-declare function aiGenerativeMessageExtractContent({ message: Struct }): string;
+declare function aiGenerativeMessageExtractContent({ message: Struct }): { content: string, parts: Struct[], images: string[], audio: string[], videos: string[], documents: string[] };
 
 /**
- * Appends text or image parts onto a chat message
+ * Appends text, image, audio, video, or document parts onto a chat message
  * @param message — Message to extend
  * @param type (optional) — Content type
  * @returns messageOut — Updated message with additional content
@@ -773,8 +793,14 @@ declare function aiGenerativeLlmResponseFromString({ content?: string }): Struct
  * @param response — LLM response to extract from
  * @returns content — Content string from the last message
  * @returns success — Whether content was successfully extracted
+ * @returns parts — Ordered text and media content parts
+ * @returns images — Image URLs or data URIs
+ * @returns audio — Audio URLs or data URIs
+ * @returns videos — Video URLs or data URIs
+ * @returns documents — Document URLs or data URIs
+ * @returns reasoning — Displayable reasoning returned by the model
  */
-declare function aiGenerativeLlmResponseLastContent({ response: Struct }): { content: string, success: bool };
+declare function aiGenerativeLlmResponseLastContent({ response: Struct }): { content: string, success: bool, parts: Struct[], images: string[], audio: string[], videos: string[], documents: string[], reasoning: string };
 
 /**
  * Extracts the last assistant message from a response
@@ -817,8 +843,14 @@ declare function aiGenerativeLlmResponseChunkGetToken({ chunk: Struct }): string
  * @param message — Message to extract content from
  * @returns content — Content string from the message
  * @returns success — Whether content was successfully extracted
+ * @returns parts — Ordered text and media content parts
+ * @returns images — Image URLs or data URIs
+ * @returns audio — Audio URLs or data URIs
+ * @returns videos — Video URLs or data URIs
+ * @returns documents — Document URLs or data URIs
+ * @returns reasoning — Displayable reasoning returned by the model
  */
-declare function aiGenerativeLlmResponseMessageGetContent({ message: Struct }): { content: string, success: bool };
+declare function aiGenerativeLlmResponseMessageGetContent({ message: Struct }): { content: string, success: bool, parts: Struct[], images: string[], audio: string[], videos: string[], documents: string[], reasoning: string };
 
 /**
  * Extracts the author role string from a response message
@@ -1206,8 +1238,8 @@ declare function chunkTextChar({ text: string, capacity?: int, overlap?: int, ma
 // === Events/Chat ===
 
 /**
- * Pulls down image attachments referenced in the latest chat message
- * @param history — Chat history whose final message may contain image parts
+ * Pulls down image, audio, video, and document attachments referenced in the latest chat message
+ * @param history — Chat history whose final message may contain media parts
  * @param attachments (optional) — Existing attachments to merge with new downloads
  * @returns paths — Virtual file paths pointing to cached attachments
  * @impure has side effects / drives control flow

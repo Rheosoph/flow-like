@@ -1,3 +1,5 @@
+import type { IContent } from "./history";
+
 export interface IResponseChunk {
 	choices: IResponseChunkChoice[];
 	created?: number | null;
@@ -20,6 +22,8 @@ export interface IResponseChunkChoice {
 
 export interface IDelta {
 	content?: null | string;
+	content_parts?: IContent[] | null;
+	reasoning?: null | string;
 	refusal?: null | string;
 	role?: null | string;
 	tool_calls?: IFunctionCall[] | null;

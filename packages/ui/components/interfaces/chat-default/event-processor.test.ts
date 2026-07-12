@@ -55,6 +55,36 @@ const chatStreamEvent = (content: string) => ({
 	},
 });
 
+const mixedResponseEvent = (eventType: "chat_stream" | "chat_out") => ({
+	event_type: eventType,
+	payload: {
+		response: {
+			choices: [
+				{
+					finish_reason: "stop",
+					index: 0,
+					message: {
+						role: "assistant",
+						content: "caption",
+						content_parts: [
+							{
+								type: "image_url",
+								image_url: {
+									url: "https://example.com/generated",
+									media_type: "image/png",
+								},
+							},
+						],
+					},
+				},
+			],
+			usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 },
+		},
+		attachments: [],
+		widgets: [],
+	},
+});
+
 const widgetPushEvent = (instanceId: string, updates: unknown[] = []) => ({
 	event_type: "chat_stream_partial",
 	payload: {
@@ -101,6 +131,74 @@ describe("processChatEvents", () => {
 
 		expect(result.shouldUpdate).toBe(true);
 		expect(result.responseMessage.inner.content).toBe("Marker added ✓");
+	});
+
+	test("mixed responses keep legacy text beside media-only parts", () => {
+		for (const eventType of ["chat_stream", "chat_out"] as const) {
+			const result = processChatEvents(
+				[mixedResponseEvent(eventType)],
+				baseState(baseMessage()),
+			);
+			const content = result.responseMessage.inner.content;
+			expect(Array.isArray(content)).toBe(true);
+			if (!Array.isArray(content)) throw new Error("expected content parts");
+			expect(content).toHaveLength(2);
+			expect(content[0]?.text).toBe("caption");
+			expect(content[1]?.image_url?.url).toBe("https://example.com/generated");
+		}
+	});
+
+	test("text arriving after streamed media remains visible and ordered", () => {
+		const result = processChatEvents(
+			[
+				{
+					event_type: "chat_stream_partial",
+					payload: {
+						chunk: {
+							id: "chunk-1",
+							choices: [
+								{
+									index: 0,
+									delta: {
+										role: "assistant",
+										content_parts: [
+											{
+												type: "image_url",
+												image_url: {
+													url: "https://example.com/generated.png",
+												},
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				},
+				{
+					event_type: "chat_stream_partial",
+					payload: {
+						chunk: {
+							id: "chunk-2",
+							choices: [
+								{
+									index: 0,
+									delta: { content: "caption" },
+								},
+							],
+						},
+					},
+				},
+			],
+			baseState(baseMessage()),
+		);
+
+		const content = result.responseMessage.inner.content;
+		if (!Array.isArray(content)) throw new Error("expected content parts");
+		expect(content[0]?.image_url?.url).toBe(
+			"https://example.com/generated.png",
+		);
+		expect(content[1]?.text).toBe("caption");
 	});
 
 	test("chat_stream_partial widgets attach to the message", () => {

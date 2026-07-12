@@ -1,7 +1,12 @@
 import { createId } from "@paralleldrive/cuid2";
 import { Response } from "../../../lib/llm/response";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
-import { IRole } from "../../../lib/schema/llm/history";
+import {
+	IContentType,
+	type IContent,
+	IRole,
+} from "../../../lib/schema/llm/history";
+import type { IResponseMessage } from "../../../lib/schema/llm/response";
 import type {
 	IAttachment,
 	IChatUsageStat,
@@ -19,6 +24,20 @@ export interface ProcessChatEventsResult {
 	done: boolean;
 	shouldUpdate: boolean;
 	interactions?: IInteractionRequest[];
+}
+
+function visibleResponseContent(
+	message: IResponseMessage,
+): string | IContent[] {
+	const parts = message.content_parts ?? [];
+	if (parts.length === 0) return message.content ?? "";
+	if (
+		message.content &&
+		!parts.some((part) => part.type === IContentType.Text)
+	) {
+		return [{ type: IContentType.Text, text: message.content }, ...parts];
+	}
+	return [...parts];
 }
 
 interface BackendReasoning {
@@ -97,6 +116,7 @@ function sanitizeReasoningForDisplay(reasoning: string): string {
 function appendFallbackReasoningStep(
 	responseMessage: IMessage,
 	reasoning: string,
+	replace = false,
 ) {
 	const sanitizedReasoning = sanitizeReasoningForDisplay(reasoning);
 
@@ -138,9 +158,11 @@ function appendFallbackReasoningStep(
 		return;
 	}
 
-	currentStep.reasoning = sanitizeReasoningForDisplay(
-		(currentStep.reasoning || "") + sanitizedReasoning,
-	);
+	currentStep.reasoning = replace
+		? sanitizedReasoning
+		: sanitizeReasoningForDisplay(
+				(currentStep.reasoning || "") + sanitizedReasoning,
+			);
 	responseMessage.current_step_id = currentStep.id;
 }
 
@@ -365,7 +387,14 @@ export function processChatEvents(
 				IRole.Assistant,
 			);
 			if (lastMessage) {
-				responseMessage.inner.content = lastMessage.content ?? "";
+				responseMessage.inner.content = visibleResponseContent(lastMessage);
+				if (lastMessage.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(
+						responseMessage,
+						lastMessage.reasoning,
+						true,
+					);
+				}
 			}
 
 			// Handle plan updates
@@ -398,7 +427,14 @@ export function processChatEvents(
 					IRole.Assistant,
 				);
 				if (lastMessage) {
-					responseMessage.inner.content = lastMessage.content ?? "";
+					responseMessage.inner.content = visibleResponseContent(lastMessage);
+					if (lastMessage.reasoning && !ev.payload.plan) {
+						appendFallbackReasoningStep(
+							responseMessage,
+							lastMessage.reasoning,
+							true,
+						);
+					}
 					shouldUpdate = true;
 				}
 			}
@@ -423,10 +459,19 @@ export function processChatEvents(
 				const lastMessage = intermediateResponse.lastMessageOfRole(
 					IRole.Assistant,
 				);
-				const finalContent =
-					lastMessage?.content ?? responseMessage.inner.content;
+				const finalContent = lastMessage
+					? visibleResponseContent(lastMessage)
+					: responseMessage.inner.content;
 				if (finalContent !== responseMessage.inner.content) {
 					responseMessage.inner.content = finalContent ?? "";
+					shouldUpdate = true;
+				}
+				if (lastMessage?.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(
+						responseMessage,
+						lastMessage.reasoning,
+						true,
+					);
 					shouldUpdate = true;
 				}
 			}

@@ -1241,6 +1241,17 @@ declare function dfListTables({ session: Struct }): { tables: Struct[], tableNam
  */
 declare function openLocalDb({ name: string, userScoped?: bool, batchSize?: int }): Struct;
 
+/**
+ * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. Storage credentials are valid for about an hour — long-running flows with many writes should flush regularly (Flush node).
+ * @param flowRemoteAppId (optional) — Connected project to open the database from
+ * @param flowRemoteDatabase (optional) — Shared database of the selected project
+ * @param writeAccess (optional) — Request write access to the remote database. Requires the connection role to allow writing databases (or files).
+ * @param batchSize (optional) — Number of items to buffer before flushing writes to storage. 0 = no buffering.
+ * @returns database — Database Connection Reference
+ * @impure has side effects / drives control flow
+ */
+declare function openRemoteDb({ flowRemoteAppId?: string, flowRemoteDatabase?: string, writeAccess?: bool, batchSize?: int }): Struct;
+
 
 // === Data/Database/Delete ===
 
@@ -2196,6 +2207,20 @@ declare function pathExists({ path: Struct }): void;
 declare function pathGet({ path: Struct }): bytes[];
 
 /**
+ * Diffs a folder against a manifest, emitting added, updated and deleted files. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents
+ * @param manifest — FlowPath to the manifest file. May not exist yet — everything is then reported as added
+ * @param root — Root folder to scan for changes
+ * @param recursive (optional) — Scan the root folder recursively
+ * @param mode (optional) — Auto: trust store ETags, hashing only files with a missing/weak ETag (fast). Checksum: always Blake3-hash contents, ignoring ETags (correct on backends with mtime-based ETags such as local disk)
+ * @returns added — Files present in the folder but not in the manifest
+ * @returns updated — Files whose ETag/hash changed since the manifest
+ * @returns deleted — Files in the manifest that no longer exist in the folder
+ * @returns session — Diff session carrying the next manifest, feed into 'Write Directory Manifest'
+ * @impure has side effects / drives control flow
+ */
+declare function pathGetChanges({ manifest: Struct, root: Struct, recursive?: bool, mode?: string }): { added: Struct[], updated: Struct[], deleted: Struct[], session: Struct };
+
+/**
  * Reads a range of bytes from a file
  * @param path — FlowPath
  * @param from — Start of the Range
@@ -2268,6 +2293,14 @@ declare function pathPut({ path: Struct, bytes: bytes[] }): void;
  * @impure has side effects / drives control flow
  */
 declare function pathRename({ from: Struct, to: Struct, overwrite?: bool }): void;
+
+/**
+ * Persists the manifest carried by a diff session, so the next diff sees the current state
+ * @param session — Diff session produced by 'Diff Directory'
+ * @returns manifest — FlowPath of the written manifest file
+ * @impure has side effects / drives control flow
+ */
+declare function pathWriteManifest({ session: Struct }): Struct;
 
 /**
  * Generates a signed URL for accessing a file
@@ -5570,6 +5603,20 @@ declare function eventsChatPushStep({ title: string, description: string }): int
 declare function eventsChatPushTextToStep({ text: string }): void;
 
 /**
+ * Embeds an a2ui widget instance into the chat message. Connect the Element Ref of an Instantiate Widget node.
+ * @param elementRef — Widget instance to embed (from Instantiate Widget)
+ * @impure has side effects / drives control flow
+ */
+declare function eventsChatPushWidget({ elementRef: Struct }): void;
+
+/**
+ * Embeds multiple a2ui widget instances into the chat message. Add an Element Ref pin for each Instantiate Widget node.
+ * @param elementRef — Widget instance to embed (from Instantiate Widget). Add more pins for multiple widgets.
+ * @impure has side effects / drives control flow
+ */
+declare function eventsChatPushWidgets({ elementRef: Struct }): void;
+
+/**
  * Removes a step from the plan by its ID
  * @param stepId — ID of the step to remove
  * @impure has side effects / drives control flow
@@ -5659,6 +5706,24 @@ declare function interactionSingleChoice({ name?: string, description?: string, 
  * @impure has side effects / drives control flow
  */
 declare function eventsGenericReturnResult({ response: any }): void;
+
+
+// === Events/Remote ===
+
+/**
+ * Invoke a chat, API or MCP event of a connected project. Pins adapt to the selected event. The project must have granted this app a role that allows executing events.
+ * @param flowRemoteAppId (optional) — Connected project to invoke the event in
+ * @param flowRemoteEvent (optional) — Event of the selected project to invoke
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the input and output pins.
+ * @param payload — Input payload passed to the remote event
+ * @param waitForResult (optional) — Wait for the remote run to finish and return its result
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote run to finish
+ * @returns runId — Remote run id
+ * @returns status — Final run status
+ * @returns result — Result payload of the remote run
+ * @impure has side effects / drives control flow
+ */
+declare function callRemoteEvent({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, payload: any, waitForResult?: bool, timeoutSeconds?: int }): { runId: string, status: string, result: any };
 
 
 // === Events/Widget ===

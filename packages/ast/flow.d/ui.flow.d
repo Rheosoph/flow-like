@@ -45,6 +45,25 @@ declare function a2uiPushToContainer({ containerRef: Struct, elementRef: Struct,
  */
 declare function a2uiRemoveFromContainer({ containerId: string, elementId: string }): bool;
 
+/**
+ * Resolves an element inside a widget instance (from Instantiate Widget). The output plugs into any element node (Set Element Value, Update GeoMap, Push CSV To Chart, …).
+ * @param elementRef — Widget instance reference (from Instantiate Widget)
+ * @param elementId — ID of the element inside the widget (e.g. 'chart-1')
+ * @returns element — The element reference (connect to element nodes)
+ * @returns exists — Whether the element exists in the widget
+ */
+declare function a2uiWidgetGetElement({ elementRef: Struct, elementId: string }): { element: Struct, exists: bool };
+
+/**
+ * Sets the text of an element inside a widget instance (from Instantiate Widget) before it is pushed to the frontend
+ * @param elementRef — Widget instance reference (from Instantiate Widget)
+ * @param elementId — ID of the element inside the widget (e.g. 'title-text')
+ * @param text (optional) — The text to set
+ * @returns elementRefOut — The updated widget instance reference (connect to Push Widget / Push To Container)
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiWidgetSetText({ elementRef: Struct, elementId: string, text?: string }): Struct;
+
 
 // === UI/Data ===
 

@@ -1,5 +1,5 @@
 import type { Nullable } from "../schema/auto-import";
-import type { IRole } from "../schema/llm/history";
+import { IContentType, type IContent, type IRole } from "../schema/llm/history";
 import type {
 	IChoice,
 	ICompletionTokenDetails,
@@ -24,6 +24,8 @@ export class FunctionCall implements IFunctionCall {
 
 export class ResponseMessage implements IResponseMessage {
 	content?: Nullable<string>;
+	content_parts: IContent[] = [];
+	reasoning?: Nullable<string>;
 	refusal?: Nullable<string>;
 	toolCalls: IFunctionCall[] = [];
 	role = "";
@@ -92,7 +94,52 @@ export class ResponseMessage implements IResponseMessage {
 
 	public applyDelta(delta: IDelta): this {
 		if (delta.content) {
+			const structuredPartsContainText = delta.content_parts?.some(
+				(part) => part.type === IContentType.Text,
+			);
+			if (this.content_parts.length > 0 && !structuredPartsContainText) {
+				const lastPart = this.content_parts.at(-1);
+				if (lastPart?.type === IContentType.Text) {
+					this.content_parts = [
+						...this.content_parts.slice(0, -1),
+						{
+							...lastPart,
+							text: (lastPart.text ?? "") + delta.content,
+						},
+					];
+				} else {
+					this.content_parts = [
+						...this.content_parts,
+						{
+							type: IContentType.Text,
+							text: delta.content,
+						},
+					];
+				}
+			}
 			this.content = (this.content ?? "") + delta.content;
+		}
+		if (delta.content_parts?.length) {
+			let precedingParts = this.content_parts;
+			const incomingContainsText = delta.content_parts.some(
+				(part) => part.type === IContentType.Text,
+			);
+			if (
+				precedingParts.length === 0 &&
+				this.content &&
+				!incomingContainsText
+			) {
+				precedingParts = [
+					{
+						type: IContentType.Text,
+						text: this.content,
+					},
+				];
+			}
+			this.content_parts = [...precedingParts, ...delta.content_parts];
+		}
+		if (delta.reasoning) {
+			this.reasoning = (this.reasoning ?? "") + delta.reasoning;
 		}
 		if (delta.refusal) {
 			this.refusal = (this.refusal ?? "") + delta.refusal;
