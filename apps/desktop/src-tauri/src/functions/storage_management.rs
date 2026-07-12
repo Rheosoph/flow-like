@@ -45,12 +45,33 @@ pub struct StorageOverview {
     pub categories: Vec<StorageCategory>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageDeleteResult {
     pub deleted_items: usize,
     pub freed_bytes: u64,
     pub skipped_items: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StoragePaths {
+    project_dir: PathBuf,
+    bit_dir: PathBuf,
+    logs_dir: PathBuf,
+    user_dir: PathBuf,
+    temporary_dir: PathBuf,
+}
+
+impl StoragePaths {
+    fn from_settings(settings: &Settings) -> Self {
+        Self {
+            project_dir: settings.project_dir.clone(),
+            bit_dir: settings.bit_dir.clone(),
+            logs_dir: settings.logs_dir.clone(),
+            user_dir: settings.user_dir.clone(),
+            temporary_dir: settings.temporary_dir.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,8 +281,12 @@ fn category(key: &str, label: &str, description: &str, items: Vec<StorageItem>) 
     }
 }
 
-fn build_overview(settings: &Settings, active_runs: &HashSet<String>) -> StorageOverview {
-    let app_root = settings.project_dir.join("apps");
+fn build_overview(
+    paths: &StoragePaths,
+    log_retention: &LogRetentionSettings,
+    active_runs: &HashSet<String>,
+) -> StorageOverview {
+    let app_root = paths.project_dir.join("apps");
     let mut apps = direct_items(
         &app_root,
         "Local app and project files",
@@ -273,7 +298,7 @@ fn build_overview(settings: &Settings, active_runs: &HashSet<String>) -> Storage
     }
 
     let mut bits = direct_items(
-        &settings.bit_dir,
+        &paths.bit_dir,
         "Downloaded model or runtime artifact",
         &HashSet::from(["deps-cache".to_string()]),
         true,
@@ -282,10 +307,10 @@ fn build_overview(settings: &Settings, active_runs: &HashSet<String>) -> Storage
         bit.name = format!("Artifact {}", short_id(&bit.id));
     }
 
-    let logs = log_items(&settings.logs_dir, active_runs);
-    let offloaded = offloaded_blob_items(&settings.user_dir.join("blob_store"));
+    let logs = log_items(&paths.logs_dir, active_runs);
+    let offloaded = offloaded_blob_items(&paths.user_dir.join("blob_store"));
     let temporary = direct_items(
-        &settings.temporary_dir,
+        &paths.temporary_dir,
         "Temporary execution file",
         &HashSet::new(),
         true,
@@ -294,19 +319,19 @@ fn build_overview(settings: &Settings, active_runs: &HashSet<String>) -> Storage
     let mut cache_exclusions = HashSet::new();
     cache_exclusions.insert("blob_store".to_string());
     for known in [
-        &settings.bit_dir,
-        &settings.project_dir,
-        &settings.logs_dir,
-        &settings.temporary_dir,
+        &paths.bit_dir,
+        &paths.project_dir,
+        &paths.logs_dir,
+        &paths.temporary_dir,
     ] {
-        if known.parent() == Some(settings.user_dir.as_path()) {
+        if known.parent() == Some(paths.user_dir.as_path()) {
             if let Some(name) = known.file_name() {
                 cache_exclusions.insert(name.to_string_lossy().to_string());
             }
         }
     }
     let cache = direct_items(
-        &settings.user_dir,
+        &paths.user_dir,
         "Cache, local database, or supporting data",
         &cache_exclusions,
         false,
@@ -353,7 +378,7 @@ fn build_overview(settings: &Settings, active_runs: &HashSet<String>) -> Storage
     StorageOverview {
         total_bytes: categories.iter().map(|entry| entry.size_bytes).sum(),
         generated_at_ms: to_ms(Some(SystemTime::now())).unwrap_or_default(),
-        log_retention: settings.log_retention.clone(),
+        log_retention: log_retention.clone(),
         categories,
     }
 }
@@ -375,17 +400,35 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn item_path(settings: &Settings, category: &str, id: &str) -> Option<PathBuf> {
+/// Remove now-empty parent directories left behind after deleting a leaf entry,
+/// walking upward until (but never touching) `stop_at`.
+fn prune_empty_parents(deleted: &Path, stop_at: &Path) {
+    let mut current = deleted.parent();
+    while let Some(dir) = current {
+        if dir == stop_at || !dir.starts_with(stop_at) {
+            break;
+        }
+        let is_empty = fs::read_dir(dir)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if !is_empty || fs::remove_dir(dir).is_err() {
+            break;
+        }
+        current = dir.parent();
+    }
+}
+
+fn item_path(paths: &StoragePaths, category: &str, id: &str) -> Option<PathBuf> {
     match category {
-        "apps" if valid_component(id) => Some(settings.project_dir.join("apps").join(id)),
-        "bits" if valid_component(id) && id != "deps-cache" => Some(settings.bit_dir.join(id)),
-        "cache" if valid_component(id) => Some(settings.user_dir.join(id)),
-        "temporary" if valid_component(id) => Some(settings.temporary_dir.join(id)),
+        "apps" if valid_component(id) => Some(paths.project_dir.join("apps").join(id)),
+        "bits" if valid_component(id) && id != "deps-cache" => Some(paths.bit_dir.join(id)),
+        "cache" if valid_component(id) => Some(paths.user_dir.join(id)),
+        "temporary" if valid_component(id) => Some(paths.temporary_dir.join(id)),
         "logs" => {
             let parts = id.split('/').collect::<Vec<_>>();
             if parts.len() == 3 && parts.iter().all(|part| valid_component(part)) {
                 Some(
-                    settings
+                    paths
                         .logs_dir
                         .join("runs")
                         .join(parts[0])
@@ -421,19 +464,16 @@ fn active_run_ids(app_handle: &AppHandle) -> HashSet<String> {
 }
 
 fn cleanup_logs(
-    settings: &Settings,
+    paths: &StoragePaths,
     active_runs: &HashSet<String>,
     days: u32,
 ) -> StorageDeleteResult {
     let cutoff = SystemTime::now()
         .checked_sub(Duration::from_secs(u64::from(days.max(1)) * 86_400))
         .unwrap_or(UNIX_EPOCH);
-    let mut result = StorageDeleteResult {
-        deleted_items: 0,
-        freed_bytes: 0,
-        skipped_items: Vec::new(),
-    };
-    for item in log_items(&settings.logs_dir, active_runs) {
+    let runs_root = paths.logs_dir.join("runs");
+    let mut result = StorageDeleteResult::default();
+    for item in log_items(&paths.logs_dir, active_runs) {
         let is_expired = item
             .updated_at_ms
             .and_then(|millis| UNIX_EPOCH.checked_add(Duration::from_millis(millis)))
@@ -441,13 +481,14 @@ fn cleanup_logs(
         if !is_expired || !item.deletable {
             continue;
         }
-        let Some(path) = item_path(settings, "logs", &item.id) else {
+        let Some(path) = item_path(paths, "logs", &item.id) else {
             continue;
         };
         match remove_path(&path) {
             Ok(()) => {
                 result.deleted_items += 1;
                 result.freed_bytes = result.freed_bytes.saturating_add(item.size_bytes);
+                prune_empty_parents(&path, &runs_root);
             }
             Err(_) => result.skipped_items.push(item.id),
         }
@@ -461,19 +502,25 @@ pub async fn run_configured_log_cleanup(
     let settings_state = TauriSettingsState::construct(app_handle)
         .await
         .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
-    let mut settings = settings_state.lock().await;
-    if !settings.log_retention.enabled {
-        return Ok(StorageDeleteResult {
-            deleted_items: 0,
-            freed_bytes: 0,
-            skipped_items: Vec::new(),
-        });
+    let (paths, days, enabled) = {
+        let settings = settings_state.lock().await;
+        (
+            StoragePaths::from_settings(&settings),
+            settings.log_retention.days,
+            settings.log_retention.enabled,
+        )
+    };
+    if !enabled {
+        return Ok(StorageDeleteResult::default());
     }
-    let result = cleanup_logs(
-        &settings,
-        &active_run_ids(app_handle),
-        settings.log_retention.days,
-    );
+    let active_runs = active_run_ids(app_handle);
+    let result = flow_like_types::tokio::task::spawn_blocking(move || {
+        cleanup_logs(&paths, &active_runs, days)
+    })
+    .await
+    .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+
+    let mut settings = settings_state.lock().await;
     settings.log_retention.last_cleanup_ms = to_ms(Some(SystemTime::now()));
     Settings::serialize(&mut settings);
     Ok(result)
@@ -486,9 +533,19 @@ pub async fn get_local_storage_overview(
     let settings_state = TauriSettingsState::construct(&app_handle)
         .await
         .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
-    let settings = settings_state.lock().await;
-    let mut overview = build_overview(&settings, &active_run_ids(&app_handle));
-    drop(settings);
+    let (paths, log_retention) = {
+        let settings = settings_state.lock().await;
+        (
+            StoragePaths::from_settings(&settings),
+            settings.log_retention.clone(),
+        )
+    };
+    let active_runs = active_run_ids(&app_handle);
+    let mut overview = flow_like_types::tokio::task::spawn_blocking(move || {
+        build_overview(&paths, &log_retention, &active_runs)
+    })
+    .await
+    .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
 
     if let Ok(state) = TauriFlowLikeState::construct(&app_handle).await {
         if let Some(apps) = overview
@@ -536,26 +593,15 @@ pub async fn run_log_cleanup(
     run_configured_log_cleanup(&app_handle).await
 }
 
-#[tauri::command(async)]
-pub async fn delete_local_storage_items(
-    app_handle: AppHandle,
-    category: String,
+fn delete_items_blocking(
+    paths: &StoragePaths,
+    log_retention: &LogRetentionSettings,
+    category: &str,
     ids: Vec<String>,
-) -> Result<StorageDeleteResult, TauriFunctionError> {
-    if ids.is_empty() || ids.len() > 500 {
-        return Err(TauriFunctionError::new("Select between 1 and 500 items"));
-    }
-    let active_runs = active_run_ids(&app_handle);
-    let settings_state = TauriSettingsState::construct(&app_handle)
-        .await
-        .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
-    let mut settings = settings_state.lock().await;
-    let overview = build_overview(&settings, &active_runs);
-    let Some(inventory) = overview
-        .categories
-        .iter()
-        .find(|entry| entry.key == category)
-    else {
+    active_runs: &HashSet<String>,
+) -> Result<(StorageDeleteResult, Vec<String>), TauriFunctionError> {
+    let overview = build_overview(paths, log_retention, active_runs);
+    let Some(inventory) = overview.categories.iter().find(|entry| entry.key == category) else {
         return Err(TauriFunctionError::new("Unknown storage category"));
     };
     let known = inventory
@@ -563,11 +609,9 @@ pub async fn delete_local_storage_items(
         .iter()
         .map(|item| (item.id.as_str(), item))
         .collect::<std::collections::HashMap<_, _>>();
-    let mut result = StorageDeleteResult {
-        deleted_items: 0,
-        freed_bytes: 0,
-        skipped_items: Vec::new(),
-    };
+    let runs_root = paths.logs_dir.join("runs");
+    let mut result = StorageDeleteResult::default();
+    let mut deleted_apps = Vec::new();
 
     for id in ids {
         let Some(item) = known.get(id.as_str()) else {
@@ -581,7 +625,7 @@ pub async fn delete_local_storage_items(
             result.skipped_items.push(id);
             continue;
         }
-        let Some(path) = item_path(&settings, &category, &id) else {
+        let Some(path) = item_path(paths, category, &id) else {
             result.skipped_items.push(id);
             continue;
         };
@@ -589,18 +633,54 @@ pub async fn delete_local_storage_items(
             Ok(()) => {
                 result.deleted_items += 1;
                 result.freed_bytes = result.freed_bytes.saturating_add(item.size_bytes);
-                if category == "apps" {
-                    for profile in settings.profiles.values_mut() {
-                        if let Some(apps) = &mut profile.hub_profile.apps {
-                            apps.retain(|app| app.app_id != id);
-                        }
-                    }
+                if category == "logs" {
+                    prune_empty_parents(&path, &runs_root);
+                } else if category == "apps" {
+                    deleted_apps.push(id);
                 }
             }
             Err(_) => result.skipped_items.push(id),
         }
     }
-    Settings::serialize(&mut settings);
+    Ok((result, deleted_apps))
+}
+
+#[tauri::command(async)]
+pub async fn delete_local_storage_items(
+    app_handle: AppHandle,
+    category: String,
+    ids: Vec<String>,
+) -> Result<StorageDeleteResult, TauriFunctionError> {
+    if ids.is_empty() || ids.len() > 500 {
+        return Err(TauriFunctionError::new("Select between 1 and 500 items"));
+    }
+    let active_runs = active_run_ids(&app_handle);
+    let settings_state = TauriSettingsState::construct(&app_handle)
+        .await
+        .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
+    let (paths, log_retention) = {
+        let settings = settings_state.lock().await;
+        (
+            StoragePaths::from_settings(&settings),
+            settings.log_retention.clone(),
+        )
+    };
+    let category_for_task = category.clone();
+    let (result, deleted_apps) = flow_like_types::tokio::task::spawn_blocking(move || {
+        delete_items_blocking(&paths, &log_retention, &category_for_task, ids, &active_runs)
+    })
+    .await
+    .map_err(|error| TauriFunctionError::new(&error.to_string()))??;
+
+    if !deleted_apps.is_empty() {
+        let mut settings = settings_state.lock().await;
+        for profile in settings.profiles.values_mut() {
+            if let Some(apps) = &mut profile.hub_profile.apps {
+                apps.retain(|app| !deleted_apps.contains(&app.app_id));
+            }
+        }
+        Settings::serialize(&mut settings);
+    }
     Ok(result)
 }
 

@@ -137,6 +137,9 @@ const CATEGORY_META = {
 
 const RETENTION_OPTIONS = [7, 14, 30, 60, 90, 180, 365];
 
+const BROWSER_DESCRIPTION =
+	"Local preferences and IndexedDB records kept inside Studio's embedded WebView. Sizes are estimates.";
+
 function estimateValueBytes(
 	value: unknown,
 	seen = new WeakSet<object>(),
@@ -213,6 +216,18 @@ async function scanIndexedDatabase(name: string, version?: number) {
 	}
 }
 
+async function estimateBrowserStorage(): Promise<StorageCategory> {
+	const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
+	return {
+		key: "browser",
+		label: "Browser storage",
+		description: BROWSER_DESCRIPTION,
+		sizeBytes: estimate?.usage ?? 0,
+		itemCount: 0,
+		items: [],
+	};
+}
+
 async function inspectBrowserStorage(): Promise<StorageCategory> {
 	const items: StorageItem[] = [];
 	let measuredBytes = 0;
@@ -236,10 +251,13 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 		// localStorage can be unavailable in hardened WebViews.
 	}
 
-	const factory = indexedDB as IDBFactory & {
-		databases?: () => Promise<Array<{ name?: string; version?: number }>>;
-	};
-	if (factory.databases) {
+	const factory =
+		typeof indexedDB !== "undefined"
+			? (indexedDB as IDBFactory & {
+					databases?: () => Promise<Array<{ name?: string; version?: number }>>;
+				})
+			: undefined;
+	if (factory?.databases) {
 		const databases = await factory.databases().catch(() => []);
 		for (const info of databases) {
 			if (!info.name) continue;
@@ -267,10 +285,8 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 		}
 	}
 
-	const originUsage = await navigator.storage
-		?.estimate()
-		.then((estimate) => estimate.usage ?? 0)
-		.catch(() => 0);
+	const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
+	const originUsage = estimate?.usage ?? 0;
 	const otherBytes = Math.max(0, originUsage - measuredBytes);
 	if (otherBytes > 0) {
 		items.push({
@@ -286,8 +302,7 @@ async function inspectBrowserStorage(): Promise<StorageCategory> {
 	return {
 		key: "browser",
 		label: "Browser storage",
-		description:
-			"Local preferences and IndexedDB records kept inside Studio's embedded WebView. Sizes are estimates.",
+		description: BROWSER_DESCRIPTION,
 		sizeBytes: Math.max(measuredBytes, originUsage),
 		itemCount: items.length,
 		items,
@@ -346,12 +361,18 @@ export default function LocalStoragePage() {
 	const [browserCategory, setBrowserCategory] =
 		useState<StorageCategory | null>(null);
 	const [browserScanNonce, setBrowserScanNonce] = useState(0);
+	const [browserScanning, setBrowserScanning] = useState(false);
+	const [browserDetailScanned, setBrowserDetailScanned] = useState(false);
 
+	// Cheap: only estimate the total via navigator.storage.estimate() on load.
+	// The heavy per-database cursor scan is deferred until the tab is opened.
 	useEffect(() => {
-		const scanGeneration = browserScanNonce;
+		const generation = browserScanNonce;
 		let cancelled = false;
-		void inspectBrowserStorage().then((result) => {
-			if (!cancelled && scanGeneration === browserScanNonce) {
+		setBrowserCategory(null);
+		setBrowserDetailScanned(false);
+		void estimateBrowserStorage().then((result) => {
+			if (!cancelled && generation === browserScanNonce) {
 				setBrowserCategory(result);
 			}
 		});
@@ -359,6 +380,34 @@ export default function LocalStoragePage() {
 			cancelled = true;
 		};
 	}, [browserScanNonce]);
+
+	// Lazy: run the full IndexedDB scan only when the user opens the tab,
+	// so a large database can never block the initial page load.
+	useEffect(() => {
+		if (
+			activeCategory !== "browser" ||
+			browserDetailScanned ||
+			browserScanning
+		) {
+			return;
+		}
+		const generation = browserScanNonce;
+		let cancelled = false;
+		setBrowserScanning(true);
+		void inspectBrowserStorage()
+			.then((result) => {
+				if (!cancelled && generation === browserScanNonce) {
+					setBrowserCategory(result);
+					setBrowserDetailScanned(true);
+				}
+			})
+			.finally(() => {
+				if (!cancelled) setBrowserScanning(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [activeCategory, browserDetailScanned, browserScanning, browserScanNonce]);
 
 	const overview = overviewQuery.data;
 	const categories = useMemo(() => {
@@ -402,7 +451,6 @@ export default function LocalStoragePage() {
 	);
 
 	const refresh = async () => {
-		setBrowserCategory(null);
 		setBrowserScanNonce((current) => current + 1);
 		await invalidate("get_local_storage_overview");
 	};
@@ -642,7 +690,19 @@ export default function LocalStoragePage() {
 								</div>
 							</CardHeader>
 							<CardContent className="p-0">
-								{filteredItems.length === 0 ? (
+								{activeCategory === "browser" &&
+								browserScanning &&
+								filteredItems.length === 0 ? (
+									<div className="flex min-h-56 flex-col items-center justify-center px-6 text-center">
+										<div className="mb-3 flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
+											<RefreshCw className="size-5 animate-spin" />
+										</div>
+										<p className="font-medium">Scanning browser storage…</p>
+										<p className="mt-1 text-sm text-muted-foreground">
+											Measuring IndexedDB records in this WebView.
+										</p>
+									</div>
+								) : filteredItems.length === 0 ? (
 									<div className="flex min-h-56 flex-col items-center justify-center px-6 text-center">
 										<div className="mb-3 flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
 											<CheckCircle2 className="size-5" />
@@ -812,14 +872,12 @@ export default function LocalStoragePage() {
 											max={3650}
 											value={days}
 											disabled={!enabled || savingPolicy}
-											onChange={(event) =>
-												setRetentionDays(
-													Math.max(
-														1,
-														Math.min(3650, Number(event.target.value)),
-													),
-												)
-											}
+											onChange={(event) => {
+												const parsed = Number.parseInt(event.target.value, 10);
+												if (!Number.isNaN(parsed)) {
+													setRetentionDays(Math.max(1, Math.min(3650, parsed)));
+												}
+											}}
 										/>
 										<Button
 											variant="secondary"
