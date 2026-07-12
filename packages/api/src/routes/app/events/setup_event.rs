@@ -221,6 +221,11 @@ pub(crate) async fn run_event_setup(
     let core_event = get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    if !super::generic_event_endpoint_allowed(&core_event.event_type) {
+        return Err(ApiError::forbidden(
+            "Ontology action events are managed and invoked through Data Studio",
+        ));
+    }
 
     // Concurrent-setup guard. Setup writes are delete-then-insert by
     // `(app, event, version)` so two parallel calls race on the same

@@ -403,6 +403,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	)
 		? (requestedView as (typeof validViews)[number])
 		: "overview";
+	const [actionBoardsRequested, setActionBoardsRequested] = useState(false);
 	const tables = useInvoke(backend.dbState.listTables, backend.dbState, [
 		appId,
 	]);
@@ -420,11 +421,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		backend.boardState.getBoards,
 		backend.boardState,
 		[appId],
-		activeView === "actions",
+		activeView === "actions" && actionBoardsRequested,
 	);
 	const appConnections = useInvoke(
 		backend.teamState.getAppConnections,
 		backend.teamState,
+		[appId],
+		activeView === "sharing",
+	);
+	const installedOntologies = useInvoke(
+		backend.graphState.listRemoteOntologyImports,
+		backend.graphState,
 		[appId],
 		activeView === "sharing",
 	);
@@ -476,13 +483,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		userTables.refetch();
 		ontologies.refetch();
 		if (activeView === "actions") boards.refetch();
-		if (activeView === "sharing") appConnections.refetch();
+		if (activeView === "sharing") {
+			appConnections.refetch();
+			installedOntologies.refetch();
+		}
 	}, [
 		tables.refetch,
 		userTables.refetch,
 		ontologies.refetch,
 		boards.refetch,
 		appConnections.refetch,
+		installedOntologies.refetch,
 		activeView,
 	]);
 
@@ -520,7 +531,13 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			ontologyId: string,
 			actions: NonNullable<GraphOverlay["actions"]>,
 		) => {
-			await backend.graphState.updateOverlay(appId, ontologyId, { actions });
+			const ontology = ontologies.data?.find(
+				(candidate) => candidate.id === ontologyId,
+			);
+			await backend.graphState.updateOverlay(appId, ontologyId, {
+				expected_updated_at: ontology?.updated_at,
+				actions,
+			});
 			await ontologies.refetch();
 			await invalidate(backend.boardState.getCatalog, [appId]);
 			toast.success("Action binding saved");
@@ -531,9 +548,15 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const updateSharing = useCallback(
 		async (
 			ontologyId: string,
-			patch: Pick<GraphOverlay, "exposed" | "bindings_enabled">,
+			patch: Partial<Pick<GraphOverlay, "exposed" | "bindings_enabled">>,
 		) => {
-			await backend.graphState.updateOverlay(appId, ontologyId, patch);
+			const ontology = ontologies.data?.find(
+				(candidate) => candidate.id === ontologyId,
+			);
+			await backend.graphState.updateOverlay(appId, ontologyId, {
+				expected_updated_at: ontology?.updated_at,
+				...patch,
+			});
 			await ontologies.refetch();
 			await invalidate(backend.boardState.getCatalog, [appId]);
 		},
@@ -546,10 +569,103 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		[appId, backend.graphState],
 	);
 
+	const invokeOntologyAction = useCallback(
+		async (
+			ontologyId: string,
+			actionId: string,
+			payload: Parameters<typeof backend.graphState.invokeOntologyAction>[3],
+			onStatus?: Parameters<typeof backend.graphState.invokeOntologyAction>[4],
+		) => {
+			let governedPayload = payload;
+			const isOffline = await backend.isOffline(appId);
+			const action = ontologies.data
+				?.find((ontology) => ontology.id === ontologyId)
+				?.actions?.find((candidate) => candidate.id === actionId);
+
+			if (!isOffline && backend.eventState.checkOAuthRequirements) {
+				const prerun = await backend.graphState.prerunOntologyAction(
+					appId,
+					ontologyId,
+					actionId,
+				);
+				const oauth = await backend.eventState.checkOAuthRequirements(
+					appId,
+					prerun.oauth_requirements,
+				);
+				if (oauth.missingProviders.length > 0) {
+					window.dispatchEvent(
+						new CustomEvent("flow:oauth-required", {
+							detail: {
+								missingProviders: oauth.missingProviders,
+								appId,
+								boardId: action?.board_id ?? "",
+								nodeId: action?.start_node_id ?? "",
+								payload,
+							},
+						}),
+					);
+					throw new Error(
+						"OAuth authorization is required. Complete authorization, then confirm the action again.",
+					);
+				}
+				governedPayload = { ...payload, oauth_tokens: oauth.tokens };
+			}
+
+			return backend.graphState.invokeOntologyAction(
+				appId,
+				ontologyId,
+				actionId,
+				governedPayload,
+				onStatus,
+			);
+		},
+		[appId, backend, backend.eventState, backend.graphState, ontologies.data],
+	);
+
 	const loadRemoteOntologies = useCallback(
 		(targetAppId: string) =>
 			backend.graphState.listRemoteOntologies(appId, targetAppId),
 		[appId, backend.graphState],
+	);
+
+	const installRemoteOntology = useCallback(
+		async (targetAppId: string, ontologyId: string) => {
+			await backend.graphState.installRemoteOntology(
+				appId,
+				targetAppId,
+				ontologyId,
+			);
+			await installedOntologies.refetch();
+			await invalidate(backend.boardState.getCatalog, [appId]);
+			toast.success("Remote ontology bindings installed");
+		},
+		[
+			appId,
+			backend.boardState,
+			backend.graphState,
+			installedOntologies,
+			invalidate,
+		],
+	);
+
+	const uninstallRemoteOntology = useCallback(
+		async (targetAppId: string, ontologyId: string) => {
+			await backend.graphState.uninstallRemoteOntology(
+				appId,
+				targetAppId,
+				ontologyId,
+			);
+			await installedOntologies.refetch();
+			await invalidate(backend.boardState.getCatalog, [appId]);
+			toast.success("Remote ontology bindings uninstalled");
+		},
+		[
+			appId,
+			backend.boardState,
+			backend.graphState,
+			installedOntologies,
+			invalidate,
+		],
 	);
 
 	const clearSearch = useCallback(() => {
@@ -651,6 +767,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						ontologies={ontologyData}
 						onCreateOntology={() => setSetupOpen(true)}
 						onSample={sampleObjects}
+						onInvokeAction={invokeOntologyAction}
 					/>
 				</TabsContent>
 				<TabsContent value="model" className="flex-1 overflow-y-auto p-6">
@@ -665,6 +782,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						ontologies={ontologyData}
 						boards={boards.data ?? []}
 						onCreateOntology={() => setSetupOpen(true)}
+						onNeedBoards={() => setActionBoardsRequested(true)}
 						onSaveActions={saveActions}
 					/>
 				</TabsContent>
@@ -673,9 +791,14 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						ontologies={ontologyData}
 						connections={connections}
 						remoteConnections={appConnections.data?.outgoing ?? []}
+						installedOntologies={installedOntologies.data ?? []}
+						installedOntologiesLoading={installedOntologies.isLoading}
+						installedOntologiesError={installedOntologies.error?.message}
 						onCreateOntology={() => setSetupOpen(true)}
 						onUpdateOntology={updateSharing}
 						onLoadRemoteOntologies={loadRemoteOntologies}
+						onInstallRemoteOntology={installRemoteOntology}
+						onUninstallRemoteOntology={uninstallRemoteOntology}
 					/>
 				</TabsContent>
 				<TabsContent
@@ -1192,10 +1315,12 @@ const OverlayView: React.FC<{
 				prev ? enrichSubgraphWithStyles(prev, updatedOverlay) : prev,
 			);
 			try {
-				await backend.graphState.updateOverlay(appId, overlayId, {
+				const saved = await backend.graphState.updateOverlay(appId, overlayId, {
+					expected_updated_at: overlay.updated_at,
 					nodes: updatedOverlay.nodes,
 					edges: updatedOverlay.edges,
 				});
+				setOverlay(saved);
 			} catch {
 				return;
 			}

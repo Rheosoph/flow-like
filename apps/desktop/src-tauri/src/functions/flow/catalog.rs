@@ -12,6 +12,13 @@ use crate::{
     state::TauriFlowLikeState,
 };
 
+fn remote_ontology_import_from_def(
+    definition: flow_like::flow_like_storage::databases::graph::lancegraph::RemoteOntologyImportDef,
+) -> flow_like_types::Result<flow_like_catalog::RemoteOntologyImport> {
+    let value = flow_like_types::json::to_value(definition)?;
+    Ok(flow_like_types::json::from_value(value)?)
+}
+
 #[tauri::command(async)]
 pub async fn get_catalog(
     handler: AppHandle,
@@ -37,11 +44,15 @@ pub async fn get_catalog(
 
     match graph_connection(&handler, &app_id, false).await {
         Ok(connection) => {
-            match flow_like::flow_like_storage::databases::graph::lancegraph::list_overlays(
-                &connection,
-            )
-            .await
-            {
+            let (ontologies, imports) = flow_like_types::tokio::join!(
+                flow_like::flow_like_storage::databases::graph::lancegraph::list_overlays(
+                    &connection
+                ),
+                flow_like::flow_like_storage::databases::graph::lancegraph::list_ontology_imports(
+                    &connection
+                )
+            );
+            match ontologies {
                 Ok(ontologies) => {
                     match ontologies
                         .into_iter()
@@ -64,6 +75,32 @@ pub async fn get_catalog(
                     app_id,
                     %error,
                     "Could not load Data Studio bindings; returning the base catalog"
+                ),
+            }
+            match imports {
+                Ok(imports) => {
+                    match imports
+                        .into_iter()
+                        .map(remote_ontology_import_from_def)
+                        .collect::<flow_like_types::Result<Vec<_>>>()
+                    {
+                        Ok(imports) => {
+                            let bindings = flow_like_catalog::remote_ontology_binding_nodes(
+                                &imports, &filtered,
+                            );
+                            filtered.extend(bindings);
+                        }
+                        Err(error) => tracing::warn!(
+                            app_id,
+                            %error,
+                            "Could not decode remote Data Studio bindings; returning local bindings"
+                        ),
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    app_id,
+                    %error,
+                    "Could not load remote Data Studio bindings; returning local bindings"
                 ),
             }
         }

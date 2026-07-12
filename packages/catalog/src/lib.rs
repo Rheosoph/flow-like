@@ -42,7 +42,9 @@ pub use flow_like_catalog_core::{
     Attachment, BoundingBox, CachedDB, DEFAULT_GRAPH_NEIGHBORS_DIRECTION,
     DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT, DEFAULT_GRAPH_SAMPLE_SIZE, FlowPath,
     FlowPathRuntime, FlowPathStore, GraphOverlay, NodeDBConnection, NodeImage, NodeImageWrapper,
-    ObjectViewDefinition, OntologyActionDefinition, ontology_binding_nodes, register_node,
+    ObjectViewDefinition, OntologyActionDefinition, RemoteOntologyImport, is_reserved_table,
+    ontology_action_parameter_validator, ontology_binding_nodes, register_node,
+    remote_ontology_binding_nodes, validate_ontology_action_parameters,
 };
 
 // Re-export standard library

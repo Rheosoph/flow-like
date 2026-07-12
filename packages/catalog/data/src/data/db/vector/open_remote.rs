@@ -1,11 +1,8 @@
-use crate::remote_util::{RemoteAppSession, error_for_status, http_client};
-use flow_like::{
-    credentials::SharedCredentials,
-    flow::{
-        execution::{LogLevel, context::ExecutionContext},
-        node::{Node, NodeLogic},
-        variable::VariableType,
-    },
+use crate::remote_util::open_remote_project_database;
+use flow_like::flow::{
+    execution::{LogLevel, context::ExecutionContext},
+    node::{Node, NodeLogic},
+    variable::VariableType,
 };
 use flow_like_storage::databases::vector::{
     VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
@@ -20,11 +17,6 @@ use super::{CachedDB, NodeDBConnection};
 /// database pin lists the shared tables of the selected project.
 const PIN_REMOTE_APP_ID: &str = "_flow_remote_app_id";
 const PIN_REMOTE_DATABASE: &str = "_flow_remote_database";
-
-#[derive(Debug, flow_like_types::json::Deserialize)]
-struct PresignProjectDbResponse {
-    shared_credentials: Value,
-}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -119,38 +111,10 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         let cache_set = context.cache.read().await.contains_key(&cache_key);
 
         if !cache_set {
-            // Exchange the runtime token for a short-lived app-to-app token
-            // bound to this app (origin) and the remote app (target).
-            let session = RemoteAppSession::open(context, &remote_app_id)
-                .await
-                .map_err(|err| {
-                    flow_like_types::anyhow!("Failed to open remote database session: {}", err)
-                })?;
-
-            // Use the app token to get storage credentials scoped to the
-            // remote app's project database.
-            let presign_url = session.url("db/presign/project");
-            let response = http_client()
-                .post(&presign_url)
-                .bearer_auth(&session.token)
-                .json(&json!({
-                    "table_name": table,
-                    "access_mode": access_mode,
-                }))
-                .send()
-                .await
-                .map_err(|err| {
-                    flow_like_types::anyhow!("Failed to presign remote database access: {}", err)
-                })?;
-            let response = error_for_status(response, "Remote database presign").await?;
-            let presigned: PresignProjectDbResponse = response.json().await?;
-            let credentials: SharedCredentials =
-                flow_like_types::json::from_value(presigned.shared_credentials)?;
-
-            // 3. Open the remote LanceDB exactly like the local Open Database
-            //    node, so the output stays fully compatible.
-            let db = credentials.to_db(&remote_app_id).await?;
-            let db = context.app_state.with_lance_session(db).execute().await?;
+            // Reuse a run-scoped raw connection across every table opened
+            // from this connected project.
+            let db =
+                open_remote_project_database(context, &remote_app_id, &table, write_access).await?;
             let mut lance_store = LanceDBVectorStore::from_connection(db, table.clone()).await;
             if let Some(opts) = &context
                 .app_state

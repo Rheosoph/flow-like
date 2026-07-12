@@ -568,10 +568,18 @@ pub async fn get_connection_graph(
                 Vec::new()
             },
             tags: meta.map(|m| m.tags.clone()).unwrap_or_default(),
-            category: if visible { categories.get(id).cloned() } else { None },
+            category: if visible {
+                categories.get(id).cloned()
+            } else {
+                None
+            },
             website: meta.and_then(|m| m.website.clone()),
             docs_url: meta.and_then(|m| m.docs_url.clone()),
-            content: if visible { content.get(id).cloned() } else { None },
+            content: if visible {
+                content.get(id).cloned()
+            } else {
+                None
+            },
         });
     }
 

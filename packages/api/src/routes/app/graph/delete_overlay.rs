@@ -41,7 +41,7 @@ pub async fn delete_overlay(
     Path((app_id, overlay_id)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
 ) -> Result<(), ApiError> {
-    ensure_any_permission!(
+    let permission = ensure_any_permission!(
         user,
         &app_id,
         &state,
@@ -50,7 +50,30 @@ pub async fn delete_overlay(
     );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;
+    let action_owner = if !overlay.actions.is_empty() {
+        if !permission.has_permission(RolePermissions::WriteEvents) {
+            return Err(ApiError::FORBIDDEN);
+        }
+        Some(permission.sub()?)
+    } else {
+        None
+    };
     lancegraph::delete_overlay(&connection, &overlay_id).await?;
+    if let Some(sub) = action_owner
+        && let Err(error) = super::actions::remove_action_events(
+            &state,
+            &sub,
+            &app_id,
+            &overlay_id,
+            &overlay.actions,
+        )
+        .await
+    {
+        // The governed contract is already gone and generic endpoints reject
+        // managed events, so a cleanup failure can only leave inert metadata.
+        tracing::error!(%error, "Failed to clean up deleted ontology action bindings");
+    }
 
     Ok(())
 }

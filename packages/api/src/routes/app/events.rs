@@ -25,6 +25,10 @@ fn connected_app_direct_event_allowed(event_type: &str, active: bool) -> bool {
     active && event_type == "simple_chat"
 }
 
+fn generic_event_endpoint_allowed(event_type: &str) -> bool {
+    event_type != "ontology_action"
+}
+
 /// Connected apps call REST/MCP events through the proxy so exposure and
 /// registration auth cannot be bypassed. Chat events have no public proxy
 /// surface and remain directly invocable through the generic handler.
@@ -33,6 +37,11 @@ pub(crate) fn ensure_connected_app_direct_event_allowed(
     event_type: &str,
     active: bool,
 ) -> Result<(), ApiError> {
+    if !generic_event_endpoint_allowed(event_type) {
+        return Err(ApiError::forbidden(
+            "Ontology action events must be accessed through their governed ontology action endpoint",
+        ));
+    }
     if user.is_connected_app() && !connected_app_direct_event_allowed(event_type, active) {
         return Err(ApiError::forbidden(
             "Connected apps may directly invoke only active simple-chat events; use the REST or MCP proxy for other event types",
@@ -85,7 +94,7 @@ pub fn routes() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use super::connected_app_direct_event_allowed;
+    use super::{connected_app_direct_event_allowed, generic_event_endpoint_allowed};
 
     #[test]
     fn connected_apps_can_directly_invoke_only_active_chat_events() {
@@ -94,5 +103,12 @@ mod tests {
         assert!(!connected_app_direct_event_allowed("rest", true));
         assert!(!connected_app_direct_event_allowed("mcp", true));
         assert!(!connected_app_direct_event_allowed("webhook", true));
+    }
+
+    #[test]
+    fn managed_ontology_actions_cannot_use_generic_event_endpoints() {
+        assert!(!generic_event_endpoint_allowed("ontology_action"));
+        assert!(generic_event_endpoint_allowed("generic"));
+        assert!(generic_event_endpoint_allowed("simple_chat"));
     }
 }

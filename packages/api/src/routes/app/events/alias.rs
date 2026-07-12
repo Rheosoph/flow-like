@@ -83,9 +83,14 @@ pub async fn list_aliases(
     Path((app_id, event_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<AliasView>>, ApiError> {
     let _permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadEvents);
-    let _event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
+    let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    if !super::generic_event_endpoint_allowed(&event.event_type) {
+        return Err(ApiError::forbidden(
+            "Ontology action events do not expose event aliases",
+        ));
+    }
 
     let rows = EventAlias::find()
         .filter(event_alias::Column::AppId.eq(&app_id))
@@ -123,6 +128,11 @@ pub async fn get_alias(
     let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    if !super::generic_event_endpoint_allowed(&event.event_type) {
+        return Err(ApiError::forbidden(
+            "Ontology action events cannot be published through event aliases",
+        ));
+    }
     let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
     let row = EventAlias::find_by_id(&storage_slug)
         .one(&state.db)
@@ -180,6 +190,11 @@ pub async fn upsert_alias(
     let event = super::db::get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    if !super::generic_event_endpoint_allowed(&event.event_type) {
+        return Err(ApiError::forbidden(
+            "Ontology action events cannot be published through event aliases",
+        ));
+    }
     let storage_slug = alias_util::storage_slug_for_event_type(&event.event_type, &slug);
 
     let sub = permission.sub().ok();

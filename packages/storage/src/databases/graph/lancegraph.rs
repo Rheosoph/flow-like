@@ -47,6 +47,24 @@ pub struct GraphOverlayDef {
     pub updated_at: String,
 }
 
+/// A sanitized ontology contract pinned into a consuming project.
+///
+/// Imports live separately from graph overlays because their table mappings
+/// point at a connected project's database, not the consuming project's local
+/// database.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RemoteOntologyImportDef {
+    pub id: String,
+    pub target_app_id: String,
+    pub remote_ontology_id: String,
+    pub contract: GraphOverlayDef,
+    pub source_updated_at: String,
+    #[serde(default = "default_true")]
+    pub bindings_enabled: bool,
+    pub installed_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ObjectViewDef {
     pub object_type: String,
@@ -102,6 +120,109 @@ pub struct NodeMappingDef {
     pub display_column: Option<String>,
     pub property_columns: Vec<PropertyColumnDef>,
     pub style: serde_json::Value,
+}
+
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => {
+            let mut entries = object.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), canonical_json(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(canonical_json).collect())
+        }
+        _ => value.clone(),
+    }
+}
+
+/// Hashes every saved field that can change what a governed action may read or
+/// execute. The hash is stored in the protected managed event and checked at
+/// invocation, so direct edits to ontology metadata cannot widen the contract.
+pub fn ontology_action_contract_hash(
+    ontology_id: &str,
+    exposed: bool,
+    action: &OntologyActionDef,
+    object: &NodeMappingDef,
+) -> Result<String> {
+    let contract = serde_json::json!({
+        "ontology_id": ontology_id,
+        "exposed": exposed,
+        "action": {
+            "id": action.id,
+            "name": action.name,
+            "description": action.description,
+            "object_type": action.object_type,
+            "board_id": action.board_id,
+            "board_version": action.board_version,
+            "start_node_id": action.start_node_id,
+            "enabled": action.enabled,
+            "allow_bulk": action.allow_bulk,
+            "parameter_schema": action.parameter_schema,
+        },
+        "object": {
+            "id": object.id,
+            "api_name": object.api_name,
+            "label": object.label,
+            "table": object.table,
+            "id_column": object.id_column,
+            "display_column": object.display_column,
+            "property_columns": object.property_columns,
+        }
+    });
+    let encoded = serde_json::to_vec(&canonical_json(&contract))?;
+    Ok(blake3::hash(&encoded).to_hex().to_string())
+}
+
+pub fn ontology_action_contract_hash_for_overlay(
+    overlay: &GraphOverlayDef,
+    action: &OntologyActionDef,
+) -> Result<String> {
+    let object = overlay
+        .nodes
+        .iter()
+        .find(|object| {
+            object.id.as_deref() == Some(action.object_type.as_str())
+                || object.api_name.as_deref() == Some(action.object_type.as_str())
+                || object.label == action.object_type
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "Ontology action '{}' references unknown object type '{}'",
+                action.id,
+                action.object_type
+            )
+        })?;
+    ontology_action_contract_hash(&overlay.id, overlay.exposed, action, object)
+}
+
+pub fn ontology_action_contracts_equal(
+    left: &GraphOverlayDef,
+    right: &GraphOverlayDef,
+) -> Result<bool> {
+    if left.actions.len() != right.actions.len() {
+        return Ok(false);
+    }
+    for left_action in &left.actions {
+        let Some(right_action) = right
+            .actions
+            .iter()
+            .find(|action| action.id == left_action.id)
+        else {
+            return Ok(false);
+        };
+        if ontology_action_contract_hash_for_overlay(left, left_action)?
+            != ontology_action_contract_hash_for_overlay(right, right_action)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1109,6 +1230,7 @@ async fn build_graph_config(
 }
 
 pub const GRAPH_OVERLAYS_TABLE: &str = "__graph_overlays__";
+pub const ONTOLOGY_IMPORTS_TABLE: &str = "__ontology_imports__";
 
 pub async fn list_overlays(connection: &Connection) -> Result<Vec<GraphOverlayDef>> {
     let table_names = connection
@@ -1200,28 +1322,47 @@ pub async fn sample_overlay(
     label: &str,
     limit: usize,
 ) -> Result<Vec<Value>> {
-    let table_name = overlay
-        .nodes
-        .iter()
-        .find(|node| node.label == label)
-        .map(|node| node.table.as_str())
-        .or_else(|| {
-            overlay
-                .edges
-                .iter()
-                .find(|edge| edge.label == label)
-                .map(|edge| edge.table.as_str())
-        })
-        .ok_or_else(|| anyhow!("Label '{}' not found in overlay", label))?;
+    let (table_name, columns) =
+        if let Some(node) = overlay.nodes.iter().find(|node| node.label == label) {
+            let mut columns = vec![node.id_column.clone()];
+            if let Some(display_column) = &node.display_column {
+                columns.push(display_column.clone());
+            }
+            columns.extend(
+                node.property_columns
+                    .iter()
+                    .map(|property| property.name.clone()),
+            );
+            (node.table.as_str(), columns)
+        } else if let Some(edge) = overlay.edges.iter().find(|edge| edge.label == label) {
+            let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
+            columns.extend(edge.src_node_column.clone());
+            columns.extend(edge.dst_node_column.clone());
+            columns.extend(
+                edge.property_columns
+                    .iter()
+                    .map(|property| property.name.clone()),
+            );
+            (edge.table.as_str(), columns)
+        } else {
+            return Err(anyhow!("Label '{}' not found in overlay", label));
+        };
+    let mut seen = HashSet::new();
+    let columns = columns
+        .into_iter()
+        .filter(|column| seen.insert(column.clone()))
+        .collect::<Vec<_>>();
 
     let table = connection
         .open_table(table_name)
         .execute()
         .await
         .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
-    let result = table
-        .query()
-        .limit(limit)
+    let mut query = table.query().limit(limit);
+    if !columns.is_empty() {
+        query = query.select(lancedb::query::Select::Columns(columns));
+    }
+    let result = query
         .execute()
         .await
         .map_err(|e| anyhow!("Failed to query table '{}': {}", table_name, e))?;
@@ -1235,6 +1376,181 @@ pub async fn sample_overlay(
     }
     rows.truncate(limit);
     Ok(rows)
+}
+
+/// Samples the exact already-resolved object mapping. This avoids a second
+/// lookup by display label, which is not a stable or necessarily unique key.
+pub async fn sample_overlay_object(
+    connection: &Connection,
+    object: &NodeMappingDef,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut columns = vec![object.id_column.clone()];
+    if let Some(display_column) = &object.display_column {
+        columns.push(display_column.clone());
+    }
+    columns.extend(
+        object
+            .property_columns
+            .iter()
+            .map(|property| property.name.clone()),
+    );
+    let mut seen = HashSet::new();
+    columns.retain(|column| seen.insert(column.clone()));
+
+    let table = connection
+        .open_table(&object.table)
+        .execute()
+        .await
+        .map_err(|error| anyhow!("Failed to open table '{}': {}", object.table, error))?;
+    let mut query = table.query().limit(limit);
+    if !columns.is_empty() {
+        query = query.select(lancedb::query::Select::Columns(columns));
+    }
+    let batches = query
+        .execute()
+        .await
+        .map_err(|error| anyhow!("Failed to query table '{}': {}", object.table, error))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|error| anyhow!("Failed to collect from '{}': {}", object.table, error))?;
+    let mut rows = Vec::new();
+    for batch in &batches {
+        rows.extend(record_batch_to_value(batch)?);
+    }
+    rows.truncate(limit);
+    Ok(rows)
+}
+
+/// Loads ontology objects by their governed object identity.
+///
+/// The saved ontology supplies the table and identity column. Callers supply
+/// only identity values, so an action invocation never has to trust a
+/// client-provided table, column, predicate, or full object payload.
+pub async fn load_overlay_objects(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+    object_type: &str,
+    ids: &[Value],
+) -> Result<Vec<Value>> {
+    if ids.is_empty() {
+        return Err(anyhow!("At least one object identity is required"));
+    }
+    if ids.len() > 100 {
+        return Err(anyhow!(
+            "At most 100 object identities may be loaded at once"
+        ));
+    }
+
+    let mapping = overlay
+        .nodes
+        .iter()
+        .find(|mapping| {
+            mapping.id.as_deref() == Some(object_type)
+                || mapping.api_name.as_deref() == Some(object_type)
+                || mapping.label == object_type
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "Object type '{}' was not found in the ontology",
+                object_type
+            )
+        })?;
+
+    let mut seen = HashSet::with_capacity(ids.len());
+    let mut literals = Vec::with_capacity(ids.len());
+    for id in ids {
+        let key = value_to_id_string(Some(id));
+        if key.is_empty() {
+            return Err(anyhow!(
+                "Object identities must be strings, numbers, or booleans"
+            ));
+        }
+        if !seen.insert(key) {
+            return Err(anyhow!("Duplicate object identities are not allowed"));
+        }
+        literals.push(value_sql_literal(id)?);
+    }
+
+    let table = connection
+        .open_table(&mapping.table)
+        .execute()
+        .await
+        .map_err(|error| anyhow!("Failed to open table '{}': {}", mapping.table, error))?;
+    let predicate = format!(
+        "{} IN ({})",
+        quote_identifier(&mapping.id_column),
+        literals.join(", ")
+    );
+    let mut columns = vec![mapping.id_column.clone()];
+    if let Some(display_column) = &mapping.display_column {
+        columns.push(display_column.clone());
+    }
+    columns.extend(
+        mapping
+            .property_columns
+            .iter()
+            .map(|property| property.name.clone()),
+    );
+    let mut seen_columns = HashSet::new();
+    columns.retain(|column| seen_columns.insert(column.clone()));
+
+    let batches = table
+        .query()
+        .only_if(&predicate)
+        .select(lancedb::query::Select::Columns(columns))
+        .limit(ids.len())
+        .execute()
+        .await
+        .map_err(|error| anyhow!("Failed to load ontology objects: {}", error))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|error| anyhow!("Failed to collect ontology objects: {}", error))?;
+
+    let mut allowed_columns = mapping
+        .property_columns
+        .iter()
+        .map(|property| property.name.as_str())
+        .collect::<HashSet<_>>();
+    allowed_columns.insert(mapping.id_column.as_str());
+    if let Some(display_column) = mapping.display_column.as_deref() {
+        allowed_columns.insert(display_column);
+    }
+
+    let mut rows_by_id = HashMap::with_capacity(ids.len());
+    for batch in &batches {
+        for mut row in record_batch_to_value(batch)? {
+            let Some(row_object) = row.as_object_mut() else {
+                continue;
+            };
+            let key = value_to_id_string(row_object.get(&mapping.id_column));
+            if !key.is_empty() {
+                row_object.retain(|column, _| allowed_columns.contains(column.as_str()));
+                rows_by_id.insert(key, row);
+            }
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(ids.len());
+    for id in ids {
+        let key = value_to_id_string(Some(id));
+        let row = rows_by_id
+            .remove(&key)
+            .ok_or_else(|| anyhow!("Object '{}' was not found", key))?;
+        ordered.push(row);
+    }
+    Ok(ordered)
+}
+
+fn value_sql_literal(value: &Value) -> Result<String> {
+    match value {
+        Value::String(value) => Ok(format!("'{}'", value.replace('\'', "''"))),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.to_string()),
+        _ => Err(anyhow!(
+            "Object identities must be strings, numbers, or booleans"
+        )),
+    }
 }
 
 pub async fn save_overlay(connection: &Connection, overlay: &GraphOverlayDef) -> Result<()> {
@@ -1300,6 +1616,57 @@ pub async fn save_overlay(connection: &Connection, overlay: &GraphOverlayDef) ->
     Ok(())
 }
 
+/// Atomically updates an existing overlay only when its persisted revision
+/// still matches the one the caller loaded. This prevents concurrent action
+/// edits from committing an overlay that no longer matches its managed event.
+pub async fn save_overlay_if_unchanged(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+    expected_updated_at: &str,
+) -> Result<bool> {
+    use arrow::array::{RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("description", DataType::Utf8, true),
+        Field::new("definition_json", DataType::Utf8, false),
+        Field::new("updated_at", DataType::Utf8, false),
+    ]));
+    let def_json = serde_json::to_string(overlay)
+        .map_err(|error| anyhow!("Failed to serialize overlay: {}", error))?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![overlay.id.as_str()])),
+            Arc::new(StringArray::from(vec![overlay.name.as_str()])),
+            Arc::new(StringArray::from(vec![
+                overlay.description.as_deref().unwrap_or(""),
+            ])),
+            Arc::new(StringArray::from(vec![def_json.as_str()])),
+            Arc::new(StringArray::from(vec![overlay.updated_at.as_str()])),
+        ],
+    )?;
+
+    let table = connection
+        .open_table(GRAPH_OVERLAYS_TABLE)
+        .execute()
+        .await
+        .map_err(|error| anyhow!("Failed to open overlays table: {}", error))?;
+    let expected = expected_updated_at.replace('\'', "''");
+    let mut merger = table.merge_insert(&["id"]);
+    merger.when_matched_update_all(Some(format!("target.updated_at = '{expected}'")));
+    let reader: Box<dyn arrow::record_batch::RecordBatchReader + Send> = Box::new(
+        arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)], schema),
+    );
+    let result = merger
+        .execute(reader)
+        .await
+        .map_err(|error| anyhow!("Failed to conditionally update overlay: {}", error))?;
+    Ok(result.num_updated_rows == 1)
+}
+
 pub async fn delete_overlay(connection: &Connection, overlay_id: &str) -> Result<()> {
     let table_names = connection
         .table_names()
@@ -1322,5 +1689,198 @@ pub async fn delete_overlay(connection: &Connection, overlay_id: &str) -> Result
         .await
         .map_err(|e| anyhow!("Failed to delete overlay: {}", e))?;
 
+    Ok(())
+}
+
+pub async fn list_ontology_imports(
+    connection: &Connection,
+) -> Result<Vec<RemoteOntologyImportDef>> {
+    let table_names = connection
+        .table_names()
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to list tables: {}", e))?;
+
+    if !table_names
+        .iter()
+        .any(|name| name == ONTOLOGY_IMPORTS_TABLE)
+    {
+        return Ok(Vec::new());
+    }
+
+    let table = connection
+        .open_table(ONTOLOGY_IMPORTS_TABLE)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to open ontology imports table: {}", e))?;
+    let result = table
+        .query()
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to query ontology imports: {}", e))?;
+    let batches = result
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| anyhow!("Failed to collect ontology imports: {}", e))?;
+
+    let mut imports: Vec<RemoteOntologyImportDef> = Vec::new();
+    for batch in &batches {
+        for row in record_batch_to_value(batch)? {
+            if let Some(definition) = row.get("definition_json").and_then(|value| value.as_str()) {
+                imports.push(
+                    serde_json::from_str(definition)
+                        .map_err(|e| anyhow!("Failed to parse ontology import: {}", e))?,
+                );
+            }
+        }
+    }
+    imports.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(imports)
+}
+
+pub async fn find_ontology_import(
+    connection: &Connection,
+    import_id: &str,
+) -> Result<Option<RemoteOntologyImportDef>> {
+    let table_names = connection
+        .table_names()
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to list tables: {}", e))?;
+
+    if !table_names
+        .iter()
+        .any(|name| name == ONTOLOGY_IMPORTS_TABLE)
+    {
+        return Ok(None);
+    }
+
+    let table = connection
+        .open_table(ONTOLOGY_IMPORTS_TABLE)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to open ontology imports table: {}", e))?;
+    let filter = format!("id = '{}'", import_id.replace('\'', "''"));
+    let result = table
+        .query()
+        .only_if(filter)
+        .limit(1)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to query ontology import '{}': {}", import_id, e))?;
+    let batches = result
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| anyhow!("Failed to collect ontology import '{}': {}", import_id, e))?;
+
+    for batch in &batches {
+        for row in record_batch_to_value(batch)? {
+            if let Some(definition) = row.get("definition_json").and_then(|value| value.as_str()) {
+                return serde_json::from_str(definition)
+                    .map(Some)
+                    .map_err(|e| anyhow!("Failed to parse ontology import: {}", e));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub async fn load_ontology_import(
+    connection: &Connection,
+    import_id: &str,
+) -> Result<RemoteOntologyImportDef> {
+    find_ontology_import(connection, import_id)
+        .await?
+        .ok_or_else(|| anyhow!("Ontology import '{}' not found", import_id))
+}
+
+pub async fn save_ontology_import(
+    connection: &Connection,
+    ontology_import: &RemoteOntologyImportDef,
+) -> Result<()> {
+    use arrow::array::{RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("target_app_id", DataType::Utf8, false),
+        Field::new("remote_ontology_id", DataType::Utf8, false),
+        Field::new("definition_json", DataType::Utf8, false),
+        Field::new("updated_at", DataType::Utf8, false),
+    ]));
+    let definition_json = serde_json::to_string(ontology_import)
+        .map_err(|e| anyhow!("Failed to serialize ontology import: {}", e))?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(vec![ontology_import.id.as_str()])),
+            Arc::new(StringArray::from(vec![
+                ontology_import.target_app_id.as_str(),
+            ])),
+            Arc::new(StringArray::from(vec![
+                ontology_import.remote_ontology_id.as_str(),
+            ])),
+            Arc::new(StringArray::from(vec![definition_json.as_str()])),
+            Arc::new(StringArray::from(vec![ontology_import.updated_at.as_str()])),
+        ],
+    )?;
+
+    let table_names = connection
+        .table_names()
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to list tables: {}", e))?;
+    if table_names
+        .iter()
+        .any(|name| name == ONTOLOGY_IMPORTS_TABLE)
+    {
+        let table = connection
+            .open_table(ONTOLOGY_IMPORTS_TABLE)
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to open ontology imports table: {}", e))?;
+        let mut merger = table.merge_insert(&["id"]);
+        merger
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        let reader: Box<dyn arrow::record_batch::RecordBatchReader + Send> = Box::new(
+            arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)], schema),
+        );
+        merger
+            .execute(reader)
+            .await
+            .map_err(|e| anyhow!("Failed to upsert ontology import: {}", e))?;
+    } else {
+        connection
+            .create_table(ONTOLOGY_IMPORTS_TABLE, vec![batch])
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to create ontology imports table: {}", e))?;
+    }
+    Ok(())
+}
+
+pub async fn delete_ontology_import(connection: &Connection, import_id: &str) -> Result<()> {
+    let table_names = connection
+        .table_names()
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to list tables: {}", e))?;
+    if !table_names
+        .iter()
+        .any(|name| name == ONTOLOGY_IMPORTS_TABLE)
+    {
+        return Ok(());
+    }
+
+    let table = connection
+        .open_table(ONTOLOGY_IMPORTS_TABLE)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to open ontology imports table: {}", e))?;
+    table
+        .delete(&format!("id = '{}'", import_id.replace('\'', "''")))
+        .await
+        .map_err(|e| anyhow!("Failed to delete ontology import: {}", e))?;
     Ok(())
 }

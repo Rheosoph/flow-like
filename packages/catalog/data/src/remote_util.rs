@@ -4,11 +4,65 @@
 
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, json::json, reqwest};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+use flow_like::credentials::SharedCredentials;
+use flow_like_storage::lancedb::Connection;
+use flow_like_types::Cacheable;
 
 #[derive(Debug, flow_like_types::json::Deserialize)]
 struct AppConnectionTokenResponse {
     token: String,
+}
+
+#[derive(Debug, flow_like_types::json::Deserialize)]
+struct PresignProjectDbResponse {
+    shared_credentials: Value,
+}
+
+#[derive(Clone)]
+struct CachedRemoteProjectConnection {
+    connection: Arc<flow_like_types::tokio::sync::OnceCell<Connection>>,
+}
+
+impl Cacheable for CachedRemoteProjectConnection {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Clone)]
+struct CachedRemoteAppSession {
+    session: Arc<flow_like_types::tokio::sync::OnceCell<RemoteAppSession>>,
+}
+
+impl Cacheable for CachedRemoteAppSession {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Clone)]
+struct CachedRemoteOntologyAuthorization {
+    authorized: Arc<flow_like_types::tokio::sync::OnceCell<()>>,
+}
+
+impl Cacheable for CachedRemoteOntologyAuthorization {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 pub(crate) fn api_base_url(hub: &str, secure: bool) -> Option<String> {
@@ -140,10 +194,121 @@ pub(crate) fn validate_path_id(value: &str, label: &str) -> flow_like_types::Res
 
 /// A short-lived session against a connected app: the app-to-app token plus
 /// the API base url. Mint one per remote operation — tokens expire quickly.
+#[derive(Clone)]
 pub(crate) struct RemoteAppSession {
     pub token: String,
     pub base_url: String,
     pub target_app_id: String,
+}
+
+async fn remote_app_session(
+    context: &ExecutionContext,
+    target_app_id: &str,
+) -> flow_like_types::Result<RemoteAppSession> {
+    let target_app_id = validate_path_id(target_app_id, "remote project")?;
+    let cache_key = format!("remote::session::{target_app_id}");
+    let cached = {
+        let existing = context.cache.read().await.get(&cache_key).cloned();
+        if let Some(existing) = existing {
+            existing
+                .as_any()
+                .downcast_ref::<CachedRemoteAppSession>()
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "Remote app session cache entry has an unexpected type"
+                    )
+                })?
+                .clone()
+        } else {
+            let mut cache = context.cache.write().await;
+            if let Some(existing) = cache.get(&cache_key) {
+                existing
+                    .as_any()
+                    .downcast_ref::<CachedRemoteAppSession>()
+                    .ok_or_else(|| {
+                        flow_like_types::anyhow!(
+                            "Remote app session cache entry has an unexpected type"
+                        )
+                    })?
+                    .clone()
+            } else {
+                let cached = CachedRemoteAppSession {
+                    session: Arc::new(flow_like_types::tokio::sync::OnceCell::new()),
+                };
+                cache.insert(cache_key, Arc::new(cached.clone()));
+                cached
+            }
+        }
+    };
+    Ok(cached
+        .session
+        .get_or_try_init(|| RemoteAppSession::open(context, &target_app_id))
+        .await?
+        .clone())
+}
+
+/// Rechecks the source project's live exposure decision once per ontology and
+/// run. Installed snapshots remain stable contracts, but exposure revocation
+/// takes effect for every new run without adding a request per node.
+pub(crate) async fn ensure_remote_ontology_exposed(
+    context: &ExecutionContext,
+    target_app_id: &str,
+    ontology_id: &str,
+) -> flow_like_types::Result<()> {
+    let target_app_id = validate_path_id(target_app_id, "remote project")?;
+    let ontology_id = validate_path_id(ontology_id, "remote ontology")?;
+    let cache_key = format!("remote::ontology-auth::{target_app_id}::{ontology_id}");
+    let cached = {
+        let existing = context.cache.read().await.get(&cache_key).cloned();
+        if let Some(existing) = existing {
+            existing
+                .as_any()
+                .downcast_ref::<CachedRemoteOntologyAuthorization>()
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "Remote ontology authorization cache entry has an unexpected type"
+                    )
+                })?
+                .clone()
+        } else {
+            let mut cache = context.cache.write().await;
+            if let Some(existing) = cache.get(&cache_key) {
+                existing
+                    .as_any()
+                    .downcast_ref::<CachedRemoteOntologyAuthorization>()
+                    .ok_or_else(|| {
+                        flow_like_types::anyhow!(
+                            "Remote ontology authorization cache entry has an unexpected type"
+                        )
+                    })?
+                    .clone()
+            } else {
+                let cached = CachedRemoteOntologyAuthorization {
+                    authorized: Arc::new(flow_like_types::tokio::sync::OnceCell::new()),
+                };
+                cache.insert(cache_key, Arc::new(cached.clone()));
+                cached
+            }
+        }
+    };
+
+    cached
+        .authorized
+        .get_or_try_init(|| async {
+            let session = remote_app_session(context, &target_app_id).await?;
+            let response = http_client_no_redirect()
+                .get(session.url(&format!("graph/{ontology_id}")))
+                .bearer_auth(&session.token)
+                .send()
+                .await
+                .map_err(|error| {
+                    flow_like_types::anyhow!("Failed to verify remote ontology exposure: {}", error)
+                })?;
+            error_for_status(response, "Remote ontology exposure check").await?;
+            Ok::<(), flow_like_types::Error>(())
+        })
+        .await?;
+    Ok(())
 }
 
 impl RemoteAppSession {
@@ -208,6 +373,95 @@ impl RemoteAppSession {
             path.trim_start_matches('/')
         )
     }
+}
+
+/// Opens a connected project's LanceDB through short-lived scoped credentials
+/// and caches the raw connection for the current run. The credentials are
+/// scoped to the project database root rather than one table, so ontology
+/// reads for different object types can share this connection.
+pub(crate) async fn open_remote_project_database(
+    context: &ExecutionContext,
+    target_app_id: &str,
+    table: &str,
+    write_access: bool,
+) -> flow_like_types::Result<Connection> {
+    let target_app_id = validate_path_id(target_app_id, "remote project")?;
+    let table = table.trim();
+    if table.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "The installed ontology object has no source table"
+        ));
+    }
+    let access_mode = if write_access { "write" } else { "read" };
+    let cache_key = format!("lance::remote::{target_app_id}::{access_mode}");
+
+    let cached = {
+        let existing = context.cache.read().await.get(&cache_key).cloned();
+        if let Some(existing) = existing {
+            existing
+                .as_any()
+                .downcast_ref::<CachedRemoteProjectConnection>()
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "Remote project connection cache entry has an unexpected type"
+                    )
+                })?
+                .clone()
+        } else {
+            let mut cache = context.cache.write().await;
+            if let Some(existing) = cache.get(&cache_key) {
+                existing
+                    .as_any()
+                    .downcast_ref::<CachedRemoteProjectConnection>()
+                    .ok_or_else(|| {
+                        flow_like_types::anyhow!(
+                            "Remote project connection cache entry has an unexpected type"
+                        )
+                    })?
+                    .clone()
+            } else {
+                let cached = CachedRemoteProjectConnection {
+                    connection: Arc::new(flow_like_types::tokio::sync::OnceCell::new()),
+                };
+                cache.insert(cache_key, Arc::new(cached.clone()));
+                cached
+            }
+        }
+    };
+
+    let connection = cached
+        .connection
+        .get_or_try_init(|| async {
+            let session = remote_app_session(context, &target_app_id).await?;
+            let response = http_client_no_redirect()
+                .post(session.url("db/presign/project"))
+                .bearer_auth(&session.token)
+                .json(&json!({
+                    "table_name": table,
+                    "access_mode": access_mode,
+                }))
+                .send()
+                .await
+                .map_err(|error| {
+                    flow_like_types::anyhow!(
+                        "Failed to request remote project database access: {}",
+                        error
+                    )
+                })?;
+            let response = error_for_status(response, "Remote project database presign").await?;
+            let presigned: PresignProjectDbResponse = response.json().await?;
+            let credentials: SharedCredentials =
+                flow_like_types::json::from_value(presigned.shared_credentials)?;
+            let database = credentials.to_db(&target_app_id).await?;
+            let connection = context
+                .app_state
+                .with_lance_session(database)
+                .execute()
+                .await?;
+            Ok::<Connection, flow_like_types::Error>(connection)
+        })
+        .await?;
+    Ok(connection.clone())
 }
 
 #[cfg(test)]

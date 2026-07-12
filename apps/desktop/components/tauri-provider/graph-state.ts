@@ -5,7 +5,12 @@ import type {
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
+	InvokeOntologyActionPayload,
 	NeighborsPayload,
+	OntologyActionPrerun,
+	OntologyActionRun,
+	OntologyActionStreamEvent,
+	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
 	SubgraphPayload,
@@ -13,6 +18,7 @@ import type {
 	UpdateOverlayPayload,
 	ValidationResult,
 } from "@flow-like/flow-like-ui";
+import { applyOntologyActionStreamEvent } from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -24,6 +30,13 @@ function scopeQuery(userScoped?: boolean): string {
 export class GraphState implements IGraphState {
 	constructor(private readonly backend: TauriBackend) {}
 
+	private requireProfile() {
+		const profile = this.backend.profile;
+		if (!profile)
+			throw new Error("An active profile is required for this request.");
+		return profile;
+	}
+
 	async listOverlays(
 		appId: string,
 		userScoped?: boolean,
@@ -32,7 +45,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<GraphOverlay[]>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph${scopeQuery(userScoped)}`,
 				{ method: "GET" },
 				this.backend.auth,
@@ -59,6 +72,167 @@ export class GraphState implements IGraphState {
 		);
 	}
 
+	async listRemoteOntologyImports(
+		appId: string,
+	): Promise<RemoteOntologyImport[]> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) return [];
+		return fetcher<RemoteOntologyImport[]>(
+			this.backend.profile,
+			`apps/${appId}/graph/imports`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async installRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<RemoteOntologyImport> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			throw new Error("Remote ontology imports require an online connection.");
+		}
+		return fetcher<RemoteOntologyImport>(
+			this.backend.profile,
+			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
+			{ method: "PUT" },
+			this.backend.auth,
+		);
+	}
+
+	async uninstallRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<void> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			throw new Error("Remote ontology imports require an online connection.");
+		}
+		await fetcher<void>(
+			this.backend.profile,
+			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async invokeOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+		payload: InvokeOntologyActionPayload,
+		onStatus?: (run: OntologyActionRun) => void,
+	): Promise<OntologyActionRun> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline) {
+			const prepared = await invoke<{
+				event_id: string;
+				payload: unknown;
+			}>("graph_prepare_ontology_action", {
+				appId,
+				ontologyId,
+				actionId,
+				payload,
+			});
+			const run: OntologyActionRun = { run_id: "", status: "Submitting" };
+			onStatus?.({ ...run });
+			const metadata = await this.backend.eventState.executeEvent(
+				appId,
+				prepared.event_id,
+				{ id: prepared.event_id, payload: prepared.payload },
+				false,
+				(runId) => {
+					run.run_id = runId;
+					run.status = "Running";
+					onStatus?.({ ...run });
+				},
+				(events) => {
+					for (const event of events) {
+						applyOntologyActionStreamEvent(run, event);
+						onStatus?.({ ...run });
+					}
+				},
+			);
+			if (!run.run_id && metadata?.run_id) run.run_id = metadata.run_id;
+			if (
+				(run.status === "Submitting" || run.status === "Running") &&
+				metadata
+			) {
+				if ((metadata.log_level ?? 0) >= 3) {
+					run.status = "Failed";
+					run.error_message =
+						"The action run reported an error. Open the run for details.";
+				} else {
+					run.status = "Completed";
+				}
+			} else if (run.status === "Submitting" || run.status === "Running") {
+				run.status = "Interrupted";
+				run.error_message =
+					"The local action ended without completion metadata. Check the run before retrying.";
+			}
+			onStatus?.({ ...run });
+			return run;
+		}
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error(
+				"An authenticated profile is required to invoke an action.",
+			);
+		}
+		const run: OntologyActionRun = { run_id: "", status: "Submitting" };
+		onStatus?.({ ...run });
+		try {
+			const requestPayload = {
+				...payload,
+				token: this.backend.auth.user?.access_token,
+				profile_id: this.backend.profile.id,
+			};
+			await this.backend.apiState.stream<OntologyActionStreamEvent>(
+				this.backend.profile,
+				`apps/${appId}/graph/${ontologyId}/actions/${actionId}/invoke`,
+				{
+					method: "POST",
+					body: JSON.stringify(requestPayload),
+					headers: { Accept: "text/event-stream" },
+				},
+				(event) => {
+					applyOntologyActionStreamEvent(run, event);
+					onStatus?.({ ...run });
+				},
+			);
+		} catch (error) {
+			if (!run.run_id) throw error;
+			run.status = "Failed";
+			run.error_message ??=
+				error instanceof Error ? error.message : "The ontology action failed.";
+		}
+		if (run.status === "Submitting" || run.status === "Running") {
+			run.status = "Interrupted";
+			run.error_message =
+				"The action stream ended before a terminal status was received. Check the run before retrying.";
+		}
+		onStatus?.({ ...run });
+		return run;
+	}
+
+	async prerunOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+	): Promise<OntologyActionPrerun> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error("Offline actions use the local execution preflight.");
+		}
+		return fetcher<OntologyActionPrerun>(
+			this.requireProfile(),
+			`apps/${appId}/graph/${ontologyId}/actions/${actionId}/prerun`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
 	async createOverlay(
 		appId: string,
 		payload: CreateOverlayPayload,
@@ -68,7 +242,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<GraphOverlay>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph${scopeQuery(userScoped)}`,
 				{ method: "POST", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -91,7 +265,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<GraphOverlay>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
 				{ method: "GET" },
 				this.backend.auth,
@@ -115,7 +289,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<GraphOverlay>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
 				{ method: "PUT", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -139,7 +313,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			await fetcher<void>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}${scopeQuery(userScoped)}`,
 				{ method: "DELETE" },
 				this.backend.auth,
@@ -163,7 +337,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<GraphSchema>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/schema${scopeQuery(userScoped)}`,
 				{ method: "GET" },
 				this.backend.auth,
@@ -186,7 +360,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<ValidationResult>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/validate${scopeQuery(userScoped)}`,
 				{ method: "POST" },
 				this.backend.auth,
@@ -210,7 +384,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<unknown[]>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/cypher${scopeQuery(userScoped)}`,
 				{ method: "POST", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -235,7 +409,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<unknown[]>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/sql${scopeQuery(userScoped)}`,
 				{ method: "POST", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -260,7 +434,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<SubgraphResult>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/neighbors${scopeQuery(userScoped)}`,
 				{ method: "POST", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -285,7 +459,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<SubgraphResult>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/subgraph${scopeQuery(userScoped)}`,
 				{ method: "POST", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -310,7 +484,7 @@ export class GraphState implements IGraphState {
 
 		if (!isOffline) {
 			return fetcher<SubgraphNode[]>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/search${scopeQuery(userScoped)}`,
 				{ method: "POST", body: JSON.stringify(payload) },
 				this.backend.auth,
@@ -341,7 +515,7 @@ export class GraphState implements IGraphState {
 			if (n !== undefined) params.set("n", String(n));
 			const qs = params.toString();
 			return fetcher<unknown[]>(
-				this.backend.profile!,
+				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/sample${qs ? `?${qs}` : ""}`,
 				{ method: "GET" },
 				this.backend.auth,

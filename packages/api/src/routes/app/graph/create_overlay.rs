@@ -70,7 +70,7 @@ pub async fn create_overlay(
     Query(scope): Query<ScopeParams>,
     Json(payload): Json<CreateOverlayPayload>,
 ) -> Result<Json<flow_like_catalog_core::GraphOverlay>, ApiError> {
-    ensure_any_permission!(
+    let permission = ensure_any_permission!(
         user,
         &app_id,
         &state,
@@ -82,33 +82,91 @@ pub async fn create_overlay(
 
     let now = chrono::Utc::now().to_rfc3339();
     let overlay_id = uuid::Uuid::new_v4().to_string();
+    let mut action_owner_sub = None;
+    let nodes = payload
+        .nodes
+        .iter()
+        .map(|n| lancegraph::NodeMappingDef {
+            id: n.id.clone(),
+            api_name: n.api_name.clone(),
+            label: n.label.clone(),
+            table: n.table.clone(),
+            id_column: n.id_column.clone(),
+            display_column: n.display_column.clone(),
+            property_columns: n
+                .property_columns
+                .iter()
+                .map(|p| lancegraph::PropertyColumnDef {
+                    name: p.name.clone(),
+                    data_type: p.data_type.clone(),
+                    nullable: p.nullable,
+                })
+                .collect(),
+            style: serde_json::to_value(&n.style).unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let mut actions = payload
+        .actions
+        .iter()
+        .map(|action| lancegraph::OntologyActionDef {
+            id: action.id.clone(),
+            name: action.name.clone(),
+            description: action.description.clone(),
+            object_type: action.object_type.clone(),
+            board_id: action.board_id.clone(),
+            board_version: action.board_version,
+            start_node_id: action.start_node_id.clone(),
+            // Event IDs are server-managed implementation capabilities.
+            event_id: None,
+            enabled: action.enabled,
+            allow_bulk: action.allow_bulk,
+            parameter_schema: action.parameter_schema.clone(),
+        })
+        .collect::<Vec<_>>();
+    super::actions::validate_action_object_types(&actions, |object_type| {
+        nodes.iter().any(|object| {
+            object.id.as_deref() == Some(object_type)
+                || object.api_name.as_deref() == Some(object_type)
+                || object.label == object_type
+        })
+    })?;
+    if !actions.is_empty() {
+        if scope.is_user_scoped() {
+            return Err(ApiError::bad_request(
+                "Executable ontology actions must use project scope",
+            ));
+        }
+        if !permission.has_permission(RolePermissions::WriteEvents) {
+            return Err(ApiError::FORBIDDEN);
+        }
+        let sub = permission.sub()?;
+        action_owner_sub = Some(sub.clone());
+        if let Err(error) = super::actions::materialize_action_events(
+            &state,
+            &sub,
+            &app_id,
+            &overlay_id,
+            payload.exposed,
+            &nodes,
+            &mut actions,
+        )
+        .await
+        {
+            if let Err(cleanup_error) =
+                super::actions::remove_action_events(&state, &sub, &app_id, &overlay_id, &actions)
+                    .await
+            {
+                tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+            }
+            return Err(error);
+        }
+    }
 
     let def = lancegraph::GraphOverlayDef {
         id: overlay_id.clone(),
         name: payload.name.clone(),
         description: payload.description.clone(),
-        nodes: payload
-            .nodes
-            .iter()
-            .map(|n| lancegraph::NodeMappingDef {
-                id: n.id.clone(),
-                api_name: n.api_name.clone(),
-                label: n.label.clone(),
-                table: n.table.clone(),
-                id_column: n.id_column.clone(),
-                display_column: n.display_column.clone(),
-                property_columns: n
-                    .property_columns
-                    .iter()
-                    .map(|p| lancegraph::PropertyColumnDef {
-                        name: p.name.clone(),
-                        data_type: p.data_type.clone(),
-                        nullable: p.nullable,
-                    })
-                    .collect(),
-                style: serde_json::to_value(&n.style).unwrap_or_default(),
-            })
-            .collect(),
+        nodes,
         edges: payload
             .edges
             .iter()
@@ -144,23 +202,7 @@ pub async fn create_overlay(
                 prominent_properties: view.prominent_properties.clone(),
             })
             .collect(),
-        actions: payload
-            .actions
-            .iter()
-            .map(|action| lancegraph::OntologyActionDef {
-                id: action.id.clone(),
-                name: action.name.clone(),
-                description: action.description.clone(),
-                object_type: action.object_type.clone(),
-                board_id: action.board_id.clone(),
-                board_version: action.board_version,
-                start_node_id: action.start_node_id.clone(),
-                event_id: action.event_id.clone(),
-                enabled: action.enabled,
-                allow_bulk: action.allow_bulk,
-                parameter_schema: action.parameter_schema.clone(),
-            })
-            .collect(),
+        actions,
         exposed: payload.exposed,
         bindings_enabled: payload.bindings_enabled,
         default_limit: payload.default_limit,
@@ -168,22 +210,20 @@ pub async fn create_overlay(
         updated_at: now.clone(),
     };
 
-    lancegraph::save_overlay(&connection, &def).await?;
-
-    let result = flow_like_catalog_core::GraphOverlay {
-        id: overlay_id,
-        name: payload.name,
-        description: payload.description,
-        nodes: payload.nodes,
-        edges: payload.edges,
-        object_views: payload.object_views,
-        actions: payload.actions,
-        exposed: payload.exposed,
-        bindings_enabled: payload.bindings_enabled,
-        default_limit: payload.default_limit,
-        created_at: now.clone(),
-        updated_at: now,
-    };
-
-    Ok(Json(result))
+    if let Err(error) = lancegraph::save_overlay(&connection, &def).await {
+        if let Some(sub) = action_owner_sub
+            && let Err(cleanup_error) = super::actions::remove_action_events(
+                &state,
+                &sub,
+                &app_id,
+                &overlay_id,
+                &def.actions,
+            )
+            .await
+        {
+            tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+        }
+        return Err(error.into());
+    }
+    Ok(Json(super::list_overlays::def_to_overlay(def)))
 }

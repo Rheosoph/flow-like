@@ -63,6 +63,17 @@ export interface GraphOverlay {
 	updated_at: string;
 }
 
+export interface RemoteOntologyImport {
+	id: string;
+	target_app_id: string;
+	remote_ontology_id: string;
+	contract: GraphOverlay;
+	source_updated_at: string;
+	bindings_enabled: boolean;
+	installed_at: string;
+	updated_at: string;
+}
+
 export interface ObjectViewDefinition {
 	object_type: string;
 	title_property?: string;
@@ -143,6 +154,7 @@ export interface CreateOverlayPayload {
 }
 
 export interface UpdateOverlayPayload {
+	expected_updated_at?: string;
 	name?: string;
 	description?: string;
 	nodes?: NodeLabelMapping[];
@@ -184,14 +196,100 @@ export interface GraphSearchPayload {
 	limit?: number;
 }
 
+export interface OntologyObjectRef {
+	object_type: string;
+	id: unknown;
+}
+
+export interface InvokeOntologyActionPayload {
+	object_refs: OntologyObjectRef[];
+	parameters?: Record<string, unknown>;
+	idempotency_key?: string;
+	oauth_tokens?: Record<string, unknown>;
+}
+
+export interface OntologyActionRun {
+	run_id: string;
+	status: string;
+	result?: unknown;
+	error_message?: string;
+}
+
+export interface OntologyActionPrerun {
+	oauth_requirements: Array<{ provider_id: string; scopes: string[] }>;
+	signature: string;
+}
+
+export interface OntologyActionStreamEvent {
+	event_type?: string;
+	payload?: unknown;
+}
+
+export function applyOntologyActionStreamEvent(
+	run: OntologyActionRun,
+	event: OntologyActionStreamEvent,
+): void {
+	const payload =
+		event.payload && typeof event.payload === "object"
+			? (event.payload as Record<string, unknown>)
+			: undefined;
+	switch (event.event_type) {
+		case "run_initiated":
+			if (typeof payload?.run_id === "string") run.run_id = payload.run_id;
+			run.status = "Running";
+			break;
+		case "generic_result":
+			run.result = event.payload;
+			break;
+		case "completed":
+			run.status =
+				typeof payload?.status === "string" ? payload.status : "Completed";
+			break;
+		case "error":
+			run.status = "Failed";
+			run.error_message =
+				typeof event.payload === "string"
+					? event.payload
+					: typeof payload?.message === "string"
+						? payload.message
+						: typeof payload?.error === "string"
+							? payload.error
+							: "The ontology action failed.";
+			break;
+	}
+}
+
 // ─── State interface ───
 
 export interface IGraphState {
 	listOverlays(appId: string, userScoped?: boolean): Promise<GraphOverlay[]>;
+	listRemoteOntologyImports(appId: string): Promise<RemoteOntologyImport[]>;
 	listRemoteOntologies(
 		appId: string,
 		targetAppId: string,
 	): Promise<GraphOverlay[]>;
+	installRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<RemoteOntologyImport>;
+	uninstallRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<void>;
+	invokeOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+		payload: InvokeOntologyActionPayload,
+		onStatus?: (run: OntologyActionRun) => void,
+	): Promise<OntologyActionRun>;
+	prerunOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+	): Promise<OntologyActionPrerun>;
 	createOverlay(
 		appId: string,
 		payload: CreateOverlayPayload,

@@ -1,17 +1,21 @@
-use flow_like::flow_like_storage::{
-    Path,
-    databases::graph::lancegraph::{
-        self, EdgeMappingDef, GraphOverlayDef, LanceGraphStore, NodeMappingDef,
+use flow_like::{
+    app::App,
+    flow::event::{Event, EventExecutionMode, EventExposure},
+    flow_like_storage::{
+        Path,
+        databases::graph::lancegraph::{
+            self, EdgeMappingDef, GraphOverlayDef, LanceGraphStore, NodeMappingDef,
+        },
+        databases::graph::{GraphStore, TraversalDirection},
+        lancedb::Connection,
     },
-    databases::graph::{GraphStore, TraversalDirection},
-    lancedb::Connection,
 };
 use flow_like_catalog::{
     DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,
     DEFAULT_GRAPH_SAMPLE_SIZE,
 };
 use flow_like_types::create_id;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::{
@@ -71,6 +75,339 @@ pub(crate) fn graph_overlay_from_def(
     Ok(flow_like_types::json::from_value(value)?)
 }
 
+fn managed_event_matches(event: &Event, ontology_id: &str, action_id: &str) -> bool {
+    if event.event_type != "ontology_action" {
+        return false;
+    }
+    flow_like_types::json::from_slice::<flow_like_types::Value>(&event.config)
+        .ok()
+        .is_some_and(|config| {
+            config
+                .get("managed_by")
+                .and_then(flow_like_types::Value::as_str)
+                == Some("ontology_action")
+                && config
+                    .get("ontology_id")
+                    .and_then(flow_like_types::Value::as_str)
+                    == Some(ontology_id)
+                && config
+                    .get("action_id")
+                    .and_then(flow_like_types::Value::as_str)
+                    == Some(action_id)
+        })
+}
+
+fn managed_event_binding_is_current(
+    event: &Event,
+    ontology_id: &str,
+    ontology_exposed: bool,
+    objects: &[NodeMappingDef],
+    action: &lancegraph::OntologyActionDef,
+) -> bool {
+    let Some(object) = action_object(objects, action) else {
+        return false;
+    };
+    let Ok(contract_hash) =
+        lancegraph::ontology_action_contract_hash(ontology_id, ontology_exposed, action, object)
+    else {
+        return false;
+    };
+    let saved_contract_hash =
+        flow_like_types::json::from_slice::<flow_like_types::Value>(&event.config)
+            .ok()
+            .and_then(|config| {
+                config
+                    .get("contract_hash")
+                    .and_then(flow_like_types::Value::as_str)
+                    .map(str::to_owned)
+            });
+    managed_event_matches(event, ontology_id, &action.id)
+        && saved_contract_hash.as_deref() == Some(contract_hash.as_str())
+        && event.name == action.name
+        && event.description == action.description.clone().unwrap_or_default()
+        && event.board_id == action.board_id
+        && event.board_version
+            == action
+                .board_version
+                .map(|version| (version[0], version[1], version[2]))
+        && action.start_node_id.as_deref() == Some(event.node_id.as_str())
+        && event.active == action.enabled
+        && event.exposure == EventExposure::Internal
+        && event.route.is_none()
+        && event.variables.is_empty()
+        && event.canary.is_none()
+        && event.priority == 0
+        && event.default_page_id.is_none()
+        && !event.is_default
+        && event.correlation_mappings.is_none()
+}
+
+fn action_object<'a>(
+    objects: &'a [NodeMappingDef],
+    action: &lancegraph::OntologyActionDef,
+) -> Option<&'a NodeMappingDef> {
+    objects.iter().find(|object| {
+        object.id.as_deref() == Some(action.object_type.as_str())
+            || object.api_name.as_deref() == Some(action.object_type.as_str())
+            || object.label == action.object_type
+    })
+}
+
+fn validate_action_object_types(
+    actions: &[lancegraph::OntologyActionDef],
+    objects: &[NodeMappingDef],
+) -> flow_like_types::Result<()> {
+    for action in actions {
+        let exists = objects.iter().any(|object| {
+            object.id.as_deref() == Some(action.object_type.as_str())
+                || object.api_name.as_deref() == Some(action.object_type.as_str())
+                || object.label == action.object_type
+        });
+        if !exists {
+            return Err(flow_like_types::anyhow!(
+                "Ontology action '{}' references unknown object type '{}'",
+                action.id,
+                action.object_type
+            ));
+        }
+        if let Some(schema) = &action.parameter_schema {
+            flow_like_catalog::ontology_action_parameter_validator(schema).map_err(|error| {
+                flow_like_types::anyhow!(
+                    "Ontology action '{}' has an invalid parameter schema: {}",
+                    action.id,
+                    error
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+async fn materialize_action_events(
+    app_handle: &AppHandle,
+    app_id: &str,
+    ontology_id: &str,
+    ontology_exposed: bool,
+    objects: &[NodeMappingDef],
+    actions: &mut [lancegraph::OntologyActionDef],
+) -> flow_like_types::Result<()> {
+    if actions.is_empty() {
+        return Ok(());
+    }
+
+    let mut action_ids = std::collections::HashSet::with_capacity(actions.len());
+    for action in actions.iter() {
+        if action.id.trim().is_empty() || !action_ids.insert(action.id.clone()) {
+            return Err(flow_like_types::anyhow!(
+                "Ontology action IDs must be non-empty and unique"
+            ));
+        }
+        if action.name.trim().is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "Ontology actions must have a name"
+            ));
+        }
+    }
+
+    let flow_like_state = TauriFlowLikeState::construct(app_handle)
+        .await
+        .map_err(|error| flow_like_types::anyhow!(error.to_string()))?;
+    let mut app = App::load(app_id.to_string(), flow_like_state).await?;
+
+    let mut app_changed = false;
+    for action in actions {
+        let start_node_id = action
+            .start_node_id
+            .clone()
+            .filter(|node_id| !node_id.trim().is_empty())
+            .ok_or_else(|| flow_like_types::anyhow!("The ontology action has no start node"))?;
+        if action.board_id.trim().is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "The ontology action has no implementation board"
+            ));
+        }
+        let board_version = action.board_version.ok_or_else(|| {
+            flow_like_types::anyhow!("The ontology action must pin an exact board version")
+        })?;
+
+        let requested_event_id = action
+            .event_id
+            .clone()
+            .filter(|event_id| !event_id.trim().is_empty());
+        let existing = match requested_event_id.as_deref() {
+            Some(event_id) => app.get_event(event_id, None).await.ok(),
+            None => None,
+        };
+        if let Some(event) = existing.as_ref()
+            && managed_event_binding_is_current(
+                event,
+                ontology_id,
+                ontology_exposed,
+                objects,
+                action,
+            )
+        {
+            action.event_id = Some(event.id.clone());
+            if !app.events.contains(&event.id) {
+                app.events.push(event.id.clone());
+                app_changed = true;
+            }
+            continue;
+        }
+        let event_id = requested_event_id
+            .filter(|_| {
+                existing
+                    .as_ref()
+                    .is_some_and(|event| managed_event_matches(event, ontology_id, &action.id))
+            })
+            .unwrap_or_else(create_id);
+        let now = std::time::SystemTime::now();
+        let object = action_object(objects, action).ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Ontology action '{}' references unknown object type '{}'",
+                action.id,
+                action.object_type
+            )
+        })?;
+        let contract_hash = lancegraph::ontology_action_contract_hash(
+            ontology_id,
+            ontology_exposed,
+            action,
+            object,
+        )?;
+        let mut event = Event {
+            id: event_id,
+            name: action.name.clone(),
+            description: action.description.clone().unwrap_or_default(),
+            board_id: action.board_id.clone(),
+            board_version: Some((board_version[0], board_version[1], board_version[2])),
+            node_id: start_node_id,
+            variables: std::collections::HashMap::new(),
+            config: flow_like_types::json::to_vec(&flow_like_types::json::json!({
+                "managed_by": "ontology_action",
+                "ontology_id": ontology_id,
+                "action_id": action.id,
+                "contract_hash": contract_hash,
+            }))
+            .unwrap_or_default(),
+            active: action.enabled,
+            canary: None,
+            priority: 0,
+            event_type: "ontology_action".to_string(),
+            notes: None,
+            event_version: (0, 0, 0),
+            created_at: now,
+            updated_at: now,
+            default_page_id: None,
+            inputs: Vec::new(),
+            route: None,
+            is_default: false,
+            execution_mode: EventExecutionMode::Local,
+            exposure: EventExposure::Internal,
+            correlation_mappings: None,
+        };
+        let event = event.upsert(&app, None, true).await?;
+        if !app.events.contains(&event.id) {
+            app.events.push(event.id.clone());
+        }
+        action.event_id = Some(event.id);
+        app_changed = true;
+    }
+
+    if app_changed {
+        app.updated_at = std::time::SystemTime::now();
+        app.save().await?;
+    }
+    Ok(())
+}
+
+async fn remove_action_events(
+    app_handle: &AppHandle,
+    app_id: &str,
+    ontology_id: &str,
+    removed_actions: &[lancegraph::OntologyActionDef],
+) -> flow_like_types::Result<()> {
+    if removed_actions.is_empty() {
+        return Ok(());
+    }
+    let flow_like_state = TauriFlowLikeState::construct(app_handle)
+        .await
+        .map_err(|error| flow_like_types::anyhow!(error.to_string()))?;
+    let mut app = App::load(app_id.to_string(), flow_like_state).await?;
+    let mut removed_event_ids = Vec::new();
+    for action in removed_actions {
+        let Some(event_id) = action.event_id.as_deref() else {
+            continue;
+        };
+        let Ok(event) = app.get_event(event_id, None).await else {
+            continue;
+        };
+        if managed_event_matches(&event, ontology_id, &action.id) {
+            event.delete(&app).await?;
+            app.events.retain(|saved_id| saved_id != event_id);
+            removed_event_ids.push(event_id.to_string());
+        }
+    }
+    if !removed_event_ids.is_empty() {
+        app.updated_at = std::time::SystemTime::now();
+        app.save().await?;
+    }
+    Ok(())
+}
+
+async fn rollback_action_event_changes(
+    app_handle: &AppHandle,
+    app_id: &str,
+    ontology_id: &str,
+    ontology_exposed: bool,
+    objects: &[NodeMappingDef],
+    previous_actions: &[lancegraph::OntologyActionDef],
+    attempted_actions: &[lancegraph::OntologyActionDef],
+) -> flow_like_types::Result<()> {
+    let newly_created = attempted_actions
+        .iter()
+        .filter(|attempted| {
+            attempted.event_id.is_some()
+                && previous_actions
+                    .iter()
+                    .find(|previous| previous.id == attempted.id)
+                    .and_then(|previous| previous.event_id.as_ref())
+                    != attempted.event_id.as_ref()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let removal_error = remove_action_events(app_handle, app_id, ontology_id, &newly_created)
+        .await
+        .err();
+    if let Some(error) = removal_error.as_ref() {
+        tracing::error!(%error, "Failed to remove newly materialized ontology action bindings");
+    }
+
+    let mut overwritten = previous_actions
+        .iter()
+        .filter(|previous| {
+            previous.event_id.is_some()
+                && attempted_actions.iter().any(|attempted| {
+                    attempted.id == previous.id && attempted.event_id == previous.event_id
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let restore_result = materialize_action_events(
+        app_handle,
+        app_id,
+        ontology_id,
+        ontology_exposed,
+        objects,
+        &mut overwritten,
+    )
+    .await;
+    match (removal_error, restore_result) {
+        (Some(error), _) => Err(error),
+        (None, result) => result,
+    }
+}
+
 #[tauri::command(async)]
 pub async fn graph_list_overlays(
     app_handle: AppHandle,
@@ -108,9 +445,10 @@ pub async fn graph_create_overlay(
     payload: CreateOverlayPayload,
     user_scoped: Option<bool>,
 ) -> Result<GraphOverlayDef, TauriFunctionError> {
-    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let user_scoped = user_scoped.unwrap_or(false);
+    let conn = graph_connection(&app_handle, &app_id, user_scoped).await?;
     let now = chrono::Utc::now().to_rfc3339();
-    let overlay = GraphOverlayDef {
+    let mut overlay = GraphOverlayDef {
         id: create_id(),
         name: payload.name,
         description: payload.description,
@@ -124,7 +462,40 @@ pub async fn graph_create_overlay(
         created_at: now.clone(),
         updated_at: now,
     };
-    lancegraph::save_overlay(&conn, &overlay).await?;
+    if user_scoped && !overlay.actions.is_empty() {
+        return Err(TauriFunctionError::new(
+            "Executable ontology actions must use project scope",
+        ));
+    }
+    for action in &mut overlay.actions {
+        action.event_id = None;
+    }
+    validate_action_object_types(&overlay.actions, &overlay.nodes)?;
+    if let Err(error) = materialize_action_events(
+        &app_handle,
+        &app_id,
+        &overlay.id,
+        overlay.exposed,
+        &overlay.nodes,
+        &mut overlay.actions,
+    )
+    .await
+    {
+        if let Err(cleanup_error) =
+            remove_action_events(&app_handle, &app_id, &overlay.id, &overlay.actions).await
+        {
+            tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+        }
+        return Err(error.into());
+    }
+    if let Err(error) = lancegraph::save_overlay(&conn, &overlay).await {
+        if let Err(cleanup_error) =
+            remove_action_events(&app_handle, &app_id, &overlay.id, &overlay.actions).await
+        {
+            tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+        }
+        return Err(error.into());
+    }
     Ok(overlay)
 }
 
@@ -140,9 +511,206 @@ pub async fn graph_get_overlay(
     Ok(overlay)
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OntologyObjectRefPayload {
+    #[serde(alias = "object_type")]
+    pub object_type: String,
+    pub id: flow_like_types::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareOntologyActionPayload {
+    #[serde(alias = "object_refs")]
+    pub object_refs: Vec<OntologyObjectRefPayload>,
+    #[serde(default = "empty_action_parameters")]
+    pub parameters: flow_like_types::Value,
+    #[serde(default, alias = "idempotency_key")]
+    pub idempotency_key: Option<String>,
+}
+
+fn empty_action_parameters() -> flow_like_types::Value {
+    flow_like_types::json::json!({})
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreparedOntologyAction {
+    pub event_id: String,
+    pub payload: flow_like_types::Value,
+}
+
+/// Resolves an offline action through local ontology metadata, hydrates the
+/// canonical objects, and returns the managed event plus run payload. The UI
+/// executes that event through EventState so exact-version, OAuth, RPA, WASM,
+/// runtime-variable, and intercom behavior stays on the established path.
+#[tauri::command(async)]
+pub async fn graph_prepare_ontology_action(
+    app_handle: AppHandle,
+    app_id: String,
+    ontology_id: String,
+    action_id: String,
+    payload: PrepareOntologyActionPayload,
+) -> Result<PreparedOntologyAction, TauriFunctionError> {
+    let connection = graph_connection(&app_handle, &app_id, false).await?;
+    let mut ontology = lancegraph::load_overlay(&connection, &ontology_id).await?;
+    let previous_ontology = ontology.clone();
+    let action_index = ontology
+        .actions
+        .iter()
+        .position(|action| action.id == action_id && action.enabled)
+        .ok_or_else(|| TauriFunctionError::new("Enabled ontology action not found"))?;
+    let action = ontology.actions[action_index].clone();
+
+    if payload.object_refs.is_empty() {
+        return Err(TauriFunctionError::new(
+            "At least one ontology object is required",
+        ));
+    }
+    if (!action.allow_bulk && payload.object_refs.len() != 1) || payload.object_refs.len() > 100 {
+        return Err(TauriFunctionError::new(if action.allow_bulk {
+            "Bulk actions accept at most 100 objects"
+        } else {
+            "This action accepts exactly one object"
+        }));
+    }
+    if !payload.parameters.is_object() {
+        return Err(TauriFunctionError::new(
+            "Action parameters must be an object",
+        ));
+    }
+    if let Some(key) = payload.idempotency_key.as_deref()
+        && (key.is_empty() || key.len() > 200)
+    {
+        return Err(TauriFunctionError::new(
+            "Idempotency keys must contain between 1 and 200 characters",
+        ));
+    }
+    if let Some(schema) = &action.parameter_schema {
+        flow_like_catalog::validate_ontology_action_parameters(schema, &payload.parameters)
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Action parameters do not match the schema: {error}"
+                ))
+            })?;
+    }
+
+    let ids = payload
+        .object_refs
+        .iter()
+        .map(|reference| {
+            if reference.object_type != action.object_type {
+                return Err(TauriFunctionError::new(&format!(
+                    "Action '{}' requires object type '{}'",
+                    action.id, action.object_type
+                )));
+            }
+            Ok(reference.id.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let objects =
+        lancegraph::load_overlay_objects(&connection, &ontology, &action.object_type, &ids).await?;
+
+    // Repair missing or tampered managed events lazily so older local
+    // ontologies remain executable without trusting a stale event ID.
+    let event_is_valid = if let Some(event_id) = ontology.actions[action_index].event_id.as_deref()
+    {
+        let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+        match App::load(app_id.clone(), flow_like_state).await {
+            Ok(app) => app.get_event(event_id, None).await.is_ok_and(|event| {
+                managed_event_binding_is_current(
+                    &event,
+                    &ontology_id,
+                    ontology.exposed,
+                    &ontology.nodes,
+                    &action,
+                )
+            }),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+    if !event_is_valid {
+        materialize_action_events(
+            &app_handle,
+            &app_id,
+            &ontology_id,
+            ontology.exposed,
+            &ontology.nodes,
+            std::slice::from_mut(&mut ontology.actions[action_index]),
+        )
+        .await?;
+        ontology.updated_at = chrono::Utc::now().to_rfc3339();
+        let save_result = lancegraph::save_overlay_if_unchanged(
+            &connection,
+            &ontology,
+            &previous_ontology.updated_at,
+        )
+        .await;
+        if !matches!(&save_result, Ok(true)) {
+            let persisted = lancegraph::load_overlay(&connection, &ontology_id)
+                .await
+                .unwrap_or(previous_ontology);
+            if persisted.updated_at != ontology.updated_at {
+                if let Err(rollback_error) = rollback_action_event_changes(
+                    &app_handle,
+                    &app_id,
+                    &ontology_id,
+                    persisted.exposed,
+                    &persisted.nodes,
+                    &persisted.actions,
+                    std::slice::from_ref(&ontology.actions[action_index]),
+                )
+                .await
+                {
+                    tracing::error!(%rollback_error, "Failed to roll back ontology action repair");
+                }
+                return match save_result {
+                    Ok(false) => Err(TauriFunctionError::new(
+                        "The ontology changed while its action binding was repaired. Try again.",
+                    )),
+                    Err(error) => Err(error.into()),
+                    Ok(true) => unreachable!(),
+                };
+            }
+        }
+    }
+    let event_id = ontology.actions[action_index]
+        .event_id
+        .clone()
+        .ok_or_else(|| TauriFunctionError::new("Ontology action event is unavailable"))?;
+    let object_ids = ids
+        .iter()
+        .map(|id| match id {
+            flow_like_types::Value::String(value) => value.clone(),
+            _ => id.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let run_payload = flow_like_types::json::json!({
+        "_ontology": {
+            "ontology_id": ontology_id,
+            "action_id": action.id,
+            "object_type": action.object_type,
+            "object_ids": object_ids,
+            "idempotency_key": payload.idempotency_key,
+        },
+        "object": objects.first().cloned().unwrap_or(flow_like_types::Value::Null),
+        "objects": objects,
+        "parameters": payload.parameters,
+    });
+
+    Ok(PreparedOntologyAction {
+        event_id,
+        payload: run_payload,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateOverlayPayload {
+    #[serde(alias = "expected_updated_at")]
+    pub expected_updated_at: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub nodes: Option<Vec<NodeMappingDef>>,
@@ -165,8 +733,13 @@ pub async fn graph_update_overlay(
     payload: UpdateOverlayPayload,
     user_scoped: Option<bool>,
 ) -> Result<GraphOverlayDef, TauriFunctionError> {
-    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let user_scoped = user_scoped.unwrap_or(false);
+    let conn = graph_connection(&app_handle, &app_id, user_scoped).await?;
     let mut overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let previous_overlay = overlay.clone();
+    let actions_supplied = payload.actions.is_some();
+    let mut removed_action_events = Vec::new();
+    let mut action_rollback = None;
 
     if let Some(name) = payload.name {
         overlay.name = name;
@@ -183,7 +756,14 @@ pub async fn graph_update_overlay(
     if let Some(object_views) = payload.object_views {
         overlay.object_views = object_views;
     }
-    if let Some(actions) = payload.actions {
+    if let Some(mut actions) = payload.actions {
+        for action in &mut actions {
+            action.event_id = previous_overlay
+                .actions
+                .iter()
+                .find(|previous| previous.id == action.id)
+                .and_then(|previous| previous.event_id.clone());
+        }
         overlay.actions = actions;
     }
     if let Some(exposed) = payload.exposed {
@@ -195,9 +775,113 @@ pub async fn graph_update_overlay(
     if let Some(limit) = payload.default_limit {
         overlay.default_limit = limit;
     }
+
+    let governed_contract_changed = actions_supplied
+        || !lancegraph::ontology_action_contracts_equal(&previous_overlay, &overlay)
+            .unwrap_or(false);
+    if let Some(expected_updated_at) = payload.expected_updated_at.as_deref()
+        && expected_updated_at != previous_overlay.updated_at
+    {
+        return Err(TauriFunctionError::new(
+            "The ontology has changed. Refresh Data Studio before saving your edits.",
+        ));
+    }
+    if governed_contract_changed && payload.expected_updated_at.is_none() {
+        return Err(TauriFunctionError::new(
+            "A current ontology revision is required for governed action changes. Refresh Data Studio and try again.",
+        ));
+    }
+    if user_scoped && !overlay.actions.is_empty() {
+        return Err(TauriFunctionError::new(
+            "Executable ontology actions must use project scope",
+        ));
+    }
+    // Mapping-only edits cannot leave an existing governed action pointing at
+    // an object type that no longer exists in the ontology.
+    validate_action_object_types(&overlay.actions, &overlay.nodes)?;
+    if governed_contract_changed && !overlay.actions.is_empty() {
+        let mut reconciled_actions = overlay.actions.clone();
+        if let Err(error) = materialize_action_events(
+            &app_handle,
+            &app_id,
+            &overlay.id,
+            overlay.exposed,
+            &overlay.nodes,
+            &mut reconciled_actions,
+        )
+        .await
+        {
+            let persisted = lancegraph::load_overlay(&conn, &overlay_id)
+                .await
+                .unwrap_or_else(|_| previous_overlay.clone());
+            if let Err(rollback_error) = rollback_action_event_changes(
+                &app_handle,
+                &app_id,
+                &overlay.id,
+                persisted.exposed,
+                &persisted.nodes,
+                &persisted.actions,
+                &reconciled_actions,
+            )
+            .await
+            {
+                tracing::error!(%rollback_error, "Failed to roll back ontology action bindings");
+            }
+            return Err(error.into());
+        }
+        overlay.actions = reconciled_actions.clone();
+        action_rollback = Some(reconciled_actions);
+    }
+    if actions_supplied {
+        removed_action_events = previous_overlay
+            .actions
+            .iter()
+            .filter(|previous| {
+                !overlay
+                    .actions
+                    .iter()
+                    .any(|action| action.id == previous.id)
+            })
+            .cloned()
+            .collect();
+    }
     overlay.updated_at = chrono::Utc::now().to_rfc3339();
 
-    lancegraph::save_overlay(&conn, &overlay).await?;
+    let save_result =
+        lancegraph::save_overlay_if_unchanged(&conn, &overlay, &previous_overlay.updated_at).await;
+    if !matches!(&save_result, Ok(true)) {
+        let persisted = lancegraph::load_overlay(&conn, &overlay_id)
+            .await
+            .unwrap_or_else(|_| previous_overlay.clone());
+        if persisted.updated_at != overlay.updated_at {
+            if let Some(attempted_actions) = action_rollback
+                && let Err(rollback_error) = rollback_action_event_changes(
+                    &app_handle,
+                    &app_id,
+                    &overlay.id,
+                    persisted.exposed,
+                    &persisted.nodes,
+                    &persisted.actions,
+                    &attempted_actions,
+                )
+                .await
+            {
+                tracing::error!(%rollback_error, "Failed to roll back ontology action bindings");
+            }
+            return match save_result {
+                Ok(false) => Err(TauriFunctionError::new(
+                    "The ontology changed while it was being saved. Refresh Data Studio and try again.",
+                )),
+                Err(error) => Err(error.into()),
+                Ok(true) => unreachable!(),
+            };
+        }
+    }
+    if let Err(error) =
+        remove_action_events(&app_handle, &app_id, &overlay.id, &removed_action_events).await
+    {
+        tracing::error!(%error, "Failed to clean up removed ontology action bindings");
+    }
     Ok(overlay)
 }
 
@@ -209,7 +893,13 @@ pub async fn graph_delete_overlay(
     user_scoped: Option<bool>,
 ) -> Result<(), TauriFunctionError> {
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
     lancegraph::delete_overlay(&conn, &overlay_id).await?;
+    if let Err(error) =
+        remove_action_events(&app_handle, &app_id, &overlay_id, &overlay.actions).await
+    {
+        tracing::error!(%error, "Failed to clean up deleted ontology action bindings");
+    }
     Ok(())
 }
 

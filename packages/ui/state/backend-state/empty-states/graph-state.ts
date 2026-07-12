@@ -5,7 +5,11 @@ import type {
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
+	InvokeOntologyActionPayload,
 	NeighborsPayload,
+	OntologyActionPrerun,
+	OntologyActionRun,
+	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
 	SubgraphPayload,
@@ -20,6 +24,27 @@ export class EmptyGraphState implements IGraphState {
 	}
 	listRemoteOntologies(): Promise<GraphOverlay[]> {
 		throw new Error("Method not implemented.");
+	}
+	listRemoteOntologyImports(): Promise<RemoteOntologyImport[]> {
+		throw new Error("Method not implemented.");
+	}
+	installRemoteOntology(): Promise<RemoteOntologyImport> {
+		throw new Error("Method not implemented.");
+	}
+	uninstallRemoteOntology(): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	invokeOntologyAction(
+		_appId: string,
+		_ontologyId: string,
+		_actionId: string,
+		_payload: InvokeOntologyActionPayload,
+		_onStatus?: (run: OntologyActionRun) => void,
+	): Promise<OntologyActionRun> {
+		throw new Error("Method not implemented.");
+	}
+	prerunOntologyAction(): Promise<OntologyActionPrerun> {
+		return Promise.resolve({ oauth_requirements: [], signature: "" });
 	}
 	createOverlay(
 		_appId: string,

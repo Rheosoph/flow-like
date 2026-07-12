@@ -5,7 +5,12 @@ import type {
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
+	InvokeOntologyActionPayload,
 	NeighborsPayload,
+	OntologyActionPrerun,
+	OntologyActionRun,
+	OntologyActionStreamEvent,
+	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
 	SubgraphPayload,
@@ -13,6 +18,8 @@ import type {
 	UpdateOverlayPayload,
 	ValidationResult,
 } from "@flow-like/flow-like-ui";
+import { applyOntologyActionStreamEvent } from "@flow-like/flow-like-ui";
+import { WebApiState } from "./api-state";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -44,6 +51,95 @@ export class WebGraphState implements IGraphState {
 	): Promise<GraphOverlay[]> {
 		return apiGet<GraphOverlay[]>(
 			`apps/${appId}/connections/${targetAppId}/ontologies`,
+			this.backend.auth,
+		);
+	}
+
+	async listRemoteOntologyImports(
+		appId: string,
+	): Promise<RemoteOntologyImport[]> {
+		return apiGet<RemoteOntologyImport[]>(
+			`apps/${appId}/graph/imports`,
+			this.backend.auth,
+		);
+	}
+
+	async installRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<RemoteOntologyImport> {
+		return apiPut<RemoteOntologyImport>(
+			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async uninstallRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<void> {
+		await apiDelete<void>(
+			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
+			this.backend.auth,
+		);
+	}
+
+	async invokeOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+		payload: InvokeOntologyActionPayload,
+		onStatus?: (run: OntologyActionRun) => void,
+	): Promise<OntologyActionRun> {
+		if (!this.backend.profile) {
+			throw new Error("An active profile is required to invoke an action.");
+		}
+		const run: OntologyActionRun = { run_id: "", status: "Submitting" };
+		onStatus?.({ ...run });
+		try {
+			const requestPayload = {
+				...payload,
+				token: this.backend.auth?.user?.access_token,
+				profile_id: this.backend.profile.id,
+			};
+			await new WebApiState(this.backend).stream<OntologyActionStreamEvent>(
+				this.backend.profile,
+				`apps/${appId}/graph/${ontologyId}/actions/${actionId}/invoke`,
+				{
+					method: "POST",
+					body: JSON.stringify(requestPayload),
+					headers: { Accept: "text/event-stream" },
+				},
+				(event) => {
+					applyOntologyActionStreamEvent(run, event);
+					onStatus?.({ ...run });
+				},
+			);
+		} catch (error) {
+			if (!run.run_id) throw error;
+			run.status = "Failed";
+			run.error_message ??=
+				error instanceof Error ? error.message : "The ontology action failed.";
+		}
+		if (run.status === "Submitting" || run.status === "Running") {
+			run.status = "Interrupted";
+			run.error_message =
+				"The action stream ended before a terminal status was received. Check the run before retrying.";
+		}
+		onStatus?.({ ...run });
+		return run;
+	}
+
+	async prerunOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+	): Promise<OntologyActionPrerun> {
+		return apiGet<OntologyActionPrerun>(
+			`apps/${appId}/graph/${ontologyId}/actions/${actionId}/prerun`,
 			this.backend.auth,
 		);
 	}

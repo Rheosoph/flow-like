@@ -14,6 +14,7 @@ pub mod list_overlays;
 pub mod neighbors;
 pub mod ontology_action;
 pub mod ontology_query;
+pub mod ontology_remote_query;
 pub mod schema;
 pub mod sql;
 pub mod subgraph;

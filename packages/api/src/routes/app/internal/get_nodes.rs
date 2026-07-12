@@ -63,9 +63,13 @@ pub async fn get_app_nodes(
     {
         match resolve_connection(&state, &user, &app_id, &ScopeParams { scope: None }).await {
             Ok(connection) => {
-                match flow_like_storage::databases::graph::lancegraph::list_overlays(&connection)
-                    .await
-                {
+                let (ontologies, imports) = flow_like_types::tokio::join!(
+                    flow_like_storage::databases::graph::lancegraph::list_overlays(&connection),
+                    flow_like_storage::databases::graph::lancegraph::list_ontology_imports(
+                        &connection
+                    )
+                );
+                match ontologies {
                     Ok(ontologies) => {
                         let ontologies = ontologies
                             .into_iter()
@@ -79,6 +83,33 @@ pub async fn get_app_nodes(
                         app_id,
                         %error,
                         "Could not load Data Studio bindings; returning the base catalog"
+                    ),
+                }
+                match imports {
+                    Ok(imports) => {
+                        let imports = imports
+                            .into_iter()
+                            .map(crate::routes::app::graph::list_imports::def_to_import)
+                            .collect::<Result<Vec<_>, _>>();
+                        match imports {
+                            Ok(imports) => {
+                                let bindings =
+                                    flow_like_catalog_core::remote_ontology_binding_nodes(
+                                        &imports, &nodes,
+                                    );
+                                nodes.extend(bindings);
+                            }
+                            Err(error) => tracing::warn!(
+                                app_id,
+                                %error,
+                                "Could not decode remote Data Studio bindings"
+                            ),
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        app_id,
+                        %error,
+                        "Could not load remote Data Studio bindings"
                     ),
                 }
             }

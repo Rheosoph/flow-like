@@ -65,6 +65,11 @@ pub fn routes() -> Router<AppState> {
             get(remote_ontologies::get_remote_ontologies),
         )
         .route(
+            "/{target_app_id}/ontologies/{ontology_id}/install",
+            put(remote_ontologies::install_remote_ontology)
+                .delete(remote_ontologies::uninstall_remote_ontology),
+        )
+        .route(
             "/{target_app_id}/events/{event_id}/detail",
             get(remote_events::get_remote_event_detail),
         )
@@ -214,9 +219,7 @@ pub(crate) fn to_connection_info(
         .get(other_app_id)
         .map(|preview| (Some(preview.name.clone()), preview.description.clone()))
         .unwrap_or((None, None));
-    let app_icon = media
-        .get(other_app_id)
-        .and_then(|(icon, _)| icon.clone());
+    let app_icon = media.get(other_app_id).and_then(|(icon, _)| icon.clone());
 
     AppConnectionInfo {
         id: model.id,

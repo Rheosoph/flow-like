@@ -67,6 +67,15 @@ pub async fn upsert_event(
 
     let mut event = params.event;
     event.id = event_id.clone();
+    if event.event_type == "ontology_action"
+        || super::db::get_event_from_db_opt(&state.db, &event_id, &app_id)
+            .await?
+            .is_some_and(|saved| saved.event_type == "ontology_action")
+    {
+        return Err(ApiError::forbidden(
+            "Ontology action events are managed through Data Studio actions",
+        ));
+    }
 
     // For rest/mcp events we need to know whether this upsert is a fresh
     // create (in which case a failed setup should roll back the whole

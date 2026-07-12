@@ -909,6 +909,7 @@ pub fn run() {
             functions::app::graph::graph_list_overlays,
             functions::app::graph::graph_create_overlay,
             functions::app::graph::graph_get_overlay,
+            functions::app::graph::graph_prepare_ontology_action,
             functions::app::graph::graph_update_overlay,
             functions::app::graph::graph_delete_overlay,
             functions::app::graph::graph_get_schema,

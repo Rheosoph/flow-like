@@ -48,7 +48,14 @@ pub async fn list_overlays(
     );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let defs = lancegraph::list_overlays(&connection).await?;
+    let mut defs = lancegraph::list_overlays(&connection).await?;
+    if user.is_connected_app() {
+        defs = defs
+            .into_iter()
+            .filter(|definition| definition.exposed)
+            .map(crate::routes::app::connection::remote_ontologies::sanitize_remote_contract)
+            .collect();
+    }
 
     let overlays: Vec<flow_like_catalog_core::GraphOverlay> =
         defs.into_iter().map(def_to_overlay).collect();
