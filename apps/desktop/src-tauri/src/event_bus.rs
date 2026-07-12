@@ -205,7 +205,7 @@ impl EventBusEvent {
             println!("Error flushing buffered sender: {}", err);
         }
 
-        if let Some(meta) = &meta {
+        let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
             let (db_fn, write_options) = {
                 let guard = execution_state.config.read().await;
                 (
@@ -213,23 +213,33 @@ impl EventBusEvent {
                     guard.callbacks.lance_write_options.clone(),
                 )
             };
-            let db_fn = db_fn
-                .as_ref()
-                .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-            let base_path = Path::from("runs").child(app_id).child(board_id);
-            let db = execution_state
-                .with_lance_session(db_fn(base_path.clone()))
-                .execute()
-                .await
-                .map_err(|e| {
-                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+            async {
+                let db_fn = db_fn
+                    .as_ref()
+                    .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
+                let base_path = Path::from("runs").child(app_id).child(board_id);
+                let db = execution_state
+                    .with_lance_session(db_fn(base_path.clone()))
+                    .execute()
+                    .await
+                    .map_err(|e| {
+                        flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+                    })?;
+                meta.flush(db, write_options.as_ref()).await.map_err(|e| {
+                    flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
                 })?;
-            meta.flush(db, write_options.as_ref()).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
-            })?;
-        }
+                Ok(())
+            }
+            .await
+        } else {
+            Ok(())
+        };
 
+        // Always release the finished run from the registry, even if flushing
+        // its logs failed. Otherwise the run stays flagged "in use" and its
+        // logs can never be deleted from storage management until restart.
         let _res = flow_like_state.remove_and_cancel_run(&run_id);
+        flush_result?;
 
         Ok(meta)
     }

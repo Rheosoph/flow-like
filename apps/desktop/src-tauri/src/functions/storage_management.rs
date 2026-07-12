@@ -168,6 +168,12 @@ fn log_items(logs_dir: &Path, active_runs: &HashSet<String>) -> Vec<StorageItem>
                 if run_id.is_empty() {
                     continue;
                 }
+                // `runs.lance` is the shared per-board metadata/index table, not
+                // an individual run log. Skip it so it isn't shown as a
+                // deletable run (deleting it would wipe the board's run index).
+                if run_id == "runs" {
+                    continue;
+                }
                 let stats = path_stats(&run.path());
                 items.push(StorageItem {
                     id: format!("{app_id}/{board_id}/{file_name}"),

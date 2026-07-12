@@ -397,7 +397,7 @@ async fn execute_internal(
         println!("Error flushing buffered sender: {}", err);
     }
 
-    if let Some(meta) = &meta {
+    let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
         let (db_fn, write_options) = {
             let guard = flow_like_state.config.read().await;
             (
@@ -405,21 +405,27 @@ async fn execute_internal(
                 guard.callbacks.lance_write_options.clone(),
             )
         };
-        let db_fn = db_fn
-            .as_ref()
-            .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-        let base_path = Path::from("runs").child(app_id).child(board_id);
-        let db = flow_like_state
-            .with_lance_session(db_fn(base_path.clone()))
-            .execute()
-            .await
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+        async {
+            let db_fn = db_fn
+                .as_ref()
+                .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
+            let base_path = Path::from("runs").child(app_id).child(board_id);
+            let db = flow_like_state
+                .with_lance_session(db_fn(base_path.clone()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+                })?;
+            meta.flush(db, write_options.as_ref()).await.map_err(|e| {
+                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
             })?;
-        meta.flush(db, write_options.as_ref())
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
-    }
+            Ok(())
+        }
+        .await
+    } else {
+        Ok(())
+    };
 
     // Report online local runs so backend analytics can count executions.
     if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
@@ -431,7 +437,11 @@ async fn execute_internal(
         });
     }
 
+    // Always release the finished run from the registry, even if flushing its
+    // logs failed. Otherwise the run stays flagged "in use" and its logs can
+    // never be deleted from storage management until the app restarts.
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);
+    flush_result?;
 
     Ok(meta)
 }
