@@ -1,9 +1,9 @@
 "use client";
 
-import { useTheme } from "next-themes";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
 import { VoiceMode } from "./VoiceMode";
+import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -34,8 +34,6 @@ export function ChatWelcome({
 	const [currentMessage, setCurrentMessage] = useState("");
 	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 	const chatBox = useRef<ChatBoxRef>(null);
-	const { resolvedTheme } = useTheme();
-
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
 
@@ -176,7 +174,14 @@ export function ChatWelcome({
 	};
 
 	return (
-		<div className="flex flex-col h-full grow bg-background relative">
+		<div
+			className="fl-chat-surface relative flex h-full grow flex-col bg-transparent"
+			data-fl-chat-surface
+			data-fl-chat-welcome
+			style={{
+				backgroundColor: "var(--fl-chat-surface-background, var(--background))",
+			}}
+		>
 			{voiceModeOpen && (
 				<VoiceMode
 					open={voiceModeOpen}
@@ -237,8 +242,13 @@ export function ChatWelcome({
 				</div>
 			)}
 			{/* Welcome Content */}
-			<div className="flex-1 flex items-center justify-center p-8">
-				<div className="max-w-2xl w-full space-y-8">
+			<div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-8">
+				<div
+					className="w-full space-y-8"
+					style={{
+						maxWidth: "min(var(--fl-chat-content-width, 64rem), 42rem)",
+					}}
+				>
 					{/* Header */}
 					<div className="text-center space-y-4">
 						<h1 className="text-3xl font-bold">{event.name}</h1>
@@ -290,6 +300,16 @@ export function ChatWelcome({
 						)}
 					</div>
 				</div>
+			</div>
+			<div
+				className="mx-auto w-full shrink-0 px-3"
+				style={{
+					maxWidth: "var(--fl-chat-content-width, 64rem)",
+					paddingBottom:
+						"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
+				}}
+			>
+				<ChatAiDisclosure text={config.ai_disclosure} />
 			</div>
 		</div>
 	);

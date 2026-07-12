@@ -61,6 +61,7 @@ export interface MonacoCodeEditorProps {
 	showLineNumbers?: boolean;
 	showMinimap?: boolean;
 	allowFullscreen?: boolean;
+	autoFocus?: boolean;
 }
 
 export function MonacoCodeEditor({
@@ -73,6 +74,7 @@ export function MonacoCodeEditor({
 	showLineNumbers = true,
 	showMinimap = false,
 	allowFullscreen = false,
+	autoFocus = true,
 }: Readonly<MonacoCodeEditorProps>) {
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const { resolvedTheme } = useTheme();
@@ -105,11 +107,13 @@ export function MonacoCodeEditor({
 		}
 	}, [resolvedTheme]);
 
-	const handleEditorMount: OnMount = useCallback((editor, monaco) => {
-		monacoRef.current = monaco;
-		// Focus the editor to ensure cursor is visible
-		editor.focus();
-	}, []);
+	const handleEditorMount: OnMount = useCallback(
+		(editor, monaco) => {
+			monacoRef.current = monaco;
+			if (autoFocus && !disabled) editor.focus();
+		},
+		[autoFocus, disabled],
+	);
 
 	const handleEditorChange = useCallback(
 		(newValue: string | undefined) => {

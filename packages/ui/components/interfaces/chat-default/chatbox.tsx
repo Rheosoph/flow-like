@@ -612,11 +612,19 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					onClearAll={() => setAttachedFiles([])}
 				/>
 
-				<form onSubmit={handleSubmit} className="relative">
+				<form
+					onSubmit={handleSubmit}
+					className="relative"
+					data-fl-chat-composer
+				>
 					<div
-						className="flex flex-col items-start bg-background border border-border rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
+						className="flex flex-col items-start border border-border rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
 						onDrop={handleDrop}
 						onDragOver={handleDragOver}
+						style={{
+							backgroundColor:
+								"var(--fl-chat-composer-background, var(--background))",
+						}}
 					>
 						{/* Text Input */}
 						<div className="flex-1 py-2 w-full pr-2">
@@ -643,7 +651,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						</div>
 
 						{/* Tool bar and settings */}
-						<div className="flex items-center justify-between w-full bg-background rounded-b-xl">
+						<div
+							className="flex w-full items-center justify-between rounded-b-xl"
+							style={{
+								backgroundColor:
+									"var(--fl-chat-composer-background, var(--background))",
+							}}
+						>
 							{/* Left side buttons */}
 							<div className="flex items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}

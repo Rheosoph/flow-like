@@ -29,3 +29,21 @@ describe("daemon event config", () => {
 		});
 	});
 });
+
+describe("chat event config", () => {
+	test("offers Chat UI without the removed advanced chat type", () => {
+		expect(EVENT_CONFIG.events_chat.eventTypes).toContain("simple_chat");
+		expect(EVENT_CONFIG.events_chat.eventTypes).not.toContain("advanced_chat");
+	});
+
+	test("includes safe appearance and AI disclosure defaults", () => {
+		expect(EVENT_CONFIG.events_chat.configs.simple_chat).toMatchObject({
+			background_image: "",
+			color_scheme: "system",
+			custom_css: "",
+		});
+		expect(
+			EVENT_CONFIG.events_chat.configs.simple_chat.ai_disclosure,
+		).toContain("AI");
+	});
+});

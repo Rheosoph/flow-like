@@ -15,15 +15,11 @@ import {
 	TelegramConfig,
 	UserMailConfig,
 } from "../index";
+import { DEFAULT_CHAT_AI_DISCLOSURE } from "./chat-appearance";
 
-/**
- * Whether an event renders a chat interface. Chat event types are `simple_chat`/`advanced_chat`
- * (and future variants), never the literal string `"chat"` — so consumers must match on this
- * predicate rather than `event_type === "chat"`, or they reject valid chat events. Keep this in
- * sync with the chat `eventTypes` declared in `EVENT_CONFIG.events_chat` below.
- */
+/** Whether an event renders the built-in chat interface. */
 export function isChatEventType(eventType: string): boolean {
-	return eventType.includes("chat");
+	return eventType === "simple_chat";
 }
 
 export const EVENT_CONFIG: IEventMapping = {
@@ -40,6 +36,10 @@ export const EVENT_CONFIG: IEventMapping = {
 			simple_chat: {
 				allow_file_upload: true,
 				allow_voice_input: false,
+				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,
+				background_image: "",
+				color_scheme: "system",
+				custom_css: "",
 				voice: {
 					mode: "disabled",
 					invoke: "manual",
@@ -79,7 +79,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 		},
 		defaultEventType: "simple_chat",
-		eventTypes: ["simple_chat", "advanced_chat", "discord", "telegram"],
+		eventTypes: ["simple_chat", "discord", "telegram"],
 		withSink: ["discord", "telegram"],
 		sinkAvailability: {
 			discord: {

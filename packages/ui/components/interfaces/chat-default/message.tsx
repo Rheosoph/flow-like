@@ -725,18 +725,27 @@ export const MessageComponent = memo(
 			<>
 				<div
 					className={cn(
-						"max-w-5xl flex gap-1 flex-col transition-all duration-300 ease-in-out",
+						"flex w-full flex-col gap-1 transition-all duration-300 ease-in-out",
 						isUser ? "items-end" : "items-start",
 					)}
+					style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
 				>
 					<div
 						className={cn(
-							"rounded-xl rounded-tr-sm p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							"p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
 							compactUserActions && "relative",
-							isUser
-								? "bg-muted dark:bg-muted/30 text-foreground max-w-3xl"
-								: "bg-background text-foreground max-w-full w-full pb-0",
+							isUser ? "max-w-3xl" : "w-full max-w-full pb-0",
 						)}
+						data-fl-chat-message={isUser ? "user" : "assistant"}
+						style={{
+							backgroundColor: isUser
+								? "var(--fl-chat-user-message-background, var(--muted))"
+								: "var(--fl-chat-ai-message-background, var(--background))",
+							borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+							color: isUser
+								? "var(--fl-chat-user-message-foreground, var(--foreground))"
+								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
+						}}
 					>
 						{!isUser && planSteps.length > 0 && (
 							<PlanSteps

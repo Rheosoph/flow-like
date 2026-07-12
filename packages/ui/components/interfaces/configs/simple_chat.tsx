@@ -2,8 +2,14 @@
 
 import { useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
+import {
+	CHAT_COLOR_SCHEMES,
+	DEFAULT_CHAT_AI_DISCLOSURE,
+	resolveChatColorScheme,
+} from "../../../lib/chat-appearance";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
+import { AssetPicker } from "../../builder/AssetPicker";
 import {
 	Checkbox,
 	Input,
@@ -15,7 +21,9 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Switch,
+	Textarea,
 } from "../../ui";
+import { MonacoCodeEditor } from "../../ui/monaco-code-editor";
 import type { IConfigInterfaceProps } from "../interfaces";
 
 export function SimpleChatConfig({
@@ -95,6 +103,98 @@ export function SimpleChatConfig({
 
 	return (
 		<div className="w-full space-y-6">
+			<section className="space-y-5 rounded-lg border border-border p-4">
+				<div className="space-y-1">
+					<h3 className="font-medium">Appearance</h3>
+					<p className="text-sm text-muted-foreground">
+						Brand the chat without changing the rest of your app.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="chat_color_scheme">Color Scheme</Label>
+					<Select
+						disabled={!isEditing}
+						value={resolveChatColorScheme(config?.color_scheme)}
+						onValueChange={(value) => setValue("color_scheme", value)}
+					>
+						<SelectTrigger id="chat_color_scheme" className="w-full">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{CHAT_COLOR_SCHEMES.map((scheme) => (
+								<SelectItem key={scheme.value} value={scheme.value}>
+									{scheme.label}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					<p className="text-sm text-muted-foreground">
+						Follow the app theme or lock this chat to light or dark mode.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label>Background Image</Label>
+					<AssetPicker
+						accept="image"
+						appId={appId}
+						disabled={!isEditing}
+						placeholder="Select from storage or enter an image URL..."
+						value={config?.background_image ?? ""}
+						onChange={(value) => setValue("background_image", value)}
+					/>
+					<p className="text-sm text-muted-foreground">
+						Choose an image from this app&apos;s storage or paste an external
+						URL. Storage images are securely resolved whenever the chat opens.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="chat_ai_disclosure">AI Disclosure</Label>
+					<Textarea
+						disabled={!isEditing}
+						id="chat_ai_disclosure"
+						placeholder={DEFAULT_CHAT_AI_DISCLOSURE}
+						value={config?.ai_disclosure ?? ""}
+						onChange={(event) => setValue("ai_disclosure", event.target.value)}
+					/>
+					<p className="text-sm text-muted-foreground">
+						Always shown below the composer so people know an AI is on the other
+						side. Leaving this empty uses the friendly default.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label>Custom CSS</Label>
+					<p className="text-sm text-muted-foreground">
+						CSS is sanitized and scoped to this chat. Use{" "}
+						<code className="rounded bg-muted px-1 py-0.5">:root</code> to
+						override theme tokens such as{" "}
+						<code className="rounded bg-muted px-1 py-0.5">--primary</code>,{" "}
+						<code className="rounded bg-muted px-1 py-0.5">--background</code>,
+						and the new{" "}
+						<code className="rounded bg-muted px-1 py-0.5">--fl-chat-*</code>{" "}
+						tokens.
+					</p>
+					<MonacoCodeEditor
+						allowFullscreen
+						autoFocus={false}
+						disabled={!isEditing}
+						height="220px"
+						language="css"
+						value={config?.custom_css ?? ""}
+						onChange={(value) => setValue("custom_css", value)}
+					/>
+					<p className="text-xs text-muted-foreground">
+						Chat tokens: --fl-chat-content-width, --fl-chat-message-radius,
+						--fl-chat-surface-background, --fl-chat-composer-background,
+						--fl-chat-user-message-background, --fl-chat-ai-message-background,
+						and --fl-chat-disclosure-background.
+					</p>
+				</div>
+			</section>
+
 			<div className="space-y-3">
 				<Label>Navigate To</Label>
 				{isEditing ? (

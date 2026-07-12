@@ -1,5 +1,8 @@
+import {
+	EVENT_CONFIG,
+	isChatEventType,
+} from "@flow-like/flow-like-ui/lib/event-config";
 import { describe, expect, test } from "vitest";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 
 describe("daemon event config", () => {
 	test("is available as a local-only simple event sink", () => {
@@ -27,5 +30,15 @@ describe("daemon event config", () => {
 			log_batch_size: 500,
 			healthy_reset_ms: 60000,
 		});
+	});
+});
+
+describe("chat event config", () => {
+	test("offers only the built-in Chat UI as a chat interface", () => {
+		expect(EVENT_CONFIG.events_chat.eventTypes).toContain("simple_chat");
+		expect(EVENT_CONFIG.events_chat.eventTypes).not.toContain("advanced_chat");
+		expect(isChatEventType("simple_chat")).toBe(true);
+		expect(isChatEventType("advanced_chat")).toBe(false);
+		expect(isChatEventType("chat_stream")).toBe(false);
 	});
 });
