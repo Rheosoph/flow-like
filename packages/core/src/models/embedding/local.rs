@@ -9,6 +9,7 @@ use flow_like_model_provider::{
     fastembed::{
         self, InitOptionsUserDefined, TextEmbedding, TokenizerFiles, UserDefinedEmbeddingModel,
     },
+    ml::ort_runtime::{ensure_ort_initialized, session_execution_providers},
     provider::Pooling,
     text_splitter::{ChunkConfig, MarkdownSplitter, TextSplitter},
     tokenizer::load_tokenizer_from_file,
@@ -64,8 +65,14 @@ impl LocalEmbeddingModel {
         let user_embedding_model =
             UserDefinedEmbeddingModel::new(loaded_model, loaded_tokenizer.clone())
                 .with_pooling(pooling);
-        let init_options =
-            InitOptionsUserDefined::new().with_max_length(params.input_length as usize);
+        ensure_ort_initialized()
+            .map_err(|error| anyhow!("Failed to configure ONNX Runtime: {error}"))?;
+        let init_options = InitOptionsUserDefined::new()
+            .with_max_length(params.input_length as usize)
+            .with_execution_providers(
+                session_execution_providers(true)
+                    .map_err(|error| anyhow!("Failed to select ONNX providers: {error}"))?,
+            );
 
         let loaded_model = TextEmbedding::try_new_from_user_defined(
             user_embedding_model.clone(),

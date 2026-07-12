@@ -23,6 +23,8 @@ plist = "1.8.0"
 
 [features]
 default = []
+local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
 local-tts-accelerate = ["flow-like/local-tts-accelerate", "flow-like-catalog/local-tts-accelerate"]
 local-tts-cuda = ["flow-like/local-tts-cuda", "flow-like-catalog/local-tts-cuda"]
 local-tts-metal = ["flow-like/local-tts-metal", "flow-like-catalog/local-tts-metal"]

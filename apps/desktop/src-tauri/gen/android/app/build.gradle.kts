@@ -25,6 +25,12 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    sourceSets {
+        getByName("main") {
+            // Mobile builds link ORT dynamically, so package the tracked libraries explicitly.
+            jniLibs.srcDir(rootProject.file("../../thirdparty/onnxruntime/android"))
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"

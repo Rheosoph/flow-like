@@ -60,6 +60,8 @@ any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", r
 [features]
 tauri = ["flow-like-storage/tauri"]
 local-ml = ["flow-like-model-provider/local-ml"]
+local-ml-cuda = ["local-ml", "flow-like-model-provider/cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like-model-provider/tensorrt"]
 local-tts = [
     "dep:any-tts",
     "any-tts/kokoro",

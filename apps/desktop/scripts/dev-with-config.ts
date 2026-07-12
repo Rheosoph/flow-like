@@ -58,6 +58,12 @@ function prepareWindowsPrereqs(): void {
 
 async function main() {
 	try {
+		if (platform() === "darwin") {
+			process.env.ORT_LIB_LOCATION ??=
+				`${process.cwd()}/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64`;
+			process.env.MACOSX_DEPLOYMENT_TARGET ??= "14.0";
+		}
+
 		const configPath = getConfigPath();
 		console.log(`Detected OS: ${platform()}, Architecture: ${arch()}`);
 		console.log(`Using config: ${configPath}`);
