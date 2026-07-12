@@ -84,6 +84,3 @@ nohup.out
 
 # Tauri generated schemas
 apps/desktop/src-tauri/gen/schemas/
-
-# Staged by the desktop build after ort-sys selects the matching Windows runtime.
-apps/desktop/src-tauri/binaries/win/*/DirectML.dll-*
