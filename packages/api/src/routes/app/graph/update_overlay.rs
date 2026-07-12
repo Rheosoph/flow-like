@@ -21,6 +21,12 @@ pub struct UpdateOverlayPayload {
     pub nodes: Option<Vec<flow_like_catalog_core::NodeLabelMapping>>,
     #[schema(value_type = Option<Vec<Object>>)]
     pub edges: Option<Vec<flow_like_catalog_core::EdgeLabelMapping>>,
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub object_views: Option<Vec<flow_like_catalog_core::ObjectViewDefinition>>,
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub actions: Option<Vec<flow_like_catalog_core::OntologyActionDefinition>>,
+    pub exposed: Option<bool>,
+    pub bindings_enabled: Option<bool>,
     pub default_limit: Option<usize>,
 }
 
@@ -80,6 +86,8 @@ pub async fn update_overlay(
         def.nodes = nodes
             .into_iter()
             .map(|n| lancegraph::NodeMappingDef {
+                id: n.id,
+                api_name: n.api_name,
                 label: n.label,
                 table: n.table,
                 id_column: n.id_column,
@@ -101,6 +109,8 @@ pub async fn update_overlay(
         def.edges = edges
             .into_iter()
             .map(|e| lancegraph::EdgeMappingDef {
+                id: e.id,
+                api_name: e.api_name,
                 label: e.label,
                 table: e.table,
                 src_column: e.src_column,
@@ -121,6 +131,40 @@ pub async fn update_overlay(
                 style: serde_json::to_value(&e.style).unwrap_or_default(),
             })
             .collect();
+    }
+    if let Some(object_views) = payload.object_views {
+        def.object_views = object_views
+            .into_iter()
+            .map(|view| lancegraph::ObjectViewDef {
+                object_type: view.object_type,
+                title_property: view.title_property,
+                prominent_properties: view.prominent_properties,
+            })
+            .collect();
+    }
+    if let Some(actions) = payload.actions {
+        def.actions = actions
+            .into_iter()
+            .map(|action| lancegraph::OntologyActionDef {
+                id: action.id,
+                name: action.name,
+                description: action.description,
+                object_type: action.object_type,
+                board_id: action.board_id,
+                board_version: action.board_version,
+                start_node_id: action.start_node_id,
+                event_id: action.event_id,
+                enabled: action.enabled,
+                allow_bulk: action.allow_bulk,
+                parameter_schema: action.parameter_schema,
+            })
+            .collect();
+    }
+    if let Some(exposed) = payload.exposed {
+        def.exposed = exposed;
+    }
+    if let Some(bindings_enabled) = payload.bindings_enabled {
+        def.bindings_enabled = bindings_enabled;
     }
     if let Some(default_limit) = payload.default_limit {
         def.default_limit = default_limit;

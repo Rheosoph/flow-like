@@ -274,6 +274,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::connection::remove_connection::remove_connection,
         crate::routes::app::connection::get_accessible::get_accessible_apps,
         crate::routes::app::connection::remote_tables::get_remote_tables,
+        crate::routes::app::connection::remote_ontologies::get_remote_ontologies,
         crate::routes::app::connection::remote_events::get_remote_events,
         crate::routes::app::connection::remote_events::get_remote_event_detail,
         crate::routes::app::connection::token::create_app_connection_token,

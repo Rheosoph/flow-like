@@ -13,9 +13,52 @@ pub struct GraphOverlay {
     pub description: Option<String>,
     pub nodes: Vec<NodeLabelMapping>,
     pub edges: Vec<EdgeLabelMapping>,
+    #[serde(default)]
+    pub object_views: Vec<ObjectViewDefinition>,
+    #[serde(default)]
+    pub actions: Vec<OntologyActionDefinition>,
+    #[serde(default)]
+    pub exposed: bool,
+    #[serde(default)]
+    pub bindings_enabled: bool,
     pub default_limit: usize,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectViewDefinition {
+    pub object_type: String,
+    #[serde(default)]
+    pub title_property: Option<String>,
+    #[serde(default)]
+    pub prominent_properties: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OntologyActionDefinition {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub object_type: String,
+    pub board_id: String,
+    #[serde(default)]
+    pub board_version: Option<[u32; 3]>,
+    #[serde(default)]
+    pub start_node_id: Option<String>,
+    #[serde(default)]
+    pub event_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allow_bulk: bool,
+    #[serde(default)]
+    pub parameter_schema: Option<flow_like_types::Value>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -28,6 +71,10 @@ pub struct PropertyColumn {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NodeLabelMapping {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub api_name: Option<String>,
     pub label: String,
     pub table: String,
     pub id_column: String,
@@ -38,6 +85,10 @@ pub struct NodeLabelMapping {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EdgeLabelMapping {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub api_name: Option<String>,
     pub label: String,
     pub table: String,
     pub src_column: String,
@@ -100,6 +151,10 @@ impl Default for GraphOverlay {
             description: None,
             nodes: Vec::new(),
             edges: Vec::new(),
+            object_views: Vec::new(),
+            actions: Vec::new(),
+            exposed: false,
+            bindings_enabled: false,
             default_limit: DEFAULT_GRAPH_OVERLAY_LIMIT,
             created_at: String::new(),
             updated_at: String::new(),

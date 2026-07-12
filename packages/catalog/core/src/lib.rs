@@ -63,13 +63,15 @@ pub use types::graph_overlay::{
     DEFAULT_GRAPH_NEIGHBORS_DIRECTION, DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT,
     DEFAULT_GRAPH_SAMPLE_SIZE, EdgeLabelMapping, GRAPH_OVERLAYS_TABLE, GraphLabelInfo,
     GraphOverlay, GraphPropertyInfo, GraphSchema, LabelStyle, NodeGraphConnection,
-    NodeLabelMapping, NodeSize, PropertyColumn, RESERVED_TABLE_PREFIX, RESERVED_TABLE_SUFFIX,
-    SubgraphEdge, SubgraphNode, SubgraphPayload, is_reserved_table,
+    NodeLabelMapping, NodeSize, ObjectViewDefinition, OntologyActionDefinition, PropertyColumn,
+    RESERVED_TABLE_PREFIX, RESERVED_TABLE_SUFFIX, SubgraphEdge, SubgraphNode, SubgraphPayload,
+    is_reserved_table,
 };
 pub use types::keypoint::{
     COCO_KEYPOINT_NAMES, COCO_SKELETON_CONNECTIONS, Keypoint, PoseDetection, SkeletonConnection,
 };
 pub use types::node_image::{NodeImage, NodeImageWrapper};
+pub use types::ontology_bindings::ontology_binding_nodes;
 pub use types::segmentation_mask::{InstanceSegmentation, SegmentationMask};
 
 /// A node constructor function type

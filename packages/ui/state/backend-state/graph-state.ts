@@ -23,6 +23,8 @@ export interface PropertyColumn {
 }
 
 export interface NodeLabelMapping {
+	id?: string;
+	api_name?: string;
 	label: string;
 	table: string;
 	id_column: string;
@@ -32,6 +34,8 @@ export interface NodeLabelMapping {
 }
 
 export interface EdgeLabelMapping {
+	id?: string;
+	api_name?: string;
 	label: string;
 	table: string;
 	src_column: string;
@@ -50,9 +54,33 @@ export interface GraphOverlay {
 	description?: string;
 	nodes: NodeLabelMapping[];
 	edges: EdgeLabelMapping[];
+	object_views: ObjectViewDefinition[];
+	actions: OntologyActionDefinition[];
+	exposed: boolean;
+	bindings_enabled: boolean;
 	default_limit: number;
 	created_at: string;
 	updated_at: string;
+}
+
+export interface ObjectViewDefinition {
+	object_type: string;
+	title_property?: string;
+	prominent_properties: string[];
+}
+
+export interface OntologyActionDefinition {
+	id: string;
+	name: string;
+	description?: string;
+	object_type: string;
+	board_id: string;
+	board_version?: [number, number, number];
+	start_node_id?: string;
+	event_id?: string;
+	enabled: boolean;
+	allow_bulk: boolean;
+	parameter_schema?: Record<string, unknown>;
 }
 
 export interface SubgraphNode {
@@ -107,6 +135,10 @@ export interface CreateOverlayPayload {
 	description?: string;
 	nodes: NodeLabelMapping[];
 	edges: EdgeLabelMapping[];
+	object_views?: ObjectViewDefinition[];
+	actions?: OntologyActionDefinition[];
+	exposed?: boolean;
+	bindings_enabled?: boolean;
 	default_limit?: number;
 }
 
@@ -115,6 +147,10 @@ export interface UpdateOverlayPayload {
 	description?: string;
 	nodes?: NodeLabelMapping[];
 	edges?: EdgeLabelMapping[];
+	object_views?: ObjectViewDefinition[];
+	actions?: OntologyActionDefinition[];
+	exposed?: boolean;
+	bindings_enabled?: boolean;
 	default_limit?: number;
 }
 
@@ -152,6 +188,10 @@ export interface GraphSearchPayload {
 
 export interface IGraphState {
 	listOverlays(appId: string, userScoped?: boolean): Promise<GraphOverlay[]>;
+	listRemoteOntologies(
+		appId: string,
+		targetAppId: string,
+	): Promise<GraphOverlay[]>;
 	createOverlay(
 		appId: string,
 		payload: CreateOverlayPayload,

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
@@ -14,6 +13,7 @@ import type {
 	UpdateOverlayPayload,
 	ValidationResult,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -43,6 +43,20 @@ export class GraphState implements IGraphState {
 			appId,
 			userScoped: userScoped ?? false,
 		});
+	}
+
+	async listRemoteOntologies(
+		appId: string,
+		targetAppId: string,
+	): Promise<GraphOverlay[]> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) return [];
+		return fetcher<GraphOverlay[]>(
+			this.backend.profile,
+			`apps/${appId}/connections/${targetAppId}/ontologies`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
 	}
 
 	async createOverlay(

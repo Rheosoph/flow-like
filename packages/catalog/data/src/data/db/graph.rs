@@ -12,6 +12,8 @@ pub mod cypher;
 pub mod drop_overlay;
 pub mod list_overlays;
 pub mod neighbors;
+pub mod ontology_action;
+pub mod ontology_query;
 pub mod schema;
 pub mod sql;
 pub mod subgraph;
@@ -382,6 +384,8 @@ impl NodeLogic for CreateGraphOverlayNode {
                 .nodes
                 .into_iter()
                 .map(|n| lancegraph::NodeMappingDef {
+                    id: n.id,
+                    api_name: n.api_name,
                     label: n.label,
                     table: n.table,
                     id_column: n.id_column,
@@ -402,6 +406,8 @@ impl NodeLogic for CreateGraphOverlayNode {
                 .edges
                 .into_iter()
                 .map(|e| lancegraph::EdgeMappingDef {
+                    id: e.id,
+                    api_name: e.api_name,
                     label: e.label,
                     table: e.table,
                     src_column: e.src_column,
@@ -422,6 +428,34 @@ impl NodeLogic for CreateGraphOverlayNode {
                     style: flow_like_types::json::to_value(&e.style).unwrap_or_default(),
                 })
                 .collect(),
+            object_views: overlay
+                .object_views
+                .into_iter()
+                .map(|view| lancegraph::ObjectViewDef {
+                    object_type: view.object_type,
+                    title_property: view.title_property,
+                    prominent_properties: view.prominent_properties,
+                })
+                .collect(),
+            actions: overlay
+                .actions
+                .into_iter()
+                .map(|action| lancegraph::OntologyActionDef {
+                    id: action.id,
+                    name: action.name,
+                    description: action.description,
+                    object_type: action.object_type,
+                    board_id: action.board_id,
+                    board_version: action.board_version,
+                    start_node_id: action.start_node_id,
+                    event_id: action.event_id,
+                    enabled: action.enabled,
+                    allow_bulk: action.allow_bulk,
+                    parameter_schema: action.parameter_schema,
+                })
+                .collect(),
+            exposed: overlay.exposed,
+            bindings_enabled: overlay.bindings_enabled,
             default_limit: overlay.default_limit,
             created_at: now.clone(),
             updated_at: now,

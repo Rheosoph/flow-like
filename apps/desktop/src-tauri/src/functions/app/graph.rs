@@ -19,7 +19,7 @@ use crate::{
     state::TauriFlowLikeState,
 };
 
-async fn graph_connection(
+pub(crate) async fn graph_connection(
     app_handle: &AppHandle,
     app_id: &str,
     user_scoped: bool,
@@ -64,6 +64,13 @@ async fn graph_connection(
         .map_err(|e| flow_like_types::anyhow!("Failed to connect to database: {}", e))
 }
 
+pub(crate) fn graph_overlay_from_def(
+    definition: GraphOverlayDef,
+) -> flow_like_types::Result<flow_like_catalog::GraphOverlay> {
+    let value = flow_like_types::json::to_value(definition)?;
+    Ok(flow_like_types::json::from_value(value)?)
+}
+
 #[tauri::command(async)]
 pub async fn graph_list_overlays(
     app_handle: AppHandle,
@@ -82,6 +89,14 @@ pub struct CreateOverlayPayload {
     pub description: Option<String>,
     pub nodes: Vec<NodeMappingDef>,
     pub edges: Vec<EdgeMappingDef>,
+    #[serde(default, alias = "object_views")]
+    pub object_views: Vec<lancegraph::ObjectViewDef>,
+    #[serde(default)]
+    pub actions: Vec<lancegraph::OntologyActionDef>,
+    #[serde(default)]
+    pub exposed: bool,
+    #[serde(default, alias = "bindings_enabled")]
+    pub bindings_enabled: bool,
     #[serde(alias = "default_limit")]
     pub default_limit: Option<usize>,
 }
@@ -101,6 +116,10 @@ pub async fn graph_create_overlay(
         description: payload.description,
         nodes: payload.nodes,
         edges: payload.edges,
+        object_views: payload.object_views,
+        actions: payload.actions,
+        exposed: payload.exposed,
+        bindings_enabled: payload.bindings_enabled,
         default_limit: payload.default_limit.unwrap_or(DEFAULT_GRAPH_OVERLAY_LIMIT),
         created_at: now.clone(),
         updated_at: now,
@@ -128,6 +147,12 @@ pub struct UpdateOverlayPayload {
     pub description: Option<String>,
     pub nodes: Option<Vec<NodeMappingDef>>,
     pub edges: Option<Vec<EdgeMappingDef>>,
+    #[serde(alias = "object_views")]
+    pub object_views: Option<Vec<lancegraph::ObjectViewDef>>,
+    pub actions: Option<Vec<lancegraph::OntologyActionDef>>,
+    pub exposed: Option<bool>,
+    #[serde(alias = "bindings_enabled")]
+    pub bindings_enabled: Option<bool>,
     #[serde(alias = "default_limit")]
     pub default_limit: Option<usize>,
 }
@@ -154,6 +179,18 @@ pub async fn graph_update_overlay(
     }
     if let Some(edges) = payload.edges {
         overlay.edges = edges;
+    }
+    if let Some(object_views) = payload.object_views {
+        overlay.object_views = object_views;
+    }
+    if let Some(actions) = payload.actions {
+        overlay.actions = actions;
+    }
+    if let Some(exposed) = payload.exposed {
+        overlay.exposed = exposed;
+    }
+    if let Some(bindings_enabled) = payload.bindings_enabled {
+        overlay.bindings_enabled = bindings_enabled;
     }
     if let Some(limit) = payload.default_limit {
         overlay.default_limit = limit;
@@ -380,9 +417,12 @@ pub async fn graph_sample(
 ) -> Result<serde_json::Value, TauriFunctionError> {
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
     let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
-    let store = LanceGraphStore::new(conn, overlay, None).await?;
-    let result = store
-        .sample(&label, n.unwrap_or(DEFAULT_GRAPH_SAMPLE_SIZE))
-        .await?;
+    let result = lancegraph::sample_overlay(
+        &conn,
+        &overlay,
+        &label,
+        n.unwrap_or(DEFAULT_GRAPH_SAMPLE_SIZE).min(500),
+    )
+    .await?;
     serde_json::to_value(result).map_err(|e| e.into())
 }

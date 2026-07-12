@@ -5,6 +5,7 @@ use crate::{
     permission::role_permission::RolePermissions,
     routes::app::{
         board::secrets::filter_board_secrets,
+        db::{ScopeParams, resolve_connection},
         template::get_template::VersionQuery,
         wasm_catalog::{app_wasm_nodes, hydrate_board_wasm_metadata},
     },
@@ -86,6 +87,37 @@ pub async fn workspace(
         .await?;
 
     let mut catalog = state.registry.as_ref().get_nodes();
+    if permission.has_permission(RolePermissions::ReadDatabase)
+        || permission.has_permission(RolePermissions::ReadFiles)
+    {
+        match resolve_connection(&state, &user, &app_id, &ScopeParams { scope: None }).await {
+            Ok(connection) => {
+                match flow_like_storage::databases::graph::lancegraph::list_overlays(&connection)
+                    .await
+                {
+                    Ok(ontologies) => {
+                        let ontologies = ontologies
+                            .into_iter()
+                            .map(crate::routes::app::graph::list_overlays::def_to_overlay)
+                            .collect::<Vec<_>>();
+                        let bindings =
+                            flow_like_catalog_core::ontology_binding_nodes(&ontologies, &catalog);
+                        catalog.extend(bindings);
+                    }
+                    Err(error) => tracing::warn!(
+                        app_id,
+                        %error,
+                        "Could not load Data Studio bindings for the workspace"
+                    ),
+                }
+            }
+            Err(error) => tracing::warn!(
+                app_id,
+                %error,
+                "Could not open the project database for Data Studio bindings"
+            ),
+        }
+    }
     let wasm_nodes = app_wasm_nodes(&state, &app_id).await?;
     hydrate_board_wasm_metadata(&mut board, &wasm_nodes, &catalog);
     filter_board_secrets(&mut board);

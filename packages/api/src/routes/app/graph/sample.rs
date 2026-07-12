@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_SAMPLE_SIZE;
-use flow_like_storage::databases::graph::{GraphStore, lancegraph};
+use flow_like_storage::databases::graph::lancegraph;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SampleParams {
@@ -76,9 +76,8 @@ pub async fn sample_nodes(
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
     let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;
-    let store = lancegraph::LanceGraphStore::new(connection, overlay, None).await?;
-
-    let results = store.sample(&params.label, params.n).await?;
+    let results =
+        lancegraph::sample_overlay(&connection, &overlay, &params.label, params.n.min(500)).await?;
 
     Ok(Json(results))
 }

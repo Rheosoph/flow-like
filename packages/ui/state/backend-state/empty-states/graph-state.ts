@@ -18,6 +18,9 @@ export class EmptyGraphState implements IGraphState {
 	listOverlays(): Promise<GraphOverlay[]> {
 		throw new Error("Method not implemented.");
 	}
+	listRemoteOntologies(): Promise<GraphOverlay[]> {
+		throw new Error("Method not implemented.");
+	}
 	createOverlay(
 		_appId: string,
 		_payload: CreateOverlayPayload,

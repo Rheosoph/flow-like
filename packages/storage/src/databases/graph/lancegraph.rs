@@ -34,9 +34,52 @@ pub struct GraphOverlayDef {
     pub description: Option<String>,
     pub nodes: Vec<NodeMappingDef>,
     pub edges: Vec<EdgeMappingDef>,
+    #[serde(default)]
+    pub object_views: Vec<ObjectViewDef>,
+    #[serde(default)]
+    pub actions: Vec<OntologyActionDef>,
+    #[serde(default)]
+    pub exposed: bool,
+    #[serde(default)]
+    pub bindings_enabled: bool,
     pub default_limit: usize,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ObjectViewDef {
+    pub object_type: String,
+    #[serde(default)]
+    pub title_property: Option<String>,
+    #[serde(default)]
+    pub prominent_properties: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OntologyActionDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub object_type: String,
+    pub board_id: String,
+    #[serde(default)]
+    pub board_version: Option<[u32; 3]>,
+    #[serde(default)]
+    pub start_node_id: Option<String>,
+    #[serde(default)]
+    pub event_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allow_bulk: bool,
+    #[serde(default)]
+    pub parameter_schema: Option<serde_json::Value>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -49,6 +92,10 @@ pub struct PropertyColumnDef {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeMappingDef {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub api_name: Option<String>,
     pub label: String,
     pub table: String,
     pub id_column: String,
@@ -59,6 +106,10 @@ pub struct NodeMappingDef {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeMappingDef {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub api_name: Option<String>,
     pub label: String,
     pub table: String,
     pub src_column: String,
@@ -1103,11 +1154,87 @@ pub async fn list_overlays(connection: &Connection) -> Result<Vec<GraphOverlayDe
 }
 
 pub async fn load_overlay(connection: &Connection, overlay_id: &str) -> Result<GraphOverlayDef> {
-    let overlays = list_overlays(connection).await?;
-    overlays
-        .into_iter()
-        .find(|o| o.id == overlay_id)
-        .ok_or_else(|| anyhow!("Overlay '{}' not found", overlay_id))
+    let table_names = connection
+        .table_names()
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to list tables: {}", e))?;
+
+    if !table_names.iter().any(|name| name == GRAPH_OVERLAYS_TABLE) {
+        return Err(anyhow!("Overlay '{}' not found", overlay_id));
+    }
+
+    let table = connection
+        .open_table(GRAPH_OVERLAYS_TABLE)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to open overlays table: {}", e))?;
+    let filter = format!("id = '{}'", overlay_id.replace('\'', "''"));
+    let result = table
+        .query()
+        .only_if(filter)
+        .limit(1)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to query overlay '{}': {}", overlay_id, e))?;
+    let batches = result
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| anyhow!("Failed to collect overlay '{}': {}", overlay_id, e))?;
+
+    for batch in &batches {
+        for row in record_batch_to_value(batch)? {
+            if let Some(definition) = row.get("definition_json").and_then(|value| value.as_str()) {
+                return serde_json::from_str(definition)
+                    .map_err(|e| anyhow!("Failed to parse overlay definition: {}", e));
+            }
+        }
+    }
+
+    Err(anyhow!("Overlay '{}' not found", overlay_id))
+}
+
+pub async fn sample_overlay(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+    label: &str,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let table_name = overlay
+        .nodes
+        .iter()
+        .find(|node| node.label == label)
+        .map(|node| node.table.as_str())
+        .or_else(|| {
+            overlay
+                .edges
+                .iter()
+                .find(|edge| edge.label == label)
+                .map(|edge| edge.table.as_str())
+        })
+        .ok_or_else(|| anyhow!("Label '{}' not found in overlay", label))?;
+
+    let table = connection
+        .open_table(table_name)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
+    let result = table
+        .query()
+        .limit(limit)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to query table '{}': {}", table_name, e))?;
+    let batches = result
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| anyhow!("Failed to collect from '{}': {}", table_name, e))?;
+    let mut rows = Vec::new();
+    for batch in &batches {
+        rows.extend(record_batch_to_value(batch)?);
+    }
+    rows.truncate(limit);
+    Ok(rows)
 }
 
 pub async fn save_overlay(connection: &Connection, overlay: &GraphOverlayDef) -> Result<()> {
@@ -1150,11 +1277,6 @@ pub async fn save_overlay(connection: &Connection, overlay: &GraphOverlayDef) ->
             .execute()
             .await
             .map_err(|e| anyhow!("Failed to open overlays table: {}", e))?;
-
-        table
-            .delete(&format!("id = '{}'", overlay.id.replace('\'', "''")))
-            .await
-            .map_err(|e| anyhow!("Failed to delete old overlay row: {}", e))?;
 
         let mut merger = table.merge_insert(&["id"]);
         merger

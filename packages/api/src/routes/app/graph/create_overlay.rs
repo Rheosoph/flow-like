@@ -22,6 +22,16 @@ pub struct CreateOverlayPayload {
     pub nodes: Vec<flow_like_catalog_core::NodeLabelMapping>,
     #[schema(value_type = Vec<Object>)]
     pub edges: Vec<flow_like_catalog_core::EdgeLabelMapping>,
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub object_views: Vec<flow_like_catalog_core::ObjectViewDefinition>,
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub actions: Vec<flow_like_catalog_core::OntologyActionDefinition>,
+    #[serde(default)]
+    pub exposed: bool,
+    #[serde(default)]
+    pub bindings_enabled: bool,
     #[serde(default = "default_limit")]
     pub default_limit: usize,
 }
@@ -81,6 +91,8 @@ pub async fn create_overlay(
             .nodes
             .iter()
             .map(|n| lancegraph::NodeMappingDef {
+                id: n.id.clone(),
+                api_name: n.api_name.clone(),
                 label: n.label.clone(),
                 table: n.table.clone(),
                 id_column: n.id_column.clone(),
@@ -101,6 +113,8 @@ pub async fn create_overlay(
             .edges
             .iter()
             .map(|e| lancegraph::EdgeMappingDef {
+                id: e.id.clone(),
+                api_name: e.api_name.clone(),
                 label: e.label.clone(),
                 table: e.table.clone(),
                 src_column: e.src_column.clone(),
@@ -121,6 +135,34 @@ pub async fn create_overlay(
                 style: serde_json::to_value(&e.style).unwrap_or_default(),
             })
             .collect(),
+        object_views: payload
+            .object_views
+            .iter()
+            .map(|view| lancegraph::ObjectViewDef {
+                object_type: view.object_type.clone(),
+                title_property: view.title_property.clone(),
+                prominent_properties: view.prominent_properties.clone(),
+            })
+            .collect(),
+        actions: payload
+            .actions
+            .iter()
+            .map(|action| lancegraph::OntologyActionDef {
+                id: action.id.clone(),
+                name: action.name.clone(),
+                description: action.description.clone(),
+                object_type: action.object_type.clone(),
+                board_id: action.board_id.clone(),
+                board_version: action.board_version,
+                start_node_id: action.start_node_id.clone(),
+                event_id: action.event_id.clone(),
+                enabled: action.enabled,
+                allow_bulk: action.allow_bulk,
+                parameter_schema: action.parameter_schema.clone(),
+            })
+            .collect(),
+        exposed: payload.exposed,
+        bindings_enabled: payload.bindings_enabled,
         default_limit: payload.default_limit,
         created_at: now.clone(),
         updated_at: now.clone(),
@@ -134,6 +176,10 @@ pub async fn create_overlay(
         description: payload.description,
         nodes: payload.nodes,
         edges: payload.edges,
+        object_views: payload.object_views,
+        actions: payload.actions,
+        exposed: payload.exposed,
+        bindings_enabled: payload.bindings_enabled,
         default_limit: payload.default_limit,
         created_at: now.clone(),
         updated_at: now,

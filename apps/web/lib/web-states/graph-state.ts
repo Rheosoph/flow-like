@@ -38,6 +38,16 @@ export class WebGraphState implements IGraphState {
 		);
 	}
 
+	async listRemoteOntologies(
+		appId: string,
+		targetAppId: string,
+	): Promise<GraphOverlay[]> {
+		return apiGet<GraphOverlay[]>(
+			`apps/${appId}/connections/${targetAppId}/ontologies`,
+			this.backend.auth,
+		);
+	}
+
 	async createOverlay(
 		appId: string,
 		payload: CreateOverlayPayload,
