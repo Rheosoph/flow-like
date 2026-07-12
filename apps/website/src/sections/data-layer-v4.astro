@@ -1,0 +1,475 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+---
+
+<section id="data-layer" class="dl-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="dl-orb dl-orb--primary"></div>
+    <div class="dl-orb dl-orb--soft"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="dl-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="inline-block rounded-full border border-border/50 bg-muted/40 px-4 py-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase mb-6">
+        {t("v4.data.kicker")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight text-foreground">
+        {t("v4.data.headline")}
+      </h2>
+      <p class="mt-5 text-base sm:text-lg text-muted-foreground leading-relaxed">
+        {t("v4.data.body")}
+      </p>
+    </div>
+
+    <!-- Split visual: explorer tree → mini flow canvas -->
+    <div class="dl-reveal dl-panel relative mx-auto max-w-5xl overflow-hidden rounded-2xl border border-border/50 bg-background/70 backdrop-blur-sm shadow-xl shadow-black/5" role="img" aria-label={t("v4.data.visual.aria")}>
+      <div class="grid grid-cols-1 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+
+        <!-- Left: OS-style file explorer -->
+        <div class="dl-explorer relative border-b border-border/50 md:border-b-0 md:border-r">
+          <div class="flex items-center gap-2 border-b border-border/40 bg-muted/30 px-4 py-2.5">
+            <span class="dl-dot bg-destructive/40"></span>
+            <span class="dl-dot bg-primary/30"></span>
+            <span class="dl-dot bg-emerald-500/40"></span>
+            <span class="ml-2 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">library</span>
+          </div>
+
+          <div class="px-3 py-3 text-sm">
+            <!-- sales/ -->
+            <div class="dl-row dl-row--folder">
+              <svg class="dl-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 6.5 L8 3.5 L11.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(90 8 8) translate(0 1)"/></svg>
+              <svg class="dl-icon text-primary/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.5 4 A1.5 1.5 0 0 1 3 2.5 H6 L7.5 4.5 H13 A1.5 1.5 0 0 1 14.5 6 V11.5 A1.5 1.5 0 0 1 13 13 H3 A1.5 1.5 0 0 1 1.5 11.5 Z" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.1"/></svg>
+              <span class="font-medium text-foreground">sales/</span>
+            </div>
+            <div class="dl-row dl-row--file dl-row--active" style="--send-delay: 0s;">
+              <svg class="dl-icon ml-6 text-muted-foreground/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.5 H9.5 L12.5 4.5 V13 A1.5 1.5 0 0 1 11 14.5 H4 A1.5 1.5 0 0 1 2.5 13 V3 A1.5 1.5 0 0 1 4 1.5 Z" stroke="currentColor" stroke-width="1.1"/><path d="M5 8 H11 M5 10.5 H9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+              <span class="font-mono text-[0.8rem] text-foreground/85">orders_q2.csv</span>
+              <span class="ml-auto font-mono text-[0.65rem] text-muted-foreground/50">1.2 GB</span>
+              <span class="dl-send" aria-hidden="true"></span>
+            </div>
+            <div class="dl-row dl-row--file">
+              <svg class="dl-icon ml-6 text-muted-foreground/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.5 H9.5 L12.5 4.5 V13 A1.5 1.5 0 0 1 11 14.5 H4 A1.5 1.5 0 0 1 2.5 13 V3 A1.5 1.5 0 0 1 4 1.5 Z" stroke="currentColor" stroke-width="1.1"/><path d="M5 8 H11 M5 10.5 H9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+              <span class="font-mono text-[0.8rem] text-foreground/85">returns_q2.csv</span>
+              <span class="ml-auto font-mono text-[0.65rem] text-muted-foreground/50">204 MB</span>
+            </div>
+
+            <!-- operations/ -->
+            <div class="dl-row dl-row--folder mt-1">
+              <svg class="dl-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4.5 6.5 L8 3.5 L11.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(90 8 8) translate(0 1)"/></svg>
+              <svg class="dl-icon text-primary/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.5 4 A1.5 1.5 0 0 1 3 2.5 H6 L7.5 4.5 H13 A1.5 1.5 0 0 1 14.5 6 V11.5 A1.5 1.5 0 0 1 13 13 H3 A1.5 1.5 0 0 1 1.5 11.5 Z" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.1"/></svg>
+              <span class="font-medium text-foreground">operations/</span>
+            </div>
+            <div class="dl-row dl-row--file dl-row--active" style="--send-delay: 1.4s;">
+              <svg class="dl-icon ml-6 text-muted-foreground/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.5 H9.5 L12.5 4.5 V13 A1.5 1.5 0 0 1 11 14.5 H4 A1.5 1.5 0 0 1 2.5 13 V3 A1.5 1.5 0 0 1 4 1.5 Z" stroke="currentColor" stroke-width="1.1"/><path d="M5 8 H11 M5 10.5 H9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+              <span class="font-mono text-[0.8rem] text-foreground/85">shift_log.xlsx</span>
+              <span class="ml-auto font-mono text-[0.65rem] text-muted-foreground/50">86 MB</span>
+              <span class="dl-send" aria-hidden="true"></span>
+            </div>
+            <div class="dl-row dl-row--file">
+              <svg class="dl-icon ml-6 text-muted-foreground/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.5 H9.5 L12.5 4.5 V13 A1.5 1.5 0 0 1 11 14.5 H4 A1.5 1.5 0 0 1 2.5 13 V3 A1.5 1.5 0 0 1 4 1.5 Z" stroke="currentColor" stroke-width="1.1"/><path d="M5 8 H11 M5 10.5 H9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+              <span class="font-mono text-[0.8rem] text-foreground/85">sensor_readings.parquet</span>
+              <span class="ml-auto font-mono text-[0.65rem] text-muted-foreground/50">3.8 GB</span>
+            </div>
+            <div class="dl-row dl-row--file">
+              <svg class="dl-icon ml-6 text-muted-foreground/70" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.5 H9.5 L12.5 4.5 V13 A1.5 1.5 0 0 1 11 14.5 H4 A1.5 1.5 0 0 1 2.5 13 V3 A1.5 1.5 0 0 1 4 1.5 Z" stroke="currentColor" stroke-width="1.1"/><path d="M5 8 H11 M5 10.5 H9.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+              <span class="font-mono text-[0.8rem] text-foreground/85">maintenance_notes.pdf</span>
+              <span class="ml-auto font-mono text-[0.65rem] text-muted-foreground/50">12 MB</span>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 border-t border-border/40 bg-muted/20 px-4 py-2">
+            <span class="dl-index-dot" aria-hidden="true"></span>
+            <span class="font-mono text-[0.65rem] uppercase tracking-wider text-muted-foreground/60">vector index</span>
+            <svg class="h-3 w-3 text-emerald-600/80 dark:text-emerald-400/80" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5 L6.5 11.5 L12.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+
+        <!-- Right: mini flow canvas -->
+        <div class="dl-canvas relative">
+          <svg class="block h-auto w-full" viewBox="0 0 640 420" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <pattern id="dl-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+                <circle cx="12" cy="12" r="0.8" class="dl-grid-dot"/>
+              </pattern>
+            </defs>
+            <rect width="640" height="420" fill="url(#dl-grid)"/>
+
+            <!-- Wires -->
+            <path class="dl-wire" d="M0,120 C60,120 60,186 118,186"/>
+            <path class="dl-wire" d="M0,265 C60,265 60,224 118,224"/>
+            <path class="dl-wire" d="M262,205 C300,205 300,205 330,205"/>
+            <path class="dl-wire" d="M462,182 C500,150 500,120 522,112"/>
+            <path class="dl-wire" d="M462,228 C500,260 500,292 522,300"/>
+
+            <!-- Packets (SMIL, hidden under reduced motion) -->
+            <circle class="dl-packet" r="4">
+              <animateMotion dur="2.8s" repeatCount="indefinite" path="M0,120 C60,120 60,186 118,186"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="2.8s" repeatCount="indefinite"/>
+            </circle>
+            <circle class="dl-packet" r="4">
+              <animateMotion dur="3.4s" begin="1.2s" repeatCount="indefinite" path="M0,265 C60,265 60,224 118,224"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.15;0.85;1" dur="3.4s" begin="1.2s" repeatCount="indefinite"/>
+            </circle>
+            <circle class="dl-packet" r="4">
+              <animateMotion dur="2.2s" begin="0.6s" repeatCount="indefinite" path="M262,205 C300,205 300,205 330,205"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.2s" begin="0.6s" repeatCount="indefinite"/>
+            </circle>
+            <circle class="dl-packet" r="3.5">
+              <animateMotion dur="2.6s" begin="1s" repeatCount="indefinite" path="M462,182 C500,150 500,120 522,112"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.6s" begin="1s" repeatCount="indefinite"/>
+            </circle>
+            <circle class="dl-packet" r="3.5">
+              <animateMotion dur="2.6s" begin="1.8s" repeatCount="indefinite" path="M462,228 C500,260 500,292 522,300"/>
+              <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.2;0.8;1" dur="2.6s" begin="1.8s" repeatCount="indefinite"/>
+            </circle>
+
+            <!-- Node: Read Folder -->
+            <g>
+              <rect class="dl-node dl-node--primary" x="118" y="160" width="144" height="90" rx="12"/>
+              <circle class="dl-pin" cx="118" cy="186" r="4"/>
+              <circle class="dl-pin" cx="118" cy="224" r="4"/>
+              <circle class="dl-pin" cx="262" cy="205" r="4"/>
+              <text class="dl-node-title" x="134" y="184">Read Folder</text>
+              <rect class="dl-chip" x="134" y="196" width="58" height="18" rx="9"/>
+              <text class="dl-chip-text" x="142" y="208.5">/sales</text>
+              <rect class="dl-chip" x="134" y="220" width="94" height="18" rx="9"/>
+              <text class="dl-chip-text" x="142" y="232.5">/operations</text>
+            </g>
+
+            <!-- Node: Clean + Combine -->
+            <g>
+              <rect class="dl-node dl-node--primary" x="330" y="168" width="132" height="74" rx="12"/>
+              <circle class="dl-pin" cx="330" cy="205" r="4"/>
+              <circle class="dl-pin" cx="462" cy="182" r="4"/>
+              <circle class="dl-pin" cx="462" cy="228" r="4"/>
+              <text class="dl-node-title" x="346" y="196">Clean</text>
+              <text class="dl-node-title" x="346" y="214">+ Combine</text>
+              <g transform="translate(432, 178)">
+                <circle class="dl-check-bg" r="8" cx="8" cy="8"/>
+                <path class="dl-check" d="M4.5 8.5 L7 11 L11.5 5.5"/>
+              </g>
+            </g>
+
+            <!-- Node: Dashboard -->
+              <g class="dl-dash-thumb">
+                <rect class="dl-node dl-node--accent" x="522" y="62" width="102" height="100" rx="12"/>
+                <circle class="dl-pin" cx="522" cy="112" r="4"/>
+                <text class="dl-node-title dl-node-title--sm" x="536" y="84">Dashboard</text>
+                <rect class="dl-bar" x="538" y="122" width="9" height="24" rx="2"/>
+                <rect class="dl-bar" x="552" y="112" width="9" height="34" rx="2"/>
+                <rect class="dl-bar" x="566" y="128" width="9" height="18" rx="2"/>
+                <rect class="dl-bar dl-bar--hi" x="580" y="102" width="9" height="44" rx="2"/>
+                <rect class="dl-bar" x="594" y="118" width="9" height="28" rx="2"/>
+                <path class="dl-spark" d="M538 100 L552 92 L566 96 L580 84 L603 88"/>
+              </g>
+
+            <!-- Node: Search -->
+            <g>
+              <rect class="dl-node dl-node--accent" x="522" y="262" width="102" height="76" rx="12"/>
+              <circle class="dl-pin" cx="522" cy="300" r="4"/>
+              <text class="dl-node-title dl-node-title--sm" x="536" y="288">Search</text>
+              <circle class="dl-search-lens" cx="548" cy="310" r="8"/>
+              <path class="dl-search-handle" d="M554 316 L562 324"/>
+              <path class="dl-search-lines" d="M572 304 H608 M572 312 H600 M572 320 H605"/>
+            </g>
+          </svg>
+
+          <span class="pointer-events-none absolute bottom-3 right-4 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/50">flow canvas</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Three items -->
+    <div class="mt-10 grid grid-cols-1 gap-4 md:mt-12 md:grid-cols-3 md:gap-5">
+      <div class="dl-reveal dl-card rounded-xl border border-border/50 bg-background/60 p-6 backdrop-blur-sm">
+        <div class="dl-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none"><path d="M3 5 H17 M3 10 H13 M3 15 H15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14.5 13 L16 14.5 L19 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3 class="mt-4 text-base font-semibold text-foreground">{t("v4.data.item1.title")}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{t("v4.data.item1.desc")}</p>
+      </div>
+
+      <div class="dl-reveal dl-card rounded-xl border border-border/50 bg-background/60 p-6 backdrop-blur-sm">
+        <div class="dl-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none"><rect x="2.5" y="2.5" width="15" height="15" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 13.5 V9.5 M10 13.5 V6.5 M13.5 13.5 V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <h3 class="mt-4 text-base font-semibold text-foreground">{t("v4.data.item2.title")}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{t("v4.data.item2.desc")}</p>
+        <a href="/modern-bi" class="mt-3 inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline">
+          {t("v4.data.item2.link")}
+          <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5 L10.5 8 L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+
+      <div class="dl-reveal dl-card rounded-xl border border-border/50 bg-background/60 p-6 backdrop-blur-sm">
+        <div class="dl-card-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" fill="none"><circle cx="8.5" cy="8.5" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M12.5 12.5 L16.5 16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.5 8.5 C6.5 7.4 7.4 6.5 8.5 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        </div>
+        <h3 class="mt-4 text-base font-semibold text-foreground">{t("v4.data.item3.title")}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{t("v4.data.item3.desc")}</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="mx-auto mt-12 max-w-3xl px-4 text-center text-xs leading-relaxed text-muted-foreground/70"><span class="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span> — {t("v4.data.uth")}</p>
+</section>
+
+<style>
+  .dl-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    opacity: 0.35;
+  }
+  .dl-orb--primary {
+    width: 480px;
+    height: 480px;
+    top: -60px;
+    right: -120px;
+    background: radial-gradient(circle, color-mix(in oklab, var(--primary) 14%, transparent), transparent 70%);
+  }
+  .dl-orb--soft {
+    width: 400px;
+    height: 400px;
+    bottom: -80px;
+    left: -100px;
+    background: radial-gradient(circle, color-mix(in oklab, var(--foreground) 6%, transparent), transparent 70%);
+  }
+
+  .dl-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .dl-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .dl-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .dl-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+  .dl-row--folder {
+    color: var(--muted-foreground);
+  }
+  .dl-row--active {
+    background: color-mix(in oklab, var(--primary) 7%, transparent);
+  }
+  .dl-icon {
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+  }
+
+  .dl-send {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-radius: 50%;
+    background: var(--primary);
+    opacity: 0;
+    animation: dl-send 2.8s ease-in-out infinite;
+    animation-delay: var(--send-delay, 0s);
+  }
+  @keyframes dl-send {
+    0% { left: 2%; opacity: 0; }
+    15% { opacity: 0.85; }
+    45% { opacity: 0.85; }
+    60% { left: 99%; opacity: 0; }
+    100% { left: 99%; opacity: 0; }
+  }
+
+  .dl-index-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--primary);
+    opacity: 0.7;
+    animation: dl-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes dl-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.85; }
+  }
+
+  /* Flow canvas SVG styling via tokens */
+  .dl-grid-dot { fill: color-mix(in oklab, var(--foreground) 14%, transparent); }
+
+  .dl-wire {
+    stroke: color-mix(in oklab, var(--primary) 40%, transparent);
+    stroke-width: 1.5;
+    fill: none;
+    stroke-dasharray: 5 5;
+    animation: dl-dash 1.4s linear infinite;
+  }
+  @keyframes dl-dash {
+    to { stroke-dashoffset: -20; }
+  }
+
+  .dl-packet { fill: var(--primary); }
+
+  .dl-node {
+    fill: var(--card);
+    stroke-width: 1.5;
+  }
+  .dl-node--primary { stroke: color-mix(in oklab, var(--primary) 45%, transparent); }
+  .dl-node--accent { stroke: color-mix(in oklab, var(--foreground) 25%, transparent); }
+
+  .dl-pin {
+    fill: var(--background);
+    stroke: color-mix(in oklab, var(--primary) 60%, transparent);
+    stroke-width: 1.5;
+  }
+
+  .dl-node-title {
+    fill: var(--foreground);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .dl-node-title--sm { font-size: 12px; }
+
+  .dl-chip { fill: color-mix(in oklab, var(--primary) 10%, transparent); }
+  .dl-chip-text {
+    fill: color-mix(in oklab, var(--foreground) 70%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+  }
+
+  .dl-check-bg { fill: color-mix(in oklab, var(--primary) 14%, transparent); }
+  .dl-check {
+    stroke: var(--primary);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+  }
+
+  .dl-bar { fill: color-mix(in oklab, var(--primary) 38%, transparent); }
+  .dl-bar--hi { fill: color-mix(in oklab, var(--primary) 65%, transparent); }
+  .dl-spark {
+    stroke: color-mix(in oklab, var(--foreground) 40%, transparent);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+  }
+
+  .dl-dash-thumb { cursor: pointer; }
+  .dl-dash-thumb:hover .dl-node { stroke: var(--primary); }
+
+  .dl-search-lens {
+    stroke: color-mix(in oklab, var(--foreground) 55%, transparent);
+    stroke-width: 1.5;
+    fill: none;
+  }
+  .dl-search-handle {
+    stroke: color-mix(in oklab, var(--foreground) 55%, transparent);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+  .dl-search-lines {
+    stroke: color-mix(in oklab, var(--foreground) 25%, transparent);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+  }
+
+  .dl-card {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  .dl-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 28px -10px hsl(0 0% 0% / 0.14);
+  }
+  .dl-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 0.65rem;
+    color: var(--primary);
+    background: color-mix(in oklab, var(--primary) 10%, transparent);
+  }
+  .dl-card-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dl-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .dl-card {
+      transition: none !important;
+    }
+    .dl-card:hover {
+      transform: none !important;
+    }
+    .dl-wire {
+      animation: none !important;
+    }
+    .dl-send,
+    .dl-index-dot {
+      animation: none !important;
+    }
+    .dl-send {
+      opacity: 0 !important;
+    }
+    .dl-packet {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  function initDataLayerReveal() {
+    const els = document.querySelectorAll("#data-layer .dl-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+
+  initDataLayerReveal();
+</script>

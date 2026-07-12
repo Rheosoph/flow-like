@@ -1,0 +1,101 @@
+---
+import "@flow-like/flow-like-ui/global.css";
+import "../../styles/website-base.css";
+import HeroShaders from "../../components/hero-shaders-v4.astro";
+
+const variants = [
+  { id: "contour-atlas", name: "Contour atlas", note: "The docs-family option: topographic, quiet, inspectable." },
+  { id: "signal-loom", name: "Signal loom", note: "Measured signal bands with a softer, woven rhythm." },
+  { id: "governed-grid", name: "Governed grid", note: "Structured cells and controlled movement; the most institutional." },
+  { id: "orbital-ledger", name: "Orbital ledger", note: "Concentric records and trace lines with a wider sense of scale." },
+  { id: "quiet-network", name: "Quiet network", note: "A restrained field of connected points; technical without looking busy." },
+  { id: "sovereign-strata", name: "Sovereign strata", note: "Layered territorial bands; the strongest ownership metaphor." },
+] as const;
+---
+
+<!doctype html>
+<html lang="en" class="light" style="color-scheme: light;">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Flow-Like hero shader lab</title>
+  </head>
+  <body class="bg-background text-foreground antialiased">
+    <main class="shader-lab relative isolate min-h-svh overflow-hidden" data-shader-lab>
+      <div class="absolute inset-0 -z-20 bg-background"></div>
+      <HeroShaders id="shader-lab-field" chooser={true} />
+      <div class="shader-lab__veil pointer-events-none absolute inset-0 -z-10"></div>
+
+      <div class="relative z-10 mx-auto flex min-h-svh max-w-7xl flex-col justify-between px-5 py-8 sm:px-8 lg:px-12">
+        <header class="max-w-2xl">
+          <a href="/" class="text-xs font-medium text-muted-foreground hover:text-foreground">← Back to the landing page</a>
+          <p class="mt-8 font-mono text-[.65rem] uppercase tracking-[.2em] text-primary">Hero shader lab · 6 options</p>
+          <h1 class="mt-4 text-balance text-4xl font-bold leading-[.98] tracking-[-.045em] sm:text-6xl">Choose the field behind the new homepage.</h1>
+          <p class="mt-5 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">Each option is tuned for the homepage's light palette, with pointer response and a low-motion fallback. Your choice is saved locally.</p>
+        </header>
+
+        <div class="mt-20">
+          <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="list" aria-label="Shader choices">
+            {variants.map((variant, index) => (
+              <button
+                type="button"
+                class:list={["shader-lab__choice", index === 0 && "is-active"]}
+                data-lab-variant={variant.id}
+                aria-pressed={index === 0 ? "true" : "false"}
+              >
+                <span class="font-mono text-[.58rem] text-primary">0{index + 1}</span>
+                <strong>{variant.name}</strong>
+                <small>{variant.note}</small>
+              </button>
+            ))}
+          </div>
+          <div class="mt-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <span>Move the pointer across the field to test its response.</span>
+            <span class="rounded-full border border-border bg-background/65 px-3 py-1.5 backdrop-blur-md">Light-mode review</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
+
+<style>
+  .shader-lab__veil { background: linear-gradient(90deg,color-mix(in oklch,var(--background) 76%,transparent),color-mix(in oklch,var(--background) 24%,transparent) 58%,color-mix(in oklch,var(--background) 66%,transparent)),linear-gradient(to top,var(--background),transparent 58%); }
+  .shader-lab__choice { display:grid;grid-template-columns:1.5rem 1fr;column-gap:.65rem;border:1px solid var(--border);border-radius:.8rem;background:color-mix(in oklch,var(--background) 72%,transparent);padding:.75rem;text-align:left;backdrop-filter:blur(14px);transition:border-color .2s ease,background-color .2s ease,transform .2s ease; }
+  .shader-lab__choice:hover { transform:translateY(-2px);border-color:color-mix(in oklch,var(--primary) 38%,var(--border)); }
+  .shader-lab__choice.is-active { border-color:color-mix(in oklch,var(--primary) 55%,var(--border));background:color-mix(in oklch,var(--primary) 8%,var(--background));box-shadow:0 0 0 2px color-mix(in oklch,var(--primary) 8%,transparent); }
+  .shader-lab__choice>span { grid-row:1/3; }
+  .shader-lab__choice strong { font-size:.72rem; }
+  .shader-lab__choice small { margin-top:.15rem;color:var(--muted-foreground);font-size:.58rem;line-height:1.45; }
+  @media(prefers-reduced-motion:reduce){.shader-lab__choice{transition:none}.shader-lab__choice:hover{transform:none}}
+</style>
+
+<script>
+  function initShaderLab() {
+    const lab = document.querySelector<HTMLElement>("[data-shader-lab]");
+    const field = document.getElementById("shader-lab-field");
+    if (!lab || !field || lab.dataset.ready === "true") return;
+    lab.dataset.ready = "true";
+    const choices = [...lab.querySelectorAll<HTMLButtonElement>("[data-lab-variant]")];
+    const sync = (variant: string) => choices.forEach((choice) => {
+      const active = choice.dataset.labVariant === variant;
+      choice.classList.toggle("is-active", active);
+      choice.setAttribute("aria-pressed", String(active));
+    });
+    choices.forEach((choice) => choice.addEventListener("click", () => {
+      const variant = choice.dataset.labVariant;
+      if (!variant) return;
+      field.dataset.heroShader = variant;
+      try { window.localStorage.setItem("flow-like:hero-shader", variant); } catch {}
+      const url = new URL(window.location.href);
+      url.searchParams.set("heroShader", variant);
+      window.history.replaceState(window.history.state, "", url);
+      sync(variant);
+    }));
+    const observer = new MutationObserver(() => sync(field.dataset.heroShader ?? "contour-atlas"));
+    observer.observe(field, { attributes:true, attributeFilter:["data-hero-shader"] });
+    sync(field.dataset.heroShader ?? "contour-atlas");
+  }
+  initShaderLab();
+</script>

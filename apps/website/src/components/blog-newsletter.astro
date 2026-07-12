@@ -36,22 +36,6 @@ const turnstileSiteKey = "0x4AAAAAACLfuGyDAsHciBgR";
       data-type="subscription"
       class="space-y-3"
     >
-      <div
-        id="blog-newsletter-error"
-        class="hidden p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-xs"
-        role="alert"
-      >
-        {t("newsletter.error")}
-      </div>
-
-      <div
-        id="blog-newsletter-success"
-        class="hidden p-2.5 rounded-lg bg-green-500/10 border border-green-500/20 text-green-700 dark:text-green-400 text-xs"
-        role="status"
-      >
-        {t("newsletter.success")}
-      </div>
-
       <div class="flex flex-col sm:flex-row gap-2">
         <input
           type="email"
@@ -66,11 +50,7 @@ const turnstileSiteKey = "0x4AAAAAACLfuGyDAsHciBgR";
           type="submit"
           class="h-10 px-5 text-sm rounded-lg bg-foreground text-background font-medium hover:bg-foreground/90 transition-colors flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
         >
-          <span class="blog-btn-text">{t("newsletter.button")}</span>
-          <svg class="blog-btn-loader hidden w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
+          {t("newsletter.button")}
         </button>
       </div>
 
@@ -92,7 +72,6 @@ const turnstileSiteKey = "0x4AAAAAACLfuGyDAsHciBgR";
         id="blog-newsletter-captcha"
         class="cf-turnstile"
         data-sitekey={turnstileSiteKey}
-        data-callback="handleBlogNewsletterCaptcha"
         data-theme="auto"
         data-size="compact"
       ></div>
@@ -104,50 +83,3 @@ const turnstileSiteKey = "0x4AAAAAACLfuGyDAsHciBgR";
 </div>
 
 <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-
-<script>
-  (window as any).handleBlogNewsletterCaptcha = function() {
-    const event = new Event('captchaChange');
-    document.getElementById('blog-newsletter-captcha')?.dispatchEvent(event);
-  };
-
-  const form = document.getElementById('blog-newsletter-form') as HTMLFormElement;
-  const errorEl = document.getElementById('blog-newsletter-error');
-  const successEl = document.getElementById('blog-newsletter-success');
-
-  form?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-
-    const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
-    const btnText = btn.querySelector('.blog-btn-text');
-    const btnLoader = btn.querySelector('.blog-btn-loader');
-
-    btn.disabled = true;
-    btnText?.classList.add('hidden');
-    btnLoader?.classList.remove('hidden');
-    errorEl?.classList.add('hidden');
-    successEl?.classList.add('hidden');
-
-    try {
-      const formData = new FormData(form);
-      await fetch(form.action, {
-        method: 'POST',
-        body: formData,
-        mode: 'no-cors'
-      });
-
-      successEl?.classList.remove('hidden');
-      form.reset();
-
-      if ((window as any).turnstile) {
-        (window as any).turnstile.reset();
-      }
-    } catch {
-      errorEl?.classList.remove('hidden');
-    } finally {
-      btn.disabled = false;
-      btnText?.classList.remove('hidden');
-      btnLoader?.classList.add('hidden');
-    }
-  });
-</script>

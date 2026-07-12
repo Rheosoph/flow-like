@@ -1,0 +1,60 @@
+---
+import { getCollection } from "astro:content";
+import BlogNewsletter from "../components/blog-newsletter.astro";
+
+const posts = (await getCollection("blog", ({ data }) => !data.draft))
+  .sort((a, b) => b.data.date.getTime() - a.data.date.getTime())
+  .slice(0, 2);
+const hrefFor = (id: string) => `/blog/${id.split("-").slice(3).join("-")}/`;
+const dateFor = (date: Date) => date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+const year = new Date().getFullYear();
+---
+
+<section id="notes" class="border-y border-border/50 bg-muted/15 py-16 md:py-20">
+  <div class="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(22rem,.85fr)] lg:px-8">
+    <div>
+      <div class="flex items-end justify-between gap-4">
+        <div>
+          <p class="font-mono text-[.65rem] uppercase tracking-[.18em] text-primary">Notes from the engine room</p>
+          <h2 class="mt-3 text-2xl font-bold tracking-tight sm:text-3xl">What we are building, and what we learned.</h2>
+        </div>
+        <a href="/blog/" class="hidden text-sm font-medium text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground sm:block">All notes →</a>
+      </div>
+      <div class="mt-7 grid gap-3 sm:grid-cols-2">
+        {posts.map((post) => (
+          <a href={hrefFor(post.id)} class="group rounded-xl border border-border/55 bg-background/65 p-5 transition-colors hover:border-primary/30 hover:bg-background">
+            <time class="font-mono text-[.6rem] uppercase tracking-[.12em] text-muted-foreground/65">{dateFor(post.data.date)}</time>
+            <h3 class="mt-3 text-sm font-semibold leading-snug group-hover:text-primary">{post.data.title}</h3>
+            <p class="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{post.data.description ?? "A note from the Flow-Like team."}</p>
+          </a>
+        ))}
+      </div>
+      <a href="/blog/" class="mt-4 inline-block text-sm font-medium text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground sm:hidden">All notes →</a>
+    </div>
+    <div class="notes-v4__newsletter">
+      <BlogNewsletter />
+    </div>
+  </div>
+</section>
+
+<footer class="border-t border-border/50 bg-background/80">
+  <div class="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+    <div class="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.4fr_repeat(4,1fr)]">
+      <div class="max-w-xs">
+        <a href="/" class="inline-flex items-center gap-2.5 font-semibold"><img src="/favicon.svg" alt="" width="28" height="28" />Flow-Like</a>
+        <p class="mt-4 text-sm leading-relaxed text-muted-foreground">The source-available operating system for your data and AI. Built in Germany.</p>
+      </div>
+      <nav aria-label="Product footer links"><h2 class="text-xs font-semibold uppercase tracking-wider">Product</h2><div class="mt-4 flex flex-col gap-2.5 text-sm text-muted-foreground"><a href="/download" class="hover:text-foreground">Download Studio</a><a href="https://app.flow-like.com" class="hover:text-foreground">Web App</a><a href="/security" class="hover:text-foreground">Security</a></div></nav>
+      <nav aria-label="Documentation footer links"><h2 class="text-xs font-semibold uppercase tracking-wider">Learn</h2><div class="mt-4 flex flex-col gap-2.5 text-sm text-muted-foreground"><a href="https://docs.flow-like.com/start/getting-started" class="hover:text-foreground">Get started</a><a href="https://docs.flow-like.com/self-hosting" class="hover:text-foreground">Self-hosting</a><a href="/blog/" class="hover:text-foreground">Blog</a></div></nav>
+      <nav aria-label="Community footer links"><h2 class="text-xs font-semibold uppercase tracking-wider">Community</h2><div class="mt-4 flex flex-col gap-2.5 text-sm text-muted-foreground"><a href="https://github.com/Rheosoph/flow-like" class="hover:text-foreground">GitHub</a><a href="https://discord.com/invite/KTWMrS2/" class="hover:text-foreground">Discord</a><a href="mailto:contact@flow-like.com" class="hover:text-foreground">Contact</a></div></nav>
+      <nav aria-label="Legal footer links"><h2 class="text-xs font-semibold uppercase tracking-wider">Legal</h2><div class="mt-4 flex flex-col gap-2.5 text-sm text-muted-foreground"><a href="/privacy-policy" class="hover:text-foreground">Privacy</a><a href="/eula" class="hover:text-foreground">EULA</a><a href="https://great-co.de/legal-notice" class="hover:text-foreground">Imprint</a></div></nav>
+    </div>
+    <div class="mt-10 border-t border-border/50 pt-6 text-xs text-muted-foreground">© {year} Rheosoph GmbH. Source available under BSL 1.1.</div>
+  </div>
+</footer>
+
+<style>
+  .notes-v4__newsletter :global(.not-prose) { margin: 0; height: 100%; background: color-mix(in oklch,var(--background) 70%,transparent); }
+  a { transition: color .2s ease; }
+  @media(prefers-reduced-motion:reduce){a{transition:none}}
+</style>

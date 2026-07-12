@@ -1,0 +1,158 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+const personas = ["business", "engineering", "design"] as const;
+const flow = ["input", "classify", "approve", "write"] as const;
+const engineeringSnippet = `pub async fn check(input: Request) {
+  permissions.storage.read()?;
+  Ok(score(input).await?)
+}`;
+---
+
+<section id="mixed-teams" class="teams-v4 relative isolate overflow-hidden py-24 md:py-32">
+  <div class="teams-v4__wash pointer-events-none absolute inset-0 -z-10" aria-hidden="true"></div>
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <header class="teams-v4__reveal mx-auto max-w-3xl text-center">
+      <p class="font-mono text-xs uppercase tracking-[.2em] text-primary">{t("v4.teams.kicker")}</p>
+      <h2 class="mt-5 text-balance text-3xl font-bold leading-tight tracking-tight sm:text-4xl lg:text-5xl">{t("v4.teams.headline")}</h2>
+      <p class="mx-auto mt-5 max-w-3xl text-base leading-relaxed text-muted-foreground sm:text-lg">{t("v4.teams.body")}</p>
+    </header>
+
+    <div class="teams-v4__reveal mx-auto mt-12 max-w-6xl" style="--delay:80ms" data-teams-demo>
+      <div class="teams-v4__tabs" role="tablist" aria-label={t("v4.teams.tabsLabel")}>
+        {personas.map((persona, index) => (
+          <button
+            type="button"
+            role="tab"
+            id={`teams-v4-tab-${persona}`}
+            aria-controls={`teams-v4-panel-${persona}`}
+            aria-selected={index === 0 ? "true" : "false"}
+            aria-label={`${t(`v4.teams.${persona}` as TranslationKey)} — ${t(`v4.teams.${persona}.sub` as TranslationKey)}`}
+            class:list={["teams-v4__tab", index === 0 && "is-active"]}
+            data-teams-tab={persona}
+          >
+            <span class="teams-v4__avatar" aria-hidden="true">{["B", "E", "D"][index]}</span>
+            <span><strong>{t(`v4.teams.${persona}` as TranslationKey)}</strong><small>{t(`v4.teams.${persona}.sub` as TranslationKey)}</small></span>
+          </button>
+        ))}
+      </div>
+
+      <div class="teams-v4__board">
+        <div class="teams-v4__chrome" aria-hidden="true"><i></i><i></i><i></i><span>supplier-onboarding.flow</span><em>{t("v4.teams.shared")}</em></div>
+        <div class="teams-v4__workspace">
+          <svg class="teams-v4__wires" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M180 150C250 150 255 150 325 150M455 150C525 150 530 150 600 150M730 150C800 150 805 150 875 150" />
+          </svg>
+          <div class="teams-v4__flow">
+            {flow.map((node, index) => (
+              <div class={`teams-v4__node teams-v4__node--${index + 1}`}>
+                <span aria-hidden="true">{["□", "✦", "✓", "↳"][index]}</span>
+                <strong>{t(`v4.teams.flow.${node}` as TranslationKey)}</strong>
+                <small data-teams-node-sub={index}></small>
+              </div>
+            ))}
+          </div>
+
+          {personas.map((persona, index) => (
+            <div
+              id={`teams-v4-panel-${persona}`}
+              class:list={["teams-v4__panel", `teams-v4__panel--${persona}`, index === 0 && "is-active"]}
+              role="tabpanel"
+              aria-labelledby={`teams-v4-tab-${persona}`}
+              aria-hidden={index === 0 ? "false" : "true"}
+              inert={index === 0 ? undefined : true}
+              data-teams-panel={persona}
+            >
+              {persona === "business" && (
+                <>
+                  <div class="teams-v4__annotation teams-v4__annotation--one"><span>01</span>New supplier form received</div>
+                  <div class="teams-v4__annotation teams-v4__annotation--two"><span>02</span>Check risk and missing details</div>
+                  <div class="teams-v4__approval"><span>✓</span><strong>Approved by Dana</strong><small>Reason recorded</small></div>
+                </>
+              )}
+              {persona === "engineering" && (
+                <>
+                  <code class="teams-v4__type teams-v4__type--one">SupplierRequest</code>
+                  <code class="teams-v4__type teams-v4__type--two">Result&lt;RiskScore&gt;</code>
+	                  <div class="teams-v4__code"><span>supplier.rs</span><pre>{engineeringSnippet}</pre></div>
+                </>
+              )}
+              {persona === "design" && (
+                <>
+                  <div class="teams-v4__screen">
+                    <div><i></i><i></i><i></i><span>Supplier review</span></div>
+	                    <label>Company<input value="Nordwerk GmbH" readonly tabindex="-1" /></label>
+	                    <label>Risk level<input value="Low · 92 / 100" readonly tabindex="-1" /></label>
+                    <span class="teams-v4__screen-action">Approve request</span>
+                  </div>
+                  <span class="teams-v4__binding">screen action → Manager approval</span>
+                </>
+              )}
+              <p class="teams-v4__note">{t(`v4.teams.${persona}.note` as TranslationKey)}</p>
+            </div>
+          ))}
+        </div>
+        <footer class="teams-v4__footer"><span>●</span><strong>{t("v4.teams.shared")}</strong><p>{t("v4.teams.shared.desc")}</p></footer>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .teams-v4__wash{background:radial-gradient(circle at 18% 25%,color-mix(in oklch,var(--primary) 7%,transparent),transparent 32%),radial-gradient(circle at 82% 72%,color-mix(in oklch,var(--tertiary) 6%,transparent),transparent 30%)}
+  .teams-v4__tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:.55rem;margin:0 auto .65rem;max-width:45rem}.teams-v4__tab{display:flex;align-items:center;gap:.65rem;border:1px solid var(--border);border-radius:.75rem;background:color-mix(in oklch,var(--background) 75%,transparent);padding:.65rem .75rem;color:var(--muted-foreground);text-align:left;backdrop-filter:blur(10px);transition:border-color .2s ease,background-color .2s ease,color .2s ease}.teams-v4__tab.is-active{border-color:color-mix(in oklch,var(--primary) 40%,var(--border));background:color-mix(in oklch,var(--primary) 7%,var(--background));color:var(--foreground)}.teams-v4__avatar{display:flex;width:2rem;height:2rem;flex:none;align-items:center;justify-content:center;border-radius:.55rem;background:var(--muted);font-family:ui-monospace,monospace;font-size:.65rem;font-weight:700}.teams-v4__tab.is-active .teams-v4__avatar{background:var(--primary);color:var(--primary-foreground)}.teams-v4__tab>span:last-child{display:flex;min-width:0;flex-direction:column}.teams-v4__tab strong{font-size:.7rem}.teams-v4__tab small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.53rem;opacity:.7}
+  .teams-v4__board{overflow:hidden;border:1px solid var(--border);border-radius:1rem;background:color-mix(in oklch,var(--background) 92%,var(--muted));box-shadow:0 30px 80px color-mix(in srgb,black 12%,transparent)}.teams-v4__chrome{display:flex;height:2.7rem;align-items:center;gap:.38rem;border-bottom:1px solid var(--border);padding:0 .75rem;background:var(--muted)}.teams-v4__chrome i{width:.46rem;height:.46rem;border-radius:50%;background:var(--muted-foreground);opacity:.25}.teams-v4__chrome span{margin-left:.35rem;color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.56rem}.teams-v4__chrome em{margin-left:auto;border:1px solid var(--border);border-radius:999px;padding:.2rem .5rem;color:var(--muted-foreground);font-size:.52rem;font-style:normal}
+  .teams-v4__workspace{position:relative;min-height:23rem;overflow:hidden;background-image:radial-gradient(color-mix(in oklch,var(--muted-foreground) 15%,transparent) .7px,transparent .7px);background-size:18px 18px}.teams-v4__wires{position:absolute;top:2.35rem;left:0;width:100%;height:9rem;fill:none;stroke:color-mix(in oklch,var(--primary) 31%,var(--border));stroke-width:2}.teams-v4__flow{position:absolute;top:0;right:0;left:0;height:13rem}.teams-v4__node{position:absolute;z-index:2;display:grid;width:8.5rem;grid-template-columns:1.6rem 1fr;grid-template-rows:auto auto;column-gap:.5rem;border:1px solid color-mix(in oklch,var(--primary) 18%,var(--border));border-radius:.72rem;background:var(--background);padding:.65rem;box-shadow:0 8px 24px color-mix(in srgb,black 8%,transparent)}.teams-v4__node>span{grid-row:1/3;display:flex;height:1.6rem;align-items:center;justify-content:center;border-radius:.4rem;background:color-mix(in oklch,var(--primary) 8%,var(--muted));color:var(--primary);font-size:.65rem}.teams-v4__node strong{font-size:.63rem}.teams-v4__node small{color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.48rem}.teams-v4__node--1{left:5%;top:5.4rem}.teams-v4__node--2{left:32%;top:5.4rem}.teams-v4__node--3{left:59%;top:5.4rem}.teams-v4__node--4{right:4%;top:5.4rem}
+  .teams-v4__panel{position:absolute;inset:0;z-index:3;opacity:0;pointer-events:none;transition:opacity .3s ease}.teams-v4__panel.is-active{opacity:1;pointer-events:auto}.teams-v4__note{position:absolute;right:1rem;bottom:1rem;left:1rem;margin:0;border:1px solid var(--border);border-radius:.65rem;background:color-mix(in oklch,var(--background) 88%,transparent);padding:.65rem .8rem;color:var(--muted-foreground);font-size:.62rem;line-height:1.5;backdrop-filter:blur(10px)}
+  .teams-v4__annotation{position:absolute;top:1.35rem;border:1px solid color-mix(in oklch,var(--primary) 20%,var(--border));border-radius:999px;background:color-mix(in oklch,var(--background) 92%,transparent);padding:.35rem .55rem;color:var(--muted-foreground);font-size:.55rem}.teams-v4__annotation span{margin-right:.35rem;color:var(--primary);font-family:ui-monospace,monospace}.teams-v4__annotation--one{left:4%}.teams-v4__annotation--two{left:31%}.teams-v4__approval{position:absolute;left:59%;top:10rem;display:grid;grid-template-columns:1.6rem 1fr;grid-template-rows:auto auto;column-gap:.5rem;border:1px solid color-mix(in oklch,#38b77a 30%,var(--border));border-radius:.7rem;background:color-mix(in oklch,#38b77a 6%,var(--background));padding:.55rem .7rem}.teams-v4__approval>span{grid-row:1/3;color:#38b77a}.teams-v4__approval strong{font-size:.58rem}.teams-v4__approval small{color:var(--muted-foreground);font-size:.49rem}
+  .teams-v4__type{position:absolute;top:8rem;z-index:5;border:1px solid color-mix(in oklch,var(--primary) 20%,var(--border));border-radius:.35rem;background:var(--background);padding:.2rem .35rem;color:var(--primary);font-size:.48rem}.teams-v4__type--one{left:22%}.teams-v4__type--two{left:49%}.teams-v4__code{position:absolute;right:1rem;top:10rem;width:16rem;overflow:hidden;border:1px solid var(--border);border-radius:.65rem;background:#11131a;color:#c6c9d2}.teams-v4__code>span{display:block;border-bottom:1px solid #292c38;padding:.45rem .55rem;color:#7e8393;font-family:ui-monospace,monospace;font-size:.5rem}.teams-v4__code pre{margin:0;padding:.65rem;font-size:.53rem;line-height:1.55}.teams-v4__code b{color:#db8fff}.teams-v4__code i{color:#7fc9a6;font-style:normal}
+  .teams-v4__screen{position:absolute;right:1rem;top:9.25rem;width:16rem;overflow:hidden;border:1px solid var(--border);border-radius:.7rem;background:var(--background);box-shadow:0 12px 35px color-mix(in srgb,black 12%,transparent)}.teams-v4__screen>div{display:flex;align-items:center;gap:.3rem;border-bottom:1px solid var(--border);padding:.45rem .5rem;background:var(--muted)}.teams-v4__screen>div i{width:.35rem;height:.35rem;border-radius:50%;background:var(--muted-foreground);opacity:.3}.teams-v4__screen>div span{margin-left:.3rem;font-size:.55rem}.teams-v4__screen label{display:block;padding:.35rem .6rem 0;color:var(--muted-foreground);font-size:.49rem}.teams-v4__screen input{display:block;width:100%;margin-top:.15rem;border:1px solid var(--border);border-radius:.35rem;background:var(--muted);padding:.32rem;color:var(--foreground);font-size:.55rem}.teams-v4__screen-action{display:block;margin:.5rem .6rem;width:calc(100% - 1.2rem);border-radius:.4rem;background:var(--primary);padding:.4rem;color:var(--primary-foreground);font-size:.55rem;font-weight:650;text-align:center}.teams-v4__binding{position:absolute;right:1.5rem;top:18.15rem;color:var(--primary);font-family:ui-monospace,monospace;font-size:.48rem}
+  .teams-v4__footer{display:flex;align-items:center;gap:.55rem;border-top:1px solid var(--border);padding:.8rem 1rem}.teams-v4__footer>span{color:var(--primary);font-size:.55rem}.teams-v4__footer strong{font-size:.63rem}.teams-v4__footer p{margin:0;color:var(--muted-foreground);font-size:.58rem}
+  .teams-v4__reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease var(--delay,0ms),transform .6s ease var(--delay,0ms)}.teams-v4__reveal.is-visible{opacity:1;transform:none}
+  @media(max-width:760px){.teams-v4__tab{justify-content:center;padding:.55rem}.teams-v4__tab>span:last-child{display:none}.teams-v4__workspace{min-height:30rem}.teams-v4__flow{top:0;height:17rem}.teams-v4__node{width:7rem;grid-template-columns:1.2rem 1fr;padding:.5rem}.teams-v4__node>span{height:1.2rem}.teams-v4__node--1{left:4%;top:3.7rem}.teams-v4__node--2{right:4%;left:auto;top:3.7rem}.teams-v4__node--3{left:4%;top:10.2rem}.teams-v4__node--4{right:4%;top:10.2rem}.teams-v4__wires{display:none}.teams-v4__annotation--one{left:4%;top:1rem}.teams-v4__annotation--two{right:4%;left:auto;top:1rem}.teams-v4__approval{left:4%;top:14.7rem}.teams-v4__type--one{left:5%;top:6.4rem}.teams-v4__type--two{right:5%;left:auto;top:6.4rem}.teams-v4__code{right:1rem;top:15rem;width:calc(100% - 2rem)}.teams-v4__screen{right:1rem;top:14.7rem;width:calc(100% - 2rem)}.teams-v4__binding{right:1.5rem;top:25.6rem}.teams-v4__footer{align-items:flex-start;flex-wrap:wrap}.teams-v4__footer p{width:100%}}
+  @media(prefers-reduced-motion:reduce){.teams-v4__reveal{opacity:1;transform:none;transition:none}.teams-v4__panel{transition:none}}
+</style>
+
+<script>
+  function initTeamsV4() {
+    document.querySelectorAll<HTMLElement>("[data-teams-demo]").forEach((demo) => {
+      if (demo.dataset.ready === "true") return;
+      demo.dataset.ready = "true";
+      const tabs = [...demo.querySelectorAll<HTMLButtonElement>("[data-teams-tab]")];
+      const panels = [...demo.querySelectorAll<HTMLElement>("[data-teams-panel]")];
+      const nodeSubs = [...demo.querySelectorAll<HTMLElement>("[data-teams-node-sub]")];
+      const labels: Record<string, string[]> = {
+        business: ["what arrived", "why this path", "who decides", "what changed"],
+        engineering: ["Request", "Result<Score>", "Approval", "RecordId"],
+        design: ["form state", "review state", "button action", "success state"],
+      };
+      const select = (persona: string, moveFocus = false) => {
+        tabs.forEach((tab) => { const active = tab.dataset.teamsTab === persona; tab.classList.toggle("is-active", active); tab.setAttribute("aria-selected", String(active)); tab.tabIndex = active ? 0 : -1; });
+        panels.forEach((panel) => { const active = panel.dataset.teamsPanel === persona; panel.classList.toggle("is-active", active); panel.setAttribute("aria-hidden", String(!active)); panel.toggleAttribute("inert", !active); });
+        nodeSubs.forEach((node, index) => node.textContent = labels[persona]?.[index] ?? "");
+        if (moveFocus) tabs.find((tab) => tab.dataset.teamsTab === persona)?.focus();
+      };
+      tabs.forEach((tab) => tab.addEventListener("click", () => select(tab.dataset.teamsTab ?? "business")));
+      tabs.forEach((tab, index) => tab.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        select(tabs[next]?.dataset.teamsTab ?? "business", true);
+      }));
+      select("business");
+    });
+    const reveals = document.querySelectorAll<HTMLElement>(".teams-v4__reveal:not(.is-visible)");
+    if (!("IntersectionObserver" in window)) { reveals.forEach((el) => el.classList.add("is-visible")); return; }
+    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => { if (!entry.isIntersecting) return; entry.target.classList.add("is-visible"); observer.unobserve(entry.target); }), { threshold:.1, rootMargin:"0px 0px -8%" });
+    reveals.forEach((el) => observer.observe(el));
+  }
+  initTeamsV4();
+</script>

@@ -1,0 +1,193 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+
+const beforeTools = [1, 2, 3, 4, 5, 6].map((index) =>
+  t(`v4.sprawl.before.tool${index}` as TranslationKey),
+);
+const afterNodes = [1, 2, 3, 4, 5, 6].map((index) => ({
+  title: t(`v4.sprawl.after.node${index}` as TranslationKey),
+  sub: t(`v4.sprawl.after.node${index}Sub` as TranslationKey),
+}));
+const cards = [1, 2, 3, 4].map((index) => ({
+  title: t(`v4.sprawl.card${index}.title` as TranslationKey),
+  desc: t(`v4.sprawl.card${index}.desc` as TranslationKey),
+}));
+---
+
+<section id="why-one-system" class="sprawl-v4 relative isolate overflow-hidden py-24 md:py-32">
+  <div class="sprawl-v4__wash pointer-events-none absolute inset-0 -z-10" aria-hidden="true"></div>
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <header class="sprawl-v4__reveal grid gap-8 md:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] md:items-end lg:gap-14">
+      <div class="max-w-2xl">
+        <p class="font-mono text-xs uppercase tracking-[.2em] text-primary">{t("v4.sprawl.kicker")}</p>
+        <h2 class="mt-5 text-balance text-3xl font-bold leading-[1.08] tracking-tight sm:text-4xl lg:text-5xl">{t("v4.sprawl.headline")}</h2>
+        <p class="mt-5 text-base leading-relaxed text-muted-foreground sm:text-lg">{t("v4.sprawl.body")}</p>
+      </div>
+      <aside class="sprawl-v4__stat relative md:justify-self-end md:max-w-72 md:text-right">
+        <p class="font-mono text-[.72rem] uppercase tracking-[.12em] tabular-nums text-muted-foreground">{t("v4.sprawl.before.caption1")}</p>
+        <p class="mt-2 text-2xl font-bold leading-none tracking-tight tabular-nums text-destructive sm:text-[1.75rem]">{t("v4.sprawl.before.caption2")}</p>
+      </aside>
+    </header>
+
+    <div class="sprawl-v4__reveal mx-auto mt-12 max-w-5xl" style="--reveal-delay:80ms">
+      <div class="sprawl-v4__slider" data-sprawl-slider style="--split:50%" role="group" aria-label={t("v4.sprawl.slider.aria")}>
+        <div class="sprawl-v4__scene sprawl-v4__scene--before">
+          <div class="sprawl-v4__scene-head">
+            <span class="sprawl-v4__status-dot sprawl-v4__status-dot--warn"></span>
+            <strong>{t("v4.sprawl.slider.before")}</strong>
+          </div>
+          <div class="sprawl-v4__tools" aria-hidden="true">
+            {beforeTools.map((tool, index) => (
+              <div class={`sprawl-v4__tool sprawl-v4__tool--${index + 1}`}>
+                <span>{["↯", "▦", "▥", "□", "✦", ">_"][index]}</span>
+                <strong>{tool}</strong>
+                <small>separate login</small>
+              </div>
+            ))}
+            <svg class="sprawl-v4__tangle" viewBox="0 0 1000 500" preserveAspectRatio="none">
+              <path d="M185 125C310 90 280 250 425 210S610 95 760 145 835 330 660 300 430 370 250 310 140 220 185 125Z" />
+              <path d="M180 330C270 240 365 410 480 285S680 225 805 350" />
+              <path d="M420 105C530 170 420 315 570 375" />
+            </svg>
+            <span class="sprawl-v4__warning sprawl-v4__warning--one">{t("v4.sprawl.before.warn1")}</span>
+            <span class="sprawl-v4__warning sprawl-v4__warning--two">{t("v4.sprawl.before.warn2")}</span>
+          </div>
+          <div class="sprawl-v4__summary sprawl-v4__summary--before">
+            <span>{t("v4.sprawl.before.caption1")}</span>
+            <strong>{t("v4.sprawl.before.caption2")}</strong>
+          </div>
+        </div>
+
+        <div class="sprawl-v4__scene sprawl-v4__scene--after" aria-hidden="true">
+          <div class="sprawl-v4__scene-head">
+            <span class="sprawl-v4__status-dot"></span>
+            <strong>{t("v4.sprawl.slider.after")}</strong>
+          </div>
+          <div class="sprawl-v4__studio">
+            <div class="sprawl-v4__studio-chrome"><i></i><i></i><i></i><span>{t("v4.sprawl.after.window")}</span></div>
+            <div class="sprawl-v4__flow">
+              <svg viewBox="0 0 1000 430" preserveAspectRatio="none">
+                <path d="M170 125C245 125 240 125 315 125M455 125C530 125 520 125 595 125M735 125C810 125 800 205 845 245M245 300C330 300 320 300 405 300M545 300C620 300 610 300 685 300M665 150C640 235 560 255 530 280" />
+              </svg>
+              {afterNodes.map((node, index) => (
+                <div class={`sprawl-v4__node sprawl-v4__node--${index + 1}`}>
+                  <span>{["↯", "✦", "⌁", "▥", "□", "↑"][index]}</span>
+                  <strong>{node.title}</strong>
+                  <small>{node.sub}</small>
+                </div>
+              ))}
+              <div class="sprawl-v4__record"><span>✓</span>{t("v4.sprawl.after.status")}</div>
+            </div>
+          </div>
+          <div class="sprawl-v4__summary sprawl-v4__summary--after">
+            <span>{t("v4.sprawl.after.caption1")}</span>
+            <strong>{t("v4.sprawl.after.caption2")}</strong>
+          </div>
+        </div>
+
+        <div class="sprawl-v4__divider" aria-hidden="true"><span>↔</span></div>
+        <input
+          class="sprawl-v4__range"
+          data-sprawl-range
+          type="range"
+          min="8"
+          max="92"
+          value="50"
+          aria-label={t("v4.sprawl.slider.handleAria")}
+        />
+      </div>
+      <p class="mt-3 text-center text-xs text-muted-foreground/65">Drag the divider to compare both systems.</p>
+    </div>
+
+    <div class="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {cards.map((card, index) => (
+        <article class="sprawl-v4__reveal rounded-xl border border-border/55 bg-background/65 p-5 backdrop-blur-sm" style={`--reveal-delay:${120 + index * 55}ms`}>
+          <span class="mb-4 flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/5 font-mono text-xs text-primary">0{index + 1}</span>
+          <h3 class="text-sm font-semibold text-foreground">{card.title}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{card.desc}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+
+  <p class="mx-auto mt-12 max-w-3xl px-4 text-center text-xs leading-relaxed text-muted-foreground/70">
+    <span class="font-mono text-[.65rem] uppercase tracking-[.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span>
+    <span aria-hidden="true"> — </span>{t("v4.sprawl.uth")}
+  </p>
+</section>
+
+<style>
+  .sprawl-v4__wash { background: radial-gradient(circle at 18% 38%, color-mix(in oklch,var(--primary) 7%,transparent),transparent 34%), radial-gradient(circle at 82% 62%, color-mix(in oklch,var(--destructive) 5%,transparent),transparent 32%); }
+  .sprawl-v4__slider { position: relative; aspect-ratio: 10/6.2; min-height: 26rem; overflow: hidden; border: 1px solid var(--border); border-radius: 1.25rem; background: var(--background); box-shadow: 0 30px 80px color-mix(in srgb,black 12%,transparent); }
+  .sprawl-v4__scene { position: absolute; inset: 0; overflow: hidden; }
+  .sprawl-v4__scene--before { clip-path: inset(0 calc(100% - var(--split)) 0 0); background: color-mix(in oklch,var(--destructive) 2.8%,var(--background)); }
+  .sprawl-v4__scene--after { clip-path: inset(0 0 0 var(--split)); background: color-mix(in oklch,var(--primary) 3.5%,var(--background)); }
+  .sprawl-v4__scene-head { position: absolute; top: 1rem; z-index: 4; display: flex; align-items: center; gap: .5rem; white-space: nowrap; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in oklch,var(--background) 87%,transparent); padding: .4rem .75rem; font-size: .7rem; backdrop-filter: blur(10px); }
+  .sprawl-v4__scene--before .sprawl-v4__scene-head { left: 1rem; }
+  .sprawl-v4__scene--after .sprawl-v4__scene-head { right: 1rem; }
+  .sprawl-v4__status-dot { width: .42rem; height: .42rem; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 .18rem color-mix(in oklch,var(--primary) 12%,transparent); }
+  .sprawl-v4__status-dot--warn { background: var(--destructive); box-shadow: 0 0 0 .18rem color-mix(in oklch,var(--destructive) 12%,transparent); }
+  .sprawl-v4__tools, .sprawl-v4__studio { position: absolute; inset: 4.25rem 1.25rem 4.25rem; }
+  .sprawl-v4__tool { position: absolute; z-index: 2; display: grid; width: 8.5rem; grid-template-columns: 1.7rem 1fr; grid-template-rows: auto auto; column-gap: .55rem; border: 1px solid color-mix(in oklch,var(--destructive) 15%,var(--border)); border-radius: .75rem; background: color-mix(in oklch,var(--background) 92%,transparent); padding: .7rem; box-shadow: 0 9px 25px color-mix(in srgb,black 8%,transparent); }
+  .sprawl-v4__tool > span { grid-row: 1/3; display: flex; height: 1.7rem; align-items: center; justify-content: center; border-radius: .42rem; background: color-mix(in oklch,var(--destructive) 8%,var(--muted)); color: var(--destructive); font-family: ui-monospace,monospace; font-size: .72rem; }
+  .sprawl-v4__tool strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .69rem; }
+  .sprawl-v4__tool small { color: var(--muted-foreground); font-size: .52rem; }
+  .sprawl-v4__tool--1{left:5%;top:8%;transform:rotate(-2deg)} .sprawl-v4__tool--2{left:42%;top:2%;transform:rotate(2deg)} .sprawl-v4__tool--3{right:4%;top:14%;transform:rotate(-1deg)} .sprawl-v4__tool--4{left:8%;bottom:8%;transform:rotate(2deg)} .sprawl-v4__tool--5{left:43%;bottom:3%;transform:rotate(-2deg)} .sprawl-v4__tool--6{right:4%;bottom:11%;transform:rotate(2deg)}
+  .sprawl-v4__tangle { position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:color-mix(in oklch,var(--destructive) 22%,transparent);stroke-width:2;stroke-dasharray:7 7; }
+  .sprawl-v4__warning { position:absolute;z-index:3;border:1px solid color-mix(in oklch,var(--destructive) 25%,var(--border));border-radius:999px;background:color-mix(in oklch,var(--destructive) 7%,var(--background));padding:.28rem .55rem;color:var(--destructive);font-size:.58rem;font-weight:650; }
+  .sprawl-v4__warning--one{left:24%;top:44%}.sprawl-v4__warning--two{right:26%;top:51%}
+  .sprawl-v4__studio { overflow:hidden;border:1px solid color-mix(in oklch,var(--primary) 18%,var(--border));border-radius:.85rem;background:color-mix(in oklch,var(--background) 95%,var(--muted));box-shadow:0 15px 45px color-mix(in srgb,black 9%,transparent)}
+  .sprawl-v4__studio-chrome{display:flex;height:2rem;align-items:center;gap:.35rem;border-bottom:1px solid var(--border);padding:0 .65rem;background:var(--muted)}
+  .sprawl-v4__studio-chrome i{width:.38rem;height:.38rem;border-radius:50%;background:var(--muted-foreground);opacity:.3}.sprawl-v4__studio-chrome span{margin-left:.4rem;color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.55rem}
+  .sprawl-v4__flow{position:absolute;inset:2rem 0 0}.sprawl-v4__flow>svg{position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:color-mix(in oklch,var(--primary) 35%,transparent);stroke-width:2}
+  .sprawl-v4__node{position:absolute;z-index:2;display:grid;width:7.8rem;grid-template-columns:1.45rem 1fr;grid-template-rows:auto auto;column-gap:.45rem;border:1px solid color-mix(in oklch,var(--primary) 22%,var(--border));border-radius:.7rem;background:var(--background);padding:.6rem;box-shadow:0 8px 20px color-mix(in srgb,black 7%,transparent)}
+  .sprawl-v4__node>span{grid-row:1/3;display:flex;height:1.45rem;align-items:center;justify-content:center;border-radius:.35rem;background:color-mix(in oklch,var(--primary) 9%,var(--muted));color:var(--primary);font-size:.65rem}.sprawl-v4__node strong{font-size:.65rem}.sprawl-v4__node small{color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.5rem}
+  .sprawl-v4__node--1{left:5%;top:12%}.sprawl-v4__node--2{left:31%;top:12%}.sprawl-v4__node--3{left:58%;top:12%}.sprawl-v4__node--4{left:13%;bottom:12%}.sprawl-v4__node--5{left:40%;bottom:12%}.sprawl-v4__node--6{right:4%;bottom:12%}
+  .sprawl-v4__record{position:absolute;right:5%;top:49%;z-index:3;display:flex;align-items:center;gap:.4rem;border:1px solid color-mix(in oklch,var(--primary) 25%,var(--border));border-radius:999px;background:color-mix(in oklch,var(--primary) 6%,var(--background));padding:.35rem .65rem;color:var(--foreground);font-size:.58rem;font-weight:650}.sprawl-v4__record span{color:var(--primary)}
+  .sprawl-v4__summary{position:absolute;right:1.25rem;bottom:1rem;left:1.25rem;display:flex;align-items:center;justify-content:center;gap:1rem;border-top:1px solid var(--border);padding-top:.7rem;color:var(--muted-foreground);font-size:.62rem}.sprawl-v4__summary strong{color:var(--foreground)}
+  .sprawl-v4__divider{position:absolute;top:0;bottom:0;left:var(--split);z-index:10;width:2px;transform:translateX(-50%);background:color-mix(in oklch,var(--primary) 68%,var(--border));box-shadow:0 0 18px color-mix(in oklch,var(--primary) 14%,transparent);pointer-events:none}
+  .sprawl-v4__divider span{position:absolute;top:50%;left:50%;display:flex;width:2.25rem;height:2.25rem;transform:translate(-50%,-50%);align-items:center;justify-content:center;border:1px solid color-mix(in oklch,var(--primary) 38%,var(--border));border-radius:999px;background:var(--background);box-shadow:0 7px 20px color-mix(in srgb,black 14%,transparent);color:var(--foreground);font-family:ui-monospace,monospace;font-size:.72rem;font-weight:700;transition:transform .15s ease,box-shadow .15s ease}
+  .sprawl-v4__range{-webkit-appearance:none;appearance:none;position:absolute;inset:0;z-index:12;width:100%;height:100%;margin:0;border:0;outline:0;background:transparent;cursor:ew-resize}
+  .sprawl-v4__range::-webkit-slider-runnable-track{height:2px;border:0;background:transparent}
+  .sprawl-v4__range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:2.75rem;height:2.75rem;margin-top:calc(-1.375rem + 1px);border:0;border-radius:999px;background:transparent;box-shadow:none;cursor:ew-resize}
+  .sprawl-v4__range::-moz-range-track{height:2px;border:0;background:transparent}
+  .sprawl-v4__range::-moz-range-progress{height:2px;background:transparent}
+  .sprawl-v4__range::-moz-range-thumb{width:2.75rem;height:2.75rem;border:0;border-radius:999px;background:transparent;box-shadow:none;cursor:ew-resize}
+  .sprawl-v4__slider:has(.sprawl-v4__range:focus-visible) .sprawl-v4__divider span{outline:3px solid color-mix(in oklch,var(--primary) 48%,transparent);outline-offset:3px}
+  .sprawl-v4__slider:has(.sprawl-v4__range:active) .sprawl-v4__divider span{transform:translate(-50%,-50%) scale(.94);box-shadow:0 4px 12px color-mix(in srgb,black 12%,transparent)}
+  .sprawl-v4__stat{padding-top:1.15rem}
+  .sprawl-v4__stat::before{content:"";position:absolute;top:0;left:0;width:2.75rem;height:2px;border-radius:2px;background:color-mix(in oklch,var(--destructive) 60%,transparent)}
+  @media(min-width:768px){.sprawl-v4__stat::before{left:auto;right:0}}
+  .sprawl-v4__reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease var(--reveal-delay,0ms),transform .6s ease var(--reveal-delay,0ms)}.sprawl-v4__reveal.is-visible{opacity:1;transform:none}
+  @media(max-width:700px){.sprawl-v4__slider{aspect-ratio:auto;min-height:25rem}.sprawl-v4__tools,.sprawl-v4__studio{inset:4rem .65rem 4rem}.sprawl-v4__tool{width:5rem;padding:.45rem;grid-template-columns:1.1rem 1fr}.sprawl-v4__tool>span{height:1.1rem}.sprawl-v4__tool--1,.sprawl-v4__tool--4{left:4%}.sprawl-v4__tool--2,.sprawl-v4__tool--5{left:38%}.sprawl-v4__tool--3,.sprawl-v4__tool--6{right:4%}.sprawl-v4__tool small{display:none}.sprawl-v4__node{width:5.2rem;padding:.4rem;grid-template-columns:1rem 1fr}.sprawl-v4__node>span{height:1rem}.sprawl-v4__node--1,.sprawl-v4__node--4{left:4%}.sprawl-v4__node--2,.sprawl-v4__node--5{left:37%}.sprawl-v4__node--3,.sprawl-v4__node--6{right:4%;left:auto}.sprawl-v4__node small{display:none}.sprawl-v4__record{display:none}.sprawl-v4__summary{align-items:flex-start;gap:.2rem;flex-direction:column}.sprawl-v4__warning--two{right:16%}.sprawl-v4__divider span{width:2rem;height:2rem;font-size:.65rem}.sprawl-v4__range::-webkit-slider-thumb{width:2.5rem;height:2.5rem;margin-top:calc(-1.25rem + 1px)}.sprawl-v4__range::-moz-range-thumb{width:2.5rem;height:2.5rem}}
+  @media(prefers-reduced-motion:reduce){.sprawl-v4__reveal{opacity:1;transform:none;transition:none}}
+</style>
+
+<script>
+  function initSprawlV4() {
+    document.querySelectorAll<HTMLElement>("[data-sprawl-slider]").forEach((slider) => {
+      if (slider.dataset.ready === "true") return;
+      slider.dataset.ready = "true";
+      const range = slider.querySelector<HTMLInputElement>("[data-sprawl-range]");
+      range?.addEventListener("input", () => slider.style.setProperty("--split", `${range.value}%`));
+    });
+    const reveals = document.querySelectorAll<HTMLElement>(".sprawl-v4__reveal:not(.is-visible)");
+    if (!("IntersectionObserver" in window)) { reveals.forEach((el) => el.classList.add("is-visible")); return; }
+    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add("is-visible");
+      observer.unobserve(entry.target);
+    }), { threshold: .12, rootMargin: "0px 0px -8%" });
+    reveals.forEach((el) => observer.observe(el));
+  }
+  initSprawlV4();
+</script>

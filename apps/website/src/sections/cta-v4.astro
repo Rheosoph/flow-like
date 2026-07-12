@@ -1,0 +1,292 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const paths = [
+  {
+    title: t("v4.cta.individual"),
+    line: t("v4.cta.individual.line"),
+    href: "/download",
+    variant: "primary" as const,
+  },
+  {
+    title: t("v4.cta.team"),
+    line: t("v4.cta.team.line"),
+    href: "https://app.flow-like.com",
+    variant: "outline" as const,
+  },
+  {
+    title: t("v4.cta.enterprise"),
+    line: t("v4.cta.enterprise.line"),
+    href: "mailto:hello@flow-like.com?subject=Enterprise%20Inquiry",
+    variant: "outline" as const,
+  },
+  {
+    title: t("v4.cta.developer"),
+    line: t("v4.cta.developer.line"),
+    href: "https://github.com/Rheosoph/flow-like",
+    variant: "outline" as const,
+  },
+];
+---
+
+<section id="cta" class="ctav4-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="ctav4-orb ctav4-orb--primary"></div>
+    <div class="ctav4-orb ctav4-orb--tertiary"></div>
+  </div>
+
+  <div class="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="ctav4-reveal mx-auto max-w-3xl text-center mb-12 md:mb-16">
+      <span class="ctav4-kicker mb-6 inline-flex items-center rounded-full px-4 py-1.5 font-mono text-[0.7rem] font-medium uppercase tracking-[0.16em]">
+        {t("v4.cta.kicker")}
+      </span>
+      <h2 class="ctav4-headline text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight mb-6">
+        {t("v4.cta.headline")}
+      </h2>
+      <p class="ctav4-body text-base sm:text-lg leading-relaxed">
+        {t("v4.cta.body")}
+      </p>
+    </div>
+
+    <!-- Persona paths -->
+    <!-- TODO: replace the Enterprise & Public Sector mailto below with a real scheduling link -->
+    <div class="ctav4-reveal space-y-3">
+      {paths.map((path) => (
+        <a
+          href={path.href}
+          class:list={[
+            "ctav4-row group flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-6 rounded-xl border px-5 py-4",
+            path.variant === "primary" ? "ctav4-row--primary" : "ctav4-row--outline",
+          ]}
+        >
+          <span class="ctav4-row-title shrink-0 sm:w-56 text-sm font-semibold">
+            {path.title}
+          </span>
+
+          <span class="ctav4-row-line flex-1 text-sm">
+            {path.line}
+          </span>
+
+          <svg
+            class="ctav4-row-arrow hidden sm:block h-4 w-4 shrink-0"
+            viewBox="0 0 16 16"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path d="M2.5 8h11m0 0L9 3.5M13.5 8 9 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </a>
+      ))}
+    </div>
+  </div>
+
+  <p class="ctav4-uth mx-auto mt-12 max-w-3xl px-4 text-center text-xs leading-relaxed"><span class="ctav4-uth-label font-mono text-[0.65rem] uppercase tracking-[0.14em]">{t("v4.common.underTheHood")}</span> — {t("v4.cta.uth")}</p>
+</section>
+
+<style>
+  /* ---- Dark contrast band: deep charcoal in light theme ---- */
+  .ctav4-section {
+    --band-fg: #f5f1ec;
+    --band-muted: color-mix(in oklch, #f5f1ec 62%, transparent);
+    --band-faint: color-mix(in oklch, #f5f1ec 44%, transparent);
+    --band-border: color-mix(in oklch, #f5f1ec 12%, transparent);
+    --band-surface: color-mix(in oklch, #f5f1ec 4%, transparent);
+    --band-hairline: color-mix(in oklch, #f5f1ec 10%, transparent);
+    --band-ring-offset: #0e0f16;
+
+    background: #0e0f16;
+    color: var(--band-fg);
+    border-top: 1px solid var(--band-hairline);
+    border-bottom: 1px solid var(--band-hairline);
+  }
+
+  /* ---- Elevated, framed band in dark theme (a plain charcoal would vanish) ---- */
+  :global(.dark) .ctav4-section {
+    --band-muted: color-mix(in oklch, #f5f1ec 58%, transparent);
+    --band-faint: color-mix(in oklch, #f5f1ec 40%, transparent);
+    --band-border: color-mix(in oklch, #f5f1ec 14%, transparent);
+    --band-surface: color-mix(in oklch, #f5f1ec 5%, transparent);
+    --band-hairline: color-mix(in oklch, var(--primary) 42%, color-mix(in oklch, #f5f1ec 12%, transparent));
+    --band-ring-offset: #18161e;
+
+    background: linear-gradient(
+      180deg,
+      oklch(0.216 0.014 272) 0%,
+      oklch(0.19 0.013 274) 50%,
+      oklch(0.214 0.035 32) 140%
+    );
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklch, #ffffff 8%, transparent),
+      inset 0 80px 170px -78px color-mix(in oklch, var(--primary) 44%, transparent),
+      inset 0 -70px 150px -90px color-mix(in oklch, var(--tertiary) 22%, transparent);
+  }
+
+  .ctav4-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+  }
+  .ctav4-orb--primary {
+    width: 520px;
+    height: 520px;
+    top: -130px;
+    left: -120px;
+    opacity: 0.6;
+    background: radial-gradient(circle, color-mix(in oklch, var(--primary) 15%, transparent), transparent 70%);
+  }
+  .ctav4-orb--tertiary {
+    width: 420px;
+    height: 420px;
+    bottom: -70px;
+    right: -80px;
+    opacity: 0.5;
+    background: radial-gradient(circle, color-mix(in oklch, var(--tertiary) 13%, transparent), transparent 70%);
+  }
+
+  /* ---- Header type ---- */
+  .ctav4-kicker {
+    border: 1px solid color-mix(in oklch, var(--primary) 38%, transparent);
+    background: color-mix(in oklch, var(--primary) 12%, transparent);
+    color: color-mix(in oklch, var(--primary) 86%, white);
+    box-shadow: 0 0 28px -8px color-mix(in oklch, var(--primary) 48%, transparent);
+  }
+  .ctav4-headline {
+    color: var(--band-fg);
+  }
+  .ctav4-body {
+    color: var(--band-muted);
+  }
+
+  /* ---- Persona rows ---- */
+  .ctav4-row {
+    backdrop-filter: blur(4px);
+    transition:
+      transform 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 0.3s ease,
+      background-color 0.3s ease,
+      box-shadow 0.3s ease,
+      color 0.3s ease;
+  }
+  .ctav4-row-arrow {
+    transition: transform 0.3s ease, color 0.3s ease;
+  }
+  .ctav4-row:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--band-ring-offset),
+      0 0 0 4px color-mix(in oklch, var(--primary) 68%, transparent);
+  }
+
+  /* Primary — confident coral, the anchor of the finale */
+  .ctav4-row--primary {
+    border-color: color-mix(in oklch, var(--primary) 55%, transparent);
+    background: linear-gradient(180deg, color-mix(in oklch, white 10%, var(--primary)), var(--primary));
+    box-shadow:
+      0 14px 44px -14px color-mix(in oklch, var(--primary) 55%, transparent),
+      inset 0 1px 0 color-mix(in oklch, #ffffff 22%, transparent);
+  }
+  .ctav4-row--primary .ctav4-row-title {
+    color: #ffffff;
+  }
+  .ctav4-row--primary .ctav4-row-line {
+    color: color-mix(in oklch, #ffffff 88%, transparent);
+  }
+  .ctav4-row--primary .ctav4-row-arrow {
+    color: #ffffff;
+  }
+  .ctav4-row--primary:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 20px 56px -14px color-mix(in oklch, var(--primary) 68%, transparent),
+      inset 0 1px 0 color-mix(in oklch, #ffffff 30%, transparent);
+  }
+  .ctav4-row--primary:hover .ctav4-row-arrow {
+    transform: translateX(4px);
+  }
+
+  /* Outline — elegant on dark, lights up coral on hover */
+  .ctav4-row--outline {
+    border-color: var(--band-border);
+    background: var(--band-surface);
+  }
+  .ctav4-row--outline .ctav4-row-title {
+    color: var(--band-fg);
+  }
+  .ctav4-row--outline .ctav4-row-line {
+    color: var(--band-muted);
+  }
+  .ctav4-row--outline .ctav4-row-arrow {
+    color: var(--band-faint);
+  }
+  .ctav4-row--outline:hover {
+    border-color: color-mix(in oklch, var(--primary) 55%, transparent);
+    background: color-mix(in oklch, var(--primary) 9%, transparent);
+    box-shadow: 0 10px 34px -18px color-mix(in oklch, var(--primary) 42%, transparent);
+  }
+  .ctav4-row--outline:hover .ctav4-row-line {
+    color: var(--band-fg);
+  }
+  .ctav4-row--outline:hover .ctav4-row-arrow {
+    color: var(--primary);
+    transform: translateX(4px);
+  }
+
+  /* ---- Under-the-hood line ---- */
+  .ctav4-uth {
+    color: var(--band-faint);
+  }
+  .ctav4-uth-label {
+    color: var(--band-muted);
+  }
+
+  .ctav4-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .ctav4-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ctav4-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+  }
+</style>
+
+<script>
+  function initCtaV4Reveal() {
+    const els = document.querySelectorAll(".ctav4-section .ctav4-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+  initCtaV4Reveal();
+</script>

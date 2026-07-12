@@ -365,41 +365,74 @@ function MobileMenu({
 }) {
 	const [mounted, setMounted] = useState(false);
 	const [langOpen, setLangOpen] = useState(false);
+	const dialogRef = useRef<HTMLDialogElement>(null);
+	const onCloseRef = useRef(onClose);
+	onCloseRef.current = onClose;
 
 	useEffect(() => setMounted(true), []);
 
 	useEffect(() => {
-		if (open) {
-			document.body.style.overflow = "hidden";
-			return () => {
-				document.body.style.overflow = "";
-			};
-		}
+		if (!open) return;
+		const previouslyFocused = document.activeElement as HTMLElement | null;
+		document.body.style.overflow = "hidden";
+		const focusableSelector =
+			'a[href], button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+		const frame = window.requestAnimationFrame(() => {
+			dialogRef.current
+				?.querySelector<HTMLElement>("[data-mobile-menu-close]")
+				?.focus();
+		});
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				onCloseRef.current();
+				return;
+			}
+			if (event.key !== "Tab") return;
+			const focusable = Array.from(
+				dialogRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ??
+					[],
+			);
+			if (!focusable.length) return;
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+			if (event.shiftKey && document.activeElement === first) {
+				event.preventDefault();
+				last?.focus();
+			} else if (!event.shiftKey && document.activeElement === last) {
+				event.preventDefault();
+				first?.focus();
+			}
+		};
+		document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			window.cancelAnimationFrame(frame);
+			document.removeEventListener("keydown", handleKeyDown);
+			document.body.style.overflow = "";
+			previouslyFocused?.focus();
+		};
 	}, [open]);
 
-	if (!mounted) return null;
+	if (!mounted || !open) return null;
 
 	return createPortal(
-		<div
-			className={`fixed inset-0 z-100 lg:hidden transition-opacity duration-300 ${
-				open
-					? "opacity-100 pointer-events-auto"
-					: "opacity-0 pointer-events-none"
-			}`}
-			role="dialog"
+		<dialog
+			ref={dialogRef}
+			id="mobile-navigation"
+			open
+			className="fixed inset-0 z-100 m-0 h-full w-full max-h-none max-w-none border-0 bg-transparent p-0 text-inherit lg:hidden"
 			aria-modal="true"
+			aria-label="Navigation menu"
 		>
 			<button
 				type="button"
 				aria-label="Close menu"
+				aria-hidden="true"
+				tabIndex={-1}
 				onClick={onClose}
 				className="absolute inset-0 w-full h-full bg-black/40 backdrop-blur-sm"
 			/>
-			<div
-				className={`absolute top-0 right-0 w-full max-w-sm h-full bg-background/95 backdrop-blur-lg border-l border-border/50 shadow-2xl transition-transform duration-300 ease-out overflow-y-auto ${
-					open ? "translate-x-0" : "translate-x-full"
-				}`}
-			>
+			<div className="absolute top-0 right-0 w-full max-w-sm h-full bg-background/95 backdrop-blur-lg border-l border-border/50 shadow-2xl overflow-y-auto">
 				<div className="flex items-center justify-between p-4 border-b border-border/30 sticky top-0 bg-background/95 backdrop-blur-lg z-10">
 					<a href="/" className="flex items-center gap-2" onClick={onClose}>
 						<img alt="logo" src="/icon.webp" className="h-8 w-8" />
@@ -407,6 +440,7 @@ function MobileMenu({
 					</a>
 					<button
 						type="button"
+						data-mobile-menu-close
 						onClick={onClose}
 						className="p-2 rounded-lg hover:bg-muted/50 transition-colors duration-300"
 						aria-label="Close menu"
@@ -562,6 +596,7 @@ function MobileMenu({
 											className="w-3 h-3 text-amber-400"
 											viewBox="0 0 24 24"
 											fill="currentColor"
+											aria-hidden="true"
 										>
 											<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
 										</svg>
@@ -647,7 +682,7 @@ function MobileMenu({
 					</a>
 				</div>
 			</div>
-		</div>,
+		</dialog>,
 		document.body,
 	);
 }
@@ -902,6 +937,8 @@ export function Header() {
 						onClick={() => setMobileMenuOpen(true)}
 						className="lg:hidden p-2 rounded-lg hover:bg-muted/50 transition-colors duration-300"
 						aria-label="Open menu"
+						aria-controls="mobile-navigation"
+						aria-expanded={mobileMenuOpen}
 					>
 						<Menu className="w-5 h-5" />
 					</button>

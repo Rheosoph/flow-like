@@ -1,0 +1,140 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+const items = [1, 2, 3].map((index) => ({
+  title: t(`v4.engine.item${index}.title` as TranslationKey),
+  desc: t(`v4.engine.item${index}.desc` as TranslationKey),
+}));
+---
+
+<section id="engine" class="engine-v4 relative isolate overflow-hidden py-24 md:py-32">
+  <div class="engine-v4__wash pointer-events-none absolute inset-0 -z-10" aria-hidden="true"></div>
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <header class="engine-v4__reveal mx-auto max-w-3xl text-center">
+      <p class="font-mono text-xs uppercase tracking-[.2em] text-primary">{t("v4.engine.kicker")}</p>
+      <h2 class="mt-5 text-balance text-3xl font-bold leading-tight tracking-tight sm:text-4xl lg:text-5xl">{t("v4.engine.headline")}</h2>
+      <p class="mx-auto mt-5 max-w-3xl text-base leading-relaxed text-muted-foreground sm:text-lg">{t("v4.engine.body")}</p>
+    </header>
+
+    <div class="engine-v4__reveal mx-auto mt-12 grid max-w-6xl gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(18rem,.74fr)]" style="--delay:80ms">
+      <div class="engine-v4__canvas" data-engine-demo>
+        <div class="engine-v4__chrome">
+          <i></i><i></i><i></i><strong>supplier-review.flow</strong>
+          <button type="button" data-engine-run>
+            <span data-run-label>{t("v4.engine.visual.run")}</span><span aria-hidden="true">▶</span>
+          </button>
+        </div>
+        <div class="engine-v4__workspace">
+          <div class="engine-v4__flow" aria-label="Four-step supplier review flow">
+            <div class="engine-v4__node" data-engine-step="0"><span>↯</span><strong>{t("v4.engine.visual.input")}</strong><small>form submitted</small><i></i></div>
+            <span class="engine-v4__wire" data-wire="0" aria-hidden="true"></span>
+            <div class="engine-v4__node" data-engine-step="1"><span>✦</span><strong>{t("v4.engine.visual.classify")}</strong><small>local model</small><i></i></div>
+            <span class="engine-v4__wire" data-wire="1" aria-hidden="true"></span>
+            <div class="engine-v4__node" data-engine-step="2"><span>✓</span><strong>{t("v4.engine.visual.review")}</strong><small>manager approval</small><i></i></div>
+            <span class="engine-v4__wire" data-wire="2" aria-hidden="true"></span>
+            <div class="engine-v4__node" data-engine-step="3"><span>↳</span><strong>{t("v4.engine.visual.write")}</strong><small>company library</small><i></i></div>
+          </div>
+
+          <div class="engine-v4__workspace-lower">
+            <div class="engine-v4__flowpilot">
+              <div class="engine-v4__flowpilot-head"><span>FP</span><strong>FlowPilot</strong><i>local</i></div>
+              <p class="engine-v4__prompt">{t("v4.engine.visual.prompt")}</p>
+              <p class="engine-v4__reply"><span aria-hidden="true">✦</span>{t("v4.engine.visual.reply")}</p>
+            </div>
+
+            <div class="engine-v4__complete" data-engine-complete role="status" aria-live="polite"><span>✓</span>{t("v4.engine.visual.done")}</div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="engine-v4__monitor" aria-label={t("v4.engine.visual.monitor")}>
+        <div class="engine-v4__monitor-head"><span></span><strong>{t("v4.engine.visual.monitor")}</strong><em data-engine-status aria-live="polite">ready</em></div>
+        <div class="engine-v4__metric"><span>{t("v4.engine.visual.duration")}</span><strong data-engine-duration>—</strong></div>
+        <div class="engine-v4__metric"><span>{t("v4.engine.visual.cost")}</span><strong>€0.003</strong></div>
+        <div class="engine-v4__metric"><span>{t("v4.engine.visual.path")}</span><strong>4 / 4</strong></div>
+        <ol class="engine-v4__trace">
+          {["request received", "model answered", "manager approved", "record written"].map((label, index) => (
+            <li data-engine-trace={index}><span></span><p>{label}<small>{index === 0 ? "input" : index === 1 ? "decision" : index === 2 ? "approval" : "output"}</small></p><time>—</time></li>
+          ))}
+        </ol>
+      </aside>
+    </div>
+
+    <div class="mt-8 grid gap-3 md:grid-cols-3">
+      {items.map((item, index) => (
+        <article class="engine-v4__reveal rounded-xl border border-border/55 bg-background/60 p-5 backdrop-blur-sm" style={`--delay:${120 + index * 60}ms`}>
+          <span class="mb-4 block font-mono text-[.65rem] text-primary">0{index + 1} / 03</span>
+          <h3 class="text-sm font-semibold">{item.title}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{item.desc}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+
+  <p class="mx-auto mt-12 max-w-3xl px-4 text-center text-xs leading-relaxed text-muted-foreground/70">
+    <span class="font-mono text-[.65rem] uppercase tracking-[.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span>
+    <span aria-hidden="true"> — </span>{t("v4.engine.uth")}
+    <a class="ml-1 text-primary underline underline-offset-4" href="https://docs.flow-like.com" target="_blank" rel="noopener noreferrer">{t("v4.engine.deepDive")} →</a>
+  </p>
+</section>
+
+<style>
+  .engine-v4__wash{background:radial-gradient(circle at 78% 24%,color-mix(in oklch,var(--primary) 8%,transparent),transparent 34%),radial-gradient(circle at 14% 72%,color-mix(in oklch,var(--tertiary) 5%,transparent),transparent 30%)}
+  .engine-v4__canvas,.engine-v4__monitor{overflow:hidden;border:1px solid var(--border);border-radius:1rem;background:color-mix(in oklch,var(--background) 92%,var(--muted));box-shadow:0 24px 60px color-mix(in srgb,black 10%,transparent)}
+  .engine-v4__chrome{display:flex;height:2.75rem;align-items:center;gap:.38rem;border-bottom:1px solid var(--border);padding:0 .75rem;background:color-mix(in oklch,var(--muted) 58%,var(--background))}.engine-v4__chrome>i{width:.48rem;height:.48rem;border-radius:50%;background:var(--muted-foreground);opacity:.25}.engine-v4__chrome>i:first-child{background:#eb6258;opacity:.65}.engine-v4__chrome>i:nth-child(2){background:#e6b449;opacity:.65}.engine-v4__chrome>i:nth-child(3){background:#43b77b;opacity:.65}.engine-v4__chrome strong{margin-left:.35rem;color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.6rem;font-weight:500}.engine-v4__chrome button{margin-left:auto;display:flex;align-items:center;gap:.5rem;border-radius:.45rem;background:var(--primary);padding:.38rem .62rem;color:var(--primary-foreground);font-size:.63rem;font-weight:650}.engine-v4__chrome button:disabled{opacity:.65}
+  .engine-v4__workspace{display:flex;min-height:23rem;flex-direction:column;justify-content:space-between;gap:2.25rem;overflow:hidden;padding:2rem 1.25rem 1.25rem;background-image:radial-gradient(color-mix(in oklch,var(--muted-foreground) 14%,transparent) .7px,transparent .7px);background-size:18px 18px}
+  .engine-v4__flow{display:grid;grid-template-columns:minmax(7.5rem,1fr) minmax(1.25rem,.32fr) minmax(7.5rem,1fr) minmax(1.25rem,.32fr) minmax(7.5rem,1fr) minmax(1.25rem,.32fr) minmax(7.5rem,1fr);align-items:center}
+  .engine-v4__wire{height:2px;background:color-mix(in oklch,var(--primary) 30%,var(--border));transition:background-color .25s ease,box-shadow .25s ease}.engine-v4__wire::after{float:right;width:.38rem;height:.38rem;margin-top:-.13rem;border-top:1px solid currentColor;border-right:1px solid currentColor;color:color-mix(in oklch,var(--primary) 40%,var(--border));content:"";transform:rotate(45deg)}.engine-v4__wire.is-running{background:var(--primary);box-shadow:0 0 0 2px color-mix(in oklch,var(--primary) 10%,transparent)}
+  .engine-v4__node{position:relative;z-index:2;display:grid;min-width:0;grid-template-columns:1.9rem minmax(0,1fr);grid-template-rows:auto auto;column-gap:.6rem;border:1px solid color-mix(in oklch,var(--primary) 20%,var(--border));border-radius:.78rem;background:color-mix(in oklch,var(--background) 97%,var(--muted));padding:.75rem;box-shadow:0 8px 22px color-mix(in srgb,black 6%,transparent);transition:border-color .25s ease,box-shadow .25s ease,transform .25s ease}.engine-v4__node>span{grid-row:1/3;display:flex;height:1.9rem;align-items:center;justify-content:center;border-radius:.5rem;background:color-mix(in oklch,var(--primary) 9%,var(--muted));color:var(--primary);font-size:.72rem}.engine-v4__node strong{overflow:hidden;font-size:.68rem;text-overflow:ellipsis;white-space:nowrap}.engine-v4__node small{overflow:hidden;color:var(--muted-foreground);font-size:.51rem;text-overflow:ellipsis;white-space:nowrap}.engine-v4__node>i{position:absolute;right:.5rem;top:.5rem;width:.34rem;height:.34rem;border-radius:50%;background:var(--border)}.engine-v4__node.is-running{transform:translateY(-2px);border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in oklch,var(--primary) 10%,transparent),0 12px 26px color-mix(in srgb,black 8%,transparent)}.engine-v4__node.is-running>i{background:var(--primary);box-shadow:0 0 0 4px color-mix(in oklch,var(--primary) 14%,transparent)}.engine-v4__node.is-done>i{background:#38b77a}
+  .engine-v4__workspace-lower{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:1rem}.engine-v4__flowpilot{width:min(100%,24rem);overflow:hidden;border:1px solid color-mix(in oklch,var(--primary) 18%,var(--border));border-radius:.8rem;background:color-mix(in oklch,var(--background) 97%,var(--muted));box-shadow:0 10px 28px color-mix(in srgb,black 7%,transparent)}.engine-v4__flowpilot-head{display:flex;align-items:center;gap:.5rem;border-bottom:1px solid var(--border);padding:.5rem .65rem;background:var(--muted)}.engine-v4__flowpilot-head span{display:flex;width:1.35rem;height:1.35rem;align-items:center;justify-content:center;border-radius:.35rem;background:var(--primary);color:var(--primary-foreground);font-size:.48rem;font-weight:700}.engine-v4__flowpilot-head strong{font-size:.63rem}.engine-v4__flowpilot-head i{margin-left:auto;color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.48rem;font-style:normal}.engine-v4__flowpilot p{margin:.55rem .65rem;border-radius:.5rem;padding:.55rem .65rem;font-size:.58rem;line-height:1.5}.engine-v4__prompt{margin-left:2.5rem!important;background:var(--muted);color:var(--muted-foreground)}.engine-v4__reply{display:flex;gap:.4rem;border:1px solid color-mix(in oklch,var(--primary) 15%,var(--border));color:var(--foreground)}.engine-v4__reply span{color:var(--primary)}
+  .engine-v4__complete{display:flex;min-width:max-content;transform:translateY(5px);align-items:center;gap:.4rem;border:1px solid color-mix(in oklch,#38b77a 25%,var(--border));border-radius:999px;background:color-mix(in oklch,#38b77a 7%,var(--background));padding:.45rem .7rem;color:var(--foreground);font-size:.62rem;font-weight:650;opacity:0;transition:opacity .35s ease,transform .35s ease}.engine-v4__complete.is-visible{transform:none;opacity:1}.engine-v4__complete span{color:#38b77a}
+  .engine-v4__monitor{padding-bottom:.8rem}.engine-v4__monitor-head{display:flex;height:2.75rem;align-items:center;gap:.5rem;border-bottom:1px solid var(--border);padding:0 .8rem;background:var(--muted)}.engine-v4__monitor-head>span{width:.45rem;height:.45rem;border-radius:50%;background:#38b77a}.engine-v4__monitor-head strong{font-size:.66rem}.engine-v4__monitor-head em{margin-left:auto;color:var(--muted-foreground);font-family:ui-monospace,monospace;font-size:.52rem;font-style:normal}.engine-v4__metric{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid color-mix(in oklch,var(--border) 65%,transparent);padding:.8rem}.engine-v4__metric span{color:var(--muted-foreground);font-size:.62rem}.engine-v4__metric strong{font-family:ui-monospace,monospace;font-size:.65rem}.engine-v4__trace{margin:.8rem 0 0;padding:0 .8rem;list-style:none}.engine-v4__trace li{display:grid;grid-template-columns:.65rem 1fr auto;gap:.55rem;align-items:start;padding:.55rem 0;color:var(--muted-foreground);opacity:.45;transition:opacity .25s ease,color .25s ease}.engine-v4__trace li>span{margin-top:.25rem;width:.45rem;height:.45rem;border:1px solid var(--border);border-radius:50%}.engine-v4__trace li p{margin:0;font-size:.6rem}.engine-v4__trace li small{display:block;margin-top:.12rem;font-family:ui-monospace,monospace;font-size:.48rem;opacity:.7}.engine-v4__trace time{font-family:ui-monospace,monospace;font-size:.5rem}.engine-v4__trace li.is-done{color:var(--foreground);opacity:1}.engine-v4__trace li.is-done>span{border-color:#38b77a;background:#38b77a;box-shadow:0 0 0 3px color-mix(in oklch,#38b77a 12%,transparent)}
+  .engine-v4__reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease var(--delay,0ms),transform .6s ease var(--delay,0ms)}.engine-v4__reveal.is-visible{opacity:1;transform:none}
+  @media(max-width:1023px){.engine-v4__monitor{display:grid;grid-template-columns:repeat(3,1fr)}.engine-v4__monitor-head{grid-column:1/-1}.engine-v4__trace{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr)}.engine-v4__trace li{grid-template-columns:.65rem 1fr}.engine-v4__trace time{display:none}}
+  @media(max-width:780px){.engine-v4__workspace{min-height:0;padding:1.25rem}.engine-v4__flow{grid-template-columns:minmax(0,1fr);justify-items:stretch}.engine-v4__wire{width:2px;height:1.25rem;justify-self:center}.engine-v4__wire::after{float:none;display:block;margin:.77rem 0 0 -.12rem;transform:rotate(135deg)}.engine-v4__node{width:min(100%,19rem);justify-self:center}.engine-v4__workspace-lower{grid-template-columns:1fr}.engine-v4__flowpilot{width:100%}.engine-v4__complete{justify-self:start}.engine-v4__monitor{grid-template-columns:1fr}.engine-v4__monitor-head,.engine-v4__trace{grid-column:1}.engine-v4__trace{grid-template-columns:1fr 1fr}}
+  @media(prefers-reduced-motion:reduce){.engine-v4__reveal{opacity:1;transform:none;transition:none}.engine-v4__node,.engine-v4__wire,.engine-v4__complete,.engine-v4__trace li{transition:none}}
+</style>
+
+<script>
+  function initEngineV4() {
+    document.querySelectorAll<HTMLElement>("[data-engine-demo]").forEach((demo) => {
+      if (demo.dataset.ready === "true") return;
+      demo.dataset.ready = "true";
+      const button = demo.querySelector<HTMLButtonElement>("[data-engine-run]");
+      const label = demo.querySelector<HTMLElement>("[data-run-label]");
+      const steps = [...demo.querySelectorAll<HTMLElement>("[data-engine-step]")];
+      const wires = [...demo.querySelectorAll<HTMLElement>("[data-wire]")];
+      const complete = demo.querySelector<HTMLElement>("[data-engine-complete]");
+      const section = demo.closest(".engine-v4");
+      const traces = [...(section?.querySelectorAll<HTMLElement>("[data-engine-trace]") ?? [])];
+      const status = section?.querySelector<HTMLElement>("[data-engine-status]");
+      const duration = section?.querySelector<HTMLElement>("[data-engine-duration]");
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const run = async () => {
+        if (!button || button.disabled) return;
+        button.disabled = true; label && (label.textContent = "Running…"); status && (status.textContent = "running"); duration && (duration.textContent = "0 ms"); complete?.classList.remove("is-visible");
+        steps.forEach((el) => el.classList.remove("is-running", "is-done")); wires.forEach((el) => el.classList.remove("is-running")); traces.forEach((el) => { el.classList.remove("is-done"); el.querySelector("time")!.textContent = "—"; });
+        for (let index = 0; index < steps.length; index++) {
+          steps[index]?.classList.add("is-running"); wires[index - 1]?.classList.add("is-running");
+          await new Promise((resolve) => window.setTimeout(resolve, reduced ? 0 : 430));
+          steps[index]?.classList.remove("is-running"); steps[index]?.classList.add("is-done"); wires[index - 1]?.classList.remove("is-running"); traces[index]?.classList.add("is-done"); const time = traces[index]?.querySelector("time"); if (time) time.textContent = `${140 + index * 219} ms`; duration && (duration.textContent = `${140 + index * 219} ms`);
+        }
+        complete?.classList.add("is-visible"); status && (status.textContent = "complete"); label && (label.textContent = "Run again"); button.disabled = false;
+      };
+      button?.addEventListener("click", run);
+    });
+    const reveals = document.querySelectorAll<HTMLElement>(".engine-v4__reveal:not(.is-visible)");
+    if (!("IntersectionObserver" in window)) { reveals.forEach((el) => el.classList.add("is-visible")); return; }
+    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => { if (!entry.isIntersecting) return; entry.target.classList.add("is-visible"); observer.unobserve(entry.target); }), { threshold:.1, rootMargin:"0px 0px -8%" });
+    reveals.forEach((el) => observer.observe(el));
+  }
+  initEngineV4();
+</script>

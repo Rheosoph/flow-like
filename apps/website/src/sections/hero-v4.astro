@@ -1,0 +1,296 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+import HeroShaders from "../components/hero-shaders-v4.astro";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+
+const github = "https://github.com/Rheosoph/flow-like";
+const webApp = "https://app.flow-like.com";
+
+const trustPills = [
+  "v4.hero.trust.openSource",
+  "v4.hero.trust.offline",
+  "v4.hero.trust.noAccount",
+  "v4.hero.trust.hardware",
+  "v4.hero.trust.free",
+  "v4.hero.trust.germany",
+] as const;
+
+const tabs = [
+  { id: "engine", image: "/images/product/FlowLikeStudio-hero.webp", label: "v4.hero.tab.engine", sub: "v4.hero.tab.engine.sub", position: "center" },
+  { id: "work", image: "/images/product/RunsAndLogs-hero.webp", label: "v4.hero.tab.work", sub: "v4.hero.tab.work.sub", position: "center" },
+  { id: "data", image: "/images/product/FlowWithLayers-hero.webp", label: "v4.hero.tab.data", sub: "v4.hero.tab.data.sub", position: "center" },
+  { id: "screens", image: "/images/product/AppBoards-hero.webp", label: "v4.hero.tab.screens", sub: "v4.hero.tab.screens.sub", position: "center" },
+  { id: "catalog", image: "/images/product/NodeCatalog-hero.webp", label: "v4.hero.tab.catalog", sub: "v4.hero.tab.catalog.sub", position: "center" },
+] as const;
+---
+
+<section id="hero" class="hero-v4 relative isolate overflow-hidden border-b border-border/40">
+  <div class="absolute inset-0 -z-20 bg-background" aria-hidden="true"></div>
+  <HeroShaders />
+  <div class="hero-v4__veil pointer-events-none absolute inset-0 -z-10" aria-hidden="true"></div>
+
+  <div class="mx-auto max-w-7xl px-4 pb-20 pt-28 sm:px-6 md:pb-28 md:pt-36 lg:px-8">
+    <div class="mx-auto max-w-4xl text-center">
+      <a href="#comparison" class="hero-v4__reveal hero-v4__badge" style="--delay: 40ms">
+        <span class="hero-v4__badge-dot" aria-hidden="true"></span>
+        <span>{t("v4.hero.badge")}</span>
+        <svg viewBox="0 0 14 14" aria-hidden="true"><path d="m5 3.5 3.5 3.5L5 10.5" /></svg>
+      </a>
+
+      <h1 class="hero-v4__reveal mt-7 text-balance text-[clamp(2.75rem,7vw,6.65rem)] font-bold leading-[0.94] tracking-[-0.055em] text-foreground" style="--delay: 110ms">
+        {t("v4.hero.headline")}
+      </h1>
+
+      <p class="hero-v4__reveal mx-auto mt-7 max-w-3xl text-balance text-base leading-relaxed text-muted-foreground sm:text-lg md:text-xl" style="--delay: 180ms">
+        {t("v4.hero.subtitle")}
+      </p>
+
+      <div class="hero-v4__reveal mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row" style="--delay: 250ms">
+        <a href="/download" class="hero-v4__primary group">
+          <span>{t("v4.hero.cta.download")}</span>
+          <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 2v10m0 0 4-4m-4 4L5 8M3 15h12" /></svg>
+        </a>
+        <a href={github} target="_blank" rel="noopener noreferrer" class="hero-v4__secondary group">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.52-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.74-1.55-2.57-.3-5.28-1.29-5.28-5.69 0-1.26.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.16 1.17A11 11 0 0 1 12 6.12c.98 0 1.96.13 2.88.39 2.2-1.48 3.16-1.17 3.16-1.17.62 1.58.23 2.75.11 3.04.74.8 1.18 1.82 1.18 3.08 0 4.42-2.71 5.39-5.3 5.68.42.36.79 1.06.79 2.14v3.26c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" /></svg>
+          <span>{t("v4.hero.cta.github")}</span>
+          <span class="hero-v4__stars" aria-label={t("v4.hero.starsLabel")}>
+            <span aria-hidden="true">★</span><span data-hero-stars>600+</span>
+          </span>
+        </a>
+      </div>
+
+      <a href={webApp} target="_blank" rel="noopener noreferrer" class="hero-v4__reveal mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground" style="--delay: 300ms">
+        {t("v4.hero.cta.webapp")}
+        <span aria-hidden="true">↗</span>
+      </a>
+
+      <ul class="hero-v4__reveal mx-auto mt-8 flex max-w-4xl list-none flex-wrap justify-center gap-2 p-0" style="--delay: 340ms" aria-label="Platform facts">
+        {trustPills.map((key) => (
+          <li class="rounded-full border border-border/60 bg-background/60 px-3 py-1.5 text-[0.72rem] font-medium text-foreground/75 shadow-sm backdrop-blur-md sm:text-xs">
+            <span class="mr-1.5 text-primary" aria-hidden="true">●</span>{t(key)}
+          </li>
+        ))}
+      </ul>
+
+    </div>
+
+    <div class="hero-v4__reveal mx-auto mt-14 max-w-6xl md:mt-20" style="--delay: 430ms" data-hero-showcase>
+      <div class="hero-v4__tabs" role="tablist" aria-label={t("v4.hero.tabsLabel")}>
+        {tabs.map((tab, index) => (
+          <button
+            type="button"
+            class:list={["hero-v4__tab", index === 0 && "is-active"]}
+            id={`hero-v4-tab-${tab.id}`}
+            role="tab"
+            aria-selected={index === 0 ? "true" : "false"}
+            aria-controls={`hero-v4-panel-${tab.id}`}
+            tabindex={index === 0 ? 0 : -1}
+            data-hero-tab={index}
+          >
+            <span>{t(tab.label)}</span>
+            <small>{t(tab.sub)}</small>
+            <i aria-hidden="true"></i>
+          </button>
+        ))}
+      </div>
+
+      <div class="hero-v4__frame">
+        <div class="hero-v4__chrome" aria-hidden="true">
+          <span></span><span></span><span></span>
+          <strong>Flow-Like Studio</strong>
+          <em>Local</em>
+        </div>
+        <div class="hero-v4__panels">
+          {tabs.map((tab, index) => (
+            <figure
+              id={`hero-v4-panel-${tab.id}`}
+              class:list={["hero-v4__panel", index === 0 && "is-active"]}
+              role="tabpanel"
+              aria-labelledby={`hero-v4-tab-${tab.id}`}
+              aria-hidden={index === 0 ? "false" : "true"}
+              data-hero-panel={index}
+            >
+              <img
+                src={tab.image}
+                alt={`${t(tab.label)} — Flow-Like Studio`}
+                width="1600"
+                height="965"
+                loading={index === 0 ? "eager" : "lazy"}
+                fetchpriority={index === 0 ? "high" : "auto"}
+                decoding="async"
+                style={`object-position:${tab.position}`}
+              />
+            </figure>
+          ))}
+        </div>
+      </div>
+      <div class="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-center font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground/55">
+        <p>{t("v4.hero.captureNote")}</p>
+        <span class="hero-v4__rotation-separator" aria-hidden="true">·</span>
+        <button type="button" class="underline decoration-border underline-offset-4 transition-colors hover:text-foreground" data-hero-rotation data-pause-label={t("v4.hero.rotation.pause")} data-resume-label={t("v4.hero.rotation.resume")} aria-pressed="false">{t("v4.hero.rotation.pause")}</button>
+      </div>
+    </div>
+
+    <p class="hero-v4__reveal mx-auto mt-8 max-w-2xl text-center text-xs leading-relaxed text-muted-foreground/70" style="--delay: 480ms">
+      <span class="font-mono text-[0.64rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span>
+      <span aria-hidden="true"> — </span>{t("v4.hero.uth")}
+    </p>
+  </div>
+</section>
+
+<style>
+  .hero-v4 { min-height: 100svh; background: color-mix(in oklch, var(--background) 76%, transparent); }
+  .hero-v4__veil {
+    background:
+      linear-gradient(to bottom, color-mix(in oklch, var(--background) 16%, transparent), color-mix(in oklch, var(--background) 48%, transparent) 58%, color-mix(in oklch, var(--background) 94%, transparent) 100%),
+      radial-gradient(ellipse 58% 42% at 50% 29%, color-mix(in oklch, var(--background) 8%, transparent), color-mix(in oklch, var(--background) 50%, transparent));
+  }
+  .hero-v4 :global(.fl-hero-shaders__canvas),
+  .hero-v4 :global(.fl-hero-shaders__fallback) {
+    filter: saturate(1.12) contrast(1.035);
+  }
+  .hero-v4__reveal { opacity: 0; transform: translateY(18px); animation: hero-v4-in .75s cubic-bezier(.16,1,.3,1) var(--delay, 0ms) forwards; }
+  @keyframes hero-v4-in { to { opacity: 1; transform: translateY(0); } }
+  .hero-v4__badge { display: inline-flex; align-items: center; gap: .55rem; border: 1px solid color-mix(in oklch, var(--primary) 28%, var(--border)); border-radius: 999px; background: color-mix(in oklch, var(--background) 76%, transparent); padding: .45rem .8rem; color: var(--foreground); font-size: .74rem; font-weight: 600; text-decoration: none; box-shadow: 0 10px 35px color-mix(in srgb, black 7%, transparent); backdrop-filter: blur(14px); }
+  .hero-v4__badge:hover { border-color: color-mix(in oklch, var(--primary) 55%, var(--border)); }
+  .hero-v4__badge svg { width: .85rem; height: .85rem; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
+  .hero-v4__badge-dot { width: .45rem; height: .45rem; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 .22rem color-mix(in oklch, var(--primary) 14%, transparent); }
+  .hero-v4__primary, .hero-v4__secondary { display: inline-flex; min-height: 3rem; align-items: center; justify-content: center; gap: .65rem; border-radius: .75rem; padding: .72rem 1.1rem; font-size: .9rem; font-weight: 650; text-decoration: none; transition: transform .2s ease, border-color .2s ease, background-color .2s ease; }
+  .hero-v4__primary { background: var(--primary); color: var(--primary-foreground); box-shadow: 0 12px 35px color-mix(in oklch, var(--primary) 20%, transparent); }
+  .hero-v4__primary:hover, .hero-v4__secondary:hover { transform: translateY(-2px); }
+  .hero-v4__primary svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
+  .hero-v4__secondary { border: 1px solid var(--border); background: color-mix(in oklch, var(--background) 78%, transparent); color: var(--foreground); backdrop-filter: blur(14px); }
+  .hero-v4__secondary > svg { width: 1.05rem; height: 1.05rem; }
+  .hero-v4__stars { display: inline-flex; align-items: center; gap: .25rem; border-left: 1px solid var(--border); padding-left: .65rem; color: var(--muted-foreground); font-size: .72rem; }
+  .hero-v4__tabs { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); overflow: hidden; border: 1px solid var(--border); border-bottom: 0; border-radius: 1rem 1rem 0 0; background: color-mix(in oklch, var(--background) 84%, transparent); backdrop-filter: blur(16px); }
+  .hero-v4__tab { position: relative; display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: .1rem; border-right: 1px solid color-mix(in oklch, var(--border) 72%, transparent); padding: .85rem 1rem 1rem; color: var(--muted-foreground); text-align: left; transition: background-color .2s ease, color .2s ease; }
+  .hero-v4__tab:last-child { border-right: 0; }
+  .hero-v4__tab span { overflow: hidden; width: 100%; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; font-weight: 650; }
+  .hero-v4__tab small { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .58rem; opacity: .62; }
+  .hero-v4__tab i { position: absolute; right: .75rem; bottom: .45rem; left: .75rem; height: 2px; overflow: hidden; border-radius: 99px; background: color-mix(in oklch, var(--border) 70%, transparent); }
+  .hero-v4__tab i::after { content: ""; display: block; width: 0; height: 100%; background: var(--primary); }
+  .hero-v4__tab.is-active { background: color-mix(in oklch, var(--primary) 6%, var(--background)); color: var(--foreground); }
+  .hero-v4__tab.is-active i::after { animation: hero-v4-progress 6.5s linear forwards; }
+  [data-rotation-paused] .hero-v4__tab.is-active i::after { animation-play-state: paused; }
+  @keyframes hero-v4-progress { to { width: 100%; } }
+  .hero-v4__frame { overflow: hidden; border: 1px solid color-mix(in oklch, var(--border) 90%, transparent); border-radius: 0 0 1.15rem 1.15rem; background: color-mix(in oklch, var(--background) 90%, black 10%); box-shadow: 0 35px 90px color-mix(in srgb, black 20%, transparent), 0 0 0 1px color-mix(in srgb, white 4%, transparent) inset; }
+  .hero-v4__chrome { display: flex; height: 2.45rem; align-items: center; gap: .42rem; border-bottom: 1px solid var(--border); padding: 0 .8rem; background: color-mix(in oklch, var(--muted) 48%, var(--background)); }
+  .hero-v4__chrome > span { width: .52rem; height: .52rem; border-radius: 50%; background: var(--muted-foreground); opacity: .24; }
+  .hero-v4__chrome > span:first-child { background: #ef665b; opacity: .7; }
+  .hero-v4__chrome > span:nth-child(2) { background: #e9b949; opacity: .7; }
+  .hero-v4__chrome > span:nth-child(3) { background: #42b983; opacity: .7; }
+  .hero-v4__chrome strong { margin-left: .35rem; color: var(--muted-foreground); font-size: .68rem; font-weight: 600; }
+  .hero-v4__chrome em { margin-left: auto; border: 1px solid color-mix(in oklch, var(--primary) 22%, var(--border)); border-radius: 999px; padding: .16rem .45rem; color: var(--muted-foreground); font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .54rem; font-style: normal; text-transform: uppercase; letter-spacing: .08em; }
+  .hero-v4__panels { position: relative; aspect-ratio: 1.659/1; background: var(--muted); }
+  .hero-v4__panel { position: absolute; inset: 0; margin: 0; opacity: 0; transform: scale(1.012); transition: opacity .45s ease, transform .6s cubic-bezier(.16,1,.3,1); pointer-events: none; }
+  .hero-v4__panel.is-active { opacity: 1; transform: scale(1); pointer-events: auto; }
+  .hero-v4__panel img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  @media (max-width: 640px) {
+    .hero-v4__tabs { grid-template-columns: repeat(5, 7.75rem); overflow-x: auto; scroll-snap-type: x proximity; }
+    .hero-v4__tab { scroll-snap-align: start; }
+    .hero-v4__panels { aspect-ratio: 1.42/1; }
+    .hero-v4__panel img { object-position: center; object-fit: contain; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-v4__reveal { opacity: 1; transform: none; animation: none; }
+    .hero-v4__tab.is-active i::after { width: 100%; animation: none; }
+    .hero-v4__panel, .hero-v4__primary, .hero-v4__secondary { transition: none; }
+    [data-hero-rotation], .hero-v4__rotation-separator { display: none; }
+  }
+</style>
+
+<script>
+  function initHeroV4() {
+    const root = document.querySelector<HTMLElement>("[data-hero-showcase]");
+    if (!root || root.dataset.ready === "true") return;
+    root.dataset.ready = "true";
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>("[data-hero-tab]")];
+    const panels = [...root.querySelectorAll<HTMLElement>("[data-hero-panel]")];
+    const tablist = root.querySelector<HTMLElement>("[role='tablist']");
+    const rotation = root.querySelector<HTMLButtonElement>("[data-hero-rotation]");
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let active = 0;
+    let timer = 0;
+    let userPaused = reduced;
+    let interactionPaused = false;
+    let inView = true;
+
+    const updateRotation = () => {
+      if (!rotation) return;
+      rotation.textContent = userPaused ? (rotation.dataset.resumeLabel ?? "Resume rotation") : (rotation.dataset.pauseLabel ?? "Pause rotation");
+      rotation.setAttribute("aria-pressed", String(userPaused));
+    };
+
+    const schedule = () => {
+      window.clearInterval(timer);
+      const paused = userPaused || interactionPaused || !inView || document.hidden;
+      root.toggleAttribute("data-rotation-paused", paused);
+      if (paused) return;
+      timer = window.setInterval(() => select(active + 1, false), 6500);
+    };
+
+    const select = (next: number, restart = true) => {
+      active = (next + tabs.length) % tabs.length;
+      tabs.forEach((tab, index) => {
+        const selected = index === active;
+        tab.classList.toggle("is-active", selected);
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      panels.forEach((panel, index) => {
+        const selected = index === active;
+        panel.classList.toggle("is-active", selected);
+        panel.setAttribute("aria-hidden", String(!selected));
+      });
+      const selectedTab = tabs[active];
+      if (selectedTab && tablist && tablist.scrollWidth > tablist.clientWidth) {
+        tablist.scrollTo({ left: selectedTab.offsetLeft - (tablist.clientWidth - selectedTab.offsetWidth) / 2, behavior: reduced ? "auto" : "smooth" });
+      }
+      if (restart) schedule();
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => { userPaused = true; updateRotation(); select(index); });
+      tab.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        userPaused = true;
+        updateRotation();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : active + (event.key === "ArrowRight" ? 1 : -1);
+        select(next);
+        tabs[active]?.focus();
+      });
+    });
+    rotation?.addEventListener("click", () => { userPaused = !userPaused; updateRotation(); schedule(); });
+    root.addEventListener("pointerenter", () => { interactionPaused = true; schedule(); });
+    root.addEventListener("pointerleave", () => { interactionPaused = false; schedule(); });
+    root.addEventListener("focusin", () => { interactionPaused = true; schedule(); });
+    root.addEventListener("focusout", (event) => { if (!root.contains(event.relatedTarget as Node | null)) { interactionPaused = false; schedule(); } });
+    document.addEventListener("visibilitychange", schedule);
+    if ("IntersectionObserver" in window) {
+      const observer = new IntersectionObserver((entries) => { inView = entries.some((entry) => entry.isIntersecting); schedule(); }, { rootMargin: "120px 0px" });
+      observer.observe(root);
+    }
+    updateRotation();
+    select(0);
+
+    const starTarget = document.querySelector<HTMLElement>("[data-hero-stars]");
+    if (starTarget) {
+      fetch("https://api.github.com/repos/Rheosoph/flow-like", { headers: { Accept: "application/vnd.github+json" } })
+        .then((response) => response.ok ? response.json() : Promise.reject())
+        .then((repo: { stargazers_count?: number }) => {
+          if (typeof repo.stargazers_count === "number") starTarget.textContent = new Intl.NumberFormat().format(repo.stargazers_count);
+        })
+        .catch(() => {});
+    }
+  }
+  initHeroV4();
+</script>

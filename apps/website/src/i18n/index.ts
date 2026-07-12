@@ -1,4 +1,19 @@
-import { de, en, es, fr, it, ja, ko, nl, pt, sv, zh } from "./locales";
+import {
+	de,
+	en as enBase,
+	es,
+	fr,
+	it,
+	ja,
+	ko,
+	nl,
+	pt,
+	sv,
+	zh,
+} from "./locales";
+import { v4en } from "./locales/v4";
+
+const en = { ...enBase, ...v4en };
 
 export const languages = {
 	en: "English",
@@ -59,4 +74,4 @@ export const translations = {
 	sv,
 } as const;
 
-export type TranslationKey = string & (keyof typeof en | keyof typeof ko | {});
+export type TranslationKey = string;
