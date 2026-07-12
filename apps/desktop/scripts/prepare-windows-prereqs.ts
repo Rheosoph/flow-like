@@ -83,7 +83,14 @@ function parseArgs(): CliOptions {
 }
 
 function selectedArchitectures(options: CliOptions): Architecture[] {
-	if (!options.arch) return Object.keys(ARCHITECTURES) as Architecture[];
+	if (!options.arch) {
+		if (process.arch === "arm64") return ["arm64"];
+		if (process.arch === "x64") return ["x64"];
+
+		throw new Error(
+			`Unsupported Windows architecture: ${process.arch}. Pass --arch x64 or --arch arm64 explicitly.`,
+		);
+	}
 
 	return [options.arch];
 }
@@ -95,7 +102,8 @@ Stages app-local Microsoft Visual C++ and ONNX Runtime/DirectML DLLs into:
   ${path.relative(process.cwd(), path.join(SRC_TAURI_DIR, "binaries/win"))}
 
 The Windows Tauri configs bundle these files as resources so MSI, NSIS
-and updater installs include the native runtime DLLs with the app.
+and updater installs include the native runtime DLLs with the app. Without
+--arch, the script stages DLLs for the current machine architecture.
 
 By default this script locates the Visual Studio Redistributable directory
 from VCToolsRedistDir, VCINSTALLDIR or vswhere. Set FLOWLIKE_VC_REDIST_DIR
