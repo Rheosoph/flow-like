@@ -601,7 +601,11 @@ fn delete_items_blocking(
     active_runs: &HashSet<String>,
 ) -> Result<(StorageDeleteResult, Vec<String>), TauriFunctionError> {
     let overview = build_overview(paths, log_retention, active_runs);
-    let Some(inventory) = overview.categories.iter().find(|entry| entry.key == category) else {
+    let Some(inventory) = overview
+        .categories
+        .iter()
+        .find(|entry| entry.key == category)
+    else {
         return Err(TauriFunctionError::new("Unknown storage category"));
     };
     let known = inventory
@@ -667,7 +671,13 @@ pub async fn delete_local_storage_items(
     };
     let category_for_task = category.clone();
     let (result, deleted_apps) = flow_like_types::tokio::task::spawn_blocking(move || {
-        delete_items_blocking(&paths, &log_retention, &category_for_task, ids, &active_runs)
+        delete_items_blocking(
+            &paths,
+            &log_retention,
+            &category_for_task,
+            ids,
+            &active_runs,
+        )
     })
     .await
     .map_err(|error| TauriFunctionError::new(&error.to_string()))??;
@@ -711,5 +721,35 @@ mod tests {
         assert_eq!(stats.size_bytes, 4);
         assert_eq!(stats.file_count, 1);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prune_empty_parents_stops_at_root_and_keeps_populated_dirs() {
+        let root = std::env::temp_dir().join(format!(
+            "flow-like-storage-prune-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runs = root.join("runs");
+        let leaf = runs.join("app").join("board").join("run.lance");
+        fs::create_dir_all(&leaf).unwrap();
+        // A sibling run keeps `board` (and its ancestors) populated.
+        let sibling = runs.join("app").join("board").join("other.lance");
+        fs::create_dir_all(&sibling).unwrap();
+
+        fs::remove_dir_all(&leaf).unwrap();
+        prune_empty_parents(&leaf, &runs);
+        assert!(sibling.exists());
+        assert!(runs.join("app").join("board").exists());
+
+        fs::remove_dir_all(&sibling).unwrap();
+        prune_empty_parents(&sibling, &runs);
+        // Empty `board` and `app` are pruned, but the `runs` root survives.
+        assert!(!runs.join("app").exists());
+        assert!(runs.exists());
+
+        fs::remove_dir_all(&root).unwrap();
     }
 }
