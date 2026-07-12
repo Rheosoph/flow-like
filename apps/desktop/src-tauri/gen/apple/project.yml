@@ -76,6 +76,7 @@ targets:
       - framework: thirdparty/onnxruntime.xcframework
         embed: false
       - sdk: Accelerate.framework
+      - sdk: CoreML.framework
       - sdk: CoreFoundation.framework
       - sdk: CoreGraphics.framework
       - sdk: CoreMedia.framework

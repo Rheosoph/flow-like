@@ -13,12 +13,14 @@ execute = ["flow-like-catalog-core/execute", "dep:tract-tflite", "dep:hound", "d
 # Execution Provider features - optional GPU/NPU acceleration
 # These are compile-time optional and gracefully fall back at runtime
 cuda = ["flow-like-model-provider/cuda"]
-tensorrt = ["flow-like-model-provider/tensorrt"]
+tensorrt = ["cuda", "flow-like-model-provider/tensorrt"]
 coreml = ["flow-like-model-provider/coreml"]
 directml = ["flow-like-model-provider/directml"]
+nnapi = ["flow-like-model-provider/nnapi"]
 xnnpack = ["flow-like-model-provider/xnnpack"]
 
-# Convenience feature for all available EPs on current platform
+# Legacy desktop convenience feature. NNAPI stays Android-targeted because its direct native
+# symbol is not present in the Apple static runtime.
 all-eps = ["cuda", "tensorrt", "coreml", "directml", "xnnpack"]
 
 [dependencies]
@@ -46,7 +48,7 @@ hound = { version = "3.5", optional = true }
 tokenizers = { version = "0.22.2", optional = true }
 # The fork disables ort's binary-download defaults. FlowLike standardizes on C API 24 and links
 # the vendored mobile runtime instead of downloading host binaries.
-face_id = { git = "https://github.com/Rheosoph/face_id-rs", rev = "2c5b26dba986be8615c5d6701392940a558dce4a", default-features = false, optional = true }
+face_id = { git = "https://github.com/Rheosoph/face_id-rs", rev = "8fb76ae1d038bf7c26f7d3be9935d85d43180e63", default-features = false, optional = true }
 reqwest = { workspace = true, optional = true }
 tempfile = { version = "3", optional = true }
 

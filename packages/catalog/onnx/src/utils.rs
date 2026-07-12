@@ -8,8 +8,6 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_core::FlowPath;
-#[cfg(feature = "execute")]
-use flow_like_model_provider::ml::ort::session::Session;
 use flow_like_types::{Result, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -115,11 +113,16 @@ impl NodeLogic for ModelInfoNode {
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         #[cfg(feature = "execute")]
         {
+            crate::onnx::execution_providers::ensure_ort_initialized()?;
             context.deactivate_exec_pin("exec_out").await?;
 
             let path: FlowPath = context.evaluate_pin("path").await?;
             let bytes = path.get(context, false).await?;
-            let session = Session::builder()?.commit_from_memory(&bytes)?;
+            let session = {
+                let mut session_builder =
+                    crate::onnx::execution_providers::configured_session_builder()?;
+                session_builder.commit_from_memory(&bytes)?
+            };
 
             let inputs: Vec<TensorInfo> = session
                 .inputs()

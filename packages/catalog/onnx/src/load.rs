@@ -1,7 +1,7 @@
 /// # ONNX Model Loader Nodes
 use crate::onnx::NodeOnnxSession;
 #[cfg(feature = "execute")]
-use crate::onnx::execution_providers::{get_ep_info, is_initialized};
+use crate::onnx::execution_providers::{configured_session_builder, ensure_ort_initialized};
 #[cfg(feature = "execute")]
 use crate::onnx::{Provider, SessionWithMeta, classification, detection};
 use flow_like::flow::{
@@ -548,16 +548,11 @@ impl NodeLogic for LoadOnnxNode {
             let path: FlowPath = context.evaluate_pin("path").await?;
             let bytes = path.get(context, false).await?;
 
-            // Get global EP info (ORT should be initialized at app startup)
-            let ep_info = get_ep_info().unwrap_or_default();
-            if !is_initialized() {
-                tracing::warn!(
-                    "ORT not initialized - call initialize_ort() at app startup for GPU acceleration"
-                );
-            }
+            // Idempotent and cheap after the first call. This also protects embedded/library
+            // callers that reach the node without going through a FlowLike runtime bootstrap.
+            let ep_info = ensure_ort_initialized()?;
 
-            // Build session - it will use the globally configured EPs
-            let session = Session::builder()?.commit_from_memory(&bytes)?;
+            let session = configured_session_builder()?.commit_from_memory(&bytes)?;
 
             // wrap ONNX session with provider metadata
             // we try to determine the here to fail fast in case of incompatible ONNX assets

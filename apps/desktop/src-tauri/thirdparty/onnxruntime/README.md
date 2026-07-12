@@ -16,3 +16,9 @@ Source archives:
 
 The Android package requires API level 24. The Apple package requires iOS 15.1
 and macOS 14.0. Rust consumers currently use ONNX Runtime C API 24.
+
+Windows desktop builds select ORT's DirectML distribution and must stage its
+`DirectML.dll` before Tauri validates bundle resources. Use `bun run build:win:x64`
+or `bun run build:win:arm` from `apps/desktop`; those wrappers run
+`scripts/prepare-windows-prereqs.ts` before the Tauri build. The same preparation
+is wired into the Windows development scripts and release CI.

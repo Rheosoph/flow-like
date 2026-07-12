@@ -7368,7 +7368,7 @@ checksum = "af9673d8203fcb076b19dfd17e38b3d4ae9f44959416ea532ce72415a6020365"
 [[package]]
 name = "face_id"
 version = "0.4.2"
-source = "git+https://github.com/Rheosoph/face_id-rs?rev=2c5b26dba986be8615c5d6701392940a558dce4a#2c5b26dba986be8615c5d6701392940a558dce4a"
+source = "git+https://github.com/Rheosoph/face_id-rs?rev=8fb76ae1d038bf7c26f7d3be9935d85d43180e63#8fb76ae1d038bf7c26f7d3be9935d85d43180e63"
 dependencies = [
  "bon",
  "image",
@@ -8467,6 +8467,7 @@ dependencies = [
  "google-cloud-auth",
  "http 1.4.0",
  "ndarray 0.17.2",
+ "ndk-sys",
  "ort",
  "reqwest 0.12.28",
  "rig-core",

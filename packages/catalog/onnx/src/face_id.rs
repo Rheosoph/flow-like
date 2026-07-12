@@ -1282,6 +1282,7 @@ async fn build_face_analyzer(
     let build_detector_path = detector_path.clone();
     let build_embedder_path = embedder_path.clone();
     let build_gender_age_path = gender_age_path.clone();
+    let execution_providers = super::execution_providers::session_execution_providers(true)?;
     let (analyzer, temp_dir) = flow_like_types::tokio::task::spawn_blocking(move || {
         let analyzer = face_id::analyzer::FaceAnalyzer::builder(
             build_detector_path,
@@ -1291,6 +1292,7 @@ async fn build_face_analyzer(
         .detector_input_size((config.input_size, config.input_size))
         .detector_score_threshold(config.score_threshold)
         .detector_iou_threshold(config.iou_threshold)
+        .with_execution_providers(&execution_providers)
         .build();
         (analyzer, temp_dir)
     })
@@ -1539,9 +1541,10 @@ impl NodeLogic for LoadFaceAnalyzerNode {
                 ModelSpec::new(ModelRole::GenderAge, &gender_age_url, &gender_age_sha256)?,
             ];
 
-            // This is idempotent and guarantees the environment EP list exists before the
-            // face_id sessions are built. Session builders inherit it automatically in ort rc.12.
-            let ep_info = super::execution_providers::initialize_ort();
+            // Face ID inherits the Apple/Android environment providers. Its fork also applies
+            // DirectML's mandatory session options, so Windows receives the complete shared
+            // provider order as well.
+            let ep_info = super::execution_providers::ensure_ort_initialized()?;
             let analyzer_ref = analyzer_cache_key(&specs, config, &ep_info.active_providers);
             let (cell, mut slot_guard) =
                 NodeFaceAnalyzer::get_or_insert_slot(context, &analyzer_ref).await?;

@@ -16,12 +16,16 @@ execute = ["local-ml"]
 # Note: These are compile-time optional. At runtime, the EP gracefully falls back to CPU if unavailable.
 # CUDA requires NVIDIA GPU with CUDA toolkit installed
 cuda = ["ort/cuda"]
-# TensorRT requires NVIDIA GPU with TensorRT runtime (often faster than CUDA for inference)
-tensorrt = ["ort/tensorrt"]
+# TensorRT requires NVIDIA GPU with TensorRT runtime (often faster than CUDA for inference).
+# Keep CUDA registered behind it as the device fallback when TensorRT cannot take a model.
+tensorrt = ["cuda", "ort/tensorrt"]
 # CoreML is Apple-only (macOS, iOS, tvOS) - compiles on all platforms but only activates on Apple
 coreml = ["ort/coreml"]
-# DirectML is Windows-only - compiles on all platforms but only activates on Windows
-directml = ["ort/directml"]
+# DirectML is Windows-only. FastEmbed uses its feature flag to apply DirectML's
+# mandatory per-session settings when it constructs embedding sessions itself.
+directml = ["ort/directml", "fastembed?/directml"]
+# NNAPI is Android-only and uses the device's available accelerator drivers
+nnapi = ["ort/nnapi"]
 # XNNPACK - highly optimized CPU inference for ARM and x86 (great for mobile/edge)
 xnnpack = ["ort/xnnpack"]
 
@@ -45,18 +49,32 @@ rmcp.workspace = true
 http = "1.4.0"
 reqwest = { workspace = true, optional = true }
 
-[target.'cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "android")))'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 # Upstream ort >= rc.11 carries the iOS static-linking support (pykeio/ort#430) that
 # previously required the Rheosoph fork, so we track upstream rc.12 directly. face_id and
 # fastembed both pin =2.0.0-rc.12, keeping a single onnxruntime native link in the graph.
-ort = { version = "=2.0.0-rc.12", features = ["api-24", "download-binaries", "copy-dylibs", "ndarray"], optional = true }
+ort = { version = "=2.0.0-rc.12", features = ["api-24", "coreml", "copy-dylibs", "download-binaries", "ndarray", "xnnpack"], optional = true }
 fastembed = { version = "=5.17.2", default-features = false, features = ["image-models", "ort-download-binaries"], optional = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "=2.0.0-rc.12", features = ["api-24", "copy-dylibs", "directml", "download-binaries", "ndarray", "xnnpack"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = ["directml", "image-models", "ort-download-binaries"], optional = true }
 
-[target.'cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))'.dependencies]
+[target.'cfg(not(any(target_os = "ios", target_os = "tvos", target_os = "android", target_os = "macos", target_os = "windows")))'.dependencies]
+ort = { version = "=2.0.0-rc.12", features = ["api-24", "copy-dylibs", "download-binaries", "ndarray", "xnnpack"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = ["image-models", "ort-download-binaries"], optional = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "tvos"))'.dependencies]
 # Mobile targets use the vendored ORT 1.24.3 runtime and must not download or copy host binaries.
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "ndarray"], optional = true }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "coreml", "ndarray", "xnnpack"], optional = true }
 fastembed = { version = "=5.17.2", default-features = false, features = ["image-models"], optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android's full ORT 1.24.3 runtime includes NNAPI and XNNPACK; registration still falls back
+# cleanly when a device driver or a model operation is unsupported.
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "ndarray", "nnapi", "xnnpack"], optional = true }
+fastembed = { version = "=5.17.2", default-features = false, features = ["image-models"], optional = true }
+ndk-sys = "0.6"
 
 [dev-dependencies]
 dotenv = "0.15.0"
