@@ -59,6 +59,7 @@ export function FlowPilotInput({
 	);
 
 	useEffect(() => {
+		void value;
 		if (textareaRef.current) {
 			textareaRef.current.style.height = "auto";
 			textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
@@ -93,6 +94,7 @@ export function FlowPilotInput({
 				</div>
 
 				<Button
+					aria-label={mode === "ui" ? "Generate UI" : "Send message"}
 					size="icon"
 					onClick={handleSubmit}
 					disabled={!value.trim() || disabled || isGenerating}

@@ -2,6 +2,7 @@
 import type { Lang, TranslationKey } from "../i18n";
 import { defaultLang, translations } from "../i18n";
 import HeroShaders from "../components/hero-shaders-v4.astro";
+import LiveShowcase from "../components/showcase/LiveShowcase.astro";
 
 interface Props { lang?: Lang; }
 const { lang = defaultLang } = Astro.props;
@@ -24,11 +25,11 @@ const trustPills = [
 ] as const;
 
 const tabs = [
-  { id: "engine", image: "/images/product/FlowLikeStudio-hero.webp", label: "v4.hero.tab.engine", sub: "v4.hero.tab.engine.sub", position: "center" },
-  { id: "work", image: "/images/product/RunsAndLogs-hero.webp", label: "v4.hero.tab.work", sub: "v4.hero.tab.work.sub", position: "center" },
-  { id: "data", image: "/images/product/FlowWithLayers-hero.webp", label: "v4.hero.tab.data", sub: "v4.hero.tab.data.sub", position: "center" },
-  { id: "screens", image: "/images/product/AppBoards-hero.webp", label: "v4.hero.tab.screens", sub: "v4.hero.tab.screens.sub", position: "center" },
-  { id: "catalog", image: "/images/product/NodeCatalog-hero.webp", label: "v4.hero.tab.catalog", sub: "v4.hero.tab.catalog.sub", position: "center" },
+  { id: "engine", variant: "workflow", label: "v4.hero.tab.engine", sub: "v4.hero.tab.engine.sub" },
+  { id: "work", variant: "runs", label: "v4.hero.tab.work", sub: "v4.hero.tab.work.sub" },
+  { id: "data", variant: "data", label: "v4.hero.tab.data", sub: "v4.hero.tab.data.sub" },
+  { id: "screens", variant: "prototype", label: "v4.hero.tab.screens", sub: "v4.hero.tab.screens.sub" },
+  { id: "catalog", variant: "catalog", label: "v4.hero.tab.catalog", sub: "v4.hero.tab.catalog.sub" },
 ] as const;
 ---
 
@@ -116,17 +117,15 @@ const tabs = [
               role="tabpanel"
               aria-labelledby={`hero-v4-tab-${tab.id}`}
               aria-hidden={index === 0 ? "false" : "true"}
+              inert={index === 0 ? undefined : true}
               data-hero-panel={index}
             >
-              <img
-                src={tab.image}
-                alt={`${t(tab.label)} — Flow-Like Studio`}
-                width="1600"
-                height="965"
-                loading={index === 0 ? "eager" : "lazy"}
-                fetchpriority={index === 0 ? "high" : "auto"}
-                decoding="async"
-                style={`object-position:${tab.position}`}
+              <LiveShowcase
+                bare
+                eager={index === 0}
+                variant={tab.variant}
+                presentation="embedded"
+                posterAlt={`${t(tab.label)} — interactive Flow-Like demo`}
               />
             </figure>
           ))}
@@ -192,12 +191,10 @@ const tabs = [
   .hero-v4__panels { position: relative; aspect-ratio: 1.659/1; background: var(--muted); }
   .hero-v4__panel { position: absolute; inset: 0; margin: 0; opacity: 0; transform: scale(1.012); transition: opacity .45s ease, transform .6s cubic-bezier(.16,1,.3,1); pointer-events: none; }
   .hero-v4__panel.is-active { opacity: 1; transform: scale(1); pointer-events: auto; }
-  .hero-v4__panel img { display: block; width: 100%; height: 100%; object-fit: cover; }
   @media (max-width: 640px) {
     .hero-v4__tabs { grid-template-columns: repeat(5, 7.75rem); overflow-x: auto; scroll-snap-type: x proximity; }
     .hero-v4__tab { scroll-snap-align: start; }
     .hero-v4__panels { aspect-ratio: 1.42/1; }
-    .hero-v4__panel img { object-position: center; object-fit: contain; }
   }
   @media (prefers-reduced-motion: reduce) {
     .hero-v4__reveal { opacity: 1; transform: none; animation: none; }
@@ -220,7 +217,7 @@ const tabs = [
     let active = 0;
     let timer = 0;
     let userPaused = reduced;
-    let interactionPaused = false;
+    let focusPaused = false;
     let inView = true;
 
     const updateRotation = () => {
@@ -231,7 +228,7 @@ const tabs = [
 
     const schedule = () => {
       window.clearInterval(timer);
-      const paused = userPaused || interactionPaused || !inView || document.hidden;
+      const paused = userPaused || focusPaused || !inView || document.hidden;
       root.toggleAttribute("data-rotation-paused", paused);
       if (paused) return;
       timer = window.setInterval(() => select(active + 1, false), 6500);
@@ -249,6 +246,7 @@ const tabs = [
         const selected = index === active;
         panel.classList.toggle("is-active", selected);
         panel.setAttribute("aria-hidden", String(!selected));
+        panel.toggleAttribute("inert", !selected);
       });
       const selectedTab = tabs[active];
       if (selectedTab && tablist && tablist.scrollWidth > tablist.clientWidth) {
@@ -269,11 +267,18 @@ const tabs = [
         tabs[active]?.focus();
       });
     });
+    const takeOverDemo = () => {
+      userPaused = true;
+      updateRotation();
+      schedule();
+    };
+    panels.forEach((panel) => {
+      panel.addEventListener("pointerdown", takeOverDemo);
+      panel.addEventListener("focusin", takeOverDemo);
+    });
     rotation?.addEventListener("click", () => { userPaused = !userPaused; updateRotation(); schedule(); });
-    root.addEventListener("pointerenter", () => { interactionPaused = true; schedule(); });
-    root.addEventListener("pointerleave", () => { interactionPaused = false; schedule(); });
-    root.addEventListener("focusin", () => { interactionPaused = true; schedule(); });
-    root.addEventListener("focusout", (event) => { if (!root.contains(event.relatedTarget as Node | null)) { interactionPaused = false; schedule(); } });
+    root.addEventListener("focusin", () => { focusPaused = true; schedule(); });
+    root.addEventListener("focusout", (event) => { if (!root.contains(event.relatedTarget as Node | null)) { focusPaused = false; schedule(); } });
     document.addEventListener("visibilitychange", schedule);
     if ("IntersectionObserver" in window) {
       const observer = new IntersectionObserver((entries) => { inView = entries.some((entry) => entry.isIntersecting); schedule(); }, { rootMargin: "120px 0px" });

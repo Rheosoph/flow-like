@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import cloudflare from "@astrojs/cloudflare";
 import react from "@astrojs/react";
 import tailwindcss from "@tailwindcss/vite";
@@ -49,6 +50,14 @@ export default defineConfig({
 		},
 		resolve: {
 			dedupe: ["react", "react-dom"],
+			alias: {
+				// flow-like-ui leaf components import Next App Router hooks; this
+				// site has no Next runtime, so alias them to inert no-ops so those
+				// components (FlowPilot bubble, interactive a2ui) run in Astro islands.
+				"next/navigation": fileURLToPath(
+					new URL("./src/shims/next-navigation.ts", import.meta.url),
+				),
+			},
 		},
 		ssr: {
 			noExternal: [

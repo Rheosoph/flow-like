@@ -1,6 +1,7 @@
 import {
 	Background,
 	BackgroundVariant,
+	type ColorMode,
 	type NodeProps,
 	ReactFlow,
 	type ReactFlowInstance,
@@ -33,6 +34,8 @@ interface FlowPreviewProps {
 	comments?: { [key: string]: IComment };
 	layers?: { [key: string]: ILayer };
 	variables?: { [key: string]: IVariable };
+	/** Explicit color mode for embeds that do not mount a next-themes provider. */
+	colorMode?: ColorMode;
 }
 
 // Preview versions of nodes that don't show toolbars
@@ -76,13 +79,14 @@ function FlowPreviewInner({
 	comments,
 	layers,
 	variables,
+	colorMode: colorModeOverride,
 }: Readonly<FlowPreviewProps>) {
 	const { resolvedTheme } = useTheme();
 	const instanceRef = useRef<ReactFlowInstance | null>(null);
 	const boardRef = useRef<IBoard | undefined>(undefined);
-	const colorMode = useMemo(
-		() => (resolvedTheme === "dark" ? "dark" : "light"),
-		[resolvedTheme],
+	const colorMode = useMemo<ColorMode>(
+		() => colorModeOverride ?? (resolvedTheme === "dark" ? "dark" : "light"),
+		[colorModeOverride, resolvedTheme],
 	);
 	const layoutRevision = useMemo(
 		() =>
@@ -201,6 +205,7 @@ export function FlowPreview({
 	comments,
 	layers,
 	variables,
+	colorMode,
 }: Readonly<FlowPreviewProps>) {
 	if (!nodes || nodes.length === 0) {
 		return (
@@ -218,6 +223,7 @@ export function FlowPreview({
 					comments={comments}
 					layers={layers}
 					variables={variables}
+					colorMode={colorMode}
 				/>
 			</ReactFlowProvider>
 		</main>

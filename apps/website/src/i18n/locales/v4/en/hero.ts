@@ -28,7 +28,7 @@ export default {
 	"v4.hero.tabsLabel": "Product showcase",
 	"v4.hero.overlay.allSteps": "All steps ran",
 	"v4.hero.starsLabel": "GitHub stars",
-	"v4.hero.captureNote": "Real product captures · choose a layer to inspect it",
+	"v4.hero.captureNote": "Live product UI · choose a layer and try it",
 	"v4.hero.rotation.pause": "Pause rotation",
 	"v4.hero.rotation.resume": "Resume rotation",
 } as const;

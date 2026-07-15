@@ -1,6 +1,7 @@
 ---
 import type { Lang, TranslationKey } from "../i18n";
 import { translations, defaultLang } from "../i18n";
+import LiveShowcase from "../components/showcase/LiveShowcase.astro";
 
 interface Props { lang?: Lang; }
 const { lang = defaultLang } = Astro.props;
@@ -33,24 +34,21 @@ const stages = [
     num: "1",
     title: t("v4.hw.stage1.title"),
     desc: t("v4.hw.stage1.desc"),
-    alt: t("v4.hw.stage1.alt"),
-    img: "/images/product/PlaceholdersForPrototyping.webp",
+    variant: "workflow" as const,
     tone: "amber" as const,
   },
   {
     num: "2",
     title: t("v4.hw.stage2.title"),
     desc: t("v4.hw.stage2.desc"),
-    alt: t("v4.hw.stage2.alt"),
-    img: "/images/product/FlowWithLayers.webp",
+    variant: "data" as const,
     tone: "indigo" as const,
   },
   {
     num: "3",
     title: t("v4.hw.stage3.title"),
     desc: t("v4.hw.stage3.desc"),
-    alt: t("v4.hw.stage3.alt"),
-    img: "/images/product/RunsAndLogs.webp",
+    variant: "runs" as const,
     tone: "emerald" as const,
   },
 ];
@@ -124,8 +122,15 @@ const toneClasses = {
                   </span>
                 )}
               </div>
-              <div class="flex-1 p-2">
-                <img src={stage.img} alt={stage.alt} class="w-full h-full object-cover rounded-lg" loading="lazy" />
+              <div class="h-72 min-h-72 shrink-0 p-2">
+                <div class="h-full overflow-hidden rounded-lg border border-border/35">
+                  <LiveShowcase
+                    bare
+                    presentation="compact"
+                    variant={stage.variant}
+                    posterAlt={`${stage.title} — interactive Flow-Like product demo`}
+                  />
+                </div>
               </div>
               <div class="px-4 py-3 border-t border-border/20">
                 <p class="text-xs text-muted-foreground">{stage.desc}</p>
