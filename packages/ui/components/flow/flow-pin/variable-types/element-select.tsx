@@ -48,7 +48,7 @@ export function ElementSelect({
 			if (!isOpen) return;
 
 			refreshSnapshot((version) => version + 1);
-			const loadPromise = selectorDataRef?.current.loadElements();
+			const loadPromise = selectorDataRef?.current.loadElements(true);
 			loadPromise?.finally(() => refreshSnapshot((version) => version + 1));
 		},
 		[selectorDataRef],

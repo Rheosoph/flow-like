@@ -45,6 +45,12 @@ fn roundtrip_secret_decorator() {
 }
 
 #[test]
+fn rejects_comment_between_secret_decorator_and_variable() {
+    let err = parse("@secret\n// note\nconst password: string = \"real\"\n").unwrap_err();
+    assert!(err.message.contains("immediately followed"));
+}
+
+#[test]
 fn roundtrip_all_decorators() {
     // Every non-keyword variable setting surfaces as a decorator and round-trips.
     let text = "@description(\"the api key\")\n@category(\"Secrets\")\n@schema(\"{\\\"type\\\":\\\"string\\\"}\")\n@secret\n@readonly\n@runtime\nconst apiKey: string = \"\"\n";
@@ -161,6 +167,57 @@ fn roundtrip_bound_exec_branch() {
 fn roundtrip_ternary_and_binary() {
     let text = "onStart() {\n    const value = pick({ result: (length({ s: name }) > 10) ? a() : b.value })\n}\n";
     assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn binary_expressions_use_standard_precedence() {
+    let text = r#"onStart() {
+    if (sender == expected && marker == "OK" || override) {
+    }
+}
+"#;
+    let ast = parse(text).expect("mixed boolean comparisons should parse");
+    let flow_like_ast::Stmt::Branch {
+        condition: Some(condition),
+        ..
+    } = &ast.events[0].body.stmts[0]
+    else {
+        panic!("expected conditional branch")
+    };
+
+    let flow_like_ast::Expr::Binary { op, lhs, rhs } = condition else {
+        panic!("expected binary condition")
+    };
+    assert_eq!(op, "||");
+    assert!(matches!(
+        lhs.as_ref(),
+        flow_like_ast::Expr::Binary { op, .. } if op == "&&"
+    ));
+    assert!(matches!(rhs.as_ref(), flow_like_ast::Expr::Ref(name) if name == "override"));
+
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "onStart() {\n    if (((sender == expected) && (marker == \"OK\")) || override) {\n    }\n}\n"
+    );
+}
+
+#[test]
+fn subtraction_is_not_lexed_as_a_negative_rhs() {
+    let text = "onStart() {\n    let result = 10-3*2\n}\n";
+    let ast = parse(text).expect("subtraction without whitespace should parse");
+
+    assert_eq!(
+        render(&ast, &RenderOptions::default()),
+        "onStart() {\n    let result = 10 - (3 * 2)\n}\n"
+    );
+}
+
+#[test]
+fn roundtrip_minimum_integer_literal() {
+    assert_idempotent(
+        "const floor: int = -9223372036854775808\n",
+        &RenderOptions::default(),
+    );
 }
 
 #[test]
@@ -298,6 +355,39 @@ fn labelled_branch_keeps_anchor_after_arm_label() {
         other => panic!("expected labelled branch, got {other:?}"),
     }
     assert_idempotent(text, &anchored_opts());
+}
+
+#[test]
+fn first_line_branch_comments_are_not_mistaken_for_exec_labels() {
+    let text = r#"function decide(approved: bool) {
+    if (approved) {
+        // approved path
+    } else {
+        // revision path
+    }
+}
+"#;
+
+    let ast = parse(text).expect("ordinary comments inside boolean branches must parse");
+    match &ast.functions[0].body.stmts[0] {
+        flow_like_ast::Stmt::Branch {
+            condition: Some(_),
+            arms,
+            ..
+        } => {
+            assert_eq!(arms[0].label, "True");
+            assert_eq!(arms[1].label, "False");
+            assert!(matches!(
+                arms[0].body.stmts.first(),
+                Some(flow_like_ast::Stmt::Comment(comment)) if comment == "approved path"
+            ));
+            assert!(matches!(
+                arms[1].body.stmts.first(),
+                Some(flow_like_ast::Stmt::Comment(comment)) if comment == "revision path"
+            ));
+        }
+        other => panic!("expected a boolean branch, got {other:?}"),
+    }
 }
 
 #[test]

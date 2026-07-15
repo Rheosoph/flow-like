@@ -21,12 +21,12 @@
 //! never guesses identities or ambiguous catalog matches: a partial or ambiguous edit produces
 //! diagnostics instead of destructive commands.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use flow_like_ast::model::*;
 use flow_like_ast::to_camel_case;
 
-use crate::flow::board::Board;
+use crate::flow::board::{Board, LayerType};
 use crate::flow::copilot::{
     BoardCommand, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef, node_to_metadata,
 };
@@ -39,9 +39,25 @@ use crate::flow::variable::VariableType;
 pub struct ReconcileResult {
     /// Minimal board mutations to realize the edit, in apply order.
     pub commands: Vec<BoardCommand>,
-    /// Non-fatal notes (e.g. an anchor that no longer resolves to a board node, or a structural
-    /// change that reconcile deliberately left to the node-authoring tools).
+    /// Non-blocking, deterministic source migrations used while deriving commands. Callers should
+    /// surface these to the author and rewrite retained FlowScript to the canonical spelling.
+    pub corrections: Vec<String>,
+    /// Blocking representation issues. Apply/check paths treat any diagnostic as an atomic
+    /// rejection, so informational notes must not be placed here.
     pub diagnostics: Vec<String>,
+}
+
+/// Controls whether omissions in the submitted AST are edits or simply outside its scope.
+///
+/// Raw FlowScript round-trips use [`ReconcileMode::Replace`] because their document represents the
+/// whole visible board. Typed IR uses [`ReconcileMode::Additive`] by default: an IR program can be
+/// a self-contained addition to an existing board and therefore must not erase unrelated anchors
+/// or variables merely because it did not reproduce them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileMode {
+    #[default]
+    Replace,
+    Additive,
 }
 
 /// Diff a parsed FlowScript AST against `existing` and emit the minimal `BoardCommand`s.
@@ -51,7 +67,7 @@ pub struct ReconcileResult {
 /// lowered/rendered form) so inlined/sugared helper nodes are never deleted merely for being
 /// absent from the text. See the module docs for the full contract.
 pub fn reconcile(existing: &Board, new: &BoardAst) -> ReconcileResult {
-    reconcile_inner(existing, new, None, None)
+    reconcile_inner(existing, new, None, None, ReconcileMode::Replace)
 }
 
 /// Diff a parsed FlowScript AST against `existing`, using catalog metadata to turn unanchored
@@ -65,7 +81,17 @@ pub fn reconcile_with_catalog(
     new: &BoardAst,
     catalog: &[NodeMetadata],
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), None)
+    reconcile_inner(existing, new, Some(catalog), None, ReconcileMode::Replace)
+}
+
+/// Catalog-aware reconcile with explicit document scope semantics.
+pub fn reconcile_with_catalog_mode(
+    existing: &Board,
+    new: &BoardAst,
+    catalog: &[NodeMetadata],
+    mode: ReconcileMode,
+) -> ReconcileResult {
+    reconcile_inner(existing, new, Some(catalog), None, mode)
 }
 
 /// Like [`reconcile_with_catalog`] but runs `enricher` to materialize each new node's dynamic
@@ -77,7 +103,13 @@ pub fn reconcile_with_catalog_enriched(
     catalog: &[NodeMetadata],
     enricher: &MetadataEnricher,
 ) -> ReconcileResult {
-    reconcile_inner(existing, new, Some(catalog), Some(enricher))
+    reconcile_inner(
+        existing,
+        new,
+        Some(catalog),
+        Some(enricher),
+        ReconcileMode::Replace,
+    )
 }
 
 /// Hook that lets a caller enrich a resolved node's metadata with the dynamic pins its `on_update`
@@ -95,12 +127,26 @@ fn reconcile_inner(
     new: &BoardAst,
     catalog: Option<&[NodeMetadata]>,
     enricher: Option<&MetadataEnricher>,
+    mode: ReconcileMode,
 ) -> ReconcileResult {
     let mut result = ReconcileResult::default();
+    let mut preflight_diagnostics = duplicate_ast_declaration_diagnostics(new);
+    let duplicate_anchors = duplicate_ast_anchors(new);
+    preflight_diagnostics.extend(duplicate_anchors.into_iter().map(|anchor| {
+            format!(
+                "duplicate FlowScript anchor `{anchor}` identifies more than one entity; no commands were derived"
+            )
+        }));
+    if !preflight_diagnostics.is_empty() {
+        preflight_diagnostics.sort();
+        preflight_diagnostics.dedup();
+        result.diagnostics = preflight_diagnostics;
+        return result;
+    }
     let board_ast = super::lower_to_ast(existing);
     let variable_refs = VariableRefLookup::from_board_and_ast(existing, new);
 
-    let variable_changes = reconcile_variables(&board_ast, new);
+    let variable_changes = reconcile_variables(existing, &board_ast, new, mode);
     result.commands.extend(variable_changes.commands);
     result.diagnostics.extend(variable_changes.diagnostics);
 
@@ -132,7 +178,7 @@ fn reconcile_inner(
         // Multi-pins (several input pins sharing one name) pair positionally with the
         // same-named args, mirroring the order lowering emitted them in.
         let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
-        for arg in &call.args {
+        for (arg_index, arg) in call.args.iter().enumerate() {
             let occurrence = {
                 let counter = same_name_seen.entry(arg.name.as_str()).or_insert(0);
                 let index = *counter;
@@ -143,8 +189,19 @@ fn reconcile_inner(
                 // References / nested calls describe wiring, which v1 does not rewrite.
                 continue;
             };
-            let pins = matching_input_pins(node, &arg.name);
-            let Some(pin) = pins.get(occurrence).copied() else {
+            let direct_pins = matching_input_pins(node, &arg.name);
+            let alias_target = direct_pins
+                .get(occurrence)
+                .is_none()
+                .then(|| input_arg_alias_target(&node.name, call, arg_index))
+                .flatten();
+            let (pins, target_occurrence) = match alias_target {
+                Some((name, alias_occurrence)) => {
+                    (matching_input_pins(node, name), alias_occurrence)
+                }
+                None => (direct_pins, occurrence),
+            };
+            let Some(pin) = pins.get(target_occurrence).copied() else {
                 // No pin at this occurrence: a literal on a pin the node's `on_update` will mint
                 // (e.g. a placeholder added to an existing `string_format`) is deferred to apply,
                 // which creates the pin and then applies the write; a genuinely unknown pin stays a
@@ -166,6 +223,15 @@ fn reconcile_inner(
                 }
                 continue;
             };
+            if alias_target.is_some() {
+                result.corrections.push(input_arg_alias_correction(
+                    call,
+                    arg,
+                    &pin.name,
+                    target_occurrence,
+                    pins.len(),
+                ));
+            }
             normalize_variable_ref_value_for_pin(&mut new_value, &pin.name, &variable_refs);
             let current = pin
                 .default_value
@@ -200,18 +266,20 @@ fn reconcile_inner(
     }
     let new_anchors: HashSet<&String> = new_calls.keys().collect();
     let mut removed_ids: HashSet<String> = HashSet::new();
-    for anchor in visible.keys() {
-        if new_anchors.contains(anchor) {
-            continue;
+    if mode == ReconcileMode::Replace {
+        for anchor in visible.keys() {
+            if new_anchors.contains(anchor) {
+                continue;
+            }
+            let Some(node) = find_board_node(existing, anchor) else {
+                continue;
+            };
+            removed_ids.insert(anchor.clone());
+            result.commands.push(BoardCommand::RemoveNode {
+                node_id: anchor.clone(),
+                summary: Some(format!("Remove {}", node.friendly_name)),
+            });
         }
-        let Some(node) = find_board_node(existing, anchor) else {
-            continue;
-        };
-        removed_ids.insert(anchor.clone());
-        result.commands.push(BoardCommand::RemoveNode {
-            node_id: anchor.clone(),
-            summary: Some(format!("Remove {}", node.friendly_name)),
-        });
     }
 
     // 4. Structural authoring: catalog-aware FlowPilot calls can add new unanchored calls in the
@@ -223,6 +291,7 @@ fn reconcile_inner(
             result.commands = structural.commands;
             result.commands.extend(anchored_edits);
         }
+        result.corrections.extend(structural.corrections);
         result.diagnostics.extend(structural.diagnostics);
     } else if ast_has_unanchored_calls(new) {
         result.diagnostics.push(
@@ -263,7 +332,270 @@ fn reconcile_inner(
         result.diagnostics.extend(violations);
     }
 
+    result.corrections.sort();
+    result.corrections.dedup();
+
     result
+}
+
+/// Reject semantic declarations that would otherwise collide in the planner's name/id maps.
+/// Reconcile is atomic, so an ambiguous document must produce diagnostics and zero commands rather
+/// than creating duplicate variables or an orphan Function layer before a later declaration wins.
+fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
+    fn register_duplicates<'a>(
+        names: impl IntoIterator<Item = &'a str>,
+        noun: &str,
+        scope: &str,
+        diagnostics: &mut Vec<String>,
+    ) {
+        let mut counts = BTreeMap::<&str, usize>::new();
+        for name in names {
+            *counts.entry(name).or_default() += 1;
+        }
+        for (name, count) in counts {
+            if count > 1 {
+                diagnostics.push(format!(
+                    "duplicate FlowScript {noun} `{name}` {scope}; no commands were derived"
+                ));
+            }
+        }
+    }
+
+    fn visit_event(event: &EventBlock, scope: &str, diagnostics: &mut Vec<String>) {
+        register_duplicates(
+            event.params.iter().map(|param| param.name.as_str()),
+            "event parameter",
+            scope,
+            diagnostics,
+        );
+        visit_block(&event.body, scope, diagnostics);
+    }
+
+    fn visit_block(block: &Block, scope: &str, diagnostics: &mut Vec<String>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Branch { arms, .. } => {
+                    register_duplicates(
+                        arms.iter().map(|arm| arm.label.as_str()),
+                        "branch arm label",
+                        scope,
+                        diagnostics,
+                    );
+                    for arm in arms {
+                        visit_block(&arm.body, scope, diagnostics);
+                    }
+                }
+                Stmt::Loop { body, .. } => visit_block(body, scope, diagnostics),
+                Stmt::Handler(event) => visit_event(event, scope, diagnostics),
+                Stmt::Let { .. }
+                | Stmt::Call { .. }
+                | Stmt::Assign { .. }
+                | Stmt::FieldAssign { .. }
+                | Stmt::LocalAlias { .. }
+                | Stmt::Return { .. }
+                | Stmt::Local(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    let mut diagnostics = Vec::new();
+    register_duplicates(
+        ast.variables.iter().map(|variable| variable.name.as_str()),
+        "variable declaration",
+        "at the top level",
+        &mut diagnostics,
+    );
+    register_duplicates(
+        ast.functions.iter().map(|function| function.name.as_str()),
+        "function declaration",
+        "at the top level",
+        &mut diagnostics,
+    );
+    register_duplicates(
+        ast.interfaces
+            .iter()
+            .map(|interface| interface.name.as_str()),
+        "interface declaration",
+        "at the top level",
+        &mut diagnostics,
+    );
+
+    for interface in &ast.interfaces {
+        let scope = format!("in interface `{}`", interface.name);
+        register_duplicates(
+            interface.fields.iter().map(|field| field.name.as_str()),
+            "interface field",
+            &scope,
+            &mut diagnostics,
+        );
+    }
+    for function in &ast.functions {
+        let scope = format!("in function `{}`", function.name);
+        register_duplicates(
+            function.params.iter().map(|param| param.name.as_str()),
+            "function parameter",
+            &scope,
+            &mut diagnostics,
+        );
+        register_duplicates(
+            function.returns.iter().map(|param| param.name.as_str()),
+            "function return",
+            &scope,
+            &mut diagnostics,
+        );
+        visit_block(&function.body, &scope, &mut diagnostics);
+    }
+    for (index, event) in ast.events.iter().enumerate() {
+        let scope = format!("in event `{}` #{}", event.name, index + 1);
+        visit_event(event, &scope, &mut diagnostics);
+    }
+
+    diagnostics.sort();
+    diagnostics.dedup();
+    diagnostics
+}
+
+fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
+    fn register(anchor: Option<&str>, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
+        let Some(anchor) = anchor.map(str::trim).filter(|anchor| !anchor.is_empty()) else {
+            return;
+        };
+        if !seen.insert(anchor.to_string()) {
+            duplicate.insert(anchor.to_string());
+        }
+    }
+
+    fn visit_call(
+        call: &Call,
+        fallback_anchor: Option<&str>,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        register(call.anchor.as_deref().or(fallback_anchor), seen, duplicate);
+        for argument in &call.args {
+            visit_expr(&argument.value, None, seen, duplicate);
+        }
+    }
+
+    fn visit_expr(
+        expr: &Expr,
+        fallback_anchor: Option<&str>,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        match expr {
+            Expr::Call(call) => visit_call(call, fallback_anchor, seen, duplicate),
+            Expr::Field { base, .. } | Expr::Member { base, .. } => {
+                visit_expr(base, fallback_anchor, seen, duplicate)
+            }
+            Expr::Object(fields) => {
+                register(fallback_anchor, seen, duplicate);
+                for field in fields {
+                    visit_expr(&field.value, None, seen, duplicate);
+                }
+            }
+            Expr::Array(items) => {
+                register(fallback_anchor, seen, duplicate);
+                for item in items {
+                    visit_expr(item, None, seen, duplicate);
+                }
+            }
+            Expr::Index { base, index }
+            | Expr::Binary {
+                lhs: base,
+                rhs: index,
+                ..
+            } => {
+                register(fallback_anchor, seen, duplicate);
+                visit_expr(base, None, seen, duplicate);
+                visit_expr(index, None, seen, duplicate);
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                register(fallback_anchor, seen, duplicate);
+                visit_expr(cond, None, seen, duplicate);
+                visit_expr(then, None, seen, duplicate);
+                visit_expr(otherwise, None, seen, duplicate);
+            }
+            Expr::Ref(_) | Expr::Literal(_) => register(fallback_anchor, seen, duplicate),
+        }
+    }
+
+    fn visit_event(
+        event: &EventBlock,
+        seen: &mut HashSet<String>,
+        duplicate: &mut HashSet<String>,
+    ) {
+        register(event.anchor.as_deref(), seen, duplicate);
+        visit_block(&event.body, seen, duplicate);
+    }
+
+    fn visit_block(block: &Block, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
+        for statement in &block.stmts {
+            match statement {
+                Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
+                    visit_call(call, anchor.as_deref(), seen, duplicate)
+                }
+                Stmt::Branch {
+                    call,
+                    condition,
+                    arms,
+                    anchor,
+                    ..
+                } => {
+                    visit_call(call, anchor.as_deref(), seen, duplicate);
+                    if let Some(condition) = condition {
+                        visit_expr(condition, None, seen, duplicate);
+                    }
+                    for arm in arms {
+                        visit_block(&arm.body, seen, duplicate);
+                    }
+                }
+                Stmt::Loop {
+                    call, body, anchor, ..
+                } => {
+                    visit_call(call, anchor.as_deref(), seen, duplicate);
+                    visit_block(body, seen, duplicate);
+                }
+                Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
+                    visit_expr(value, anchor.as_deref(), seen, duplicate)
+                }
+                Stmt::FieldAssign { value, anchor, .. } => {
+                    register(anchor.as_deref(), seen, duplicate);
+                    visit_expr(value, None, seen, duplicate);
+                }
+                Stmt::Return { values, anchor } => {
+                    register(anchor.as_deref(), seen, duplicate);
+                    for value in values {
+                        visit_expr(value, None, seen, duplicate);
+                    }
+                }
+                Stmt::Local(variable) => register(variable.anchor.as_deref(), seen, duplicate),
+                Stmt::Handler(event) => visit_event(event, seen, duplicate),
+                Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut duplicate = HashSet::new();
+    for variable in &ast.variables {
+        register(variable.anchor.as_deref(), &mut seen, &mut duplicate);
+    }
+    for function in &ast.functions {
+        register(function.anchor.as_deref(), &mut seen, &mut duplicate);
+        visit_block(&function.body, &mut seen, &mut duplicate);
+    }
+    for event in &ast.events {
+        visit_event(event, &mut seen, &mut duplicate);
+    }
+    let mut duplicate = duplicate.into_iter().collect::<Vec<_>>();
+    duplicate.sort();
+    duplicate
 }
 
 /// Re-join execution chains severed by deletions: for each removed segment whose predecessor and
@@ -282,7 +614,9 @@ fn bridge_removed_exec_chains(
     // pin id → (owner ref for commands, pin, walkable node when the owner is a node).
     let mut pin_owner: HashMap<&str, (String, &Pin, Option<&Node>)> = HashMap::new();
     for node in all_board_nodes(existing) {
-        for pin in node.pins.values() {
+        let mut pins = node.pins.values().collect::<Vec<_>>();
+        pins.sort_by(|left, right| left.id.cmp(&right.id));
+        for pin in pins {
             pin_owner.insert(pin.id.as_str(), (node.id.clone(), pin, Some(node)));
         }
     }
@@ -372,24 +706,35 @@ fn bridge_removed_exec_chains(
 /// Enforce [`MAX_NODES_PER_LAYER`]: existing per-layer populations plus the edit's additions
 /// (minus its removals) must stay within the cap. Returns violation diagnostics, or `None` when
 /// the edit fits.
-fn layer_node_limit_violations(
-    existing: &Board,
-    commands: &[BoardCommand],
-) -> Option<Vec<String>> {
+fn layer_node_limit_violations(existing: &Board, commands: &[BoardCommand]) -> Option<Vec<String>> {
     let mut counts: HashMap<Option<String>, i64> = HashMap::new();
     let mut layer_names: HashMap<String, String> = HashMap::new();
-    let mut node_layers: HashMap<&str, Option<String>> = HashMap::new();
+    // Canonical boards keep every node in `board.nodes` and identify Function membership through
+    // `node.layer`. Some legacy/readback paths also mirror those same identities in
+    // `layer.nodes`. Count identities, not map entries, or a valid 26-node Function temporarily
+    // represented in both stores looks like 52 nodes and every edit is rejected by the limit.
+    // The flat representation is authoritative; layer-local maps only fill identities absent from
+    // it. Normalize an empty layer id to root, matching placement and apply semantics.
+    let normalize_layer = |layer: Option<&str>| {
+        layer
+            .filter(|layer_id| !layer_id.is_empty())
+            .map(str::to_string)
+    };
+    let mut node_layers: HashMap<String, Option<String>> = HashMap::new();
 
     for node in existing.nodes.values() {
-        *counts.entry(node.layer.clone()).or_default() += 1;
-        node_layers.insert(node.id.as_str(), node.layer.clone());
+        node_layers.insert(node.id.clone(), normalize_layer(node.layer.as_deref()));
     }
     for layer in existing.layers.values() {
         layer_names.insert(layer.id.clone(), layer.name.clone());
         for node in layer.nodes.values() {
-            *counts.entry(Some(layer.id.clone())).or_default() += 1;
-            node_layers.insert(node.id.as_str(), Some(layer.id.clone()));
+            node_layers
+                .entry(node.id.clone())
+                .or_insert_with(|| normalize_layer(Some(layer.id.as_str())));
         }
+    }
+    for layer in node_layers.values() {
+        *counts.entry(layer.clone()).or_default() += 1;
     }
 
     for command in commands {
@@ -405,7 +750,7 @@ fn layer_node_limit_violations(
                 layer_names.insert(ref_id.clone(), name.clone());
             }
             BoardCommand::RemoveNode { node_id, .. } => {
-                if let Some(layer) = node_layers.get(node_id.as_str()) {
+                if let Some(layer) = node_layers.get(node_id) {
                     *counts.entry(layer.clone()).or_default() -= 1;
                 }
             }
@@ -448,7 +793,12 @@ fn literal_to_value(lit: &Literal) -> flow_like_types::Value {
     }
 }
 
-fn reconcile_variables(existing: &BoardAst, new: &BoardAst) -> ReconcileResult {
+fn reconcile_variables(
+    live_board: &Board,
+    existing: &BoardAst,
+    new: &BoardAst,
+    mode: ReconcileMode,
+) -> ReconcileResult {
     let mut result = ReconcileResult::default();
     let mut existing_by_anchor: HashMap<&str, &VarDecl> = HashMap::new();
     let mut existing_by_name: HashMap<&str, &VarDecl> = HashMap::new();
@@ -462,19 +812,54 @@ fn reconcile_variables(existing: &BoardAst, new: &BoardAst) -> ReconcileResult {
 
     let mut seen_existing = HashSet::new();
     for var in &new.variables {
-        let matched = var
-            .anchor
-            .as_deref()
-            .and_then(|anchor| existing_by_anchor.get(anchor).copied())
-            .or_else(|| existing_by_name.get(var.name.as_str()).copied());
+        if secret_initializer_contains_value(var) {
+            result.diagnostics.push(format!(
+                "secret variable `{}` cannot take a non-empty FlowScript-authored default; use an empty placeholder and configure the value through trusted secret settings",
+                var.name
+            ));
+            continue;
+        }
+        let matched = match var.anchor.as_deref() {
+            Some(anchor) => match existing_by_anchor.get(anchor).copied() {
+                Some(existing) => Some(existing),
+                None => {
+                    result.diagnostics.push(format!(
+                        "variable `{}` anchors to `{anchor}`, which no longer exists on the board; the explicit anchor was not replaced by a name match",
+                        var.name
+                    ));
+                    continue;
+                }
+            },
+            None => existing_by_name.get(var.name.as_str()).copied(),
+        };
 
         match matched {
             Some(old) => {
                 if let Some(anchor) = old.anchor.as_deref() {
                     seen_existing.insert(anchor.to_string());
                 }
-                if let Some(command) = update_variable_command(existing, new, old, var) {
-                    result.commands.push(command);
+                let hidden_default_present = old
+                    .anchor
+                    .as_deref()
+                    .and_then(|anchor| live_board.variables.get(anchor))
+                    .is_some_and(|variable| variable.secret && variable.default_value.is_some());
+                match update_variable_command(existing, new, old, var, hidden_default_present) {
+                    Err(diagnostic) => result.diagnostics.push(diagnostic),
+                    Ok(update) => {
+                        if mode == ReconcileMode::Additive
+                            && var.anchor.is_none()
+                            && update.is_some()
+                        {
+                            result.diagnostics.push(format!(
+                                "additive variable `{}` collides with an existing variable but omits its exact anchor; the existing type/default/security configuration was preserved",
+                                var.name
+                            ));
+                            continue;
+                        }
+                        if let Some(command) = update {
+                            result.commands.push(command);
+                        }
+                    }
                 }
             }
             None => {
@@ -483,24 +868,26 @@ fn reconcile_variables(existing: &BoardAst, new: &BoardAst) -> ReconcileResult {
         }
     }
 
-    for var in &existing.variables {
-        let Some(anchor) = var.anchor.as_deref() else {
-            continue;
-        };
-        if seen_existing.contains(anchor) {
-            continue;
+    if mode == ReconcileMode::Replace {
+        for var in &existing.variables {
+            let Some(anchor) = var.anchor.as_deref() else {
+                continue;
+            };
+            if seen_existing.contains(anchor) {
+                continue;
+            }
+            let still_present_by_name = new.variables.iter().any(|new_var| {
+                new_var.anchor.as_deref() == Some(anchor)
+                    || (new_var.anchor.is_none() && new_var.name == var.name)
+            });
+            if still_present_by_name {
+                continue;
+            }
+            result.commands.push(BoardCommand::RemoveVariable {
+                variable_id: anchor.to_string(),
+                summary: Some(format!("Remove variable {}", var.name)),
+            });
         }
-        let still_present_by_name = new.variables.iter().any(|new_var| {
-            new_var.anchor.as_deref() == Some(anchor)
-                || (new_var.anchor.is_none() && new_var.name == var.name)
-        });
-        if still_present_by_name {
-            continue;
-        }
-        result.commands.push(BoardCommand::RemoveVariable {
-            variable_id: anchor.to_string(),
-            summary: Some(format!("Remove variable {}", var.name)),
-        });
     }
 
     result
@@ -512,7 +899,10 @@ fn create_variable_command(ast: &BoardAst, var: &VarDecl) -> BoardCommand {
         name: var.name.clone(),
         data_type: variable_data_type(var).to_string(),
         value_type: variable_value_type(var).to_string(),
-        default_value: variable_default_value(var),
+        // FlowScript is model-visible and therefore cannot be a credential write channel. A
+        // secret declaration may carry an empty initializer for readability, but only a
+        // trusted secret-setting path may populate the stored default.
+        default_value: (!var.secret).then(|| variable_default_value(var)).flatten(),
         description: var.description.clone(),
         category: var.category.clone(),
         schema: visible_variable_schema(ast, var),
@@ -546,38 +936,103 @@ fn generated_variable_id(name: &str) -> String {
     out
 }
 
+fn secret_initializer_contains_value(var: &VarDecl) -> bool {
+    if !var.secret {
+        return false;
+    }
+    match var.default.as_ref() {
+        None | Some(Literal::Null) => false,
+        Some(Literal::String(value)) => !value.is_empty(),
+        Some(_) => true,
+    }
+}
+
 fn update_variable_command(
     old_ast: &BoardAst,
     new_ast: &BoardAst,
     old: &VarDecl,
     new: &VarDecl,
-) -> Option<BoardCommand> {
-    let variable_id = old.anchor.clone()?;
+    hidden_default_present: bool,
+) -> Result<Option<BoardCommand>, String> {
+    let Some(variable_id) = old.anchor.clone() else {
+        return Ok(None);
+    };
     let old_default = variable_default_value(old);
     let new_default = variable_default_value(new);
     let old_schema = visible_variable_schema(old_ast, old);
     let new_schema = visible_variable_schema(new_ast, new);
+
+    let data_type_changed = variable_data_type(old) != variable_data_type(new);
+    let value_type_changed = variable_value_type(old) != variable_value_type(new);
+    let schema_changed =
+        old_schema != new_schema && !schemas_structurally_equivalent(old_ast, new_ast, old, new);
+
+    // A hidden default cannot be validated against a new representation without exposing it to
+    // the text/model domain. Preserve it only while its type and schema stay unchanged. The user
+    // can declassify in one atomic clear-and-flag update before changing the representation.
+    if old.secret
+        && new.secret
+        && hidden_default_present
+        && (data_type_changed || value_type_changed || schema_changed)
+    {
+        return Err(format!(
+            "secret variable `{}` has a hidden default, so its type/value shape/schema cannot be changed while it remains secret; declassify it without an initializer to clear the hidden default atomically",
+            new.name
+        ));
+    }
+
+    // Never replace a hidden credential with model-authored text during declassification. The
+    // first transition clears the credential and secret flag together; a later non-secret edit
+    // may set an ordinary default through the normal path.
+    if old.secret && !new.secret && hidden_default_present && new_default.is_some() {
+        return Err(format!(
+            "secret variable `{}` cannot be declassified with a FlowScript-authored default; remove the initializer so the hidden default can be cleared atomically",
+            new.name
+        ));
+    }
 
     let mut changed = false;
 
     let name = changed_option(new.name.clone(), old.name != new.name, &mut changed);
     let data_type = changed_option(
         variable_data_type(new).to_string(),
-        variable_data_type(old) != variable_data_type(new),
+        data_type_changed,
         &mut changed,
     );
     let value_type = changed_option(
         variable_value_type(new).to_string(),
-        variable_value_type(old) != variable_value_type(new),
+        value_type_changed,
         &mut changed,
     );
-    let default_value = changed_option(
-        new_default.clone().unwrap_or(flow_like_types::Value::Null),
-        old_default != new_default && new_default.is_some(),
-        &mut changed,
-    );
-    let clear_default_value = old_default.is_some() && new_default.is_none();
-    changed |= clear_default_value;
+    let (default_value, clear_default_value) = if new.secret {
+        // This covers secret -> secret (the old value is deliberately absent from `old_default`)
+        // as well as non-secret -> secret. Neither transition may write or clear a credential from
+        // model-authored FlowScript.
+        (None, false)
+    } else if old.secret && hidden_default_present {
+        // `new_default` was rejected above. Set both fields on one UpdateVariable so apply clears
+        // the hidden bytes before the cloned variable becomes non-secret.
+        changed = true;
+        (None, true)
+    } else if old.secret {
+        // The live board proves there are no hidden bytes to preserve or expose, so an ordinary
+        // default may be authored as part of the non-secret result.
+        let default_value = changed_option(
+            new_default.clone().unwrap_or(flow_like_types::Value::Null),
+            new_default.is_some(),
+            &mut changed,
+        );
+        (default_value, false)
+    } else {
+        let default_value = changed_option(
+            new_default.clone().unwrap_or(flow_like_types::Value::Null),
+            old_default != new_default && new_default.is_some(),
+            &mut changed,
+        );
+        let clear_default_value = old_default.is_some() && new_default.is_none();
+        changed |= clear_default_value;
+        (default_value, clear_default_value)
+    };
 
     let description = changed_option(
         new.description.clone().unwrap_or_default(),
@@ -595,8 +1050,6 @@ fn update_variable_command(
     let clear_category = old.category.is_some() && new.category.is_none();
     changed |= clear_category;
 
-    let schema_changed =
-        old_schema != new_schema && !schemas_structurally_equivalent(old_ast, new_ast, old, new);
     let schema = changed_option(
         new_schema.clone().unwrap_or_default(),
         schema_changed && new_schema.is_some(),
@@ -614,7 +1067,7 @@ fn update_variable_command(
         &mut changed,
     );
 
-    changed.then_some(BoardCommand::UpdateVariable {
+    Ok(changed.then_some(BoardCommand::UpdateVariable {
         variable_id,
         name,
         data_type,
@@ -633,7 +1086,7 @@ fn update_variable_command(
         runtime_configured,
         value: None,
         summary: Some(format!("Update variable {}", new.name)),
-    })
+    }))
 }
 
 fn changed_option<T>(value: T, did_change: bool, changed: &mut bool) -> Option<T> {
@@ -683,7 +1136,91 @@ const FUNCTION_EXEC_IN: &str = "exec_in";
 const FUNCTION_EXEC_OUT: &str = "exec_out";
 /// The catalog node that invokes a function layer (`function_layer_id` holds the target layer).
 const CALL_FUNCTION_NODE_TYPE: &str = "control_call_function";
+/// Generic call-by-reference node; its FlowScript display is the referenced target rather than
+/// this catalog type, so anchored display validation must treat it as intentional sugar.
+const CALL_REFERENCE_NODE_TYPE: &str = "control_call_reference";
 const FUNCTION_LAYER_ID_PIN: &str = "function_layer_id";
+
+/// Catalog nodes that FlowScript renders as binary operators. This is the write-side counterpart
+/// of `lower.rs::BINARY_OPS`: every two-data-input operator the reader emits must be materializable
+/// again, including Boolean composition and arithmetic nested inside a condition or call argument.
+///
+/// Float equality nodes deliberately are not listed: unlike the two-operand sugar they also
+/// require a tolerance input, so silently inventing one would change the authored semantics.
+const BINARY_OPERATOR_NODES: &[(&str, &str, &str, &str)] = &[
+    ("==", "String", "Boolean", "equal_string"),
+    ("!=", "String", "Boolean", "not_equal_string"),
+    ("==", "Boolean", "Boolean", "bool_equal"),
+    ("&&", "Boolean", "Boolean", "bool_and"),
+    ("||", "Boolean", "Boolean", "bool_or"),
+    ("^", "Boolean", "Boolean", "bool_xor"),
+    ("==", "Integer", "Boolean", "int_equal"),
+    ("!=", "Integer", "Boolean", "int_unequal"),
+    (">", "Integer", "Boolean", "int_greater_than"),
+    (">=", "Integer", "Boolean", "int_greater_than_or_equal"),
+    ("<", "Integer", "Boolean", "int_less_than"),
+    ("<=", "Integer", "Boolean", "int_less_than_or_equal"),
+    ("+", "Integer", "Integer", "int_add"),
+    ("-", "Integer", "Integer", "int_subtract"),
+    ("*", "Integer", "Integer", "int_multiply"),
+    ("/", "Integer", "Integer", "int_divide"),
+    ("%", "Integer", "Integer", "int_modulo"),
+    ("**", "Integer", "Integer", "int_power"),
+    (">", "Float", "Boolean", "float_greater_than"),
+    (">=", "Float", "Boolean", "float_greater_than_or_equal"),
+    ("<", "Float", "Boolean", "float_less_than"),
+    ("<=", "Float", "Boolean", "float_less_than_or_equal"),
+    ("+", "Float", "Float", "float_add"),
+    ("-", "Float", "Float", "float_subtract"),
+    ("*", "Float", "Float", "float_multiply"),
+    ("/", "Float", "Float", "float_divide"),
+    ("**", "Float", "Float", "float_power"),
+];
+
+fn canonical_binary_op(op: &str) -> &str {
+    match op {
+        "===" => "==",
+        "!==" => "!=",
+        _ => op,
+    }
+}
+
+fn binary_operator_op(node_type: &str) -> Option<&'static str> {
+    BINARY_OPERATOR_NODES
+        .iter()
+        .find(|(_, _, _, candidate)| *candidate == node_type)
+        .map(|(op, _, _, _)| *op)
+}
+
+fn binary_data_inputs(meta: &NodeMetadata) -> Option<Vec<&PinMetadata>> {
+    let inputs = meta
+        .inputs
+        .iter()
+        .filter(|pin| pin.data_type != "Execution")
+        .collect::<Vec<_>>();
+    (inputs.len() == 2).then_some(inputs)
+}
+
+fn binary_operator_call(
+    meta: &NodeMetadata,
+    inputs: &[&PinMetadata],
+    lhs: &Expr,
+    rhs: &Expr,
+) -> Call {
+    Call {
+        node_type: meta.name.clone(),
+        display: to_camel_case(&meta.name),
+        args: [lhs, rhs]
+            .into_iter()
+            .zip(inputs)
+            .map(|(value, pin)| Arg {
+                name: pin.name.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+        anchor: None,
+    }
+}
 
 /// Hard ceiling on nodes per layer (root, event scope, or one function layer). Oversized layers
 /// make boards unreadable; reconcile rejects edits that would exceed it so the agent splits the
@@ -713,7 +1250,11 @@ fn function_layer_pins(func: &FnDecl, impure: bool) -> Vec<LayerPinMetadata> {
         .unwrap_or_default();
     exec_pins
         .into_iter()
-        .chain(func.params.iter().map(|param| layer_pin_from_param(param, "Input")))
+        .chain(
+            func.params
+                .iter()
+                .map(|param| layer_pin_from_param(param, "Input")),
+        )
         .chain(
             func.returns
                 .iter()
@@ -752,12 +1293,27 @@ fn param_pin_metadata(param: &Param) -> PinMetadata {
     }
 }
 
+fn param_output_pin_def(param: &Param) -> PlaceholderPinDef {
+    PlaceholderPinDef {
+        name: param.name.clone(),
+        friendly_name: param.name.clone(),
+        description: None,
+        pin_type: "Output".to_string(),
+        data_type: type_ref_data_type(&param.ty).to_string(),
+        value_type: Some(type_ref_value_type(&param.ty).to_string()),
+    }
+}
+
 /// A FlowScript `function` declaration resolved to its (existing or planned) layer, captured
 /// before events/bodies are planned so call sites anywhere in the document can target it.
 #[derive(Clone)]
 struct PlannedFunction {
     entity: NodeEntity,
     impure: bool,
+    /// At least one call in this function (or a transitively called FlowScript function) does not
+    /// resolve against the catalog. Structural/purity diagnostics are derivative until that
+    /// primary resolution error is repaired, so they must not drown out the actionable cause.
+    has_unresolved_calls: bool,
     params: Vec<Param>,
     returns: Vec<Param>,
 }
@@ -834,12 +1390,28 @@ fn find_board_node<'a>(board: &'a Board, node_id: &str) -> Option<&'a Node> {
     })
 }
 
+/// Return one semantic node per id in deterministic id order.
+///
+/// Canonical boards store nodes in `board.nodes` and use `node.layer` for membership. Legacy
+/// boards can instead (or additionally) keep nodes in `layer.nodes`. A mirrored nested clone may
+/// lag behind the canonical flat node, so flat nodes always win and nested nodes only fill ids
+/// absent from the flat map. Layers are visited by id to make the fallback deterministic even for
+/// malformed legacy boards that repeat one nested-only id in more than one layer.
 fn all_board_nodes(board: &Board) -> Vec<&Node> {
-    let mut nodes: Vec<&Node> = board.nodes.values().collect();
-    for layer in board.layers.values() {
-        nodes.extend(layer.nodes.values());
+    let mut nodes_by_id: BTreeMap<&str, &Node> = BTreeMap::new();
+    for node in board.nodes.values() {
+        nodes_by_id.insert(node.id.as_str(), node);
     }
-    nodes
+
+    let mut layers = board.layers.values().collect::<Vec<_>>();
+    layers.sort_by(|left, right| left.id.cmp(&right.id));
+    for layer in layers {
+        for node in layer.nodes.values() {
+            nodes_by_id.entry(node.id.as_str()).or_insert(node);
+        }
+    }
+
+    nodes_by_id.into_values().collect()
 }
 
 fn literal_expr_to_value(expr: &Expr) -> Option<flow_like_types::Value> {
@@ -958,6 +1530,24 @@ fn find_input_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
     matching_input_pins(node, name).first().copied()
 }
 
+fn find_input_pin_by_ref<'a>(node: &'a Node, pin_ref: &str) -> Option<&'a Pin> {
+    if let Some(pin) = node.pins.get(pin_ref)
+        && pin.pin_type == PinType::Input
+    {
+        return Some(pin);
+    }
+    if let Some((name, occurrence)) = parse_pin_occurrence_ref(pin_ref) {
+        let mut matching = node
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Input && node_pin_name_matches(pin, name))
+            .collect::<Vec<_>>();
+        matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        return matching.get(occurrence).copied();
+    }
+    find_input_pin(node, pin_ref)
+}
+
 /// All input pins matching `name`, deterministically ordered: populated pins (connected or
 /// holding a default — the ones lowering emits args for) first, then empty ones, each sorted
 /// by pin index. `node.pins` is a HashMap, so an unsorted `.find()` picks an arbitrary pin
@@ -973,6 +1563,28 @@ fn matching_input_pins<'a>(node: &'a Node, name: &str) -> Vec<&'a Pin> {
         (!populated, p.index, p.id.clone())
     });
     matching
+}
+
+/// Stable occurrence ref for one concrete live input pin, ordered the same way occurrence refs
+/// are decoded after apply. This intentionally differs from `matching_input_pins`' populated-first
+/// authored-argument pairing.
+fn node_input_occurrence_ref(node: &Node, pin: &Pin) -> String {
+    let mut matching = node
+        .pins
+        .values()
+        .filter(|candidate| {
+            candidate.pin_type == PinType::Input && node_pin_name_matches(candidate, &pin.name)
+        })
+        .collect::<Vec<_>>();
+    matching.sort_by_key(|candidate| (candidate.index, candidate.id.clone()));
+    if matching.len() <= 1 {
+        return pin.name.clone();
+    }
+    let occurrence = matching
+        .iter()
+        .position(|candidate| candidate.id == pin.id)
+        .unwrap_or_default();
+    pin_occurrence_ref(&pin.name, occurrence)
 }
 
 fn find_output_pin<'a>(node: &'a Node, name: &str) -> Option<&'a Pin> {
@@ -1007,13 +1619,70 @@ fn metadata_pin_name_matches(pin: &PinMetadata, requested: &str) -> bool {
     pin_name_matches(&pin.name, requested) || pin_name_matches(&pin.friendly_name, requested)
 }
 
+fn authored_arg_name_matches(raw: &str, canonical: &str) -> bool {
+    raw == canonical || to_camel_case(raw) == to_camel_case(canonical)
+}
+
+/// Resolve only catalog-proven argument aliases whose target and position are deterministic.
+/// Direct catalog pin matches always win before this fallback is consulted. Alias/canonical mixes
+/// and duplicate aliases are rejected so an automatic repair can never overwrite one input with
+/// another authored value.
+fn input_arg_alias_target(
+    node_type: &str,
+    call: &Call,
+    arg_index: usize,
+) -> Option<(&'static str, usize)> {
+    let arg_name = call.args.get(arg_index)?.name.as_str();
+    let count = |name: &str| {
+        call.args
+            .iter()
+            .filter(|arg| authored_arg_name_matches(&arg.name, name))
+            .count()
+    };
+
+    match (node_type, arg_name) {
+        ("string_replace", "regex") if count("regex") == 1 && count("isRegex") == 0 => {
+            Some(("isRegex", 0))
+        }
+        ("bool_or", "a") if count("a") == 1 && count("b") <= 1 && count("boolean") == 0 => {
+            Some(("boolean", 0))
+        }
+        ("bool_or", "b") if count("b") == 1 && count("a") <= 1 && count("boolean") == 0 => {
+            Some(("boolean", 1))
+        }
+        _ => None,
+    }
+}
+
+fn input_arg_alias_correction(
+    call: &Call,
+    arg: &Arg,
+    canonical_name: &str,
+    occurrence: usize,
+    matching_pin_count: usize,
+) -> String {
+    let target = if matching_pin_count > 1 {
+        format!(
+            "`{}` (occurrence {} of {matching_pin_count})",
+            to_camel_case(canonical_name),
+            occurrence + 1
+        )
+    } else {
+        format!("`{}`", to_camel_case(canonical_name))
+    };
+    format!(
+        "Auto-corrected `{}` argument `{}` to {target}.",
+        call.display, arg.name
+    )
+}
+
 fn call_matches_node(call: &Call, node: &Node) -> bool {
     if !call.node_type.trim().is_empty() {
         return call.node_type == node.name;
     }
 
-    pin_name_matches(&node.name, &call.display)
-        || pin_name_matches(&node.friendly_name, &call.display)
+    let display = safe_catalog_call_alias(&call.display).unwrap_or(&call.display);
+    pin_name_matches(&node.name, display) || pin_name_matches(&node.friendly_name, display)
 }
 
 fn is_exec_pin(pin: &Pin) -> bool {
@@ -1076,19 +1745,58 @@ fn metadata_input_pin_at<'a>(
         .nth(occurrence)
 }
 
+/// Encode an occurrence of a same-named pin in a board-command pin reference. Catalog nodes can
+/// legally expose several pins with the same internal name (for example the two `string` inputs
+/// on `equal_string`). Pin ids are regenerated when a catalog node is added, so a reconcile batch
+/// cannot address those future ids directly. The applier resolves this stable positional selector
+/// after `AddNode` has materialized the node.
+pub(crate) fn pin_occurrence_ref(name: &str, occurrence: usize) -> String {
+    format!("{name}[#{}]", occurrence + 1)
+}
+
+/// Decode the positional selector produced by [`pin_occurrence_ref`]. Ordinary pin names are
+/// deliberately left untouched; only a terminal, one-based `[#N]` suffix is reserved.
+pub(crate) fn parse_pin_occurrence_ref(pin_ref: &str) -> Option<(&str, usize)> {
+    let without_closing = pin_ref.strip_suffix(']')?;
+    let (name, one_based) = without_closing.rsplit_once("[#")?;
+    let one_based = one_based.parse::<usize>().ok()?;
+    if name.is_empty() || one_based == 0 {
+        return None;
+    }
+    Some((name, one_based - 1))
+}
+
+fn metadata_input_command_ref(
+    meta: &NodeMetadata,
+    input: &PinMetadata,
+    occurrence: usize,
+) -> String {
+    let matching = meta
+        .inputs
+        .iter()
+        .filter(|pin| pin.data_type != "Execution" && metadata_pin_name_matches(pin, &input.name))
+        .count();
+    if matching > 1 {
+        pin_occurrence_ref(&input.name, occurrence)
+    } else {
+        input.name.clone()
+    }
+}
+
 /// Node types whose `on_update` mints one input pin per template placeholder, paired with the
 /// config pin that carries the template. Reconcile plans NEW nodes against static catalog metadata
 /// that predates those pins, so it predicts them from the config value here. Extend this list as
 /// more placeholder-driven nodes appear (the prediction machinery is otherwise node-agnostic).
-fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static str> {
+pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static str> {
     match node_type {
         "string_format" => Some("format_string"),
+        "string_render_template" => Some("template"),
         _ => None,
     }
 }
 
 /// Placeholder tokens in a template string, matching `string_format`'s `\{([a-zA-Z0-9_]+)\}`.
-fn template_placeholders(template: &str) -> Vec<String> {
+fn format_string_placeholders(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut names = Vec::new();
     let mut i = 0;
@@ -1108,6 +1816,25 @@ fn template_placeholders(template: &str) -> Vec<String> {
         i += 1;
     }
     names
+}
+
+fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<String>> {
+    match node_type {
+        "string_format" => Some(format_string_placeholders(template)),
+        "string_render_template" => {
+            let mut environment = flow_like_types::minijinja::Environment::new();
+            environment.add_template("flowscript", template).ok()?;
+            let parsed = environment.get_template("flowscript").ok()?;
+            let mut names = parsed
+                .undeclared_variables(false)
+                .into_iter()
+                .collect::<Vec<_>>();
+            names.sort();
+            names.dedup();
+            Some(names)
+        }
+        _ => None,
+    }
 }
 
 /// The literal template string driving a placeholder node's dynamic pins: the value of the config
@@ -1166,12 +1893,86 @@ fn synthesize_dynamic_input_pin(
     entity: &NodeEntity,
     existing: &Board,
 ) -> Option<PinMetadata> {
+    if let Some(pin) = synthesize_chart_mode_input_pin(meta, call, arg, entity, existing) {
+        return Some(pin);
+    }
     let config_pin = dynamic_placeholder_config_pin(&meta.name)?;
     let template = placeholder_template_value(meta, call, entity, existing, config_pin)?;
-    template_placeholders(&template)
+    synthesize_dynamic_input_pin_from_template(meta, &template, &arg.name)
+}
+
+/// Predict the mode-specific pins of `a2ui_push_csv_to_chart`. Its static catalog shape is JSON
+/// mode (`data`); `on_update` swaps that pin for the CSV family, and can swap it back on an
+/// existing CSV-mode node. The source checker cannot depend on server-only runtime enrichment, so
+/// mirror this small audited state machine deterministically.
+fn synthesize_chart_mode_input_pin(
+    meta: &NodeMetadata,
+    call: &Call,
+    arg: &Arg,
+    entity: &NodeEntity,
+    existing: &Board,
+) -> Option<PinMetadata> {
+    if meta.name != "a2ui_push_csv_to_chart" {
+        return None;
+    }
+    let format = placeholder_template_value(meta, call, entity, existing, "format")?;
+    let (name, friendly_name, data_type, valid_values, enforce_schema) =
+        match (format.as_str(), arg.name.as_str()) {
+            ("JSON", requested) if pin_name_matches("data", requested) => {
+                ("data", "Data", "Struct", None, false)
+            }
+            ("CSV", requested) if pin_name_matches("csv", requested) => {
+                ("csv", "Data", "String", None, false)
+            }
+            ("CSV", requested) if pin_name_matches("table", requested) => {
+                ("table", "Table", "Struct", None, false)
+            }
+            ("CSV", requested) if pin_name_matches("chart_type", requested) => (
+                "chart_type",
+                "Chart Type",
+                "String",
+                Some(
+                    [
+                        "Bar", "Line", "Pie", "Scatter", "Area", "Radar", "Heatmap", "Calendar",
+                        "Sankey", "Tree",
+                    ]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                ),
+                false,
+            ),
+            ("CSV", requested) if pin_name_matches("delimiter", requested) => {
+                ("delimiter", "Delimiter", "String", None, false)
+            }
+            _ => return None,
+        };
+    Some(PinMetadata {
+        name: name.to_string(),
+        friendly_name: friendly_name.to_string(),
+        description: String::new(),
+        data_type: data_type.to_string(),
+        value_type: "Normal".to_string(),
+        default_value: None,
+        schema: None,
+        is_generic: false,
+        valid_values,
+        enforce_schema,
+    })
+}
+
+/// Pure counterpart shared with typed IR validation. It mirrors the exact placeholder grammar and
+/// Generic pin shape reconciliation will use when the node is materialized.
+pub(crate) fn synthesize_dynamic_input_pin_from_template(
+    meta: &NodeMetadata,
+    template: &str,
+    requested_pin: &str,
+) -> Option<PinMetadata> {
+    dynamic_placeholder_config_pin(&meta.name)?;
+    dynamic_template_placeholders(&meta.name, template)?
         .iter()
-        .any(|token| token == &arg.name || to_camel_case(token) == arg.name)
-        .then(|| generic_input_pin_metadata(&arg.name))
+        .any(|token| token == requested_pin || to_camel_case(token) == requested_pin)
+        .then(|| generic_input_pin_metadata(requested_pin))
 }
 
 /// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on
@@ -1299,6 +2100,20 @@ fn metadata_exec_output_pin(meta: &NodeMetadata) -> Option<String> {
     default_exec_output_by_policy(&meta.name, &candidates)
 }
 
+/// Catalog-level invariant for a node used as an Event registration target. Entry nodes start an
+/// execution chain: they expose at least one execution output and cannot themselves require an
+/// incoming execution edge. This deliberately derives capability from pins instead of a fixed
+/// node-type allowlist so package-defined event nodes remain supported.
+fn event_entry_incompatibility(meta: &NodeMetadata) -> Option<&'static str> {
+    if meta.inputs.iter().any(|pin| pin.data_type == "Execution") {
+        return Some("it has an Execution input and must run inside an existing chain");
+    }
+    if !meta.outputs.iter().any(|pin| pin.data_type == "Execution") {
+        return Some("it has no Execution output to start a workflow chain");
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 struct ExecPinCandidate {
     name: String,
@@ -1316,6 +2131,9 @@ type ExecOutputSelector = fn(&[ExecPinCandidate]) -> Option<String>;
 const EXEC_OUTPUT_POLICIES: &[(&str, ExecOutputSelector)] = &[
     ("http_fetch", select_exec_success),
     ("streaming_http_fetch", select_exec_success),
+    // Batch upsert exposes `exec_out` for success and `error` for failure. Sequential/function
+    // continuation follows success; an unhandled error intentionally terminates that path.
+    ("batch_upsert_local_db", select_exec_out),
 ];
 
 fn default_exec_output_by_policy(
@@ -1339,6 +2157,10 @@ fn default_exec_output_by_policy(
 
 fn select_exec_success(candidates: &[ExecPinCandidate]) -> Option<String> {
     select_named_exec_pin(candidates, &["exec_success"])
+}
+
+fn select_exec_out(candidates: &[ExecPinCandidate]) -> Option<String> {
+    select_named_exec_pin(candidates, &["exec_out"])
 }
 
 fn select_exec_done(candidates: &[ExecPinCandidate]) -> Option<String> {
@@ -1463,6 +2285,97 @@ struct ValueSource {
 }
 
 #[derive(Debug, Clone)]
+struct OutputShape {
+    node_type: String,
+    pin_name: String,
+    data_type: String,
+    value_type: String,
+    schema: Option<String>,
+}
+
+/// Extract the declared keys from a concrete object schema. Catalog schemas generated by
+/// `schemars` normally expose `properties` at the root, but optional/ref-wrapped structs occur as
+/// well. Stay conservative around unions: only a single non-null object variant is authoritative
+/// enough to reject an unknown key.
+fn catalog_object_schema_fields(schema: &str) -> Option<(Option<String>, Vec<String>)> {
+    fn is_null_schema(schema: &flow_like_types::Value) -> bool {
+        schema.get("type").is_some_and(|value| match value {
+            flow_like_types::Value::String(kind) => kind == "null",
+            flow_like_types::Value::Array(kinds) => kinds
+                .iter()
+                .all(|kind| kind.as_str().is_some_and(|kind| kind == "null")),
+            _ => false,
+        })
+    }
+
+    fn fields(
+        schema: &flow_like_types::Value,
+        root: &flow_like_types::Value,
+        depth: usize,
+    ) -> Option<Vec<String>> {
+        if depth > 8 {
+            return None;
+        }
+        if let Some(properties) = schema
+            .get("properties")
+            .and_then(flow_like_types::Value::as_object)
+        {
+            // An explicitly extensible object does not have an exhaustive property list. Absence
+            // is treated as the concrete catalog shape used by schemars-generated Rust structs;
+            // an explicit schema/pattern for extra keys keeps runtime member access permissive.
+            if schema
+                .get("additionalProperties")
+                .is_some_and(|value| value.as_bool() != Some(false))
+                || schema
+                    .get("unevaluatedProperties")
+                    .is_some_and(|value| value.as_bool() != Some(false))
+                || schema
+                    .get("patternProperties")
+                    .and_then(flow_like_types::Value::as_object)
+                    .is_some_and(|patterns| !patterns.is_empty())
+            {
+                return None;
+            }
+            let mut names = properties.keys().cloned().collect::<Vec<_>>();
+            names.sort();
+            return Some(names);
+        }
+        if let Some(reference) = schema.get("$ref").and_then(flow_like_types::Value::as_str)
+            && let Some(pointer) = reference.strip_prefix('#')
+        {
+            return fields(root.pointer(pointer)?, root, depth + 1);
+        }
+        for union in ["anyOf", "oneOf"] {
+            let Some(variants) = schema.get(union).and_then(flow_like_types::Value::as_array)
+            else {
+                continue;
+            };
+            let mut object_fields = None;
+            for variant in variants {
+                if is_null_schema(variant) {
+                    continue;
+                }
+                let candidate = fields(variant, root, depth + 1)?;
+                if object_fields.is_some() {
+                    // Several object variants can legitimately expose different/dynamic keys.
+                    return None;
+                }
+                object_fields = Some(candidate);
+            }
+            return object_fields;
+        }
+        None
+    }
+
+    let root = flow_like_types::json::from_str::<flow_like_types::Value>(schema).ok()?;
+    let title = root
+        .get("title")
+        .and_then(flow_like_types::Value::as_str)
+        .map(str::to_string);
+    fields(&root, &root, 0).map(|fields| (title, fields))
+}
+
+#[derive(Debug, Clone)]
 enum SymbolValue {
     Source(ValueSource),
     Literal(flow_like_types::Value),
@@ -1500,13 +2413,68 @@ impl CatalogIndex {
     }
 
     fn resolve_call(&self, call: &Call) -> Result<NodeMetadata, String> {
-        if !call.node_type.trim().is_empty()
-            && let Some(meta) = self.by_type.get(&call.node_type)
-        {
-            return Ok(meta.clone());
+        if !call.node_type.trim().is_empty() {
+            return self.by_type.get(&call.node_type).cloned().ok_or_else(|| {
+                format!(
+                    "FlowScript call `{}` declares exact node_type `{}`, which is not available in the catalog",
+                    call.display, call.node_type
+                )
+            });
         }
 
-        self.resolve_display(&call.display)
+        match self.resolve_display(&call.display) {
+            Ok(meta) => Ok(meta),
+            Err(original) => {
+                let Some(replacement) = safe_catalog_call_alias(&call.display) else {
+                    return Err(original);
+                };
+                let Ok(meta) = self.resolve_display(replacement) else {
+                    return Err(original);
+                };
+                let unknown_args = call_arguments_without_exact_inputs(call, &meta);
+                let missing_required = call_missing_required_exact_inputs(call, &meta);
+                if !unknown_args.is_empty() || !missing_required.is_empty() {
+                    let mut reasons = Vec::new();
+                    if !unknown_args.is_empty() {
+                        reasons.push(format!(
+                            "{} {} not {} on `{replacement}`",
+                            unknown_args
+                                .iter()
+                                .map(|name| format!("`{name}`"))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            if unknown_args.len() == 1 { "is" } else { "are" },
+                            if unknown_args.len() == 1 {
+                                "an input"
+                            } else {
+                                "inputs"
+                            },
+                        ));
+                    }
+                    if !missing_required.is_empty() {
+                        reasons.push(format!(
+                            "required {} {} missing",
+                            if missing_required.len() == 1 {
+                                "input"
+                            } else {
+                                "inputs"
+                            },
+                            missing_required
+                                .iter()
+                                .map(|name| format!("`{name}`"))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ));
+                    }
+                    return Err(format!(
+                        "FlowScript call `{}` does not match a catalog declaration. The exact node name is `{replacement}`, but it was not auto-corrected because {}. Use `emailSmtpSend({{ connection: ..., from: ..., to: ..., subject: ..., bodyText: ... }})`.",
+                        call.display,
+                        reasons.join(" and "),
+                    ));
+                }
+                Ok(meta)
+            }
+        }
     }
 
     fn resolve_display(&self, display: &str) -> Result<NodeMetadata, String> {
@@ -1526,6 +2494,96 @@ impl CatalogIndex {
             "FlowScript call `{display}` does not match a catalog declaration; call `get_declarations` and use the exact function name"
         ))
     }
+}
+
+/// Deliberately tiny catalog migration table. These are historical/obvious names with exactly one
+/// semantic successor; fuzzy matching is intentionally excluded because selecting the wrong node
+/// is worse than asking the author to repair a call.
+fn safe_catalog_call_alias(display: &str) -> Option<&'static str> {
+    match display {
+        "emailSmtpSendMail" => Some("emailSmtpSend"),
+        _ => None,
+    }
+}
+
+/// Return authored arguments that do not bind positionally to an exact catalog input. Used to
+/// ensure a call-name migration is shape-compatible before applying it automatically.
+fn call_arguments_without_exact_inputs<'a>(call: &'a Call, meta: &NodeMetadata) -> Vec<&'a str> {
+    let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+    call.args
+        .iter()
+        .filter_map(|arg| {
+            let occurrence = {
+                let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+                let current = *seen;
+                *seen += 1;
+                current
+            };
+            metadata_input_pin_at(meta, &arg.name, occurrence)
+                .is_none()
+                .then_some(arg.name.as_str())
+        })
+        .collect()
+}
+
+fn call_missing_required_exact_inputs(call: &Call, meta: &NodeMetadata) -> Vec<String> {
+    let mut authored_indices = HashSet::new();
+    let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+    for arg in &call.args {
+        let occurrence = {
+            let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+            let current = *seen;
+            *seen += 1;
+            current
+        };
+        if let Some((index, _)) = meta
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, pin)| {
+                pin.data_type != "Execution" && metadata_pin_name_matches(pin, &arg.name)
+            })
+            .nth(occurrence)
+        {
+            authored_indices.insert(index);
+        }
+    }
+
+    let mut claimed = HashSet::new();
+    let mut missing = Vec::new();
+    for required in &meta.required_inputs {
+        let Some((index, input)) = meta.inputs.iter().enumerate().find(|(index, input)| {
+            !claimed.contains(index)
+                && input.data_type != "Execution"
+                && metadata_pin_name_matches(input, required)
+        }) else {
+            missing.push(to_camel_case(required));
+            continue;
+        };
+        claimed.insert(index);
+        if input.default_value.is_none() && !authored_indices.contains(&index) {
+            missing.push(to_camel_case(&input.name));
+        }
+    }
+    missing
+}
+
+fn unsafe_catalog_call_shape_diagnostic(call: &Call, meta: &NodeMetadata) -> Option<String> {
+    if meta.name != "email_imap_inbox_fetch_mail" {
+        return None;
+    }
+    let unknown = call_arguments_without_exact_inputs(call, meta);
+    if unknown.is_empty() {
+        return None;
+    }
+    let names = unknown
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "node `emailImapInboxFetchMail` has no input pin named {names}; this mailbox-fetch shape cannot be auto-corrected. `emailImapInboxFetchMail` accepts exactly `emailRef` and returns one `email`. Use `mailImapInbox({{ connection, inbox: \"INBOX\" }})`, then `mailImapList({{ inbox: inbox.inboxStruct, filter: \"UNSEEN\" }})`; for each returned EmailRef call `emailImapInboxFetchMail({{ emailRef: ref }})`, and only after successful processing call `emailImapMarkSeen({{ email: ref, markAsSeen: true }})`."
+    ))
 }
 
 fn one_catalog_match(display: &str, matches: &[NodeMetadata]) -> Result<NodeMetadata, String> {
@@ -1557,16 +2615,11 @@ struct BoardIndex<'a> {
 impl<'a> BoardIndex<'a> {
     fn new(board: &'a Board) -> Self {
         let mut pin_owner = HashMap::new();
-        for node in board.nodes.values() {
-            for pin in node.pins.values() {
+        for node in all_board_nodes(board) {
+            let mut pins = node.pins.values().collect::<Vec<_>>();
+            pins.sort_by(|left, right| left.id.cmp(&right.id));
+            for pin in pins {
                 pin_owner.insert(pin.id.as_str(), (node, pin));
-            }
-        }
-        for layer in board.layers.values() {
-            for node in layer.nodes.values() {
-                for pin in node.pins.values() {
-                    pin_owner.insert(pin.id.as_str(), (node, pin));
-                }
             }
         }
         Self { pin_owner }
@@ -1622,6 +2675,9 @@ struct StructuralPlanner<'a> {
     catalog: CatalogIndex,
     result: ReconcileResult,
     add_commands: Vec<BoardCommand>,
+    /// Ref ids for newly planned Event registration nodes. Event node types are catalog-extensible,
+    /// so registration ordering cannot rely on a hard-coded list of built-in `events_*` names.
+    event_entry_refs: HashSet<String>,
     disconnect_commands: Vec<BoardCommand>,
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
@@ -1636,7 +2692,10 @@ struct StructuralPlanner<'a> {
     /// execution entry to wire from yet).
     exec_check_exempt: HashSet<String>,
     next_ref: usize,
-    next_position: usize,
+    /// Canvas placement is local to each layer. A single global counter makes function bodies
+    /// start thousands of pixels away from their own layer origin, so an otherwise populated
+    /// function appears empty and large workflows stretch into an unreadable line.
+    next_position_by_layer: HashMap<Option<String>, usize>,
     /// Impure calls planned in expression/argument position (e.g. `value: fakerFullName()`).
     /// They only receive data wiring where they are resolved; `plan_block` drains this queue and
     /// splices them into the exec chain ahead of the consuming statement (innermost call first —
@@ -1668,6 +2727,7 @@ impl<'a> StructuralPlanner<'a> {
             catalog: CatalogIndex::new(catalog),
             result: ReconcileResult::default(),
             add_commands: Vec::new(),
+            event_entry_refs: HashSet::new(),
             disconnect_commands: Vec::new(),
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
@@ -1678,7 +2738,7 @@ impl<'a> StructuralPlanner<'a> {
             new_impure_nodes: Vec::new(),
             exec_check_exempt: HashSet::new(),
             next_ref: 0,
-            next_position: 0,
+            next_position_by_layer: HashMap::new(),
             pending_exec_splices: Vec::new(),
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
@@ -1717,9 +2777,24 @@ impl<'a> StructuralPlanner<'a> {
         }
         self.pop_scope();
 
+        self.check_new_function_structure();
         self.check_dangling_impure_execution();
 
-        self.result.commands.extend(self.add_commands);
+        // The entry node is the registration target for the outer app Event. Materialize every
+        // layer, variable and workflow node first, then add the entry node last. Connections are
+        // emitted afterwards, so their ref resolution remains deterministic.
+        let (event_entries, setup_commands): (Vec<_>, Vec<_>) =
+            self.add_commands.into_iter().partition(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode {
+                        ref_id: Some(ref_id),
+                        ..
+                    } if self.event_entry_refs.contains(ref_id)
+                )
+            });
+        self.result.commands.extend(setup_commands);
+        self.result.commands.extend(event_entries);
         // Literal/config updates can change node shape (for example format/schema/template
         // nodes whose on_update adds dynamic pins), so apply them before resolving connections.
         self.result.commands.extend(self.update_commands);
@@ -1735,12 +2810,19 @@ impl<'a> StructuralPlanner<'a> {
             let mut seen = HashSet::new();
             seen.insert(func.name.clone());
             let impure = self.function_body_is_impure(ast, &func.body, &mut seen);
-            let entity = self.function_layer_entity(func, impure);
+            let mut resolution_seen = HashSet::new();
+            resolution_seen.insert(func.name.clone());
+            let has_unresolved_calls =
+                self.function_body_has_unresolved_calls(ast, &func.body, &mut resolution_seen);
+            let Some(entity) = self.function_layer_entity(func, impure) else {
+                continue;
+            };
             self.planned_functions.insert(
                 func.name.clone(),
                 PlannedFunction {
                     entity,
                     impure,
+                    has_unresolved_calls,
                     params: func.params.clone(),
                     returns: func.returns.clone(),
                 },
@@ -1789,11 +2871,7 @@ impl<'a> StructuralPlanner<'a> {
             .args
             .iter()
             .any(|arg| self.expr_contains_impure_call(ast, &arg.value, seen));
-        if let Some(func) = ast
-            .functions
-            .iter()
-            .find(|func| func.name == call.display)
-        {
+        if let Some(func) = ast.functions.iter().find(|func| func.name == call.display) {
             let body_impure = seen.insert(func.name.clone())
                 && self.function_body_is_impure(ast, &func.body, seen);
             return body_impure || args_impure;
@@ -1844,27 +2922,165 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    /// Whether this body contains a call whose identity cannot yet be resolved. Purity and graph
+    /// completeness depend on resolved pin metadata; when a call is unknown, the catalog error is
+    /// the primary actionable diagnostic and secondary "pure"/"missing tail" warnings are noise.
+    fn function_body_has_unresolved_calls(
+        &self,
+        ast: &BoardAst,
+        block: &Block,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        block.stmts.iter().any(|stmt| match stmt {
+            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+                self.call_has_unresolved_target(ast, call, seen)
+            }
+            Stmt::Assign { value, .. } | Stmt::LocalAlias { value, .. } => {
+                self.expr_has_unresolved_call(ast, value, seen)
+            }
+            Stmt::FieldAssign { value, .. } => self.expr_has_unresolved_call(ast, value, seen),
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                ..
+            } => {
+                (!is_placeholder_call(call) && self.call_has_unresolved_target(ast, call, seen))
+                    || condition.as_ref().is_some_and(|condition| {
+                        self.expr_has_unresolved_call(ast, condition, seen)
+                    })
+                    || arms
+                        .iter()
+                        .any(|arm| self.function_body_has_unresolved_calls(ast, &arm.body, seen))
+            }
+            Stmt::Loop { call, body, .. } => {
+                self.call_has_unresolved_target(ast, call, seen)
+                    || self.function_body_has_unresolved_calls(ast, body, seen)
+            }
+            Stmt::Return { values, .. } => values
+                .iter()
+                .any(|value| self.expr_has_unresolved_call(ast, value, seen)),
+            Stmt::Handler(event) => self.function_body_has_unresolved_calls(ast, &event.body, seen),
+            Stmt::Local(_) | Stmt::Comment(_) => false,
+        })
+    }
+
+    fn call_has_unresolved_target(
+        &self,
+        ast: &BoardAst,
+        call: &Call,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        let args_unresolved = call
+            .args
+            .iter()
+            .any(|arg| self.expr_has_unresolved_call(ast, &arg.value, seen));
+        if let Some(function) = ast
+            .functions
+            .iter()
+            .find(|function| function.name == call.display)
+        {
+            return args_unresolved
+                || (seen.insert(function.name.clone())
+                    && self.function_body_has_unresolved_calls(ast, &function.body, seen));
+        }
+        if args_unresolved {
+            return true;
+        }
+        let Ok(meta) = self.catalog.resolve_call(call) else {
+            return true;
+        };
+        unsafe_catalog_call_shape_diagnostic(call, &meta).is_some()
+    }
+
+    fn expr_has_unresolved_call(
+        &self,
+        ast: &BoardAst,
+        expr: &Expr,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        match expr {
+            Expr::Call(call) => self.call_has_unresolved_target(ast, call, seen),
+            Expr::Field { base, .. } | Expr::Member { base, .. } => {
+                self.expr_has_unresolved_call(ast, base, seen)
+            }
+            Expr::Object(fields) => fields
+                .iter()
+                .any(|field| self.expr_has_unresolved_call(ast, &field.value, seen)),
+            Expr::Array(items) => items
+                .iter()
+                .any(|item| self.expr_has_unresolved_call(ast, item, seen)),
+            Expr::Index { base, index } => {
+                self.expr_has_unresolved_call(ast, base, seen)
+                    || self.expr_has_unresolved_call(ast, index, seen)
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.expr_has_unresolved_call(ast, cond, seen)
+                    || self.expr_has_unresolved_call(ast, then, seen)
+                    || self.expr_has_unresolved_call(ast, otherwise, seen)
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                self.expr_has_unresolved_call(ast, lhs, seen)
+                    || self.expr_has_unresolved_call(ast, rhs, seen)
+            }
+            Expr::Ref(_) | Expr::Literal(_) => false,
+        }
+    }
+
     fn assignment_targets_board_variable(&self, ast: &BoardAst, target: &str) -> bool {
         ast.variables.iter().any(|var| var.name == target)
             || self.variable_refs.resolve(target).is_some()
     }
 
     fn plan_event(&mut self, event: &EventBlock, target_layer: Option<String>) {
+        if event.anchor.is_none() && block_has_no_executable_statements(&event.body) {
+            self.result.diagnostics.push(format!(
+                "new event `{}` has no executable body nodes; an Event entry is a registration target, not a complete workflow",
+                event.name
+            ));
+        }
         let entry = match &event.anchor {
             Some(anchor) => {
-                let entry = find_board_node(self.existing, anchor)
-                    .map(|_| NodeEntity::Existing(anchor.clone()));
+                let entry = find_board_node(self.existing, anchor).and_then(|node| {
+                    if !event.node_type.trim().is_empty() && node.name != event.node_type {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` declares exact node_type `{}`, but anchor `{anchor}` resolves to `{}`",
+                            event.name, event.node_type, node.name
+                        ));
+                        return None;
+                    }
+                    if event.node_type.trim().is_empty()
+                        && !pin_name_matches(&node.name, &event.name)
+                        && !pin_name_matches(&node.friendly_name, &event.name)
+                    {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` keeps anchor `{anchor}`, but that anchor identifies `{}`; remove the anchor to replace the event type",
+                            event.name, node.name
+                        ));
+                        return None;
+                    }
+                    Some(NodeEntity::Existing(anchor.clone()))
+                });
                 if entry.is_none() {
-                    self.result.diagnostics.push(format!(
-                        "event `{}` anchors to `{anchor}`, which no longer exists on the board; its body was planned without an execution entry",
-                        event.name
-                    ));
+                    if find_board_node(self.existing, anchor).is_none() {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` anchors to `{anchor}`, which no longer exists on the board; its body was planned without an execution entry",
+                            event.name
+                        ));
+                    }
                 }
                 entry
             }
-            None => {
-                self.add_entry_node(&event.name, target_layer.clone(), !event.params.is_empty())
-            }
+            None => self.add_entry_node(
+                &event.name,
+                &event.node_type,
+                target_layer.clone(),
+                &event.params,
+            ),
         };
 
         self.push_scope();
@@ -1879,6 +3095,19 @@ impl<'a> StructuralPlanner<'a> {
         let Some(planned) = self.planned_functions.get(&func.name).cloned() else {
             return;
         };
+        if func.anchor.is_none() {
+            if block_has_no_executable_statements(&func.body) {
+                self.result.diagnostics.push(format!(
+                    "new function `{}` has no executable body nodes; empty helper layers are not actionable FlowScript",
+                    func.name
+                ));
+            } else if !planned.impure && func.returns.is_empty() && !planned.has_unresolved_calls {
+                self.result.diagnostics.push(format!(
+                    "new function `{}` is pure and declares no return values; its body has no observable runtime effect and cannot be reached through execution wiring. Declare and return a value, or use a catalog node with an Execution input if the helper is intended to perform side effects",
+                    func.name
+                ));
+            }
+        }
         let layer = planned.entity.clone();
         let target_layer = Some(layer.node_ref());
         self.push_scope();
@@ -1903,6 +3132,98 @@ impl<'a> StructuralPlanner<'a> {
         }
         self.function_return_targets.pop();
         self.pop_scope();
+    }
+
+    /// Validate the graph commands produced for new Function layers, rather than trusting only
+    /// the source-level shape. A function can contain syntactically valid calls yet still render
+    /// and execute as an empty layer when none of those calls materialize, or when its execution
+    /// boundaries are not connected to the body.
+    fn check_new_function_structure(&mut self) {
+        let new_functions = self
+            .planned_functions
+            .iter()
+            .filter_map(|(name, planned)| match &planned.entity {
+                NodeEntity::Layer { ref_id, pins } => Some((
+                    name.clone(),
+                    ref_id.clone(),
+                    pins.clone(),
+                    planned.has_unresolved_calls,
+                )),
+                NodeEntity::Existing(_) | NodeEntity::New { .. } => None,
+            })
+            .collect::<Vec<_>>();
+
+        for (name, layer_ref, pins, has_unresolved_calls) in new_functions {
+            if has_unresolved_calls {
+                // Planning already emitted the exact catalog-resolution failure. The apparent
+                // empty/pure/disconnected layer is a consequence of that missing node, not an
+                // independent repair target.
+                continue;
+            }
+            let body_nodes = self
+                .add_commands
+                .iter()
+                .filter_map(|command| match command {
+                    BoardCommand::AddNode {
+                        ref_id: Some(ref_id),
+                        target_layer: Some(target_layer),
+                        ..
+                    } if target_layer == &layer_ref => Some(ref_id.clone()),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+
+            if body_nodes.is_empty() {
+                self.result.diagnostics.push(format!(
+                    "new function `{name}` contains no materialized body nodes in its Function layer; refusing to create a runtime-empty helper"
+                ));
+                continue;
+            }
+
+            let has_exec_in = pins.iter().any(|pin| {
+                pin.name == FUNCTION_EXEC_IN
+                    && pin.data_type == "Execution"
+                    && pin.pin_type == "Input"
+            });
+            let has_exec_out = pins.iter().any(|pin| {
+                pin.name == FUNCTION_EXEC_OUT
+                    && pin.data_type == "Execution"
+                    && pin.pin_type == "Output"
+            });
+            if !(has_exec_in && has_exec_out) {
+                continue;
+            }
+
+            let entry_connected = self.connect_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                        if from_node == &layer_ref
+                            && from_pin == FUNCTION_EXEC_IN
+                            && body_nodes.contains(to_node)
+                )
+            });
+            if !entry_connected {
+                self.result.diagnostics.push(format!(
+                    "new impure function `{name}` has no Function exec_in connection to a materialized body node; its body would never run"
+                ));
+            }
+
+            let exit_connected = self.connect_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, to_node, to_pin, .. }
+                        if body_nodes.contains(from_node)
+                            && to_node == &layer_ref
+                            && to_pin == FUNCTION_EXEC_OUT
+                )
+            });
+            if !exit_connected {
+                self.result.diagnostics.push(format!(
+                    "new impure function `{name}` has no materialized body tail connected to Function exec_out; callers could not continue after it. End the body on a node with one execution output, use explicit labelled arms for terminal multi-output nodes, or add an exact continuation policy for that node type"
+                ));
+            }
+        }
     }
 
     /// Execution entry for an impure function body: the layer's `exec_in` boundary pin. The
@@ -1967,8 +3288,7 @@ impl<'a> StructuralPlanner<'a> {
                     .pins
                     .values()
                     .find(|pin| {
-                        pin.pin_type == PinType::Output
-                            && pin.data_type == VariableType::Execution
+                        pin.pin_type == PinType::Output && pin.data_type == VariableType::Execution
                     })
                     .map(|pin| pin.name.clone())
             }),
@@ -2331,15 +3651,33 @@ impl<'a> StructuralPlanner<'a> {
                     entity
                 };
 
-                if anchor.is_none() && bind.is_none() && !synthesized_branch {
-                    self.result.diagnostics.push(
-                        "new FlowScript branch statements are not yet converted automatically; use the control_branch declaration or emit_commands for complex branch wiring".to_string(),
-                    );
-                }
                 if let Some(cond) = condition {
-                    // Anchored (existing) branches already have their condition wired on the
-                    // board; a synthesized branch wired it through its own call arguments.
-                    if !matches!(entity, Some(NodeEntity::Existing(_))) && !synthesized_branch {
+                    // Condition-form branches use a placeholder call in the AST. For an anchored
+                    // branch, reconcile the condition against its existing input source so edits
+                    // inside sugared comparisons update/reuse that source. A new synthesized
+                    // branch already wired the same expression through its call arguments.
+                    if let Some(existing @ NodeEntity::Existing(node_id)) = entity.as_ref()
+                        && is_placeholder_call(call)
+                        && let Some(node) = find_board_node(self.existing, node_id)
+                    {
+                        let meta = node_to_metadata(node);
+                        let condition_call = Call {
+                            node_type: node.name.clone(),
+                            display: to_camel_case(&node.name),
+                            args: vec![Arg {
+                                name: "condition".to_string(),
+                                value: cond.clone(),
+                            }],
+                            anchor: Some(node_id.clone()),
+                        };
+                        self.plan_call_arguments(
+                            &condition_call,
+                            existing,
+                            &meta,
+                            target_layer.clone(),
+                            true,
+                        );
+                    } else if !synthesized_branch {
                         let _ = self.resolve_expr(cond, target_layer.clone());
                     }
                 }
@@ -2457,15 +3795,34 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
-    fn function_layer_entity(&mut self, func: &FnDecl, impure: bool) -> NodeEntity {
+    fn function_layer_entity(&mut self, func: &FnDecl, impure: bool) -> Option<NodeEntity> {
         if let Some(anchor) = &func.anchor {
-            return NodeEntity::Existing(anchor.clone());
+            let Some(existing) = self
+                .existing
+                .layers
+                .get(anchor)
+                .filter(|layer| matches!(layer.r#type, LayerType::Function))
+            else {
+                self.result.diagnostics.push(format!(
+                    "function `{}` anchors to `{anchor}`, which is not an existing Function layer",
+                    func.name
+                ));
+                return None;
+            };
+            if to_camel_case(&existing.name) != to_camel_case(&func.name) {
+                self.result.diagnostics.push(format!(
+                    "function `{}` anchors to Function layer `{anchor}` named `{}`; anchored function identity cannot be retargeted",
+                    func.name, existing.name
+                ));
+                return None;
+            }
+            return Some(NodeEntity::Existing(anchor.clone()));
         }
 
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
         let pins = function_layer_pins(func, impure);
-        let position = self.next_position();
+        let position = self.next_position(None);
         self.add_commands.push(BoardCommand::CreateLayer {
             name: func.name.clone(),
             ref_id: Some(ref_id.clone()),
@@ -2488,7 +3845,7 @@ impl<'a> StructuralPlanner<'a> {
             target_layer: None,
             summary: Some(format!("Create function {}", func.name)),
         });
-        NodeEntity::Layer { ref_id, pins }
+        Some(NodeEntity::Layer { ref_id, pins })
     }
 
     fn seed_function_params(&mut self, params: &[Param], layer: &NodeEntity) {
@@ -2648,9 +4005,59 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
         if let Some(anchor) = anchor {
-            let meta = find_board_node(self.existing, anchor).map(node_to_metadata)?;
+            let Some(node) = find_board_node(self.existing, anchor) else {
+                self.result.diagnostics.push(format!(
+                    "call `{}` anchors to `{anchor}`, which no longer exists on the board",
+                    call.display
+                ));
+                return None;
+            };
+            // Validate anchored calls against their live instance pins/defaults while retaining
+            // any explicit catalog requirements (including repeated names). Dynamic instance
+            // pins exist only in the live metadata, so neither source can safely replace the
+            // other wholesale.
+            let mut meta = node_to_metadata(node);
+            self.merge_catalog_required_inputs(&mut meta);
+            let planned_function_target = self
+                .planned_functions
+                .get(&call.display)
+                .map(|planned| planned.entity.node_ref());
+            let expected_node_type = if planned_function_target.is_some() {
+                CALL_FUNCTION_NODE_TYPE
+            } else {
+                call.node_type.as_str()
+            };
+            if !expected_node_type.trim().is_empty() && meta.name != expected_node_type {
+                self.result.diagnostics.push(format!(
+                    "call `{}` declares exact node_type `{expected_node_type}`, but anchor `{anchor}` resolves to `{}`",
+                    call.display, meta.name
+                ));
+                return None;
+            }
+            if expected_node_type.trim().is_empty()
+                && meta.name != CALL_REFERENCE_NODE_TYPE
+                && !(is_placeholder_call(call) && meta.name == "control_branch")
+                && !call_matches_node(call, node)
+            {
+                self.result.diagnostics.push(format!(
+                    "call `{}` keeps anchor `{anchor}`, but that anchor identifies `{}`; remove the anchor to replace the node type",
+                    call.display, meta.name
+                ));
+                return None;
+            }
+            if let Some(expected_layer) = planned_function_target
+                && node_pin_literal_string(node, FUNCTION_LAYER_ID_PIN).as_deref()
+                    != Some(expected_layer.as_str())
+            {
+                self.result.diagnostics.push(format!(
+                    "function call `{}` keeps anchor `{anchor}`, but that call targets a different Function layer; remove the anchor to retarget it",
+                    call.display
+                ));
+                return None;
+            }
             let entity = NodeEntity::Existing(anchor.to_string());
             let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, false);
+            self.check_required_inputs_after_planning(call, &entity, &meta);
             return Some((entity, input_sources));
         }
 
@@ -2661,31 +4068,122 @@ impl<'a> StructuralPlanner<'a> {
         self.add_call_node_with_sources(call, target_layer)
     }
 
-    /// Resolve an event block's entry node. Arbitrary event names intentionally fall back to a
-    /// simple event; that is only worth a diagnostic when declared payload params get dropped.
+    /// Resolve an event block's entry node. A non-empty `node_type` is an exact catalog identity
+    /// supplied by the typed AST and is therefore authoritative; `display` remains the authored
+    /// handler alias. Text-parsed FlowScript has no `node_type`, so that legacy surface continues
+    /// to resolve by display and then fall back to a Generic/Simple event.
     fn add_entry_node(
         &mut self,
         display: &str,
+        node_type: &str,
         target_layer: Option<String>,
-        dropped_params: bool,
+        params: &[Param],
     ) -> Option<NodeEntity> {
+        if !node_type.trim().is_empty() {
+            let Some(meta) = self.catalog.by_type.get(node_type).cloned() else {
+                self.result.diagnostics.push(format!(
+                    "event `{display}` declares exact node_type `{node_type}`, which is not available in the catalog"
+                ));
+                return None;
+            };
+            if let Some(reason) = event_entry_incompatibility(&meta) {
+                self.result.diagnostics.push(format!(
+                    "event `{display}` declares node_type `{node_type}`, which cannot be used as an event entry: {reason}"
+                ));
+                return None;
+            }
+            let friendly_name = (display != to_camel_case(&meta.name)).then(|| display.to_string());
+            return Some(self.queue_event_entry_node(meta, target_layer, params, friendly_name));
+        }
+
         match self.catalog.resolve_display(display) {
-            Ok(meta) => Some(self.queue_add_node(meta, target_layer)),
+            Ok(meta) => {
+                if let Some(reason) = event_entry_incompatibility(&meta) {
+                    self.result.diagnostics.push(format!(
+                        "FlowScript handler `{display}` resolved to `{}`, which cannot be used as an event entry: {reason}",
+                        meta.name
+                    ));
+                    return None;
+                }
+                Some(self.queue_event_entry_node(meta, target_layer, params, None))
+            }
             Err(err) => {
-                for fallback in ["eventsSimple", "eventsGeneric"] {
+                let fallbacks = if params.is_empty() {
+                    ["eventsSimple", "eventsGeneric"]
+                } else {
+                    ["eventsGeneric", "eventsSimple"]
+                };
+                for fallback in fallbacks {
                     if let Ok(meta) = self.catalog.resolve_display(fallback) {
-                        if dropped_params {
-                            self.result.diagnostics.push(format!(
-                                "event `{display}` does not match a catalog entry node; created a `{fallback}` entry instead and its declared payload params were not carried over"
-                            ));
+                        if event_entry_incompatibility(&meta).is_some() {
+                            continue;
                         }
-                        return Some(self.queue_add_node(meta, target_layer));
+                        // Preserve an arbitrary handler's authored name on its generic fallback.
+                        // The apply planner registers this friendly name as a same-batch alias so
+                        // `tools: [fetchPage]` resolves directly to this concrete entry node. A
+                        // successful fallback is normal handler lowering, not a diagnostic: all
+                        // reconcile diagnostics block atomic FlowScript application.
+                        return Some(self.queue_event_entry_node(
+                            meta,
+                            target_layer,
+                            params,
+                            Some(display.to_string()),
+                        ));
                     }
                 }
                 self.result.diagnostics.push(err);
                 None
             }
         }
+    }
+
+    /// Add a new event entry, materializing FlowScript-declared custom data outputs only for the
+    /// generic event node. Static Simple/Chat interfaces must continue to use their catalog pins.
+    fn queue_event_entry_node(
+        &mut self,
+        mut meta: NodeMetadata,
+        target_layer: Option<String>,
+        params: &[Param],
+        friendly_name: Option<String>,
+    ) -> NodeEntity {
+        let mut additional_pins = Vec::new();
+
+        for param in params {
+            if metadata_output_pin(&meta, &param.name).is_some() {
+                continue;
+            }
+
+            if meta.name != "events_generic" {
+                self.result.diagnostics.push(format!(
+                    "could not choose an output pin for event parameter `{}` on `{}`; only a new eventsGeneric entry may declare custom output parameters",
+                    param.name, meta.friendly_name
+                ));
+                continue;
+            }
+
+            let pin_meta = param_pin_metadata(param);
+            if pin_meta.data_type == "Execution" {
+                self.result.diagnostics.push(format!(
+                    "could not choose an output pin for event parameter `{}`: custom Generic Event parameters must be data values, not Execution",
+                    param.name
+                ));
+                continue;
+            }
+
+            additional_pins.push(param_output_pin_def(param));
+            meta.outputs.push(pin_meta);
+        }
+
+        let entity = self.queue_add_node_with_additional_pins(
+            meta,
+            target_layer,
+            additional_pins,
+            friendly_name,
+        );
+        if let NodeEntity::New { ref_id, .. } = &entity {
+            self.event_entry_refs.insert(ref_id.clone());
+        }
+        entity
     }
 
     fn add_call_node(&mut self, call: &Call, target_layer: Option<String>) -> Option<NodeEntity> {
@@ -2711,14 +4209,247 @@ impl<'a> StructuralPlanner<'a> {
                 return None;
             }
         };
+        if let Some(diagnostic) = unsafe_catalog_call_shape_diagnostic(call, &meta) {
+            self.result.diagnostics.push(diagnostic);
+            return None;
+        }
+        if let Some(replacement) = safe_catalog_call_alias(&call.display)
+            && pin_name_matches(&meta.name, replacement)
+            && !pin_name_matches(&meta.name, &call.display)
+        {
+            self.result.corrections.push(format!(
+                "Auto-corrected FlowScript call `{}` to `{replacement}`.",
+                call.display
+            ));
+        }
         // Materialize this call's dynamic (`on_update`-generated) pins so its args resolve against
         // real pins; a no-op when no enricher is supplied (falls back to `synthesize_dynamic_input_pin`).
         let meta = self.enrich_meta(meta, call);
         let entity = self.queue_add_node(meta.clone(), target_layer.clone());
 
         let input_sources = self.plan_call_arguments(call, &entity, &meta, target_layer, true);
+        self.check_required_inputs_after_planning(call, &entity, &meta);
 
         Some((entity, input_sources))
+    }
+
+    /// Merge catalog-declared requirements into live instance metadata as a multiset union. The
+    /// live metadata contributes dynamic pins and actual defaults; the catalog contributes
+    /// requirements that an older or shape-shifted instance may no longer expose. Taking the
+    /// maximum occurrence count avoids doubling the same requirement when both sources contain it.
+    fn merge_catalog_required_inputs(&self, live: &mut NodeMetadata) {
+        let Some(catalog) = self.catalog.by_type.get(&live.name) else {
+            return;
+        };
+
+        let canonical_name = |required: &str| {
+            live.inputs
+                .iter()
+                .find(|input| {
+                    input.data_type != "Execution" && metadata_pin_name_matches(input, required)
+                })
+                .map(|input| input.name.clone())
+                .unwrap_or_else(|| required.to_string())
+        };
+        let mut merged = live.required_inputs.clone();
+        let mut merged_counts = HashMap::<String, usize>::new();
+        for required in &merged {
+            *merged_counts.entry(canonical_name(required)).or_default() += 1;
+        }
+
+        let mut catalog_counts = HashMap::<String, usize>::new();
+        for required in &catalog.required_inputs {
+            let key = canonical_name(required);
+            let catalog_count = catalog_counts.entry(key.clone()).or_default();
+            *catalog_count += 1;
+            if merged_counts.get(&key).copied().unwrap_or_default() >= *catalog_count {
+                continue;
+            }
+            merged.push(required.clone());
+            *merged_counts.entry(key).or_default() += 1;
+        }
+        live.required_inputs = merged;
+    }
+
+    /// Catalog metadata carries the data inputs that must be configured for a node to be usable.
+    /// Argument planning is the source of truth here: a required pin is satisfied only when it
+    /// retained a catalog default or planning actually queued a literal/update or incoming edge.
+    /// Pair duplicate pin names positionally so one `value:` argument cannot accidentally satisfy
+    /// every same-named required input.
+    fn check_required_inputs_after_planning(
+        &mut self,
+        call: &Call,
+        entity: &NodeEntity,
+        meta: &NodeMetadata,
+    ) {
+        if meta.required_inputs.is_empty() {
+            return;
+        }
+
+        let node_ref = entity.node_ref();
+        // Anchored statement literals are deliberately applied by the legacy outer diff, so the
+        // structural planner does not queue a duplicate UpdateNodePin for them. Reconstruct their
+        // exact positional pin refs here so they still satisfy required-input validation.
+        let mut authored_literal_inputs = HashSet::new();
+        let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
+        for (arg_index, arg) in call.args.iter().enumerate() {
+            let occurrence = {
+                let seen = same_name_seen.entry(arg.name.as_str()).or_insert(0);
+                let current = *seen;
+                *seen += 1;
+                current
+            };
+            if literal_expr_to_value(&arg.value).is_none() {
+                continue;
+            }
+            let pin_ref = match entity {
+                // Mirror the legacy anchored diff's populated-first pairing, then translate the
+                // concrete live pin back to its stable positional ref for required matching.
+                NodeEntity::Existing(node_id) => {
+                    find_board_node(self.existing, node_id).and_then(|node| {
+                        let direct = matching_input_pins(node, &arg.name);
+                        if let Some(pin) = direct.get(occurrence).copied() {
+                            return Some(node_input_occurrence_ref(node, pin));
+                        }
+                        let (name, alias_occurrence) =
+                            input_arg_alias_target(&meta.name, call, arg_index)?;
+                        matching_input_pins(node, name)
+                            .get(alias_occurrence)
+                            .copied()
+                            .map(|pin| node_input_occurrence_ref(node, pin))
+                    })
+                }
+                _ => {
+                    if let Some(input) = metadata_input_pin_at(meta, &arg.name, occurrence) {
+                        Some(metadata_input_command_ref(meta, input, occurrence))
+                    } else {
+                        input_arg_alias_target(&meta.name, call, arg_index).and_then(
+                            |(name, alias_occurrence)| {
+                                metadata_input_pin_at(meta, name, alias_occurrence).map(|input| {
+                                    metadata_input_command_ref(meta, input, alias_occurrence)
+                                })
+                            },
+                        )
+                    }
+                }
+            };
+            if let Some(pin_ref) = pin_ref {
+                authored_literal_inputs.insert(pin_ref);
+            }
+        }
+
+        let mut claimed_inputs = HashSet::new();
+        let mut missing = Vec::new();
+        let mut required_seen: HashMap<&str, usize> = HashMap::new();
+
+        for required in &meta.required_inputs {
+            let required_occurrence = {
+                let occurrence = required_seen.entry(required.as_str()).or_insert(0);
+                let current = *occurrence;
+                *occurrence += 1;
+                current
+            };
+            // `required_inputs` is name-based. Prefer a no-default matching pin because catalog
+            // enrichment derives this list from precisely those pins; the fallback preserves
+            // manually-authored metadata where a required pin also has a usable default.
+            let matching_indices = meta
+                .inputs
+                .iter()
+                .enumerate()
+                .filter(|(index, input)| {
+                    !claimed_inputs.contains(index)
+                        && input.data_type != "Execution"
+                        && metadata_pin_name_matches(input, required)
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let input_index = matching_indices
+                .iter()
+                .copied()
+                .find(|index| meta.inputs[*index].default_value.is_none())
+                .or_else(|| matching_indices.first().copied());
+
+            let Some(input_index) = input_index else {
+                let label = if meta
+                    .required_inputs
+                    .iter()
+                    .filter(|name| name.as_str() == required.as_str())
+                    .count()
+                    > 1
+                {
+                    pin_occurrence_ref(required, required_occurrence)
+                } else {
+                    required.clone()
+                };
+                missing.push(label);
+                continue;
+            };
+            claimed_inputs.insert(input_index);
+
+            let input = &meta.inputs[input_index];
+            if input.default_value.is_some() {
+                continue;
+            }
+            let occurrence = meta.inputs[..input_index]
+                .iter()
+                .filter(|candidate| {
+                    candidate.data_type != "Execution"
+                        && metadata_pin_name_matches(candidate, &input.name)
+                })
+                .count();
+            let pin_ref = metadata_input_command_ref(meta, input, occurrence);
+            let has_literal_or_value = authored_literal_inputs.contains(&pin_ref)
+                || self.update_commands.iter().any(|command| {
+                    matches!(
+                        command,
+                        BoardCommand::UpdateNodePin { node_id, pin_id, .. }
+                            if node_id == &node_ref && pin_id == &pin_ref
+                    )
+                });
+            let has_planned_connection = self.connect_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { to_node, to_pin, .. }
+                        if to_node == &node_ref && to_pin == &pin_ref
+                )
+            });
+            // An unchanged anchored edge is intentionally not re-queued. Inspect the exact live
+            // pin occurrence rather than `existing_source_for_input`'s name-only lookup, which
+            // would let one connected repeated pin satisfy all of its siblings.
+            let has_retained_existing_connection = if let NodeEntity::Existing(node_id) = entity {
+                find_board_node(self.existing, node_id)
+                    .and_then(|node| find_input_pin_by_ref(node, &pin_ref))
+                    .is_some_and(|pin| {
+                        if pin.depends_on.is_empty() {
+                            return false;
+                        }
+                        !self.disconnect_commands.iter().any(|command| {
+                            matches!(
+                                command,
+                                BoardCommand::DisconnectPins { to_node, to_pin, .. }
+                                    if to_node == node_id
+                                        && (to_pin == &pin_ref
+                                            || to_pin == &pin.id
+                                            || to_pin == &pin.name)
+                            )
+                        })
+                    })
+            } else {
+                false
+            };
+            if !has_literal_or_value && !has_planned_connection && !has_retained_existing_connection
+            {
+                missing.push(pin_ref);
+            }
+        }
+
+        if !missing.is_empty() {
+            self.result.diagnostics.push(format!(
+                "node `{}` is missing required inputs: {}",
+                call.display,
+                missing.join(", ")
+            ));
+        }
     }
 
     /// Create the `control_call_function` node for a call to a FlowScript `function` declaration.
@@ -2753,8 +4484,7 @@ impl<'a> StructuralPlanner<'a> {
                 .get(id)
                 .map(|layer| {
                     layer.pins.values().any(|pin| {
-                        pin.pin_type == PinType::Input
-                            && pin.data_type == VariableType::Execution
+                        pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution
                     })
                 })
                 .unwrap_or(planned.impure),
@@ -2798,7 +4528,7 @@ impl<'a> StructuralPlanner<'a> {
     ) -> Vec<ValueSource> {
         let mut input_sources = Vec::new();
         let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
-        for arg in &call.args {
+        for (arg_index, arg) in call.args.iter().enumerate() {
             // Multi-pins (several inputs sharing one name) pair positionally with the
             // same-named args, mirroring the order lowering emitted them in.
             let occurrence = {
@@ -2807,76 +4537,98 @@ impl<'a> StructuralPlanner<'a> {
                 *counter += 1;
                 index
             };
-            if occurrence > 0
-                && matches!(entity, NodeEntity::New { .. })
-                && metadata_input_pin_at(meta, &arg.name, occurrence).is_some()
-            {
-                // Board commands address pins by NAME, so a second same-named pin on a node
-                // created in this same batch cannot be targeted yet — surface it instead of
-                // silently collapsing both args onto the first pin.
-                self.result.diagnostics.push(format!(
-                    "`{}` uses the multi-pin argument `{}` more than once; repeated same-named arguments on a NEW node are not supported through FlowScript yet — configure the extra pin afterwards or via emit_commands",
-                    call.display, arg.name
-                ));
-                continue;
-            }
             // Pins minted by a node's `on_update` (for example each `{placeholder}` of a
             // `string_format` node) are absent from the STATIC catalog metadata used to plan a NEW
             // node, so they must be predicted from the call's own config args. `synthesized_pin`
             // backs the `&PinMetadata` borrow for such a predicted dynamic pin.
             let synthesized_pin;
-            let input = match metadata_input_pin_at(meta, &arg.name, occurrence) {
-                Some(pin) => pin,
-                None => {
-                    // `tools:`/`fnRefs:` carry a node's function references, not pin values — they
-                    // are not board pins. For a NEWLY added node, materialize them as a
-                    // `SetNodeFunctionRefs` command (the applier resolves each named target once the
-                    // referenced functions/events exist). For an EXISTING node, leave its
-                    // references untouched: an unchanged document round-trips to a clean no-op, and
-                    // rewriting them would need exact ref→entry-node resolution against the live
-                    // board.
-                    if is_synthetic_fn_ref_arg(arg) {
-                        if let NodeEntity::New { .. } = entity {
-                            let refs = synthetic_fn_ref_targets(arg);
-                            if !refs.is_empty() {
-                                self.fn_ref_commands
-                                    .push(BoardCommand::SetNodeFunctionRefs {
-                                        node_id: entity.node_ref(),
-                                        fn_refs: refs,
-                                        summary: Some(format!(
-                                            "Register {} on {}",
-                                            arg.name, meta.friendly_name
-                                        )),
-                                    });
+            let (input, target_occurrence) =
+                match metadata_input_pin_at(meta, &arg.name, occurrence) {
+                    Some(pin) => (pin, occurrence),
+                    None => {
+                        if let Some((name, alias_occurrence)) =
+                            input_arg_alias_target(&meta.name, call, arg_index)
+                            && let Some(pin) = metadata_input_pin_at(meta, name, alias_occurrence)
+                        {
+                            let matching_pin_count = meta
+                                .inputs
+                                .iter()
+                                .filter(|candidate| {
+                                    candidate.data_type != "Execution"
+                                        && metadata_pin_name_matches(candidate, &pin.name)
+                                })
+                                .count();
+                            self.result.corrections.push(input_arg_alias_correction(
+                                call,
+                                arg,
+                                &pin.name,
+                                alias_occurrence,
+                                matching_pin_count,
+                            ));
+                            (pin, alias_occurrence)
+                        } else {
+                            // `tools:`/`fnRefs:` carry a node's function references, not pin values —
+                            // they are not board pins. For a NEWLY added node, materialize them as a
+                            // `SetNodeFunctionRefs` command (the applier resolves each named target once
+                            // the referenced functions/events exist). For an EXISTING node, leave its
+                            // references untouched: an unchanged document round-trips to a clean no-op,
+                            // and rewriting them would need exact ref→entry-node resolution against the
+                            // live board.
+                            if is_synthetic_fn_ref_arg(arg) {
+                                if let NodeEntity::New { .. } = entity {
+                                    let refs = synthetic_fn_ref_targets(arg);
+                                    if !refs.is_empty() {
+                                        self.fn_ref_commands.push(
+                                            BoardCommand::SetNodeFunctionRefs {
+                                                node_id: entity.node_ref(),
+                                                fn_refs: refs,
+                                                summary: Some(format!(
+                                                    "Register {} on {}",
+                                                    arg.name, meta.friendly_name
+                                                )),
+                                            },
+                                        );
+                                    }
+                                }
+                                continue;
+                            }
+                            // A dynamic pin the node's `on_update` will add from its config (for example
+                            // a `string_format` placeholder that appears in the format string):
+                            // synthesize a permissive Generic pin so its value/connection is still
+                            // planned. Apply sets the config pin first, runs `on_update`, then resolves
+                            // the wire against the now-live pin (see `plan()`'s
+                            // update-before-connect ordering).
+                            match synthesize_dynamic_input_pin(
+                                meta,
+                                call,
+                                arg,
+                                entity,
+                                self.existing,
+                            ) {
+                                Some(pin) => {
+                                    synthesized_pin = pin;
+                                    (&synthesized_pin, occurrence)
+                                }
+                                None => {
+                                    self.result.diagnostics.push(format!(
+                                    "node `{}` has no input pin named `{}`; skipped that argument",
+                                    call.display, arg.name
+                                ));
+                                    continue;
+                                }
                             }
                         }
-                        continue;
                     }
-                    // A dynamic pin the node's `on_update` will add from its config (for example a
-                    // `string_format` placeholder that appears in the format string): synthesize a
-                    // permissive Generic pin so its value/connection is still planned. Apply sets
-                    // the config pin first, runs `on_update`, then resolves the wire against the
-                    // now-live pin (see `plan()`'s update-before-connect ordering).
-                    match synthesize_dynamic_input_pin(meta, call, arg, entity, self.existing) {
-                        Some(pin) => {
-                            synthesized_pin = pin;
-                            &synthesized_pin
-                        }
-                        None => {
-                            self.result.diagnostics.push(format!(
-                                "node `{}` has no input pin named `{}`; skipped that argument",
-                                call.display, arg.name
-                            ));
-                            continue;
-                        }
-                    }
-                }
-            };
+                };
+            // Catalog pin ids are randomized by AddNodeCommand, so same-named inputs on a NEW
+            // node cannot be addressed by their catalog ids. Carry their stable occurrence in
+            // the command pin ref; apply resolves it after the node exists.
+            let input_command_ref = metadata_input_command_ref(meta, input, target_occurrence);
 
             if let Some(mut value) = literal_expr_to_value(&arg.value) {
                 self.normalize_input_value(input, &mut value);
                 if include_direct_literals {
-                    self.queue_update_input(entity, input, value, meta);
+                    self.queue_update_input_at(entity, input, &input_command_ref, value, meta);
                 }
                 continue;
             }
@@ -2900,15 +4652,16 @@ impl<'a> StructuralPlanner<'a> {
             let source = match source {
                 SymbolValue::Literal(mut value) => {
                     self.normalize_input_value(input, &mut value);
-                    self.queue_update_input(entity, input, value, meta);
+                    self.queue_update_input_at(entity, input, &input_command_ref, value, meta);
                     continue;
                 }
                 SymbolValue::VariableRef { variable_id }
                     if is_variable_ref_pin_name(&input.name) =>
                 {
-                    self.queue_update_input(
+                    self.queue_update_input_at(
                         entity,
                         input,
+                        &input_command_ref,
                         flow_like_types::Value::String(variable_id),
                         meta,
                     );
@@ -2948,7 +4701,7 @@ impl<'a> StructuralPlanner<'a> {
                     from_node: source.node.node_ref(),
                     from_pin: output_pin.clone(),
                     to_node: entity.node_ref(),
-                    to_pin: input.name.clone(),
+                    to_pin: input_command_ref,
                     summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
                 });
             }
@@ -3020,6 +4773,9 @@ impl<'a> StructuralPlanner<'a> {
                 then,
                 otherwise,
             } => self.reuse_existing_select_source(cond, then, otherwise, source, target_layer),
+            Expr::Binary { op, lhs, rhs } => {
+                self.reuse_existing_binary_source(op, lhs, rhs, source, target_layer)
+            }
             _ => None,
         }
     }
@@ -3060,9 +4816,7 @@ impl<'a> StructuralPlanner<'a> {
         };
         let node = find_board_node(self.existing, node_id)?;
         let base_input = match node.name.as_str() {
-            "struct_get"
-                if node_pin_literal_string(node, "field").as_deref() == Some(field) =>
-            {
+            "struct_get" if node_pin_literal_string(node, "field").as_deref() == Some(field) => {
                 "struct"
             }
             "struct_break"
@@ -3145,6 +4899,40 @@ impl<'a> StructuralPlanner<'a> {
         Some(SymbolValue::Source(source))
     }
 
+    /// Reuse the pure comparison node that an existing binary expression lowered from. Besides
+    /// keeping an unchanged round-trip a no-op, this lets a literal edit such as
+    /// `sender == "old"` -> `sender == "new"` update the comparator in place instead of adding a
+    /// duplicate node behind the branch.
+    fn reuse_existing_binary_source(
+        &mut self,
+        op: &str,
+        lhs: &Expr,
+        rhs: &Expr,
+        source: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if binary_operator_op(&node.name) != Some(canonical_binary_op(op)) {
+            return None;
+        }
+
+        let meta = node_to_metadata(node);
+        let inputs = binary_data_inputs(&meta)?;
+        let call = binary_operator_call(&meta, &inputs, lhs, rhs);
+        let entity = NodeEntity::Existing(node_id.clone());
+        self.plan_call_arguments(&call, &entity, &meta, target_layer, true);
+
+        Some(SymbolValue::Source(ValueSource {
+            node: entity.clone(),
+            output_pin: source
+                .output_pin
+                .or_else(|| self.resolve_entity_output_pin(&entity, None)),
+        }))
+    }
+
     fn reuse_existing_call_source(
         &mut self,
         call: &Call,
@@ -3162,10 +4950,13 @@ impl<'a> StructuralPlanner<'a> {
         // node that targets that function's layer (catalog resolution can never match it, and
         // recreating it on every reconcile would duplicate call nodes).
         let is_function_call_reuse = source_node.name == CALL_FUNCTION_NODE_TYPE
-            && self.planned_functions.get(&call.display).is_some_and(|planned| {
-                node_pin_literal_string(source_node, FUNCTION_LAYER_ID_PIN)
-                    .is_some_and(|layer_id| layer_id == planned.entity.node_ref())
-            });
+            && self
+                .planned_functions
+                .get(&call.display)
+                .is_some_and(|planned| {
+                    node_pin_literal_string(source_node, FUNCTION_LAYER_ID_PIN)
+                        .is_some_and(|layer_id| layer_id == planned.entity.node_ref())
+                });
         let meta = if is_function_call_reuse {
             node_to_metadata(source_node)
         } else {
@@ -3218,9 +5009,20 @@ impl<'a> StructuralPlanner<'a> {
         value: flow_like_types::Value,
         meta: &NodeMetadata,
     ) {
+        self.queue_update_input_at(entity, input, &input.name, value, meta);
+    }
+
+    fn queue_update_input_at(
+        &mut self,
+        entity: &NodeEntity,
+        input: &PinMetadata,
+        pin_ref: &str,
+        value: flow_like_types::Value,
+        meta: &NodeMetadata,
+    ) {
         if let NodeEntity::Existing(node_id) = entity
             && let Some(node) = find_board_node(self.existing, node_id)
-            && let Some(pin) = find_input_pin(node, &input.name)
+            && let Some(pin) = find_input_pin_by_ref(node, pin_ref)
         {
             let current = pin.default_value.as_deref().and_then(|bytes| {
                 flow_like_types::json::from_slice::<flow_like_types::Value>(bytes).ok()
@@ -3232,7 +5034,7 @@ impl<'a> StructuralPlanner<'a> {
 
         self.update_commands.push(BoardCommand::UpdateNodePin {
             node_id: entity.node_ref(),
-            pin_id: input.name.clone(),
+            pin_id: pin_ref.to_string(),
             value,
             summary: Some(format!("Set {} on {}", input.name, meta.friendly_name)),
         });
@@ -3264,37 +5066,90 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn queue_add_node(&mut self, meta: NodeMetadata, target_layer: Option<String>) -> NodeEntity {
+        self.queue_add_node_with_additional_pins(meta, target_layer, Vec::new(), None)
+    }
+
+    fn queue_add_node_with_additional_pins(
+        &mut self,
+        meta: NodeMetadata,
+        target_layer: Option<String>,
+        additional_pins: Vec<PlaceholderPinDef>,
+        friendly_name: Option<String>,
+    ) -> NodeEntity {
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
         if let Some(exec_in) = metadata_exec_input_pin(&meta) {
             self.new_impure_nodes
                 .push((ref_id.clone(), exec_in, meta.friendly_name.clone()));
         }
-        let position = self.next_position();
+        let position = self.next_position(target_layer.as_deref());
         self.add_commands.push(BoardCommand::AddNode {
             node_type: meta.name.clone(),
             ref_id: Some(ref_id.clone()),
             position: Some(position),
-            friendly_name: None,
+            friendly_name,
+            additional_pins: (!additional_pins.is_empty()).then_some(additional_pins),
             target_layer,
             summary: Some(format!("Add {}", meta.friendly_name)),
         });
         NodeEntity::New { ref_id, meta }
     }
 
-    fn next_position(&mut self) -> NodePosition {
-        let (base_x, base_y) = self.rightmost_existing_position();
+    fn next_position(&mut self, target_layer: Option<&str>) -> NodePosition {
+        const COLUMNS: usize = 4;
+        let layer_key = target_layer.map(str::to_string);
+        let index = self
+            .next_position_by_layer
+            .entry(layer_key.clone())
+            .or_insert(0);
+        let current = *index;
+        *index += 1;
+        let (base_x, base_y) = self.rightmost_existing_position(target_layer);
         let position = NodePosition {
-            x: base_x + 260.0 * (self.next_position as f64 + 1.0),
-            y: base_y + 120.0 * ((self.next_position / 4) as f64),
+            x: base_x + 260.0 * ((current % COLUMNS) as f64 + 1.0),
+            y: base_y + 160.0 * ((current / COLUMNS) as f64),
         };
-        self.next_position += 1;
         position
     }
 
-    fn rightmost_existing_position(&self) -> (f64, f64) {
+    fn rightmost_existing_position(&self, target_layer: Option<&str>) -> (f64, f64) {
         let mut rightmost: Option<(f32, f32)> = None;
-        for node in all_board_nodes(self.existing) {
+        let mut seen = HashSet::new();
+        let mut nodes = Vec::new();
+        match target_layer {
+            Some(layer_id) => {
+                // Canonical boards keep layer members flat in `board.nodes` and identify their
+                // scope via `node.layer`; retain the nested map only as a legacy compatibility
+                // source. De-duplicate boards that temporarily contain both representations.
+                if let Some(layer) = self.existing.layers.get(layer_id) {
+                    for node in layer.nodes.values() {
+                        if seen.insert(node.id.as_str()) {
+                            nodes.push(node);
+                        }
+                    }
+                }
+                for node in self
+                    .existing
+                    .nodes
+                    .values()
+                    .filter(|node| node.layer.as_deref() == Some(layer_id))
+                {
+                    if seen.insert(node.id.as_str()) {
+                        nodes.push(node);
+                    }
+                }
+            }
+            None => {
+                // Layer members also live in `board.nodes`; exclude them from root placement or a
+                // wide Function body pushes unrelated root/event nodes thousands of pixels away.
+                nodes.extend(self.existing.nodes.values().filter(|node| {
+                    node.layer
+                        .as_deref()
+                        .is_none_or(|layer_id| layer_id.is_empty())
+                }));
+            }
+        };
+        for node in nodes {
             if let Some((x, y, _)) = node.coordinates {
                 if rightmost.map_or(true, |(rx, _)| x > rx) {
                     rightmost = Some((x, y));
@@ -3438,6 +5293,115 @@ impl<'a> StructuralPlanner<'a> {
                 .collect(),
             NodeEntity::Layer { .. } => Vec::new(),
         }
+    }
+
+    /// Resolve the catalog/board shape of the exact data output represented by `source`. An
+    /// unselected call result uses the same deterministic default-output rule as connection
+    /// planning, so validation never guesses among several unrelated outputs.
+    fn source_output_shape(&self, source: &ValueSource) -> Option<OutputShape> {
+        match &source.node {
+            NodeEntity::Existing(id) => {
+                let node = find_board_node(self.existing, id)?;
+                let pin = source
+                    .output_pin
+                    .as_deref()
+                    .and_then(|name| find_output_pin(node, name))
+                    .or_else(|| {
+                        default_node_output_pin(node)
+                            .as_deref()
+                            .and_then(|name| find_output_pin(node, name))
+                    })?;
+                Some(OutputShape {
+                    node_type: node.name.clone(),
+                    pin_name: pin.name.clone(),
+                    data_type: format!("{:?}", pin.data_type),
+                    value_type: format!("{:?}", pin.value_type),
+                    schema: pin.schema.clone(),
+                })
+            }
+            NodeEntity::New { meta, .. } => {
+                let pin = source
+                    .output_pin
+                    .as_deref()
+                    .and_then(|name| metadata_output_pin(meta, name))
+                    .or_else(|| {
+                        default_metadata_output_pin(meta)
+                            .as_deref()
+                            .and_then(|name| metadata_output_pin(meta, name))
+                    })?;
+                Some(OutputShape {
+                    node_type: meta.name.clone(),
+                    pin_name: pin.name.clone(),
+                    data_type: pin.data_type.clone(),
+                    value_type: pin.value_type.clone(),
+                    schema: pin.schema.clone(),
+                })
+            }
+            // Function/event boundary pins currently carry no schema in PlaceholderPinDef. Keep
+            // their member access permissive instead of pretending their shape is authoritative.
+            NodeEntity::Layer { .. } => None,
+        }
+    }
+
+    fn source_is_collection(&self, source: &ValueSource) -> bool {
+        self.source_output_shape(source)
+            .is_some_and(|shape| matches!(shape.value_type.as_str(), "Array" | "HashSet"))
+    }
+
+    /// Reject the generic `struct_get` fallback only when catalog metadata proves it wrong.
+    /// Schema-less Struct/Generic outputs and map-shaped values remain intentionally open-ended.
+    fn schema_allows_member_access(&mut self, source: &ValueSource, field: &str) -> bool {
+        let Some(shape) = self.source_output_shape(source) else {
+            return true;
+        };
+        if shape.data_type != "Struct" || shape.value_type == "HashMap" {
+            return true;
+        }
+        let Some(schema) = shape.schema.as_deref() else {
+            return true;
+        };
+
+        if matches!(shape.value_type.as_str(), "Array" | "HashSet") {
+            self.result.diagnostics.push(format!(
+                "catalog output `{}.{}` has collection type `{}`, so member `{field}` cannot use generic struct-field fallback; select `{}` and index or loop over it instead",
+                shape.node_type,
+                shape.pin_name,
+                shape.value_type,
+                shape.pin_name
+            ));
+            return false;
+        }
+        if shape.value_type != "Normal" {
+            return true;
+        }
+
+        let Some((title, fields)) = catalog_object_schema_fields(schema) else {
+            return true;
+        };
+        if fields
+            .iter()
+            .any(|declared| pin_name_matches(declared, field))
+        {
+            return true;
+        }
+
+        let schema_name = title
+            .map(|title| format!(" schema `{title}`"))
+            .unwrap_or_else(|| " its catalog schema".to_string());
+        let available = if fields.is_empty() {
+            "none".to_string()
+        } else {
+            fields
+                .iter()
+                .map(|field| to_camel_case(field))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        self.result.diagnostics.push(format!(
+            "catalog output `{}.{}` uses{}, which declares no field `{field}` (available fields: {available}); refusing generic struct-field fallback",
+            shape.node_type, shape.pin_name, schema_name
+        ));
+        false
     }
 
     /// Resolve a branch arm's label to an exec output pin. Labels come in two shapes: lowered
@@ -3635,7 +5599,13 @@ impl<'a> StructuralPlanner<'a> {
                     // DATA keys (`mail.subject`), which the parser classifies as Field. Fall
                     // back to the struct_get lowering the Member arm uses instead of dropping
                     // the connection.
-                    None => self.lower_struct_field_access(source, pin, target_layer),
+                    None if pin == "length" && self.source_is_collection(&source) => {
+                        self.lower_array_length_access(source, target_layer)
+                    }
+                    None if self.schema_allows_member_access(&source, pin) => {
+                        self.lower_struct_field_access(source, pin, target_layer)
+                    }
+                    None => None,
                 }
             }
             Expr::Call(call) => self.add_call_node(call, target_layer).map(|node| {
@@ -3657,15 +5627,245 @@ impl<'a> StructuralPlanner<'a> {
                 let base_source = self.symbol_to_source(base_symbol, target_layer.clone())?;
                 if field == "length" {
                     self.lower_array_length_access(base_source, target_layer)
-                } else {
+                } else if self.schema_allows_member_access(&base_source, field) {
                     self.lower_struct_field_access(base_source, field, target_layer)
+                } else {
+                    None
                 }
             }
-            Expr::Index { base, index } => {
-                self.lower_array_index_access(base, index, target_layer)
-            }
-            Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } | Expr::Binary { .. } => None,
+            Expr::Index { base, index } => self.lower_array_index_access(base, index, target_layer),
+            Expr::Binary { op, lhs, rhs } => self.lower_binary_operator(op, lhs, rhs, target_layer),
+            Expr::Object(_) | Expr::Array(_) | Expr::Ternary { .. } => None,
             Expr::Literal(_) => None,
+        }
+    }
+
+    /// Materialize the catalog node represented by a FlowScript binary expression and return its
+    /// output as a value source. Selection is type-directed: a literal on either side is enough to
+    /// choose an Integer/Float/String/Boolean family while typed refs and calls use output metadata.
+    fn lower_binary_operator(
+        &mut self,
+        op: &str,
+        lhs: &Expr,
+        rhs: &Expr,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let meta = self.resolve_binary_operator_meta(op, lhs, rhs)?;
+        let inputs = binary_data_inputs(&meta)?;
+        let call = binary_operator_call(&meta, &inputs, lhs, rhs);
+        let entity = self.queue_add_node(meta.clone(), target_layer.clone());
+        self.plan_call_arguments(&call, &entity, &meta, target_layer, true);
+
+        let Some(output_pin) = default_metadata_output_pin(&meta) else {
+            self.result.diagnostics.push(format!(
+                "binary operator node `{}` has no unambiguous data output",
+                meta.name
+            ));
+            return None;
+        };
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: Some(output_pin),
+        }))
+    }
+
+    fn resolve_binary_operator_meta(
+        &mut self,
+        op: &str,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Option<NodeMetadata> {
+        let op = canonical_binary_op(op);
+        if !BINARY_OPERATOR_NODES
+            .iter()
+            .any(|(candidate_op, _, _, _)| *candidate_op == op)
+        {
+            self.result.diagnostics.push(format!(
+                "binary operator `{op}` is not supported by FlowScript reconcile"
+            ));
+            return None;
+        }
+
+        let lhs_type = self.expr_data_type_hint(lhs);
+        let rhs_type = self.expr_data_type_hint(rhs);
+        let operand_type = match (lhs_type.as_deref(), rhs_type.as_deref()) {
+            (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs.to_string()),
+            (Some(lhs), Some(rhs)) => {
+                self.result.diagnostics.push(format!(
+                    "binary operator `{op}` has incompatible operand types `{lhs}` and `{rhs}`"
+                ));
+                return None;
+            }
+            (Some(known), None) | (None, Some(known)) => Some(known.to_string()),
+            (None, None) => None,
+        };
+
+        let candidates = BINARY_OPERATOR_NODES
+            .iter()
+            .filter(|(candidate_op, data_type, _, _)| {
+                *candidate_op == op
+                    && operand_type
+                        .as_deref()
+                        .is_none_or(|known| known == *data_type)
+            })
+            .filter_map(|(_, _, result_type, node_type)| {
+                self.catalog
+                    .by_type
+                    .get(*node_type)
+                    .map(|meta| (*result_type, meta))
+            })
+            .filter(|(result_type, meta)| {
+                binary_data_inputs(meta).is_some()
+                    && meta.outputs.iter().any(|pin| pin.data_type == *result_type)
+            })
+            .map(|(_, meta)| meta.clone())
+            .collect::<Vec<_>>();
+
+        match candidates.as_slice() {
+            [meta] => Some(meta.clone()),
+            [] => {
+                let type_name = operand_type.as_deref().unwrap_or("unknown");
+                self.result.diagnostics.push(format!(
+                    "binary operator `{op}` for `{type_name}` has no suitable two-input catalog node"
+                ));
+                None
+            }
+            many => {
+                self.result.diagnostics.push(format!(
+                    "binary operator `{op}` has ambiguous operand type; candidates are {}",
+                    many.iter()
+                        .map(|meta| meta.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                None
+            }
+        }
+    }
+
+    fn expr_data_type_hint(&self, expr: &Expr) -> Option<String> {
+        if let Some(value) = literal_expr_to_value(expr) {
+            return value_data_type(&value).map(str::to_string);
+        }
+
+        match expr {
+            Expr::Ref(name) => self
+                .lookup_symbol(name)
+                .and_then(|symbol| self.symbol_data_type_hint(&symbol)),
+            Expr::Call(call) => {
+                let meta = self.catalog.resolve_call(call).ok()?;
+                let output = default_metadata_output_pin(&meta)?;
+                metadata_output_pin(&meta, &output).map(|pin| pin.data_type.clone())
+            }
+            Expr::Field { base, pin } => match base.as_ref() {
+                Expr::Call(call) => self
+                    .catalog
+                    .resolve_call(call)
+                    .ok()
+                    .and_then(|meta| metadata_output_pin(&meta, pin).cloned())
+                    .map(|output| output.data_type),
+                Expr::Ref(name) => self.lookup_symbol(name).and_then(|symbol| match symbol {
+                    SymbolValue::Source(source) => {
+                        self.entity_output_data_type(&source.node, Some(pin))
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            },
+            Expr::Ternary {
+                then, otherwise, ..
+            } => {
+                let then_type = self.expr_data_type_hint(then)?;
+                (self.expr_data_type_hint(otherwise).as_deref() == Some(then_type.as_str()))
+                    .then_some(then_type)
+            }
+            Expr::Binary { op, lhs, rhs } => {
+                let op = canonical_binary_op(op);
+                let lhs_type = self.expr_data_type_hint(lhs);
+                let rhs_type = self.expr_data_type_hint(rhs);
+                let operand_type = match (lhs_type.as_deref(), rhs_type.as_deref()) {
+                    (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
+                    (Some(_), Some(_)) => return None,
+                    (Some(known), None) | (None, Some(known)) => Some(known),
+                    (None, None) => None,
+                };
+                let mut result_types = BINARY_OPERATOR_NODES
+                    .iter()
+                    .filter(|(candidate_op, data_type, _, _)| {
+                        *candidate_op == op && operand_type.is_none_or(|known| known == *data_type)
+                    })
+                    .map(|(_, _, result_type, _)| *result_type)
+                    .collect::<Vec<_>>();
+                result_types.sort_unstable();
+                result_types.dedup();
+                match result_types.as_slice() {
+                    [result_type] => Some((*result_type).to_string()),
+                    _ => None,
+                }
+            }
+            Expr::Object(_) => Some("Struct".to_string()),
+            Expr::Array(_) => Some("Generic".to_string()),
+            Expr::Member { .. } | Expr::Index { .. } | Expr::Literal(_) => None,
+        }
+    }
+
+    fn symbol_data_type_hint(&self, symbol: &SymbolValue) -> Option<String> {
+        match symbol {
+            SymbolValue::Source(source) => self.source_data_type_hint(source),
+            SymbolValue::Literal(value) => value_data_type(value).map(str::to_string),
+            SymbolValue::VariableRef { variable_id } => self
+                .existing
+                .variables
+                .get(variable_id)
+                .or_else(|| {
+                    self.existing
+                        .layers
+                        .values()
+                        .find_map(|layer| layer.variables.get(variable_id))
+                })
+                .map(|variable| format!("{:?}", variable.data_type)),
+        }
+    }
+
+    fn source_data_type_hint(&self, source: &ValueSource) -> Option<String> {
+        let output = source
+            .output_pin
+            .clone()
+            .or_else(|| self.resolve_entity_output_pin(&source.node, None))?;
+        self.entity_output_data_type(&source.node, Some(&output))
+    }
+
+    fn entity_output_data_type(
+        &self,
+        entity: &NodeEntity,
+        requested: Option<&str>,
+    ) -> Option<String> {
+        match entity {
+            NodeEntity::Existing(id) => {
+                let node = find_board_node(self.existing, id)?;
+                let output = requested
+                    .and_then(|name| find_output_pin(node, name))
+                    .or_else(|| {
+                        default_node_output_pin(node).and_then(|name| find_output_pin(node, &name))
+                    })?;
+                Some(format!("{:?}", output.data_type))
+            }
+            NodeEntity::New { meta, .. } => {
+                let output = requested
+                    .and_then(|name| metadata_output_pin(meta, name))
+                    .or_else(|| {
+                        default_metadata_output_pin(meta)
+                            .and_then(|name| metadata_output_pin(meta, &name))
+                    })?;
+                Some(output.data_type.clone())
+            }
+            NodeEntity::Layer { pins, .. } => pins
+                .iter()
+                .find(|pin| {
+                    pin.pin_type == "Output"
+                        && requested.is_none_or(|name| pin_name_matches(&pin.name, name))
+                })
+                .map(|pin| pin.data_type.clone()),
         }
     }
 
@@ -4048,6 +6248,24 @@ fn ast_has_unanchored_calls(ast: &BoardAst) -> bool {
         }
     }
     false
+}
+
+/// Empty event/function shells are registration/layer scaffolding, not workflow logic. Keep the
+/// check syntactic and conservative: calls, assignments, control flow, handlers and returns may
+/// all lower to real graph work; comments, typed locals and literal aliases cannot by themselves.
+fn block_has_no_executable_statements(block: &Block) -> bool {
+    block.stmts.iter().all(|stmt| match stmt {
+        Stmt::Comment(_) | Stmt::Local(_) => true,
+        Stmt::LocalAlias { value, .. } => !expr_has_unanchored_calls(value),
+        Stmt::Let { .. }
+        | Stmt::Call { .. }
+        | Stmt::Assign { .. }
+        | Stmt::FieldAssign { .. }
+        | Stmt::Branch { .. }
+        | Stmt::Loop { .. }
+        | Stmt::Handler(_)
+        | Stmt::Return { .. } => false,
+    })
 }
 
 fn block_has_unanchored_calls(block: &Block) -> bool {
@@ -4516,6 +6734,7 @@ pub fn reconcile_text(existing: &Board, text: &str) -> ReconcileResult {
         Ok(ast) => reconcile(existing, &ast),
         Err(err) => ReconcileResult {
             commands: Vec::new(),
+            corrections: Vec::new(),
             diagnostics: vec![format!(
                 "FlowScript parse error at line {}, col {}: {}",
                 err.line, err.col, err.message
@@ -4535,6 +6754,7 @@ pub fn reconcile_text_with_catalog(
         Ok(ast) => reconcile_with_catalog(existing, &ast, catalog),
         Err(err) => ReconcileResult {
             commands: Vec::new(),
+            corrections: Vec::new(),
             diagnostics: vec![format!(
                 "FlowScript parse error at line {}, col {}: {}",
                 err.line, err.col, err.message
@@ -4555,6 +6775,7 @@ pub fn reconcile_text_with_catalog_enriched(
         Ok(ast) => reconcile_with_catalog_enriched(existing, &ast, catalog, enricher),
         Err(err) => ReconcileResult {
             commands: Vec::new(),
+            corrections: Vec::new(),
             diagnostics: vec![format!(
                 "FlowScript parse error at line {}, col {}: {}",
                 err.line, err.col, err.message
@@ -4566,7 +6787,7 @@ pub fn reconcile_text_with_catalog_enriched(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::board::{Board, ExecutionMode, ExecutionStage};
+    use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
     use crate::flow::pin::ValueType;
@@ -4608,6 +6829,143 @@ mod tests {
         .expect("connect pins");
     }
 
+    #[test]
+    fn all_board_nodes_prefers_flat_nodes_and_orders_nested_fallbacks() {
+        let mut board = empty_board();
+
+        let mut canonical = Node::new("canonical", "Canonical", "", "test");
+        canonical.id = "shared".to_string();
+        board.nodes.insert(canonical.id.clone(), canonical.clone());
+
+        let mut flat_last = Node::new("flat_last", "Flat Last", "", "test");
+        flat_last.id = "z-flat".to_string();
+        board.nodes.insert(flat_last.id.clone(), flat_last);
+
+        let mut layer_z = Layer::new(
+            "layer-z".to_string(),
+            "Layer Z".to_string(),
+            LayerType::Function,
+        );
+        let mut stale_mirror = canonical;
+        stale_mirror.name = "stale_mirror".to_string();
+        layer_z.nodes.insert(stale_mirror.id.clone(), stale_mirror);
+        let mut fallback_z = Node::new("fallback_z", "Fallback Z", "", "test");
+        fallback_z.id = "nested-only".to_string();
+        layer_z.nodes.insert(fallback_z.id.clone(), fallback_z);
+
+        let mut layer_a = Layer::new(
+            "layer-a".to_string(),
+            "Layer A".to_string(),
+            LayerType::Function,
+        );
+        let mut fallback_a = Node::new("fallback_a", "Fallback A", "", "test");
+        fallback_a.id = "nested-only".to_string();
+        layer_a.nodes.insert(fallback_a.id.clone(), fallback_a);
+
+        // Insert in reverse lexical order: fallback selection must depend on layer id, not the
+        // backing HashMap's iteration order.
+        board.layers.insert(layer_z.id.clone(), layer_z);
+        board.layers.insert(layer_a.id.clone(), layer_a);
+
+        let nodes = all_board_nodes(&board);
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nested-only", "shared", "z-flat"]
+        );
+        assert_eq!(
+            nodes
+                .iter()
+                .find(|node| node.id == "shared")
+                .map(|node| node.name.as_str()),
+            Some("canonical"),
+            "a mirrored legacy clone must not shadow the canonical flat node"
+        );
+        assert_eq!(
+            nodes
+                .iter()
+                .find(|node| node.id == "nested-only")
+                .map(|node| node.name.as_str()),
+            Some("fallback_a"),
+            "nested-only duplicates must choose the lexically first layer deterministically"
+        );
+    }
+
+    #[test]
+    fn board_index_prefers_flat_pins_and_keeps_nested_only_fallbacks() {
+        let mut board = empty_board();
+
+        let mut producer = Node::new("producer", "Producer", "", "test");
+        producer.id = "producer".to_string();
+        let producer_output = producer
+            .add_output_pin(
+                "canonical_value",
+                "Canonical Value",
+                "",
+                VariableType::String,
+            )
+            .id
+            .clone();
+
+        let mut legacy = Node::new("legacy", "Legacy", "", "test");
+        legacy.id = "legacy".to_string();
+        let legacy_output = legacy
+            .add_output_pin("legacy_value", "Legacy Value", "", VariableType::String)
+            .id
+            .clone();
+
+        let mut consumer = Node::new("consumer", "Consumer", "", "test");
+        consumer.id = "consumer".to_string();
+        consumer
+            .add_input_pin("flat_input", "Flat Input", "", VariableType::String)
+            .depends_on
+            .insert(producer_output.clone());
+        consumer
+            .add_input_pin("legacy_input", "Legacy Input", "", VariableType::String)
+            .depends_on
+            .insert(legacy_output);
+
+        let mut stale_producer = producer.clone();
+        stale_producer
+            .pins
+            .get_mut(&producer_output)
+            .expect("mirrored output")
+            .name = "stale_value".to_string();
+
+        board.nodes.insert(producer.id.clone(), producer);
+        board.nodes.insert(consumer.id.clone(), consumer);
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Function Layer".to_string(),
+            LayerType::Function,
+        );
+        layer
+            .nodes
+            .insert(stale_producer.id.clone(), stale_producer);
+        layer.nodes.insert(legacy.id.clone(), legacy);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let index = BoardIndex::new(&board);
+        let consumer = board.nodes.get("consumer").expect("consumer");
+        let flat_source = index
+            .data_source_for_input(consumer, "flat_input")
+            .expect("flat source");
+        assert_eq!(flat_source.node.node_ref(), "producer");
+        assert_eq!(
+            flat_source.output_pin.as_deref(),
+            Some("canonical_value"),
+            "the nested stale pin name must not shadow canonical flat metadata"
+        );
+
+        let legacy_source = index
+            .data_source_for_input(consumer, "legacy_input")
+            .expect("legacy nested-only source");
+        assert_eq!(legacy_source.node.node_ref(), "legacy");
+        assert_eq!(legacy_source.output_pin.as_deref(), Some("legacy_value"));
+    }
+
     /// Build an `event → log` board where the log node carries a literal `text` default.
     fn board_with_log(text_default: &str) -> Board {
         let mut board = empty_board();
@@ -4642,6 +7000,32 @@ mod tests {
         variable.id = "var_api".to_string();
         variable.description = Some("API key".to_string());
         variable.set_default_value(flow_like_types::Value::String("old".to_string()));
+        board.variables.insert(variable.id.clone(), variable);
+        board
+    }
+
+    fn board_with_secret_variable() -> Board {
+        let mut board = board_with_variable();
+        board
+            .variables
+            .get_mut("var_api")
+            .expect("secret variable")
+            .secret = true;
+        board
+    }
+
+    fn board_with_secret_struct_variable() -> Board {
+        let mut board = empty_board();
+        let mut variable = Variable::new("apiKey", VariableType::Struct, ValueType::Normal);
+        variable.id = "var_api".to_string();
+        variable.secret = true;
+        variable.schema = Some(
+            r#"{"type":"object","properties":{"token":{"type":"string"}},"required":["token"]}"#
+                .to_string(),
+        );
+        variable.set_default_value(
+            flow_like_types::json::from_str(r#"{"token":"hidden"}"#).expect("valid secret object"),
+        );
         board.variables.insert(variable.id.clone(), variable);
         board
     }
@@ -4779,12 +7163,295 @@ mod tests {
             .collect();
         assert_eq!(
             updates,
-            vec![(
-                second_id,
-                flow_like_types::Value::String("c".to_string())
-            )],
+            vec![(second_id, flow_like_types::Value::String("c".to_string()))],
             "editing the second occurrence must update exactly the second pin, by id"
         );
+    }
+
+    #[test]
+    fn new_multi_pin_call_emits_stable_occurrence_refs() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "equal_string",
+                "Equal String",
+                vec![
+                    pin_meta("string", "String", PinType::Input),
+                    pin_meta("string", "String", PinType::Input),
+                ],
+                vec![pin_meta("result", "Boolean", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "eventsSimple() {\n    const matches = equalString({ string: \"sender\", string: \"example@example.com\" })\n}\n",
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "same-named inputs on a new node must reconcile cleanly: {:?}",
+            result.diagnostics
+        );
+        let updates = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::UpdateNodePin { pin_id, value, .. } => {
+                    Some((pin_id.as_str(), value.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            updates,
+            vec![
+                (
+                    "string[#1]",
+                    flow_like_types::Value::String("sender".to_string())
+                ),
+                (
+                    "string[#2]",
+                    flow_like_types::Value::String("example@example.com".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn string_replace_regex_alias_targets_canonical_pin_and_reports_correction() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "string_replace",
+                "String Replace",
+                vec![
+                    pin_meta("string", "String", PinType::Input),
+                    pin_meta("pattern", "String", PinType::Input),
+                    pin_meta("replacement", "String", PinType::Input),
+                    pin_meta("is_regex", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("string", "String", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const replaced = stringReplace({ string: "abc", pattern: "a", replacement: "z", regex: true })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { pin_id, value, .. }
+                if pin_id == "is_regex" && value == &flow_like_types::Value::Bool(true)
+        )));
+        assert_eq!(
+            result.corrections,
+            vec!["Auto-corrected `stringReplace` argument `regex` to `isRegex`.".to_string()]
+        );
+    }
+
+    #[test]
+    fn bool_or_a_b_aliases_target_distinct_boolean_occurrences() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "bool_or",
+                "Boolean Or",
+                vec![
+                    pin_meta("boolean", "Boolean", PinType::Input),
+                    pin_meta("boolean", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("result", "Boolean", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            "eventsSimple() {\n    const either = boolOr({ a: true, b: false })\n}\n",
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let updates = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id.starts_with("boolean[#") =>
+                {
+                    Some((pin_id.as_str(), value.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            updates,
+            vec![
+                ("boolean[#1]", flow_like_types::Value::Bool(true)),
+                ("boolean[#2]", flow_like_types::Value::Bool(false)),
+            ]
+        );
+        assert_eq!(result.corrections.len(), 2);
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("`a` to `boolean` (occurrence 1 of 2)"))
+        );
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("`b` to `boolean` (occurrence 2 of 2)"))
+        );
+    }
+
+    fn smtp_send_catalog() -> Vec<NodeMetadata> {
+        let mut send = catalog_meta(
+            "email_smtp_send",
+            "Send Email",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("connection", "Struct", PinType::Input),
+                pin_meta("from", "String", PinType::Input),
+                pin_meta("to", "String", PinType::Input),
+                pin_meta("subject", "String", PinType::Input),
+                pin_meta("body_text", "String", PinType::Input),
+            ],
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("message_id", "String", PinType::Output),
+            ],
+        );
+        send.required_inputs = vec!["connection".into(), "from".into(), "to".into()];
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            send,
+        ]
+    }
+
+    #[test]
+    fn smtp_send_legacy_name_is_repaired_only_for_a_compatible_complete_call() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    emailSmtpSendMail({ connection: {}, from: "support@example.com", to: "user@example.com", bodyText: "hello" })
+}
+"#,
+            &smtp_send_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "email_smtp_send"
+        )));
+        assert!(result.corrections.iter().any(|correction| correction
+            == "Auto-corrected FlowScript call `emailSmtpSendMail` to `emailSmtpSend`."));
+    }
+
+    #[test]
+    fn smtp_send_legacy_name_with_incompatible_shape_is_not_partially_repaired() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    emailSmtpSendMail({ email: {}, to: "user@example.com", subject: "Hello", body: "text" })
+}
+"#,
+            &smtp_send_catalog(),
+        );
+
+        assert!(result.corrections.is_empty());
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "email_smtp_send"
+        )));
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.contains("emailSmtpSendMail"))
+            .expect("actionable legacy-name diagnostic");
+        assert!(diagnostic.contains("emailSmtpSend"));
+        assert!(diagnostic.contains("not auto-corrected"));
+        assert!(diagnostic.contains("connection"));
+        assert!(diagnostic.contains("from"));
+        assert!(diagnostic.contains("bodyText"));
+    }
+
+    #[test]
+    fn imap_mailbox_fetch_misuse_gets_one_structural_replacement_diagnostic() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "email_imap_inbox_fetch_mail",
+                "Fetch Mail",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("email_ref", "Struct", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("email", "Struct", PinType::Output),
+                ],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const fetched = emailImapInboxFetchMail({ email: {}, unseenOnly: true, markSeen: true })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.corrections.is_empty());
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if node_type == "email_imap_inbox_fetch_mail"
+        )));
+        let matching = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.contains("emailImapInboxFetchMail"))
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "{:?}", result.diagnostics);
+        assert!(matching[0].contains("accepts exactly `emailRef`"));
+        assert!(matching[0].contains("mailImapList"));
+        assert!(matching[0].contains("emailImapMarkSeen"));
     }
 
     #[test]
@@ -4898,6 +7565,454 @@ mod tests {
     }
 
     #[test]
+    fn new_secret_variable_accepts_empty_placeholder_without_storing_it() {
+        let ast = flow_like_ast::parse("@secret\nconst apiKey: string = \"\"\n").expect("parse");
+
+        let result = reconcile(&empty_board(), &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::CreateVariable {
+                name,
+                default_value: None,
+                secret: Some(true),
+                ..
+            } if name == "apiKey"
+        ));
+    }
+
+    #[test]
+    fn new_secret_variable_rejects_nonempty_flowscript_default_without_echoing_it() {
+        let ast =
+            flow_like_ast::parse("@secret\nconst apiKey: string = \"model-authored-credential\"\n")
+                .expect("parse");
+
+        let result = reconcile(&empty_board(), &ast);
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("cannot take a non-empty FlowScript-authored default")
+        }));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.contains("model-authored-credential"))
+        );
+    }
+
+    #[test]
+    fn secret_to_secret_metadata_update_never_writes_or_clears_hidden_default() {
+        let board = board_with_secret_variable();
+        let ast = flow_like_ast::parse(
+            r#"@description("Updated description")
+@secret
+const apiKey: string = ""   //@v:var_api
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateVariable {
+                variable_id,
+                default_value: None,
+                clear_default_value: false,
+                description: Some(description),
+                secret: None,
+                ..
+            } if variable_id == "var_api" && description == "Updated description"
+        ));
+    }
+
+    #[test]
+    fn existing_secret_variable_rejects_nonempty_flowscript_default() {
+        let board = board_with_secret_variable();
+        let ast = flow_like_ast::parse(
+            r#"@description("API key")
+@secret
+const apiKey: string = "model-authored-replacement"   //@v:var_api
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("cannot take a non-empty FlowScript-authored default")
+        }));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.contains("model-authored-replacement"))
+        );
+    }
+
+    #[test]
+    fn nonsecret_to_secret_update_preserves_existing_default_with_empty_placeholder() {
+        let board = board_with_variable();
+        let ast = flow_like_ast::parse(
+            r#"@description("API key")
+@secret
+const apiKey: string = ""   //@v:var_api
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateVariable {
+                variable_id,
+                default_value: None,
+                clear_default_value: false,
+                secret: Some(true),
+                ..
+            } if variable_id == "var_api"
+        ));
+    }
+
+    #[test]
+    fn secret_declassification_atomically_clears_hidden_default() {
+        let board = board_with_secret_variable();
+        let ast = flow_like_ast::parse(
+            r#"@description("API key")
+const apiKey: string   //@v:var_api
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateVariable {
+                variable_id,
+                default_value: None,
+                clear_default_value: true,
+                secret: Some(false),
+                ..
+            } if variable_id == "var_api"
+        ));
+    }
+
+    #[test]
+    fn secret_declassification_with_model_default_is_rejected() {
+        let board = board_with_secret_variable();
+        let ast = flow_like_ast::parse(
+            r#"@description("API key")
+const apiKey: string = "model-authored-replacement"   //@v:var_api
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("cannot be declassified with a FlowScript-authored default")
+        }));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.contains("model-authored-replacement")),
+            "security diagnostics must not echo an authored credential"
+        );
+    }
+
+    #[test]
+    fn secret_without_hidden_default_can_be_declassified_with_ordinary_default() {
+        let mut board = board_with_secret_variable();
+        board
+            .variables
+            .get_mut("var_api")
+            .expect("secret variable")
+            .default_value = None;
+        let ast = flow_like_ast::parse(
+            r#"@description("API key")
+const apiKey: string = "ordinary-default"   //@v:var_api
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.commands.len(), 1);
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateVariable {
+                variable_id,
+                default_value: Some(flow_like_types::Value::String(value)),
+                clear_default_value: false,
+                secret: Some(false),
+                ..
+            } if variable_id == "var_api" && value == "ordinary-default"
+        ));
+    }
+
+    #[test]
+    fn secret_type_or_value_shape_edit_with_hidden_default_is_rejected() {
+        for source in [
+            "@description(\"API key\")\n@secret\nconst apiKey: int   //@v:var_api\n",
+            "@description(\"API key\")\n@secret\nconst apiKey: string[]   //@v:var_api\n",
+        ] {
+            let board = board_with_secret_variable();
+            let ast = flow_like_ast::parse(source).expect("parse");
+
+            let result = reconcile(&board, &ast);
+
+            assert!(result.commands.is_empty(), "{:?}", result.commands);
+            assert!(result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("type/value shape/schema cannot be changed")
+            }));
+        }
+    }
+
+    #[test]
+    fn secret_schema_edit_with_hidden_default_is_rejected() {
+        let board = board_with_secret_struct_variable();
+        let mut ast = super::super::lower_to_ast(&board);
+        ast.variables[0].schema = Some(
+            r#"{"type":"object","properties":{"token":{"type":"integer"}},"required":["token"]}"#
+                .to_string(),
+        );
+        ast.interfaces = flow_like_ast::interfaces_for_variables(&ast.variables);
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("type/value shape/schema cannot be changed")
+        }));
+    }
+
+    #[test]
+    fn duplicate_raw_anchors_fail_closed_before_deriving_commands() {
+        let board = empty_board();
+        let mut ast =
+            flow_like_ast::parse("const first: string = \"one\"\nconst second: string = \"two\"\n")
+                .expect("parse");
+        ast.variables[0].anchor = Some("same-variable".to_string());
+        ast.variables[1].anchor = Some("same-variable".to_string());
+
+        let result = reconcile(&board, &ast);
+
+        assert!(result.commands.is_empty());
+        assert_eq!(result.diagnostics.len(), 1);
+        assert!(result.diagnostics[0].contains("duplicate FlowScript anchor"));
+    }
+
+    #[test]
+    fn duplicate_variables_fail_closed_before_colliding_create_commands() {
+        let ast = flow_like_ast::parse(
+            "const ticket: string = \"first\"\nconst ticket: string = \"second\"\n",
+        )
+        .expect("parse");
+
+        let result = reconcile(&empty_board(), &ast);
+
+        assert!(result.commands.is_empty());
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("duplicate FlowScript variable declaration `ticket`")
+        }));
+    }
+
+    #[test]
+    fn duplicate_functions_fail_closed_without_orphaning_a_layer() {
+        let ast = flow_like_ast::parse(
+            r#"const untouched: string = "value"
+
+function helper() {
+}
+
+function helper() {
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &[]);
+
+        assert!(
+            result.commands.is_empty(),
+            "the unrelated variable must not be created when declaration preflight fails"
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("duplicate FlowScript function declaration `helper`")
+        }));
+    }
+
+    #[test]
+    fn duplicate_interface_fields_and_parameters_are_rejected() {
+        let ast = flow_like_ast::parse(
+            r#"interface Ticket {
+    id: string;
+    id: string;
+}
+
+function helper(ticket: string, ticket: string) {
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&empty_board(), &ast);
+
+        assert!(result.commands.is_empty());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("duplicate FlowScript interface field `id`"))
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("duplicate FlowScript function parameter `ticket`")
+        }));
+    }
+
+    #[test]
+    fn anchored_call_display_cannot_silently_reuse_a_different_node_type() {
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut log = Node::new("log_info", "Log Info", "", "debug");
+        log.id = "log".to_string();
+        log.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        board.nodes.insert(log.id.clone(), log);
+
+        let ast = flow_like_ast::parse(
+            "simpleEvent() {   //@n:event\n    mailImapConnect()   //@n:log\n}\n",
+        )
+        .expect("parse");
+        let result = reconcile_with_catalog(&board, &ast, &[]);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("call `mailImapConnect` keeps anchor `log`")
+        }));
+    }
+
+    #[test]
+    fn anchored_event_display_cannot_silently_reuse_a_different_event_type() {
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+        let ast = flow_like_ast::parse("mailEvent() {   //@n:event\n}\n").expect("parse");
+
+        let result = reconcile_with_catalog(&board, &ast, &[]);
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("event `mailEvent` keeps anchor `event`")
+            })
+        );
+    }
+
+    #[test]
+    fn anchored_function_call_cannot_silently_keep_the_old_target() {
+        let mut board = empty_board();
+        for (id, name) in [("layer-a", "Helper A"), ("layer-b", "Helper B")] {
+            let layer = Layer::new(id.to_string(), name.to_string(), LayerType::Function);
+            board.layers.insert(layer.id.clone(), layer);
+        }
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut call = Node::new(CALL_FUNCTION_NODE_TYPE, "Call Function", "", "control");
+        call.id = "call".to_string();
+        call.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        call.add_input_pin(FUNCTION_LAYER_ID_PIN, "Function", "", VariableType::String)
+            .default_value = Some(b"\"layer-a\"".to_vec());
+        call.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(call.id.clone(), call);
+
+        let ast = flow_like_ast::parse(
+            r#"function helperA() {   //@l:layer-a
+}
+
+function helperB() {   //@l:layer-b
+}
+
+simpleEvent() {   //@n:event
+    helperB()   //@n:call
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&board, &ast, &[]);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function call `helperB` keeps anchor `call`")
+        }));
+    }
+
+    #[test]
+    fn typed_call_identity_does_not_fall_back_to_a_matching_display() {
+        let mut ast =
+            flow_like_ast::parse("eventsSimple() {\n    logInfo({ message: \"hi\" })\n}\n")
+                .expect("parse");
+        let Stmt::Call { call, .. } = &mut ast.events[0].body.stmts[0] else {
+            panic!("expected call")
+        };
+        call.node_type = "missing_exact_log_type".to_string();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![],
+            ),
+        ];
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &catalog);
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("exact node_type `missing_exact_log_type`")
+            })
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "log_info"
+        )));
+    }
+
+    #[test]
     fn changed_variable_default_emits_update_variable() {
         let board = board_with_variable();
         let text = super::super::board_to_flowscript(
@@ -4936,6 +8051,54 @@ mod tests {
             &result.commands[0],
             BoardCommand::RemoveVariable { variable_id, .. } if variable_id == "var_api"
         ));
+    }
+
+    #[test]
+    fn additive_reconcile_preserves_unmentioned_existing_nodes_and_variables() {
+        let variable_board = board_with_variable();
+        let variable_result = reconcile_with_catalog_mode(
+            &variable_board,
+            &BoardAst::default(),
+            &[],
+            ReconcileMode::Additive,
+        );
+        assert!(
+            variable_result.commands.is_empty(),
+            "additive typed documents must not delete omitted variables"
+        );
+
+        let node_board = board_with_log("hello");
+        let node_result = reconcile_with_catalog_mode(
+            &node_board,
+            &BoardAst::default(),
+            &[],
+            ReconcileMode::Additive,
+        );
+        assert!(
+            node_result
+                .commands
+                .iter()
+                .all(|command| !matches!(command, BoardCommand::RemoveNode { .. })),
+            "additive typed documents must not delete omitted nodes"
+        );
+    }
+
+    #[test]
+    fn additive_unanchored_variable_collision_cannot_mutate_existing_configuration() {
+        let board = board_with_variable();
+        let ast = flow_like_ast::parse("const apiKey: string = \"new\"\n").expect("parse");
+
+        let result = reconcile_with_catalog_mode(&board, &ast, &[], ReconcileMode::Additive);
+
+        assert!(result.commands.is_empty(), "got {:?}", result.commands);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("omits its exact anchor")),
+            "got {:?}",
+            result.diagnostics
+        );
     }
 
     #[test]
@@ -5168,6 +8331,69 @@ mod tests {
         ]
     }
 
+    fn schema_member_catalog() -> Vec<NodeMetadata> {
+        let mut email = pin_meta("email", "Struct", PinType::Output);
+        email.schema = Some(
+            r#"{"title":"Email","type":"object","properties":{"subject":{"type":"string"},"plain":{"type":"string"},"html":{"type":"string"}}}"#
+                .to_string(),
+        );
+        let mut emails = pin_meta_friendly("emails", "Emails", "Struct", "Array", PinType::Output);
+        emails.schema = Some(
+            r#"{"title":"EmailRef","type":"object","properties":{"uid":{"type":"integer"}}}"#
+                .to_string(),
+        );
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "email_imap_inbox_fetch_mail",
+                "Fetch Mail",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output), email],
+            ),
+            catalog_meta(
+                "mail_imap_list",
+                "List Mails",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output), emails],
+            ),
+            catalog_meta(
+                "struct_get",
+                "Get Field",
+                vec![
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                ],
+                vec![pin_meta("value", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "array_length",
+                "Array Length",
+                vec![pin_meta_friendly(
+                    "array",
+                    "Array",
+                    "Generic",
+                    "Array",
+                    PinType::Input,
+                )],
+                vec![pin_meta("length", "Integer", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
     #[test]
     fn unchanged_struct_member_roundtrip_reuses_accessor() {
         // A sugared struct_get (`base.field` in text) must reuse the existing accessor on a
@@ -5180,6 +8406,152 @@ mod tests {
             "no-op member-chain round-trip must be empty; got {:?} from text:\n{text}",
             result.commands
         );
+    }
+
+    #[test]
+    fn schema_member_fallback_rejects_unknown_email_field() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const mail = emailImapInboxFetchMail({})
+    log({ text: mail.body })
+}
+"#,
+            &schema_member_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("email_imap_inbox_fetch_mail.email")
+                    && diagnostic.contains("declares no field `body`")
+                    && diagnostic.contains("plain")
+                    && diagnostic.contains("html")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
+        )));
+    }
+
+    #[test]
+    fn schema_member_fallback_accepts_declared_and_schema_less_fields() {
+        let declared = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const mail = emailImapInboxFetchMail({})
+    log({ text: mail.plain })
+}
+"#,
+            &schema_member_catalog(),
+        );
+        assert!(
+            declared.diagnostics.is_empty(),
+            "{:?}",
+            declared.diagnostics
+        );
+        assert!(declared.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
+        )));
+
+        let mut open_catalog = schema_member_catalog();
+        let fetch = open_catalog
+            .iter_mut()
+            .find(|meta| meta.name == "email_imap_inbox_fetch_mail")
+            .expect("fetch metadata");
+        fetch
+            .outputs
+            .iter_mut()
+            .find(|pin| pin.name == "email")
+            .expect("email output")
+            .schema = None;
+        let open = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const mail = emailImapInboxFetchMail({})
+    log({ text: mail.body })
+}
+"#,
+            &open_catalog,
+        );
+        assert!(open.diagnostics.is_empty(), "{:?}", open.diagnostics);
+        assert!(open.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
+        )));
+
+        let mut extensible_catalog = schema_member_catalog();
+        let fetch = extensible_catalog
+            .iter_mut()
+            .find(|meta| meta.name == "email_imap_inbox_fetch_mail")
+            .expect("fetch metadata");
+        fetch
+            .outputs
+            .iter_mut()
+            .find(|pin| pin.name == "email")
+            .expect("email output")
+            .schema = Some(
+            r#"{"title":"ExtensibleEmail","type":"object","properties":{"plain":{"type":"string"}},"additionalProperties":true}"#
+                .to_string(),
+        );
+        let extensible = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const mail = emailImapInboxFetchMail({})
+    log({ text: mail.body })
+}
+"#,
+            &extensible_catalog,
+        );
+        assert!(
+            extensible.diagnostics.is_empty(),
+            "{:?}",
+            extensible.diagnostics
+        );
+        assert!(extensible.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
+        )));
+    }
+
+    #[test]
+    fn schema_member_fallback_rejects_fields_on_array_outputs_but_keeps_length() {
+        let invalid = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const fetched = mailImapList({})
+    log({ text: fetched.mails })
+}
+"#,
+            &schema_member_catalog(),
+        );
+        assert!(
+            invalid.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("mail_imap_list.emails")
+                    && diagnostic.contains("collection type `Array`")
+                    && diagnostic.contains("member `mails`")
+            }),
+            "{:?}",
+            invalid.diagnostics
+        );
+
+        let length = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const fetched = mailImapList({})
+    log({ text: fetched.length })
+}
+"#,
+            &schema_member_catalog(),
+        );
+        assert!(length.diagnostics.is_empty(), "{:?}", length.diagnostics);
+        assert!(length.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "array_length"
+        )));
     }
 
     #[test]
@@ -5403,12 +8775,12 @@ mod tests {
         assert!(matches!(
             &result.commands[0],
             BoardCommand::AddNode { node_type, ref_id, .. }
-                if node_type == "events_simple" && ref_id.as_deref() == Some("$0")
+                if node_type == "log" && ref_id.as_deref() == Some("$1")
         ));
         assert!(matches!(
             &result.commands[1],
             BoardCommand::AddNode { node_type, ref_id, .. }
-                if node_type == "log" && ref_id.as_deref() == Some("$1")
+                if node_type == "events_simple" && ref_id.as_deref() == Some("$0")
         ));
         assert!(matches!(
             &result.commands[2],
@@ -5425,6 +8797,585 @@ mod tests {
                     && to_node == "$1"
                     && to_pin == "exec_in"
         ));
+    }
+
+    #[test]
+    fn catalog_required_input_blocks_empty_unanchored_call() {
+        let board = empty_board();
+        let mut required_sink = catalog_meta(
+            "required_sink",
+            "Required Sink",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("payload", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        );
+        required_sink.required_inputs = vec!["payload".to_string()];
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            required_sink,
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    requiredSink({})
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                == "node `requiredSink` is missing required inputs: payload"),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn catalog_required_input_accepts_literal_connection_and_catalog_default() {
+        fn required_catalog(default: Option<&str>) -> Vec<NodeMetadata> {
+            let mut payload = pin_meta("payload", "String", PinType::Input);
+            payload.default_value = default.map(str::to_string);
+            let mut required_sink = catalog_meta(
+                "required_sink",
+                "Required Sink",
+                vec![pin_meta("exec_in", "Execution", PinType::Input), payload],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            );
+            // Keep this explicitly required even in the defaulted case: the guard must recognize
+            // that the catalog value itself satisfies the requirement.
+            required_sink.required_inputs = vec!["payload".to_string()];
+            vec![
+                catalog_meta(
+                    "events_simple",
+                    "Simple Event",
+                    Vec::new(),
+                    vec![pin_meta("exec_out", "Execution", PinType::Output)],
+                ),
+                catalog_meta(
+                    "make_value",
+                    "Make Value",
+                    Vec::new(),
+                    vec![pin_meta("value", "String", PinType::Output)],
+                ),
+                required_sink,
+            ]
+        }
+
+        let cases = [
+            (
+                r#"eventsSimple() {
+    requiredSink({ payload: "literal" })
+}
+"#,
+                required_catalog(None),
+            ),
+            (
+                r#"eventsSimple() {
+    const made = makeValue({})
+    requiredSink({ payload: made.value })
+}
+"#,
+                required_catalog(None),
+            ),
+            (
+                r#"eventsSimple() {
+    requiredSink({})
+}
+"#,
+                required_catalog(Some("\"from catalog\"")),
+            ),
+        ];
+
+        for (source, catalog) in cases {
+            let result = reconcile_text_with_catalog(&empty_board(), source, &catalog);
+            assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn catalog_required_inputs_preserve_repeated_pin_occurrences() {
+        let board = empty_board();
+        let mut repeated_sink = catalog_meta(
+            "repeated_sink",
+            "Repeated Sink",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("payload", "String", PinType::Input),
+                pin_meta("payload", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        );
+        repeated_sink.required_inputs = vec!["payload".to_string(), "payload".to_string()];
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            repeated_sink,
+        ];
+
+        let missing = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    repeatedSink({ payload: "first" })
+}
+"#,
+            &catalog,
+        );
+        assert!(
+            missing
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.ends_with("payload[#2]")),
+            "{:?}",
+            missing.diagnostics
+        );
+
+        let satisfied = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    repeatedSink({ payload: "first", payload: "second" })
+}
+"#,
+            &catalog,
+        );
+        assert!(
+            satisfied.diagnostics.is_empty(),
+            "{:?}",
+            satisfied.diagnostics
+        );
+    }
+
+    fn anchored_required_sink_catalog() -> Vec<NodeMetadata> {
+        let mut required_sink = catalog_meta(
+            "required_sink",
+            "Required Sink",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("payload", "String", PinType::Input),
+            ],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        );
+        required_sink.required_inputs = vec!["payload".to_string()];
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "make_value",
+                "Make Value",
+                Vec::new(),
+                vec![pin_meta("value", "String", PinType::Output)],
+            ),
+            required_sink,
+        ]
+    }
+
+    fn board_with_anchored_required_sink(
+        payload_default: Option<&str>,
+        connect_payload: bool,
+    ) -> Board {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut sink = Node::new("required_sink", "Required Sink", "", "test");
+        sink.id = "sink".to_string();
+        let sink_exec = sink
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let payload = sink.add_input_pin("payload", "Payload", "", VariableType::String);
+        payload.default_value = payload_default.map(|value| value.as_bytes().to_vec());
+        let payload_id = payload.id.clone();
+        sink.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(sink.id.clone(), sink);
+        connect(&mut board, "event", &event_out, "sink", &sink_exec);
+
+        if connect_payload {
+            let mut source = Node::new("make_value", "Make Value", "", "test");
+            source.id = "source".to_string();
+            let value = source
+                .add_output_pin("value", "Value", "", VariableType::String)
+                .id
+                .clone();
+            board.nodes.insert(source.id.clone(), source);
+            connect(&mut board, "source", &value, "sink", &payload_id);
+        }
+
+        board
+    }
+
+    #[test]
+    fn catalog_required_input_blocks_missing_anchored_call() {
+        let board = board_with_anchored_required_sink(None, false);
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {   //@n:event
+    requiredSink({})   //@n:sink
+}
+"#,
+            &anchored_required_sink_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                == "node `requiredSink` is missing required inputs: payload"),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn catalog_required_input_accepts_anchored_literal_from_outer_diff() {
+        let board = board_with_anchored_required_sink(None, false);
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {   //@n:event
+    requiredSink({ payload: "configured" })   //@n:sink
+}
+"#,
+            &anchored_required_sink_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "sink"
+                    && pin_id == "payload"
+                    && value == &flow_like_types::Value::String("configured".to_string())
+        )));
+    }
+
+    #[test]
+    fn catalog_required_input_accepts_retained_anchored_connection() {
+        let board = board_with_anchored_required_sink(None, true);
+        let text = anchored_text(&board);
+        let result = reconcile_text_with_catalog(&board, &text, &anchored_required_sink_catalog());
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "{:?}\nFlowScript:\n{text}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn catalog_required_input_accepts_live_default_on_anchored_node() {
+        let board = board_with_anchored_required_sink(Some("\"configured\""), false);
+        // Omit the argument deliberately: the explicit catalog requirement must be merged into
+        // the live metadata, then recognized as satisfied by the instance's retained default.
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {   //@n:event
+    requiredSink({})   //@n:sink
+}
+"#,
+            &anchored_required_sink_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn typed_event_node_type_is_authoritative_over_handler_name() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_generic",
+                "Generic Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "notify",
+                "Notify",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let ast = BoardAst {
+            events: vec![EventBlock {
+                // Deliberately disagrees with node_type: this is the authored handler alias, not
+                // a catalog lookup key on the typed path.
+                name: "eventsSimple".to_string(),
+                node_type: "events_generic".to_string(),
+                params: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: Call {
+                            node_type: "notify".to_string(),
+                            display: "notify".to_string(),
+                            args: Vec::new(),
+                            anchor: None,
+                        },
+                        anchor: None,
+                    }],
+                },
+                anchor: None,
+            }],
+            ..BoardAst::default()
+        };
+
+        let result = reconcile_with_catalog(&board, &ast, &catalog);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+            )
+        }));
+        let entry_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode {
+                        node_type,
+                        friendly_name: Some(alias),
+                        ..
+                    } if node_type == "events_generic" && alias == "eventsSimple"
+                )
+            })
+            .expect("exact Generic Event entry with the authored handler alias");
+        let notify_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "notify"
+                )
+            })
+            .expect("workflow body node");
+        assert!(
+            entry_index > notify_index,
+            "custom event registrations must still be emitted after workflow setup"
+        );
+    }
+
+    #[test]
+    fn typed_event_rejects_exact_node_type_that_cannot_start_a_chain() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "log",
+                "Log",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "notify",
+                "Notify",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let ast = BoardAst {
+            events: vec![EventBlock {
+                name: "start".to_string(),
+                node_type: "log".to_string(),
+                params: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: Call {
+                            node_type: "notify".to_string(),
+                            display: "notify".to_string(),
+                            args: Vec::new(),
+                            anchor: None,
+                        },
+                        anchor: None,
+                    }],
+                },
+                anchor: None,
+            }],
+            ..BoardAst::default()
+        };
+
+        let result = reconcile_with_catalog(&board, &ast, &catalog);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("node_type `log`")
+                && diagnostic.contains("cannot be used as an event entry")
+                && diagnostic.contains("Execution input")
+        }));
+        assert!(!result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode { node_type, .. } if node_type == "log"
+            )
+        }));
+    }
+
+    #[test]
+    fn new_generic_event_parameters_become_additional_output_pins() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_generic",
+                "Generic Event",
+                Vec::new(),
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("payload", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsGeneric(payload: Struct, ticketId: string) {
+    log({ text: ticketId })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let additional_pins = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    additional_pins,
+                    ..
+                } if node_type == "events_generic" => additional_pins.as_ref(),
+                _ => None,
+            })
+            .expect("generic event carries additional pins");
+        assert_eq!(additional_pins.len(), 1, "payload is a catalog pin");
+        assert_eq!(additional_pins[0].name, "ticketId");
+        assert_eq!(additional_pins[0].pin_type, "Output");
+        assert_eq!(additional_pins[0].data_type, "String");
+        assert_eq!(additional_pins[0].value_type.as_deref(), Some("Normal"));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "$0"
+                        && from_pin == "ticketId"
+                        && to_node == "$1"
+                        && to_pin == "text"
+            )
+        }));
+    }
+
+    #[test]
+    fn named_generic_handler_fallback_is_actionable_and_keeps_tool_alias() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_generic",
+                "Generic Event",
+                Vec::new(),
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("payload", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_from_model",
+                "Agent From Model",
+                Vec::new(),
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: agentFromModel({}), tools: [fetchPage] })
+    fetchPage(payload: Struct) {
+        logInfo({ message: "fetching" })
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "a successful Generic handler fallback must remain atomically applicable: {:?}",
+            result.diagnostics
+        );
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::AddNode {
+                    node_type,
+                    friendly_name: Some(friendly_name),
+                    ..
+                } if node_type == "events_generic" && friendly_name == "fetchPage"
+            )
+        }));
+        assert!(result.commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::SetNodeFunctionRefs { fn_refs, .. }
+                    if fn_refs == &vec!["fetchPage".to_string()]
+            )
+        }));
     }
 
     #[test]
@@ -5913,6 +9864,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_function_layer_names_compare_in_flowscript_form() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "legacy-function".to_string(),
+            "Handle Ticket".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+        let ast = super::super::lower_to_ast(&board);
+
+        assert_eq!(ast.functions[0].name, "handleTicket");
+        let result = reconcile_with_catalog(&board, &ast, &[]);
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
+    }
+
+    #[test]
     fn catalog_aware_reconcile_creates_function_layers_from_functions() {
         let board = empty_board();
         let catalog = vec![catalog_meta(
@@ -6092,7 +10061,9 @@ function notify(message: string) {
         );
 
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        // Layer $0 (prepared first), event $1, call node $2, body log node $3.
+        // Refs follow planning order: layer $0, event $1, call node $2, body log node $3.
+        // Command application order intentionally differs: workflow/layer nodes are added first
+        // and the Event entry is the final AddNode registration target.
         assert!(result.commands.iter().any(|command| matches!(
             command,
             BoardCommand::AddNode { node_type, ref_id, target_layer, .. }
@@ -6100,6 +10071,34 @@ function notify(message: string) {
                     && ref_id.as_deref() == Some("$2")
                     && target_layer.is_none()
         )));
+        let event_add_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+                )
+            })
+            .expect("event entry add command");
+        let last_logic_add_index = result
+            .commands
+            .iter()
+            .enumerate()
+            .filter(|(_, command)| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type != "events_simple"
+                )
+            })
+            .map(|(index, _)| index)
+            .max()
+            .expect("workflow add commands");
+        assert!(
+            event_add_index > last_logic_add_index,
+            "event entry must be added after workflow nodes: {:?}",
+            result.commands
+        );
         // The call node targets the new function layer by its ref.
         assert!(result.commands.iter().any(|command| matches!(
             command,
@@ -6128,6 +10127,608 @@ function notify(message: string) {
             BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
                 if from_node == "$0" && from_pin == "exec_in" && to_node == "$3" && to_pin == "exec_in"
         )));
+        // The final body node closes the function's execution chain at its layer boundary.
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$3" && from_pin == "exec_out" && to_node == "$0" && to_pin == "exec_out"
+        )));
+    }
+
+    #[test]
+    fn focused_helpers_can_feed_separate_event_entries_registered_last() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_generic",
+                "Generic Event",
+                vec![],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("payload", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function pollInbox() {
+    log({ message: "poll" })
+}
+
+function processApproval(payload: Struct) {
+    log({ message: "approval" })
+}
+
+eventsSimple() {
+    pollInbox()
+}
+
+eventsGeneric(payload: Struct) {
+    processApproval({ payload: payload })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(command, BoardCommand::CreateLayer { .. }))
+                .count(),
+            2,
+            "each focused helper must become its own function layer"
+        );
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. }
+                        if node_type == "control_call_function"
+                ))
+                .count(),
+            2,
+            "each Event must invoke its own helper through a call node"
+        );
+
+        let event_indices = result
+            .commands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, command)| match command {
+                BoardCommand::AddNode { node_type, .. }
+                    if matches!(node_type.as_str(), "events_simple" | "events_generic") =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(event_indices.len(), 2, "both Event roots must be retained");
+        let last_logic_index = result
+            .commands
+            .iter()
+            .enumerate()
+            .filter(|(_, command)| {
+                matches!(command, BoardCommand::CreateLayer { .. })
+                    || matches!(
+                        command,
+                        BoardCommand::AddNode { node_type, .. }
+                            if !matches!(node_type.as_str(), "events_simple" | "events_generic")
+                    )
+            })
+            .map(|(index, _)| index)
+            .max()
+            .expect("helper logic commands");
+        assert!(
+            event_indices
+                .iter()
+                .all(|event_index| *event_index > last_logic_index),
+            "Event registration must happen after all helper layers and call nodes: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn new_empty_event_body_is_rejected() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "events_simple",
+            "Simple Event",
+            vec![],
+            vec![pin_meta("exec_out", "Execution", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(&board, "eventsSimple() {\n}\n", &catalog);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("new event") && diagnostic.contains("no executable body nodes")
+        }));
+    }
+
+    #[test]
+    fn new_empty_function_body_is_rejected() {
+        let board = empty_board();
+
+        let result =
+            reconcile_text_with_catalog(&board, "function prepareSupportTable() {\n}\n", &[]);
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("new function") && diagnostic.contains("no executable body nodes")
+        }));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("no materialized body nodes")
+                && diagnostic.contains("runtime-empty helper")
+        }));
+    }
+
+    #[test]
+    fn new_pure_function_without_returns_is_rejected_as_runtime_empty() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "string_format",
+            "String Format",
+            vec![pin_meta("format_string", "String", PinType::Input)],
+            vec![pin_meta("value", "String", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function prepareSupportTicket() {
+    stringFormat({ formatString: "support" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("new function `prepareSupportTicket` is pure")
+                && diagnostic.contains("no observable runtime effect")
+                && diagnostic.contains("cannot be reached through execution wiring")
+                && diagnostic.contains("Declare and return a value")
+        }));
+    }
+
+    #[test]
+    fn unresolved_side_effect_call_does_not_cascade_into_pure_function_warnings() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "string_format",
+            "String Format",
+            vec![pin_meta("format_string", "String", PinType::Input)],
+            vec![pin_meta("value", "String", PinType::Output)],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function sendApprovalRequest(smtp: Struct) {
+    const subject = stringFormat({ formatString: "Approval" })
+    missingSmtpSend({ connection: smtp, to: "approver@example.com", subject: subject.value })
+}
+
+function unrelatedPureHelper() {
+    stringFormat({ formatString: "still pure" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("missingSmtpSend")
+                    && diagnostic.contains("does not match a catalog declaration")
+            }),
+            "the exact call repair must remain visible: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().all(|diagnostic| {
+                !diagnostic.contains("sendApprovalRequest` is pure")
+                    && !diagnostic.contains("runtime-empty helper")
+                    && !diagnostic.contains("materialized body tail")
+            }),
+            "unresolved-call fallout must not masquerade as independent function defects: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("unrelatedPureHelper` is pure")
+                    && diagnostic.contains("no observable runtime effect")
+            }),
+            "suppression must remain scoped to the function with the unresolved call: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn unsafe_resolved_call_shape_does_not_cascade_into_function_structure_warnings() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "email_imap_inbox_fetch_mail",
+            "Fetch Mail",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("email_ref", "Struct", PinType::Input),
+            ],
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("email", "Struct", PinType::Output),
+            ],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function fetchInboxWrong(connection: Struct) {
+    emailImapInboxFetchMail({ email: connection, unseenOnly: true, markSeen: true })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("mailbox-fetch shape cannot be auto-corrected")
+                    && diagnostic.contains("accepts exactly `emailRef`")
+            }),
+            "the actionable call-shape diagnostic must remain: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().all(|diagnostic| {
+                !diagnostic.contains("runtime-empty helper")
+                    && !diagnostic.contains("no materialized body nodes")
+                    && !diagnostic.contains("no Function exec_in connection")
+                    && !diagnostic.contains("no materialized body tail")
+            }),
+            "unsafe-call fallout must not become independent function diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn batch_upsert_success_closes_impure_function_body() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "batch_upsert_local_db",
+            "Batch Upsert",
+            vec![
+                pin_meta("exec_in", "Execution", PinType::Input),
+                pin_meta("database", "Struct", PinType::Input),
+                pin_meta("id_row", "String", PinType::Input),
+                pin_meta_friendly("value", "Value", "Struct", "Array", PinType::Input),
+            ],
+            vec![
+                pin_meta("exec_out", "Execution", PinType::Output),
+                pin_meta("error", "Execution", PinType::Output),
+                pin_meta("error_message", "String", PinType::Output),
+            ],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function saveTicket() {
+    batchUpsertLocalDb({ database: {}, idRow: "ticket_id", value: [] })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$1"
+                    && from_pin == "exec_out"
+                    && to_node == "$0"
+                    && to_pin == "exec_out"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                if from_node == "$1" && from_pin == "error" && to_node == "$0"
+        )));
+    }
+
+    #[test]
+    fn unknown_multi_exec_function_tail_keeps_actionable_branch_hint() {
+        let board = empty_board();
+        let catalog = vec![catalog_meta(
+            "custom_terminal",
+            "Custom Terminal",
+            vec![pin_meta("exec_in", "Execution", PinType::Input)],
+            vec![
+                pin_meta("success", "Execution", PinType::Output),
+                pin_meta("error", "Execution", PinType::Output),
+            ],
+        )];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "function runTerminal() {\n    customTerminal()\n}\n",
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("runTerminal")
+                    && diagnostic.contains("no materialized body tail")
+                    && diagnostic.contains("explicit labelled arms")
+                    && diagnostic.contains("continuation policy")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn existing_flat_layer_members_drive_layer_local_placement_only() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "function-layer".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+
+        let mut root = Node::new("root", "Root", "", "test");
+        root.id = "root-node".to_string();
+        root.coordinates = Some((100.0, 50.0, 0.0));
+        board.nodes.insert(root.id.clone(), root);
+
+        let mut body = Node::new("body", "Body", "", "test");
+        body.id = "body-node".to_string();
+        body.layer = Some("function-layer".to_string());
+        body.coordinates = Some((1_000.0, 300.0, 0.0));
+        board.nodes.insert(body.id.clone(), body);
+
+        let planner = StructuralPlanner::new(&board, &[], None);
+        assert_eq!(
+            planner.rightmost_existing_position(Some("function-layer")),
+            (1_000.0, 300.0),
+            "canonical flat members must offset edits inside their Function"
+        );
+        assert_eq!(
+            planner.rightmost_existing_position(None),
+            (100.0, 50.0),
+            "Function members must not push root/event placement to the right"
+        );
+    }
+
+    #[test]
+    fn new_function_bodies_use_compact_layer_local_positions() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function first() {
+    log({ message: "1" })
+    log({ message: "2" })
+    log({ message: "3" })
+    log({ message: "4" })
+    log({ message: "5" })
+}
+
+function second() {
+    log({ message: "a" })
+    log({ message: "b" })
+}
+
+eventsSimple() {
+    first()
+    second()
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let positions_for = |layer: &str| {
+            result
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    BoardCommand::AddNode {
+                        target_layer: Some(target),
+                        position: Some(position),
+                        ..
+                    } if target == layer => Some((position.x, position.y)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = positions_for("$0");
+        let second = positions_for("$1");
+        assert_eq!(first.len(), 5);
+        assert_eq!(second.len(), 2);
+        assert_eq!(first[0], (260.0, 200.0));
+        assert_eq!(second[0], (260.0, 200.0));
+        assert!(first.iter().all(|(x, _)| *x <= 1040.0), "{first:?}");
+        assert!(second.iter().all(|(x, _)| *x <= 1040.0), "{second:?}");
+        assert!(
+            first.iter().any(|(_, y)| *y > 200.0),
+            "the fifth node should wrap to a second row: {first:?}"
+        );
+    }
+
+    #[test]
+    fn support_workflow_helpers_stay_compact_and_event_entry_is_created_last() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "list_unread",
+                "List Unread",
+                vec![],
+                vec![pin_meta_friendly(
+                    "emails",
+                    "Emails",
+                    "Generic",
+                    "Array",
+                    PinType::Output,
+                )],
+            ),
+            catalog_meta(
+                "for_each",
+                "For Each",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta_friendly("array", "Array", "Generic", "Array", PinType::Input),
+                ],
+                vec![
+                    pin_meta("loop", "Execution", PinType::Output),
+                    pin_meta("done", "Execution", PinType::Output),
+                    pin_meta("item", "Generic", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function ensureSupportTicketsTable() {
+    log({ message: "ensure table" })
+}
+
+function pollSupportInbox() {
+    const unreadRefs = listUnread()
+    for (const item of forEach({ array: unreadRefs.emails })) {
+        log({ message: "process mail" })
+    }
+}
+
+eventsSimple() {
+    ensureSupportTicketsTable()
+    pollSupportInbox()
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|diagnostic| { !diagnostic.contains("no incoming execution connection") })
+        );
+
+        for layer in ["$0", "$1"] {
+            let layer_positions = result
+                .commands
+                .iter()
+                .filter_map(|command| match command {
+                    BoardCommand::AddNode {
+                        target_layer: Some(target),
+                        position: Some(position),
+                        ..
+                    } if target == layer => Some((position.x, position.y)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !layer_positions.is_empty(),
+                "missing body nodes for {layer}"
+            );
+            assert!(
+                layer_positions.iter().all(|(x, _)| *x <= 1040.0),
+                "{layer} body escaped its compact layer-local grid: {layer_positions:?}"
+            );
+        }
+
+        let event_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "events_simple"
+                )
+            })
+            .expect("event entry command");
+        let last_setup_index = result
+            .commands
+            .iter()
+            .enumerate()
+            .filter(|(_, command)| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { .. } | BoardCommand::CreateLayer { .. }
+                )
+            })
+            .map(|(index, _)| index)
+            .max()
+            .expect("setup commands");
+        assert_eq!(
+            event_index, last_setup_index,
+            "event entry must be created only after helper layers and their workflow nodes"
+        );
     }
 
     #[test]
@@ -6207,6 +10808,327 @@ function notify(message: string) {
             command,
             BoardCommand::ConnectPins { from_node, to_node, .. }
                 if from_node == "$1" && to_node == "$4"
+        )));
+    }
+
+    fn binary_condition_catalog(comparison: NodeMetadata) -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            comparison,
+        ]
+    }
+
+    #[test]
+    fn string_equality_condition_lowers_to_comparator_output() {
+        let catalog = binary_condition_catalog(catalog_meta(
+            "equal_string",
+            "Equal String",
+            vec![
+                pin_meta("string", "String", PinType::Input),
+                pin_meta("string", "String", PinType::Input),
+            ],
+            vec![pin_meta("equal", "Boolean", PinType::Output)],
+        ));
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"run() {
+    if ("sender@example.com" == "example@example.com") {
+        log({ message: "approved" })
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let comparator = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "equal_string" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .expect("equal_string node");
+        let branch = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "control_branch" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .expect("control_branch node");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == comparator
+                    && from_pin == "equal"
+                    && to_node == branch
+                    && to_pin == "condition"
+        )));
+    }
+
+    #[test]
+    fn integer_ordering_condition_lowers_to_typed_comparator() {
+        let catalog = binary_condition_catalog(catalog_meta(
+            "int_greater_than",
+            "Integer Greater Than",
+            vec![
+                pin_meta("integer1", "Integer", PinType::Input),
+                pin_meta("integer2", "Integer", PinType::Input),
+            ],
+            vec![pin_meta("greater_than", "Boolean", PinType::Output)],
+        ));
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"run() {
+    if (3 > 2) {
+        log({ message: "ordered" })
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let comparator = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "int_greater_than" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .expect("int_greater_than node");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == comparator
+                    && pin_id == "integer1"
+                    && value == &flow_like_types::Value::from(3)
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == comparator
+                    && pin_id == "integer2"
+                    && value == &flow_like_types::Value::from(2)
+        )));
+    }
+
+    #[test]
+    fn arithmetic_and_boolean_operators_round_trip_through_catalog_nodes() {
+        let mut catalog = binary_condition_catalog(catalog_meta(
+            "int_greater_than",
+            "Integer Greater Than",
+            vec![
+                pin_meta("integer1", "Integer", PinType::Input),
+                pin_meta("integer2", "Integer", PinType::Input),
+            ],
+            vec![pin_meta("greater_than", "Boolean", PinType::Output)],
+        ));
+        catalog.extend([
+            catalog_meta(
+                "int_add",
+                "Integer Add",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("sum", "Integer", PinType::Output)],
+            ),
+            catalog_meta(
+                "bool_and",
+                "Boolean And",
+                vec![
+                    pin_meta("boolean", "Boolean", PinType::Input),
+                    pin_meta("boolean", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("result", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "bool_or",
+                "Boolean Or",
+                vec![
+                    pin_meta("boolean", "Boolean", PinType::Input),
+                    pin_meta("boolean", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("result", "Boolean", PinType::Output)],
+            ),
+        ]);
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"run() {
+    if (1 + 2 > 2 && true || false) {
+        log({ message: "approved" })
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for expected in ["int_add", "int_greater_than", "bool_and", "bool_or"] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == expected
+                )),
+                "missing {expected}: {:?}",
+                result.commands
+            );
+        }
+        let bool_or = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "bool_or" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .expect("bool_or node");
+        let branch = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "control_branch" => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .expect("control_branch node");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == bool_or
+                    && from_pin == "result"
+                    && to_node == branch
+                    && to_pin == "condition"
+        )));
+    }
+
+    #[test]
+    fn editing_existing_binary_condition_reuses_comparator() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Start", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut comparator = Node::new("equal_string", "Equal", "", "string");
+        comparator.id = "comparator".to_string();
+        let left = comparator.add_input_pin("string", "String", "", VariableType::String);
+        left.default_value = Some(b"\"sender@example.com\"".to_vec());
+        let right = comparator.add_input_pin("string", "String", "", VariableType::String);
+        right.default_value = Some(b"\"old@example.com\"".to_vec());
+        let equal = comparator
+            .add_output_pin("equal", "Equal", "", VariableType::Boolean)
+            .id
+            .clone();
+        board.nodes.insert(comparator.id.clone(), comparator);
+
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.id = "branch".to_string();
+        let branch_in = branch
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let condition = branch
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .id
+            .clone();
+        let branch_true = branch
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        branch.add_output_pin("false", "False", "", VariableType::Execution);
+        board.nodes.insert(branch.id.clone(), branch);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.id = "log".to_string();
+        let log_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let message = log.add_input_pin("message", "Message", "", VariableType::String);
+        message.default_value = Some(b"\"matched\"".to_vec());
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(log.id.clone(), log);
+
+        connect(&mut board, "event", &event_out, "branch", &branch_in);
+        connect(&mut board, "comparator", &equal, "branch", &condition);
+        connect(&mut board, "branch", &branch_true, "log", &log_in);
+
+        let text = anchored_text(&board).replace("\"old@example.com\"", "\"new@example.com\"");
+        let result = reconcile_text_with_catalog(&board, &text, &[]);
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "{:?}\nFlowScript:\n{text}",
+            result.diagnostics
+        );
+        assert_eq!(
+            result
+                .commands
+                .iter()
+                .filter(|command| matches!(command, BoardCommand::AddNode { .. }))
+                .count(),
+            0,
+            "an edited binary condition must reuse its existing comparator"
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                if node_id == "comparator"
+                    && pin_id == "string[#2]"
+                    && value == &flow_like_types::Value::String("new@example.com".to_string())
         )));
     }
 
@@ -6364,6 +11286,58 @@ function notify(message: string) {
     }
 
     #[test]
+    fn deletion_bridge_prefers_flat_pin_metadata_over_stale_mirror() {
+        let mut board = board_with_exec_chain();
+        let mut stale_event = board.nodes.get("event").expect("event").clone();
+        let event_output_id = find_output_pin(&stale_event, "exec_out")
+            .expect("event output")
+            .id
+            .clone();
+        stale_event
+            .pins
+            .get_mut(&event_output_id)
+            .expect("stale event output")
+            .name = "stale_exec_out".to_string();
+
+        let mut layer = Layer::new(
+            "legacy-layer".to_string(),
+            "Legacy Layer".to_string(),
+            LayerType::Function,
+        );
+        layer.nodes.insert(stale_event.id.clone(), stale_event);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let removed = HashSet::from(["log_mid".to_string()]);
+        let occupied_sources = HashSet::new();
+        let mut commands = Vec::new();
+        let mut diagnostics = Vec::new();
+        bridge_removed_exec_chains(
+            &board,
+            &removed,
+            &occupied_sources,
+            &mut commands,
+            &mut diagnostics,
+        );
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(
+            commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "event"
+                        && from_pin == "exec_out"
+                        && to_node == "log_tail"
+                        && to_pin == "exec_in"
+            )),
+            "bridge must use canonical flat pin metadata: {commands:?}"
+        );
+        assert!(!commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_pin, .. } if from_pin == "stale_exec_out"
+        )));
+    }
+
+    #[test]
     fn replacing_mid_chain_statement_does_not_bridge_over_the_replacement() {
         let board = board_with_exec_chain();
         let text = crate::flow::ast::board_to_flowscript(
@@ -6403,6 +11377,81 @@ function notify(message: string) {
             "bridge must skip sources the plan already drives: {:?}",
             result.commands
         );
+    }
+
+    fn node_limit_add_command(ref_id: &str, target_layer: Option<&str>) -> BoardCommand {
+        BoardCommand::AddNode {
+            node_type: "log".to_string(),
+            ref_id: Some(ref_id.to_string()),
+            position: None,
+            friendly_name: None,
+            additional_pins: None,
+            target_layer: target_layer.map(str::to_string),
+            summary: None,
+        }
+    }
+
+    fn board_with_mirrored_layer_nodes(count: usize) -> Board {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "helper".to_string(),
+            LayerType::Function,
+        );
+        for index in 0..count {
+            let mut node = Node::new("log", "Log", "", "debug");
+            node.id = format!("body-{index}");
+            node.layer = Some(layer.id.clone());
+            board.nodes.insert(node.id.clone(), node.clone());
+            layer.nodes.insert(node.id.clone(), node);
+        }
+        board.layers.insert(layer.id.clone(), layer);
+        board
+    }
+
+    #[test]
+    fn layer_node_limit_counts_mirrored_canonical_nodes_once() {
+        let board = board_with_mirrored_layer_nodes(MAX_NODES_PER_LAYER);
+        let unrelated_root_add = node_limit_add_command("$root", None);
+
+        assert!(
+            layer_node_limit_violations(&board, &[unrelated_root_add]).is_none(),
+            "the flat and layer-local maps contain the same identities and must not consume the Function budget twice"
+        );
+    }
+
+    #[test]
+    fn layer_node_limit_reports_unique_population_after_deduplication() {
+        let board = board_with_mirrored_layer_nodes(MAX_NODES_PER_LAYER);
+        let layer_add = node_limit_add_command("$body", Some("function-layer"));
+
+        let diagnostics = layer_node_limit_violations(&board, &[layer_add])
+            .expect("one genuinely new Function node must exceed the limit");
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0].contains("51 nodes"),
+            "the diagnostic must report the unique post-edit population: {diagnostics:?}"
+        );
+        assert!(!diagnostics[0].contains("101 nodes"));
+    }
+
+    #[test]
+    fn layer_node_limit_treats_empty_layer_ids_as_root() {
+        let mut board = empty_board();
+        for index in 0..(MAX_NODES_PER_LAYER - 1) {
+            let mut node = Node::new("log", "Log", "", "debug");
+            node.id = format!("root-{index}");
+            node.layer = Some(String::new());
+            board.nodes.insert(node.id.clone(), node);
+        }
+        let root_adds = [
+            node_limit_add_command("$root-1", None),
+            node_limit_add_command("$root-2", None),
+        ];
+
+        let diagnostics = layer_node_limit_violations(&board, &root_adds)
+            .expect("empty layer ids and explicit root additions share one budget");
+        assert!(diagnostics[0].contains("the root layer with 51 nodes"));
     }
 
     #[test]
@@ -6455,6 +11504,15 @@ function notify(message: string) {
             "String Format",
             vec![pin_meta("format_string", "String", PinType::Input)],
             vec![pin_meta("value", "String", PinType::Output)],
+        )]
+    }
+
+    fn render_template_dynamic_catalog() -> Vec<NodeMetadata> {
+        vec![catalog_meta(
+            "string_render_template",
+            "Render Template",
+            vec![pin_meta("template", "String", PinType::Input)],
+            vec![pin_meta("rendered", "String", PinType::Output)],
         )]
     }
 
@@ -6533,6 +11591,77 @@ function notify(message: string) {
             "an arg that is not a template placeholder must not be synthesized: {:?}",
             result.diagnostics
         );
+    }
+
+    #[test]
+    fn jinja_template_placeholder_pin_is_predicted_without_runtime_enricher() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function greet(name: string): (message: string) {
+    const rendered = stringRenderTemplate({ template: "Hello {{ name }}", name: name })
+    return rendered.rendered
+}
+"#,
+            &render_template_dynamic_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == "$0"
+                        && from_pin == "name"
+                        && to_node == "$1"
+                        && to_pin == "name"
+            )),
+            "Jinja's undeclared `name` variable should become a dynamic input pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn csv_chart_mode_pins_are_predicted_without_runtime_enricher() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "a2ui_push_csv_to_chart",
+                "Push Data to Chart",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("element_ref", "Struct", PinType::Input),
+                    pin_meta("library", "String", PinType::Input),
+                    pin_meta("format", "String", PinType::Input),
+                    pin_meta("data", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    a2uiPushCsvToChart({ elementRef: {}, library: "Nivo", format: "CSV", csv: "x,y\\n1,2", chartType: "Bar", delimiter: "," })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for expected in ["csv", "chart_type", "delimiter"] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { pin_id, .. } if pin_id == expected
+                )),
+                "missing dynamic CSV pin `{expected}`: {:?}",
+                result.commands
+            );
+        }
     }
 
     #[test]
@@ -6761,7 +11890,7 @@ function notify(message: string) {
 
         let result = reconcile_text_with_catalog(
             &board,
-            r#"const rows: Struct[] = []   //@v:var_rows
+            r#"const rows: Struct[] = []
 
 eventsSimple() {
     arrayClearRef({ varRef: "rows" })
@@ -8280,6 +13409,69 @@ eventsSimple() {
                     )
                 }),
                 "missing exec edge {from_node}.{from_pin} -> {to_node}.{to_pin}; commands: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_aware_reconcile_wires_explicit_multi_exec_branch_arms() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "custom_split",
+                "Custom Split",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_error", "Execution", PinType::Output),
+                    pin_meta("exec_success", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                Vec::new(),
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    customSplit() {
+        exec_success: {
+            logInfo({ message: "done" })
+        }
+        exec_error: {
+            logInfo({ message: "failed" })
+        }
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for (from_pin, to_node) in [("exec_success", "$2"), ("exec_error", "$3")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin: actual_pin, to_node: actual_node, to_pin, .. }
+                        if from_node == "$1"
+                            && actual_pin == from_pin
+                            && actual_node == to_node
+                            && to_pin == "exec_in"
+                )),
+                "missing explicit {from_pin} arm wiring: {:?}",
                 result.commands
             );
         }

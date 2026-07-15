@@ -217,6 +217,23 @@ pub struct CopilotResponse {
     pub suggestions: Vec<Suggestion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flowscript_workspace: Option<String>,
+    /// Exact typed-IR command batch retained by the host for atomic Apply/Dismiss review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_ir_commit: Option<FlowIrCommitToken>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FlowIrCommitToken {
+    pub board_id: String,
+    pub draft_id: String,
+    pub revision: u64,
+    pub base_fingerprint: String,
+    pub claim_id: String,
+    /// Host-derived review policy. This is a UI hint only: native Apply derives the same policy
+    /// again from the retained draft and fails closed unless the host passes explicit approval.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_destructive_approval: bool,
 }
 
 /// Context for a specific run (for log queries)
@@ -250,6 +267,10 @@ pub enum BoardCommand {
         position: Option<NodePosition>,
         #[serde(default)]
         friendly_name: Option<String>,
+        /// Additional pins to append to the catalog node when it is created. FlowScript uses
+        /// this for user-declared outputs on a new `events_generic` entry node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        additional_pins: Option<Vec<PlaceholderPinDef>>,
         /// Target layer ID to place the node in. If None, uses current layer.
         #[serde(default)]
         target_layer: Option<String>,

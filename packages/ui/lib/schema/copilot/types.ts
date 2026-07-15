@@ -50,6 +50,16 @@ export interface UIActionContext {
 	workflow_events: WorkflowEventInfo[];
 }
 
+/** Frontend-owned scope injected into runtime tools used by a nested board/UI specialist. */
+export interface CopilotToolContext {
+	appId: string;
+	boardId?: string;
+	/** Correlates tools called inside a delegated run with its outer frontend request. */
+	parentRequestId?: string;
+	/** Immutable top-level user request that owns a delegated specialist run. */
+	sourceUserPrompt?: string;
+}
+
 /** Unified context passed to the copilot */
 export interface UnifiedContext {
 	scope: CopilotScope;
@@ -93,11 +103,32 @@ export interface UnifiedCopilotResponse {
 	/** Last FlowScript document submitted by the workflow agent */
 	flowscript_workspace?: string;
 
+	/** Exact retained compiled workflow batch awaiting Apply/Dismiss resolution. */
+	flow_ir_commit?: FlowIrCommitToken;
+
 	/** Suggested follow-up prompts */
 	suggestions: UnifiedSuggestion[];
 
 	/** The actual scope that was used (agent may decide to focus on one area) */
 	active_scope: CopilotScope;
+}
+
+export interface FlowIrCommitToken {
+	board_id: string;
+	draft_id: string;
+	revision: number;
+	base_fingerprint: string;
+	claim_id: string;
+	/** Host-derived UI hint; native Apply re-derives and enforces this policy. */
+	requires_destructive_approval?: boolean;
+}
+
+export type FlowIrCommitDisposition = "preflight" | "applied" | "dismissed";
+
+export interface FlowIrCommitDispositionResult {
+	status: "current" | "applied" | "dismissed" | "error";
+	code?: string;
+	message: string;
 }
 
 /** Status of a plan step */

@@ -441,7 +441,6 @@ export function FlowBoard({
 	const selectorDataRef = useRef(createEmptyFlowSelectorData());
 	const [selectorDataVersion, setSelectorDataVersion] = useState(0);
 	const selectorCacheKeyRef = useRef("");
-	const selectorPrefetchKeyRef = useRef("");
 	const elementOptionsPromiseRef = useRef<
 		Promise<FlowElementOption[]> | undefined
 	>(undefined);
@@ -460,176 +459,177 @@ export function FlowBoard({
 		bitOptionsPromiseRef.current = undefined;
 	}
 
-	const loadElementOptions = useCallback(async () => {
-		const cache = selectorDataRef.current;
-		if (cache.elementsLoaded) return cache.elementOptions;
-		if (elementOptionsPromiseRef.current)
-			return elementOptionsPromiseRef.current;
+	const loadElementOptions = useCallback(
+		async (force = false) => {
+			const cache = selectorDataRef.current;
+			if (elementOptionsPromiseRef.current)
+				return elementOptionsPromiseRef.current;
+			if (!force && cache.elementsLoaded) return cache.elementOptions;
 
-		const cacheKey = selectorCacheKeyRef.current;
-		cache.elementsLoading = true;
-		cache.elementsError = undefined;
+			const cacheKey = selectorCacheKeyRef.current;
+			cache.elementsLoading = true;
+			cache.elementsError = undefined;
 
-		const promise = (async () => {
-			try {
-				const [routes, events, pages] = await Promise.all([
-					backend.routeState.getRoutes(appId),
-					backend.eventState.getEvents(appId),
-					backend.pageState.getPages(appId),
-				]);
-				const eventsMap = new Map(events.map((event) => [event.id, event]));
-				const pagesById = new Map(pages.map((page) => [page.pageId, page]));
-				const pageTargets = new Map<
-					string,
-					{ pageName?: string; pagePath?: string; boardId?: string }
-				>();
+			const promise = (async () => {
+				try {
+					const [routes, events, pages] = await Promise.all([
+						backend.routeState.getRoutes(appId),
+						backend.eventState.getEvents(appId),
+						backend.pageState.getPages(appId),
+					]);
+					const eventsMap = new Map(events.map((event) => [event.id, event]));
+					const pagesById = new Map(pages.map((page) => [page.pageId, page]));
+					const pageTargets = new Map<
+						string,
+						{ pageName?: string; pagePath?: string; boardId?: string }
+					>();
 
-				const queuePage = (
-					pageId: string,
-					pageName?: string,
-					pagePath?: string,
-					boardId?: string,
-				) => {
-					const existing = pageTargets.get(pageId);
-					if (existing) {
-						existing.pageName ??= pageName;
-						existing.pagePath ??= pagePath;
-						existing.boardId ??= boardId;
-						return;
+					const queuePage = (
+						pageId: string,
+						pageName?: string,
+						pagePath?: string,
+						boardId?: string,
+					) => {
+						const existing = pageTargets.get(pageId);
+						if (existing) {
+							existing.pageName ??= pageName;
+							existing.pagePath ??= pagePath;
+							existing.boardId ??= boardId;
+							return;
+						}
+
+						pageTargets.set(pageId, { pageName, pagePath, boardId });
+					};
+
+					for (const route of routes) {
+						const event = eventsMap.get(route.eventId);
+						const pageId = event?.default_page_id;
+						if (!pageId) continue;
+
+						const pageInfo = pagesById.get(pageId);
+						queuePage(
+							pageId,
+							pageInfo?.name,
+							route.path,
+							pageInfo?.boardId ?? event.board_id,
+						);
 					}
 
-					pageTargets.set(pageId, { pageName, pagePath, boardId });
-				};
+					for (const pageInfo of pages) {
+						queuePage(
+							pageInfo.pageId,
+							pageInfo.name,
+							undefined,
+							pageInfo.boardId,
+						);
+					}
 
-				for (const route of routes) {
-					const event = eventsMap.get(route.eventId);
-					const pageId = event?.default_page_id;
-					if (!pageId) continue;
-
-					const pageInfo = pagesById.get(pageId);
-					queuePage(
-						pageId,
-						pageInfo?.name,
-						route.path,
-						pageInfo?.boardId ?? event.board_id,
+					const seenIds = new Set<string>();
+					const pageElements = await Promise.all(
+						Array.from(pageTargets.entries()).map(
+							async ([pageId, pageInfo]) => {
+								try {
+									const page = await backend.pageState.getPage(
+										appId,
+										pageId,
+										pageInfo.boardId,
+									);
+									return flattenPageElements(page.components ?? []).map(
+										(element) => ({
+											...element,
+											id: `${pageId}/${element.id}`,
+											rawId: element.id,
+											label: pageInfo.pageName
+												? `${pageInfo.pageName} / ${element.label}`
+												: element.label,
+											pageName: pageInfo.pageName,
+											pagePath: pageInfo.pagePath,
+										}),
+									);
+								} catch {
+									return [];
+								}
+							},
+						),
 					);
+
+					const allElements = pageElements.flat().filter((element) => {
+						if (seenIds.has(element.id)) return false;
+						seenIds.add(element.id);
+						return true;
+					});
+
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.elementOptions = allElements;
+						cache.elementsLoaded = true;
+						setSelectorDataVersion((current) => current + 1);
+					}
+
+					return allElements;
+				} catch (error) {
+					console.error("Failed to load page elements:", error);
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.elementsError = error;
+						setSelectorDataVersion((current) => current + 1);
+					}
+					return [];
+				} finally {
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.elementsLoading = false;
+					}
+					elementOptionsPromiseRef.current = undefined;
 				}
+			})();
 
-				for (const pageInfo of pages) {
-					queuePage(
-						pageInfo.pageId,
-						pageInfo.name,
-						undefined,
-						pageInfo.boardId,
-					);
+			elementOptionsPromiseRef.current = promise;
+			return promise;
+		},
+		[appId, backend.eventState, backend.pageState, backend.routeState],
+	);
+
+	const loadBitOptions = useCallback(
+		async (force = false) => {
+			const cache = selectorDataRef.current;
+			if (bitOptionsPromiseRef.current) return bitOptionsPromiseRef.current;
+			if (!force && cache.bitsLoaded) return cache.bitOptions;
+
+			const cacheKey = selectorCacheKeyRef.current;
+			cache.bitsLoading = true;
+			cache.bitsError = undefined;
+
+			const promise = (async () => {
+				try {
+					const bits = await backend.bitState.getProfileBits();
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.bitOptions = bits;
+						cache.bitsByRef = indexBitsByRef(bits);
+						cache.bitsLoaded = true;
+						setSelectorDataVersion((current) => current + 1);
+					}
+					return bits;
+				} catch (error) {
+					console.error("Failed to load profile bits:", error);
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.bitsError = error;
+						setSelectorDataVersion((current) => current + 1);
+					}
+					return [];
+				} finally {
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.bitsLoading = false;
+					}
+					bitOptionsPromiseRef.current = undefined;
 				}
+			})();
 
-				const seenIds = new Set<string>();
-				const pageElements = await Promise.all(
-					Array.from(pageTargets.entries()).map(async ([pageId, pageInfo]) => {
-						try {
-							const page = await backend.pageState.getPage(
-								appId,
-								pageId,
-								pageInfo.boardId,
-							);
-							return flattenPageElements(page.components ?? []).map(
-								(element) => ({
-									...element,
-									id: `${pageId}/${element.id}`,
-									rawId: element.id,
-									label: pageInfo.pageName
-										? `${pageInfo.pageName} / ${element.label}`
-										: element.label,
-									pageName: pageInfo.pageName,
-									pagePath: pageInfo.pagePath,
-								}),
-							);
-						} catch {
-							return [];
-						}
-					}),
-				);
-
-				const allElements = pageElements.flat().filter((element) => {
-					if (seenIds.has(element.id)) return false;
-					seenIds.add(element.id);
-					return true;
-				});
-
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.elementOptions = allElements;
-					cache.elementsLoaded = true;
-					setSelectorDataVersion((current) => current + 1);
-				}
-
-				return allElements;
-			} catch (error) {
-				console.error("Failed to load page elements:", error);
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.elementsError = error;
-					setSelectorDataVersion((current) => current + 1);
-				}
-				return [];
-			} finally {
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.elementsLoading = false;
-				}
-				elementOptionsPromiseRef.current = undefined;
-			}
-		})();
-
-		elementOptionsPromiseRef.current = promise;
-		return promise;
-	}, [appId, backend.eventState, backend.pageState, backend.routeState]);
-
-	const loadBitOptions = useCallback(async () => {
-		const cache = selectorDataRef.current;
-		if (cache.bitsLoaded) return cache.bitOptions;
-		if (bitOptionsPromiseRef.current) return bitOptionsPromiseRef.current;
-
-		const cacheKey = selectorCacheKeyRef.current;
-		cache.bitsLoading = true;
-		cache.bitsError = undefined;
-
-		const promise = (async () => {
-			try {
-				const bits = await backend.bitState.getProfileBits();
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.bitOptions = bits;
-					cache.bitsByRef = indexBitsByRef(bits);
-					cache.bitsLoaded = true;
-					setSelectorDataVersion((current) => current + 1);
-				}
-				return bits;
-			} catch (error) {
-				console.error("Failed to load profile bits:", error);
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.bitsError = error;
-					setSelectorDataVersion((current) => current + 1);
-				}
-				return [];
-			} finally {
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.bitsLoading = false;
-				}
-				bitOptionsPromiseRef.current = undefined;
-			}
-		})();
-
-		bitOptionsPromiseRef.current = promise;
-		return promise;
-	}, [backend.bitState]);
+			bitOptionsPromiseRef.current = promise;
+			return promise;
+		},
+		[backend.bitState],
+	);
 
 	selectorDataRef.current.loadElements = loadElementOptions;
 	selectorDataRef.current.loadBits = loadBitOptions;
-
-	useEffect(() => {
-		if (selectorPrefetchKeyRef.current === selectorCacheKey) return;
-		selectorPrefetchKeyRef.current = selectorCacheKey;
-		void loadElementOptions();
-		void loadBitOptions();
-	}, [selectorCacheKey, loadElementOptions, loadBitOptions]);
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
 	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
 	const { screenToFlowPosition, getViewport, setViewport, fitView, getNodes } =
@@ -820,6 +820,7 @@ export function FlowBoard({
 		executeCommand,
 		executeCommands,
 		applyFlowScript,
+		applyFlowIrCommit,
 		awarenessRef: commandAwarenessRef,
 	} = useCommandExecution({
 		appId,
@@ -3114,6 +3115,11 @@ export function FlowBoard({
 		) => applyFlowScript(flowscript, currentLayer, catalog.data, options),
 		[applyFlowScript, currentLayer, catalog.data],
 	);
+	const handleApplyFlowIrCommit = useCallback(
+		(token: Parameters<typeof applyFlowIrCommit>[0]) =>
+			applyFlowIrCommit(token),
+		[applyFlowIrCommit],
+	);
 
 	// Publish the live board surface for the global assistant while this board is
 	// mounted (old versions are read-only, so they never register).
@@ -3128,6 +3134,7 @@ export function FlowBoard({
 			selectedNodeIds,
 			runContext: currentMetadata,
 			applyFlowScript: handleApplyFlowScript,
+			applyFlowIrCommit: handleApplyFlowIrCommit,
 			executeCommands: handleExecuteCommands,
 			focusNode,
 			selectNodes,
@@ -3148,6 +3155,7 @@ export function FlowBoard({
 		selectedNodeIds,
 		currentMetadata,
 		handleApplyFlowScript,
+		handleApplyFlowIrCommit,
 		handleExecuteCommands,
 		focusNode,
 		selectNodes,
@@ -3177,6 +3185,7 @@ export function FlowBoard({
 							onSelectNodes={selectNodes}
 							onExecuteCommands={handleExecuteCommands}
 							onApplyFlowScript={handleApplyFlowScript}
+							onApplyFlowIrCommit={handleApplyFlowIrCommit}
 							runContext={currentMetadata}
 							onClearRunContext={handleClearRunContext}
 							onClose={handleCopilotClose}
@@ -3820,6 +3829,7 @@ export function FlowBoard({
 								onSelectNodes={selectNodes}
 								onExecuteCommands={handleExecuteCommands}
 								onApplyFlowScript={handleApplyFlowScript}
+								onApplyFlowIrCommit={handleApplyFlowIrCommit}
 								runContext={currentMetadata}
 								onClearRunContext={handleClearRunContext}
 								onClose={handleCopilotClose}

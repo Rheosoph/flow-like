@@ -2,14 +2,21 @@
 // The added config here will be used whenever a users loads a page in their browser.
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
+import { setFlowPilotProductionMetricsSink } from "@flow-like/flow-like-ui/state/global-chat/agent-debug-report";
 import * as Sentry from "@sentry/nextjs";
 import posthog from "posthog-js";
 
-posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY!, {
-	api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
-	defaults: "2025-11-30",
-  	ui_host: 'https://eu.posthog.com'
-});
+const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+if (posthogKey) {
+	posthog.init(posthogKey, {
+		api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+		defaults: "2025-11-30",
+		ui_host: "https://eu.posthog.com",
+	});
+	setFlowPilotProductionMetricsSink((metrics) => {
+		posthog.capture("flowpilot_generation_metrics", metrics);
+	});
+}
 
 Sentry.init({
 	dsn: "https://f262b1c585a179ce9888298ae9e5d4c7@o4507505692901376.ingest.de.sentry.io/4510815115477072",

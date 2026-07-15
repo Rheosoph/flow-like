@@ -1,5 +1,7 @@
 import type {
 	IAddColumnPayload,
+	ICreateTableResult,
+	IDatabaseSchemaField,
 	IDatabaseState,
 	IIndexConfig,
 	IIndexType,
@@ -7,6 +9,14 @@ import type {
 } from "../db-state";
 
 export class EmptyDatabaseState implements IDatabaseState {
+	createTable(
+		appId: string,
+		tableName: string,
+		fields: IDatabaseSchemaField[],
+		ifNotExists?: boolean,
+	): Promise<ICreateTableResult> {
+		throw new Error("Method not implemented.");
+	}
 	buildIndex(
 		appId: string,
 		tableName: string,

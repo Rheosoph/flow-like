@@ -20,6 +20,7 @@ import {
 	upsertVariableCommand,
 } from "../lib";
 import { toastError } from "../lib/messages";
+import { flowPilotDebugLog } from "../lib/flowpilot-debug";
 import type { IGenericCommand } from "../lib/schema";
 import {
 	type IBoard,
@@ -28,6 +29,7 @@ import {
 	ILayerType,
 	type IVariable,
 } from "../lib/schema/flow/board";
+import type { PlaceholderPinDef } from "../lib/schema/flow/copilot";
 import { type INode, IVariableType } from "../lib/schema/flow/node";
 import { type IPin, IPinType } from "../lib/schema/flow/pin";
 import type { ILayer } from "../lib/schema/flow/run";
@@ -140,6 +142,60 @@ function pinsFromDefs(
 	}
 
 	return pins;
+}
+
+function appendAdditionalNodePins(
+	node: INode,
+	pinDefs: PlaceholderPinDef[] | undefined,
+): INode {
+	if (!pinDefs?.length) return node;
+	if (node.name !== "events_generic") {
+		throw new Error(
+			"Additional catalog-node pins are only supported on events_generic",
+		);
+	}
+
+	const pins = { ...node.pins };
+	let outputCount = Object.values(pins).filter(
+		(pin) => pin.pin_type === IPinType.Output,
+	).length;
+
+	for (const pinDef of pinDefs) {
+		if (
+			pinDef.pin_type !== IPinType.Output ||
+			pinDef.data_type === IVariableType.Execution
+		) {
+			throw new Error(
+				`Additional events_generic pin "${pinDef.name}" must be a non-execution Output`,
+			);
+		}
+		if (
+			Object.values(pins).some(
+				(pin) => pin.pin_type === IPinType.Output && pin.name === pinDef.name,
+			)
+		) {
+			throw new Error(
+				`events_generic already has an output pin named "${pinDef.name}"`,
+			);
+		}
+
+		const id = createId();
+		pins[id] = {
+			id,
+			name: pinDef.name,
+			friendly_name: pinDef.friendly_name,
+			description: pinDef.description ?? "",
+			pin_type: IPinType.Output,
+			data_type: pinDef.data_type as IVariableType,
+			value_type: (pinDef.value_type as IValueType) ?? IValueType.Normal,
+			index: ++outputCount,
+			connected_to: [],
+			depends_on: [],
+			default_value: null,
+		};
+	}
+
+	return { ...node, pins };
 }
 
 function isSetupLayerCommand(cmd: BoardCommand): boolean {
@@ -541,10 +597,13 @@ export function useCopilotCommands({
 				const flush = async () => {
 					if (batch.length === 0) return;
 					batchIndex++;
-					console.log(`[FlowPilot] Executing ${label} batch ${batchIndex}`, {
-						commands: batch.length,
-						approxBytes: batchBytes,
-					});
+					flowPilotDebugLog(
+						`[FlowPilot] Executing ${label} batch ${batchIndex}`,
+						{
+							commands: batch.length,
+							approxBytes: batchBytes,
+						},
+					);
 					const result = await executeCommands([...batch], {
 						refetch: options.refetch ?? false,
 					});
@@ -609,7 +668,7 @@ export function useCopilotCommands({
 						[cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId],
 						layerAsNode(layer),
 					);
-					console.log(`[CreateLayer] Queued "${cmd.name}" (${layerId})`, {
+					flowPilotDebugLog(`[CreateLayer] Queued "${cmd.name}" (${layerId})`, {
 						refs: [cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId].filter(
 							Boolean,
 						),
@@ -637,11 +696,14 @@ export function useCopilotCommands({
 					const targetLayer = resolveLayerId(cmd.target_layer) ?? currentLayer;
 
 					const result = addNodeCommand({
-						node: {
-							...cloneNode(catalogNode),
-							coordinates: [position.x, position.y, 0],
-							friendly_name: cmd.friendly_name ?? catalogNode.friendly_name,
-						},
+						node: appendAdditionalNodePins(
+							{
+								...cloneNode(catalogNode),
+								coordinates: [position.x, position.y, 0],
+								friendly_name: cmd.friendly_name ?? catalogNode.friendly_name,
+							},
+							cmd.additional_pins,
+						),
 						current_layer: targetLayer,
 					});
 					const plannedNode = result.node as INode;
@@ -652,7 +714,7 @@ export function useCopilotCommands({
 						plannedNode,
 					);
 
-					console.log(
+					flowPilotDebugLog(
 						`[AddNode] Queued "${plannedNode.friendly_name}" (${plannedNode.id})`,
 						{
 							refs: [
@@ -701,11 +763,14 @@ export function useCopilotCommands({
 						[cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId],
 						placeholderNode,
 					);
-					console.log(`[AddPlaceholder] Queued "${cmd.name}" (${layerId})`, {
-						refs: [cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId].filter(
-							Boolean,
-						),
-					});
+					flowPilotDebugLog(
+						`[AddPlaceholder] Queued "${cmd.name}" (${layerId})`,
+						{
+							refs: [cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId].filter(
+								Boolean,
+							),
+						},
+					);
 					nodeIndex++;
 				}
 			}
@@ -743,7 +808,9 @@ export function useCopilotCommands({
 					runtime_configured: cmd.runtime_configured ?? false,
 				};
 
-				console.log(`[CreateVariable] Queued ${cmd.name} (${cmd.data_type})`);
+				flowPilotDebugLog(
+					`[CreateVariable] Queued ${cmd.name} (${cmd.data_type})`,
+				);
 				variableCreateCommands.push(
 					upsertVariableCommand({ variable, layer_id: targetLayer }),
 				);
@@ -819,7 +886,7 @@ export function useCopilotCommands({
 					encodedValue = Array.from(encoded);
 				}
 
-				console.log(
+				flowPilotDebugLog(
 					`[UpdateNodePin] Queued ${node.friendly_name}.${cmd.pin_id} = ${JSON.stringify(cmd.value)}`,
 					{ encodedValue, originalValue: cmd.value, pinId },
 				);
@@ -993,7 +1060,7 @@ export function useCopilotCommands({
 							break;
 						}
 
-						console.log(
+						flowPilotDebugLog(
 							`[ConnectPins] Queued ${fromNode.friendly_name}.${cmd.from_pin} -> ${toNode.friendly_name}.${cmd.to_pin}`,
 							{
 								from_node_id: fromNode.id,
@@ -1112,7 +1179,7 @@ export function useCopilotCommands({
 								cmd.runtime_configured ?? existingVariable.runtime_configured,
 						};
 
-						console.log(
+						flowPilotDebugLog(
 							`[UpdateVariable] Queued ${existingVariable.name} = ${JSON.stringify(cmd.value)}`,
 						);
 						remainingGenericCommands.push(
@@ -1135,7 +1202,9 @@ export function useCopilotCommands({
 							break;
 						}
 
-						console.log(`[DeleteVariable] Queued ${variableToDelete.name}`);
+						flowPilotDebugLog(
+							`[DeleteVariable] Queued ${variableToDelete.name}`,
+						);
 						remainingGenericCommands.push(
 							removeVariableCommand({ variable: variableToDelete }),
 						);
@@ -1164,7 +1233,7 @@ export function useCopilotCommands({
 						const targetLayer =
 							resolveLayerId(cmd.target_layer) ?? currentLayer;
 
-						console.log(
+						flowPilotDebugLog(
 							`[CreateComment] Queued "${cmd.content.slice(0, 30)}..."`,
 						);
 						remainingGenericCommands.push(
@@ -1190,7 +1259,7 @@ export function useCopilotCommands({
 							color: cmd.color ?? existingComment.color,
 						};
 
-						console.log(
+						flowPilotDebugLog(
 							`[UpdateComment] Queued "${updatedComment.content.slice(0, 30)}..."`,
 						);
 						remainingGenericCommands.push(
@@ -1214,7 +1283,7 @@ export function useCopilotCommands({
 							break;
 						}
 
-						console.log(
+						flowPilotDebugLog(
 							`[DeleteComment] Queued "${commentToDelete.content.slice(0, 30)}..."`,
 						);
 						remainingGenericCommands.push(
@@ -1247,7 +1316,7 @@ export function useCopilotCommands({
 							parent_id: targetLayer,
 						};
 
-						console.log(
+						flowPilotDebugLog(
 							`[CreateLayer] Queued "${cmd.name}" with ${nodeIds.length} nodes`,
 						);
 						remainingGenericCommands.push(
@@ -1280,7 +1349,7 @@ export function useCopilotCommands({
 						const allNodeIds = [...new Set([...existingNodeIds, ...nodeIds])];
 						const updatedLayer = layerWithNodeIds(existingLayer, allNodeIds);
 
-						console.log(
+						flowPilotDebugLog(
 							`[AddNodesToLayer] Queued ${nodeIds.length} nodes for "${existingLayer.name}"`,
 						);
 						remainingGenericCommands.push(
@@ -1315,7 +1384,7 @@ export function useCopilotCommands({
 							remainingNodeIds,
 						);
 
-						console.log(
+						flowPilotDebugLog(
 							`[RemoveNodesFromLayer] Queued ${nodeIds.length} nodes from "${layerToUpdate.name}"`,
 						);
 						remainingGenericCommands.push(
@@ -1347,7 +1416,7 @@ export function useCopilotCommands({
 				await refreshBoardSnapshot();
 			}
 
-			console.log(
+			flowPilotDebugLog(
 				`[handleExecuteCommands] Completed ${commands.length} FlowPilot commands`,
 			);
 		},

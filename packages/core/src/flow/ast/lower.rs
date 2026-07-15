@@ -180,6 +180,62 @@ pub fn lower_board(board: &Board) -> BoardAst {
     lowering.run()
 }
 
+#[derive(Clone, Copy)]
+struct CanonicalBoardNode<'a> {
+    node: &'a Node,
+    /// Effective semantic scope. Canonical flat nodes carry it on `node.layer`; legacy
+    /// layer-local-only nodes inherit it from the map that contains them.
+    layer: Option<&'a str>,
+}
+
+/// Return one semantic node per id across the canonical flat store and the legacy layer-local
+/// compatibility maps. Flat `board.nodes` entries are authoritative when both representations are
+/// present; a layer-local entry only fills an id missing from the flat store.
+fn canonical_board_nodes<'a>(board: &'a Board) -> Vec<CanonicalBoardNode<'a>> {
+    let mut by_id: HashMap<&'a str, CanonicalBoardNode<'a>> = HashMap::new();
+
+    // A malformed/readback board can retain the same legacy-only identity in more than one
+    // layer-local map. Pick the first layer/node in stable id order so lowering does not depend on
+    // HashMap iteration order. Canonical flat entries below still replace every legacy fallback.
+    let mut legacy_layers = board.layers.iter().collect::<Vec<_>>();
+    legacy_layers.sort_by(|(left_key, left), (right_key, right)| {
+        left.id.cmp(&right.id).then_with(|| left_key.cmp(right_key))
+    });
+    for (_, layer) in legacy_layers {
+        let mut legacy_nodes = layer.nodes.iter().collect::<Vec<_>>();
+        legacy_nodes.sort_by(|(left_key, left), (right_key, right)| {
+            left.id.cmp(&right.id).then_with(|| left_key.cmp(right_key))
+        });
+        for (_, node) in legacy_nodes {
+            let effective_layer = node
+                .layer
+                .as_deref()
+                .filter(|layer_id| !layer_id.is_empty())
+                .or(Some(layer.id.as_str()));
+            by_id.entry(node.id.as_str()).or_insert(CanonicalBoardNode {
+                node,
+                layer: effective_layer,
+            });
+        }
+    }
+    for node in board.nodes.values() {
+        by_id.insert(
+            node.id.as_str(),
+            CanonicalBoardNode {
+                node,
+                layer: node
+                    .layer
+                    .as_deref()
+                    .filter(|layer_id| !layer_id.is_empty()),
+            },
+        );
+    }
+
+    let mut nodes = by_id.into_values().collect::<Vec<_>>();
+    nodes.sort_by(|left, right| left.node.id.cmp(&right.node.id));
+    nodes
+}
+
 struct Lowering<'a> {
     board: &'a Board,
     /// pin id -> owning node (across the whole board, all scopes).
@@ -223,13 +279,8 @@ impl<'a> Lowering<'a> {
                 pins.insert(pin.id.as_str(), pin);
             }
         };
-        for node in board.nodes.values() {
-            index(node);
-        }
-        for layer in board.layers.values() {
-            for node in layer.nodes.values() {
-                index(node);
-            }
+        for indexed in canonical_board_nodes(board) {
+            index(indexed.node);
         }
 
         // Map function-layer boundary input pins to their parameter names so nodes inside the
@@ -326,7 +377,13 @@ impl<'a> Lowering<'a> {
         let mut owning_function: HashMap<&str, &str> = HashMap::new();
         for layer in self.board.layers.values() {
             let mut cur = layer.id.as_str();
+            let mut seen = HashSet::new();
             loop {
+                // Corrupt/self-referential presentational ancestry must not hang FlowScript
+                // lowering (and therefore every reconcile, which lowers the existing board).
+                if !seen.insert(cur) {
+                    break;
+                }
                 if function_ids.contains(cur) {
                     owning_function.insert(layer.id.as_str(), cur);
                     break;
@@ -341,14 +398,13 @@ impl<'a> Lowering<'a> {
         // Group nodes by the function they ultimately belong to (or root).
         let mut function_nodes: HashMap<&str, Vec<&Node>> = HashMap::new();
         let mut root_nodes: Vec<&Node> = Vec::new();
-        for node in self.board.nodes.values() {
-            match node
+        for indexed in canonical_board_nodes(self.board) {
+            match indexed
                 .layer
-                .as_deref()
-                .and_then(|l| owning_function.get(l).copied())
+                .and_then(|layer_id| owning_function.get(layer_id).copied())
             {
-                Some(fid) => function_nodes.entry(fid).or_default().push(node),
-                None => root_nodes.push(node),
+                Some(fid) => function_nodes.entry(fid).or_default().push(indexed.node),
+                None => root_nodes.push(indexed.node),
             }
         }
 

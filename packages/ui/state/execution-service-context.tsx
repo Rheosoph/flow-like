@@ -14,6 +14,7 @@ import { WasmSandboxWarningDialog } from "../components/flow/wasm-sandbox-warnin
 import type { IIntercomEvent, ILogMetadata, IRunPayload } from "../lib";
 import type { IBoard, IVariable } from "../lib/schema/flow/board";
 import { IExecutionMode } from "../lib/schema/flow/board";
+import { normalizeBoardVersion } from "../lib/schema/flow/board-version";
 import { useBackend } from "./backend-state";
 import {
 	prerunBoardKey,
@@ -361,6 +362,7 @@ export function ExecutionServiceProvider({
 			skipConsentCheck: boolean | undefined,
 			isRemote: boolean,
 		): Promise<ILogMetadata | undefined> => {
+			const boardVersion = normalizeBoardVersion(payload.version);
 			// Run WASM consent check first (independent of runtime vars).
 			// Fetch prerun once and reuse the result for runtime vars later.
 			let prerunResult: Awaited<
@@ -371,8 +373,8 @@ export function ExecutionServiceProvider({
 				try {
 					const fetchPrerun = backend.boardState.prerunBoard;
 					prerunResult = await prerunSwr(
-						prerunBoardKey(appId, boardId),
-						() => fetchPrerun(appId, boardId),
+						prerunBoardKey(appId, boardId, boardVersion),
+						() => fetchPrerun(appId, boardId, boardVersion),
 						{ onDrift: (key) => notifyPrerunDrift(key) },
 					);
 
@@ -437,7 +439,11 @@ export function ExecutionServiceProvider({
 				} else {
 					// Local execution - use local board for full variable info (includes secrets)
 					try {
-						const board = await backend.boardState.getBoard(appId, boardId);
+						const board = await backend.boardState.getBoard(
+							appId,
+							boardId,
+							boardVersion,
+						);
 						varsNeedingValues = getVariablesNeedingPrompt(
 							board,
 							effectiveIsRemote,
@@ -452,7 +458,11 @@ export function ExecutionServiceProvider({
 			} else if (backend.boardState.prerunBoard) {
 				// prerunBoard exists but the earlier call failed — fall back to local board
 				try {
-					const board = await backend.boardState.getBoard(appId, boardId);
+					const board = await backend.boardState.getBoard(
+						appId,
+						boardId,
+						boardVersion,
+					);
 					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
 					if (
 						executionMode === IExecutionMode.Remote &&
@@ -489,7 +499,11 @@ export function ExecutionServiceProvider({
 			} else {
 				// prerunBoard not available - use getBoard
 				try {
-					const board = await backend.boardState.getBoard(appId, boardId);
+					const board = await backend.boardState.getBoard(
+						appId,
+						boardId,
+						boardVersion,
+					);
 					const executionMode = board.execution_mode ?? IExecutionMode.Hybrid;
 					if (
 						executionMode === IExecutionMode.Remote &&
@@ -694,7 +708,12 @@ export function ExecutionServiceProvider({
 
 				if (!isRemote) {
 					try {
-						const board = await backend.boardState.getBoard(appId, boardId);
+						const event = await backend.eventState.getEvent(appId, eventIdStr);
+						const board = await backend.boardState.getBoard(
+							appId,
+							boardId,
+							normalizeBoardVersion(event.board_version),
+						);
 						varsNeedingValues = getVariablesNeedingPrompt(board, false);
 					} catch {
 						// Fall back to prerun variables if board fetch fails
@@ -705,9 +724,7 @@ export function ExecutionServiceProvider({
 				try {
 					const event = await backend.eventState.getEvent(appId, eventIdStr);
 					boardId = event.board_id;
-					const version = event.board_version as
-						| [number, number, number]
-						| undefined;
+					const version = normalizeBoardVersion(event.board_version);
 					const board = await backend.boardState.getBoard(
 						appId,
 						event.board_id,
@@ -734,9 +751,7 @@ export function ExecutionServiceProvider({
 				try {
 					const event = await backend.eventState.getEvent(appId, eventIdStr);
 					boardId = event.board_id;
-					const version = event.board_version as
-						| [number, number, number]
-						| undefined;
+					const version = normalizeBoardVersion(event.board_version);
 					const board = await backend.boardState.getBoard(
 						appId,
 						event.board_id,

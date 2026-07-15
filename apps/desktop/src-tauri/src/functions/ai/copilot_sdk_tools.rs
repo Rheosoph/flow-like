@@ -6,14 +6,15 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
-    time::Duration,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 
 use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
 use super::internet_search::run_internet_search;
 pub use copilot_sdk::ToolHandler;
 use copilot_sdk::{Tool, ToolResultObject};
+use flow_like::copilot::FlowIrCommitToken;
 use flow_like::flow::ast::{
     RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
     destructive_flowscript_command_summaries, reconcile_text_with_catalog,
@@ -24,27 +25,412 @@ use flow_like::flow::copilot::platform::run_memory_tool;
 use flow_like::flow::copilot::tool_spec::{
     INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
     find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
-    resolve_tool_approval,
+    resolve_tool_approval, runtime_execution_tool_specs,
 };
+#[cfg(test)]
+use flow_like::flow::copilot::typed_ir_schema_hint;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, EmitCommandsArgs, EmitCommandsTool, GetCurrentFlowScriptTool,
-    GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool, GraphContext,
-    ListBoardNodesTool, NodeMetadata, ValidationIssue, build_list_board_nodes_output,
-    build_node_details_output, build_unconfigured_nodes_output, render_catalog_search_results,
-    tool_definition_parts, validate_emit_commands,
+    BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoardCommand, BoundBeginFlowIrDraftTool,
+    CatalogProvider, CheckFlowScriptArgs, CheckFlowScriptTool, CommitFlowIrDraftArgs,
+    CommitFlowIrDraftTool, CommitFlowScriptArgs, CommitFlowScriptTool, EmitCommandsArgs,
+    FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore, GetCurrentFlowScriptTool,
+    GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool,
+    GraphContext, ListBoardNodesTool, ModelFacingEmitCommandsTool, NodeMetadata,
+    PatchFlowScriptArgs, PatchFlowScriptTool, PlanFlowIrTool, UpdateFlowIrDraftArgs,
+    UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
+    ValidateFlowIrDraftTool, ValidationIssue, WriteFlowScriptArgs, WriteFlowScriptTool,
+    board_has_no_nodes, build_list_board_nodes_output, build_node_details_output,
+    build_unconfigured_nodes_output, emit_validation_requires_flowscript,
+    flowscript_has_executable_node_call, flowscript_missing_function_helpers,
+    is_blocking_flowscript_diagnostic, parse_typed_ir_arguments, plan_flow_capabilities,
+    render_catalog_search_results, run_declaration_queries, tool_definition_parts,
+    validate_model_facing_emit_commands, validate_model_facing_emit_commands_scope,
 };
+use flow_like_types::sync::Mutex as AsyncMutex;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+
+const FLOW_IR_DRAFT_STORE_TTL: Duration = Duration::from_secs(45 * 60);
+const FLOW_IR_PENDING_REVIEW_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const MAX_PERSISTED_FLOW_IR_DRAFT_STORES: usize = 64;
+
+struct CachedFlowIrDraftStore {
+    store: Arc<FlowIrDraftStore>,
+    last_accessed: Instant,
+    /// Absolute lease start for an unresolved native review. Unlike `last_accessed`, this is not
+    /// refreshed by preflight or other token traffic, so a response lost after native finalization
+    /// cannot pin one of the bounded board-store slots forever.
+    pending_since: Option<Instant>,
+}
+
+/// A commit claim stays attached to its queued command batch until the desktop host actually
+/// drains that batch into a response/event. Dropping an undrained queue (cancellation, host error,
+/// or surface teardown) reopens only the exact claimed revision so it can be retried safely.
+struct PendingRetainedCommitClaim {
+    store: Arc<FlowIrDraftStore>,
+    token: FlowIrCommitToken,
+    queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
+    flowscript: Option<String>,
+    expected_command_count: usize,
+    acknowledged: bool,
+}
+
+impl PendingRetainedCommitClaim {
+    fn new(
+        store: Arc<FlowIrDraftStore>,
+        token: FlowIrCommitToken,
+        queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
+        flowscript: Option<String>,
+        expected_command_count: usize,
+    ) -> Self {
+        Self {
+            store,
+            token,
+            queued_flowscript,
+            flowscript,
+            expected_command_count,
+            acknowledged: false,
+        }
+    }
+
+    fn acknowledge(mut self) -> FlowIrCommitToken {
+        self.acknowledged = true;
+        self.token.clone()
+    }
+}
+
+fn release_retained_commit_claim(store: &FlowIrDraftStore, token: &FlowIrCommitToken) -> bool {
+    store.release_commit_if_matches(
+        &token.draft_id,
+        token.revision,
+        &token.base_fingerprint,
+        &token.claim_id,
+    )
+}
+
+impl Drop for PendingRetainedCommitClaim {
+    fn drop(&mut self) {
+        if !self.acknowledged {
+            release_retained_commit_claim(&self.store, &self.token);
+            if let (Some(workspace), Some(flowscript)) =
+                (&self.queued_flowscript, self.flowscript.as_deref())
+                && let Ok(mut queued) = workspace.lock()
+                && queued.as_deref() == Some(flowscript)
+            {
+                *queued = None;
+            }
+        }
+    }
+}
+
+/// Commands produced by host-local tools, including the retained-draft claim that authorizes an
+/// exact checked batch. Plain direct-command and legacy FlowScript tools leave `commit_claim`
+/// empty.
+#[derive(Default)]
+pub(super) struct SideEffectCommandQueue {
+    commands: Vec<BoardCommand>,
+    commit_claim: Option<PendingRetainedCommitClaim>,
+}
+
+impl SideEffectCommandQueue {
+    fn extend(&mut self, commands: impl IntoIterator<Item = BoardCommand>) -> bool {
+        if self.commit_claim.is_some() {
+            return false;
+        }
+        self.commands.extend(commands);
+        true
+    }
+
+    fn extend_retained_commit(
+        &mut self,
+        commands: impl IntoIterator<Item = BoardCommand>,
+        store: Arc<FlowIrDraftStore>,
+        token: FlowIrCommitToken,
+        queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
+        flowscript: Option<String>,
+    ) -> bool {
+        let commands = commands.into_iter().collect::<Vec<_>>();
+        let claim = PendingRetainedCommitClaim::new(
+            store,
+            token,
+            queued_flowscript,
+            flowscript,
+            commands.len(),
+        );
+        if self.commit_claim.is_some() || !self.commands.is_empty() {
+            // A response has room for one exact review token and its exact retained batch. Never
+            // attach that token to unrelated direct commands already waiting in the queue.
+            // Dropping the new claim reopens its revision without disturbing the earlier batch.
+            drop(claim);
+            return false;
+        }
+        self.commands.extend(commands);
+        self.commit_claim = Some(claim);
+        true
+    }
+
+    /// Direct/legacy commands may be streamed before the response is finalized. A retained commit
+    /// is indivisible: while its claim exists, keep the full command batch in this queue so no
+    /// caller can expose commands before it can atomically take their exact review token.
+    pub(super) fn drain_streamable(&mut self) -> Vec<BoardCommand> {
+        if self.commit_claim.is_some() {
+            return Vec::new();
+        }
+        self.commands.drain(..).collect()
+    }
+
+    /// Atomically transfer the final command tail and its exact Apply/Dismiss token under one host
+    /// lock. A claimed batch whose command count changed is malformed and fails closed by
+    /// reopening the retained revision instead of returning a token for a different batch.
+    pub(super) fn take_delivery(&mut self) -> (Vec<BoardCommand>, Option<FlowIrCommitToken>) {
+        if self.commit_claim.as_ref().is_some_and(|claim| {
+            self.commands.is_empty() || self.commands.len() != claim.expected_command_count
+        }) {
+            self.abandon();
+            return (Vec::new(), None);
+        }
+        let commands = self.commands.drain(..).collect();
+        let token = self.commit_claim.take().map(|claim| claim.acknowledge());
+        (commands, token)
+    }
+
+    /// Fail closed after a poisoned queue: discard commands and let pending claim drops reopen the
+    /// retained revisions instead of reporting an idempotent success for a batch nobody received.
+    pub(super) fn abandon(&mut self) {
+        self.commands.clear();
+        self.commit_claim = None;
+    }
+}
+
+/// Retained workflow drafts need to survive provider continuations and a fresh SDK/MCP surface for
+/// the same board. Keep them board-scoped, time-bounded, and capped so reopening tools does not
+/// silently discard repairable work or turn the process cache into an unbounded session store.
+static FLOW_IR_DRAFT_STORES: LazyLock<Mutex<HashMap<String, CachedFlowIrDraftStore>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone, Copy)]
+enum FlowIrDraftStoreAccessError {
+    BoardIdRequired,
+    Capacity,
+    EpochChanged,
+    Unavailable,
+}
+
+impl FlowIrDraftStoreAccessError {
+    fn tool_result(self) -> ToolResultObject {
+        let (code, message, retryable, next_action) = match self {
+            Self::BoardIdRequired => (
+                "IR_DRAFT_BOARD_ID_REQUIRED",
+                "Retained FlowScript drafts require a persistent board id so Apply/Dismiss can resolve their exact commit token.",
+                false,
+                "use_a_persisted_board",
+            ),
+            Self::Capacity => (
+                "IR_DRAFT_STORE_CAPACITY",
+                "Retained draft capacity is occupied by unresolved board reviews. Apply or dismiss an existing FlowPilot review before starting one for another board.",
+                true,
+                "resolve_pending_review",
+            ),
+            Self::EpochChanged => (
+                "FLOWSCRIPT_DRAFT_STORE_EPOCH_CHANGED",
+                "This tool surface's immutable request binding belongs to an older board-draft store epoch. Do not retry this tool call in the current phase; restart the FlowPilot phase so the host can bind the same request to the active store.",
+                false,
+                "restart_agent_phase",
+            ),
+            Self::Unavailable => (
+                "IR_DRAFT_STORE_UNAVAILABLE",
+                "The board-scoped retained draft cache is unavailable. No detached draft store was created; retry after the host recovers.",
+                true,
+                "retry_after_host_recovery",
+            ),
+        };
+        ToolResultObject::text(
+            json!({
+                "status": "error",
+                "code": code,
+                "retryable": retryable,
+                "next_action": next_action,
+                "message": message,
+            })
+            .to_string(),
+        )
+    }
+}
+
+fn flow_ir_draft_store_for_board(
+    board: &Board,
+    live_board: Option<&Arc<AsyncMutex<Board>>>,
+) -> Result<Arc<FlowIrDraftStore>, FlowIrDraftStoreAccessError> {
+    with_current_board(board, live_board, |current| {
+        persisted_flow_ir_draft_store(&board.id, current)
+    })
+}
+
+/// Acquire the same retained board-scoped store for the built-in Bits/core path. External SDK
+/// tools and the core rig loop must share this cache because the native atomic Apply endpoint
+/// resolves review tokens here after the originating chat request has returned.
+pub(super) fn retained_flow_ir_draft_store_for_board(
+    board: &Board,
+) -> Result<Arc<FlowIrDraftStore>, String> {
+    persisted_flow_ir_draft_store(&board.id, board).map_err(|error| match error {
+        FlowIrDraftStoreAccessError::BoardIdRequired => {
+            "Retained FlowScript drafts require a persistent board id so Apply/Dismiss can resolve their exact commit token.".to_string()
+        }
+        FlowIrDraftStoreAccessError::Capacity => {
+            "Retained draft capacity is occupied by unresolved board reviews. Apply or dismiss an existing FlowPilot review before starting one for another board.".to_string()
+        }
+        FlowIrDraftStoreAccessError::EpochChanged => {
+            "The board-scoped retained draft store changed while constructing this tool surface; restart the FlowPilot phase.".to_string()
+        }
+        FlowIrDraftStoreAccessError::Unavailable => {
+            "The board-scoped retained draft cache is unavailable; no detached draft store was created.".to_string()
+        }
+    })
+}
+
+fn persisted_flow_ir_draft_store(
+    board_key: &str,
+    observed_board: &Board,
+) -> Result<Arc<FlowIrDraftStore>, FlowIrDraftStoreAccessError> {
+    touch_persisted_flow_ir_draft_store(
+        board_key,
+        Arc::new(FlowIrDraftStore::new()),
+        Some(observed_board),
+    )
+}
+
+/// Refresh a board-scoped draft-store lease at retained-tool execution time, not merely when the
+/// tool surface is constructed. If a newer surface already installed a store, all callers converge
+/// on that store rather than reviving a detached one.
+fn touch_persisted_flow_ir_draft_store(
+    board_key: &str,
+    fallback: Arc<FlowIrDraftStore>,
+    observed_board: Option<&Board>,
+) -> Result<Arc<FlowIrDraftStore>, FlowIrDraftStoreAccessError> {
+    if board_key.trim().is_empty() {
+        return Err(FlowIrDraftStoreAccessError::BoardIdRequired);
+    }
+    let now = Instant::now();
+    let mut stores = FLOW_IR_DRAFT_STORES
+        .lock()
+        .map_err(|_| FlowIrDraftStoreAccessError::Unavailable)?;
+    // Observation is diagnostic only. Pending review tokens are released exclusively by explicit
+    // Apply/Dismiss disposition so unrelated board edits cannot silently acknowledge a batch.
+    if let (Some(board), Some(cached)) = (observed_board, stores.get(board_key)) {
+        cached.store.observe_board(board);
+    }
+    prune_expired_flow_ir_draft_stores(&mut stores, now);
+    if let Some(cached) = stores.get_mut(board_key) {
+        cached.last_accessed = now;
+        return Ok(cached.store.clone());
+    }
+    // Never split a board's store while it carries an unresolved review. Reclaim an idle lease;
+    // when all slots are pending, fail closed rather than creating an untracked ephemeral store.
+    if !reclaim_flow_ir_draft_store_slot(&mut stores) {
+        return Err(FlowIrDraftStoreAccessError::Capacity);
+    }
+    let store = fallback;
+    stores.insert(
+        board_key.to_string(),
+        CachedFlowIrDraftStore {
+            store: store.clone(),
+            last_accessed: now,
+            pending_since: None,
+        },
+    );
+    Ok(store)
+}
+
+fn touch_bound_flowscript_draft_store(
+    board_key: &str,
+    bound_store: Arc<FlowIrDraftStore>,
+) -> Result<Arc<FlowIrDraftStore>, FlowIrDraftStoreAccessError> {
+    let active = touch_persisted_flow_ir_draft_store(board_key, bound_store.clone(), None)?;
+    if Arc::ptr_eq(&active, &bound_store) {
+        Ok(active)
+    } else {
+        Err(FlowIrDraftStoreAccessError::EpochChanged)
+    }
+}
+
+fn reclaim_flow_ir_draft_store_slot(stores: &mut HashMap<String, CachedFlowIrDraftStore>) -> bool {
+    prune_expired_flow_ir_draft_stores(stores, Instant::now());
+    if stores.len() < MAX_PERSISTED_FLOW_IR_DRAFT_STORES {
+        return true;
+    }
+    if let Some(oldest_key) = stores
+        .iter()
+        .filter(|(_, cached)| !cached.store.has_pending_commit())
+        .min_by_key(|(_, cached)| cached.last_accessed)
+        .map(|(key, _)| key.clone())
+    {
+        stores.remove(&oldest_key);
+    }
+    stores.len() < MAX_PERSISTED_FLOW_IR_DRAFT_STORES
+}
+
+fn prune_expired_flow_ir_draft_stores(
+    stores: &mut HashMap<String, CachedFlowIrDraftStore>,
+    now: Instant,
+) {
+    stores.retain(|_, cached| {
+        if cached.store.has_pending_commit() {
+            // `last_accessed` is refreshed immediately before every retained tool call, including
+            // the commit that creates the pending claim. Use that timestamp when first observing
+            // the claim so its absolute lease starts no later than commit time.
+            let pending_since = *cached.pending_since.get_or_insert(cached.last_accessed);
+            now.saturating_duration_since(pending_since) <= FLOW_IR_PENDING_REVIEW_TTL
+        } else {
+            cached.pending_since = None;
+            now.saturating_duration_since(cached.last_accessed) <= FLOW_IR_DRAFT_STORE_TTL
+        }
+    });
+}
+
+/// Resolve an existing board-scoped store for Apply/Dismiss lifecycle commands without ever
+/// creating a replacement. Pending stores survive the normal idle TTL but expire at the absolute
+/// review lease, so a missing entry means the token cannot be proven against this desktop process.
+pub(super) fn retained_flow_ir_draft_store(board_key: &str) -> Option<Arc<FlowIrDraftStore>> {
+    let mut stores = FLOW_IR_DRAFT_STORES.lock().ok()?;
+    let now = Instant::now();
+    prune_expired_flow_ir_draft_stores(&mut stores, now);
+    let cached = stores.get_mut(board_key.trim())?;
+    cached.last_accessed = now;
+    Some(cached.store.clone())
+}
+
+/// Hold the registry-backed board lock for the entire operation so fingerprint validation and
+/// command queueing observe one host state. Detached/anonymous boards retain the captured fallback.
+fn with_current_board<T>(
+    captured: &Board,
+    live: Option<&Arc<AsyncMutex<Board>>>,
+    operation: impl FnOnce(&Board) -> T,
+) -> T {
+    match live {
+        Some(live) => {
+            let board = block_on_tool(live.lock());
+            operation(&board)
+        }
+        None => operation(captured),
+    }
+}
 
 /// Create all Copilot SDK tools for board context.
 ///
-/// When a live `board` is supplied the FlowScript transpile surface is enabled: `get_declarations`
-/// (signature lookup) and `edit_flowscript` (apply edited FlowScript via reconcile) are registered
-/// in addition to the structural `emit_commands` path.
-pub fn create_board_tools(
+/// When a live `board` and immutable edit request are supplied, the code-first FlowScript surface
+/// is enabled: `write_flowscript` retains the complete source, `patch_flowscript` repairs an exact
+/// revision, `check_flowscript` retains the compiler-derived command batch, and
+/// `commit_flowscript` transfers only that exact batch into the normal Apply/Dismiss boundary.
+/// Legacy typed-JSON and one-shot `edit_flowscript` adapters remain implemented below for old
+/// callers, but are intentionally not advertised to model-facing SDK/MCP surfaces.
+pub(super) fn create_board_tools(
     graph_context: Option<Arc<GraphContext>>,
     board: Option<Arc<Board>>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    request_acceptance_prompt: Option<&str>,
     catalog_provider: Option<Arc<dyn CatalogProvider>>,
-    side_effect_commands: Option<Arc<Mutex<Vec<BoardCommand>>>>,
+    side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
+    queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
 ) -> Vec<(Tool, ToolHandler)> {
     let mut tools = vec![
         create_catalog_search_tool(catalog_provider.clone()),
@@ -60,12 +446,49 @@ pub fn create_board_tools(
     }
 
     if let Some(board) = board {
-        tools.push(create_get_current_flowscript_tool(board.clone()));
-        tools.push(create_edit_flowscript_tool(
-            board,
-            catalog_provider,
-            side_effect_commands,
+        let flow_ir_drafts = flow_ir_draft_store_for_board(&board, live_board.as_ref())
+            // This value only supplies tool schemas if capacity is currently exhausted. Every
+            // invocation reacquires the board lease and returns the explicit host error first.
+            .unwrap_or_else(|_| Arc::new(FlowIrDraftStore::new()));
+        let acceptance_binding = request_acceptance_prompt
+            .map(|prompt| flow_ir_drafts.bind_request_acceptance_contract(&board.id, prompt));
+        tools.push(create_get_current_flowscript_tool(
+            board.clone(),
+            live_board.clone(),
         ));
+        if let (Some(provider), Some(acceptance_binding)) =
+            (catalog_provider.clone(), acceptance_binding)
+        {
+            tools.push(create_write_flowscript_tool(
+                board.clone(),
+                live_board.clone(),
+                provider.clone(),
+                flow_ir_drafts.clone(),
+                acceptance_binding.clone(),
+            ));
+            tools.push(create_patch_flowscript_tool(
+                board.clone(),
+                live_board.clone(),
+                provider.clone(),
+                flow_ir_drafts.clone(),
+                acceptance_binding.clone(),
+            ));
+            tools.push(create_check_flowscript_tool(
+                board.clone(),
+                live_board.clone(),
+                provider,
+                flow_ir_drafts.clone(),
+                acceptance_binding.clone(),
+            ));
+            tools.push(create_commit_flowscript_tool(
+                board,
+                live_board,
+                flow_ir_drafts,
+                acceptance_binding,
+                side_effect_commands.clone(),
+                queued_flowscript.clone(),
+            ));
+        }
     }
 
     if let Some(ctx) = graph_context.clone() {
@@ -83,6 +506,31 @@ pub fn create_board_tools(
     tools
 }
 
+fn typed_draft_request_access_denied(
+    store: &FlowIrDraftStore,
+    board_id: &str,
+    draft_id: &str,
+    acceptance_binding: Option<&FlowIrAcceptanceBinding>,
+) -> Option<ToolResultObject> {
+    store
+        .authorize_draft_request(board_id, draft_id, acceptance_binding)
+        .err()
+        .map(|denied| {
+            ToolResultObject::text(
+                serde_json::to_string_pretty(&denied).unwrap_or_else(|error| {
+                    json!({
+                        "status": "request_identity_mismatch",
+                        "code": "IR_DRAFT_REQUEST_IDENTITY_MISMATCH",
+                        "retryable": false,
+                        "auto_resume": false,
+                        "message": format!("Failed to render request recovery metadata: {error}")
+                    })
+                    .to_string()
+                }),
+            )
+        })
+}
+
 /// Create runtime tools that execute through the frontend bridge.
 ///
 /// These tools need browser/app context such as the active backend state, storage provider,
@@ -92,8 +540,12 @@ pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandle
         create_database_tool(bridge.clone()),
         create_storage_tool(bridge.clone()),
         create_ui_inspect_tool(bridge.clone()),
-        create_execute_event_tool(bridge.clone()),
     ];
+    tools.extend(
+        runtime_execution_tool_specs()
+            .iter()
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None)),
+    );
     for name in [INTERNET_SEARCH_TOOL, "ask_user"] {
         if let Some(spec) = find_global_tool_spec(name) {
             tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
@@ -179,8 +631,9 @@ fn run_blocking_tool<T>(f: impl FnOnce() -> T) -> T {
 
 /// Tool set for the global FlowPilot assistant, generated from the shared platform tool specs so
 /// every backend (Bits/rig, GitHub Copilot, Codex, Claude Code) advertises identical tools.
-/// App-scoped runtime tools (database/storage/execute_event) are excluded because the global
-/// assistant is not bound to a single app.
+/// App-scoped data/storage tools and the board-scoped `execute_event` alias are excluded because
+/// the global assistant is not bound to a single app. Global execution uses `call_app_event`, while
+/// `execute_node` and `query_execution_logs` require explicit app/board/run ids in their schemas.
 pub fn create_global_assistant_tools(
     bridge: FrontendToolBridge,
     memory: Option<Arc<AssistantMemory>>,
@@ -225,7 +678,8 @@ fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
 fn database_operation_requires_approval(operation: &str) -> bool {
     matches!(
         operation,
-        "insert"
+        "create_table"
+            | "insert"
             | "add_items"
             | "delete"
             | "remove_items"
@@ -239,36 +693,56 @@ fn database_operation_requires_approval(operation: &str) -> bool {
     )
 }
 
-fn flowscript_validation_message(diagnostics: &[String]) -> &'static str {
+fn flowscript_validation_message(flowscript: &str, diagnostics: &[String]) -> String {
+    let missing_function_helpers = flowscript_missing_function_helpers(flowscript, diagnostics);
+    if !missing_function_helpers.is_empty() {
+        return format!(
+            "FlowScript validation failed: local helper declaration(s) {} are missing the required `function` keyword. Write `function helperName(...) {{ ... }}`; these are local Function layers, not catalog nodes, so another declaration search will not fix them.",
+            missing_function_helpers
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if diagnostics.iter().any(|diagnostic| {
+        diagnostic.contains("return value")
+            && diagnostic.contains("no matching function return pin")
+    }) {
+        return "FlowScript validation failed: a helper returns a value without declaring a matching output pin. Add a named return signature, for example `function classify(body: string): (isSupport: bool) { ...; return result.value }`.".to_string();
+    }
+
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.contains("nodes (max"))
     {
-        return "FlowScript validation failed: a layer would exceed the 50-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 50-node budget — and call the helpers from the parent flow.";
+        return "FlowScript validation failed: a layer would exceed the 50-node cap. Nothing was queued. Split the logic into smaller `function name(...) { ... }` declarations — each function layer has its own 50-node budget — and call the helpers from the parent flow.".to_string();
     }
 
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.contains("labelled branch requires a call condition"))
     {
-        return "FlowScript validation failed: labelled branch syntax (`if (...) { // label ... }`) requires the condition to be a catalog/control-node call. For ordinary boolean checks, remove the trailing branch labels/comments and use plain `if (condition) { ... } else { ... }`, or use exact control-node declarations from get_declarations.";
+        return "FlowScript validation failed: labelled branch syntax (`if (...) { // label ... }`) requires the condition to be a catalog/control-node call. For ordinary boolean checks, remove the trailing branch labels/comments and use plain `if (condition) { ... } else { ... }`, or use exact control-node declarations from get_declarations.".to_string();
     }
 
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.contains("expected `Colon`, found `Assign`"))
     {
-        return "FlowScript validation failed: object and call-argument fields use colon syntax, for example `{ host: \"imap.gmail.com\" }`, not assignment syntax like `{ host = \"imap.gmail.com\" }`.";
+        return "FlowScript validation failed: object and call-argument fields use colon syntax, for example `{ host: \"imap.gmail.com\" }`, not assignment syntax like `{ host = \"imap.gmail.com\" }`.".to_string();
     }
 
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.contains("`const` binding requires a call expression"))
     {
-        return "FlowScript validation failed: inside a function/event block, `const name = ...` must bind a catalog/node call. Use `let` for local literal aliases or pass literals/objects directly into node calls.";
+        return "FlowScript validation failed: inside a function/event block, `const name = ...` must bind a catalog/node call. Use `let` for local literal aliases or pass literals/objects directly into node calls.".to_string();
     }
 
     "FlowScript validation failed. Fix the listed issues and call edit_flowscript again."
+        .to_string()
 }
 
 fn flowscript_summary(flowscript: &str) -> Value {
@@ -291,6 +765,10 @@ Read operations do not ask for approval. Mutating operations show an approval di
 
 Operations:
 - list_tables: return project and user-scoped tables.
+- create_table: create an empty table from explicit fields [{name,type,nullable?,vector_size?}].
+  `if_not_exists` defaults to true; no seed row is inserted. A `partial` result with
+  `explicit_schema_create_not_deployed` means the remote API is older than this client: retain the
+  schema request and continue the workflow build instead of switching to a smoke test.
 - describe_table: schema, indices, row count, and sample rows.
 - query: SQL/filter/vector/FTS query via the existing database query API.
 - insert/add_items, delete/remove_items, update.
@@ -302,7 +780,7 @@ Operations:
                 "operation": {
                     "type": "string",
                     "enum": [
-                        "list_tables", "describe_table", "query",
+                        "list_tables", "create_table", "describe_table", "query",
                         "insert", "add_items", "delete", "remove_items", "update",
                         "build_index", "drop_index", "optimize",
                         "add_column", "drop_columns", "alter_column"
@@ -311,6 +789,22 @@ Operations:
                 "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
                 "table_name": { "type": "string", "description": "Table name for table operations." },
                 "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
+                "fields": {
+                    "type": "array",
+                    "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32, timestamp, vector. Vector fields require vector_size.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "name": { "type": "string" },
+                            "type": { "type": "string" },
+                            "nullable": { "type": "boolean", "description": "Defaults to true." },
+                            "vector_size": { "type": "integer", "minimum": 1 }
+                        },
+                        "required": ["name", "type"]
+                    }
+                },
+                "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
                 "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
                 "offset": { "type": "integer" },
                 "limit": { "type": "integer" },
@@ -442,53 +936,16 @@ Operations:
     (tool, handler)
 }
 
-fn create_execute_event_tool(bridge: FrontendToolBridge) -> (Tool, ToolHandler) {
-    let tool = Tool::new("execute_event")
-        .description(
-            r#"Execute a workflow event through the frontend execution service and return bounded logs.
-
-Use this after creating or updating an event-backed workflow to validate behavior with real runtime
-logs. This is side-effecting and always asks for approval unless the user selected "don't ask again
-this session"."#,
-        )
-        .schema(json!({
-            "type": "object",
-            "properties": {
-                "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-                "event_id": { "type": "string" },
-                "payload": { "type": "object", "description": "Run payload. If omitted, {id:event_id,payload:{}} is used." },
-                "stream_state": { "type": "boolean", "description": "Stream state/log events, default true." },
-                "skip_consent_check": { "type": "boolean" }
-            },
-            "required": ["event_id"]
-        }));
-
-    let handler: ToolHandler = Arc::new(move |_name, args| {
-        let event_id = arg_string(args, "event_id", "eventId");
-        frontend_tool_result_with_timeout(
-            &bridge,
-            "execute_event",
-            args.clone(),
-            FrontendToolApproval::execute(
-                "Approve workflow execution",
-                format!("FlowPilot wants to execute event '{event_id}' and inspect the logs."),
-                "execute_event".to_string(),
-            ),
-            Duration::from_secs(600),
-        )
-    });
-
-    (tool, handler)
-}
-
 /// Catalog search tool - find nodes by functionality.
 fn create_catalog_search_tool(provider: Option<Arc<dyn CatalogProvider>>) -> (Tool, ToolHandler) {
     let tool = Tool::new("catalog_search")
         .description(
-            r#"Search the node catalog by functionality or name. Returns matching nodes with their node_type for legacy/manual AddNode commands.
+            r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
-WHEN TO USE: Only for manual command JSON, layout/modeling operations, or debugging catalog metadata.
-FOR WORKFLOW EDITS: Prefer get_declarations, write FlowScript, then call edit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
+FOR WORKFLOW EDITS: Use get_declarations for exact camelCase signatures, author the complete source
+with write_flowscript, repair it with patch_flowscript, then check_flowscript and commit_flowscript.
+FlowScript is the model-authored language; catalog_search is not part of that code-first lifecycle.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#,
         )
         .schema(json!({
@@ -496,7 +953,7 @@ EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "op
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Natural language catalog search for manual AddNode use. For FlowScript workflows, use get_declarations instead."
+                    "description": "Natural language catalog metadata search. For FlowScript authoring, use get_declarations instead."
                 }
             },
             "required": ["query"]
@@ -572,26 +1029,31 @@ fn create_get_node_details_tool(context: Arc<GraphContext>) -> (Tool, ToolHandle
 }
 
 /// Run the shared core emit validation (the exact checks the rig/Bits path runs) and flatten the
-/// structured issues into model-facing strings: (errors, warnings). Validation is skipped when the
-/// board context or catalog provider is unavailable.
+/// structured issues into model-facing strings: (errors, warnings). The visual-only model scope is
+/// always enforced; graph/catalog checks additionally run when that context is available.
 fn run_emit_validation(
     commands: &[BoardCommand],
     explanation: &str,
     graph_context: Option<&GraphContext>,
     provider: Option<&Arc<dyn CatalogProvider>>,
-) -> (Vec<String>, Vec<String>) {
-    let (Some(graph_context), Some(provider)) = (graph_context, provider) else {
-        return (Vec::new(), Vec::new());
-    };
+) -> (Vec<String>, Vec<String>, bool) {
     let args = EmitCommandsArgs {
         commands: commands.to_vec(),
         explanation: explanation.to_string(),
     };
-    let outcome = block_on_tool(validate_emit_commands(
-        &args,
-        graph_context,
-        provider.as_ref(),
-    ));
+    let scope = validate_model_facing_emit_commands_scope(&args);
+    let outcome = if !scope.errors.is_empty() {
+        scope
+    } else if let (Some(graph_context), Some(provider)) = (graph_context, provider) {
+        block_on_tool(validate_model_facing_emit_commands(
+            &args,
+            graph_context,
+            provider.as_ref(),
+        ))
+    } else {
+        scope
+    };
+    let requires_flowscript = emit_validation_requires_flowscript(&outcome);
     (
         outcome.errors.iter().map(format_validation_issue).collect(),
         outcome
@@ -599,6 +1061,7 @@ fn run_emit_validation(
             .iter()
             .map(format_validation_issue)
             .collect(),
+        requires_flowscript,
     )
 }
 
@@ -618,9 +1081,9 @@ fn format_validation_issue(issue: &ValidationIssue) -> String {
 fn create_emit_commands_tool(
     graph_context: Option<Arc<GraphContext>>,
     provider: Option<Arc<dyn CatalogProvider>>,
-    side_effect_commands: Option<Arc<Mutex<Vec<BoardCommand>>>>,
+    side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
 ) -> (Tool, ToolHandler) {
-    let tool = tool_from_rig_definition(&EmitCommandsTool);
+    let tool = tool_from_rig_definition(&ModelFacingEmitCommandsTool);
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let commands = args.get("commands").cloned().unwrap_or(json!([]));
@@ -637,7 +1100,7 @@ fn create_emit_commands_tool(
             }
         };
 
-        let (validation_errors, validation_warnings) = run_emit_validation(
+        let (validation_errors, validation_warnings, requires_flowscript) = run_emit_validation(
             &parsed_commands,
             explanation,
             graph_context.as_deref(),
@@ -647,14 +1110,23 @@ fn create_emit_commands_tool(
             // No command echo: the model already knows the batch it sent; the errors reference
             // command indices. Echoing the batch only bloats every retry's context.
             let result = json!({
-                "status": "validation_errors",
+                "status": if requires_flowscript { "representation_rejected" } else { "validation_errors" },
+                "next_action": if requires_flowscript { "write_patch_check_commit_flowscript" } else { "repair_visual_batch" },
+                "retry_emit_commands": !requires_flowscript,
                 "errors": validation_errors,
                 "warnings": validation_warnings,
                 "explanation": explanation,
-                "message": format!(
-                    "Validation failed, nothing was queued. Fix these issues and call emit_commands again:\n- {}",
-                    validation_errors.join("\n- ")
-                )
+                "message": if requires_flowscript {
+                    format!(
+                        "Representation rejected, nothing was queued. Do not retry executable or layer commands through emit_commands. Author behavior with write_flowscript, repair with patch_flowscript, validate with check_flowscript, then queue with commit_flowscript:\n- {}",
+                        validation_errors.join("\n- ")
+                    )
+                } else {
+                    format!(
+                        "Validation failed, nothing was queued. Fix these visual issues and call emit_commands again:\n- {}",
+                        validation_errors.join("\n- ")
+                    )
+                }
             });
             return ToolResultObject::text(
                 serde_json::to_string_pretty(&result).unwrap_or_default(),
@@ -717,7 +1189,18 @@ fn create_emit_commands_tool(
         if let Some(store) = &side_effect_commands
             && let Ok(mut queued) = store.lock()
         {
-            queued.extend(parsed_commands);
+            if !queued.extend(parsed_commands) {
+                return ToolResultObject::text(
+                    json!({
+                        "status": "error",
+                        "code": "COMMAND_DELIVERY_CONFLICT",
+                        "retryable": false,
+                        "queued_count": 0,
+                        "message": "This response already carries an exact retained workflow review. Direct commands were refused rather than mixing them under that review token; finish the existing Apply/Dismiss review."
+                    })
+                    .to_string(),
+                );
+            }
         }
 
         // The queued batch travels through the side-effect store (the chat loop drains it into a
@@ -744,7 +1227,7 @@ fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, To
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
         let provider = provider.clone();
-        let mut queries: Vec<String> = args
+        let queries: Vec<String> = args
             .get("queries")
             .and_then(Value::as_array)
             .map(|entries| {
@@ -757,50 +1240,830 @@ fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, To
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(query) = args.get("query").and_then(Value::as_str) {
-            let query = query.trim();
-            if !query.is_empty() && !queries.iter().any(|existing| existing == query) {
-                queries.insert(0, query.to_string());
-            }
-        }
-
-        let declarations = if queries.is_empty() {
-            block_on_tool(provider.get_declarations(""))
-        } else {
-            let mut sections = Vec::with_capacity(queries.len());
-            for query in &queries {
-                sections.push(block_on_tool(provider.get_declarations(query)));
-            }
-            sections.join("\n")
+        let declaration_args = GetDeclarationsArgs {
+            query: args
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            queries,
         };
+        let declarations = block_on_tool(run_declaration_queries(&provider, &declaration_args));
         ToolResultObject::text(declarations)
     });
 
     (tool, handler)
 }
 
-/// edit_flowscript tool - apply an edited FlowScript document to the board via reconcile.
-///
-/// Always validates first: parse errors and reconcile diagnostics are reported back to the agent
-/// and NOTHING is queued. Only a clean parse that yields commands queues them (status "queued"),
-/// where the main chat loop turns them into a reviewable `<commands>` envelope.
-fn create_get_current_flowscript_tool(board: Arc<Board>) -> (Tool, ToolHandler) {
+fn parse_flowscript_arguments<T: DeserializeOwned>(
+    arguments: Value,
+    tool_name: &str,
+) -> Result<T, ToolResultObject> {
+    serde_json::from_value(arguments).map_err(|error| {
+        ToolResultObject::text(
+            json!({
+                "status": "validation_errors",
+                "code": "FLOWSCRIPT_ARGUMENTS_INVALID",
+                "message": format!(
+                    "Failed to parse {tool_name} arguments against its advertised schema: {error}"
+                )
+            })
+            .to_string(),
+        )
+    })
+}
+
+fn flowscript_tool_cancelled_result(
+    tool_name: &str,
+    draft_id: Option<&str>,
+    revision: Option<u64>,
+) -> ToolResultObject {
+    ToolResultObject::text(
+        serde_json::to_string_pretty(&json!({
+            "status": "cancelled",
+            "code": "FLOWSCRIPT_TOOL_CANCELLED",
+            "draft_id": draft_id,
+            "revision": revision,
+            "message": format!(
+                "{tool_name} was cancelled before a command batch was transferred. Continue from the retained FlowScript draft in the next phase."
+            )
+        }))
+        .unwrap_or_default(),
+    )
+}
+
+fn create_write_flowscript_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: FlowIrAcceptanceBinding,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&WriteFlowScriptTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+        acceptance_binding: acceptance_binding.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, arguments| {
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return flowscript_tool_cancelled_result("write_flowscript", None, None);
+        }
+        let store = match touch_bound_flowscript_draft_store(&board_key, store.clone()) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_flowscript_arguments::<WriteFlowScriptArgs>(
+            arguments.clone(),
+            "write_flowscript",
+        ) {
+            Ok(args) => args,
+            Err(error) => return error,
+        };
+        let catalog = block_on_tool(provider.get_all_metadata());
+        let result = with_current_board(&board, live_board.as_ref(), |board| {
+            store.observe_board(board);
+            store.write_flowscript_with_acceptance_binding(
+                board,
+                &catalog,
+                args,
+                &acceptance_binding,
+            )
+        });
+        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+    });
+    (tool, handler)
+}
+
+fn create_patch_flowscript_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: FlowIrAcceptanceBinding,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&PatchFlowScriptTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+        acceptance_binding: acceptance_binding.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, arguments| {
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return flowscript_tool_cancelled_result("patch_flowscript", None, None);
+        }
+        let store = match touch_bound_flowscript_draft_store(&board_key, store.clone()) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_flowscript_arguments::<PatchFlowScriptArgs>(
+            arguments.clone(),
+            "patch_flowscript",
+        ) {
+            Ok(args) => args,
+            Err(error) => return error,
+        };
+        let catalog = block_on_tool(provider.get_all_metadata());
+        let result = with_current_board(&board, live_board.as_ref(), |board| {
+            store.observe_board(board);
+            store.patch_flowscript_with_acceptance_binding(
+                board,
+                &catalog,
+                args,
+                &acceptance_binding,
+            )
+        });
+        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+    });
+    (tool, handler)
+}
+
+fn create_check_flowscript_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: FlowIrAcceptanceBinding,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&CheckFlowScriptTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+        acceptance_binding: acceptance_binding.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, arguments| {
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return flowscript_tool_cancelled_result("check_flowscript", None, None);
+        }
+        let store = match touch_bound_flowscript_draft_store(&board_key, store.clone()) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_flowscript_arguments::<CheckFlowScriptArgs>(
+            arguments.clone(),
+            "check_flowscript",
+        ) {
+            Ok(args) => args,
+            Err(error) => return error,
+        };
+        let catalog = block_on_tool(provider.get_all_metadata());
+        let result = with_current_board(&board, live_board.as_ref(), |board| {
+            store.observe_board(board);
+            store.check_flowscript_with_acceptance_binding(
+                board,
+                &catalog,
+                args,
+                &acceptance_binding,
+            )
+        });
+        ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+    });
+    (tool, handler)
+}
+
+fn create_commit_flowscript_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: FlowIrAcceptanceBinding,
+    side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
+    queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&CommitFlowScriptTool {
+        board: board.clone(),
+        store: store.clone(),
+        acceptance_binding: acceptance_binding.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, arguments| {
+        let store = match touch_bound_flowscript_draft_store(&board_key, store.clone()) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_flowscript_arguments::<CommitFlowScriptArgs>(
+            arguments.clone(),
+            "commit_flowscript",
+        ) {
+            Ok(args) => args,
+            Err(error) => return error,
+        };
+        let draft_id = args.draft_id.clone();
+        let expected_revision = args.expected_revision;
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return flowscript_tool_cancelled_result(
+                "commit_flowscript",
+                Some(&draft_id),
+                Some(expected_revision),
+            );
+        }
+
+        with_current_board(&board, live_board.as_ref(), |board| {
+            // Keep the registry-backed board guard across fingerprint validation and host queue
+            // installation. The client never supplies a command batch: only commands retained by
+            // check_flowscript for this exact revision cross the Apply/Dismiss boundary.
+            store.observe_board(board);
+            let result =
+                store.commit_flowscript_with_acceptance_binding(board, args, &acceptance_binding);
+            let commit_token = if result.status == "queued" {
+                store
+                    .latest_pending_commit_token(&board.id)
+                    .filter(|token| {
+                        token.draft_id == draft_id
+                            && token.revision == expected_revision
+                            && result.base_fingerprint.as_deref()
+                                == Some(token.base_fingerprint.as_str())
+                    })
+            } else {
+                None
+            };
+
+            if result.status == "queued" && commit_token.is_none() {
+                let released = store.release_commit(&draft_id, expected_revision);
+                return ToolResultObject::text(
+                    json!({
+                        "status": "error",
+                        "code": "FLOWSCRIPT_COMMIT_TOKEN_INVALID",
+                        "draft_id": draft_id,
+                        "revision": expected_revision,
+                        "claim_released": released,
+                        "source": result.source,
+                        "message": "FlowScript committed without a complete board/revision/claim identity. No commands were transferred; the malformed pre-delivery claim was rolled back."
+                    })
+                    .to_string(),
+                );
+            }
+
+            if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+                if let Some(token) = commit_token.as_ref() {
+                    release_retained_commit_claim(&store, token);
+                }
+                return flowscript_tool_cancelled_result(
+                    "commit_flowscript",
+                    Some(&draft_id),
+                    Some(expected_revision),
+                );
+            }
+
+            if let Some(commit_token) = commit_token {
+                let Some(commands) = &side_effect_commands else {
+                    release_retained_commit_claim(&store, &commit_token);
+                    return ToolResultObject::text(
+                        json!({
+                            "status": "error",
+                            "code": "FLOWSCRIPT_COMMIT_QUEUE_UNAVAILABLE",
+                            "draft_id": draft_id,
+                            "revision": expected_revision,
+                            "source": result.source,
+                            "message": "FlowScript checked successfully, but the host command queue is unavailable. The claim was released; retry this exact revision when the queue is available."
+                        })
+                        .to_string(),
+                    );
+                };
+                if result.commands.is_empty() || result.commands.len() != result.queued_count {
+                    release_retained_commit_claim(&store, &commit_token);
+                    return ToolResultObject::text(
+                        json!({
+                            "status": "error",
+                            "code": "FLOWSCRIPT_COMMIT_BATCH_INVALID",
+                            "draft_id": draft_id,
+                            "revision": expected_revision,
+                            "source": result.source,
+                            "message": "The retained FlowScript command batch was incomplete. No commands were transferred and the claim was released."
+                        })
+                        .to_string(),
+                    );
+                }
+                let mut queued = match commands.lock() {
+                    Ok(queued) => queued,
+                    Err(poisoned) => {
+                        poisoned.into_inner().abandon();
+                        release_retained_commit_claim(&store, &commit_token);
+                        return ToolResultObject::text(
+                            json!({
+                                "status": "error",
+                                "code": "FLOWSCRIPT_COMMIT_QUEUE_UNAVAILABLE",
+                                "draft_id": draft_id,
+                                "revision": expected_revision,
+                                "source": result.source,
+                                "message": "The host command queue could not be locked. The FlowScript claim was released; retry this exact revision."
+                            })
+                            .to_string(),
+                        );
+                    }
+                };
+                if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+                    release_retained_commit_claim(&store, &commit_token);
+                    return flowscript_tool_cancelled_result(
+                        "commit_flowscript",
+                        Some(&draft_id),
+                        Some(expected_revision),
+                    );
+                }
+                let source = result.source.clone();
+                if !queued.extend_retained_commit(
+                    result.commands.clone(),
+                    store.clone(),
+                    commit_token,
+                    queued_flowscript.clone(),
+                    source.clone(),
+                ) {
+                    return ToolResultObject::text(
+                        json!({
+                            "status": "error",
+                            "code": "FLOWSCRIPT_COMMIT_TOKEN_CONFLICT",
+                            "draft_id": draft_id,
+                            "revision": expected_revision,
+                            "source": source,
+                            "message": "This FlowPilot response already carries unresolved commands or another commit token. The newer FlowScript claim was released rather than mixing batches under one review token."
+                        })
+                        .to_string(),
+                    );
+                }
+                if let (Some(workspace), Some(source)) = (&queued_flowscript, source)
+                    && let Ok(mut queued_workspace) = workspace.lock()
+                {
+                    *queued_workspace = Some(source);
+                }
+            }
+
+            // FlowScriptDraftResponse skips its host-only commands field, preventing a second,
+            // client-trusted copy of the batch from escaping through the model tool result.
+            ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        })
+    });
+    (tool, handler)
+}
+
+#[allow(dead_code)]
+fn create_plan_flow_ir_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&PlanFlowIrTool {
+        provider: provider.clone(),
+    });
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let request = match parse_typed_ir_arguments::<FlowCapabilityPlanRequest>(
+            args.clone(),
+            "IR_CAPABILITY_PLAN_INVALID",
+            "typed capability plan",
+        ) {
+            Ok(request) => request,
+            Err(error) => return ToolResultObject::text(error),
+        };
+        let catalog = block_on_tool(provider.get_all_metadata());
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&plan_flow_capabilities(&request, &catalog))
+                .unwrap_or_default(),
+        )
+    });
+    (tool, handler)
+}
+
+#[allow(dead_code)]
+fn create_begin_flow_ir_draft_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: Option<FlowIrAcceptanceBinding>,
+) -> (Tool, ToolHandler) {
+    let tool = match acceptance_binding.as_ref() {
+        Some(binding) => tool_from_rig_definition(&BoundBeginFlowIrDraftTool {
+            board: board.clone(),
+            provider: provider.clone(),
+            store: store.clone(),
+            acceptance_binding: binding.clone(),
+        }),
+        None => tool_from_rig_definition(&BeginFlowIrDraftTool {
+            board: board.clone(),
+            provider: provider.clone(),
+            store: store.clone(),
+        }),
+    };
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let store = match touch_persisted_flow_ir_draft_store(&board_key, store.clone(), None) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_typed_ir_arguments::<BeginFlowIrDraftArgs>(
+            args.clone(),
+            "IR_DRAFT_INVALID",
+            "typed draft header",
+        ) {
+            Ok(args) => args,
+            Err(error) => return ToolResultObject::text(error),
+        };
+        let catalog = block_on_tool(provider.get_all_metadata());
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&with_current_board(
+                &board,
+                live_board.as_ref(),
+                |board| {
+                    store.observe_board(board);
+                    match acceptance_binding.as_ref() {
+                        Some(binding) => {
+                            store.begin_with_acceptance_binding(board, &catalog, args, binding)
+                        }
+                        None => store.begin(board, &catalog, args),
+                    }
+                },
+            ))
+            .unwrap_or_default(),
+        )
+    });
+    (tool, handler)
+}
+
+#[allow(dead_code)]
+fn create_update_flow_ir_draft_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: Option<FlowIrAcceptanceBinding>,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&UpdateFlowIrDraftTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let store = match touch_persisted_flow_ir_draft_store(&board_key, store.clone(), None) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_typed_ir_arguments::<UpdateFlowIrDraftArgs>(
+            args.clone(),
+            "IR_DRAFT_UPDATE_INVALID",
+            "typed draft update",
+        ) {
+            Ok(args) => args,
+            Err(error) => return ToolResultObject::text(error),
+        };
+        if let Some(denied) = typed_draft_request_access_denied(
+            &store,
+            &board_key,
+            &args.draft_id,
+            acceptance_binding.as_ref(),
+        ) {
+            return denied;
+        }
+        let catalog = block_on_tool(provider.get_all_metadata());
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&with_current_board(
+                &board,
+                live_board.as_ref(),
+                |board| {
+                    store.observe_board(board);
+                    match acceptance_binding.as_ref() {
+                        Some(binding) => store
+                            .update_draft_with_acceptance_binding(board, &catalog, args, binding),
+                        None => store.update_draft(board, &catalog, args),
+                    }
+                },
+            ))
+            .unwrap_or_default(),
+        )
+    });
+    (tool, handler)
+}
+
+#[allow(dead_code)]
+fn create_upsert_flow_ir_module_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: Option<FlowIrAcceptanceBinding>,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&UpsertFlowIrModuleTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let store = match touch_persisted_flow_ir_draft_store(&board_key, store.clone(), None) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_typed_ir_arguments::<UpsertFlowIrModuleArgs>(
+            args.clone(),
+            "IR_MODULE_INVALID",
+            "typed workflow module",
+        ) {
+            Ok(args) => args,
+            Err(error) => return ToolResultObject::text(error),
+        };
+        if let Some(denied) = typed_draft_request_access_denied(
+            &store,
+            &board_key,
+            &args.draft_id,
+            acceptance_binding.as_ref(),
+        ) {
+            return denied;
+        }
+        let catalog = block_on_tool(provider.get_all_metadata());
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&with_current_board(
+                &board,
+                live_board.as_ref(),
+                |board| {
+                    store.observe_board(board);
+                    match acceptance_binding.as_ref() {
+                        Some(binding) => store
+                            .upsert_module_with_acceptance_binding(board, &catalog, args, binding),
+                        None => store.upsert_module(board, &catalog, args),
+                    }
+                },
+            ))
+            .unwrap_or_default(),
+        )
+    });
+    (tool, handler)
+}
+
+#[allow(dead_code)]
+fn create_validate_flow_ir_draft_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: Option<FlowIrAcceptanceBinding>,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&ValidateFlowIrDraftTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let store = match touch_persisted_flow_ir_draft_store(&board_key, store.clone(), None) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_typed_ir_arguments::<ValidateFlowIrDraftArgs>(
+            args.clone(),
+            "IR_DRAFT_VALIDATION_INVALID",
+            "typed draft validation request",
+        ) {
+            Ok(args) => args,
+            Err(error) => return ToolResultObject::text(error),
+        };
+        if let Some(denied) = typed_draft_request_access_denied(
+            &store,
+            &board_key,
+            &args.draft_id,
+            acceptance_binding.as_ref(),
+        ) {
+            return denied;
+        }
+        let catalog = block_on_tool(provider.get_all_metadata());
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&with_current_board(
+                &board,
+                live_board.as_ref(),
+                |board| {
+                    store.observe_board(board);
+                    match acceptance_binding.as_ref() {
+                        Some(binding) => {
+                            store.validate_with_acceptance_binding(board, &catalog, args, binding)
+                        }
+                        None => store.validate(board, &catalog, args),
+                    }
+                },
+            ))
+            .unwrap_or_default(),
+        )
+    });
+    (tool, handler)
+}
+
+#[allow(dead_code)]
+fn create_commit_flow_ir_draft_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
+    store: Arc<FlowIrDraftStore>,
+    acceptance_binding: Option<FlowIrAcceptanceBinding>,
+    side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
+    queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
+) -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&CommitFlowIrDraftTool {
+        board: board.clone(),
+        provider: provider.clone(),
+        store: store.clone(),
+    });
+    let board_key = board.id.clone();
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let store = match touch_persisted_flow_ir_draft_store(&board_key, store.clone(), None) {
+            Ok(store) => store,
+            Err(error) => return error.tool_result(),
+        };
+        let args = match parse_typed_ir_arguments::<CommitFlowIrDraftArgs>(
+            args.clone(),
+            "IR_COMMIT_INVALID",
+            "typed draft commit",
+        ) {
+            Ok(args) => args,
+            Err(error) => return ToolResultObject::text(error),
+        };
+        if let Some(denied) = typed_draft_request_access_denied(
+            &store,
+            &board_key,
+            &args.draft_id,
+            acceptance_binding.as_ref(),
+        ) {
+            return denied;
+        }
+        let draft_id = args.draft_id.clone();
+        let expected_revision = args.expected_revision;
+        let cancelled_result = || {
+            ToolResultObject::text(
+                serde_json::to_string_pretty(&json!({
+                    "status": "cancelled",
+                    "code": "IR_COMMIT_CANCELLED",
+                    "draft_id": draft_id.clone(),
+                    "revision": expected_revision,
+                    "message": "Typed draft commit was cancelled before queueing commands."
+                }))
+                .unwrap_or_default(),
+            )
+        };
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return cancelled_result();
+        }
+        let catalog = block_on_tool(provider.get_all_metadata());
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return cancelled_result();
+        }
+        with_current_board(&board, live_board.as_ref(), |board| {
+            // The registry-backed board guard remains held until the command batch and its claim
+            // are atomically installed in the host queue. This closes the captured-board race at
+            // the fingerprint/queue boundary.
+            store.observe_board(board);
+            let result = match acceptance_binding.as_ref() {
+                Some(binding) => {
+                    store.commit_with_acceptance_binding(board, &catalog, args, binding)
+                }
+                None => store.commit(board, &catalog, args),
+            };
+            let commit_token = if result.status == "queued" {
+                match (
+                    result.base_fingerprint.clone(),
+                    result.claim_id.clone(),
+                    result.revision,
+                ) {
+                    (Some(base_fingerprint), Some(claim_id), Some(revision))
+                        if revision == expected_revision
+                            && !board.id.trim().is_empty()
+                            && !claim_id.trim().is_empty() =>
+                    {
+                        Some(FlowIrCommitToken {
+                            board_id: board.id.clone(),
+                            draft_id: draft_id.clone(),
+                            revision,
+                            requires_destructive_approval: store
+                                .pending_commit_requires_destructive_approval(
+                                    &draft_id,
+                                    revision,
+                                    &base_fingerprint,
+                                    &claim_id,
+                                )
+                                .unwrap_or(true),
+                            base_fingerprint,
+                            claim_id,
+                        })
+                    }
+                    _ => {
+                        // Core promises a complete nonce for every newly queued commit. If that
+                        // invariant is ever broken, no exact token exists to carry through the
+                        // normal lifecycle. Roll back synchronously before exposing commands; this
+                        // is the only legacy revision-only release path and cannot race a retry
+                        // because the malformed claim is still pending at this point.
+                        let released = store.release_commit(&draft_id, expected_revision);
+                        return ToolResultObject::text(
+                            json!({
+                                "status": "error",
+                                "code": "IR_COMMIT_TOKEN_INVALID",
+                                "draft_id": draft_id.clone(),
+                                "revision": expected_revision,
+                                "claim_released": released,
+                                "message": "Typed draft queued without a complete board/revision/claim identity. No commands were transferred; the malformed pre-delivery claim was rolled back."
+                            })
+                            .to_string(),
+                        );
+                    }
+                }
+            } else {
+                None
+            };
+            if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+                if let Some(token) = commit_token.as_ref() {
+                    release_retained_commit_claim(&store, token);
+                }
+                return cancelled_result();
+            }
+            if let Some(commit_token) = commit_token {
+                let Some(commands) = &side_effect_commands else {
+                    release_retained_commit_claim(&store, &commit_token);
+                    return ToolResultObject::text(
+                        json!({
+                            "status": "error",
+                            "code": "IR_COMMIT_QUEUE_UNAVAILABLE",
+                            "draft_id": draft_id.clone(),
+                            "revision": expected_revision,
+                            "message": "Typed draft validated, but the host command queue is unavailable. The commit claim was released; retry this exact revision when the queue is available."
+                        })
+                        .to_string(),
+                    );
+                };
+                if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+                    release_retained_commit_claim(&store, &commit_token);
+                    return cancelled_result();
+                }
+                let mut queued = match commands.lock() {
+                    Ok(queued) => queued,
+                    Err(poisoned) => {
+                        // A poisoned queue cannot prove delivery. Reopen all pending typed claims
+                        // and discard their command batches before returning a retryable host error.
+                        poisoned.into_inner().abandon();
+                        release_retained_commit_claim(&store, &commit_token);
+                        return ToolResultObject::text(
+                            json!({
+                                "status": "error",
+                                "code": "IR_COMMIT_QUEUE_UNAVAILABLE",
+                                "draft_id": draft_id.clone(),
+                                "revision": expected_revision,
+                                "message": "Typed draft validated, but the host command queue could not be locked. The commit claim was released; retry this exact revision."
+                            })
+                            .to_string(),
+                        );
+                    }
+                };
+                if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+                    release_retained_commit_claim(&store, &commit_token);
+                    return cancelled_result();
+                }
+                if !queued.extend_retained_commit(
+                    result.commands.clone(),
+                    store.clone(),
+                    commit_token,
+                    queued_flowscript.clone(),
+                    result.flowscript.clone(),
+                ) {
+                    return ToolResultObject::text(
+                        json!({
+                            "status": "error",
+                            "code": "IR_COMMIT_TOKEN_CONFLICT",
+                            "draft_id": draft_id.clone(),
+                            "revision": expected_revision,
+                            "message": "This FlowPilot response already carries unresolved commands or another typed commit token. The newer claim was released rather than mixing batches under one review token."
+                        })
+                        .to_string(),
+                    );
+                }
+                if let (Some(workspace), Some(flowscript)) =
+                    (&queued_flowscript, result.flowscript.clone())
+                    && let Ok(mut queued_workspace) = workspace.lock()
+                {
+                    *queued_workspace = Some(flowscript);
+                }
+            }
+            ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
+        })
+    });
+    (tool, handler)
+}
+
+/// Render the current live board for a retained FlowScript source lifecycle. The handler uses the
+/// registry-backed board lock so a long-running agent never starts from the stale construction-time
+/// snapshot used only to derive the shared Rig schema.
+fn create_get_current_flowscript_tool(
+    board: Arc<Board>,
+    live_board: Option<Arc<AsyncMutex<Board>>>,
+) -> (Tool, ToolHandler) {
     let tool = tool_from_rig_definition(&GetCurrentFlowScriptTool {
         board: board.clone(),
     });
 
     let handler: ToolHandler = Arc::new(move |_name, _args| {
-        let flowscript = board_to_flowscript(
-            &board,
-            &RenderOptions {
-                anchors: true,
-                ..Default::default()
-            },
-        );
+        let flowscript = with_current_board(&board, live_board.as_ref(), |board| {
+            board_to_flowscript(
+                board,
+                &RenderOptions {
+                    anchors: true,
+                    ..Default::default()
+                },
+            )
+        });
         let payload = json!({
             "status": "ok",
-            "flowscript": flowscript,
-            "message": "Edit this exact FlowScript document and submit the full edited source to edit_flowscript."
+            "source": flowscript,
+            "message": "Use this exact anchored FlowScript as the starting source for write_flowscript. Repair the retained document with patch_flowscript, run check_flowscript on its exact revision, then call commit_flowscript once it is valid."
         });
         ToolResultObject::text(serde_json::to_string_pretty(&payload).unwrap_or_default())
     });
@@ -808,14 +2071,18 @@ fn create_get_current_flowscript_tool(board: Arc<Board>) -> (Tool, ToolHandler) 
     (tool, handler)
 }
 
+#[allow(dead_code)]
 fn create_edit_flowscript_tool(
     board: Arc<Board>,
     provider: Option<Arc<dyn CatalogProvider>>,
-    side_effect_commands: Option<Arc<Mutex<Vec<BoardCommand>>>>,
+    side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
+    queued_flowscript: Option<Arc<Mutex<Option<String>>>>,
 ) -> (Tool, ToolHandler) {
     let tool = Tool::new("edit_flowscript")
         .description(
-            r#"Apply an edited FlowScript document to the board (PRIMARY way to modify a workflow).
+            r#"Legacy compatibility adapter for applying one complete edited FlowScript document.
+New model-facing surfaces use write_flowscript, patch_flowscript, check_flowscript, and
+commit_flowscript so source revisions and exact compiler-derived commands remain retained.
 
 For existing-board edits, call `get_current_flowscript` first, edit that exact returned document,
 and submit the FULL edited FlowScript source. Reconcile compares it to the live board using the
@@ -828,7 +2095,18 @@ and submit the FULL edited FlowScript source. Reconcile compares it to the live 
   body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
 
 VALIDATION: This tool validates before queueing. If it reports parse errors or diagnostics,
-nothing was queued — fix the FlowScript and resubmit. Only a clean parse queues commands.
+nothing was queued — revise the SAME submitted draft and call edit_flowscript again immediately.
+Do not restart broad catalog discovery; make one targeted declaration lookup only when a diagnostic
+explicitly identifies a missing/incorrect declaration. Only a clean parse queues commands. After
+status `queued`, stop: do not search or submit the document again.
+
+COMPLETENESS: An Event entry is added only after the board logic is complete. Never replace a
+failed full draft with an empty `eventsSimple() {}`/`eventsGeneric() {}`/`eventsChat() {}` shell;
+that entry is only the registration target for the outer app Event and is not a workflow by itself.
+For complex flows, keep real work in focused, non-empty named helper functions and add thin Event
+entries last to invoke those helpers. Across validation retries preserve the requested helpers,
+Events, variables, and capabilities. A direct one-node log/string-format smoke test is not a valid
+replacement for a richer production draft, even if that smaller document parses cleanly.
 
 RULES:
 - PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
@@ -855,6 +2133,13 @@ RULES:
   boundary pin, and `return` values surface as call-node outputs. USE THEM — a single layer
   (root, event scope, or one function) is hard-capped at 50 nodes and edits exceeding it are
   rejected, so split big flows into small helper functions with focused responsibilities.
+- The `function` keyword is mandatory for helpers: write
+  `function fetchMail(host: string) { ... }`, never bare `fetchMail(...) { ... }`. A helper call is
+  valid only when its declaration remains in this same full document; do not invent helper calls
+  and expect declaration lookup to resolve them as catalog nodes.
+- A helper that executes `return value` must declare its named return pin, for example
+  `function classify(body: string): (isSupport: bool) { ...; return result.value }`; otherwise the
+  Function layer has no output pin for that return.
 - Charts (`a2uiPushCsvToChart`) read their data from a `format`-specific pin. With `format: "CSV"`, wire
   a DataFusion query's `table` output into the chart's `table` input (both are the same tabular struct)
   and set `chartType` (for example "Bar" / "Line" / "Pie"). The `data` input is ONLY for
@@ -864,7 +2149,7 @@ RULES:
   output is the field). To target an a2ui element, either pass the element id path string directly to a
   setter's `elementRef`, or fetch a handle with `a2uiGetElement({ elementRef: "surfaceId/element-id" }).element`;
   both are accepted.
-- To reposition nodes on the canvas, use `emit_commands` with MoveNode."#,
+- To reposition nodes on the canvas without changing layer membership, use `emit_commands` with MoveNode."#,
         )
         .schema(json!({
             "type": "object",
@@ -895,12 +2180,43 @@ RULES:
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
+        let cancelled_result = || {
+            let payload = json!({
+                "status": "cancelled",
+                "retryable": true,
+                "next_action": "resume_retained_draft",
+                "flowscript_workspace_summary": flowscript_summary(flowscript),
+                "message": "The owning agent phase ended while this FlowScript was being validated. No commands were queued by this cancelled call; continue from the retained full draft in the next phase."
+            });
+            ToolResultObject::text(serde_json::to_string_pretty(&payload).unwrap_or_default())
+        };
+
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return cancelled_result();
+        }
+
         if flowscript.trim().is_empty() {
             let payload = json!({
                 "status": "validation_errors",
+                "retryable": true,
+                "next_action": "revise_and_resubmit",
                 "errors": ["edit_flowscript requires a non-empty `flowscript` string. The submitted tool arguments did not contain usable FlowScript."],
                 "flowscript_workspace_summary": flowscript_summary(flowscript),
                 "message": "FlowScript validation failed. Call edit_flowscript again with the edited FlowScript in `flowscript`."
+            });
+            return ToolResultObject::text(
+                serde_json::to_string_pretty(&payload).unwrap_or_default(),
+            );
+        }
+
+        if board_has_no_nodes(&board) && !flowscript_has_executable_node_call(flowscript) {
+            let payload = json!({
+                "status": "validation_errors",
+                "retryable": true,
+                "next_action": "revise_and_resubmit",
+                "errors": ["An empty Event entry is only a registration target, not a workflow implementation."],
+                "flowscript_workspace_summary": flowscript_summary(flowscript),
+                "message": "Nothing was queued. Restore the complete prior draft, implement the board logic first, and keep the Event entry as the final execution root."
             });
             return ToolResultObject::text(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
@@ -912,20 +2228,43 @@ RULES:
             .map(|provider| block_on_tool(provider.get_all_metadata()))
             .unwrap_or_default();
 
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return cancelled_result();
+        }
+
         let result = reconcile_text_with_catalog(&board, flowscript, &catalog);
+        let structured_diagnostics = result.structured_diagnostics_for_source(flowscript);
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return cancelled_result();
+        }
         let has_parse_error = result
             .diagnostics
             .iter()
             .any(|d| d.to_lowercase().contains("parse error"));
+        let blocking_diagnostics = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| is_blocking_flowscript_diagnostic(diagnostic))
+            .cloned()
+            .collect::<Vec<_>>();
 
-        // Parse failure (or no derivable change with diagnostics) → report back, queue nothing.
-        if has_parse_error || (result.commands.is_empty() && !result.diagnostics.is_empty()) {
-            let message = flowscript_validation_message(&result.diagnostics);
+        // Parse failure, unsafe partial translation, or no derivable change with diagnostics →
+        // report back and queue nothing. This matches the core/Bits path: partial commands must
+        // never turn a semantically incomplete FlowScript into a green success.
+        if has_parse_error
+            || !blocking_diagnostics.is_empty()
+            || (result.commands.is_empty() && !result.diagnostics.is_empty())
+        {
+            let message = flowscript_validation_message(flowscript, &result.diagnostics);
             let payload = json!({
                 "status": "validation_errors",
-                "errors": result.diagnostics,
+                "retryable": true,
+                "next_action": "revise_and_resubmit",
+                "errors": if blocking_diagnostics.is_empty() { result.diagnostics.clone() } else { blocking_diagnostics },
+                "diagnostics": result.diagnostics,
+                "structured_diagnostics": structured_diagnostics,
                 "flowscript_workspace_summary": flowscript_summary(flowscript),
-                "message": message
+                "message": format!("{message} Revise this same draft and call edit_flowscript again; do not restart broad discovery.")
             });
             return ToolResultObject::text(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
@@ -936,8 +2275,10 @@ RULES:
         if result.commands.is_empty() {
             let payload = json!({
                 "status": "no_changes",
+                "retryable": true,
+                "next_action": "revise_and_resubmit",
                 "flowscript_workspace_summary": flowscript_summary(flowscript),
-                "message": "No board changes were derived from the FlowScript. If this was meant to create nodes, use get_declarations for exact function names and submit concrete catalog calls inside a function/event block."
+                "message": "No board changes were derived from the FlowScript. Revise this same draft with concrete catalog calls inside a function/event block and call edit_flowscript again. Use at most one targeted declaration lookup if an exact function is missing; do not restart broad discovery."
             });
             return ToolResultObject::text(
                 serde_json::to_string_pretty(&payload).unwrap_or_default(),
@@ -950,8 +2291,11 @@ RULES:
                 let message = blocked_destructive_flowscript_message(&destructive);
                 let payload = json!({
                     "status": "validation_errors",
+                    "retryable": true,
+                    "next_action": "revise_and_resubmit",
                     "errors": [message],
                     "diagnostics": result.diagnostics,
+                    "structured_diagnostics": structured_diagnostics,
                     "flowscript_workspace_summary": flowscript_summary(flowscript),
                     "message": "FlowScript validation failed. Deletions require an explicit allow_deletions=true opt-in."
                 });
@@ -961,30 +2305,44 @@ RULES:
             }
         }
 
-        // Clean parse with derived commands → queue them for review. The batch travels through
-        // the side-effect store (the chat loop drains it into a <commands> frame); the model
-        // gets the count plus any non-fatal diagnostics/warnings to react to, not an echo of
-        // the commands derived from its own submission.
+        // Clean, exact parse with derived commands → queue them for review. Diagnostics are atomic
+        // failures above; a successful batch cannot contain silently skipped graph behavior.
+        if super::frontend_tool_bridge::scoped_tool_execution_cancelled() {
+            return cancelled_result();
+        }
         let queued_count = result.commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut commands) = store.lock()
         {
-            commands.extend(result.commands);
+            if !commands.extend(result.commands) {
+                return ToolResultObject::text(
+                    json!({
+                        "status": "error",
+                        "code": "COMMAND_DELIVERY_CONFLICT",
+                        "retryable": false,
+                        "queued_count": 0,
+                        "flowscript_workspace_summary": flowscript_summary(flowscript),
+                        "message": "This response already carries an exact retained workflow review. Legacy FlowScript commands were refused rather than mixing them under that review token; finish the existing Apply/Dismiss review."
+                    })
+                    .to_string(),
+                );
+            }
+        }
+        if let Some(store) = &queued_flowscript
+            && let Ok(mut workspace) = store.lock()
+        {
+            *workspace = Some(flowscript.to_string());
         }
         let payload = json!({
             "status": "queued",
+            "retryable": false,
+            "next_action": "stop",
             "queued_count": queued_count,
             "explanation": format!("Reconciled {queued_count} change(s) from edited FlowScript."),
             "diagnostics": result.diagnostics,
+            "structured_diagnostics": structured_diagnostics,
             "flowscript_workspace_summary": flowscript_summary(flowscript),
-            "message": if result.diagnostics.is_empty() {
-                format!("Queued {queued_count} board change(s) for user review.")
-            } else {
-                format!(
-                    "Queued {queued_count} board change(s) for user review, with {} non-fatal warning(s) listed in `diagnostics` — address them if they affect the requested behavior.",
-                    result.diagnostics.len()
-                )
-            },
+            "message": format!("Queued {queued_count} board change(s) for user review. Stop now; do not search or submit this FlowScript again."),
         });
         ToolResultObject::text(serde_json::to_string_pretty(&payload).unwrap_or_default())
     });
@@ -2395,5 +3753,955 @@ fn get_component_schema_doc(component_type: &str) -> String {
         )
     } else {
         base_doc
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like::flow::{
+        board::{ExecutionMode, ExecutionStage},
+        copilot::{
+            FlowCapabilityRequirement, FlowIrArg, FlowIrDraftMode, FlowIrLiteral, FlowIrModule,
+            FlowIrProgram, FlowIrStep, FlowIrValue, FlowModuleEstimate, FlowModuleKind,
+            PinMetadata,
+        },
+        execution::LogLevel,
+        pin::ValueType,
+        variable::{Variable, VariableType},
+    };
+    use flow_like::flow_like_storage::Path;
+    use std::time::SystemTime;
+
+    fn empty_board(id: &str) -> Board {
+        Board {
+            id: id.to_string(),
+            name: "Captured".to_string(),
+            description: String::new(),
+            nodes: HashMap::new(),
+            variables: HashMap::new(),
+            comments: HashMap::new(),
+            viewport: (0.0, 0.0, 1.0),
+            version: (0, 0, 1),
+            stage: ExecutionStage::Dev,
+            log_level: LogLevel::Info,
+            execution_mode: ExecutionMode::Hybrid,
+            refs: HashMap::new(),
+            layers: HashMap::new(),
+            page_ids: Vec::new(),
+            hash: None,
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            parent: None,
+            board_dir: Path::from("/test"),
+            logic_nodes: HashMap::new(),
+            app_state: None,
+        }
+    }
+
+    fn pin(name: &str, data_type: &str) -> PinMetadata {
+        PinMetadata {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: String::new(),
+            data_type: data_type.to_string(),
+            value_type: "Normal".to_string(),
+            default_value: None,
+            schema: None,
+            is_generic: data_type == "Generic",
+            valid_values: None,
+            enforce_schema: false,
+        }
+    }
+
+    fn typed_catalog() -> Vec<NodeMetadata> {
+        vec![
+            NodeMetadata {
+                name: "events_simple".to_string(),
+                friendly_name: "events_simple".to_string(),
+                description: String::new(),
+                inputs: Vec::new(),
+                outputs: vec![pin("exec_out", "Execution")],
+                category: None,
+                required_inputs: Vec::new(),
+                companion_nodes: Vec::new(),
+                capability_tags: Vec::new(),
+            },
+            NodeMetadata {
+                name: "string_format".to_string(),
+                friendly_name: "string_format".to_string(),
+                description: String::new(),
+                inputs: vec![pin("format_string", "String")],
+                outputs: vec![pin("string", "String")],
+                category: None,
+                required_inputs: Vec::new(),
+                companion_nodes: Vec::new(),
+                capability_tags: Vec::new(),
+            },
+            NodeMetadata {
+                name: "log_info".to_string(),
+                friendly_name: "log_info".to_string(),
+                description: String::new(),
+                inputs: vec![pin("exec_in", "Execution"), pin("message", "String")],
+                outputs: vec![pin("exec_out", "Execution")],
+                category: None,
+                required_inputs: vec!["message".to_string()],
+                companion_nodes: Vec::new(),
+                capability_tags: Vec::new(),
+            },
+        ]
+    }
+
+    struct StaticCatalogProvider {
+        catalog: Vec<NodeMetadata>,
+    }
+
+    #[async_trait::async_trait]
+    impl CatalogProvider for StaticCatalogProvider {
+        async fn search(&self, _query: &str) -> Vec<NodeMetadata> {
+            self.catalog.clone()
+        }
+
+        async fn search_by_pin_type(&self, _pin_type: &str, _is_input: bool) -> Vec<NodeMetadata> {
+            self.catalog.clone()
+        }
+
+        async fn filter_by_category(&self, _category_prefix: &str) -> Vec<NodeMetadata> {
+            self.catalog.clone()
+        }
+
+        async fn get_node_metadata(&self, node_type: &str) -> Option<NodeMetadata> {
+            self.catalog
+                .iter()
+                .find(|node| node.name == node_type)
+                .cloned()
+        }
+
+        async fn get_all_nodes(&self) -> Vec<String> {
+            self.catalog.iter().map(|node| node.name.clone()).collect()
+        }
+
+        async fn get_all_metadata(&self) -> Vec<NodeMetadata> {
+            self.catalog.clone()
+        }
+    }
+
+    #[test]
+    fn board_tool_surface_advertises_source_lifecycle_not_model_authored_json() {
+        let board_key = format!("source-tool-surface-{:?}", std::thread::current().id());
+        let board = Arc::new(empty_board(&board_key));
+        let provider: Arc<dyn CatalogProvider> = Arc::new(StaticCatalogProvider {
+            catalog: typed_catalog(),
+        });
+        let tools = create_board_tools(
+            None,
+            Some(board),
+            None,
+            Some("Build an event that formats a message."),
+            Some(provider),
+            Some(Arc::new(Mutex::new(SideEffectCommandQueue::default()))),
+            Some(Arc::new(Mutex::new(None))),
+        );
+        let names = tools
+            .iter()
+            .map(|(tool, _)| tool.name.as_str())
+            .collect::<HashSet<_>>();
+
+        for expected in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+        ] {
+            assert!(names.contains(expected), "missing {expected}: {names:?}");
+        }
+        for hidden in [
+            "plan_flow_ir",
+            "begin_flow_ir_draft",
+            "update_flow_ir_draft",
+            "upsert_flow_ir_module",
+            "validate_flow_ir_draft",
+            "commit_flow_ir_draft",
+            "edit_flowscript",
+        ] {
+            assert!(!names.contains(hidden), "legacy tool leaked: {hidden}");
+        }
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[test]
+    fn sdk_emit_commands_rejects_executable_json_and_accepts_layout() {
+        let queue = Arc::new(Mutex::new(SideEffectCommandQueue::default()));
+        let (_, handler) = create_emit_commands_tool(None, None, Some(queue.clone()));
+
+        let rejected = handler(
+            "emit_commands",
+            &json!({
+                "commands": [
+                    {
+                        "command_type": "AddNode",
+                        "node_type": "log_info",
+                        "ref_id": "$0",
+                        "position": { "x": 0, "y": 0 },
+                        "summary": "Add log"
+                    },
+                    {
+                        "command_type": "ConnectPins",
+                        "from_node": "start",
+                        "from_pin": "exec_out",
+                        "to_node": "$0",
+                        "to_pin": "exec_in",
+                        "summary": "Connect log"
+                    }
+                ],
+                "explanation": "Build executable behavior"
+            }),
+        );
+        let rejected: Value = serde_json::from_str(&rejected.text_result_for_llm)
+            .expect("scope rejection is structured JSON");
+        assert_eq!(
+            rejected["status"], "representation_rejected",
+            "{rejected:#}"
+        );
+        assert_eq!(
+            rejected["next_action"],
+            "write_patch_check_commit_flowscript"
+        );
+        assert_eq!(rejected["retry_emit_commands"], false);
+        let message = rejected["message"].as_str().expect("redirect message");
+        assert!(message.contains("write_flowscript"));
+        assert!(message.contains("patch_flowscript"));
+        assert!(message.contains("check_flowscript"));
+        assert!(message.contains("commit_flowscript"));
+        assert!(!message.contains("call emit_commands again"));
+        let errors = rejected["errors"].as_array().expect("validation errors");
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|error| {
+            error
+                .as_str()
+                .is_some_and(|error| error.contains("executable-command-requires-flowscript"))
+        }));
+        let (commands, token) = queue.lock().expect("queue lock").take_delivery();
+        assert!(commands.is_empty());
+        assert!(token.is_none());
+
+        let accepted = handler(
+            "emit_commands",
+            &json!({
+                "commands": [{
+                    "command_type": "MoveNode",
+                    "node_id": "node-1",
+                    "position": { "x": 120, "y": 80 },
+                    "summary": "Align node"
+                }],
+                "explanation": "Align the workflow"
+            }),
+        );
+        let accepted: Value = serde_json::from_str(&accepted.text_result_for_llm)
+            .expect("queued result is structured JSON");
+        assert_eq!(accepted["status"], "queued", "{accepted:#}");
+        let (commands, token) = queue.lock().expect("queue lock").take_delivery();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            commands.first(),
+            Some(BoardCommand::MoveNode { .. })
+        ));
+        assert!(token.is_none());
+    }
+
+    #[test]
+    fn source_commit_queues_only_the_exact_retained_host_batch() {
+        let board_key = format!("source-tool-commit-{:?}", std::thread::current().id());
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+        let board = Arc::new(empty_board(&board_key));
+        let provider: Arc<dyn CatalogProvider> = Arc::new(StaticCatalogProvider {
+            catalog: typed_catalog(),
+        });
+        let queue = Arc::new(Mutex::new(SideEffectCommandQueue::default()));
+        let workspace = Arc::new(Mutex::new(None));
+        let tools = create_board_tools(
+            None,
+            Some(board.clone()),
+            None,
+            Some("Create an event that logs hello."),
+            Some(provider),
+            Some(queue.clone()),
+            Some(workspace.clone()),
+        );
+        let call = |name: &str, args: Value| {
+            let handler = &tools
+                .iter()
+                .find(|(tool, _)| tool.name == name)
+                .unwrap_or_else(|| panic!("missing tool {name}"))
+                .1;
+            handler(name, &args)
+        };
+        let source = "eventsSimple() {\n    logInfo({ message: \"hello\" })\n}\n";
+
+        let written = call(
+            "write_flowscript",
+            json!({ "draft_id": "source-sdk", "source": source }),
+        );
+        let written: Value = serde_json::from_str(&written.text_result_for_llm)
+            .expect("write returns structured source response");
+        assert_eq!(written["revision"], 0);
+        assert_eq!(written["source"], source);
+
+        let checked = call(
+            "check_flowscript",
+            json!({ "draft_id": "source-sdk", "expected_revision": 0 }),
+        );
+        let checked: Value = serde_json::from_str(&checked.text_result_for_llm)
+            .expect("check returns structured source response");
+        assert_eq!(checked["status"], "valid", "{checked:#}");
+        assert_eq!(checked["source"], source);
+
+        let committed = call(
+            "commit_flowscript",
+            json!({ "draft_id": "source-sdk", "expected_revision": 0 }),
+        );
+        let committed: Value = serde_json::from_str(&committed.text_result_for_llm)
+            .expect("commit returns structured source response");
+        assert_eq!(committed["status"], "queued", "{committed:#}");
+        assert_eq!(committed["source"], source);
+        assert!(committed.get("commands").is_none());
+
+        let mut queued = queue.lock().expect("command queue lock");
+        let (commands, token) = queued.take_delivery();
+        assert!(!commands.is_empty());
+        let token = token.expect("queued source batch owns an exact review token");
+        drop(queued);
+        assert_eq!(
+            workspace.lock().expect("workspace lock").as_deref(),
+            Some(source)
+        );
+        let store = retained_flow_ir_draft_store(&board_key).expect("retained board store");
+        assert!(store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        ));
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    fn typed_program() -> FlowIrProgram {
+        FlowIrProgram {
+            modules: vec![FlowIrModule::Event {
+                name: "eventsSimple".to_string(),
+                node_type: "events_simple".to_string(),
+                params: Vec::new(),
+                steps: vec![FlowIrStep::Node {
+                    id: "message".to_string(),
+                    node_type: "string_format".to_string(),
+                    args: vec![FlowIrArg {
+                        pin: "format_string".to_string(),
+                        occurrence: 0,
+                        value: FlowIrValue::Literal {
+                            value: FlowIrLiteral::String("hello".to_string()),
+                        },
+                    }],
+                    continue_from: None,
+                    exec_arms: Vec::new(),
+                    anchor: None,
+                }],
+                anchor: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn committed_store(draft_id: &str) -> (Arc<FlowIrDraftStore>, Board, Vec<NodeMetadata>) {
+        let store = Arc::new(FlowIrDraftStore::new());
+        let board = empty_board("typed-queue-board");
+        let catalog = typed_catalog();
+        store.begin(
+            &board,
+            &catalog,
+            BeginFlowIrDraftArgs {
+                draft_id: draft_id.to_string(),
+                replace_existing: false,
+                expected_modules: vec!["eventsSimple".to_string()],
+                capability_plan: FlowCapabilityPlanRequest {
+                    requirements: vec![FlowCapabilityRequirement {
+                        id: "format_message".to_string(),
+                        intent: "format a message".to_string(),
+                        required: true,
+                        exact_node_type: Some("string_format".to_string()),
+                        inputs: Vec::new(),
+                        outputs: Vec::new(),
+                    }],
+                    modules: vec![FlowModuleEstimate {
+                        name: "eventsSimple".to_string(),
+                        kind: FlowModuleKind::Event,
+                        estimated_nodes: 1,
+                    }],
+                },
+                mode: FlowIrDraftMode::Additive,
+                program: typed_program(),
+            },
+        );
+        (store, board, catalog)
+    }
+
+    #[test]
+    fn built_in_core_and_native_apply_resolve_the_same_retained_store() {
+        let board_key = format!(
+            "flow-ir-built-in-store-test-{:?}",
+            std::thread::current().id()
+        );
+        let board = empty_board(&board_key);
+        let built_in = retained_flow_ir_draft_store_for_board(&board)
+            .expect("built-in core path acquires board-scoped draft store");
+        let atomic_apply = retained_flow_ir_draft_store(&board_key)
+            .expect("native Apply resolves the originating draft store");
+
+        assert!(Arc::ptr_eq(&built_in, &atomic_apply));
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    fn commit_args(draft_id: &str) -> CommitFlowIrDraftArgs {
+        CommitFlowIrDraftArgs {
+            draft_id: draft_id.to_string(),
+            expected_revision: 0,
+            allow_deletions: false,
+            remove_node_ids: Vec::new(),
+            remove_variable_ids: Vec::new(),
+            remove_layer_ids: Vec::new(),
+            remove_comment_ids: Vec::new(),
+            use_best_candidate: false,
+        }
+    }
+
+    fn commit_token(
+        board: &Board,
+        draft_id: &str,
+        committed: &flow_like::flow::copilot::FlowIrCommitResult,
+    ) -> FlowIrCommitToken {
+        FlowIrCommitToken {
+            board_id: board.id.clone(),
+            draft_id: draft_id.to_string(),
+            revision: committed.revision.expect("queued commit revision"),
+            base_fingerprint: committed
+                .base_fingerprint
+                .clone()
+                .expect("queued commit base fingerprint"),
+            claim_id: committed
+                .claim_id
+                .clone()
+                .expect("queued commit claim generation"),
+            requires_destructive_approval: false,
+        }
+    }
+
+    #[test]
+    fn typed_draft_store_survives_tool_surface_recreation_for_same_board() {
+        let board_key = format!("flow-ir-cache-test-{:?}", std::thread::current().id());
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+
+        let board = empty_board(&board_key);
+        let first =
+            persisted_flow_ir_draft_store(&board_key, &board).expect("first board cache lease");
+        let second =
+            persisted_flow_ir_draft_store(&board_key, &board).expect("second board cache lease");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[test]
+    fn typed_tool_touch_refreshes_or_replaces_the_board_store_lease() {
+        let board_key = format!("flow-ir-touch-test-{:?}", std::thread::current().id());
+        let stale_store = Arc::new(FlowIrDraftStore::new());
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.insert(
+                board_key.clone(),
+                CachedFlowIrDraftStore {
+                    store: stale_store,
+                    last_accessed: Instant::now()
+                        .checked_sub(FLOW_IR_DRAFT_STORE_TTL + Duration::from_secs(1))
+                        .expect("test instant supports TTL subtraction"),
+                    pending_since: None,
+                },
+            );
+        }
+
+        let replacement = Arc::new(FlowIrDraftStore::new());
+        let active = touch_persisted_flow_ir_draft_store(&board_key, replacement.clone(), None)
+            .expect("expired lease can be replaced");
+        assert!(Arc::ptr_eq(&active, &replacement));
+
+        let ignored_fallback = Arc::new(FlowIrDraftStore::new());
+        let touched = touch_persisted_flow_ir_draft_store(&board_key, ignored_fallback, None)
+            .expect("active lease can be touched");
+        assert!(Arc::ptr_eq(&touched, &replacement));
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[test]
+    fn stale_tool_surface_binding_does_not_cross_store_epochs() {
+        let board_key = format!("flow-ir-epoch-test-{:?}", std::thread::current().id());
+        let bound_store = Arc::new(FlowIrDraftStore::new());
+        let active_store = Arc::new(FlowIrDraftStore::new());
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.insert(
+                board_key.clone(),
+                CachedFlowIrDraftStore {
+                    store: active_store,
+                    last_accessed: Instant::now(),
+                    pending_since: None,
+                },
+            );
+        }
+
+        assert!(matches!(
+            touch_bound_flowscript_draft_store(&board_key, bound_store),
+            Err(FlowIrDraftStoreAccessError::EpochChanged)
+        ));
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[test]
+    fn pending_commit_store_is_exempt_from_ttl_expiration() {
+        let board_key = format!("flow-ir-pending-ttl-test-{:?}", std::thread::current().id());
+        let draft_id = format!("pending-ttl-{:?}", std::thread::current().id());
+        let (pending_store, board, catalog) = committed_store(&draft_id);
+        let committed = pending_store.commit(&board, &catalog, commit_args(&draft_id));
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        assert!(pending_store.has_pending_commit());
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.insert(
+                board_key.clone(),
+                CachedFlowIrDraftStore {
+                    store: pending_store.clone(),
+                    last_accessed: Instant::now()
+                        .checked_sub(FLOW_IR_DRAFT_STORE_TTL + Duration::from_secs(1))
+                        .expect("test instant supports TTL subtraction"),
+                    pending_since: None,
+                },
+            );
+        }
+
+        let active = touch_persisted_flow_ir_draft_store(
+            &board_key,
+            Arc::new(FlowIrDraftStore::new()),
+            None,
+        )
+        .expect("pending lease remains retained");
+        assert!(Arc::ptr_eq(&active, &pending_store));
+
+        let mut advanced_board = board.clone();
+        let applied_variable = Variable::new(
+            "appliedTypedCommandBatch",
+            VariableType::String,
+            ValueType::Normal,
+        );
+        advanced_board
+            .variables
+            .insert(applied_variable.id.clone(), applied_variable);
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock()
+            && let Some(cached) = stores.get_mut(&board_key)
+        {
+            cached.last_accessed = Instant::now()
+                .checked_sub(FLOW_IR_DRAFT_STORE_TTL + Duration::from_secs(1))
+                .expect("test instant supports TTL subtraction");
+        }
+        let replacement = Arc::new(FlowIrDraftStore::new());
+        let after_observation = touch_persisted_flow_ir_draft_store(
+            &board_key,
+            replacement.clone(),
+            Some(&advanced_board),
+        )
+        .expect("observation keeps an unresolved review pinned");
+        assert!(pending_store.has_pending_commit());
+        assert!(Arc::ptr_eq(&after_observation, &pending_store));
+
+        let token = commit_token(&board, &draft_id, &committed);
+        assert!(pending_store.acknowledge_applied_commit(
+            &advanced_board,
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        ));
+        assert!(!pending_store.has_pending_commit());
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock()
+            && let Some(cached) = stores.get_mut(&board_key)
+        {
+            cached.last_accessed = Instant::now()
+                .checked_sub(FLOW_IR_DRAFT_STORE_TTL + Duration::from_secs(1))
+                .expect("test instant supports TTL subtraction");
+        }
+        let after_apply = touch_persisted_flow_ir_draft_store(
+            &board_key,
+            replacement.clone(),
+            Some(&advanced_board),
+        )
+        .expect("resolved expired lease can be replaced");
+        assert!(Arc::ptr_eq(&after_apply, &replacement));
+        // Permanent revision idempotency remains even though the explicit applied disposition
+        // cleared the transient board reservation and cache pin.
+        assert_eq!(
+            pending_store
+                .commit(&board, &catalog, commit_args(&draft_id))
+                .status,
+            "already_queued"
+        );
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[test]
+    fn pending_commit_store_expires_after_absolute_review_lease() {
+        let board_key = format!(
+            "flow-ir-pending-review-lease-test-{:?}",
+            std::thread::current().id()
+        );
+        let draft_id = format!("pending-review-lease-{:?}", std::thread::current().id());
+        let (pending_store, board, catalog) = committed_store(&draft_id);
+        assert_eq!(
+            pending_store
+                .commit(&board, &catalog, commit_args(&draft_id))
+                .status,
+            "queued"
+        );
+        let now = Instant::now();
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.insert(
+                board_key.clone(),
+                CachedFlowIrDraftStore {
+                    store: pending_store.clone(),
+                    // Recent traffic must not extend the absolute unresolved-review lease.
+                    last_accessed: now,
+                    pending_since: Some(
+                        now.checked_sub(FLOW_IR_PENDING_REVIEW_TTL + Duration::from_secs(1))
+                            .expect("test instant supports review lease subtraction"),
+                    ),
+                },
+            );
+        }
+
+        let replacement = Arc::new(FlowIrDraftStore::new());
+        let active =
+            touch_persisted_flow_ir_draft_store(&board_key, replacement.clone(), Some(&board))
+                .expect("an abandoned pending review releases its bounded cache slot");
+        assert!(Arc::ptr_eq(&active, &replacement));
+        assert!(!Arc::ptr_eq(&active, &pending_store));
+
+        if let Ok(mut stores) = FLOW_IR_DRAFT_STORES.lock() {
+            stores.remove(&board_key);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn current_board_operation_prefers_the_live_registry_board() {
+        let captured = empty_board("live-board-test");
+        let mut updated = captured.clone();
+        updated.name = "Live".to_string();
+        let live = Arc::new(AsyncMutex::new(updated));
+
+        let observed = with_current_board(&captured, Some(&live), |board| board.name.clone());
+        assert_eq!(observed, "Live");
+        let fallback = with_current_board(&captured, None, |board| board.name.clone());
+        assert_eq!(fallback, "Captured");
+    }
+
+    #[test]
+    fn hard_cache_cap_rejects_a_new_board_when_every_slot_is_pending() {
+        let draft_id = "capacity-pending";
+        let (pending_store, board, catalog) = committed_store(draft_id);
+        assert_eq!(
+            pending_store
+                .commit(&board, &catalog, commit_args(draft_id))
+                .status,
+            "queued"
+        );
+        let now = Instant::now();
+        let mut stores = (0..MAX_PERSISTED_FLOW_IR_DRAFT_STORES)
+            .map(|index| {
+                (
+                    format!("pending-board-{index}"),
+                    CachedFlowIrDraftStore {
+                        store: pending_store.clone(),
+                        last_accessed: now,
+                        pending_since: None,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert!(!reclaim_flow_ir_draft_store_slot(&mut stores));
+        assert_eq!(stores.len(), MAX_PERSISTED_FLOW_IR_DRAFT_STORES);
+    }
+
+    #[test]
+    fn stale_delivery_generation_cannot_release_an_exact_revision_retry() {
+        let draft_id = "aba-safe-delivery";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let first = store.commit(&board, &catalog, args.clone());
+        assert_eq!(first.status, "queued", "{first:#?}");
+        let first_token = commit_token(&board, draft_id, &first);
+        assert!(release_retained_commit_claim(&store, &first_token));
+
+        let retry = store.commit(&board, &catalog, args);
+        assert_eq!(retry.status, "queued", "{retry:#?}");
+        let retry_token = commit_token(&board, draft_id, &retry);
+        assert_ne!(first_token.claim_id, retry_token.claim_id);
+        assert!(!release_retained_commit_claim(&store, &first_token));
+        assert!(store.pending_commit_matches(
+            &retry_token.draft_id,
+            retry_token.revision,
+            &retry_token.base_fingerprint,
+            &retry_token.claim_id,
+        ));
+    }
+
+    #[test]
+    fn typed_ir_parse_hint_uses_the_canonical_tagged_shapes() {
+        let hint = typed_ir_schema_hint();
+        assert_eq!(hint["type_object"]["data_type"], "string");
+        assert_eq!(hint["literal_boolean"]["value"]["type"], "boolean");
+        assert_eq!(hint["literal_integer"]["value"]["type"], "integer");
+        assert_eq!(hint["value_ref"]["kind"], "ref");
+        assert_eq!(hint["call_function_step"]["kind"], "call_function");
+        assert!(hint["if_step"].get("then_steps").is_some());
+    }
+
+    #[test]
+    fn dropping_an_undrained_typed_batch_releases_its_commit_claim() {
+        let draft_id = "abandoned-host-queue";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let flowscript = committed
+            .flowscript
+            .clone()
+            .expect("typed commit carries compiled FlowScript");
+        let workspace = Arc::new(Mutex::new(Some(flowscript.clone())));
+        let token = commit_token(&board, draft_id, &committed);
+
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            token,
+            Some(workspace.clone()),
+            Some(flowscript),
+        ));
+        drop(queue);
+
+        assert_eq!(*workspace.lock().expect("workspace lock"), None);
+        assert_eq!(store.commit(&board, &catalog, args).status, "queued");
+    }
+
+    #[test]
+    fn retained_batch_is_not_streamable_before_atomic_final_delivery() {
+        let draft_id = "delivered-host-queue";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let flowscript = committed
+            .flowscript
+            .clone()
+            .expect("typed commit carries compiled FlowScript");
+        let workspace = Arc::new(Mutex::new(Some(flowscript.clone())));
+        let token = commit_token(&board, draft_id, &committed);
+
+        let expected_count = committed.commands.len();
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            token,
+            Some(workspace.clone()),
+            Some(flowscript.clone()),
+        ));
+        assert!(queue.drain_streamable().is_empty());
+        assert_eq!(queue.commands.len(), expected_count);
+        drop(queue);
+
+        assert_eq!(*workspace.lock().expect("workspace lock"), None);
+        assert_eq!(store.commit(&board, &catalog, args).status, "queued");
+    }
+
+    #[test]
+    fn retained_claim_never_absorbs_an_unrelated_queued_command() {
+        let draft_id = "exact-batch-queue-conflict";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let token = commit_token(&board, draft_id, &committed);
+
+        let unrelated = BoardCommand::RemoveNode {
+            node_id: "unrelated-direct-command".to_string(),
+            summary: None,
+        };
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend([unrelated]));
+        assert!(!queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            token,
+            None,
+            committed.flowscript,
+        ));
+        assert!(queue.commit_claim.is_none());
+        assert_eq!(queue.drain_streamable().len(), 1);
+        assert_eq!(
+            store.commit(&board, &catalog, args).status,
+            "queued",
+            "rejecting a mixed host batch must reopen only the retained claim"
+        );
+    }
+
+    #[test]
+    fn direct_command_is_refused_after_a_retained_claim_is_queued() {
+        let draft_id = "inverse-exact-batch-queue-conflict";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let expected_count = committed.commands.len();
+        let expected_token = commit_token(&board, draft_id, &committed);
+
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            expected_token.clone(),
+            None,
+            committed.flowscript,
+        ));
+        assert!(!queue.extend([BoardCommand::RemoveNode {
+            node_id: "late-unrelated-direct-command".to_string(),
+            summary: None,
+        }]));
+
+        let (commands, token) = queue.take_delivery();
+        assert_eq!(commands.len(), expected_count);
+        assert_eq!(token, Some(expected_token.clone()));
+        assert!(store.pending_commit_matches(
+            &expected_token.draft_id,
+            expected_token.revision,
+            &expected_token.base_fingerprint,
+            &expected_token.claim_id,
+        ));
+    }
+
+    #[test]
+    fn cancellation_before_atomic_delivery_releases_claim_and_commands_together() {
+        let draft_id = "cancelled-after-stream-drain";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let token = commit_token(&board, draft_id, &committed);
+
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            token,
+            None,
+            committed.flowscript,
+        ));
+        assert!(queue.drain_streamable().is_empty());
+
+        // No renderer can observe claimed commands before owning their token. Cancellation abandons
+        // both sides of the atomic delivery and reopens the exact retained revision.
+        queue.abandon();
+        let (commands, token) = queue.take_delivery();
+        assert!(commands.is_empty());
+        assert!(token.is_none());
+        assert_eq!(store.commit(&board, &catalog, args).status, "queued");
+    }
+
+    #[test]
+    fn final_response_transfer_keeps_the_exact_commit_pending() {
+        let draft_id = "delivered-final-response";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let flowscript = committed
+            .flowscript
+            .clone()
+            .expect("typed commit carries compiled FlowScript");
+        let workspace = Arc::new(Mutex::new(Some(flowscript.clone())));
+        let expected_token = commit_token(&board, draft_id, &committed);
+
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            expected_token.clone(),
+            Some(workspace.clone()),
+            Some(flowscript.clone()),
+        ));
+        let (commands, token) = queue.take_delivery();
+        assert!(!commands.is_empty());
+        assert_eq!(token, Some(expected_token));
+        drop(queue);
+
+        assert_eq!(
+            workspace.lock().expect("workspace lock").as_deref(),
+            Some(flowscript.as_str())
+        );
+        assert_eq!(
+            store.commit(&board, &catalog, args).status,
+            "already_queued"
+        );
+    }
+
+    #[test]
+    fn malformed_claim_without_commands_fails_closed_and_reopens_revision() {
+        let draft_id = "malformed-atomic-delivery";
+        let (store, board, catalog) = committed_store(draft_id);
+        let args = commit_args(draft_id);
+        let committed = store.commit(&board, &catalog, args.clone());
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let token = commit_token(&board, draft_id, &committed);
+
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            committed.commands,
+            store.clone(),
+            token,
+            None,
+            committed.flowscript,
+        ));
+        queue.commands.clear();
+
+        let (commands, token) = queue.take_delivery();
+        assert!(commands.is_empty());
+        assert!(token.is_none());
+        assert_eq!(store.commit(&board, &catalog, args).status, "queued");
     }
 }

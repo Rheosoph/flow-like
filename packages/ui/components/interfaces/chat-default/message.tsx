@@ -13,6 +13,7 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
+import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import {
 	Badge,
 	Button,
@@ -28,6 +29,7 @@ import {
 	Textarea,
 } from "../../ui";
 import { StreamingTextEditor } from "../../ui/streaming-text-editor";
+import { AgentDebugReport } from "./agent-debug-report";
 import { AppReferences } from "./app-references";
 import { FilePreview, type ProcessedAttachment } from "./attachment";
 import {
@@ -708,7 +710,10 @@ export const MessageComponent = memo(
 
 		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 		const hasUsageStats = usageStats.length > 0;
-		const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
+		const hasFooterContent =
+			hasUsageStats ||
+			processedAttachments.length > 0 ||
+			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
 		const compactUserActions = isUser && !hasFooterContent;
 
 		return (
@@ -800,6 +805,9 @@ export const MessageComponent = memo(
 						{hasUsageStats && (
 							<UsageStats stats={usageStats} className="mt-1" />
 						)}
+						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
+							<AgentDebugReport report={message.debug_report} />
+						)}
 						{!loading && (
 							<MessageActions
 								isUser={isUser}
@@ -876,6 +884,8 @@ export const MessageComponent = memo(
 			prev.message.plan_steps === next.message.plan_steps &&
 			prev.message.current_step_id === next.message.current_step_id &&
 			prev.message.usage_stats === next.message.usage_stats &&
+			prev.message.debug_report === next.message.debug_report &&
+			prev.message.app_refs === next.message.app_refs &&
 			prev.loading === next.loading &&
 			prev.onMessageUpdate === next.onMessageUpdate
 		);

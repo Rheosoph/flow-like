@@ -271,6 +271,13 @@ impl AppPermissionResponse {
 }
 
 impl AppUser {
+    fn app_permission_denial(&self) -> ApiError {
+        match self {
+            AppUser::Unauthorized => ApiError::unauthorized("Authentication required"),
+            _ => ApiError::forbidden("User does not have app permissions"),
+        }
+    }
+
     /// Whether this principal is another app acting through a connection token.
     /// The single source of truth for the connected-app discrimination used by
     /// the route-level guards, so a new connected-app-like variant only has to
@@ -516,6 +523,14 @@ impl AppUser {
         app_id: &str,
         state: &AppState,
     ) -> Result<AppPermissionResponse, ApiError> {
+        // Keep anonymous principals available to public routes in the JWT
+        // middleware, but classify them as unauthenticated as soon as a route
+        // asks for app permissions. Previously this fell through to an
+        // anyhow-backed ApiError and was reported as a 500 INTERNAL_ERROR.
+        if matches!(self, AppUser::Unauthorized) {
+            return Err(self.app_permission_denial());
+        }
+
         let sub = self.sub();
         if let Ok(sub) = sub {
             let cached_permission = state.check_permission(&sub, app_id);
@@ -581,8 +596,11 @@ impl AppUser {
                         .and(technical_user::Column::Id.eq(&api_key.key_id)),
                 )
                 .one(&state.db)
-                .await?
-                .ok_or_else(|| ApiError::from(anyhow!("Technical user not found for API Key")))?;
+                .await?;
+            let Some(role_model) = role_model else {
+                state.auth_cache.invalidate(&hash_token(&api_key.api_key));
+                return Err(ApiError::unauthorized("API key is no longer valid"));
+            };
 
             let permissions = RolePermissions::from_bits(role_model.permissions)
                 .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
@@ -602,9 +620,7 @@ impl AppUser {
             });
         }
 
-        Err(ApiError::from(anyhow!(
-            "User does not have app permissions"
-        )))
+        Err(self.app_permission_denial())
     }
 
     pub async fn execution_app_permission(
@@ -915,22 +931,27 @@ pub async fn jwt_middleware(
         // Cache miss - validate token
         let claims = state.validate_token(token);
         if let Ok(claims) = claims {
-            let sub = claims.get("sub").ok_or(anyhow!("sub not found"))?;
-            let sub = sub.as_str().ok_or(anyhow!("sub not a string"))?;
+            if let Some(sub) = claims.get("sub").and_then(|sub| sub.as_str()) {
+                state.auth_cache.insert(
+                    cache_key,
+                    CachedAuth::OpenID {
+                        sub: sub.to_string(),
+                    },
+                );
 
-            state.auth_cache.insert(
-                cache_key,
-                CachedAuth::OpenID {
+                let user = AppUser::OpenID(OpenIDUser {
                     sub: sub.to_string(),
-                },
-            );
+                    access_token: token.to_string(),
+                });
+                request.extensions_mut().insert::<AppUser>(user);
+                return Ok(next.run(request).await);
+            }
 
-            let user = AppUser::OpenID(OpenIDUser {
-                sub: sub.to_string(),
-                access_token: token.to_string(),
-            });
-            request.extensions_mut().insert::<AppUser>(user);
-            return Ok(next.run(request).await);
+            // A token that validates cryptographically but has no usable
+            // subject is not an internal server failure. Continue trying the
+            // other supported token formats; if none match, the request is
+            // passed to the route as anonymous below.
+            tracing::warn!("Validated OpenID token is missing a string sub claim");
         }
 
         // OpenID failed — try executor JWT
@@ -1025,14 +1046,16 @@ pub async fn jwt_middleware(
                 }
             }
 
-            // Cache miss - validate PAT
-            if !pat_str.starts_with("pat_") {
-                return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
-            }
+            // Cache miss - validate PAT. The surrounding branch has already
+            // established the `pat_` prefix.
             let pat_parts = &pat_str[4..];
             let parts: Vec<&str> = pat_parts.split('.').collect();
             if parts.len() != 2 {
-                return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
+                state.auth_cache.insert(cache_key, CachedAuth::Invalid);
+                request
+                    .extensions_mut()
+                    .insert::<AppUser>(AppUser::Unauthorized);
+                return Ok(next.run(request).await);
             }
             let pat_id = parts[0];
             let pat_secret = parts[1];
@@ -1055,7 +1078,10 @@ pub async fn jwt_middleware(
                     let now = chrono::Utc::now().naive_utc();
                     if valid_until < now {
                         state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                        return Err(AuthorizationError::from(anyhow!("PAT is expired")));
+                        request
+                            .extensions_mut()
+                            .insert::<AppUser>(AppUser::Unauthorized);
+                        return Ok(next.run(request).await);
                     }
                 }
 
@@ -1161,7 +1187,10 @@ pub async fn jwt_middleware(
                 let now = chrono::Utc::now().naive_utc();
                 if valid_until < now {
                     state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                    return Err(AuthorizationError::from(anyhow!("API Key is expired")));
+                    request
+                        .extensions_mut()
+                        .insert::<AppUser>(AppUser::Unauthorized);
+                    return Ok(next.run(request).await);
                 }
             }
 
@@ -1195,4 +1224,36 @@ pub async fn jwt_middleware(
         .extensions_mut()
         .insert::<AppUser>(AppUser::Unauthorized);
     Ok(next.run(request).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{http::StatusCode, response::IntoResponse};
+
+    #[test]
+    fn anonymous_app_permission_denial_is_unauthorized() {
+        let response = AppUser::Unauthorized
+            .app_permission_denial()
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get("x-error-id").is_none());
+    }
+
+    #[test]
+    fn authenticated_app_permission_denial_is_forbidden() {
+        let user = AppUser::Executor(ExecutorUser {
+            sub: "user-id".to_string(),
+            app_id: "app-id".to_string(),
+            run_id: "run-id".to_string(),
+            technical_user_id: None,
+            app_chain: None,
+            correlation: None,
+        });
+        let response = user.app_permission_denial().into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response.headers().get("x-error-id").is_none());
+    }
 }

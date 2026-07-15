@@ -8,6 +8,10 @@
  */
 
 import { getRegisteredTypes } from "../a2ui/ComponentRegistry";
+import {
+	isSemanticBoxTag,
+	normalizeSemanticBoxTag,
+} from "../a2ui/semantic-box-tags";
 import type {
 	BoundValue,
 	CanvasSettings,
@@ -796,6 +800,32 @@ export function validateComponents(
 				if (type === "iframe" && key === "sandbox") {
 					const sandbox = sanitizeIframeSandbox(value);
 					if (sandbox) cleaned[key] = sandbox;
+					continue;
+				}
+				if (type === "box" && key === "as") {
+					const boxTag = coerceToBoundValue(value);
+					if (boxTag && "path" in boxTag) {
+						// Keep data binding semantics. A2UIBox applies the same allowlist
+						// after resolving the path, including its default value.
+						cleaned[key] = boxTag;
+					} else if (
+						boxTag &&
+						"literalString" in boxTag &&
+						isSemanticBoxTag(boxTag.literalString)
+					) {
+						cleaned[key] = boxTag;
+					} else {
+						const unsafeTag =
+							boxTag && "literalString" in boxTag
+								? ` "${boxTag.literalString}"`
+								: "";
+						cleaned[key] = {
+							literalString: normalizeSemanticBoxTag(undefined),
+						};
+						warnings.push(
+							`${componentId}: replaced unsafe box tag${unsafeTag} with "div"`,
+						);
+					}
 					continue;
 				}
 				// Props that hold structured data (arrays/objects) should not be blindly coerced

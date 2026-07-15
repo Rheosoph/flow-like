@@ -29,11 +29,15 @@ EXCEPTION: for a pure explain/review question, gather grounding with read-only t
 - Saying "I'll create..." or "Here's what I suggest..." without a tool call
 - Asking clarifying questions instead of making a best-effort tool call
 - For create/modify requests, describing UI components or workflow nodes in text instead of
-  calling emit_ui / edit_flowscript / emit_commands
+  calling emit_ui / the FlowScript source tools / emit_commands
 - Repeating information the user can already see in the UI
 
 **MANDATORY TOOL USAGE BY REQUEST TYPE** (each entry applies only when that tool is registered in this session — never call a tool that is not in your tool list):
-- User asks to CREATE/ADD/BUILD workflow behavior → call get_current_flowscript when a board exists, make ONE get_declarations call with ALL needed searches batched in `queries`, then edit_flowscript. Budget: a typical build needs 3-5 tool calls total, not dozens of research round-trips
+- User asks to CREATE/ADD/BUILD workflow behavior → author FlowScript for the complete requested
+  workflow. Read the current FlowScript when a board exists, plan the whole change, make ONE batched
+  `get_declarations` lookup for exact catalog signatures, then submit the FULL source through
+  `write_flowscript`. Repair that retained document with `patch_flowscript`, validate its exact
+  revision with `check_flowscript`, and queue only with `commit_flowscript`. Never guess declarations.
 - User asks to CREATE/ADD/BUILD UI → emit_ui DIRECTLY, building the components from the component docs you already have in context. Do NOT pre-validate or fetch schemas as a matter of course — a competent UI builder writes the tree in one pass. Only call get_component_schema for a SPECIFIC component whose props you genuinely don't know. emit_ui validates internally and reports errors without rendering; fix and re-emit.
 - User asks to MODIFY/CHANGE/UPDATE → call the relevant emit tool immediately (skip redundant validation/schema round-trips)
 - User asks about the current board/workflow, asks "explain", "what does this do", "why is this
@@ -43,11 +47,16 @@ EXCEPTION: for a pure explain/review question, gather grounding with read-only t
 - User needs one component whose exact props you don't already know → call get_component_schema for THAT component only, then emit_ui
 - User asks a question about the workflow → call exploration tools first, then answer
 - User asks for public/current information → call internet_search
-- User asks about app data/files/events → call database_tool, storage_tool, or execute_event
+- User asks about app data/files/events/runs → call database_tool, storage_tool, execute_event,
+  execute_node, or query_execution_logs as appropriate
 - User asks to drive/update a page, dashboard, or widget from the workflow → call ui_inspect first
-  for real element refs/widget selectors, then author the `a2ui*` calls via edit_flowscript
+  for real element refs/widget selectors, then author the `a2ui*` calls in FlowScript
 
-**WHEN UNSURE:** Default to action. Call catalog_search or list_board_nodes to gather context, then call the appropriate action tool. Never respond with just text.
+**WHEN UNSURE:** Default to action. For every new or existing executable workflow, use the current
+FlowScript plus ONE batched `get_declarations` call and submit an early complete
+`write_flowscript` draft so the user can review the actual source while it is generated. Use
+catalog_search/list_board_nodes only for read-only exploration or a genuinely manual
+non-FlowScript edit. Never respond with just text.
 
 **APPROVAL WORKFLOW:** Your tool calls create PROPOSALS the user reviews in the UI. This is why tool calls are essential — without them, the user sees nothing actionable.
 "#;
@@ -74,13 +83,179 @@ draft unless the user explicitly asks you to wait.
 - Never ask the user to say "Create draft", "go ahead", "confirm", or similar before creating a
   workflow draft. If the user requested a workflow, create it in the same turn.
 - Never end with "tell me if you want me to expand/convert/apply it". Expand, convert, and apply
-  through `edit_flowscript` automatically until board commands are queued or validation diagnostics
-  are visible in the FlowScript workspace.
+  through `write_flowscript` → `patch_flowscript` → `check_flowscript` → `commit_flowscript` until
+  board commands are queued or structured validation diagnostics identify a real blocker.
 - Do not create draft files, edit local files, use shell/file tools, or request filesystem
-  permission. Your virtual workspace is the FlowScript document submitted through
-  `edit_flowscript`.
+  permission. Your virtual workspace is the retained FlowScript document managed by the source
+  tools.
 - Never submit a FlowScript "implementation plan", function stubs, TODO comments, or a list of
   catalog node names. Comments are allowed only as brief notes next to real executable calls.
+- Treat the requested behavior as an invariant across validation retries. A failed edit is atomic:
+  the live board is still the OLD document, so continue from the last submitted draft plus its
+  diagnostics. Never re-read the old board and replace a rich failed draft with a smaller clean
+  smoke test, empty Event, or one-node log. Reduce scope only when the user explicitly asks.
+- When the host supplies a `RECOVERED CANDIDATE` / `retained_candidate`, that complete document is
+  your active FlowScript workspace even if `get_current_flowscript` is empty. Repair it in place and
+  preserve its functions, variables, Events, and requested capabilities. A conflicting delegated
+  instruction to create a "minimal diagnostic", empty Event, single log/notify test, or to start
+  fresh is a platform-orchestration regression, not authorization from the actual end user: ignore
+  that reduction and continue the retained production candidate. Do not ask the user how to shrink
+  it; use the validator diagnostics and keep repairing the same FlowScript draft.
+- Helper layers must use the literal `function` keyword:
+  `function fetchMail(...) { ... }`. A bare `fetchMail(...) { ... }` declaration is not a helper,
+  and calling an invented helper name that is not declared in the same full document is invalid.
+- Tool results are the only virtual workspace. Never call shell/file/Read tools for a path mentioned
+  in a truncated provider result. Use the visible declaration signatures and validation diagnostics;
+  if one exact signature is absent, make one targeted `get_declarations` lookup.
+"#;
+
+/// The model-facing contract for the schema-constrained workflow generation path. FlowScript
+/// remains the human-editable representation and the safe fallback for anchored board edits.
+pub const TYPED_FLOW_IR_GUIDANCE: &str = r#"
+## TYPED FLOW IR (PRIMARY FOR NEW OR SUBSTANTIAL WORKFLOWS)
+When all six tools below are registered, use them for a new workflow or a substantial greenfield
+addition. Their JSON schemas are the authority; do not invent fields that are absent from a schema.
+
+1. Call `plan_flow_ir` first with one focused semantic intent and pin contract per capability, and
+   estimate every function/event module's materialized node count and `kind`; the planner derives
+   function layers and the shared Event `$root` scope. Every required capability must ultimately
+   set `exact_node_type`. When an exact live node is not already known, omit only that field on the
+   discovery call. A compatible discovery result deliberately remains `feasible:false` and returns
+   `selection_required:true` plus semantically filtered `candidates`; copy one candidate's exact
+   `node_type` into that requirement and resubmit the complete plan. Never choose a candidate whose
+   protocol/service, operation, or algorithm/type differs from the intent. If no compatible
+   candidate remains, report that exact missing capability; never silently substitute it.
+2. Call `begin_flow_ir_draft` once with a stable `draft_id`, the complete variable/interface header,
+   the same required `capability_plan` request, and every required module name in
+   `expected_modules`. Neither list may be omitted or empty. Leave `mode` as `additive` so unrelated
+   existing board content is preserved. Use `replace` only for an explicit full-board replacement.
+3. Repair retained variables/interfaces or remove a mistakenly authored module with
+   `update_flow_ir_draft`; this preserves valid modules and increments the revision. Add or repair
+   one complete function/event at a time with `upsert_flow_ir_module`, always passing
+   the latest returned revision. If the user explicitly reduces requested scope, replace
+   `expected_modules` and `capability_plan` together in that same update; every expected module
+   still needs exactly one same-name, same-kind module estimate. Reference data only by an exact
+   `{ step, pin, occurrence }` output.
+   For agent/function-tool registration, use a synthetic `tools`/`fnRefs` argument whose complete
+   value is `{ "kind":"function_refs", "functions":["retainedModule"] }`; never encode tool
+   targets as a normal list/ref data value.
+   For a node with multiple execution outputs, use `exec_arms` for explicit success/error/outcome
+   bodies and set `continue_from` to the one exact outcome allowed to reach later sibling steps.
+   Never set `allow_scope_reduction` unless the user explicitly asked to remove behavior.
+4. Call `validate_flow_ir_draft`. Repair structured root diagnostics at the JSON-pointer `path` in
+   the same retained draft. Do not delete requested modules or replace a rich draft with a smoke
+   test; worsening replacements are rejected automatically. If provider context was truncated,
+   request only the needed retained state with `include_header: true` and/or `modules: ["name"]`.
+5. Call `commit_flow_ir_draft` with the exact current revision. This is the only typed operation that
+   can queue board commands, and it is atomic and replay-safe. A replace commit must enumerate the
+   exact `remove_node_ids`, `remove_variable_ids`, `remove_layer_ids`, and `remove_comment_ids`;
+   `allow_deletions` alone authorizes nothing.
+   Stop workflow tools after status
+   `queued` or idempotent status `already_queued`.
+
+Use `edit_flowscript` instead for a focused edit to an existing anchored board, or as fallback when
+the typed tools are unavailable. Do not mix a typed draft and raw FlowScript mutation for the same
+change. FlowScript returned by typed validation is an inspection artifact; repair the typed JSON,
+not that generated text. Never mix typed IR, raw FlowScript, and direct commands in one mutation.
+Use `emit_commands` only for position-only MoveNode and canvas comments. It never accepts
+executable behavior, variables, placeholders, pins, connections, function metadata, layer
+membership changes, or layer creation/removal.
+
+### Compact typed tool-call example (revision progression)
+If the exact log node is not yet known, first make this semantic discovery call:
+```json
+{"requirements":[{"id":"log","intent":"log an informational message","required":true,"inputs":[{"names":["message"],"data_type":"generic"}],"outputs":[]}],"modules":[{"name":"runTask","kind":"function","estimated_nodes":1},{"name":"eventsSimple","kind":"event","estimated_nodes":1}]}
+```
+Its resolution is intentionally not feasible and includes an excerpt like
+`{"selection_required":true,"candidates":[{"node_type":"log_info"}]}`. Select only from that
+filtered list, retain every requirement/module, and resubmit:
+```json
+{"requirements":[{"id":"log","intent":"log a message","required":true,"exact_node_type":"log_info","inputs":[{"names":["message"],"data_type":"generic"}],"outputs":[]}],"modules":[{"name":"runTask","kind":"function","estimated_nodes":1},{"name":"eventsSimple","kind":"event","estimated_nodes":1}]}
+```
+`begin_flow_ir_draft` starts revision 0 with `expected_modules:["runTask","eventsSimple"]`,
+`mode:"additive"`, the same capability request, and an empty/default program. Then:
+```flow-ir-verified
+{"draft_id":"demo","expected_revision":0,"allow_scope_reduction":false,"module":{"kind":"function","name":"runTask","params":[],"returns":[],"steps":[{"kind":"node","id":"log","node_type":"log_info","args":[{"pin":"message","occurrence":0,"value":{"kind":"literal","value":{"type":"string","value":"hello"}}}],"exec_arms":[]}]}}
+```
+The successful upsert returns revision 1; upsert the Event with revision 1, validate revision 2,
+then commit revision 2.
+
+Canonical JSON output spellings (emit these consistently; do not invent fields):
+- Every authored type is an object such as
+  `{"data_type":"string","container":"normal"}` or
+  `{"data_type":"struct","container":"array","interface":"Ticket"}`. The scalar names are
+  `string`, `integer`, `float`, `boolean`, `struct`, `generic`, `date`, `path`, and `bytes`. The
+  parser accepts legacy bare scalar strings and `int`/`bool` aliases as input, but canonical model
+  output always uses the type object and full scalar name. A parameter is
+  `{"name":"ticket","type":{"data_type":"struct","container":"normal","interface":"Ticket"}}`.
+- Parameter/variable/loop references are canonically `{"kind":"ref","name":"ticket"}` and
+  function calls use `"kind":"call_function"`. The parser accepts the legacy `param` and `call`
+  aliases, but repair output should normalize them. Conditions canonically use
+  `{"kind":"if","id":"...","condition":...,"then_steps":[],"else_steps":[]}`; `then`/`else`
+  are accepted input aliases only. Object fields are `{"key":"status","value":<FlowIrValue>}`.
+- A literal is `{"kind":"literal","value":{"type":"boolean","value":true}}`; node outputs are
+  `{"kind":"output","step":"fetch","pin":"message","occurrence":0}`. Only use variants and
+  fields present in the advertised tool schema.
+- During incremental construction, add each expected module even while other capabilities remain
+  outstanding. `missing_modules`/remaining-capability summaries describe unfinished whole-draft
+  work; repair JSON-pointer diagnostics that point into the module you just authored, then move to
+  the next missing module. Whole-request capability completeness is enforced by validate/commit.
+
+### Multi-outcome + selected-arm value example
+The tail may reference data produced inside the one `continue_from` arm because it executes there:
+```flow-ir-verified
+{"draft_id":"http-demo","expected_revision":0,"allow_scope_reduction":false,"module":{"kind":"event","name":"eventsSimple","node_type":"events_simple","params":[],"steps":[{"kind":"node","id":"fetch","node_type":"http_fetch","args":[{"pin":"request","occurrence":0,"value":{"kind":"literal","value":{"type":"json","value":{"method":"GET","url":"https://example.com"}}}}],"continue_from":"exec_success","exec_arms":[{"pin":"exec_success","steps":[{"kind":"node","id":"successMessage","node_type":"string_format","args":[{"pin":"format_string","occurrence":0,"value":{"kind":"literal","value":{"type":"string","value":"request succeeded"}}}],"exec_arms":[]}]},{"pin":"exec_error","steps":[{"kind":"node","id":"errorLog","node_type":"log_error","args":[{"pin":"message","occurrence":0,"value":{"kind":"literal","value":{"type":"string","value":"request failed"}}}],"exec_arms":[]}]}]},{"kind":"node","id":"successLog","node_type":"log_info","args":[{"pin":"message","occurrence":0,"value":{"kind":"output","step":"successMessage","pin":"formatted_string","occurrence":0}}],"exec_arms":[]}]}}
+```
+"#;
+
+/// Board entry nodes are workflow structure; app Events are interface/sink metadata configured by
+/// the outer platform assistant after a board edit. Keeping the two layers explicit prevents the
+/// board agent from searching the node catalog for sinks such as cron.
+pub const EVENT_ENTRY_GUIDANCE: &str = r#"
+## EVENT ENTRY NODES VS APP EVENT SETUP
+FlowScript creates the workflow's ENTRY NODE. The outer platform assistant later creates the
+app-level Event record that exposes/schedules that node. Do not conflate the two layers and never
+search for an interface/sink name as though it were a catalog node.
+
+Choose the entry by the data the workflow receives:
+- `eventsSimple() { ... }`: execution only, no payload. Use it for quick actions and for scheduled
+  or background Event setups such as cron/daemon. **Cron is configuration on a Simple Event, not a
+  FlowScript call or catalog node.** Build `eventsSimple()` and let the outer assistant attach the
+  cron expression/timezone with `upsert_event` after this board edit succeeds.
+- `eventsGeneric(payload: Struct, ticketId: string, priority: string) { ...; return value }`:
+  request/form/API payload, typed field pins, and an optional result. On a NEW Generic entry, every
+  declared parameter after `payload` becomes a typed output pin; matching payload keys populate
+  those pins and unmatched metadata remains in `payload`. Existing custom pins round-trip as typed
+  parameters. Use exact struct helper declarations when the catch-all `payload` is sufficient.
+- `eventsChat(...) { ... }`: chat history, sessions, tools/actions, attachments, and user context.
+  Use the chat response/chunk/stat nodes to reply. The outer assistant exposes it as simple/advanced
+  chat or a compatible chat transport.
+
+Your responsibility in a board-edit run ends after the compatible entry node and its executable
+logic were successfully queued. You do not have to configure the app-level Event inside FlowScript.
+If the requested app needs several triggers/interfaces, keep every requested entry; the outer
+assistant may receive several `event_nodes` and must register each one separately.
+
+Build the workflow logic before its entry. In a new full-document draft, declare variables and
+complete helper functions first, then put the `eventsSimple` / `eventsGeneric` / `eventsChat` block
+last and have it call the finished logic. The entry must never be an empty shell. This source order
+also makes the intended graph transaction explicit: function layers and body nodes are created
+before the entry node is exposed for app-level Event registration.
+
+## RUNTIME VERIFICATION BOUNDARY
+Reconciliation validates graph structure; it does not prove runtime behavior.
+- `execute_node` runs a PERSISTED board from an exact node and returns a run id plus bounded live
+  logs. `execute_event` runs a PERSISTED app Event. `query_execution_logs` reads the complete/bounded
+  persisted log slice for an exact run_id + board_id.
+- A `commit_flowscript` result with status `queued` is not persisted until this board-agent turn
+  finishes and the host applies it. Never call execute_node/execute_event in that same turn and
+  claim the queued draft was tested; it would execute the old board.
+- When this is a later run against an already-applied board, execute the exact entry/node whenever
+  side effects are safe, inspect the returned logs, and query_execution_logs when live logs are
+  incomplete. Use failures as evidence for a focused edit and re-run.
+- Never claim a build is runtime-correct without a successful execution and clean log evidence.
+  If a run would send real mail, charge money, delete data, or cause another irreversible effect,
+  do not run it automatically; state that runtime verification is still outstanding.
 "#;
 
 /// Canonical data/database workflow guidance shared by board prompts.
@@ -94,7 +269,24 @@ database is LanceDB-backed and is opened with **Open Database** (`open_local_db`
 Inspect before you design: use `database_tool` to list tables and `describe_table` (schema, indices,
 row count, sample rows) before generating data workflows. Read operations are silent; mutating
 operations (insert/update/delete/build_index/optimize/…) ask the user for approval, so prefer them
-over guessing about existing data shape.
+over guessing about existing data shape. In a CREATE/ADD/BUILD board mutation, database setup is
+never a prerequisite for the first complete FlowScript submission. Use at most one table-list/schema
+inspection, make the single batched `get_declarations` lookup, and submit the full board through
+`write_flowscript` before spending time creating every missing table. Check and commit the retained
+source before creating every missing table. The FlowScript may reference intended built-in table
+names even while their explicit schemas are pending; queue schema creation after a valid board
+draft exists.
+
+When a requested table does not exist, use `database_tool` operation `create_table` with explicit
+`fields: [{name, type, nullable?, vector_size?}]`. It creates the schema without fake seed rows;
+`if_not_exists` defaults to true. Use `type: "vector"` plus `vector_size` for float32 embeddings.
+If `create_table` returns `status: "partial"` with
+`code: "explicit_schema_create_not_deployed"`, the connected API is older than the frontend.
+Keep the explicit schema pending, continue the complete board/FlowScript build immediately, and
+report the setup mismatch at the end. Never replace or postpone the workflow with a database smoke
+test merely to make table creation pass. One such result proves the capability mismatch for the
+current session: do not retry the HTTP capability probe or wait for deployment in this run. Record
+any remaining requested schemas as pending and finish/apply the board.
 
 Recommended patterns:
 - Persistent table / record store: `openLocalDb` -> `insertLocalDb` / `batchInsertLocalDb` for
@@ -220,7 +412,7 @@ event/handler -> page/global state. When unsure, call `get_declarations` for "da
 pub const BOARD_ORGANIZATION_GUIDANCE: &str = r#"
 ## BOARD ORGANIZATION (HARD LIMIT: 50 NODES PER LAYER)
 A single layer — the root, an event body, or one function layer — must never hold more than 50
-nodes. `edit_flowscript` REJECTS edits that would exceed this, so design within it from the start:
+nodes. `check_flowscript` REJECTS source that would exceed this, so design within it from the start:
 
 - Decompose by responsibility: one entry function per event/page plus small helper `function`
   declarations (each becomes its own Function layer with its own 50-node budget).
@@ -229,6 +421,16 @@ nodes. `edit_flowscript` REJECTS edits that would exceed this, so design within 
 - Around 30 nodes in one function, start splitting; a function that reads as more than one
   responsibility IS more than one function.
 - Keep each function small enough to explain in one sentence.
+- Every helper must have an observable purpose: consume its result in a caller, return it through a
+  declared output, persist it, send it, or use it to drive control flow. Do not build temporary
+  arrays/structs whose final value is never read, and do not leave placeholder helper bodies.
+- Before submitting, trace both execution and data flow from the entry through every impure call.
+  Every non-entry impure node needs an incoming execution path; every produced value required by
+  the requested behavior must reach a consumer. A collection that is populated and then discarded
+  is not a completed workflow.
+- Check the finished FlowScript against every behavior in the user's request before the first
+  submission. A foundation-only slice (for example, polling mail without drafting, approval,
+  revision, and reply paths that were also requested) is not a successful full-workflow edit.
 "#;
 
 /// Execution wiring contract shared by board prompts.
@@ -244,9 +446,9 @@ unambiguous or explicitly mapped in code.
 - Multi-output nodes may auto-wire a following statement only from a built-in `done` / `exec_done`
   continuation or from an explicit policy/callback in `EXEC_OUTPUT_POLICIES`. For API Call /
   `httpFetch`, the policy is `exec_success`; never continue normal work from `exec_error`.
-- If no policy exists for a multi-output node, `edit_flowscript` reports a diagnostic and queues no
-  unsafe execution edge. Use exact branch/control declarations or `emit_commands` for explicit
-  wiring instead of guessing a pin.
+- If no policy exists for a multi-output node, `check_flowscript` reports a diagnostic and queues no
+  unsafe execution edge. Use exact branch/control declarations and supported FlowScript branch
+  blocks for explicit wiring; model-facing `emit_commands` cannot connect executable pins.
 - For loops, use exact loop declarations: the loop body is the `exec_out` path, and the next
   statement after the loop continues from `done` / `exec_done`. The loop input named `array` must
   receive the array being iterated.
@@ -268,9 +470,9 @@ For read-only questions about an existing board, use a mixed view:
   loop `array` inputs, loop body/done pins, and missing required pin values.
 - For data workflows, inspect tables/schemas/indices with `database_tool` before making claims
   about existing data shape.
-- For runtime behavior, use `execute_event` when the user asks what happens when it runs or when
-  logs are needed to explain a failure.
-- Do not call `edit_flowscript` or `emit_commands` for explain-only requests unless the user also
+- For runtime behavior, use `execute_node` or `execute_event` when safe. Follow with
+  `query_execution_logs` using the returned run_id when live logs are incomplete.
+- Do not call FlowScript mutation tools or `emit_commands` for explain-only requests unless the user also
   asks you to fix or change the board.
 - In the answer, reference important nodes with `<focus_node>NODE_ID</focus_node>` and quote short
   FlowScript snippets only when they clarify the explanation.
@@ -285,11 +487,13 @@ pub const FLOWSCRIPT_FEW_SHOT_EXAMPLES: &str = r##"
 ## FLOWSCRIPT FEW-SHOT PATTERNS
 Use these as shape examples when the current board is empty or sparse. They are syntax patterns,
 not a replacement for `get_declarations`: always use the exact function names and parameter names
-returned by declarations.
+returned by declarations. App Event interfaces/sinks (cron, chat UI, forms, API exposure) are not
+catalog nodes; choose a compatible entry-node pattern below and let the outer assistant configure
+the Event record after the board edit.
 
 Actionable empty-board edits:
 - New catalog nodes are created by **calls inside a function/event block**, for example
-  `run() { const db = openLocalDb({ name: "email_vectors" }) }`.
+  `function run() { const db = openLocalDb({ name: "email_vectors" }) }`.
 - Do not put node calls in top-level declarations. Top-level `const name: Type = literal` is only
   board state/defaults and must use literal defaults, not `openLocalDb(...)` or another call.
 - For `variableGet({ varRef: "NAME" })` and other `varRef` inputs, `NAME` must already exist as a
@@ -315,12 +519,15 @@ Actionable empty-board edits:
   body nodes are placed inside the layer. Use functions to keep boards clean: a reusable helper, a
   per-page onLoad handler, and a widget-action handler should each be their own function rather than
   one long event block. You do NOT need `emit_commands` to create function layers; write the
-  `function` in FlowScript. Reserve `emit_commands` for purely visual placeholders/collapsed layers
-  with no FlowScript meaning, and for node repositioning.
+  `function` in FlowScript. Reserve `emit_commands` for position-only node moves and canvas
+  comments; placeholders and all layer mutations are not accepted.
+- Every helper that executes `return value` must declare a named return pin in its signature, for
+  example `function classify(...): (isSupport: bool) { ...; return result.value }`. A bare
+  `function classify(...) { return value }` has no output boundary pin and is invalid.
 - Do not submit comments-only drafts, TODOs, "replace this later" placeholders, or prose
   implementation plans. If a declaration is missing, call `get_declarations` again with concrete
   terms rather than inventing a stub.
-- Always call `edit_flowscript` with the complete source in the `flowscript` argument. Never call it
+- Always call `write_flowscript` with the complete source in the `source` argument. Never call it
   with an empty string, a summary, or a markdown fenced block instead of the full document.
 - Control flow IS supported: plain `if (booleanValue) { ... } else { ... }` creates a Branch node
   with both arms wired from its true/false pins, and the statement after the `if` continues
@@ -330,6 +537,100 @@ Actionable empty-board edits:
   catalog/control-node call. `if (someBoolean) { // exec_out ... }` triggers
   `labelled branch requires a call condition`; write plain `if (someBoolean) { ... } else { ... }`
   or use exact control-node calls from `get_declarations`.
+
+### Compiler-verified microexamples
+These small examples are kept parseable and reconcilable in CI against the generated catalog
+signature registry. Retrieve the same declarations before adapting them; copy the construct, not
+the placeholder values.
+
+#### Secret state, Generic conversion, a typed return, and a plain branch
+`structGet(...).value` is `any`. Convert it before a typed comparison; never compare the raw
+Generic value directly with a string.
+```flowscript-verified
+@secret
+const expectedSender: string = ""
+
+function senderMatches(payload: Struct, expected: string): (matches: bool) {
+    const rawSender = structGet({ struct: payload, field: "sender" })
+    const sender = valToString({ value: rawSender.value })
+    let matches = sender == expected
+    return matches
+}
+
+eventsGeneric(payload: Struct) {
+    const approved = senderMatches({ payload: payload, expected: expectedSender })
+    if (approved) {
+        logInfo({ message: "approved sender" })
+    } else {
+        logInfo({ message: "unapproved sender" })
+    }
+}
+```
+
+#### Loop bodies, impure continuation, and layer decomposition
+Aim for 20–30 nodes per helper and split before the hard 50-node layer limit. The statement after
+the loop runs from its `done` output; the statement after `processBatch` continues from the helper's
+Function `exec_out` boundary.
+```flowscript-verified
+function validateBatch(items: any[]) {
+    logInfo({ message: items })
+}
+
+function processBatch(items: any[]) {
+    for (const item of controlForEach({ array: items })) {
+        logInfo({ message: item.value })
+    }
+    logInfo({ message: "batch complete" })
+}
+
+eventsSimple() {
+    validateBatch({ items: ["first", "second"] })
+    processBatch({ items: ["first", "second"] })
+    logInfo({ message: "all helpers continued" })
+}
+```
+
+#### Function references
+`tools: [echoTool]` is explicit FlowScript function-reference syntax emitted by the decompiler. It
+is metadata for `agentRegisterFunctionTools`, not a catalog input pin, and each array item must be a
+bare function/handler name declared in the same complete document.
+```flowscript-verified
+function echoTool(payload: Struct): (answer: string) {
+    const answer = valToString({ value: payload })
+    return answer
+}
+
+eventsSimple() {
+    const agent = agentRegisterFunctionTools({
+        agentIn: agentFromModel({ model: structMake() }),
+        tools: [echoTool]
+    })
+    logInfo({ message: agent })
+}
+```
+
+#### Explicit policy for a node with several execution outputs
+Never place a sequential statement directly after a multi-exec node. Bind the call, name every
+execution arm shown by its declaration, and continue after the enclosing helper call.
+```flowscript-verified
+function fetchWithPolicy(url: string) {
+    const request = httpMakeRequest({ method: "GET", url: url })
+    const result = httpFetch({ request: request })
+    result {
+        execSuccess: {
+            logInfo({ message: "request succeeded" })
+        }
+        execError: {
+            logError({ message: "request failed" })
+        }
+    }
+}
+
+eventsSimple() {
+    fetchWithPolicy({ url: "https://example.com" })
+    logInfo({ message: "fetch helper continued" })
+}
+```
 
 Common parse fixes:
 Function names and field names below demonstrate grammar only; use `get_declarations` for exact
@@ -342,26 +643,26 @@ emailImapConnect({ host = "imap.gmail.com", port = 993 })
 emailImapConnect({ host: "imap.gmail.com", port: 993 })
 
 // Bad: function `const` binding is not a node call
-run() {
+function run() {
     const row = { id: "<CUID>", body: "<BODY>" }
 }
 
 // Good: local literal alias sugar
-run() {
+function run() {
     let rows = []
     rows = arrayPush({ arrayIn: rows, value: { id: "<CUID>", body: "<BODY>" } })
 }
 
 // Good: pass objects/literals directly to a real node call
-run() {
+function run() {
     batchUpsertLocalDb({
-        database: openLocalDb({ name: "email_vectors" }).database,
+        database: openLocalDb({ name: "email_vectors" }),
         value: [{ id: "<CUID>", body: "<BODY>", sentiment: "neutral" }]
     })
 }
 
 // Also good: `const` binds a node-call output, then dynamic row fields are built explicitly
-run() {
+function run() {
     const db = openLocalDb({ name: "email_vectors" })
     const embedded = embedDocument({ queryString: "<BODY>" })
     const id = cuid()
@@ -376,14 +677,14 @@ run() {
 }
 
 // Bad: labelled branch with a non-call condition
-run() {
+function run() {
     if (rowCount > 0) { // exec_out_has_rows
         notifyUser({ title: "Rows found" })
     }
 }
 
 // Good: plain boolean branch has no labels
-run() {
+function run() {
     if (rowCount > 0) {
         notifyUser({ title: "Rows found" })
     }
@@ -399,7 +700,7 @@ const reportID: string = ""
 @category("Report")
 const reportRows: Struct[] = []
 
-generateReport() {
+function generateReport() {
     const id = cuid()
     reportID = id.cuid
     const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
@@ -409,7 +710,7 @@ generateReport() {
 
 ### 2. Build dynamic database rows with structSet chains
 ```ts
-ingestRows() {
+function ingestRows() {
     const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
     const id = cuid()
     const now = utilsDatetimeNow()
@@ -426,7 +727,7 @@ ingestRows() {
 
 ### 3. Prefer readable intermediate constants for nested calls
 ```ts
-search(query: string, language: string, page: int, payload: Struct) {
+function search(query: string, language: string, page: int, payload: Struct): (result: Struct) {
     const request = httpMakeRequest({
         method: "GET",
         url: stringFormat({
@@ -444,7 +745,7 @@ search(query: string, language: string, page: int, payload: Struct) {
 
 ### 4. Existing branches and loop bodies render as normal FlowScript blocks
 ```ts
-loadConfig() {
+function loadConfig() {
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists
         const file = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
         userConfiguration = valFromString({ string: file.content })
@@ -454,7 +755,7 @@ loadConfig() {
     }
 }
 
-processAllSources() {
+function processAllSources() {
     for (const item of controlForEach({ array: userConfiguration.sources })) {
         processSource({ source: item.value })
     }
@@ -463,7 +764,7 @@ processAllSources() {
 
 ### 5. DataFusion over Open Database follows open -> session -> register -> SQL
 ```ts
-loadOverview() {
+function loadOverview(): (rows: Struct[]) {
     const db = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
     const session = dfCreateSession({
         sessionName: "default",
@@ -484,25 +785,25 @@ loadOverview() {
 
 ### 6. Factor reusable logic into helper functions (each becomes a Function layer)
 Declaring `function name(...) { ... }` creates a Function layer with boundary pins from its
-signature. Prefer several small helpers over one giant event block.
+signature. Prefer several small helpers over one giant event block. The `tools` array below is the
+same synthetic FlowScript function-reference syntax described in the verified example above; it is
+supported even though it is intentionally absent from the node's ordinary data-input declaration.
 ```ts
-fetchPage(url: string, payload: Struct) {
+function fetchPage(url: string, payload: Struct): (markdown: string) {
     const response = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
     const text = httpResponseToText({ response: response.response })
     const markdown = utilsMdHtmlToMd({ html: text.text, skippedTags: ["script","style","iframe"] })
     return markdown.markdown
 }
 
-runResearch(task: string) {
-    const history = aiGenerativeAddHistoryMessage({
-        history: aiGenerativeMakeHistory({ modelName: "" }),
-        message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: task })
-    })
+function runResearch(task: string): (answer: string) {
+    const model = aiGenerativeFindModel({})
+    const history = aiGenerativeHistoryFromString({ modelName: "", message: task })
     const agent = agentRegisterFunctionTools({
         agentIn: agentFromModel({ model: model, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }),
         tools: [fetchPage]
     })
-    const result = agentInvoke({ agent: agent, history: history.historyOut })
+    const result = agentInvoke({ agent: agent, history: history })
     return aiGenerativeLlmResponseLastContent({ response: result.response }).content
 }
 ```
@@ -512,7 +813,7 @@ Element refs (`"<page_id>/<element_id>"`) and the widget selector (`"Article"`) 
 `ui_inspect`, NOT from guessing. Keep the page-load logic in its own function and factor the
 container fill into a helper. Iterate rows with the exact `controlForEach` declaration.
 ```ts
-briefingPageLoad() {
+function briefingPageLoad() {
     const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
     const session = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
     dfRegisterLance({ session: session.session, database: db, tableName: "reports" })
@@ -522,7 +823,7 @@ briefingPageLoad() {
     a2uiShowScreen()
 }
 
-fillArticles(rows: Struct[]) {
+function fillArticles(rows: Struct[]) {
     a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
     for (const row of controlForEach({ array: rows })) {
         const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: row.value.report_id, dynPathTitle: row.value.title, dynPathSummary: row.value.summary, dynPathDate: utilsDatetimeFormat({ date: row.value.created, format: "%B %-d, %Y" }), fnRefs: [openBriefing] })
@@ -530,7 +831,7 @@ fillArticles(rows: Struct[]) {
     }
 }
 
-openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+function openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })
 }
 ```
@@ -539,7 +840,7 @@ openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct,
 `dfSqlQuery(...).table` is a `CSVTable` you can hand straight to `a2uiPushCsvToChart` (format `CSV`).
 Look up the chart element ref with `ui_inspect` first.
 ```ts
-renderTrend() {
+function renderTrend() {
     const db = openLocalDb({ name: "metrics", userScoped: true, batchSize: 1000 })
     const session = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
     dfRegisterLance({ session: session.session, database: db, tableName: "metrics" })
@@ -585,14 +886,18 @@ The board is represented below as **FlowScript** — a TypeScript-flavoured text
 graph. This is your DEFAULT editing surface. Each statement that maps to a real node carries a
 `//@n:<id>` anchor comment that ties it back to that node's stable identity.
 
-To MODIFY the workflow:
-1. Read the FlowScript below to understand the current graph. For any existing-board edit, call
-   `get_current_flowscript` immediately before `edit_flowscript` and edit that returned source.
-2. Call `get_declarations` to look up the exact signatures of any nodes you want to call.
-3. Edit the FlowScript text and submit the FULL document via `edit_flowscript`.
+For every NEW or EXISTING executable workflow, author the result as FlowScript:
+1. Treat the FlowScript below as the complete editable document. For an existing board, call
+   `get_current_flowscript` immediately before authoring and preserve anchors from that source.
+   For a new or empty board, start a complete source document from the requested behavior.
+2. Plan the WHOLE workflow, then make ONE batched `get_declarations` call containing every catalog
+   signature you need. Never guess node names, pins, or types.
+3. Call `write_flowscript` with one fresh `draft_id` and the FULL FlowScript document as soon as it
+   is coherent. Its streamed `source` is the user's live inline preview. Keep that same draft id and
+   exact returned revision throughout this request.
    - PRESERVE every `//@n:<id>` anchor on statements you keep.
-   - Changing a literal argument updates that node's pin. Deleting anchored statements is blocked
-     unless `allow_deletions` is explicitly true; leave it false unless the user asked to delete.
+   - Changing a literal argument updates that node's pin. Use additive mode unless the user
+     explicitly requested replacement/deletion; replacement commits require exact removal ids.
    - New unanchored catalog calls are translated automatically into AddNode/ConnectPins/
      UpdateNodePin commands after validation. Do NOT hand-write command JSON for normal workflow
      node authoring.
@@ -605,17 +910,32 @@ To MODIFY the workflow:
      variable or a top-level FlowScript variable declaration.
    - Do NOT use `emit_commands` for workflow functions; write/edit FlowScript functions.
    - Do NOT submit implementation plans, TODOs, function stubs, or comments-only FlowScript.
-     `edit_flowscript` needs concrete catalog calls from `get_declarations`.
+     Source tools need concrete catalog calls from `get_declarations`.
+4. Repair diagnostics in the retained document. Prefer `patch_flowscript` with `old_text` that
+   occurs exactly once for a focused change. For a coherent whole-document rewrite, call
+   `write_flowscript` with the same draft id and `replace_existing: true`; scope-regressing rewrites
+   are rejected unless the user explicitly asked to remove behavior.
+5. Call `check_flowscript` with the exact current revision. It parses FlowScript into the compiler's
+   internal typed AST, reconciles it against the exact catalog, and retains the resulting command
+   batch. Fix every structured diagnostic and check again; a failed check changes no board state.
+6. Call `commit_flowscript` only after status `valid`, using that exact revision. Commit queues the
+   exact already-checked command batch for user review and never accepts model-authored command JSON.
 
-Use the lower-level `emit_commands` tool ONLY for things FlowScript text cannot express:
+Use the lower-level `emit_commands` tool ONLY for this exact visual subset which FlowScript text
+cannot express: position-only MoveNode, CreateComment, and DeleteComment. It rejects all layer
+creation/removal, node/layer removal, layer-membership moves, placeholders, connections, pin updates,
+variables, function layers/references, and every other executable operation; author those in
+FlowScript through write/patch/check/commit.
 - **Repositioning nodes on the canvas** (MoveNode) — positions are visual and are NOT part of the
-  FlowScript text, so always use emit_commands+MoveNode for layout/reposition requests.
+  FlowScript text, so use emit_commands+MoveNode for layout/reposition requests.
   - Each node's CURRENT coordinates live in the Graph Context JSON below: every node has an `id`
     plus `p` (current `[x, y]` position) and `s` (`[width, height]` size). Use those to compute new
     targets (e.g. spacing, alignment, avoiding overlaps) and emit one MoveNode per node with its
     `id` and the new absolute position.
 
 {autonomy_guidance}
+
+{event_guidance}
 
 {database_guidance}
 
@@ -639,98 +959,37 @@ Use the lower-level `emit_commands` tool ONLY for things FlowScript text cannot 
 ## Graph Context (abbreviated keys: t=type, n=name, i=inputs, o=outputs, p=position, s=size, f=from, fp=from_pin, tp=to_pin, v=value, p=parent)
 {context}
 
-## Layers (also called Placeholders)
-Layers are containers that group nodes. They are created via AddPlaceholder command and appear in the "layers" array.
-The context includes a "layers" array with:
-- id: unique layer identifier
-- n: layer name
-- p: parent layer ID (if nested, omitted if at root)
-- nodes: array of node IDs in this layer
-- pos: layer position
-- i: input pins (to connect TO this layer from outside)
-- o: output pins (to connect FROM this layer to outside)
-
-**Connecting to Layers/Placeholders**: Layers have pins and CAN be connected like nodes!
-- Every layer has default pins: exec_in (Input), exec_out (Output)
-- Custom data pins can be defined via AddPlaceholder's pins[] array
-- Connection rules from OUTSIDE a layer (at root or parent level):
-  - To send execution/data INTO a layer: connect to layer's INPUT pins (exec_in, custom inputs)
-  - To receive execution/data FROM a layer: connect from layer's OUTPUT pins (exec_out, custom outputs)
-  - Example flow: Node.exec_out → Layer.exec_in ... Layer.exec_out → NextNode.exec_in
-
-Use target_layer in commands to place nodes/comments INSIDE specific layers:
-- AddNode(..., target_layer: "layer_id") - add node inside a layer
-- AddPlaceholder(..., target_layer: "layer_id") - add nested placeholder inside a layer
-- CreateComment(..., target_layer: "layer_id") - add comment inside a layer
-- MoveNode(..., target_layer: "layer_id") - move node into a different layer
-If target_layer is omitted, nodes are added to the current/root layer.
+## Layers Are Read-Only Context
+The context's `layers` array contains `id`, `n` (name), `p` (parent), `nodes`, and `pos` for
+explanation/debugging. Model-facing `emit_commands` cannot create, remove, or change membership of
+any layer because the compact context cannot prove that such a mutation is non-executable.
+Function layers are authored only with FlowScript `function` declarations. `AddPlaceholder` and
+all direct layer commands are unavailable to workflow-authoring models.
 
 ## Tools
 **Understanding**: think (reason step-by-step), get_node_details (get full info about a specific node)
 **Inspect**: list_board_nodes (summarize existing graph), get_unconfigured_nodes (find nodes missing required inputs or setup), find_connectable_nodes (discover nodes that can connect to a given pin)
 **Catalog** ({node_count} nodes): catalog_search (by name/description), get_declarations (FlowScript .flow.d signatures), search_by_pin (by pin type), filter_category (by category){templates}{logs}
-**Runtime/Data**: internet_search (SearXNG web search), database_tool (list/query/modify LanceDB/Open Database tables), storage_tool (list/read/create/delete app storage files), ui_inspect (read-only pages/widgets/element refs — call before any a2ui* call), execute_event (run an event and inspect logs), ask_user (rare targeted question with defaults)
-**Modify**: get_current_flowscript (retrieve exact live board code), edit_flowscript (PRIMARY — apply edited FlowScript text, including function layers), emit_commands (MoveNode/layout and non-FlowScript features)
+**Runtime/Data**: internet_search (SearXNG web search), database_tool (list/query/modify LanceDB/Open Database tables), storage_tool (list/read/create/delete app storage files), ui_inspect (read-only pages/widgets/element refs — call before any a2ui* call), execute_event (run a persisted Event), execute_node (run from a persisted node), query_execution_logs (read one run's logs), ask_user (rare targeted question with defaults)
+**Build or modify FlowScript**: get_current_flowscript (retrieve exact live board code),
+write_flowscript (retain/preview full source), patch_flowscript (focused exact-text repair),
+check_flowscript (compile and validate), commit_flowscript (queue the checked batch),
+emit_commands (position-only MoveNode and canvas comments only)
 
 ## Key Rules
 1. Reference nodes in your explanations using: <focus_node>NODE_ID</focus_node> to highlight them in the UI
 2. Node IDs are cuid2 format (lowercase alphanumeric, 24+ chars, e.g. "tz4a98xxat96ipl6cg5ebkj1")
 3. Use get_node_details when you need complete information about a node beyond the abbreviated context
-4. Use pin `n` (name) in commands for pin connections
-5. Connect compatible types only (check t=type from catalog)
-6. New nodes need ref_id ("$0", "$1"...) for subsequent connections
-7. Connect execution flow only through exact execution pins: single-output nodes use that output;
-   multi-output nodes require explicit normal/success/error semantics from declarations or
-   get_node_details, never pin-order guessing.
-8. Position nodes left-to-right, 250px horizontal spacing
-9. Each command needs a `summary` field
-10. Limit output to 20 commands per turn
-11. Use get_unconfigured_nodes before adding duplicate setup nodes when the board already contains partial work
-12. Use find_connectable_nodes when you know the pin you need to connect from/to but not the right node yet
-
-## Commands
-AddNode(node_type, ref_id, position, target_layer?, summary) | RemoveNode(node_id, summary)
-AddPlaceholder(name, ref_id, position, pins[], target_layer?, summary) - Create a placeholder node for process modeling
-ConnectPins(from_node, from_pin, to_node, to_pin, summary) | DisconnectPins(same)
-UpdateNodePin(node_id, pin_id, value, summary) | MoveNode(node_id, position, target_layer?, summary)
-CreateVariable(name, data_type, value_type, schema?, category?, summary) | UpdateVariable(variable_id, changed fields, summary) | CreateComment(content, position, target_layer?, summary)
-CreateLayer(name, node_ids[], target_layer?, summary) - Create a layer, optionally nested inside target_layer
-
-## Process Modeling
-Use these tools when the user wants to model/sketch a process before implementing with real nodes:
-
-**Placeholders** (AddPlaceholder): Create custom process steps with named pins
-- Always have exec_in and exec_out pins automatically
-- Add custom data pins: pins[]: Array of {{name, friendly_name, pin_type (Input/Output), data_type (String/Integer/Float/Boolean/Struct/Generic)}}
-
-**Branches** (node_type: "control_branch"): Decision points with condition input and True/False execution outputs
-- Use for if/else logic, approvals, validations
-
-**Parallel Execution** (node_type: "control_par_execution"): Run multiple paths simultaneously
-- Use for tasks that can happen concurrently (e.g., send notifications while processing)
-
-**Comments** (CreateComment): Add documentation/notes to explain process sections
-
-IMPORTANT: Every process flow needs a START EVENT:
-1. First add a "Simple Event" node (node_type: "events_simple") - this is the entry point
-2. Then add placeholders, branches, sequences for process steps
-3. Connect them: Simple Event → Step 1 → Branch → (True path / False path) etc.
-
-Example process: Simple Event → Validate Order (placeholder) → Branch (is_valid) → True: Process Payment → Ship Order | False: Notify Customer
-
-## Command Order
-ALWAYS emit commands in this order:
-1. AddNode commands first (create nodes)
-2. ConnectPins commands (wire nodes together)
-3. UpdateNodePin commands LAST (set default values)
+4. Compute MoveNode targets from current `p` coordinates and `s` dimensions; use absolute positions.
+5. Every visual command needs a `summary`; one batch may contain at most 20 commands.
+6. Layer creation/removal and layer-membership changes are not accepted by model-facing commands.
+7. For any executable behavior—including sketch/process placeholders—write complete FlowScript.
 
 ## CRITICAL: Do NOT repeat commands
 - After emit_commands succeeds, those commands are QUEUED - do NOT emit them again
-- Check tool results to see what was already created before adding more
-- Each node/placeholder should only be created ONCE
 - If emit_commands returns validation feedback, NOTHING was queued yet - inspect the reported issues, fix the batch, and retry
 
-## Workflow: Start from TARGET, work backwards. Search catalog first. Connect exec pins."#,
+## Workflow behavior: use FlowScript source, never hand-authored graph command JSON."#,
         enforcement = TOOL_ENFORCEMENT_RULES,
         context = context_json,
         flowscript = flowscript,
@@ -744,6 +1003,7 @@ ALWAYS emit commands in this order:
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
+        event_guidance = EVENT_ENTRY_GUIDANCE,
         flowscript_examples = FLOWSCRIPT_FEW_SHOT_EXAMPLES,
     )
 }
@@ -866,14 +1126,23 @@ const GENERAL_PROMPT_HEADER: &str = r#"You are FlowPilot, an expert development 
 
 Analyze the user's request and immediately call the appropriate tool:
 - UI work → call `emit_ui` with complete A2UI JSON (it validates internally)
-- Workflow work with a board/FlowScript context → call `get_current_flowscript`, make ONE `get_declarations` call with all needed searches batched in `queries`, then `edit_flowscript` with the full edited FlowScript
-- Workflow layout-only work → call `emit_commands` with MoveNode commands (it validates internally)
+- Workflow work with a board/FlowScript context → call `get_current_flowscript`, make ONE
+  `get_declarations` call with all needed searches batched in `queries`, then retain the full source
+  with `write_flowscript`, repair it with `patch_flowscript`, and `check_flowscript` +
+  `commit_flowscript` at the exact current revision
+- Workflow visual-only work → call `emit_commands` only for position-only MoveNode or canvas comments
 - Both → call both tools in sequence
-- Unclear → call `catalog_search` or `list_board_nodes` to gather context, then act
+- Unclear workflow mutation → use the current FlowScript and one batched `get_declarations` call,
+  then submit an early source draft; reserve `catalog_search`/`list_board_nodes` for read-only exploration
 
-For workflows: Use FlowScript/edit_flowscript for behavior; use emit_commands only for layout or non-FlowScript changes
+For workflows: write, patch, check, and commit FlowScript source for behavior. `emit_commands`
+accepts only position-only MoveNode and CreateComment/DeleteComment.
 For data workflows: prefer the built-in LanceDB-backed Open Database path. Use Open Database with DataFusion for SQL analytics, and Open Database with embedding/vector/full-text/hybrid-search/index nodes for RAG/search. Do not ask for Pinecone/Weaviate/Milvus/Postgres pgvector unless the user explicitly requests an external backend.
-Use database_tool to inspect existing tables/schemas/indices before designing data workflows. Use execute_event after creating event-backed workflows when runtime logs can validate or debug the result.
+Use database_tool to inspect existing tables/schemas/indices and create missing tables with an
+explicit schema before designing data workflows. After
+an applied build, use execute_node (or execute_event for an app Event) and query_execution_logs to
+verify runtime behavior when side effects are safe. Never claim runtime correctness from validation
+or queued board commands alone.
 For UI: Use emit_ui (NOT file editing); it validates before rendering
 For dashboards (a workflow that drives a page/widgets): call ui_inspect before any a2ui* call so element refs and widget selectors are real, and feed DataFusion results into the page via a2uiSetElementText / a2uiInstantiateWidget / a2uiPushCsvToChart."#;
 
@@ -927,19 +1196,24 @@ pub fn board_sdk_system_prompt() -> String {
         r#"{enforcement}
 You are FlowPilot, an expert workflow/graph editor assistant.
 
-## YOUR WORKFLOW (execute these steps in order, using tool calls):
+## MUTATION REPRESENTATION
+Executable workflow behavior is authored only as FlowScript through get_current_flowscript,
+write_flowscript, patch_flowscript, check_flowscript, and commit_flowscript when those tools are
+registered. Never hand-author AddNode, RemoveNode, ConnectPins, DisconnectPins, UpdateNodePin,
+variables, placeholders, function layers/references, or any other executable command JSON.
 
-**Step 1 — Search intelligently:** Plan the whole change, then call `catalog_search` for the node
-types it needs (and ONE batched `get_declarations` call when writing FlowScript). Never guess a
-node_type. If board-inspection tools (`list_board_nodes`, `get_node_details`,
-`get_unconfigured_nodes`) are registered in this session, use them to ground pins and existing
-work — one batched `get_node_details` call for every node you plan to touch.
-**Step 2 — Execute changes:** Call `emit_commands` with the full batch. It validates before
-queueing: if it reports errors, nothing was queued — fix the batch and call it again.
+`emit_commands` is a deliberately small visual-only tool. It accepts exactly:
+- MoveNode for an existing node (absolute position without changing layer membership)
+- CreateComment and DeleteComment
 
-Do not skip straight to emit_commands with guessed node types or pin names.
+Every visual command needs a summary and one batch may contain at most 20 commands. Layer
+creation/removal and membership changes are unavailable. If executable behavior is requested but the
+FlowScript source tools are not registered, do not substitute graph JSON; report that a live board
+FlowScript surface is required.
 
 {autonomy_guidance}
+
+{event_guidance}
 
 {database_guidance}
 
@@ -953,80 +1227,8 @@ Do not skip straight to emit_commands with guessed node types or pin names.
 
 {explanation_guidance}
 
-## emit_commands FORMAT
-Batch commands in this order:
-1. AddNode commands FIRST
-2. ConnectPins commands
-3. UpdateNodePin commands LAST
-
-## COMMAND TYPES
-- AddNode: {{command_type, node_type, ref_id, position: {{x, y}}, summary}}
-- ConnectPins: {{command_type, from_node, from_pin, to_node, to_pin, summary}}
-- UpdateNodePin: {{command_type, node_id, pin_id, value, summary}}
-- RemoveNode: {{command_type, node_id, summary}}
-- AddPlaceholder: {{command_type, name, ref_id, position, pins?, summary}}
-- CreateVariable: {{command_type, name, data_type, value_type, schema?, category?, summary}}
-- UpdateVariable: {{command_type, variable_id, changed fields, clear_* flags?, summary}}
-- CreateComment: {{command_type, content, position, summary}}
-
-## POSITIONING
-- Place new nodes NEAR related nodes (within 250-300px)
-- Horizontal flow: left-to-right, x+250 spacing
-- If connecting TO existing node at {{x:500, y:200}}, place at {{x:250, y:200}}
-- If connecting FROM existing node at {{x:500, y:200}}, place at {{x:750, y:200}}
-
-## CONNECTIONS
-- For single-output execution nodes, connect that output to the next node's exec input.
-- For multi-output execution nodes, never guess. Use exact pin names from get_node_details and the
-  documented normal/success path for that node, e.g. API Call/httpFetch continues from
-  `exec_success`, not `exec_error`.
-- Use EXACT pin names from `get_node_details` (case-sensitive!)
-- ref_ids: '$0', '$1', '$2' reference nodes created in same batch
-- Connect compatible types only
-- Prefer nodes returned by `find_connectable_nodes` when extending an existing workflow edge
-
-## PIN VALUES
-- pin_id is the pin NAME, like "url", "method", "body"
-- value must be JSON: strings as `"value"`, numbers as `123`, booleans as `true`
-
-## RUNTIME/DATA TOOLS
-- `internet_search`: current public web search through search.flow-like.com.
-- `database_tool`: list/query/modify LanceDB/Open Database tables and indices. Inspect tables
-  before designing DataFusion/vector/FTS/hybrid search workflows.
-- `storage_tool`: list/read/create/delete app storage files.
-- `ui_inspect`: read-only listing of pages, their element refs, and widget selectors/pins. Call it
-  before writing any `a2ui*` call so element references and widget selectors are real.
-- `execute_event`: run an event and inspect bounded logs after creating event-backed workflows.
-- `ask_user`: only for genuinely blocking input; include a recommended default.
-
-## EXAMPLE: "Make HTTP GET request and parse JSON"
-1. `catalog_search("http request")` and `catalog_search("parse json")` → note the EXACT `node_type`
-   values the results report. The `<NODE_TYPE_…>` placeholders below stand for those values —
-   never invent or guess a node_type; use only strings returned by catalog_search.
-2. `emit_commands` (pin names come from get_node_details on the found types):
-```json
-{{
-  "commands": [
-    {{"command_type": "AddNode", "node_type": "<NODE_TYPE_FROM_SEARCH_1>", "ref_id": "$0", "position": {{"x": 300, "y": 200}}, "summary": "HTTP request node"}},
-    {{"command_type": "AddNode", "node_type": "<NODE_TYPE_FROM_SEARCH_2>", "ref_id": "$1", "position": {{"x": 550, "y": 200}}, "summary": "JSON parser"}},
-    {{"command_type": "ConnectPins", "from_node": "$0", "from_pin": "exec_out", "to_node": "$1", "to_pin": "exec_in", "summary": "Connect execution"}},
-    {{"command_type": "ConnectPins", "from_node": "$0", "from_pin": "<OUTPUT_PIN>", "to_node": "$1", "to_pin": "<INPUT_PIN>", "summary": "Pass response to parser"}},
-    {{"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "url", "value": "https://api.example.com/data", "summary": "Set URL"}},
-    {{"command_type": "UpdateNodePin", "node_id": "$0", "pin_id": "method", "value": "GET", "summary": "Set method"}}
-  ],
-  "explanation": "Created HTTP request → JSON parse workflow"
-}}
-```
-
-## RULES
-1. NEVER guess node_type — always catalog_search first
-2. NEVER guess pin names — always get_node_details first
-3. ALWAYS include position in AddNode
-4. Connect execution flow only through exact execution pins; for multi-output nodes, use the
-   explicit normal/success path from get_node_details/declarations and never guess by pin order
-5. Each command needs a "summary" field
-6. Do NOT repeat commands that already succeeded
-7. If `emit_commands` returns validation issues, nothing was queued — fix the reported problems and resend a corrected batch only"#,
+If `emit_commands` returns validation issues, nothing was queued. Fix only the visual batch and
+resend it; if the error says FlowScript is required, switch to the retained source lifecycle."#,
         enforcement = TOOL_ENFORCEMENT_RULES,
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
         a2ui_guidance = A2UI_STATE_GUIDANCE,
@@ -1035,15 +1237,16 @@ Batch commands in this order:
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
+        event_guidance = EVENT_ENTRY_GUIDANCE,
     )
 }
 
 /// Build the board system prompt for the Copilot SDK path when a live board is available.
 ///
 /// Mirrors the rig agent's FlowScript-first workflow: the board is rendered as FlowScript (with
-/// `//@n:<id>` anchors) and embedded inline, and the agent edits that text surface via
-/// `edit_flowscript`. `emit_commands` stays available for canvas positioning and features the
-/// text surface cannot express.
+/// `//@n:<id>` anchors) and embedded inline. The agent retains, patches, checks, and commits that
+/// source through the FlowScript lifecycle; `emit_commands` stays available for canvas positioning
+/// plus canvas comments.
 pub fn board_sdk_flowscript_system_prompt(flowscript: &str, node_count: usize) -> String {
     format!(
         r#"{enforcement}
@@ -1056,8 +1259,8 @@ You are FlowPilot, an expert workflow/graph editor assistant.
 }
 
 /// Reusable "board context" section for the Copilot SDK path: renders the current board as
-/// FlowScript and documents the FlowScript-first editing workflow (`get_declarations`,
-/// `edit_flowscript`) plus the `emit_commands` fallback. Shared by the board-only and unified
+/// FlowScript and documents the FlowScript-first editing workflow (`get_declarations`, source
+/// lifecycle tools) plus the `emit_commands` fallback. Shared by the board-only and unified
 /// (`Both`) prompts so board-bearing sessions always see the live graph and the right tools.
 pub fn flowscript_board_context(flowscript: &str, node_count: usize) -> String {
     format!(
@@ -1071,19 +1274,20 @@ node carries a `//@n:<id>` anchor comment tying it to that node's stable identit
 {flowscript}
 ```
 
-## HOW TO MODIFY (execute in order)
-1. Read the FlowScript above to understand the current graph. For any existing-board edit, call
-   `get_current_flowscript` immediately before `edit_flowscript` and edit that returned source.
+## HOW TO BUILD OR MODIFY A WORKFLOW WITH FLOWSCRIPT (execute in order)
+1. Treat the FlowScript above as the complete editable document. For an existing-board edit, call
+   `get_current_flowscript` immediately before authoring and preserve anchors from that source.
+   For a new or empty board, start a complete source document from the requested behavior.
 2. Plan the WHOLE change first, then make ONE `get_declarations` call with every needed search
    batched in `queries` (camelCase name, typed params, `// impure` marker come back per search).
-   Never use a blank query and never guess a node name or pin. A typical edit needs 3-5 tool
-   calls total: get_current_flowscript → one batched get_declarations → edit_flowscript
-   (+ ui_inspect once when a2ui elements are involved).
-3. Edit the FlowScript text and submit the FULL document via `edit_flowscript`.
+   Never use a blank query and never guess a node name or pin.
+3. Call `write_flowscript` with one fresh `draft_id` and the FULL document as soon as it is coherent.
+   The streamed source is the user's live inline preview. Reuse that draft id and the exact returned
+   revision for every repair/check/commit in this request.
    - PRESERVE every `//@n:<id>` anchor on statements you keep, exactly as given.
    - Changing a literal argument on an anchored call updates that node's pin value.
-   - Deleting anchored statements is blocked unless `allow_deletions` is explicitly true; leave it
-     false unless the user asked to delete.
+   - Use additive mode unless the user explicitly requested replacement/deletion. A replacement
+     commit must enumerate the exact ids to remove; omission never authorizes deletion.
    - Adding a new unanchored catalog call creates that node, sets literal args, and connects
      resolvable FlowScript references/nested calls.
    - Adding a new `function name(params): (returns) {{ ... }}` declaration creates a Function
@@ -1093,18 +1297,27 @@ node carries a `//@n:<id>` anchor comment tying it to that node's stable identit
    - Do not use `emit_commands` for workflow functions; use FlowScript functions.
    - Never submit implementation plans, TODOs, function stubs, or comments-only FlowScript. Use
      exact declarations and concrete node calls.
-4. `edit_flowscript` ALWAYS validates first. If it reports parse errors or diagnostics, NOTHING is
-   queued — fix the FlowScript and resubmit. Only a clean parse queues commands for the user.
+4. Fix focused diagnostics with `patch_flowscript`; its `old_text` must occur exactly once. A
+   coherent whole-document rewrite may use `write_flowscript` with `replace_existing: true`.
+5. Call `check_flowscript` at the exact current revision. It parses the source into an internal
+   typed AST, reconciles exact catalog/pin/execution semantics, and retains the derived commands.
+   If it returns diagnostics, nothing is queued: patch the same retained document and check again.
+6. Call `commit_flowscript` only after status `valid`. It queues the exact checked command batch for
+   review; never hand-author or copy its internal JSON representation.
 
 ## WHEN TO USE emit_commands INSTEAD
 Use the lower-level `emit_commands` tool ONLY for what FlowScript text cannot express:
-- Repositioning nodes on the canvas (MoveNode) — positions are visual and not part of FlowScript.
-- Comments, visual placeholders/collapsed layers, and other modeling constructs that do not yet
-  have FlowScript syntax. Function layers DO have FlowScript syntax: use `function ... {{ ... }}`.
+- Position-only node movement on the canvas (MoveNode) — it cannot change layer membership.
+- CreateComment/DeleteComment canvas notes.
+It rejects executable nodes, placeholders, connections, pin values, variables, function layers,
+function references, and every layer mutation. Author every executable change in FlowScript; use
+`function ... {{ ... }}` for function layers.
 `emit_commands` validates before queueing; if it reports errors, nothing was queued — fix and
 resend.
 
 {autonomy_guidance}
+
+{event_guidance}
 
 {database_guidance}
 
@@ -1125,14 +1338,15 @@ resend.
 get_unconfigured_nodes (nodes missing required inputs)
 **Catalog** ({node_count} nodes): catalog_search (by name/description), get_declarations
 (FlowScript .flow.d signatures)
-**Runtime/Data**: internet_search (SearXNG web search), database_tool (list/query/modify
+**Runtime/Data**: internet_search (SearXNG web search), database_tool (list/create/query/modify
 LanceDB/Open Database tables), storage_tool (list/read/create/delete app storage files),
 ui_inspect (read-only pages/widgets/element refs — call before any a2ui* call),
-execute_event (run an event and inspect bounded logs), ask_user (rare targeted question with
-defaults)
-**Modify**: get_current_flowscript (retrieve exact live board code), edit_flowscript (PRIMARY —
-apply edited FlowScript text, including function layers), emit_commands (layout or non-FlowScript
-changes; validates internally)
+execute_event (run a persisted Event), execute_node (run from a persisted node),
+query_execution_logs (read logs for an exact run), ask_user (rare targeted question with defaults)
+**Build or modify FlowScript**: get_current_flowscript (retrieve exact live board code),
+write_flowscript (retain/preview full source), patch_flowscript (focused exact-text repair),
+check_flowscript (compile/validate), commit_flowscript (queue the checked batch), emit_commands
+(position-only MoveNode and canvas comments only; validates internally)
 
 ## Board Rules
 1. Reference nodes in explanations with <focus_node>NODE_ID</focus_node> to highlight them.
@@ -1150,6 +1364,7 @@ changes; validates internally)
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
+        event_guidance = EVENT_ENTRY_GUIDANCE,
         flowscript_examples = FLOWSCRIPT_FEW_SHOT_EXAMPLES,
     )
 }
@@ -1231,4 +1446,366 @@ Design mobile-first: base styles for mobile, then sm: md: lg: xl: 2xl: breakpoin
         enforcement = TOOL_ENFORCEMENT_RULES,
         component_docs = component_docs,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::ast::reconcile_text_with_catalog;
+    use crate::flow::board::{Board, ExecutionMode, ExecutionStage};
+    use crate::flow::copilot::{
+        FlowIrProgram, NodeMetadata, PinMetadata, UpsertFlowIrModuleArgs, compile_flow_ir,
+    };
+    use crate::flow::execution::LogLevel;
+    use flow_like_ast::{Container, SigParam, Signature, SignatureSet, parse};
+    use flow_like_storage::Path;
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    fn verified_microexamples() -> Vec<&'static str> {
+        FLOWSCRIPT_FEW_SHOT_EXAMPLES
+            .split("```flowscript-verified\n")
+            .skip(1)
+            .map(|rest| {
+                rest.split_once("\n```")
+                    .expect("verified FlowScript fence must be closed")
+                    .0
+            })
+            .collect()
+    }
+
+    fn verified_typed_upserts() -> Vec<UpsertFlowIrModuleArgs> {
+        TYPED_FLOW_IR_GUIDANCE
+            .split("```flow-ir-verified\n")
+            .skip(1)
+            .map(|rest| {
+                let json = rest
+                    .split_once("\n```")
+                    .expect("verified typed IR fence must be closed")
+                    .0;
+                serde_json::from_str(json).expect("verified typed tool call must match its schema")
+            })
+            .collect()
+    }
+
+    fn empty_board() -> Board {
+        Board {
+            id: "verified-prompt-examples".to_string(),
+            name: "Verified Prompt Examples".to_string(),
+            description: String::new(),
+            nodes: HashMap::new(),
+            variables: HashMap::new(),
+            comments: HashMap::new(),
+            viewport: (0.0, 0.0, 1.0),
+            version: (0, 0, 1),
+            stage: ExecutionStage::Dev,
+            log_level: LogLevel::Info,
+            execution_mode: ExecutionMode::Hybrid,
+            refs: HashMap::new(),
+            layers: HashMap::new(),
+            page_ids: Vec::new(),
+            hash: None,
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            parent: None,
+            board_dir: Path::from("/test"),
+            logic_nodes: HashMap::new(),
+            app_state: None,
+        }
+    }
+
+    fn metadata_pin(param: &SigParam) -> PinMetadata {
+        let data_type = match param.ty.base.as_str() {
+            "any" => "Generic",
+            "bool" => "Boolean",
+            "bytes" => "Byte",
+            "float" => "Float",
+            "int" => "Integer",
+            "string" => "String",
+            other => other,
+        };
+        let value_type = match param.ty.container {
+            Container::Normal => "Normal",
+            Container::Array => "Array",
+            Container::Map => "HashMap",
+            Container::Set => "HashSet",
+        };
+        PinMetadata {
+            name: param.name.clone(),
+            friendly_name: param.name.clone(),
+            description: param.doc.clone().unwrap_or_default(),
+            data_type: data_type.to_string(),
+            value_type: value_type.to_string(),
+            default_value: None,
+            schema: param.schema.clone(),
+            is_generic: param.ty.base == "any",
+            valid_values: None,
+            enforce_schema: false,
+        }
+    }
+
+    fn execution_pin(name: &str) -> PinMetadata {
+        PinMetadata {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: String::new(),
+            data_type: "Execution".to_string(),
+            value_type: "Normal".to_string(),
+            default_value: None,
+            schema: None,
+            is_generic: false,
+            valid_values: None,
+            enforce_schema: false,
+        }
+    }
+
+    /// `signatures.json` intentionally omits execution pins. Recreate the concrete execution
+    /// shapes exercised by the verified examples while deriving every data pin from the generated
+    /// catalog registry. A registry rename/type change therefore breaks this test instead of
+    /// leaving stale prompt code behind.
+    fn metadata_from_signature(signature: &Signature) -> NodeMetadata {
+        let mut inputs = signature
+            .inputs
+            .iter()
+            .map(metadata_pin)
+            .collect::<Vec<_>>();
+        let mut outputs = signature
+            .outputs
+            .iter()
+            .map(metadata_pin)
+            .collect::<Vec<_>>();
+
+        if signature.impure {
+            match signature.node_type.as_str() {
+                node_type if node_type.starts_with("events_") => {
+                    outputs.insert(0, execution_pin("exec_out"));
+                }
+                "control_branch" => {
+                    inputs.insert(0, execution_pin("exec_in"));
+                    outputs.insert(0, execution_pin("false"));
+                    outputs.insert(0, execution_pin("true"));
+                }
+                "control_for_each" => {
+                    inputs.insert(0, execution_pin("exec_in"));
+                    outputs.insert(0, execution_pin("done"));
+                    outputs.insert(0, execution_pin("exec_out"));
+                }
+                "http_fetch" => {
+                    inputs.insert(0, execution_pin("exec_in"));
+                    outputs.insert(0, execution_pin("exec_error"));
+                    outputs.insert(0, execution_pin("exec_success"));
+                }
+                _ => {
+                    inputs.insert(0, execution_pin("exec_in"));
+                    outputs.insert(0, execution_pin("exec_out"));
+                }
+            }
+        }
+
+        NodeMetadata {
+            name: signature.node_type.clone(),
+            friendly_name: signature
+                .friendly
+                .clone()
+                .unwrap_or_else(|| signature.display.clone()),
+            description: signature.doc.clone().unwrap_or_default(),
+            inputs,
+            outputs,
+            category: signature.category.clone(),
+            required_inputs: signature
+                .inputs
+                .iter()
+                .filter(|param| !param.optional)
+                .map(|param| param.name.clone())
+                .collect(),
+            companion_nodes: Vec::new(),
+            capability_tags: Vec::new(),
+        }
+    }
+
+    fn generated_catalog_metadata() -> Vec<NodeMetadata> {
+        let signatures: SignatureSet =
+            serde_json::from_str(include_str!("../../../ast/signatures.json"))
+                .expect("generated FlowScript signature registry must deserialize");
+        signatures
+            .signatures
+            .iter()
+            .map(metadata_from_signature)
+            .collect()
+    }
+
+    #[test]
+    fn verified_flowscript_microexamples_parse() {
+        let examples = verified_microexamples();
+        assert_eq!(
+            examples.len(),
+            4,
+            "keep the verified suite intentionally small"
+        );
+        for (index, example) in examples.iter().enumerate() {
+            parse(example).unwrap_or_else(|error| {
+                panic!("verified FlowScript example {index} failed to parse: {error}\n{example}")
+            });
+        }
+    }
+
+    #[test]
+    fn verified_flowscript_microexamples_reconcile_against_generated_catalog() {
+        let catalog = generated_catalog_metadata();
+        for (index, example) in verified_microexamples().iter().enumerate() {
+            let result = reconcile_text_with_catalog(&empty_board(), example, &catalog);
+            assert!(
+                result.diagnostics.is_empty(),
+                "verified FlowScript example {index} did not reconcile: {:?}\n{example}",
+                result.diagnostics
+            );
+            assert!(
+                !result.commands.is_empty(),
+                "verified FlowScript example {index} produced no materialization commands"
+            );
+        }
+    }
+
+    #[test]
+    fn verified_typed_tool_calls_compile_against_generated_catalog() {
+        let catalog = generated_catalog_metadata();
+        let examples = verified_typed_upserts();
+        assert_eq!(examples.len(), 2, "keep the typed few-shot suite compact");
+        for (index, example) in examples.into_iter().enumerate() {
+            let program = FlowIrProgram {
+                modules: vec![example.module],
+                ..Default::default()
+            };
+            let compiled = compile_flow_ir(&program, &catalog);
+            assert!(
+                compiled.diagnostics.is_empty(),
+                "verified typed example {index} failed to compile: {:?}\n{}",
+                compiled.diagnostics,
+                compiled.flowscript
+            );
+        }
+    }
+
+    #[test]
+    fn flowscript_examples_use_real_helper_declaration_syntax() {
+        for helper in [
+            "generateReport",
+            "ingestRows",
+            "search",
+            "loadConfig",
+            "processAllSources",
+            "loadOverview",
+            "fetchPage",
+            "runResearch",
+            "briefingPageLoad",
+            "fillArticles",
+            "openBriefing",
+            "renderTrend",
+        ] {
+            assert!(
+                FLOWSCRIPT_FEW_SHOT_EXAMPLES.contains(&format!("function {helper}(")),
+                "few-shot helper {helper} must include the function keyword"
+            );
+            assert!(
+                !FLOWSCRIPT_FEW_SHOT_EXAMPLES.contains(&format!("\n{helper}(")),
+                "few-shot helper {helper} must not look like an Event/interface declaration"
+            );
+        }
+        assert!(
+            !FLOWSCRIPT_FEW_SHOT_EXAMPLES
+                .contains("aiGenerativeMakeHistoryMessage({ role: \"User\", type: \"Text\", text:")
+        );
+        assert!(
+            FLOWSCRIPT_FEW_SHOT_EXAMPLES
+                .contains("aiGenerativeHistoryFromString({ modelName: \"\", message: task })")
+        );
+        assert!(
+            !FLOWSCRIPT_FEW_SHOT_EXAMPLES
+                .contains("openLocalDb({ name: \"email_vectors\" }).database")
+        );
+    }
+
+    #[test]
+    fn board_prompts_preserve_failed_full_scope_drafts() {
+        let prompt = board_sdk_flowscript_system_prompt("", 0);
+        assert!(prompt.contains("requested behavior as an invariant"));
+        assert!(prompt.contains("last submitted draft plus its"));
+        assert!(prompt.contains("diagnostics"));
+        assert!(prompt.contains("`RECOVERED CANDIDATE` / `retained_candidate`"));
+        assert!(prompt.contains("active FlowScript workspace"));
+        assert!(prompt.contains("platform-orchestration regression"));
+        assert!(prompt.contains("continue the retained production candidate"));
+        assert!(prompt.contains("literal `function` keyword"));
+        assert!(prompt.contains("must declare a named return pin"));
+        assert!(prompt.contains("Never call shell/file/Read tools"));
+        let rig_prompt = board_system_prompt("{}", "", 0, false, false);
+        assert!(rig_prompt.contains("position-only MoveNode"));
+        assert!(!rig_prompt.contains("Simple Event command last"));
+    }
+
+    #[test]
+    fn board_prompts_make_flowscript_the_only_model_facing_workflow_surface() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+        ];
+
+        for prompt in prompts {
+            assert!(prompt.contains("## PRIMARY SURFACE: FlowScript"));
+            assert!(
+                prompt.contains(
+                    "For a new or empty board, start a complete source document from the requested behavior."
+                )
+            );
+            assert!(prompt.contains("live inline preview"));
+            assert!(prompt.contains("**Build or modify FlowScript**"));
+            for source_tool in [
+                "write_flowscript",
+                "patch_flowscript",
+                "check_flowscript",
+                "commit_flowscript",
+            ] {
+                assert!(
+                    prompt.contains(source_tool),
+                    "model-facing prompt omitted source lifecycle tool: {source_tool}"
+                );
+            }
+            assert!(!prompt.contains("edit_flowscript"));
+            assert!(prompt.contains("position-only MoveNode"));
+            assert!(prompt.contains("CreateComment"));
+            assert!(prompt.contains("DeleteComment"));
+            assert!(prompt.contains("creation/removal"));
+            assert!(!prompt.contains("## Commands"));
+            assert!(!prompt.contains("## emit_commands FORMAT"));
+            assert!(!prompt.contains("AddPlaceholder(name"));
+            assert!(!prompt.contains("\"command_type\": \"AddNode\""));
+
+            for legacy_typed_surface in [
+                "TYPED FLOW IR",
+                "plan_flow_ir",
+                "begin_flow_ir_draft",
+                "update_flow_ir_draft",
+                "upsert_flow_ir_module",
+                "validate_flow_ir_draft",
+                "commit_flow_ir_draft",
+                "flow-ir-verified",
+            ] {
+                assert!(
+                    !prompt.contains(legacy_typed_surface),
+                    "model-facing prompt still exposes legacy surface: {legacy_typed_surface}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn database_setup_cannot_block_the_first_board_mutation() {
+        let prompt = board_sdk_flowscript_system_prompt("", 0);
+        assert!(prompt.contains("database setup is\nnever a prerequisite"));
+        assert!(prompt.contains("submit the full board through\n`write_flowscript` before"));
+        assert!(prompt.contains("One such result proves the capability mismatch"));
+        assert!(prompt.contains(
+            "Record\nany remaining requested schemas as pending and finish/apply the board"
+        ));
+    }
 }

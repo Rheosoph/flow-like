@@ -1,6 +1,11 @@
 import {
 	type ChatImage,
 	type CopilotScope,
+	type CopilotToolContext,
+	type FlowIrCommitDisposition,
+	type FlowIrCommitDispositionResult,
+	type FlowIrCommitToken,
+	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
 	type IBoardState,
@@ -36,6 +41,8 @@ import {
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
+import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
@@ -1052,7 +1059,12 @@ export class BoardState implements IBoardState {
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
-		const board = await this.getBoard(appId, boardId, undefined, true);
+		const board = await this.getBoard(
+			appId,
+			boardId,
+			normalizeBoardVersion(payload.version),
+			true,
+		);
 		await this.ensureAppPackagesInstalledForExecution(appId);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
@@ -1228,6 +1240,7 @@ export class BoardState implements IBoardState {
 				appId: appId,
 				boardId: boardId,
 				payload: payload,
+				version: normalizeBoardVersion(payload.version),
 				events: channel,
 				streamState: streamState,
 				credentials,
@@ -1269,6 +1282,7 @@ export class BoardState implements IBoardState {
 				method: "POST",
 				body: JSON.stringify({
 					node_id: payload.id,
+					version: payload.version,
 					payload: payload.payload,
 					token: this.backend.auth.user?.access_token,
 					stream_state: streamState ?? true,
@@ -1561,7 +1575,10 @@ export class BoardState implements IBoardState {
 			);
 		}
 
-		const boardUpdate = await fetcher<{ id: string }>(
+		const boardUpdate = await fetcher<{
+			id: string;
+			updated_at?: IBoard["updated_at"];
+		}>(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}`,
 			{
@@ -1580,6 +1597,35 @@ export class BoardState implements IBoardState {
 
 		if (!boardUpdate?.id) {
 			throw new Error("Failed to update board");
+		}
+
+		// Keep the authoritative remote write immediately readable by desktop callers. Previously an
+		// online upsert never populated the local store; getBoards() therefore returned [] while its
+		// remote sync ran in the background. A create_app -> flowpilot_board sequence interpreted that
+		// empty snapshot as "no board", created a duplicate board, and could then hit a propagation 404.
+		try {
+			// Older deployed APIs return only `{ id }`. Use an intentionally old revision for that
+			// compatibility path so the transient readiness cache can never outrank the authoritative
+			// remote board during the next sync.
+			const authoritativeUpdatedAt = boardUpdate.updated_at ?? {
+				secs_since_epoch: 0,
+				nanos_since_epoch: 0,
+			};
+			await invoke("upsert_board", {
+				appId,
+				boardId,
+				name,
+				description,
+				logLevel,
+				stage,
+				executionMode,
+				template,
+				authoritativeUpdatedAt,
+			});
+		} catch (error) {
+			// The remote write already succeeded. Do not turn a cache failure into a failed
+			// create_app response (and a duplicate retry); the readiness path can still fetch it.
+			console.warn("Failed to cache the remote board locally:", error);
 		}
 	}
 
@@ -1799,14 +1845,17 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		pageId: string,
 		wildcard = false,
+		version?: [number, number, number],
 	): Promise<Record<string, unknown>> {
 		// Try local execution first
 		const localElements = await invoke<Record<string, unknown>>(
 			"get_execution_elements",
 			{
+				appId,
 				boardId,
 				pageId,
 				wildcard,
+				version,
 			},
 		);
 
@@ -1829,6 +1878,7 @@ export class BoardState implements IBoardState {
 				const params = new URLSearchParams();
 				params.set("page_id", pageId);
 				if (wildcard) params.set("wildcard", "true");
+				if (version) params.set("version", version.join("_"));
 
 				const response = await fetcher<{ elements: Record<string, unknown> }>(
 					this.backend.profile,
@@ -1866,13 +1916,17 @@ export class BoardState implements IBoardState {
 		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
+		reasoningEffort?: string,
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
 		nested?: boolean,
 		readOnly?: boolean,
+		toolContext?: CopilotToolContext,
+		requestId?: string,
+		rawUserPrompt?: string,
 	): Promise<UnifiedCopilotResponse> {
-		console.log(
+		flowPilotDebugLog(
 			"[copilot_chat] Calling with scope:",
 			scope,
 			"runContext:",
@@ -1898,13 +1952,97 @@ export class BoardState implements IBoardState {
 			history,
 			currentImages: requestImages,
 			modelId,
+			reasoningEffort,
 			channel,
 			token: actualToken,
 			runContext,
 			actionContext,
 			nested,
 			readOnly,
+			toolContext,
+			requestId,
+			rawUserPrompt,
 		});
+	}
+
+	async cancelCopilotChat(requestId: string): Promise<void> {
+		await invoke<boolean>("cancel_copilot_chat", { requestId });
+	}
+
+	async flowIrCommitDisposition(
+		token: FlowIrCommitToken,
+		disposition: FlowIrCommitDisposition,
+	): Promise<FlowIrCommitDispositionResult> {
+		return await invoke<FlowIrCommitDispositionResult>(
+			"flowpilot_flow_ir_commit_disposition",
+			{ token, disposition },
+		);
+	}
+
+	async applyFlowIrCommit(
+		appId: string,
+		token: FlowIrCommitToken,
+	): Promise<IApplyFlowIrCommitResponse> {
+		const result = await invoke<IApplyFlowIrCommitResponse>(
+			"flowpilot_apply_flow_ir_commit",
+			{
+				appId,
+				token,
+			},
+		);
+		if (result.status !== "applied" || result.commands.length === 0) {
+			return result;
+		}
+
+		try {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline) return result;
+			if (
+				!this.backend.profile ||
+				!this.backend.auth ||
+				!this.backend.queryClient
+			) {
+				await this.backend.pushOfflineSyncCommand(
+					appId,
+					token.board_id,
+					result.commands,
+				);
+				return result;
+			}
+
+			try {
+				await fetcher(
+					this.backend.profile,
+					`apps/${appId}/board/${token.board_id}`,
+					{
+						method: "POST",
+						body: JSON.stringify({ commands: result.commands }),
+					},
+					this.backend.auth,
+				);
+			} catch (error) {
+				console.error(
+					"Failed to push typed FlowPilot commands to server:",
+					error,
+				);
+				await this.backend.pushOfflineSyncCommand(
+					appId,
+					token.board_id,
+					result.commands,
+				);
+			}
+		} catch (error) {
+			// Native apply has already committed and acknowledged the exact batch. A
+			// remote-sync bookkeeping failure is recoverable and must not make the caller
+			// retry or dismiss a commit that is already present locally.
+			const warning = `Typed workflow applied locally; remote synchronization must retry: ${getErrorMessage(error, "Unknown sync error")}`;
+			console.error(warning, error);
+			return {
+				...result,
+				diagnostics: [...result.diagnostics, warning],
+			};
+		}
+		return result;
 	}
 
 	async prerunBoard(

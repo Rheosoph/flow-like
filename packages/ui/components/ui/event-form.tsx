@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
 import { useInvoke } from "../../hooks";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
@@ -8,6 +8,10 @@ import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
 import { IExecutionMode } from "../../lib/schema/flow/board";
+import {
+	type BoardVersion,
+	normalizeBoardVersion,
+} from "../../lib/schema/flow/board-version";
 import {
 	IEventExecutionMode,
 	IEventExposure,
@@ -59,6 +63,21 @@ interface EventFormProps {
 	) => Promise<IStoredOAuthToken>;
 }
 
+interface EventFormData {
+	name: string;
+	description: string;
+	board_version?: BoardVersion;
+	node_id?: string;
+	board_id: string;
+	default_page_id?: string;
+	target_kind: "board" | "page";
+	event_type?: string;
+	config: number[];
+	path: string;
+	execution_mode: IEventExecutionMode;
+	exposure: IEventExposure;
+}
+
 export function EventForm({
 	eventConfig,
 	uiEventTypes,
@@ -74,21 +93,18 @@ export function EventForm({
 	onRefreshToken,
 }: Readonly<EventFormProps>) {
 	const backend = useBackend();
-	const inferredDefaultPageId = (event as any)?.default_page_id as
-		| string
-		| null
-		| undefined;
-	const [formData, setFormData] = useState({
+	const inferredDefaultPageId = event?.default_page_id;
+	const [formData, setFormData] = useState<EventFormData>({
 		name: event?.name ?? "",
 		description: event?.description ?? "",
-		board_version: undefined,
+		board_version: normalizeBoardVersion(event?.board_version),
 		node_id: event?.node_id ?? "",
 		board_id: event?.board_id ?? "",
 		default_page_id: inferredDefaultPageId ?? undefined,
 		target_kind: inferredDefaultPageId ? ("page" as const) : ("board" as const),
-		event_type: undefined,
-		config: [],
-		path: (event as any)?.path ?? "/",
+		event_type: event?.event_type,
+		config: event?.config ?? [],
+		path: typeof event?.path === "string" ? event.path : "/",
 		execution_mode:
 			(event?.execution_mode as IEventExecutionMode | undefined) ??
 			IEventExecutionMode.Local,
@@ -142,7 +158,9 @@ export function EventForm({
 	);
 
 	const [selectedNodeType, setSelectedNodeType] = useState<string>("");
-	const [eventTypeConfig, setEventTypeConfig] = useState<any>({});
+	const [eventTypeConfig, setEventTypeConfig] = useState<
+		Record<string, unknown>
+	>({});
 
 	const boardExecutionMode = board.data?.execution_mode;
 	const canExecuteLocally = backend.capabilities().canExecuteLocally;
@@ -190,14 +208,15 @@ export function EventForm({
 		return uiEventTypes.includes(eventType);
 	};
 
-	const shouldRequireRoutePath = useMemo(() => {
-		if (formData.target_kind === "page") return true;
-		return isUiEventType(formData.event_type);
-	}, [formData.target_kind, formData.event_type, uiEventTypes]);
+	const shouldRequireRoutePath =
+		formData.target_kind === "page" || isUiEventType(formData.event_type);
 
-	const handleInputChange = (field: string, value: any) => {
+	function handleInputChange<K extends keyof EventFormData>(
+		field: K,
+		value: EventFormData[K],
+	) {
 		setFormData((prev) => ({ ...prev, [field]: value }));
-	};
+	}
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -388,26 +407,53 @@ export function EventForm({
 	const isEditing = !!event;
 	const isPageEvent = formData.target_kind === "page";
 
-	const handleSelectPage = useCallback(
-		(pageId: string) => {
-			setPathError(null);
-			const page = (pages.data ?? []).find(
-				(p: PageListItem) => p.pageId === pageId,
-			);
-			handleInputChange("default_page_id", pageId);
-			handleInputChange("event_type", "page");
-			handleInputChange("node_id", "");
-			handleInputChange("board_version", undefined);
-			setSelectedNodeType("");
-			setEventTypeConfig({});
-			if (page?.boardId) {
-				handleInputChange("board_id", page.boardId);
-			} else {
-				handleInputChange("board_id", "");
-			}
-		},
-		[pages.data],
-	);
+	const handleSelectPage = (pageId: string) => {
+		setPathError(null);
+		const page = (pages.data ?? []).find(
+			(p: PageListItem) => p.pageId === pageId,
+		);
+		handleInputChange("default_page_id", pageId);
+		handleInputChange("event_type", "page");
+		handleInputChange("node_id", "");
+		handleInputChange("board_version", undefined);
+		setSelectedNodeType("");
+		setEventTypeConfig({});
+		handleInputChange("board_id", page?.boardId ?? "");
+	};
+
+	const boardVersionSelector = formData.board_id ? (
+		<div className="space-y-2">
+			<Label>Flow Version</Label>
+			<Select
+				value={formData.board_version?.join(".") ?? "latest"}
+				onValueChange={(value) => {
+					handleInputChange(
+						"board_version",
+						value === "latest"
+							? undefined
+							: normalizeBoardVersion(value.split(".").map(Number)),
+					);
+					if (!isPageEvent) handleInputChange("node_id", undefined);
+				}}
+			>
+				<SelectTrigger>
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent>
+					<SelectItem value="latest">Latest</SelectItem>
+					{versions.data?.map((version) => (
+						<SelectItem key={version.join(".")} value={version.join(".")}>
+							v{version.join(".")}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			<p className="text-xs text-muted-foreground">
+				Latest follows the current flow. A pinned version always runs that exact
+				snapshot.
+			</p>
+		</div>
+	) : null;
 
 	return (
 		<form onSubmit={handleSubmit} className="space-y-6 pb-4">
@@ -486,6 +532,8 @@ export function EventForm({
 						</Select>
 					</div>
 
+					{boardVersionSelector}
+
 					<div className="space-y-2">
 						<Label htmlFor="path">Route Path</Label>
 						<Input
@@ -538,32 +586,7 @@ export function EventForm({
 					</div>
 
 					{/* Board Version Selection */}
-					<div className="space-y-4">
-						<div className="space-y-2">
-							<Label htmlFor="board">Flow Version</Label>
-							<Select
-								value={formData.board_version ?? ""}
-								onValueChange={(value) => {
-									handleInputChange(
-										"board_version",
-										value === "" ? undefined : value.split(".").map(Number),
-									);
-									handleInputChange("node_id", undefined);
-								}}
-							>
-								<SelectTrigger>
-									<SelectValue placeholder="Latest" />
-								</SelectTrigger>
-								<SelectContent>
-									{versions.data?.map((board) => (
-										<SelectItem key={board.join(".")} value={board.join(".")}>
-											v{board.join(".")}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-					</div>
+					{boardVersionSelector}
 
 					{/* Execution mode — where the event runs. Locked to match the
 					    board when the board is Local/Remote; user-selectable when

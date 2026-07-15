@@ -158,7 +158,6 @@ export interface WidgetBuilderProps {
 	actionContext?: {
 		appId?: string;
 		boardId?: string;
-		boardVersion?: [number, number, number];
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
 		widgetActions?: { id: string; label: string; description?: string }[];

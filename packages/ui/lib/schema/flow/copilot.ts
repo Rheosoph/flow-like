@@ -45,7 +45,10 @@ export interface PlaceholderPinDef {
 		| "Boolean"
 		| "Struct"
 		| "Generic"
-		| "Execution";
+		| "Execution"
+		| "Date"
+		| "PathBuf"
+		| "Byte";
 	value_type?: "Normal" | "Array" | "HashMap" | "HashSet";
 }
 
@@ -57,6 +60,8 @@ export type BoardCommand =
 			ref_id?: string; // Reference ID for this node (e.g., "$0", "$1") used in connections
 			position?: { x: number; y: number };
 			friendly_name?: string;
+			/** Extra pins appended to a new catalog node; supported only for events_generic outputs. */
+			additional_pins?: PlaceholderPinDef[];
 			/** Target layer ID to place the node in. If undefined, uses current layer. */
 			target_layer?: string;
 			summary?: string;

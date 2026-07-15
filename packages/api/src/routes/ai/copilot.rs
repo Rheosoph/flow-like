@@ -1,4 +1,10 @@
-use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    state::{AppState, flow_ir_draft_store_key},
+};
 use axum::{
     Extension, Json, Router,
     extract::State,
@@ -13,7 +19,8 @@ use flow_like::copilot::{
 };
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::{
-    CatalogProvider, NodeMetadata, PinMetadata, enrich_node_metadata, score_catalog_metadata,
+    CatalogProvider, FlowIrDraftStore, NodeMetadata, PinMetadata, enrich_node_metadata,
+    score_catalog_metadata,
 };
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow::pin::{Pin, PinType};
@@ -33,6 +40,11 @@ pub struct CopilotChatRequest {
     /// The scope of operation: "Board", "Frontend", or "Both"
     pub scope: CopilotScope,
 
+    /// App owning `board`. Required whenever board context is supplied so the server can authorize
+    /// and canonically reload it before retaining a compiled FlowScript review.
+    #[serde(default)]
+    pub app_id: Option<String>,
+
     /// Board context (optional for Frontend scope)
     #[serde(default)]
     pub board: Option<Board>,
@@ -47,6 +59,11 @@ pub struct CopilotChatRequest {
 
     /// The user's prompt
     pub user_prompt: String,
+
+    /// Immutable user-authored request before any host orchestration wrappers. Older clients may
+    /// omit it, in which case `user_prompt` remains authoritative.
+    #[serde(default)]
+    pub raw_user_prompt: Option<String>,
 
     /// Images attached to the current prompt
     #[serde(default)]
@@ -88,6 +105,15 @@ fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError
     if payload.user_prompt.chars().count() > MAX_PROMPT_CHARS {
         return Err(ApiError::bad_request(format!(
             "Prompt is too large. Maximum is {MAX_PROMPT_CHARS} characters."
+        )));
+    }
+    if payload
+        .raw_user_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.chars().count() > MAX_PROMPT_CHARS)
+    {
+        return Err(ApiError::bad_request(format!(
+            "Raw prompt is too large. Maximum is {MAX_PROMPT_CHARS} characters."
         )));
     }
 
@@ -363,6 +389,7 @@ async fn build_unified_copilot(
     state: &AppState,
     scope: CopilotScope,
     profile: Option<Arc<Profile>>,
+    flow_ir_draft_store: Option<Arc<FlowIrDraftStore>>,
 ) -> Result<flow_like::copilot::UnifiedCopilot, ApiError> {
     let flow_like_state = master_flow_like_state(state).await?;
 
@@ -373,10 +400,13 @@ async fn build_unified_copilot(
         })),
     };
 
-    let copilot =
+    let mut copilot =
         flow_like::copilot::UnifiedCopilot::new(flow_like_state, catalog_provider, profile, None)
             .await
             .map_err(|e| ApiError::internal(format!("Failed to init copilot: {e}")))?;
+    if let Some(store) = flow_ir_draft_store {
+        copilot = copilot.with_flow_ir_draft_store(store);
+    }
     Ok(copilot)
 }
 
@@ -386,10 +416,37 @@ async fn build_unified_copilot(
 pub async fn copilot_chat(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
-    Json(payload): Json<CopilotChatRequest>,
+    Json(mut payload): Json<CopilotChatRequest>,
 ) -> Result<axum::response::Response, ApiError> {
-    let sub = user.sub()?;
+    let mut sub = user.sub()?;
     validate_copilot_payload(&payload)?;
+
+    // A renderer-supplied board is useful for identifying the requested context, but it is not an
+    // authority or concurrency boundary. Authorize its owning app, then replace it with the
+    // canonical persisted board so the retained commit token fingerprints the same source that the
+    // review Apply endpoint will later reload.
+    let retained_app_id =
+        if let Some(board_id) = payload.board.as_ref().map(|board| board.id.clone()) {
+            let app_id = payload
+                .app_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|app_id| !app_id.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    ApiError::bad_request("app_id is required when board context is supplied")
+                })?;
+            let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+            sub = permission.sub()?;
+            payload.board = Some(
+                state
+                    .master_board(&sub, &app_id, &board_id, &state, None)
+                    .await?,
+            );
+            Some(app_id)
+        } else {
+            None
+        };
 
     tracing::info!(
         "[copilot_chat] User {} requested scope {:?}",
@@ -414,17 +471,30 @@ pub async fn copilot_chat(
     // token, the model call loops through this server's metered `/chat/completions`, so tier
     // enforcement + usage tracking apply. Falls back to `None` only when the user has no profile.
     let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
-    let copilot = build_unified_copilot(&state, payload.scope, profile).await?;
+    let flow_ir_draft_store = payload.board.as_ref().and_then(|board| {
+        (!matches!(payload.scope, CopilotScope::Frontend)).then(|| {
+            let app_id = retained_app_id
+                .as_deref()
+                .expect("board context was authorized with an app id");
+            let key = flow_ir_draft_store_key(&sub, app_id, &board.id);
+            state
+                .flow_ir_draft_stores
+                .get_with(key, || Arc::new(FlowIrDraftStore::new()))
+        })
+    });
+    let copilot =
+        build_unified_copilot(&state, payload.scope, profile, flow_ir_draft_store).await?;
 
     if !payload.stream {
         let response = copilot
-            .chat(
+            .chat_with_raw_user_prompt(
                 payload.scope,
                 payload.board.as_ref(),
                 &payload.selected_node_ids,
                 payload.current_surface.as_ref(),
                 &payload.selected_component_ids,
                 payload.user_prompt,
+                payload.raw_user_prompt,
                 payload.request_images,
                 payload.history,
                 payload.model_id,
@@ -450,13 +520,14 @@ pub async fn copilot_chat(
 
     flow_like_types::tokio::spawn(async move {
         let result = copilot
-            .chat(
+            .chat_with_raw_user_prompt(
                 payload.scope,
                 payload.board.as_ref(),
                 &payload.selected_node_ids,
                 payload.current_surface.as_ref(),
                 &payload.selected_component_ids,
                 payload.user_prompt,
+                payload.raw_user_prompt,
                 payload.request_images,
                 payload.history,
                 payload.model_id,

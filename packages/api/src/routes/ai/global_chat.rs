@@ -688,6 +688,7 @@ pub async fn global_chat(
             canvas_settings: None,
             root_component_id: None,
             flowscript_workspace: None,
+            flow_ir_commit: None,
             suggestions: Vec::new(),
             active_scope: scope,
         })

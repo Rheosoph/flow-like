@@ -7,14 +7,20 @@
 //! See `todo/ast.md`.
 
 mod apply;
+mod diagnostics;
 mod lower;
 mod reconcile;
 mod signatures;
 mod types;
 
 pub use apply::{
-    ApplyFlowScriptResult, apply_flowscript_to_board, blocked_destructive_flowscript_message,
-    destructive_flowscript_command_summaries,
+    ApplyFlowScriptResult, apply_board_commands_to_board, apply_flowscript_to_board,
+    blocked_destructive_flowscript_message, destructive_flowscript_command_summaries,
+};
+pub use diagnostics::{
+    FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
+    FlowScriptDiagnosticPhase, FlowScriptSourcePosition, FlowScriptSourceSpan,
+    structure_reconcile_diagnostics,
 };
 pub use flow_like_ast::{
     BoardAst, DeclarationFile, NodeSchemas, ParseError, RenderOptions, Signature, SignatureSet,
@@ -22,9 +28,14 @@ pub use flow_like_ast::{
 };
 pub use lower::lower_board;
 pub use reconcile::{
-    MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileResult, reconcile, reconcile_text,
-    reconcile_text_with_catalog, reconcile_text_with_catalog_enriched, reconcile_with_catalog,
+    MAX_NODES_PER_LAYER, MetadataEnricher, ReconcileMode, ReconcileResult, reconcile,
+    reconcile_text, reconcile_text_with_catalog, reconcile_text_with_catalog_enriched,
+    reconcile_with_catalog, reconcile_with_catalog_mode,
 };
+pub(crate) use reconcile::{
+    dynamic_placeholder_config_pin, synthesize_dynamic_input_pin_from_template,
+};
+pub(crate) use reconcile::{parse_pin_occurrence_ref, pin_occurrence_ref};
 pub use signatures::{node_to_signature, node_to_signature_in};
 
 use crate::flow::board::Board;
@@ -245,7 +256,7 @@ mod generate_flowscript {
 #[cfg(test)]
 mod lower_tests {
     use super::*;
-    use crate::flow::board::{Board, ExecutionMode, ExecutionStage};
+    use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
     use crate::flow::variable::{VariableType, infer_schema_from_json};
@@ -424,5 +435,155 @@ mod lower_tests {
             !text_out.contains("eventsGenericReturnResult"),
             "the raw call must not leak:\n{text_out}"
         );
+    }
+
+    #[test]
+    fn legacy_layer_local_only_function_nodes_are_lowered() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Legacy Helper".to_string(),
+            LayerType::Function,
+        );
+        let mut body = Node::new("log", "Log", "", "debug");
+        body.id = "legacy-body".to_string();
+        body.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        body.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        layer.nodes.insert(body.id.clone(), body);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let text = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(text.contains("function legacyHelper()"), "{text}");
+        assert!(
+            text.contains("log()"),
+            "legacy function body was hidden:\n{text}"
+        );
+        assert!(text.contains("//@n:legacy-body"), "{text}");
+    }
+
+    #[test]
+    fn canonical_flat_node_wins_over_stale_layer_local_clone() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "Helper".to_string(),
+            LayerType::Function,
+        );
+
+        let mut canonical = Node::new("canonical_log", "Canonical", "", "debug");
+        canonical.id = "shared-body".to_string();
+        canonical.layer = Some(layer.id.clone());
+        canonical.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        canonical.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        let mut stale = Node::new("stale_log", "Stale", "", "debug");
+        stale.id = canonical.id.clone();
+        stale.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        stale.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        board.nodes.insert(canonical.id.clone(), canonical);
+        layer.nodes.insert(stale.id.clone(), stale);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let text = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(text.contains("canonicalLog()"), "{text}");
+        assert!(
+            !text.contains("staleLog()"),
+            "stale compatibility clone won:\n{text}"
+        );
+        assert_eq!(text.matches("//@n:shared-body").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn duplicate_legacy_identity_uses_the_first_layer_in_stable_id_order() {
+        let mut board = empty_board();
+        let mut first = Layer::new(
+            "a-function".to_string(),
+            "First Helper".to_string(),
+            LayerType::Function,
+        );
+        let mut last = Layer::new(
+            "z-function".to_string(),
+            "Last Helper".to_string(),
+            LayerType::Function,
+        );
+
+        let mut preferred = Node::new("preferred_log", "Preferred", "", "debug");
+        preferred.id = "legacy-shared".to_string();
+        preferred.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        preferred.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        let mut stale = Node::new("stale_log", "Stale", "", "debug");
+        stale.id = preferred.id.clone();
+        stale.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        stale.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        first.nodes.insert(preferred.id.clone(), preferred);
+        last.nodes.insert(stale.id.clone(), stale);
+        // Insert in reverse lexical order: selection must follow semantic ids, not insertion or
+        // randomized HashMap iteration order.
+        board.layers.insert(last.id.clone(), last);
+        board.layers.insert(first.id.clone(), first);
+
+        let text = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(text.contains("preferredLog()"), "{text}");
+        assert!(
+            !text.contains("staleLog()"),
+            "unstable legacy fallback won:\n{text}"
+        );
+        assert_eq!(text.matches("//@n:legacy-shared").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn cyclic_presentational_layer_parents_do_not_hang_or_hide_root_events() {
+        let mut board = empty_board();
+        let mut first = Layer::new(
+            "cycle-a".to_string(),
+            "Cycle A".to_string(),
+            LayerType::Macro,
+        );
+        let mut second = Layer::new(
+            "cycle-b".to_string(),
+            "Cycle B".to_string(),
+            LayerType::Collapsed,
+        );
+        first.parent_id = Some(second.id.clone());
+        second.parent_id = Some(first.id.clone());
+        board.layers.insert(first.id.clone(), first);
+        board.layers.insert(second.id.clone(), second);
+
+        let mut event = Node::new("events_generic", "Cycle Event", "", "events");
+        event.id = "cycle-event".to_string();
+        event.layer = Some("cycle-a".to_string());
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let ast = lower_to_ast(&board);
+
+        assert_eq!(ast.events.len(), 1);
+        assert_eq!(ast.events[0].anchor.as_deref(), Some("cycle-event"));
+        assert!(ast.functions.is_empty());
     }
 }

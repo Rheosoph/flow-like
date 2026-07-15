@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { IHistoryMessage } from "../../../lib";
+import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 
 export type IAttachment =
 	| string // Simple URL variant
@@ -78,6 +79,8 @@ export interface IMessage {
 	usage_stats?: IChatUsageStat[];
 	/** Apps this message acted on/referenced — rendered as clickable chips under the message. */
 	app_refs?: string[];
+	/** Persisted, bounded lifecycle report for debugging one complete agent turn. */
+	debug_report?: IAgentDebugReport;
 }
 
 export interface ISession {

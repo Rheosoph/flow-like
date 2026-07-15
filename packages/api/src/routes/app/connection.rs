@@ -209,9 +209,7 @@ pub(crate) fn to_connection_info(
         .get(other_app_id)
         .map(|preview| (Some(preview.name.clone()), preview.description.clone()))
         .unwrap_or((None, None));
-    let app_icon = media
-        .get(other_app_id)
-        .and_then(|(icon, _)| icon.clone());
+    let app_icon = media.get(other_app_id).and_then(|(icon, _)| icon.clone());
 
     AppConnectionInfo {
         id: model.id,

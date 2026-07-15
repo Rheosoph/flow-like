@@ -3031,9 +3031,16 @@ impl NodeLogic for LocalSpeechToTextNode {
             Ok(output) => output,
             Err(error) => {
                 let message = error.to_string().to_ascii_lowercase();
-                if ["decode", "unsupported", "codec", "format", "track", "container"]
-                    .iter()
-                    .any(|needle| message.contains(needle))
+                if [
+                    "decode",
+                    "unsupported",
+                    "codec",
+                    "format",
+                    "track",
+                    "container",
+                ]
+                .iter()
+                .any(|needle| message.contains(needle))
                 {
                     bail!(
                         "{error}. Local Speech to Text decodes WAV, MP3, FLAC, OGG (Vorbis/Opus), WebM/Opus, M4A/MP4 (AAC) and PCM; re-encode the input to one of these formats."

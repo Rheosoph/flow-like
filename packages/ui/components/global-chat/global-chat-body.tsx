@@ -56,6 +56,7 @@ import {
 	SelectValue,
 } from "../../index";
 import { getApiOrigin } from "../../lib/api-url";
+import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import {
 	type IMessage,
@@ -135,6 +136,10 @@ const EMPTY_SUGGESTIONS: Array<{
 
 // Radix Select disallows an empty value, so "memory off" uses a sentinel mapped back to "".
 const MEMORY_OFF = "__off__";
+const GLOBAL_CHAT_CONFIG = {
+	allow_file_upload: true,
+	tools: [] as string[],
+};
 
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
@@ -155,8 +160,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
 	const provider = useGlobalChatStore((s) => s.provider);
 	const selectedModelId = useGlobalChatStore((s) => s.selectedModelId);
+	const reasoningEffort = useGlobalChatStore((s) => s.reasoningEffort);
 	const setProvider = useGlobalChatStore((s) => s.setProvider);
 	const setSelectedModelId = useGlobalChatStore((s) => s.setSelectedModelId);
+	const setReasoningEffort = useGlobalChatStore((s) => s.setReasoningEffort);
 	const embeddingModelId = useGlobalChatStore((s) => s.embeddingModelId);
 	const setEmbeddingModelId = useGlobalChatStore((s) => s.setEmbeddingModelId);
 	const appendMessage = useGlobalChatStore((s) => s.appendMessage);
@@ -348,6 +355,36 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		setSelectedModelId,
 	]);
 
+	const selectedAgentModel = isAgent
+		? copilotSDK.models.find((model) => model.id === selectedModelId)
+		: undefined;
+	const reasoningEffortOptions =
+		selectedAgentModel?.supportedReasoningEfforts ?? [];
+
+	// Do not validate against the hook's metadata-free static fallback. Once the
+	// backend has returned a real catalog (`[]` or populated), stale persisted
+	// values are reset to Auto instead of being sent to an incompatible model.
+	useEffect(() => {
+		if (!reasoningEffort) return;
+		if (!isAgent) {
+			setReasoningEffort("");
+			return;
+		}
+		if (
+			!selectedAgentModel ||
+			selectedAgentModel.supportedReasoningEfforts === undefined
+		) {
+			return;
+		}
+		if (
+			!selectedAgentModel.supportedReasoningEfforts.some(
+				(option) => option.id === reasoningEffort,
+			)
+		) {
+			setReasoningEffort("");
+		}
+	}, [isAgent, reasoningEffort, selectedAgentModel, setReasoningEffort]);
+
 	const handleSendMessage: ISendMessageFunction = useCallback(
 		async (content, filesAttached) => {
 			const trimmed = content.trim();
@@ -442,6 +479,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
 			await driveGlobalChatStream({
 				responseMessage,
+				inputPreview: {
+					prompt: trimmed,
+					attachments: imageFiles.map((file) => ({
+						name: file.name,
+						type: file.type,
+						size: file.size,
+					})),
+				},
 				// Desktop drives the run over a Tauri Channel (resumable via the Rust registry); the
 				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
 				// tool bridge via the registry. Both feed the shared parser identically.
@@ -459,6 +504,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									: undefined,
 							history: historyPayload,
 							modelId: effectiveModelId,
+							reasoningEffort: state.reasoningEffort || undefined,
 							embeddingModelId: state.embeddingModelId || undefined,
 							token: authUser?.access_token ?? undefined,
 							userContext: userContext ?? undefined,
@@ -469,6 +515,16 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							baseUrl: getApiOrigin(),
 							token: authUser?.access_token ?? undefined,
 							onToolRequest: runGlobalChatTool,
+							onLifecycle: FLOWPILOT_DEBUG_ENABLED
+								? (event) => {
+										useGlobalChatStore
+											.getState()
+											.recordDebugEvent(responseMessage.id, {
+												...event,
+												id: `${responseMessage.id}:${event.id}`,
+											});
+									}
+								: undefined,
 							body: {
 								scope: "Frontend",
 								user_prompt: trimmed,
@@ -575,9 +631,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
 
-	// Provider + model live in ONE combined popover selector (see providerModelPicker below) to keep
-	// the toolbar compact: the trigger shows the active provider icon + model name, and the popover
-	// hosts the provider switch and that provider's model list.
+	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo(
 		() =>
 			isAgent
@@ -687,6 +741,16 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			) : null,
 		[memoryModels, embeddingModelId, handleEmbeddingChange],
 	);
+	const defaultReasoningEffortName = reasoningEffortOptions.find(
+		(option) => option.id === selectedAgentModel?.defaultReasoningEffort,
+	)?.name;
+	const autoReasoningEffortName = defaultReasoningEffortName
+		? `Auto (${defaultReasoningEffortName} default)`
+		: "Auto (provider default)";
+	const currentReasoningEffortName = reasoningEffort
+		? (reasoningEffortOptions.find((option) => option.id === reasoningEffort)
+				?.name ?? reasoningEffort)
+		: autoReasoningEffortName;
 
 	const showEmptyState =
 		messages.length === 0 &&
@@ -720,26 +784,37 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		(option) => option.id === selectedModelId,
 	)?.label;
 
-	// Combined provider + model selector — one compact trigger instead of a provider pill row plus a
-	// separate model dropdown. The popover switches provider (which reloads its model list) and picks
-	// the model; picking a model closes it, switching provider keeps it open.
+	// Provider, model, and model-specific reasoning effort live in one compact picker. A model with
+	// configurable reasoning keeps the popover open so the next section can be selected immediately;
+	// models without that capability close it as before.
 	const providerModelPicker = (
 		<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 			<PopoverTrigger asChild>
 				<Button
 					variant="outline"
 					size="sm"
-					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}`}
+					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}`}
 					className="h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
-					<span className="max-w-32 truncate">
+					<span className="max-w-28 truncate">
 						{currentModelLabel ?? "Model"}
 					</span>
+					{reasoningEffortOptions.length > 0 && (
+						<>
+							<span className="text-border" aria-hidden="true">
+								·
+							</span>
+							<BrainIcon className="size-3.5 shrink-0 text-muted-foreground" />
+							<span className="max-w-32 truncate text-muted-foreground">
+								{currentReasoningEffortName}
+							</span>
+						</>
+					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent align="start" className="z-10000 w-64 p-2">
+			<PopoverContent align="start" className="z-10000 w-72 p-2">
 				<p className="px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
 					Provider
 				</p>
@@ -762,7 +837,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
 					Model
 				</p>
-				<div className="max-h-56 space-y-0.5 overflow-y-auto">
+				<div className="max-h-48 space-y-0.5 overflow-y-auto">
 					{modelOptions.length === 0 ? (
 						<p className="px-2 py-4 text-center text-xs text-muted-foreground">
 							{isAgent ? "Starting backend…" : "No models available"}
@@ -776,7 +851,15 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									type="button"
 									onClick={() => {
 										setSelectedModelId(option.id);
-										setPickerOpen(false);
+										const nextModel = copilotSDK.models.find(
+											(model) => model.id === option.id,
+										);
+										if (
+											!isAgent ||
+											(nextModel?.supportedReasoningEfforts?.length ?? 0) === 0
+										) {
+											setPickerOpen(false);
+										}
 									}}
 									className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
 								>
@@ -787,6 +870,49 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						})
 					)}
 				</div>
+				{reasoningEffortOptions.length > 0 && (
+					<>
+						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+							Reasoning
+						</p>
+						<div className="grid grid-cols-2 gap-1">
+							<button
+								type="button"
+								onClick={() => {
+									setReasoningEffort("");
+									setPickerOpen(false);
+								}}
+								className={`col-span-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${!reasoningEffort ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+							>
+								<BrainIcon className="size-3.5 shrink-0" />
+								<span className="flex-1 truncate">
+									{autoReasoningEffortName}
+								</span>
+								{!reasoningEffort && (
+									<CheckIcon className="size-3.5 shrink-0" />
+								)}
+							</button>
+							{reasoningEffortOptions.map((option) => {
+								const active = option.id === reasoningEffort;
+								return (
+									<button
+										key={option.id}
+										type="button"
+										title={option.description}
+										onClick={() => {
+											setReasoningEffort(option.id);
+											setPickerOpen(false);
+										}}
+										className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+									>
+										<span className="flex-1 truncate">{option.name}</span>
+										{active && <CheckIcon className="size-3.5 shrink-0" />}
+									</button>
+								);
+							})}
+						</div>
+					</>
+				)}
 			</PopoverContent>
 		</Popover>
 	);
@@ -924,7 +1050,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						messages={messages}
 						onSendMessage={handleSendMessage}
 						isStreamActive={isStreaming}
-						config={{ allow_file_upload: true, tools: [] }}
+						config={GLOBAL_CHAT_CONFIG}
 						activeInteractions={activeInteractions}
 						onRespondToInteraction={handleRespondToInteraction}
 						inlinePrompt={

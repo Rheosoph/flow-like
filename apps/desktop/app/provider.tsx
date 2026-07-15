@@ -1,5 +1,6 @@
 // app/providers.tsx
 "use client";
+import { setFlowPilotProductionMetricsSink } from "@flow-like/flow-like-ui/state/global-chat/agent-debug-report";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import { useEffect } from "react";
@@ -21,11 +22,14 @@ export function PHProvider({
 
 		posthog.init(apiKey, {
 			api_host: apiHost,
-			ui_host: 'https://eu.posthog.com',
+			ui_host: "https://eu.posthog.com",
 			person_profiles: "always",
 			capture_pageleave: true,
 			autocapture: true,
 			enable_heatmaps: true,
+		});
+		return setFlowPilotProductionMetricsSink((metrics) => {
+			posthog.capture("flowpilot_generation_metrics", metrics);
 		});
 	}, []);
 

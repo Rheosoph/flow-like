@@ -30,6 +30,21 @@ pub fn parse(src: &str) -> Result<BoardAst, ParseError> {
 /// well inside a 2 MiB (debug/test) stack while allowing any realistic board.
 const MAX_NESTING_DEPTH: usize = 128;
 
+fn binary_operator_precedence(op: &str) -> Option<u8> {
+    match op {
+        "||" => Some(1),
+        "&&" => Some(2),
+        "|" => Some(3),
+        "^" => Some(4),
+        "==" | "!=" | "===" | "!==" => Some(5),
+        ">" | ">=" | "<" | "<=" => Some(6),
+        "+" | "-" => Some(7),
+        "*" | "/" | "%" => Some(8),
+        "**" => Some(9),
+        _ => None,
+    }
+}
+
 struct Parser<'a> {
     src: &'a str,
     toks: Vec<Token>,
@@ -125,9 +140,14 @@ impl Parser<'_> {
         None
     }
 
-    /// Consume a trailing non-anchor comment (a branch arm label) if present.
-    fn take_label(&mut self) -> Option<String> {
+    /// Consume a trailing non-anchor comment on `line` (a branch arm label) if present.
+    ///
+    /// Newlines are otherwise insignificant to the parser, but labels are deliberately trailing
+    /// syntax (`{ // exec_success`). A normal first-line comment inside the block must stay in the
+    /// block and must not turn a boolean `if` into the labelled call-branch form.
+    fn take_label_on_line(&mut self, line: usize) -> Option<String> {
         if let Tok::Comment(text) = self.cur()
+            && self.cur_token().line == line
             && !text.starts_with('@')
         {
             let label = text.clone();
@@ -248,6 +268,11 @@ impl Parser<'_> {
                     ast.events.push(self.event_block()?);
                 }
                 Tok::Comment(_) => {
+                    if !decorators.is_empty() {
+                        return Err(self.err(
+                            "decorators must be immediately followed by a variable declaration",
+                        ));
+                    }
                     // Stray top-level comment (no AST slot): skip.
                     self.bump();
                 }
@@ -799,12 +824,13 @@ impl Parser<'_> {
         }
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
+        let true_brace_line = self.line();
         self.expect(&Tok::LBrace)?;
         // A trailing non-anchor comment marks the labelled (call-based) branch form. The anchor
         // comment can FOLLOW the label on the same line (`{ // exec_out   //@n:id`) — the lexer
         // splits them into separate Comment tokens, so consume the anchor after the label or the
         // branch node counts as deleted on reconcile.
-        let true_label = self.take_label();
+        let true_label = self.take_label_on_line(true_brace_line);
         let anchor = self.take_anchor();
         let true_body = self.block_body()?;
 
@@ -812,8 +838,9 @@ impl Parser<'_> {
         let mut else_body = None;
         if self.is_ident("else") {
             self.bump(); // else
+            let else_brace_line = self.line();
             self.expect(&Tok::LBrace)?;
-            else_label = self.take_label();
+            else_label = self.take_label_on_line(else_brace_line);
             else_body = Some(self.block_body()?);
         }
 
@@ -947,13 +974,38 @@ impl Parser<'_> {
         Ok(cond)
     }
 
-    /// Single-precedence left-associative binary parse. The renderer fully parenthesises
-    /// nested binary/ternary operands, so explicit parens carry all the grouping.
+    /// Parse binary expressions with JavaScript-like precedence. FlowScript's renderer
+    /// parenthesises nested binary operands, but model-authored source frequently omits those
+    /// redundant parentheses (`a == b && c == d`), so the reader must still preserve the usual
+    /// operator semantics.
     fn binary(&mut self) -> Result<Expr, ParseError> {
+        self.binary_precedence(0)
+    }
+
+    fn binary_precedence(&mut self, minimum: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.postfix()?;
         while let Tok::Op(op) = self.cur().clone() {
+            let Some(precedence) = binary_operator_precedence(&op) else {
+                break;
+            };
+            if precedence < minimum {
+                break;
+            }
             self.bump();
-            let rhs = self.postfix()?;
+            if self.depth >= MAX_NESTING_DEPTH {
+                return Err(self.err("binary expression nesting too deep"));
+            }
+            self.depth += 1;
+            // Exponentiation is right-associative; all other supported operators are
+            // left-associative.
+            let next_minimum = if op == "**" {
+                precedence
+            } else {
+                precedence + 1
+            };
+            let rhs = self.binary_precedence(next_minimum);
+            self.depth -= 1;
+            let rhs = rhs?;
             lhs = Expr::Binary {
                 op,
                 lhs: Box::new(lhs),

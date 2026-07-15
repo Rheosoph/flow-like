@@ -107,7 +107,13 @@ impl Lexer {
                 ':' => self.single(Tok::Colon),
                 '?' => self.single(Tok::Question),
                 '.' if !self.peek_is_digit(1) => self.single(Tok::Dot),
-                c if c.is_ascii_digit() || (c == '-' && self.peek_is_digit(1)) => self.number()?,
+                c if c.is_ascii_digit()
+                    || (c == '-'
+                        && self.peek_is_digit(1)
+                        && signed_number_can_start_after(tokens.last())) =>
+                {
+                    self.number()?
+                }
                 c if is_ident_start(c) => self.ident(),
                 _ => {
                     if let Some(op) = self.match_operator() {
@@ -387,6 +393,20 @@ impl Lexer {
 
     fn err(&self, message: impl Into<String>) -> ParseError {
         ParseError::new(message, self.line, self.col)
+    }
+}
+
+/// A leading `-` belongs to a numeric literal only where a new expression can start. After an
+/// expression-ending token it is subtraction (`10-3`, `value - 1`). Keeping the sign on the
+/// numeric token preserves the full `i64` literal range, including `i64::MIN`.
+fn signed_number_can_start_after(previous: Option<&Token>) -> bool {
+    match previous.map(|token| &token.tok) {
+        None => true,
+        Some(
+            Tok::Str(_) | Tok::Int(_) | Tok::Float(_) | Tok::RParen | Tok::RBracket | Tok::RBrace,
+        ) => false,
+        Some(Tok::Ident(name)) => name == "return",
+        Some(_) => true,
     }
 }
 

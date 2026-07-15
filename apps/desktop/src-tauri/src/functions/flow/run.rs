@@ -188,6 +188,7 @@ async fn execute_internal(
     app_id: String,
     mut board_id: String,
     mut payload: RunPayload,
+    requested_version: Option<(u32, u32, u32)>,
     events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
     event_id: Option<String>,
     stream_state: bool,
@@ -199,7 +200,7 @@ async fn execute_internal(
     let mut event = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
-    let mut version = None;
+    let mut version = requested_version;
     let Ok(app) = App::load(app_id.clone(), flow_like_state.clone()).await else {
         return Err(TauriFunctionError::new("App not found"));
     };
@@ -519,6 +520,7 @@ pub(crate) async fn execute_daemon_event(
             filter_secrets: Some(false),
         },
         None,
+        None,
         Some(event_id),
         false,
         credentials,
@@ -542,6 +544,7 @@ pub async fn execute_board(
     app_id: String,
     board_id: String,
     payload: RunPayload,
+    version: Option<(u32, u32, u32)>,
     stream_state: Option<bool>,
     events: tauri::ipc::Channel<Vec<InterComEvent>>,
     credentials: Option<SharedCredentials>,
@@ -554,6 +557,7 @@ pub async fn execute_board(
         app_id,
         board_id,
         payload,
+        version,
         Some(events),
         None,
         stream_state,
@@ -583,6 +587,7 @@ pub async fn execute_event(
         app_id,
         String::new(), // Will be read from the event anyways
         payload,
+        None,
         Some(events),
         Some(event_id),
         stream_state,

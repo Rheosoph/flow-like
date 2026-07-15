@@ -43,7 +43,11 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub canary: Option<Json>,
     /// Process-mining case-key mappings: key name → dot-path into the payload.
-    #[sea_orm(column_name = "correlationMappings", column_type = "JsonBinary", nullable)]
+    #[sea_orm(
+        column_name = "correlationMappings",
+        column_type = "JsonBinary",
+        nullable
+    )]
     pub correlation_mappings: Option<Json>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,

@@ -86,12 +86,17 @@ function eventUpdatedAtMs(event?: IEvent): number {
 	const updatedAt = event?.updated_at;
 	if (!updatedAt) return Number.NaN;
 	return (
-		updatedAt.secs_since_epoch * 1000 +
-		updatedAt.nanos_since_epoch / 1_000_000
+		updatedAt.secs_since_epoch * 1000 + updatedAt.nanos_since_epoch / 1_000_000
 	);
 }
 
 export class EventState implements IEventState {
+	private readonly remoteEventSyncs = new Map<string, Promise<IEvent[]>>();
+	private readonly remoteEventFailures = new Map<
+		string,
+		{ attempts: number; retryAt: number; error: unknown }
+	>();
+
 	constructor(private readonly backend: TauriBackend) {}
 
 	private async ensureRpaApprovalForEvent(
@@ -235,26 +240,52 @@ export class EventState implements IEventState {
 			return events;
 		}
 
-		const syncRemote = async () => {
-			const remoteData = await fetcher<IEvent[]>(
-				this.backend.profile!,
-				`apps/${appId}/events`,
-				{
-					method: "GET",
-				},
-				this.backend.auth,
-			);
+		const syncRemote = () => {
+			const active = this.remoteEventSyncs.get(appId);
+			if (active) return active;
 
-			for (const event of remoteData) {
-				await invoke("upsert_event", {
-					appId: appId,
-					event: event,
-					enforceId: true,
-					offline: isOffline,
+			let task: Promise<IEvent[]>;
+			task = (async () => {
+				const remoteData = await fetcher<IEvent[]>(
+					this.backend.profile!,
+					`apps/${appId}/events`,
+					{
+						method: "GET",
+					},
+					this.backend.auth,
+				);
+
+				for (const event of remoteData) {
+					await invoke("upsert_event", {
+						appId: appId,
+						event: event,
+						enforceId: true,
+						offline: isOffline,
+					});
+				}
+
+				this.remoteEventFailures.delete(appId);
+				return remoteData;
+			})()
+				.catch((error) => {
+					const previous = this.remoteEventFailures.get(appId)?.attempts ?? 0;
+					const attempts = Math.min(previous + 1, 6);
+					const delayMs = Math.min(2_000 * 2 ** (attempts - 1), 60_000);
+					this.remoteEventFailures.set(appId, {
+						attempts,
+						retryAt: Date.now() + delayMs,
+						error,
+					});
+					throw error;
+				})
+				.finally(() => {
+					if (this.remoteEventSyncs.get(appId) === task) {
+						this.remoteEventSyncs.delete(appId);
+					}
 				});
-			}
 
-			return remoteData;
+			this.remoteEventSyncs.set(appId, task);
+			return task;
 		};
 
 		if (force) {
@@ -273,14 +304,29 @@ export class EventState implements IEventState {
 			}
 		}
 
+		const failure = this.remoteEventFailures.get(appId);
+		if (failure && failure.retryAt > Date.now()) {
+			// Preserve the distinction between "the app has no Events" and "we could
+			// not load its Events", while still preventing render/query retries from
+			// hammering a failing endpoint during the backoff window.
+			if (events.length === 0) throw failure.error;
+			return events;
+		}
+
 		if (events.length === 0) {
 			try {
 				const remoteData = await syncRemote();
 				const queryKey = [this.getEvents.name || "backendFn", appId];
 				this.backend.queryClient.setQueryData(queryKey, remoteData);
 				return remoteData;
-			} catch {
-				return events;
+			} catch (error) {
+				// An empty local cache is not a valid fallback: returning [] here makes an
+				// authentication or server failure look like an app with no Events.
+				console.error(
+					"[EventSync] Remote event fetch failed with no local fallback:",
+					error,
+				);
+				throw error;
 			}
 		}
 
@@ -602,7 +648,9 @@ export class EventState implements IEventState {
 			(event.board_version as [number, number, number]) ?? undefined,
 			true,
 		);
-		await this.backend.boardState.ensureAppPackagesInstalledForExecution?.(appId);
+		await this.backend.boardState.ensureAppPackagesInstalledForExecution?.(
+			appId,
+		);
 		await this.ensureRpaApprovalForEvent(appId, event, board, "execution");
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthResult = await checkOAuthTokens(board, oauthTokenStore, hub, {

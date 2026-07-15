@@ -20,6 +20,7 @@ flow-like-ast.workspace = true
 flow-like-bits.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
+blake3.workspace = true
 rig.workspace = true
 rmcp.workspace = true
 rayon = "1.11.0"
@@ -51,6 +52,7 @@ argon2.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true
+serde_path_to_error = "0.1.20"
 async-trait.workspace = true
 percent-encoding.workspace = true
 utoipa = { version = "5", optional = true }

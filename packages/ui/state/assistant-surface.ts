@@ -5,9 +5,11 @@ import type {
 	FlowScriptApplyResultLike,
 } from "../components/flow/flow-copilot/types";
 import type { ILogMetadata } from "../lib";
+import type { FlowIrCommitToken } from "../lib/schema/copilot";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { BoardCommand } from "../lib/schema/flow/copilot";
 import type { INode } from "../lib/schema/flow/node";
+import type { IApplyFlowIrCommitResponse } from "./backend-state/board-state";
 
 /**
  * Live context published by an open flow board while it is mounted, so the global
@@ -34,6 +36,10 @@ export interface AssistantBoardSurface {
 		flowscript: string,
 		options?: FlowScriptApplyOptions,
 	) => Promise<FlowScriptApplyResultLike | undefined>;
+	/** Atomically applies the exact retained compiled workflow batch under a live-board CAS. */
+	applyFlowIrCommit: (
+		token: FlowIrCommitToken,
+	) => Promise<IApplyFlowIrCommitResponse>;
 	/** Executes board copilot commands through the board's command pipeline. */
 	executeCommands: (commands: BoardCommand[]) => Promise<void>;
 	/** Pans/zooms the canvas to the given node. */
