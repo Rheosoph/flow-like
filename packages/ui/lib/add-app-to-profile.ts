@@ -1,4 +1,3 @@
-import type { QueryClient } from "@tanstack/react-query";
 import type { IBackendState } from "../state/backend-state";
 
 /**
@@ -10,12 +9,12 @@ import type { IBackendState } from "../state/backend-state";
  * call this, otherwise the app stays "member but hidden".
  *
  * Failures are swallowed (logged only) so a profile-sync hiccup never aborts the
- * surrounding acquisition flow. Pass a `queryClient` to refresh the library.
+ * surrounding acquisition flow. Callers are responsible for invalidating the
+ * `getSettingsProfile`/`getApps` queries afterwards (e.g. via `useInvalidateInvoke`).
  */
 export async function addAppToProfile(
 	backend: IBackendState,
 	appId: string,
-	queryClient?: QueryClient,
 ): Promise<void> {
 	try {
 		const profile = await backend.userState.getSettingsProfile();
@@ -24,8 +23,6 @@ export async function addAppToProfile(
 			{ app_id: appId, favorite: false, pinned: false },
 			"Upsert",
 		);
-		queryClient?.invalidateQueries({ queryKey: ["getSettingsProfile"] });
-		queryClient?.invalidateQueries({ queryKey: ["getApps"] });
 	} catch (error) {
 		console.error("Failed to add app to profile:", error);
 	}

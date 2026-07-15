@@ -180,7 +180,9 @@ export function NotificationsPageScreen() {
 			try {
 				if (action === "accept") {
 					await backend.teamState.acceptInvite(id);
-					const appId = invitations.find((invite) => invite.id === id)?.app_id;
+					const appId = invitationsQuery.data?.pages
+						.flat()
+						.find((invite) => invite.id === id)?.app_id;
 					if (appId) {
 						await addAppToProfile(backend, appId);
 						await Promise.all([
@@ -197,7 +199,7 @@ export function NotificationsPageScreen() {
 				toast.error(`Failed to ${action} invite. Please try again later.`);
 			}
 		},
-		[backend, invitations, invalidate, invitationsQuery, syncOverview],
+		[backend, invalidate, invitationsQuery, syncOverview],
 	);
 
 	const handleMarkAsRead = useCallback(
