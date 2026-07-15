@@ -1,10 +1,12 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 import { useCallback, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { addAppToProfile } from "../../lib/add-app-to-profile";
 import type { IApp } from "../../lib/schema/app/app";
 import { IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit-pack";
@@ -29,6 +31,7 @@ export function useStoreData(
 ) {
 	const backend = useBackend();
 	const auth = useAuth();
+	const queryClient = useQueryClient();
 	const [isPurchasing, setIsPurchasing] = useState(false);
 
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
@@ -142,6 +145,7 @@ export function useStoreData(
 
 			if (result.alreadyMember) {
 				toast.info("You already own this app!");
+				await addAppToProfile(backend, id, queryClient);
 				await apps.refetch?.();
 				await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(
 					() => {},
@@ -165,7 +169,8 @@ export function useStoreData(
 		id,
 		isPurchasing,
 		ensureAuthenticated,
-		backend.appState,
+		backend,
+		queryClient,
 		apps,
 		events,
 		routes,
@@ -205,6 +210,7 @@ export function useStoreData(
 				appData.id,
 				"Interested in trying out your app!",
 			);
+			await addAppToProfile(backend, appData.id, queryClient);
 			toast.success("Joined app! You can now access it.");
 			await apps.refetch?.();
 			await Promise.all([events.refetch?.(), routes.refetch?.()]).catch(
@@ -218,13 +224,19 @@ export function useStoreData(
 		appData,
 		id,
 		ensureAuthenticated,
-		backend.appState,
+		backend,
+		queryClient,
 		apps,
 		events,
 		routes,
 		router,
 		onBuy,
 	]);
+
+	const registerAppInProfile = useCallback(async () => {
+		if (!id) return;
+		await addAppToProfile(backend, id, queryClient);
+	}, [backend, id, queryClient]);
 
 	const hasThumbnail = !!metaData?.thumbnail;
 	const coverUrl = metaData?.thumbnail || "/placeholder-thumbnail.webp";
@@ -266,5 +278,6 @@ export function useStoreData(
 		onBuy,
 		onJoinOrRequest,
 		refetchAppData,
+		registerAppInProfile,
 	} as const;
 }

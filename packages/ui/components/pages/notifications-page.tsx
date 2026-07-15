@@ -25,6 +25,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../hooks/use-invoke";
+import { addAppToProfile } from "../../lib/add-app-to-profile";
 import { formatRelativeTime } from "../../lib/date";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -179,6 +180,14 @@ export function NotificationsPageScreen() {
 			try {
 				if (action === "accept") {
 					await backend.teamState.acceptInvite(id);
+					const appId = invitations.find((invite) => invite.id === id)?.app_id;
+					if (appId) {
+						await addAppToProfile(backend, appId);
+						await Promise.all([
+							invalidate(backend.userState.getSettingsProfile, []),
+							invalidate(backend.appState.getApps, []),
+						]);
+					}
 				} else {
 					await backend.teamState.rejectInvite(id);
 				}
@@ -188,7 +197,7 @@ export function NotificationsPageScreen() {
 				toast.error(`Failed to ${action} invite. Please try again later.`);
 			}
 		},
-		[backend, invitationsQuery, syncOverview],
+		[backend, invitations, invalidate, invitationsQuery, syncOverview],
 	);
 
 	const handleMarkAsRead = useCallback(
