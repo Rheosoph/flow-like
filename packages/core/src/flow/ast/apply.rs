@@ -30,7 +30,7 @@ use crate::{
         },
         copilot::{BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata},
         node::{FnRefs, Node, NodeLogic},
-        pin::{Pin, PinType, ValueType},
+        pin::{Pin, PinOptions, PinType, ValueType},
         variable::{Variable, VariableType},
     },
     state::FlowLikeState,
@@ -557,6 +557,78 @@ impl FlowScriptApplyPlanner {
                         self.resolve_optional_layer(board, target_layer.as_deref())?;
                     generic_commands.push(GenericCommand::UpsertVariable(command));
                 }
+                BoardCommand::UpdateVariable {
+                    variable_id,
+                    name,
+                    data_type,
+                    value_type,
+                    default_value,
+                    clear_default_value,
+                    description,
+                    clear_description,
+                    category,
+                    clear_category,
+                    schema,
+                    clear_schema,
+                    exposed,
+                    secret,
+                    editable,
+                    runtime_configured,
+                    value,
+                    ..
+                } => {
+                    let Some(existing_variable) = board.variables.get(variable_id) else {
+                        return Err(flow_like_types::anyhow!(
+                            "Variable `{variable_id}` not found"
+                        ));
+                    };
+                    let mut variable = existing_variable.clone();
+                    if let Some(name) = name {
+                        variable.name = name.clone();
+                    }
+                    if let Some(data_type) = data_type {
+                        variable.data_type = variable_type_from_str(data_type);
+                    }
+                    if let Some(value_type) = value_type {
+                        variable.value_type = value_type_from_str(value_type);
+                    }
+                    if *clear_default_value {
+                        variable.default_value = None;
+                    } else if let Some(default_value) = default_value.as_ref().or(value.as_ref()) {
+                        variable.default_value =
+                            Some(flow_like_types::json::to_vec(default_value)?);
+                    }
+                    if *clear_description {
+                        variable.description = None;
+                    } else if let Some(description) = description {
+                        variable.description = Some(description.clone());
+                    }
+                    if *clear_category {
+                        variable.category = None;
+                    } else if let Some(category) = category {
+                        variable.category = Some(category.clone());
+                    }
+                    if *clear_schema {
+                        variable.schema = None;
+                    } else if let Some(schema) = schema {
+                        variable.schema = Some(schema.clone());
+                    }
+                    if let Some(exposed) = exposed {
+                        variable.exposed = *exposed;
+                    }
+                    if let Some(secret) = secret {
+                        variable.secret = *secret;
+                    }
+                    if let Some(editable) = editable {
+                        variable.editable = *editable;
+                    }
+                    if let Some(runtime_configured) = runtime_configured {
+                        variable.runtime_configured = *runtime_configured;
+                    }
+                    generic_commands.push(GenericCommand::UpsertVariable(
+                        UpsertVariableCommand::new(variable),
+                    ));
+                }
                 BoardCommand::UpdateNodePin {
                     node_id,
                     pin_id,
@@ -662,6 +734,7 @@ impl FlowScriptApplyPlanner {
                 BoardCommand::AddNode { .. }
                 | BoardCommand::AddPlaceholder { .. }
                 | BoardCommand::CreateVariable { .. }
+                | BoardCommand::UpdateVariable { .. }
                 | BoardCommand::UpdateNodePin { .. } => {}
                 BoardCommand::RemoveNode { node_id, .. } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
@@ -724,78 +797,6 @@ impl FlowScriptApplyPlanner {
                         (position.x as f32, position.y as f32, 0.0),
                         current_layer,
                     )));
-                }
-                BoardCommand::UpdateVariable {
-                    variable_id,
-                    name,
-                    data_type,
-                    value_type,
-                    default_value,
-                    clear_default_value,
-                    description,
-                    clear_description,
-                    category,
-                    clear_category,
-                    schema,
-                    clear_schema,
-                    exposed,
-                    secret,
-                    editable,
-                    runtime_configured,
-                    value,
-                    ..
-                } => {
-                    let Some(existing_variable) = board.variables.get(variable_id) else {
-                        return Err(flow_like_types::anyhow!(
-                            "Variable `{variable_id}` not found"
-                        ));
-                    };
-                    let mut variable = existing_variable.clone();
-                    if let Some(name) = name {
-                        variable.name = name.clone();
-                    }
-                    if let Some(data_type) = data_type {
-                        variable.data_type = variable_type_from_str(data_type);
-                    }
-                    if let Some(value_type) = value_type {
-                        variable.value_type = value_type_from_str(value_type);
-                    }
-                    if *clear_default_value {
-                        variable.default_value = None;
-                    } else if let Some(default_value) = default_value.as_ref().or(value.as_ref()) {
-                        variable.default_value =
-                            Some(flow_like_types::json::to_vec(default_value)?);
-                    }
-                    if *clear_description {
-                        variable.description = None;
-                    } else if let Some(description) = description {
-                        variable.description = Some(description.clone());
-                    }
-                    if *clear_category {
-                        variable.category = None;
-                    } else if let Some(category) = category {
-                        variable.category = Some(category.clone());
-                    }
-                    if *clear_schema {
-                        variable.schema = None;
-                    } else if let Some(schema) = schema {
-                        variable.schema = Some(schema.clone());
-                    }
-                    if let Some(exposed) = exposed {
-                        variable.exposed = *exposed;
-                    }
-                    if let Some(secret) = secret {
-                        variable.secret = *secret;
-                    }
-                    if let Some(editable) = editable {
-                        variable.editable = *editable;
-                    }
-                    if let Some(runtime_configured) = runtime_configured {
-                        variable.runtime_configured = *runtime_configured;
-                    }
-                    generic_commands.push(GenericCommand::UpsertVariable(
-                        UpsertVariableCommand::new(variable),
-                    ));
                 }
                 BoardCommand::RemoveVariable { variable_id, .. } => {
                     let Some(variable) = board.variables.get(variable_id) else {
@@ -1111,11 +1112,17 @@ impl FlowScriptApplyPlanner {
         }
 
         if let Some(layer) = board.layers.get(entity_id) {
-            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, None);
+            // Function boundary directions are intentionally inverted from an inner-body edge:
+            // layer Inputs provide parameter values to body nodes, while layer Outputs receive
+            // body return values. Preserve that distinction so a same-named parameter/return can
+            // never resolve through HashMap iteration order.
+            let boundary_direction = expected.map(invert_boundary_pin_direction);
+            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, boundary_direction);
         }
 
         if let Some(layer) = self.staged_layers.get(entity_id) {
-            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, None);
+            let boundary_direction = expected.map(invert_boundary_pin_direction);
+            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, boundary_direction);
         }
 
         Err(flow_like_types::anyhow!("Entity `{entity_id}` not found"))
@@ -1269,6 +1276,8 @@ fn placeholder_pins(defs: Option<&[PlaceholderPinDef]>) -> HashMap<String, Pin> 
         PinType::Input,
         VariableType::Execution,
         ValueType::Normal,
+        None,
+        false,
         0,
     );
     insert_placeholder_pin(
@@ -1279,6 +1288,8 @@ fn placeholder_pins(defs: Option<&[PlaceholderPinDef]>) -> HashMap<String, Pin> 
         PinType::Output,
         VariableType::Execution,
         ValueType::Normal,
+        None,
+        false,
         1,
     );
 
@@ -1320,18 +1331,25 @@ fn append_additional_node_pins(
             ));
         }
 
-        node.add_output_pin(
+        let pin = node.add_output_pin(
             &def.name,
             &def.friendly_name,
             def.description.as_deref().unwrap_or(""),
             variable_type_from_str(&def.data_type),
-        )
-        .set_value_type(
+        );
+        pin.set_value_type(
             def.value_type
                 .as_deref()
                 .map(value_type_from_str)
                 .unwrap_or(ValueType::Normal),
         );
+        pin.schema = def.schema.clone();
+        if def.enforce_schema {
+            pin.set_options(PinOptions {
+                enforce_schema: Some(true),
+                ..PinOptions::default()
+            });
+        }
     }
 
     Ok(())
@@ -1362,6 +1380,8 @@ fn insert_layer_pins(
                 .as_deref()
                 .map(value_type_from_str)
                 .unwrap_or(ValueType::Normal),
+            def.schema.clone(),
+            def.enforce_schema,
             (offset + start_index) as u16,
         );
     }
@@ -1375,6 +1395,8 @@ fn insert_placeholder_pin(
     pin_type: PinType,
     data_type: VariableType,
     value_type: ValueType,
+    schema: Option<String>,
+    enforce_schema: bool,
     index: u16,
 ) {
     let id = create_id();
@@ -1387,16 +1409,26 @@ fn insert_placeholder_pin(
             description: description.to_string(),
             pin_type,
             data_type,
-            schema: None,
+            schema,
             value_type,
             depends_on: Default::default(),
             connected_to: Default::default(),
             default_value: None,
             index,
-            options: None,
+            options: enforce_schema.then(|| PinOptions {
+                enforce_schema: Some(true),
+                ..PinOptions::default()
+            }),
             value: None,
         },
     );
+}
+
+fn invert_boundary_pin_direction(direction: PinType) -> PinType {
+    match direction {
+        PinType::Input => PinType::Output,
+        PinType::Output => PinType::Input,
+    }
 }
 
 fn resolve_pin_id_in_node(
@@ -1552,7 +1584,7 @@ fn pin_type_from_str(value: &str) -> PinType {
 mod tests {
     use super::*;
     use crate::flow::board::{ExecutionMode, ExecutionStage};
-    use crate::flow::execution::LogLevel;
+    use crate::flow::execution::{LogLevel, context::ExecutionContext};
     use crate::flow::variable::VariableType;
     use crate::state::FlowLikeConfig;
     use crate::utils::http::HTTPClient;
@@ -1616,6 +1648,144 @@ mod tests {
             .as_deref()
             .expect("pin has a default value");
         flow_like_types::json::from_slice(bytes).expect("default value decodes")
+    }
+
+    struct TestVariableGetLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestVariableGetLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("variable_get", "Get Variable", "", "test");
+            node.add_input_pin("var_ref", "Variable Reference", "", VariableType::String);
+            node.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut Node, board: &Board) {
+            let Some(variable) = test_referenced_variable(node, board) else {
+                return;
+            };
+            let Some(current) = node.get_pin_by_name("value_ref").cloned() else {
+                return;
+            };
+            if current.data_type == variable.data_type
+                && current.value_type == variable.value_type
+                && current.schema == variable.schema
+            {
+                return;
+            }
+
+            let mut connected_to = current.connected_to;
+            connected_to.retain(|pin_id| {
+                board.get_pin_by_id(pin_id).is_some_and(|pin| {
+                    pin.data_type == variable.data_type
+                        && pin.value_type == variable.value_type
+                        && (variable.schema.is_none()
+                            || pin.schema.is_none()
+                            || pin.schema == variable.schema)
+                })
+            });
+            let output = node
+                .get_pin_mut_by_name("value_ref")
+                .expect("test variable getter output");
+            output.data_type = variable.data_type;
+            output.value_type = variable.value_type;
+            output.schema = variable.schema;
+            output.connected_to = connected_to;
+        }
+    }
+
+    struct TestVariableSetLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestVariableSetLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("variable_set", "Set Variable", "", "test");
+            node.add_input_pin("var_ref", "Variable Reference", "", VariableType::String);
+            node.add_input_pin("value_in", "Value", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut Node, board: &Board) {
+            let Some(variable) = test_referenced_variable(node, board) else {
+                return;
+            };
+            let Some(current) = node.get_pin_by_name("value_in").cloned() else {
+                return;
+            };
+            if current.data_type == variable.data_type
+                && current.value_type == variable.value_type
+                && current.schema == variable.schema
+            {
+                return;
+            }
+
+            let mut depends_on = current.depends_on;
+            depends_on.retain(|pin_id| {
+                board.get_pin_by_id(pin_id).is_some_and(|pin| {
+                    pin.data_type == variable.data_type
+                        && pin.value_type == variable.value_type
+                        && (variable.schema.is_none()
+                            || pin.schema.is_none()
+                            || pin.schema == variable.schema)
+                })
+            });
+            let input = node
+                .get_pin_mut_by_name("value_in")
+                .expect("test variable setter input");
+            input.data_type = variable.data_type;
+            input.value_type = variable.value_type;
+            input.schema = variable.schema;
+            input.depends_on = depends_on;
+        }
+    }
+
+    fn test_referenced_variable(node: &Node, board: &Board) -> Option<Variable> {
+        let variable_id = node
+            .get_pin_by_name("var_ref")?
+            .default_value
+            .as_deref()
+            .and_then(|bytes| flow_like_types::json::from_slice::<String>(bytes).ok())?;
+        board.get_any_variable(&variable_id)
+    }
+
+    fn set_test_variable_reference(node: &mut Node, variable_id: &str) {
+        let encoded =
+            flow_like_types::json::to_vec(variable_id).expect("variable reference serializes");
+        node.get_pin_mut_by_name("var_ref")
+            .expect("test variable reference input")
+            .default_value = Some(encoded);
+    }
+
+    fn update_variable_data_type(variable_id: &str, data_type: &str) -> BoardCommand {
+        BoardCommand::UpdateVariable {
+            variable_id: variable_id.to_string(),
+            name: None,
+            data_type: Some(data_type.to_string()),
+            value_type: None,
+            default_value: None,
+            clear_default_value: false,
+            description: None,
+            clear_description: false,
+            category: None,
+            clear_category: false,
+            schema: None,
+            clear_schema: false,
+            exposed: None,
+            secret: None,
+            editable: None,
+            runtime_configured: None,
+            value: None,
+            summary: None,
+        }
     }
 
     #[test]
@@ -1686,6 +1856,107 @@ mod tests {
             .find(|pin| pin.name == "message")
             .expect("message pin");
         assert_eq!(decode_default(message), json!("retained value"));
+    }
+
+    #[tokio::test]
+    async fn variable_update_refreshes_dynamic_pin_contracts_before_reconnecting_edges() {
+        let mut board = empty_board();
+        let mut variable = Variable::new("ticket", VariableType::String, ValueType::Normal);
+        variable.id = "ticket-variable".to_string();
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut getter = TestVariableGetLogic.get_node();
+        getter.id = "getter".to_string();
+        set_test_variable_reference(&mut getter, "ticket-variable");
+        getter
+            .get_pin_mut_by_name("value_ref")
+            .expect("getter output")
+            .data_type = VariableType::String;
+        let getter_pin_id = getter
+            .get_pin_by_name("value_ref")
+            .expect("getter output")
+            .id
+            .clone();
+
+        let mut setter = TestVariableSetLogic.get_node();
+        setter.id = "setter".to_string();
+        set_test_variable_reference(&mut setter, "ticket-variable");
+        setter
+            .get_pin_mut_by_name("value_in")
+            .expect("setter input")
+            .data_type = VariableType::String;
+        let setter_pin_id = setter
+            .get_pin_by_name("value_in")
+            .expect("setter input")
+            .id
+            .clone();
+        getter
+            .pins
+            .get_mut(&getter_pin_id)
+            .expect("getter output")
+            .connected_to
+            .insert(setter_pin_id.clone());
+        setter
+            .pins
+            .get_mut(&setter_pin_id)
+            .expect("setter input")
+            .depends_on
+            .insert(getter_pin_id.clone());
+        board.nodes.insert(getter.id.clone(), getter);
+        board.nodes.insert(setter.id.clone(), setter);
+
+        let commands = vec![
+            update_variable_data_type("ticket-variable", "Date"),
+            BoardCommand::ConnectPins {
+                from_node: "getter".to_string(),
+                from_pin: "value_ref".to_string(),
+                to_node: "setter".to_string(),
+                to_pin: "value_in".to_string(),
+                summary: None,
+            },
+        ];
+
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("variable update is planned in setup");
+        assert!(matches!(
+            setup.as_slice(),
+            [GenericCommand::UpsertVariable(_)]
+        ));
+        let remaining = planner
+            .build_remaining_commands(&board, &commands)
+            .expect("only the edge remains after setup planning");
+        assert!(matches!(
+            remaining.as_slice(),
+            [GenericCommand::ConnectPin(_)]
+        ));
+
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        {
+            let registry = state.node_registry();
+            let mut registry = registry.write().await;
+            registry.push_node(Arc::new(TestVariableGetLogic));
+            registry.push_node(Arc::new(TestVariableSetLogic));
+        }
+
+        let result = apply_board_commands_to_board(&mut board, commands, &[], state, None)
+            .await
+            .expect("variable update and reconnect apply");
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(
+            board.variables["ticket-variable"].data_type,
+            VariableType::Date
+        );
+        let getter_pin = &board.nodes["getter"].pins[&getter_pin_id];
+        let setter_pin = &board.nodes["setter"].pins[&setter_pin_id];
+        assert_eq!(getter_pin.data_type, VariableType::Date);
+        assert_eq!(setter_pin.data_type, VariableType::Date);
+        assert!(getter_pin.connected_to.contains(&setter_pin_id));
+        assert!(setter_pin.depends_on.contains(&getter_pin_id));
     }
 
     #[test]
@@ -2669,14 +2940,30 @@ eventsChat() {
             ref_id: Some("$0".to_string()),
             position: None,
             friendly_name: None,
-            additional_pins: Some(vec![PlaceholderPinDef {
-                name: "ticketIds".to_string(),
-                friendly_name: "ticketIds".to_string(),
-                description: None,
-                pin_type: "Output".to_string(),
-                data_type: "String".to_string(),
-                value_type: Some("Array".to_string()),
-            }]),
+            additional_pins: Some(vec![
+                PlaceholderPinDef {
+                    name: "ticketIds".to_string(),
+                    friendly_name: "ticketIds".to_string(),
+                    description: None,
+                    pin_type: "Output".to_string(),
+                    data_type: "String".to_string(),
+                    value_type: Some("Array".to_string()),
+                    schema: None,
+                    enforce_schema: false,
+                },
+                PlaceholderPinDef {
+                    name: "ticket".to_string(),
+                    friendly_name: "ticket".to_string(),
+                    description: None,
+                    pin_type: "Output".to_string(),
+                    data_type: "Struct".to_string(),
+                    value_type: Some("Normal".to_string()),
+                    schema: Some(
+                        r#"{"type":"object","properties":{"id":{"type":"string"}}}"#.to_string(),
+                    ),
+                    enforce_schema: true,
+                },
+            ]),
             target_layer: None,
             summary: None,
         }];
@@ -2696,6 +2983,58 @@ eventsChat() {
         assert_eq!(pin.pin_type, PinType::Output);
         assert_eq!(pin.data_type, VariableType::String);
         assert_eq!(pin.value_type, ValueType::Array);
+        let typed_pin = command
+            .node
+            .pins
+            .values()
+            .find(|pin| pin.name == "ticket")
+            .expect("schema-bearing custom output exists before node creation");
+        assert!(typed_pin.schema.is_some());
+        assert_eq!(
+            typed_pin
+                .options
+                .as_ref()
+                .and_then(|options| options.enforce_schema),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn function_layer_pin_resolution_inverts_boundary_direction() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function".to_string(),
+            "Function".to_string(),
+            LayerType::Function,
+        );
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        let parameter = template
+            .add_input_pin("value", "Value", "", VariableType::String)
+            .clone();
+        let returned = template
+            .add_output_pin("value", "Value", "", VariableType::String)
+            .clone();
+        let parameter_id = parameter.id.clone();
+        let return_id = returned.id.clone();
+        layer.pins.insert(parameter.id.clone(), parameter);
+        layer.pins.insert(returned.id.clone(), returned);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        assert_eq!(
+            planner
+                .resolve_pin_id(&board, "function", "value", Some(PinType::Output))
+                .unwrap(),
+            parameter_id,
+            "a layer used as the edge source exposes its boundary Input parameter"
+        );
+        assert_eq!(
+            planner
+                .resolve_pin_id(&board, "function", "value", Some(PinType::Input))
+                .unwrap(),
+            return_id,
+            "a layer used as the edge target exposes its boundary Output return"
+        );
     }
 
     /// The full Part B flow without a node registry: setup defers a write to a not-yet-minted

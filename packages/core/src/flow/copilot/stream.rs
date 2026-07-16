@@ -759,15 +759,220 @@ fn redact_debug_value(value: &Value, field_name: Option<&str>) -> Value {
     }
 }
 
-/// Bounded JSON safe for a user-visible debug report. It never includes values stored under
-/// credential-like fields. Long strings retain a bounded, redacted prefix so FlowScripts and
-/// diagnostics remain useful instead of being replaced by an opaque size placeholder.
-pub fn safe_json_preview(value: &Value, max_chars: usize) -> String {
-    let redacted = redact_debug_value(value, None);
-    truncate_preview(
-        &serde_json::to_string_pretty(&redacted).unwrap_or_else(|_| "<unavailable>".to_string()),
-        max_chars,
+/// Top-level fields that carry the diagnostic meaning of a tool result. Structure-aware bounding
+/// shortens every other string (for example a re-embedded `source`) before touching these.
+const PRESERVED_PREVIEW_FIELDS: &[&str] = &[
+    "status",
+    "code",
+    "message",
+    "revision",
+    "diagnostics",
+    "review_notes",
+];
+
+/// Strings at or below this length are never shortened, and a shortened string always ends up
+/// below it, so a shrink can only reduce the serialized size.
+const PREVIEW_SHRINK_MIN_CHARS: usize = 160;
+const PREVIEW_SHRINK_KEEP_CHARS: usize = 80;
+
+#[derive(Debug, Clone)]
+enum PreviewPathSegment {
+    Key(String),
+    Index(usize),
+}
+
+struct PreviewShrinkCandidate {
+    savings: usize,
+    path: Vec<PreviewPathSegment>,
+}
+
+fn shrunk_preview_string(text: &str) -> String {
+    let total = text.chars().count();
+    let prefix = text
+        .chars()
+        .take(PREVIEW_SHRINK_KEEP_CHARS)
+        .collect::<String>();
+    format!(
+        "{prefix}… [{} chars omitted]",
+        total - PREVIEW_SHRINK_KEEP_CHARS
     )
+}
+
+/// Exact character count this string contributes to the serialized document, quotes and escapes
+/// included. Pretty-printing never alters string tokens, so the measurement is exact for both
+/// compact and pretty output.
+fn serialized_string_chars(text: &str) -> usize {
+    serde_json::to_string(text).map_or_else(|_| text.chars().count(), |token| token.chars().count())
+}
+
+fn preview_shrink_savings(text: &str) -> Option<usize> {
+    if text.chars().count() <= PREVIEW_SHRINK_MIN_CHARS {
+        return None;
+    }
+    let savings = serialized_string_chars(text)
+        .saturating_sub(serialized_string_chars(&shrunk_preview_string(text)));
+    (savings > 0).then_some(savings)
+}
+
+fn collect_shrinkable_strings(
+    value: &Value,
+    path: &mut Vec<PreviewPathSegment>,
+    protected: bool,
+    shrink_protected: bool,
+    candidates: &mut Vec<PreviewShrinkCandidate>,
+) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                let child_protected = protected
+                    || (path.is_empty() && PRESERVED_PREVIEW_FIELDS.contains(&key.as_str()));
+                path.push(PreviewPathSegment::Key(key.clone()));
+                collect_shrinkable_strings(
+                    child,
+                    path,
+                    child_protected,
+                    shrink_protected,
+                    candidates,
+                );
+                path.pop();
+            }
+        }
+        Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                path.push(PreviewPathSegment::Index(index));
+                collect_shrinkable_strings(child, path, protected, shrink_protected, candidates);
+                path.pop();
+            }
+        }
+        Value::String(text) if protected == shrink_protected => {
+            if let Some(savings) = preview_shrink_savings(text) {
+                candidates.push(PreviewShrinkCandidate {
+                    savings,
+                    path: path.clone(),
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn shorten_string_at(value: &mut Value, path: &[PreviewPathSegment]) {
+    let mut current = value;
+    for segment in path {
+        current = match segment {
+            PreviewPathSegment::Key(key) => match current.get_mut(key) {
+                Some(next) => next,
+                None => return,
+            },
+            PreviewPathSegment::Index(index) => match current.get_mut(index) {
+                Some(next) => next,
+                None => return,
+            },
+        };
+    }
+    if let Value::String(text) = current
+        && text.chars().count() > PREVIEW_SHRINK_MIN_CHARS
+    {
+        *text = shrunk_preview_string(text);
+    }
+}
+
+/// Decide every truncation for one protection tier in a single budgeting pass: measure each
+/// shrinkable string once, shrink the largest savings first, and stop as soon as the overshoot is
+/// covered. Shrinking never restructures the document, so the collected paths stay valid and no
+/// intermediate re-serialization is needed. Returns the overshoot this tier could not absorb.
+fn apply_preview_shrink_budget(
+    value: &mut Value,
+    shrink_protected: bool,
+    overshoot: usize,
+) -> usize {
+    if overshoot == 0 {
+        return 0;
+    }
+    let mut candidates = Vec::new();
+    collect_shrinkable_strings(
+        value,
+        &mut Vec::new(),
+        false,
+        shrink_protected,
+        &mut candidates,
+    );
+    candidates.sort_by(|a, b| b.savings.cmp(&a.savings));
+    let mut remaining = overshoot;
+    for candidate in candidates {
+        if remaining == 0 {
+            break;
+        }
+        shorten_string_at(value, &candidate.path);
+        remaining = remaining.saturating_sub(candidate.savings);
+    }
+    remaining
+}
+
+/// Smallest still-valid preview: the protected diagnostic fields alone, shrunk in place and with
+/// oversized arrays collapsed to counts as the very last step. Used when even shrinking every
+/// string cannot reach the budget, for example a wide payload whose keys alone exceed it. For
+/// pathologically small budgets the envelope may still exceed `max_chars`; validity wins there.
+fn minimal_preview_envelope(redacted: &Value, max_chars: usize) -> String {
+    let mut fields = serde_json::Map::new();
+    fields.insert("preview_truncated".to_string(), Value::Bool(true));
+    if let Value::Object(object) = redacted {
+        for field in PRESERVED_PREVIEW_FIELDS {
+            if let Some(value) = object.get(*field) {
+                fields.insert((*field).to_string(), value.clone());
+            }
+        }
+    }
+    let mut envelope = Value::Object(fields);
+    if let Ok(serialized) = serde_json::to_string_pretty(&envelope) {
+        let overshoot = serialized.chars().count().saturating_sub(max_chars);
+        if overshoot == 0 {
+            return serialized;
+        }
+        let remaining = apply_preview_shrink_budget(&mut envelope, false, overshoot);
+        apply_preview_shrink_budget(&mut envelope, true, remaining);
+    }
+    if let Ok(serialized) = serde_json::to_string_pretty(&envelope)
+        && serialized.chars().count() <= max_chars
+    {
+        return serialized;
+    }
+    if let Value::Object(fields) = &mut envelope {
+        for field in ["diagnostics", "review_notes"] {
+            if let Some(count) = fields.get(field).and_then(Value::as_array).map(Vec::len) {
+                fields.insert(
+                    field.to_string(),
+                    Value::String(format!("{count} item(s) omitted")),
+                );
+            }
+        }
+    }
+    serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "<unavailable>".to_string())
+}
+
+/// Bounded JSON safe for a user-visible debug report. It never includes values stored under
+/// credential-like fields. Oversized payloads are bounded structure-first in one budgeting pass:
+/// every shrinkable string is measured exactly once, the largest are truncated until the budget
+/// is covered, and the document is serialized at most twice, so `status`, `diagnostics`,
+/// `review_notes`, `message`, and `revision` survive intact and the preview stays valid JSON.
+/// When protected content itself exceeds the budget it is truncated inside its string values,
+/// and a payload whose structure alone overflows the budget collapses to a minimal envelope of
+/// the protected fields — the preview never degrades to invalid JSON.
+pub fn safe_json_preview(value: &Value, max_chars: usize) -> String {
+    let mut redacted = redact_debug_value(value, None);
+    let Ok(serialized) = serde_json::to_string_pretty(&redacted) else {
+        return "<unavailable>".to_string();
+    };
+    let overshoot = serialized.chars().count().saturating_sub(max_chars);
+    if overshoot == 0 {
+        return serialized;
+    }
+    let remaining = apply_preview_shrink_budget(&mut redacted, false, overshoot);
+    apply_preview_shrink_budget(&mut redacted, true, remaining);
+    match serde_json::to_string_pretty(&redacted) {
+        Ok(serialized) if serialized.chars().count() <= max_chars => serialized,
+        _ => minimal_preview_envelope(&redacted, max_chars),
+    }
 }
 
 /// Bounded, redacted text safe for a user-visible debug report.
@@ -1124,6 +1329,143 @@ function pollSupportInbox() {
 
         assert!(frame.contains("buildSupportWorkflow"));
         assert!(frame.contains("AUDIT_TAIL_MARKER"));
+    }
+
+    #[test]
+    fn oversized_tool_result_preview_stays_valid_json_and_keeps_diagnostics() {
+        let source = "eventsSimple() {\n    logInfo({ message: \"poll\" })\n}\n".repeat(800);
+        let response = json!({
+            "status": "validation_errors",
+            "message": "FlowScript check failed. Apply a unique text patch to this retained revision.",
+            "revision": 16,
+            "source": source,
+            "draft_id": "support-mailbox",
+            "diagnostics": [
+                {
+                    "id": "FSD-1",
+                    "code": "FS_FUNCTION_RETURN_MISMATCH",
+                    "message": "return value 1 of function pollSupportInbox is not a resolvable FlowScript value",
+                },
+                {
+                    "id": "FSD-2",
+                    "code": "FS_UNKNOWN_INPUT_PIN",
+                    "message": "unknown input pin `body` on emailSmtpSend",
+                },
+            ],
+            "review_notes": [
+                {
+                    "id": "FSD-3",
+                    "code": "FS_REQUEST_ACCEPTANCE_INCOMPLETE",
+                    "message": "The reachable FlowScript workflow does not implement required request scope \"send email\".",
+                },
+            ],
+        });
+        let raw = response.to_string();
+        assert!(
+            raw.len() > 40_000,
+            "fixture must exceed 40KB: {}",
+            raw.len()
+        );
+
+        let preview = safe_tool_result_preview(&raw, TOOL_RESULT_PREVIEW_CHARS);
+        assert!(preview.chars().count() <= TOOL_RESULT_PREVIEW_CHARS);
+        let parsed: Value =
+            serde_json::from_str(&preview).expect("bounded preview must remain valid JSON");
+        assert_eq!(parsed["status"], "validation_errors");
+        assert_eq!(parsed["revision"], 16);
+        assert!(
+            parsed["message"]
+                .as_str()
+                .unwrap()
+                .contains("Apply a unique text patch")
+        );
+        assert!(
+            parsed["diagnostics"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("pollSupportInbox")
+        );
+        assert_eq!(parsed["diagnostics"][1]["code"], "FS_UNKNOWN_INPUT_PIN");
+        assert_eq!(
+            parsed["review_notes"][0]["code"],
+            "FS_REQUEST_ACCEPTANCE_INCOMPLETE"
+        );
+        let bounded_source = parsed["source"].as_str().unwrap();
+        assert!(bounded_source.contains("chars omitted"));
+        assert!(bounded_source.chars().count() < 200);
+    }
+
+    #[test]
+    fn multi_megabyte_wide_payloads_preview_to_valid_json_with_diagnostics_present() {
+        let mut payload = serde_json::Map::new();
+        payload.insert("status".to_string(), json!("validation_errors"));
+        payload.insert("code".to_string(), json!("FLOWSCRIPT_CHECK_FAILED"));
+        payload.insert(
+            "message".to_string(),
+            json!("Apply a unique text patch to this retained revision."),
+        );
+        payload.insert("revision".to_string(), json!(7));
+        payload.insert(
+            "diagnostics".to_string(),
+            json!([{
+                "id": "FSD-1",
+                "code": "FS_UNKNOWN_INPUT_PIN",
+                "message": "unknown input pin `body` on emailSmtpSend",
+            }]),
+        );
+        for index in 0..320 {
+            payload.insert(format!("field_{index:03}"), json!("y".repeat(16_000)));
+        }
+        let payload = Value::Object(payload);
+        assert!(
+            payload.to_string().len() > 5_000_000,
+            "fixture must exceed 5MB"
+        );
+
+        let preview = safe_json_preview(&payload, 2_200);
+        assert!(preview.chars().count() <= 2_200, "{}", preview.len());
+        let parsed: Value =
+            serde_json::from_str(&preview).expect("wide oversized preview must stay valid JSON");
+        assert_eq!(parsed["status"], "validation_errors");
+        assert_eq!(parsed["revision"], 7);
+        assert_eq!(parsed["diagnostics"][0]["code"], "FS_UNKNOWN_INPUT_PIN");
+    }
+
+    #[test]
+    fn oversized_unprotected_strings_shrink_in_one_pass_without_losing_structure() {
+        let preview = safe_json_preview(
+            &json!({
+                "status": "valid",
+                "message": "FlowScript is valid.",
+                "source": "x".repeat(12_000),
+                "harmless": "visible",
+            }),
+            2_200,
+        );
+        assert!(preview.chars().count() <= 2_200);
+        let parsed: Value = serde_json::from_str(&preview).expect("preview must stay valid JSON");
+        assert_eq!(parsed["status"], "valid");
+        assert_eq!(parsed["harmless"], "visible");
+        let source = parsed["source"].as_str().unwrap();
+        assert!(source.starts_with(&"x".repeat(PREVIEW_SHRINK_KEEP_CHARS)));
+        assert!(source.contains("chars omitted"));
+    }
+
+    #[test]
+    fn protected_content_exceeding_the_budget_truncates_inside_strings_keeping_json_valid() {
+        let preview = safe_json_preview(
+            &json!({
+                "status": "error",
+                "message": "m".repeat(12_000),
+            }),
+            1_000,
+        );
+        assert!(preview.chars().count() <= 1_000);
+        let parsed: Value = serde_json::from_str(&preview).expect("preview must stay valid JSON");
+        assert_eq!(parsed["status"], "error");
+        let message = parsed["message"].as_str().unwrap();
+        assert!(message.starts_with(&"m".repeat(PREVIEW_SHRINK_KEEP_CHARS)));
+        assert!(message.contains("chars omitted"));
     }
 
     #[test]

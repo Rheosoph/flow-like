@@ -987,6 +987,30 @@ describe("agent debug report", () => {
 		);
 	});
 
+	test("keeps diagnostics beside redacted FlowScript in nested MCP text results", () => {
+		const preview = agentDebugPreview(
+			JSON.stringify([
+				{
+					type: "text",
+					text: JSON.stringify({
+						status: "validation_errors",
+						source: 'prefix @secret const innocuous: string = "nested-secret"',
+						structured_diagnostics: [
+							{
+								code: "IR_REQUEST_APPROVAL_UI_ACTIONS_MISSING",
+								phase: "acceptance",
+							},
+						],
+					}),
+				},
+			]),
+		);
+
+		expect(preview).toContain("validation_errors");
+		expect(preview).toContain("IR_REQUEST_APPROVAL_UI_ACTIONS_MISSING");
+		expect(preview).not.toContain("nested-secret");
+	});
+
 	test("keeps a redacted debug preview when @secret precedes another variable decorator", () => {
 		const preview = agentDebugPreview(`@secret
 @category("IMAP")
@@ -1283,6 +1307,51 @@ ${"// safe filler\n".repeat(900)}`;
 		expect(
 			new TextEncoder().encode(JSON.stringify(report)).byteLength,
 		).toBeLessThanOrEqual(512 * 1024);
+	});
+
+	test("records source-lifecycle diagnostics from nested MCP text results", () => {
+		let report = createAgentDebugReport("source-lifecycle", {
+			startedAtMs: 1_000,
+		});
+		const event = debugEventFromCopilotStream(
+			{
+				type: "tool_end",
+				data: {
+					tool_call_id: "check-1",
+					tool_name: "check_flowscript",
+					status: "error",
+					result: JSON.stringify([
+						{
+							type: "text",
+							text: JSON.stringify({
+								status: "validation_errors",
+								structured_diagnostics: [
+									{
+										code: "FS_TYPE_MISMATCH",
+										phase: "type_check",
+									},
+								],
+							}),
+						},
+					]),
+				},
+			},
+			{ scope: "nested", requestId: "source-lifecycle", nowMs: 1_200 },
+		);
+		if (!event) throw new Error("Expected a source lifecycle tool event.");
+		report = recordAgentDebugEvent(report, event);
+
+		expect(report.generation_evaluation?.attempts).toEqual([
+			{
+				attempt_index: 1,
+				elapsed_ms: 200,
+				parse_valid: true,
+				typed_valid: false,
+				reconcile_valid: false,
+				accepted: false,
+				diagnostic_keys: ["FS_TYPE_MISMATCH"],
+			},
+		]);
 	});
 
 	test("records every typed draft mutation schema failure as a distinct attempt", () => {

@@ -152,6 +152,10 @@ pub struct Copilot {
     /// wrappers may still be included in the model prompt, but must never become acceptance
     /// criteria merely because the host added them.
     raw_user_prompt: Option<String>,
+    /// Host-derived identity material (e.g. conversation id + immutable source prompt) that
+    /// scopes retained drafts and the acceptance contract. Falls back to `raw_user_prompt` /
+    /// `user_prompt` when unset so single-surface callers keep prompt-text identity.
+    request_identity_prompt: Option<String>,
 }
 
 /// A typed batch is not durable outside the model loop until its exact token is attached to the
@@ -243,6 +247,7 @@ impl Copilot {
             flow_ir_drafts: Arc::new(ir_tools::FlowIrDraftStore::new()),
             typed_flow_ir_enabled: false,
             raw_user_prompt: None,
+            request_identity_prompt: None,
         })
     }
 
@@ -265,6 +270,14 @@ impl Copilot {
     /// Empty values deliberately fall back to `user_prompt` for backward compatibility.
     pub fn with_raw_user_prompt(mut self, prompt: Option<String>) -> Self {
         self.raw_user_prompt = prompt.filter(|prompt| !prompt.trim().is_empty());
+        self
+    }
+
+    /// Supply the host-derived request identity that owns retained drafts and the acceptance
+    /// contract, so every backend binds the same identity while `raw_user_prompt` keeps serving
+    /// routing and edit classification. Empty values fall back to `raw_user_prompt`/`user_prompt`.
+    pub fn with_request_identity_prompt(mut self, prompt: Option<String>) -> Self {
+        self.request_identity_prompt = prompt.filter(|prompt| !prompt.trim().is_empty());
         self
     }
 
@@ -372,8 +385,9 @@ impl Copilot {
         let node_count = available_nodes.len();
         let flow_ir_drafts = self.flow_ir_drafts.clone();
         let acceptance_prompt = self
-            .raw_user_prompt
+            .request_identity_prompt
             .clone()
+            .or_else(|| self.raw_user_prompt.clone())
             .unwrap_or_else(|| user_prompt.clone());
         let acceptance_binding =
             Some(flow_ir_drafts.bind_request_acceptance_contract(&board.id, &acceptance_prompt));
@@ -494,6 +508,7 @@ impl Copilot {
             })
             .tool(CommitFlowScriptTool {
                 board: board_for_tools.clone(),
+                provider: self.catalog_provider.clone(),
                 store: flow_ir_drafts.clone(),
                 acceptance_binding: acceptance_binding
                     .clone()
@@ -1661,8 +1676,11 @@ impl Copilot {
                         let Some(binding) = acceptance_binding else {
                             return render_missing_direct_request_binding();
                         };
+                        let catalog = self.catalog_provider.get_all_metadata().await;
                         flow_ir_drafts
-                            .commit_flowscript_with_acceptance_binding(board, args, binding)
+                            .commit_flowscript_with_acceptance_binding(
+                                board, &catalog, args, binding,
+                            )
                             .render_for_model(board)
                     }
                     Err(error) => format!("Failed to parse FlowScript commit: {error}"),

@@ -15,7 +15,9 @@ use super::ir_tools::{
     PatchFlowScriptArgs, WriteFlowScriptArgs,
 };
 use super::platform::PlatformToolBridge;
-use super::provider::CatalogProvider;
+#[cfg(test)]
+use super::provider::MAX_DECLARATION_PRIORITY_BLOCK_BYTES;
+use super::provider::{CatalogProvider, DECLARATION_PRIORITY_BEGIN, DECLARATION_PRIORITY_END};
 use super::search::score_catalog_metadata;
 use super::tool_spec::{find_runtime_execution_tool_spec, missing_required_args};
 use super::types::{BoardCommand, RunContext, TemplateInfo};
@@ -220,6 +222,7 @@ pub struct QueryExecutionLogsArgs {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetDeclarationsArgs {
     /// Free-text search for the kinds of nodes you want to call in FlowScript
     /// (e.g. "http request", "parse json", "invoke agent").
@@ -243,6 +246,12 @@ const MAX_REPORTED_OMITTED_DECLARATION_QUERIES: usize = 32;
 // declaration batch self-contained while preserving an equal slice for every requested capability.
 const MAX_DECLARATION_RESPONSE_BYTES: usize = 24_000;
 const DECLARATION_TRUNCATION_NOTICE: &str = "\n// [Additional matches omitted. Refine this capability only when a validation diagnostic names its node/pin or identifies a related comparison/type-conversion mismatch.]";
+const DECLARATION_PRIORITY_TRUNCATION_NOTICE: &str =
+    "\n// [Additional matches omitted; priority declaration retained.]";
+const DECLARATION_SIGNATURE_TRUNCATION_NOTICE: &str =
+    "\n// [Additional matches and usage notes omitted; exact declaration retained.]";
+const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Retry this capability in a separate focused get_declarations call.]";
+const MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES: usize = 48;
 
 fn declaration_query_key(query: &str) -> String {
     query
@@ -323,60 +332,365 @@ fn bound_declaration_sections(sections: &[String]) -> String {
 }
 
 fn bound_declaration_sections_to(sections: &[String], max_bytes: usize) -> String {
+    bound_declaration_sections_vec_to(sections, max_bytes).join("\n")
+}
+
+fn bound_declaration_sections_vec_to(sections: &[String], max_bytes: usize) -> Vec<String> {
     if sections.is_empty() {
-        return String::new();
+        return Vec::new();
     }
 
     let separator_bytes = sections.len().saturating_sub(1);
-    let per_section_bytes = max_bytes
-        .saturating_sub(separator_bytes)
-        .checked_div(sections.len())
+    let available_bytes = max_bytes.saturating_sub(separator_bytes);
+    if sections.iter().map(String::len).sum::<usize>() <= available_bytes {
+        return sections.to_vec();
+    }
+
+    let minimums = sections
+        .iter()
+        .map(|section| declaration_section_minimum_bytes(section))
+        .collect::<Vec<_>>();
+    let minimum_total = minimums.iter().sum::<usize>();
+    let budgets = if minimum_total <= available_bytes {
+        let distributable = available_bytes - minimum_total;
+        let per_section_extra = distributable / sections.len();
+        let extra_remainder = distributable % sections.len();
+        minimums
+            .into_iter()
+            .enumerate()
+            .map(|(index, minimum)| {
+                minimum
+                    .saturating_add(per_section_extra)
+                    .saturating_add(usize::from(index < extra_remainder))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let per_section_bytes = available_bytes
+            .checked_div(sections.len())
+            .unwrap_or_default();
+        vec![per_section_bytes; sections.len()]
+    };
+
+    sections
+        .iter()
+        .zip(budgets)
+        .map(|(section, budget)| bound_declaration_section_to(section, budget))
+        .collect()
+}
+
+fn declaration_priority_block(section: &str) -> Option<&str> {
+    let start = section.find(DECLARATION_PRIORITY_BEGIN)?;
+    let end = section[start..].find(DECLARATION_PRIORITY_END)?;
+    let end = start
+        .saturating_add(end)
+        .saturating_add(DECLARATION_PRIORITY_END.len());
+    section.get(start..end)
+}
+
+fn declaration_priority_projection(section: &str) -> Option<String> {
+    let block = declaration_priority_block(section)?;
+    let identity_end = section
+        .find('\n')
+        .map(|index| index.saturating_add(1))
         .unwrap_or_default();
+    let identity = section.get(..identity_end).unwrap_or_default();
+    let identity = if identity.len() <= MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES {
+        identity.to_string()
+    } else {
+        let retained = MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES.saturating_sub(4);
+        let boundary = identity
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= retained)
+            .last()
+            .unwrap_or_default();
+        format!("{}...\n", &identity[..boundary])
+    };
+    Some(format!("{identity}{block}"))
+}
+
+fn declaration_exact_signature_line(section: &str) -> Option<&str> {
+    section
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("declare function "))
+}
+
+fn declaration_section_identity(section: &str) -> String {
+    let identity_end = section
+        .find('\n')
+        .map(|index| index.saturating_add(1))
+        .unwrap_or(section.len());
+    let identity = section.get(..identity_end).unwrap_or_default();
+    if identity.len() <= MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES {
+        return identity.to_string();
+    }
+    let retained = MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES.saturating_sub(4);
+    let boundary = identity
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= retained)
+        .last()
+        .unwrap_or_default();
+    format!("{}...\n", &identity[..boundary])
+}
+
+fn declaration_exact_projection(section: &str) -> Option<String> {
+    let signature = declaration_exact_signature_line(section)?;
+    let first_line = section.lines().next().map(str::trim).unwrap_or_default();
+    if first_line == signature {
+        return Some(format!("{signature}\n"));
+    }
+    Some(format!(
+        "{}{signature}\n",
+        declaration_section_identity(section)
+    ))
+}
+
+fn declaration_section_minimum_bytes(section: &str) -> usize {
+    if let Some(exact_projection) = declaration_exact_projection(section) {
+        return exact_projection.len();
+    }
+    section
+        .find('\n')
+        .map(|index| index.saturating_add(1))
+        .unwrap_or(section.len())
+        .saturating_add(DECLARATION_TRUNCATION_NOTICE.len())
+}
+
+fn minimum_declaration_sections_bytes(sections: &[String]) -> usize {
+    sections
+        .iter()
+        .map(|section| declaration_section_minimum_bytes(section))
+        .sum::<usize>()
+        .saturating_add(sections.len().saturating_sub(1))
+}
+
+fn preferred_declaration_sections_bytes(sections: &[String]) -> usize {
     sections
         .iter()
         .map(|section| {
-            if section.len() <= per_section_bytes {
-                return section.clone();
-            }
-            let retained_bytes =
-                per_section_bytes.saturating_sub(DECLARATION_TRUNCATION_NOTICE.len());
-            let boundary = section
-                .char_indices()
-                .map(|(index, _)| index)
-                .take_while(|index| *index <= retained_bytes)
-                .last()
-                .unwrap_or_default();
-            let mut bounded = section[..boundary].to_string();
-            bounded.push_str(DECLARATION_TRUNCATION_NOTICE);
-            bounded
+            declaration_priority_projection(section)
+                .map(|projection| {
+                    projection
+                        .len()
+                        .saturating_add(DECLARATION_PRIORITY_TRUNCATION_NOTICE.len())
+                })
+                .unwrap_or_else(|| declaration_section_minimum_bytes(section))
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .sum::<usize>()
+        .saturating_add(sections.len().saturating_sub(1))
 }
 
-fn render_declaration_query_batch(batch: &DeclarationQueryBatch, sections: &[String]) -> String {
+fn bound_declaration_section_to(section: &str, max_bytes: usize) -> String {
+    if section.len() <= max_bytes {
+        return section.to_string();
+    }
+    if let Some(mut priority_projection) = declaration_priority_projection(section)
+        && priority_projection
+            .len()
+            .saturating_add(DECLARATION_PRIORITY_TRUNCATION_NOTICE.len())
+            <= max_bytes
+    {
+        priority_projection.push_str(DECLARATION_PRIORITY_TRUNCATION_NOTICE);
+        return priority_projection;
+    }
+    if let Some(mut exact_projection) = declaration_exact_projection(section)
+        && exact_projection.len() <= max_bytes
+    {
+        if exact_projection
+            .len()
+            .saturating_add(DECLARATION_SIGNATURE_TRUNCATION_NOTICE.len())
+            <= max_bytes
+        {
+            exact_projection.push_str(DECLARATION_SIGNATURE_TRUNCATION_NOTICE);
+        }
+        return exact_projection;
+    }
+    let notice = DECLARATION_TRUNCATION_NOTICE;
+    let retained_bytes = max_bytes.saturating_sub(notice.len());
+    let boundary = section
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= retained_bytes)
+        .last()
+        .unwrap_or_default();
+    let mut bounded = section[..boundary].to_string();
+    bounded.push_str(notice);
+    bounded
+}
+
+fn declaration_output_omission_section(query: &str) -> String {
+    format!("// declaration query: {query}\n{DECLARATION_OUTPUT_OMISSION_NOTICE}")
+}
+
+fn bounded_section_retains_exact_signature(original: &str, bounded: &str) -> bool {
+    let Some(signature) = declaration_exact_signature_line(original) else {
+        return false;
+    };
+    bounded.lines().map(str::trim).any(|line| line == signature)
+}
+
+fn declaration_batch_header(
+    batch: &DeclarationQueryBatch,
+    sections: &[String],
+    output_omitted: &[bool],
+    bounded_sections: &[String],
+) -> String {
+    let mut matched_queries = Vec::new();
+    let mut unmatched_queries = Vec::new();
+    let mut output_omitted_queries = Vec::new();
+    for (index, query) in batch.processed.iter().enumerate() {
+        let provider_matched = sections
+            .get(index)
+            .and_then(|section| declaration_exact_signature_line(section))
+            .is_some();
+        if output_omitted.get(index).copied().unwrap_or_default() && provider_matched {
+            output_omitted_queries.push(query.clone());
+        } else if provider_matched {
+            matched_queries.push(query.clone());
+        } else {
+            unmatched_queries.push(query.clone());
+        }
+    }
+    let complete = unmatched_queries.is_empty()
+        && output_omitted_queries.is_empty()
+        && batch.omitted_count == 0
+        && batch.truncated_query_count == 0;
     let metadata = json!({
         "processed_count": batch.processed.len(),
         "processed_queries": batch.processed,
+        "matched_count": matched_queries.len(),
+        "matched_queries": matched_queries,
+        "unmatched_count": unmatched_queries.len(),
+        "unmatched_queries": unmatched_queries,
+        "output_omitted_count": output_omitted_queries.len(),
+        "output_omitted_queries": output_omitted_queries,
+        "complete": complete,
         "omitted_count": batch.omitted_count,
         "omitted_queries": batch.omitted,
         "omitted_queries_truncated": batch.omitted_count > batch.omitted.len(),
         "truncated_query_count": batch.truncated_query_count,
     });
     let mut header = format!("// flowpilot.declaration-batch/v1 {}\n", metadata);
-    if header.len() > MAX_DECLARATION_RESPONSE_BYTES / 2 {
-        header = format!(
-            "// flowpilot.declaration-batch/v1 {}\n",
-            json!({
-                "processed_count": batch.processed.len(),
-                "omitted_count": batch.omitted_count,
-                "query_names_omitted_for_size": true,
-                "truncated_query_count": batch.truncated_query_count,
-            })
-        );
+    if header.len() > MAX_DECLARATION_RESPONSE_BYTES / 2
+        || header
+            .len()
+            .saturating_add(preferred_declaration_sections_bytes(bounded_sections))
+            > MAX_DECLARATION_RESPONSE_BYTES
+    {
+        let mut compact_metadata = json!({
+            "processed_count": batch.processed.len(),
+            "matched_count": matched_queries.len(),
+            "unmatched_count": unmatched_queries.len(),
+            "output_omitted_count": output_omitted_queries.len(),
+            "complete": complete,
+            "omitted_count": batch.omitted_count,
+            "query_names_omitted_for_size": true,
+            "truncated_query_count": batch.truncated_query_count,
+        });
+        if let Some(metadata) = compact_metadata.as_object_mut() {
+            if !unmatched_queries.is_empty() {
+                metadata.insert("unmatched_queries".to_string(), json!(unmatched_queries));
+            }
+            if !output_omitted_queries.is_empty() {
+                metadata.insert(
+                    "output_omitted_queries".to_string(),
+                    json!(output_omitted_queries),
+                );
+            }
+        }
+        header = format!("// flowpilot.declaration-batch/v1 {}\n", compact_metadata);
     }
+    header
+}
+
+fn render_declaration_query_batch(batch: &DeclarationQueryBatch, sections: &[String]) -> String {
+    let provider_matched = batch
+        .processed
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            sections
+                .get(index)
+                .and_then(|section| declaration_exact_signature_line(section))
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    let mut output_omitted = vec![false; batch.processed.len()];
+
+    for _ in 0..=batch.processed.len() {
+        let effective_sections = batch
+            .processed
+            .iter()
+            .enumerate()
+            .map(|(index, query)| {
+                if output_omitted[index] {
+                    declaration_output_omission_section(query)
+                } else {
+                    sections.get(index).cloned().unwrap_or_else(|| {
+                        format!("// declaration query: {query}\n// No declaration result returned.")
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+        let header =
+            declaration_batch_header(batch, sections, &output_omitted, &effective_sections);
+        let body_budget = MAX_DECLARATION_RESPONSE_BYTES.saturating_sub(header.len());
+        let minimum_body_bytes = minimum_declaration_sections_bytes(&effective_sections);
+
+        if minimum_body_bytes <= body_budget {
+            let bounded_sections =
+                bound_declaration_sections_vec_to(&effective_sections, body_budget);
+            let mut newly_omitted = false;
+            for index in 0..batch.processed.len() {
+                if provider_matched[index]
+                    && !output_omitted[index]
+                    && !sections.get(index).is_some_and(|original| {
+                        bounded_sections.get(index).is_some_and(|bounded| {
+                            bounded_section_retains_exact_signature(original, bounded)
+                        })
+                    })
+                {
+                    output_omitted[index] = true;
+                    newly_omitted = true;
+                }
+            }
+            if newly_omitted {
+                continue;
+            }
+            return format!("{header}{}", bounded_sections.join("\n"));
+        }
+
+        let next_omission = provider_matched
+            .iter()
+            .enumerate()
+            .filter(|(index, matched)| **matched && !output_omitted[*index])
+            .max_by_key(|(index, _)| {
+                sections
+                    .get(*index)
+                    .map(|section| declaration_section_minimum_bytes(section))
+                    .unwrap_or_default()
+            })
+            .map(|(index, _)| index);
+        if let Some(index) = next_omission {
+            output_omitted[index] = true;
+            continue;
+        }
+
+        let bounded_sections = bound_declaration_sections_vec_to(&effective_sections, body_budget);
+        return format!("{header}{}", bounded_sections.join("\n"));
+    }
+
+    let effective_sections = batch
+        .processed
+        .iter()
+        .map(|query| declaration_output_omission_section(query))
+        .collect::<Vec<_>>();
+    let output_omitted = provider_matched;
+    let header = declaration_batch_header(batch, sections, &output_omitted, &effective_sections);
     let body_budget = MAX_DECLARATION_RESPONSE_BYTES.saturating_sub(header.len());
-    let body = bound_declaration_sections_to(sections, body_budget);
+    let body = bound_declaration_sections_to(&effective_sections, body_budget);
     format!("{header}{body}")
 }
 
@@ -389,13 +703,13 @@ pub async fn run_declaration_queries(
     if batch.processed.is_empty() {
         return provider.get_declarations("").await;
     }
-    let mut sections = Vec::with_capacity(batch.processed.len());
-    for query in &batch.processed {
-        sections.push(format!(
-            "// declaration query: {query}\n{}",
-            provider.get_declarations(query).await
-        ));
-    }
+    let declarations = provider.get_declarations_batch(&batch.processed).await;
+    let sections = batch
+        .processed
+        .iter()
+        .zip(declarations)
+        .map(|(query, declarations)| format!("// declaration query: {query}\n{declarations}"))
+        .collect::<Vec<_>>();
     render_declaration_query_batch(&batch, &sections)
 }
 
@@ -1016,7 +1330,6 @@ with check_flowscript, and queue with commit_flowscript."#
 
 /// Legacy complete command schema retained for host/internal compatibility. Model-facing board
 /// builders must register `ModelFacingEmitCommandsTool` instead.
-
 struct EmitCommandsTool;
 
 impl Tool for EmitCommandsTool {
@@ -1697,11 +2010,14 @@ impl Tool for GetDeclarationsTool {
             description: r#"Look up FlowScript node declarations (.flow.d) by intent. BATCH-FIRST: pass ALL the searches your plan needs in ONE call via `queries`.
 
 Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
-signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. The result
-is deliberately bounded and self-contained. Never try to read a temporary/persisted-output path
-with filesystem tools; if validation later names a failing node/pin or a comparison/type-conversion
-mismatch, use one focused repair lookup for that diagnostic. Empty queries intentionally return
-guidance only, not the full catalog.
+signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. Exact live
+metadata also contributes bounded usage notes for required and repeated pins, Struct schema fields,
+and companion calls/structural chains. Treat those notes as authoritative: repeat same-name inputs
+in declaration order and never invent Struct members. The result is deliberately bounded and
+self-contained. Never try to read a temporary/persisted-output path with filesystem tools; if
+validation later names a failing node/pin or a comparison/type-conversion mismatch, use one focused
+repair lookup for that diagnostic. Empty queries intentionally return guidance only, not the full
+catalog.
 
 WORKFLOW: sketch the whole flow first, list every node capability it needs, then make ONE
 get_declarations call with all of those searches in `queries`. Keep each search focused on one
@@ -1724,7 +2040,7 @@ typed arguments. This covers every package in the project's catalog, including t
                         "minItems": 1,
                         "maxItems": MAX_DECLARATION_QUERIES,
                         "uniqueItems": true,
-                        "description": "REQUIRED. Every focused declaration search needed by the planned flow, answered in this one call — one entry per node capability. The result reports processed_queries and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                        "description": "REQUIRED. Every focused declaration search needed by the planned flow, answered in this one call — one entry per node capability. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
                     },
                     "query": {
                         "type": "string",
@@ -1732,7 +2048,8 @@ typed arguments. This covers every package in the project's catalog, including t
                         "maxLength": MAX_DECLARATION_QUERY_BYTES
                     }
                 },
-                "required": ["queries"]
+                "required": ["queries"],
+                "additionalProperties": false
             }),
         }
     }
@@ -1781,6 +2098,7 @@ pub struct CheckFlowScriptTool {
 
 pub struct CommitFlowScriptTool {
     pub board: Arc<Board>,
+    pub provider: Arc<dyn CatalogProvider>,
     pub store: Arc<FlowIrDraftStore>,
     pub acceptance_binding: FlowIrAcceptanceBinding,
 }
@@ -2815,8 +3133,9 @@ RULES:
 - Inside a function/event block, `const name = ...` must bind a node-call expression. Use
   local alias syntax like `let rows = []` / `rows = arrayPush(...)`, typed `let name: Type =
   literal`, or direct literals for non-call values.
-- Do not rely on mutable assignments inside brand-new `if`/`for` blocks; new control-flow body
-  lowering is limited and unsafe partial graph edits are rejected.
+- A `let` reassigned across new `if`/`for` blocks promotes to a board variable with its
+  initializer preserved. Never reassign a `const` binding inside a branch arm — declare it with
+  `let`; for a value chosen between branches, assign the same `let` in both arms.
 - FlowScript statement order maps to the normal execution path only when the previous node has one
   execution output, a `done` / `exec_done` output, or an explicit continuation policy in the
   reconciler. Multi-output nodes are not guessed by pin order; API Call/httpFetch continues from
@@ -2843,7 +3162,10 @@ RULES:
   document. Never invent helper calls and expect them to resolve as catalog nodes.
 - A helper that returns a value MUST declare a named return pin, for example
   `function classify(body: string): (isSupport: bool) { ...; return result.value }`. Without the
-  `: (name: Type)` return signature, the Function layer has no matching output pin.
+  `: (name: Type)` return signature, the Function layer has no matching output pin. Return values
+  may be node outputs, parameters, literals (`return "done"`), or mutable `let` bindings; each
+  declared return pin needs a matching return value, and an event-level `return` accepts exactly
+  one value.
 - An Event entry is the final execution/registration root, not the implementation. Never replace a
   failed rich draft with an empty Event or a direct one-node log/string-format smoke test. Keep and
   repair the complete document; every diagnostic blocks the whole candidate. If only a working
@@ -2902,7 +3224,7 @@ impl Tool for WriteFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Start a retained code-first FlowScript draft. Write the complete source document; the host binds it to the immutable user request, parses it into internal BoardAst, returns structured source diagnostics, and preserves the exact text for inline preview and later patches. Catalog-related diagnostics automatically include exact live signatures or bounded candidates in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Defaults to additive scope. Use replace mode only for an intentional complete-board document."
+            description: "Start a retained code-first FlowScript draft. Write the complete source document; the host binds it to the immutable user request, parses it into internal BoardAst, returns structured source diagnostics, and preserves the exact text for inline preview and later patches. When a retained draft already exists for this same request (a follow-up repair run), do NOT start a new draft: reuse the SAME draft_id and exact expected_revision and repair it in place. Function returns accept node outputs, params, literals, and mutable `let` bindings (one return value per declared return pin). A `let` reassigned across if/for promotes to a board variable with its initializer preserved; never reassign a `const` inside a branch arm — declare it with `let`. Catalog-related diagnostics automatically include exact live signatures or bounded candidates in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Defaults to additive scope. Use replace mode only for an intentional complete-board document."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(WriteFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -2934,7 +3256,7 @@ impl Tool for PatchFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Patch one exact, uniquely occurring text range in a retained FlowScript draft using revision compare-and-swap. The full updated source and structured diagnostics are returned inline. Catalog-related diagnostics automatically include repair signatures in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Ambiguous, stale, replayed, or scope-collapsing patches do not mutate the draft."
+            description: "Patch one exact, uniquely occurring text range in a retained FlowScript draft using revision compare-and-swap. This is the way to resume a retained draft in a follow-up repair run: keep its SAME draft_id and exact expected_revision instead of rewriting from scratch. The full updated source and structured diagnostics are returned inline. Function returns accept node outputs, params, literals, and mutable `let` bindings; a `let` reassigned across if/for promotes to a board variable — never reassign a `const` inside a branch arm. Catalog-related diagnostics automatically include repair signatures in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Ambiguous, stale, replayed, or scope-collapsing patches do not mutate the draft."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(PatchFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -2998,7 +3320,7 @@ impl Tool for CommitFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Idempotently claim the exact command batch retained by check_flowscript for this source revision. It refuses stale board/revision/request state and requires exact per-entity removal ids for replacement drafts. The existing Apply/Dismiss review boundary remains authoritative."
+            description: "Idempotently claim the exact command batch retained by check_flowscript for this source revision. It refuses stale board, catalog, revision, or request state and requires exact per-entity removal ids for replacement drafts. If the live catalog changed, run check_flowscript again at the same revision before retrying. The existing Apply/Dismiss review boundary remains authoritative."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(CommitFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -3006,10 +3328,16 @@ impl Tool for CommitFlowScriptTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let catalog = self.provider.get_all_metadata().await;
         self.store.observe_board(&self.board);
         Ok(self
             .store
-            .commit_flowscript_with_acceptance_binding(&self.board, args, &self.acceptance_binding)
+            .commit_flowscript_with_acceptance_binding(
+                &self.board,
+                &catalog,
+                args,
+                &self.acceptance_binding,
+            )
             .render_for_model(&self.board))
     }
 }
@@ -3310,6 +3638,61 @@ pub fn get_tool_description(name: &str, arguments: &serde_json::Value) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flow_like_types::tokio;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct BatchDispatchProvider {
+        batch_calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl CatalogProvider for BatchDispatchProvider {
+        async fn search(&self, _query: &str) -> Vec<super::super::types::NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn search_by_pin_type(
+            &self,
+            _pin_type: &str,
+            _is_input: bool,
+        ) -> Vec<super::super::types::NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn filter_by_category(
+            &self,
+            _category_prefix: &str,
+        ) -> Vec<super::super::types::NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn get_node_metadata(
+            &self,
+            _node_type: &str,
+        ) -> Option<super::super::types::NodeMetadata> {
+            None
+        }
+
+        async fn get_all_nodes(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        async fn get_declarations(&self, _query: &str) -> String {
+            panic!("multi-query dispatch must use get_declarations_batch")
+        }
+
+        async fn get_declarations_batch(&self, queries: &[String]) -> Vec<String> {
+            self.batch_calls.fetch_add(1, Ordering::SeqCst);
+            queries
+                .iter()
+                .map(|query| {
+                    let function_name = query.replace(' ', "");
+                    format!("declare function {function_name}(): void;")
+                })
+                .collect()
+        }
+    }
 
     #[test]
     fn model_facing_emit_schema_exposes_visual_commands_only() {
@@ -3894,6 +4277,23 @@ eventsGeneric(payload: Struct) {
         assert!(queries.iter().any(|query| query.contains("tenth")));
     }
 
+    #[tokio::test]
+    async fn declaration_query_runner_dispatches_one_provider_batch() {
+        let concrete = Arc::new(BatchDispatchProvider::default());
+        let provider: Arc<dyn CatalogProvider> = concrete.clone();
+        let args = GetDeclarationsArgs {
+            query: "smtp send".to_string(),
+            queries: vec!["imap receive".to_string(), "boolean or".to_string()],
+        };
+
+        let result = run_declaration_queries(&provider, &args).await;
+
+        assert_eq!(concrete.batch_calls.load(Ordering::SeqCst), 1);
+        assert!(result.contains("\"processed_count\":3"));
+        assert!(result.contains("\"matched_count\":3"));
+        assert!(result.contains("\"complete\":true"));
+    }
+
     #[test]
     fn declaration_batch_reports_queries_beyond_the_runtime_safety_bound() {
         let args = GetDeclarationsArgs {
@@ -3922,6 +4322,97 @@ eventsGeneric(payload: Struct) {
     }
 
     #[test]
+    fn declaration_batch_reports_match_coverage_and_completeness() {
+        let args = GetDeclarationsArgs {
+            query: String::new(),
+            queries: vec![
+                "boolean or".to_string(),
+                "unknown package capability".to_string(),
+            ],
+        };
+        let batch = declaration_query_batch(&args);
+        let sections = vec![
+            "// result\n  declare function boolOr({ boolean?: bool }): bool;".to_string(),
+            "// No FlowScript declarations matched this query.".to_string(),
+        ];
+
+        let result = render_declaration_query_batch(&batch, &sections);
+
+        assert!(result.contains("\"matched_count\":1"));
+        assert!(result.contains("\"matched_queries\":[\"boolean or\"]"));
+        assert!(result.contains("\"unmatched_count\":1"));
+        assert!(result.contains("\"unmatched_queries\":[\"unknown package capability\"]"));
+        assert!(result.contains("\"complete\":false"));
+    }
+
+    #[test]
+    fn declaration_batch_is_complete_only_when_every_requested_query_matches() {
+        let args = GetDeclarationsArgs {
+            query: "boolean or".to_string(),
+            queries: vec!["smtp send email".to_string()],
+        };
+        let batch = declaration_query_batch(&args);
+        let sections = vec![
+            "declare function boolOr({ boolean?: bool }): bool;".to_string(),
+            "declare function emailSmtpSend({ connection: Struct }): void;".to_string(),
+        ];
+
+        let result = render_declaration_query_batch(&batch, &sections);
+
+        assert!(result.contains("\"matched_count\":2"));
+        assert!(result.contains("\"unmatched_count\":0"));
+        assert!(result.contains("\"complete\":true"));
+    }
+
+    #[test]
+    fn declaration_batch_retains_exact_signature_from_oversized_priority_section() {
+        let args = GetDeclarationsArgs {
+            query: "large live declaration".to_string(),
+            queries: Vec::new(),
+        };
+        let batch = declaration_query_batch(&args);
+        let signature =
+            format!("declare function largeLiveDeclaration({{ payload: Struct }}): string;");
+        let section = format!(
+            "// declaration query: large live declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n// {}\n{DECLARATION_PRIORITY_END}",
+            "usage".repeat(MAX_DECLARATION_RESPONSE_BYTES)
+        );
+
+        let result = render_declaration_query_batch(&batch, &[section]);
+
+        assert!(result.len() <= MAX_DECLARATION_RESPONSE_BYTES);
+        assert!(result.contains(&signature));
+        assert!(result.contains("\"output_omitted_count\":0"));
+        assert!(result.contains("\"complete\":true"));
+    }
+
+    #[test]
+    fn declaration_batch_marks_signature_larger_than_global_budget_output_omitted() {
+        let args = GetDeclarationsArgs {
+            query: "impossibly large declaration".to_string(),
+            queries: Vec::new(),
+        };
+        let batch = declaration_query_batch(&args);
+        let signature = format!(
+            "declare function impossiblyLargeDeclaration({{ {} }}): void;",
+            "payload: string, ".repeat(MAX_DECLARATION_RESPONSE_BYTES)
+        );
+        let section = format!(
+            "// declaration query: impossibly large declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n{DECLARATION_PRIORITY_END}"
+        );
+
+        let result = render_declaration_query_batch(&batch, &[section]);
+
+        assert!(result.len() <= MAX_DECLARATION_RESPONSE_BYTES);
+        assert!(!result.contains("declare function impossiblyLargeDeclaration("));
+        assert!(result.contains("\"output_omitted_count\":1"));
+        assert!(result.contains("\"output_omitted_queries\":[\"impossibly large declaration\"]"));
+        assert!(result.contains("\"matched_count\":0"));
+        assert!(result.contains("\"complete\":false"));
+        assert!(result.contains("Exact declaration omitted"));
+    }
+
+    #[test]
     fn declaration_batch_bounds_oversized_queries_and_reports_that_fact() {
         let args = GetDeclarationsArgs {
             query: "x".repeat(MAX_DECLARATION_QUERY_BYTES + 100),
@@ -3933,6 +4424,7 @@ eventsGeneric(payload: Struct) {
         assert_eq!(batch.truncated_query_count, 1);
         let result = render_declaration_query_batch(&batch, &["declaration".to_string()]);
         assert!(result.contains("\"truncated_query_count\":1"));
+        assert!(result.contains("\"complete\":false"));
         assert!(result.len() <= MAX_DECLARATION_RESPONSE_BYTES);
     }
 
@@ -3950,5 +4442,71 @@ eventsGeneric(payload: Struct) {
         }
         assert!(result.contains("Additional matches omitted"));
         assert!(result.contains("comparison/type-conversion mismatch"));
+    }
+
+    #[test]
+    fn declaration_batch_truncation_preserves_every_priority_usage_block() {
+        let args = GetDeclarationsArgs {
+            query: String::new(),
+            queries: (0..MAX_DECLARATION_QUERIES)
+                .map(|index| {
+                    let prefix = format!("capability-{index:02}-");
+                    format!(
+                        "{prefix}{}",
+                        "x".repeat(MAX_DECLARATION_QUERY_BYTES.saturating_sub(prefix.len()))
+                    )
+                })
+                .collect(),
+        };
+        let batch = declaration_query_batch(&args);
+        let priority_prefix = format!(
+            "{DECLARATION_PRIORITY_BEGIN}// Exact top catalog signature:\n\
+             declare function boolOr({{ boolean?: bool, boolean?: bool }}): bool;\n\
+             // boolOr repeats input `boolean` twice; repeat the exact key in declaration order.\n"
+        );
+        let filler_bytes = MAX_DECLARATION_PRIORITY_BLOCK_BYTES.saturating_sub(
+            priority_prefix
+                .len()
+                .saturating_add("// \n".len())
+                .saturating_add(DECLARATION_PRIORITY_END.len()),
+        );
+        let priority = format!(
+            "{priority_prefix}// {}\n{DECLARATION_PRIORITY_END}",
+            "p".repeat(filler_bytes)
+        );
+        assert_eq!(priority.len(), MAX_DECLARATION_PRIORITY_BLOCK_BYTES);
+        let sections = batch
+            .processed
+            .iter()
+            .enumerate()
+            .map(|(index, query)| {
+                format!(
+                    "// declaration query: {query}\n{priority}// query-{index}\n{}",
+                    "x".repeat(10_000)
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let result = render_declaration_query_batch(&batch, &sections);
+
+        assert!(result.len() <= MAX_DECLARATION_RESPONSE_BYTES);
+        assert_eq!(
+            result.matches(DECLARATION_PRIORITY_BEGIN).count(),
+            MAX_DECLARATION_QUERIES
+        );
+        assert_eq!(
+            result.matches(DECLARATION_PRIORITY_END).count(),
+            MAX_DECLARATION_QUERIES
+        );
+        assert_eq!(
+            result
+                .matches("repeat the exact key in declaration order")
+                .count(),
+            MAX_DECLARATION_QUERIES
+        );
+        assert_eq!(
+            result.matches("// declaration query: capability-").count(),
+            MAX_DECLARATION_QUERIES
+        );
     }
 }

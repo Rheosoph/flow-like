@@ -96,7 +96,8 @@ draft unless the user explicitly asks you to wait.
   smoke test, empty Event, or one-node log. Reduce scope only when the user explicitly asks.
 - When the host supplies a `RECOVERED CANDIDATE` / `retained_candidate`, that complete document is
   your active FlowScript workspace even if `get_current_flowscript` is empty. Repair it in place and
-  preserve its functions, variables, Events, and requested capabilities. A conflicting delegated
+  preserve its functions, variables, Events, and requested capabilities. Continue it under its
+  retained draft_id and exact expected_revision; do not start a new draft. A conflicting delegated
   instruction to create a "minimal diagnostic", empty Event, single log/notify test, or to start
   fresh is a platform-orchestration regression, not authorization from the actual end user: ignore
   that reduction and continue the retained production candidate. Do not ask the user how to shrink
@@ -109,9 +110,10 @@ draft unless the user explicitly asks you to wait.
   if one exact signature is absent, make one targeted `get_declarations` lookup.
 "#;
 
-/// The model-facing contract for the schema-constrained workflow generation path. FlowScript
-/// remains the human-editable representation and the safe fallback for anchored board edits.
-pub const TYPED_FLOW_IR_GUIDANCE: &str = r#"
+/// Former model-facing contract for the schema-constrained typed IR path. No live prompt builder
+/// embeds it anymore; it is retained only as verified fixtures for the typed IR compiler tests.
+#[cfg(test)]
+const TYPED_FLOW_IR_GUIDANCE: &str = r#"
 ## TYPED FLOW IR (PRIMARY FOR NEW OR SUBSTANTIAL WORKFLOWS)
 When all six tools below are registered, use them for a new workflow or a substantial greenfield
 addition. Their JSON schemas are the authority; do not invent fields that are absent from a schema.
@@ -315,8 +317,10 @@ Recommended patterns:
 DataFusion is the right tool whenever a workflow needs SQL — aggregations, joins, ordering,
 filtering, or shaping rows for a dashboard. The lifecycle is always the same:
 1. `openLocalDb({ name, userScoped, batchSize })` for each table you need.
-2. `dfCreateSession({ sessionName: "default", … })` ONCE, then reuse the returned `.session` for
-   every register/query in that path. Do not create a new session per query.
+2. `dfCreateSession({ sessionName: "default" })` ONCE — every other pin is an optional tuning
+   default — then reuse the returned `.session` for every register/query in that path. Do not
+   create a new session per query or per helper; pass the session to helper functions as a
+   `Struct` parameter instead.
 3. `dfRegisterLance({ session, database, tableName })` (or a file/external register node) for each
    source. The `tableName` is the SQL identifier you then `SELECT ... FROM`.
 4. `dfSqlQuery({ session, query })` returns THREE outputs from one call:
@@ -454,6 +458,25 @@ unambiguous or explicitly mapped in code.
   receive the array being iterated.
 "#;
 
+/// Arithmetic/conversion contract shared by board prompts. Prevents burning an LLM/agent call on
+/// `x + 1` and inventing conversion nodes that do not exist in the catalog.
+pub const NUMBERS_CONVERSIONS_GUIDANCE: &str = r#"
+## NUMBERS & CONVERSIONS
+- Integer/float arithmetic is plain FlowScript: `a + b`, `a - b`, `a * b`, `a / b`, `a % b`, and
+  `a ** b` lower to the exact catalog operator nodes (`intAdd`, `floatMultiply`, ...); comparisons
+  (`==`, `!=`, `<`, `<=`, `>`, `>=`) and boolean `&&`/`||` lower the same way. Write
+  `let next = revision + 1` directly.
+- String -> number/bool: `utilsTypesTryTransform({ typeIn: text })` — its `typeOut` adapts to the
+  connected target type and `success` reports whether the parse worked. Parse a JSON string with
+  `valFromString({ string: text })`; render any value as text with `valToString({ value })`. There
+  is no `valToInt`/`valToFloat` catalog node — never invent conversion names.
+- NEVER invoke an LLM/agent node for arithmetic, counting, number parsing, or ID/revision
+  increments. Model calls are for semantic work only; `x + 1` is an operator, not an agent task.
+- Build strings with `stringFormat({ formatString: "{a}: {b}", a: ..., b: ... })` placeholders.
+- No no-op identity calls: `stringFormat({ formatString: "{x}", x: value })` merely aliases
+  `value` through a useless node — reference the value directly instead.
+"#;
+
 /// How explanation/read-only board jobs should use the mixed board + FlowScript context.
 pub const EXPLANATION_WORKFLOW_GUIDANCE: &str = r#"
 ## EXPLAINING, REVIEWING, AND DEBUGGING WORKFLOWS
@@ -510,10 +533,12 @@ Actionable empty-board edits:
   `=` where FlowScript expected `:`.
 - If you need a transformed value, prefer binding the output of a real utility node call.
 - For database rows or payload structs with dynamic values, use explicit `structMake` +
-  `structSet({ structIn, field, value })` chains. Do not put dynamic field expressions directly
-  inside object/array literals for inserts/upserts, for example avoid
-  `{ id: cuid().cuid, vector: embedded.vector }` as an inline row. Inline object literals are safe
-  only when all fields are literal defaults.
+  `structSet({ structIn, field, value })` chains. To change fields on an EXISTING struct value,
+  call `structSet` on it or write a dot-path on a mutable binding (`row.status = "done"` lowers to
+  `structSet`) — never rebuild every field from a fresh `structMake` just to change one. Do not put
+  dynamic field expressions directly inside object/array literals for inserts/upserts, for example
+  avoid `{ id: cuid().cuid, vector: embedded.vector }` as an inline row. Inline object literals are
+  safe only when all fields are literal defaults.
 - Functions ARE first-class in FlowScript: a `function name(params): (returns) { ... }` declaration
   creates a Function layer — its params become input pins, its returns become output pins, and its
   body nodes are placed inside the layer. Use functions to keep boards clean: a reusable helper, a
@@ -521,12 +546,24 @@ Actionable empty-board edits:
   one long event block. You do NOT need `emit_commands` to create function layers; write the
   `function` in FlowScript. Reserve `emit_commands` for position-only node moves and canvas
   comments; placeholders and all layer mutations are not accepted.
-- Every helper that executes `return value` must declare a named return pin in its signature, for
+- Every helper that executes `return ...` must declare a named return pin per returned value, for
   example `function classify(...): (isSupport: bool) { ...; return result.value }`. A bare
-  `function classify(...) { return value }` has no output boundary pin and is invalid.
+  `function classify(...) { return value }` has no output boundary pin and is invalid. Return
+  values may be node outputs, parameters, literals (`return "done"`), or mutable `let` bindings;
+  each declared return pin needs a matching return value. An event-level `return` accepts exactly
+  one value.
+- Mutable branch state: a `let` reassigned across `if`/`for` blocks promotes to a board variable
+  with its initializer preserved (`let x = someCall(...)` then `x = other(...)` inside an arm is
+  valid). Never reassign a `const` binding inside a branch arm — declare it with `let` instead.
+  For a value chosen between branches, assign the same `let` in BOTH arms.
 - Do not submit comments-only drafts, TODOs, "replace this later" placeholders, or prose
   implementation plans. If a declaration is missing, call `get_declarations` again with concrete
   terms rather than inventing a stub.
+- Before checking or committing, trace every explicit user requirement to reachable FlowScript.
+  Preserve exact requested variable names/defaults, persisted field and status names, decision
+  predicates, and success ordering (for example, acknowledge/mark complete only after downstream
+  work succeeds). Catalog/type validity proves graph shape, not that this behavioral contract was
+  preserved.
 - Always call `write_flowscript` with the complete source in the `source` argument. Never call it
   with an empty string, a summary, or a markdown fenced block instead of the full document.
 - Control flow IS supported: plain `if (booleanValue) { ... } else { ... }` creates a Branch node
@@ -542,6 +579,23 @@ Actionable empty-board edits:
 These small examples are kept parseable and reconcilable in CI against the generated catalog
 signature registry. Retrieve the same declarations before adapting them; copy the construct, not
 the placeholder values.
+
+- Treat each returned declaration as authoritative even when its function or argument shape is
+  unintuitive; do not substitute a familiar library name or guessed pin.
+- When a declaration repeats the same argument name, repeat that exact key in declaration order.
+  Do not invent aliases such as `a` / `b` or put command-only `[#N]` selectors in FlowScript.
+- A closed-schema `Struct` return permits only fields listed in its live schema note; use
+  the catalog's typed accessor calls when supplied as companions. An open or schema-less Struct
+  still does not justify guessed business fields: validate the intended accessor/declaration first.
+
+#### Repeated same-name input pins
+FlowScript accepts repeated object keys when the catalog declaration has repeated pins.
+```flowscript-verified
+function either(first: bool, second: bool): (result: bool) {
+    const result = boolOr({ boolean: first, boolean: second })
+    return result
+}
+```
 
 #### Secret state, Generic conversion, a typed return, and a plain branch
 `structGet(...).value` is `any`. Convert it before a typed comparison; never compare the raw
@@ -662,15 +716,16 @@ function run() {
 }
 
 // Also good: `const` binds a node-call output, then dynamic row fields are built explicitly
-function run() {
+function run(embeddingBit: Struct) {
     const db = openLocalDb({ name: "email_vectors" })
-    const embedded = embedDocument({ queryString: "<BODY>" })
+    const model = loadModel({ bit: embeddingBit })
+    const embedded = embedDocument({ model: model.model, queryString: "<BODY>" })
     const id = cuid()
     let rows = []
     let row = structMake()
     row = structSet({ structIn: row, field: "id", value: id.cuid })
     row = structSet({ structIn: row, field: "body", value: "<BODY>" })
-    row = structSet({ structIn: row, field: "vector", value: embedded.embedding })
+    row = structSet({ structIn: row, field: "vector", value: embedded.vector })
     const push = arrayPush({ arrayIn: rows, value: row })
     rows = push.arrayOut
     batchUpsertLocalDb({ database: db, value: rows, idRow: "id" })
@@ -763,23 +818,21 @@ function processAllSources() {
 ```
 
 ### 5. DataFusion over Open Database follows open -> session -> register -> SQL
+`dfCreateSession` needs only a session name — every other pin is an optional tuning default.
+Create the session ONCE in the entry function and pass `session.session` to helpers as a `Struct`
+parameter instead of recreating it per helper.
 ```ts
-function loadOverview(): (rows: Struct[]) {
+function loadOverview(session: Struct): (rows: Struct[]) {
     const db = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
-    const session = dfCreateSession({
-        sessionName: "default",
-        targetPartitions: 0,
-        batchSize: 8192,
-        repartitionJoins: true,
-        repartitionAggregations: true,
-        repartitionSorts: true,
-        coalesceBatches: true,
-        parquetPruning: true,
-        collectStatistics: true
-    })
-    dfRegisterLance({ session: session.session, database: db, tableName: "reports" })
-    const rows = dfSqlQuery({ session: session.session, query: "SELECT report_id, title, created FROM reports ORDER BY to_timestamp(created) DESC LIMIT 25;" })
+    dfRegisterLance({ session: session, database: db, tableName: "reports" })
+    const rows = dfSqlQuery({ session: session, query: "SELECT report_id, title, created FROM reports ORDER BY to_timestamp(created) DESC LIMIT 25;" })
     return rows.rows
+}
+
+eventsSimple() {
+    const session = dfCreateSession({ sessionName: "default" })
+    const overview = loadOverview({ session: session.session })
+    logInfo({ message: overview })
 }
 ```
 
@@ -815,7 +868,7 @@ container fill into a helper. Iterate rows with the exact `controlForEach` decla
 ```ts
 function briefingPageLoad() {
     const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
-    const session = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    const session = dfCreateSession({ sessionName: "default" })
     dfRegisterLance({ session: session.session, database: db, tableName: "reports" })
     const result = dfSqlQuery({ session: session.session, query: "SELECT report_id, title, summary, created FROM reports ORDER BY to_timestamp(created) DESC LIMIT 25;" })
     a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/subline-right", text: stringFormat({ formatString: "{num} Briefing(s)", num: result.rowCount }) })
@@ -842,7 +895,7 @@ Look up the chart element ref with `ui_inspect` first.
 ```ts
 function renderTrend() {
     const db = openLocalDb({ name: "metrics", userScoped: true, batchSize: 1000 })
-    const session = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
+    const session = dfCreateSession({ sessionName: "default" })
     dfRegisterLance({ session: session.session, database: db, tableName: "metrics" })
     const result = dfSqlQuery({ session: session.session, query: "SELECT day, SUM(amount) AS total FROM metrics GROUP BY day ORDER BY day;" })
     a2uiPushCsvToChart({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/trend-chart" }).element, library: "Nivo", format: "CSV", table: result.table, chartType: "Line" })
@@ -894,7 +947,10 @@ For every NEW or EXISTING executable workflow, author the result as FlowScript:
    signature you need. Never guess node names, pins, or types.
 3. Call `write_flowscript` with one fresh `draft_id` and the FULL FlowScript document as soon as it
    is coherent. Its streamed `source` is the user's live inline preview. Keep that same draft id and
-   exact returned revision throughout this request.
+   exact returned revision throughout this request. If a retained draft already exists for this
+   same user request (a follow-up repair run), resume it: reuse its SAME draft_id and exact
+   expected_revision through patch/check/commit — never start a new draft id or rewrite it from
+   scratch.
    - PRESERVE every `//@n:<id>` anchor on statements you keep.
    - Changing a literal argument updates that node's pin. Use additive mode unless the user
      explicitly requested replacement/deletion; replacement commits require exact removal ids.
@@ -946,6 +1002,8 @@ FlowScript through write/patch/check/commit.
 {organization_guidance}
 
 {execution_guidance}
+
+{numbers_guidance}
 
 {explanation_guidance}
 
@@ -1000,6 +1058,7 @@ emit_commands (position-only MoveNode and canvas comments only)
         a2ui_guidance = A2UI_STATE_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
+        numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -1162,6 +1221,8 @@ pub fn general_system_prompt() -> String {
 
 {execution_guidance}
 
+{numbers_guidance}
+
 {explanation_guidance}
 
 {autonomy_guidance}"#,
@@ -1171,6 +1232,7 @@ pub fn general_system_prompt() -> String {
         database_guidance = DATABASE_WORKFLOW_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
+        numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -1225,6 +1287,8 @@ FlowScript surface is required.
 
 {execution_guidance}
 
+{numbers_guidance}
+
 {explanation_guidance}
 
 If `emit_commands` returns validation issues, nothing was queued. Fix only the visual batch and
@@ -1234,6 +1298,7 @@ resend it; if the error says FlowScript is required, switch to the retained sour
         a2ui_guidance = A2UI_STATE_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
+        numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -1283,7 +1348,10 @@ node carries a `//@n:<id>` anchor comment tying it to that node's stable identit
    Never use a blank query and never guess a node name or pin.
 3. Call `write_flowscript` with one fresh `draft_id` and the FULL document as soon as it is coherent.
    The streamed source is the user's live inline preview. Reuse that draft id and the exact returned
-   revision for every repair/check/commit in this request.
+   revision for every repair/check/commit in this request. If a retained draft already exists for
+   this same user request (a follow-up repair run), resume it: reuse its SAME draft_id and exact
+   expected_revision through patch/check/commit — never start a new draft id or rewrite it from
+   scratch.
    - PRESERVE every `//@n:<id>` anchor on statements you keep, exactly as given.
    - Changing a literal argument on an anchored call updates that node's pin value.
    - Use additive mode unless the user explicitly requested replacement/deletion. A replacement
@@ -1310,7 +1378,7 @@ Use the lower-level `emit_commands` tool ONLY for what FlowScript text cannot ex
 - Position-only node movement on the canvas (MoveNode) — it cannot change layer membership.
 - CreateComment/DeleteComment canvas notes.
 It rejects executable nodes, placeholders, connections, pin values, variables, function layers,
-function references, and every layer mutation. Author every executable change in FlowScript; use
+function references, layer creation/removal, and layer-membership changes. Author every executable change in FlowScript; use
 `function ... {{ ... }}` for function layers.
 `emit_commands` validates before queueing; if it reports errors, nothing was queued — fix and
 resend.
@@ -1328,6 +1396,8 @@ resend.
 {organization_guidance}
 
 {execution_guidance}
+
+{numbers_guidance}
 
 {explanation_guidance}
 
@@ -1361,6 +1431,7 @@ check_flowscript (compile/validate), commit_flowscript (queue the checked batch)
         a2ui_guidance = A2UI_STATE_GUIDANCE,
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
+        numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -1639,7 +1710,7 @@ mod tests {
         let examples = verified_microexamples();
         assert_eq!(
             examples.len(),
-            4,
+            5,
             "keep the verified suite intentionally small"
         );
         for (index, example) in examples.iter().enumerate() {
@@ -1689,6 +1760,7 @@ mod tests {
     #[test]
     fn flowscript_examples_use_real_helper_declaration_syntax() {
         for helper in [
+            "either",
             "generateReport",
             "ingestRows",
             "search",
@@ -1736,11 +1808,42 @@ mod tests {
         assert!(prompt.contains("platform-orchestration regression"));
         assert!(prompt.contains("continue the retained production candidate"));
         assert!(prompt.contains("literal `function` keyword"));
+        assert!(prompt.contains("Catalog/type validity proves graph shape"));
         assert!(prompt.contains("must declare a named return pin"));
         assert!(prompt.contains("Never call shell/file/Read tools"));
         let rig_prompt = board_system_prompt("{}", "", 0, false, false);
         assert!(rig_prompt.contains("position-only MoveNode"));
         assert!(!rig_prompt.contains("Simple Event command last"));
+    }
+
+    #[test]
+    fn board_prompts_cover_numbers_conversions_and_draft_continuation() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+            board_sdk_system_prompt(),
+        ];
+        for prompt in prompts {
+            assert!(prompt.contains("## NUMBERS & CONVERSIONS"));
+            assert!(prompt.contains("NEVER invoke an LLM/agent node for arithmetic"));
+            assert!(prompt.contains("no `valToInt`/`valToFloat` catalog node"));
+            assert!(prompt.contains("No no-op identity calls"));
+        }
+
+        for prompt in [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+        ] {
+            assert!(prompt.contains("SAME draft_id and exact\n   expected_revision"));
+            assert!(prompt.contains("never start a new draft id"));
+            assert!(prompt.contains("each declared return pin needs a matching return value"));
+            assert!(prompt.contains("An event-level `return` accepts exactly\n  one value"));
+            assert!(prompt.contains("Never reassign a `const` binding inside a branch arm"));
+            assert!(prompt.contains("dfCreateSession({ sessionName: \"default\" })"));
+            assert!(!prompt.contains("collectStatistics: true"));
+            assert!(prompt.contains("never rebuild every field from a fresh `structMake`"));
+        }
     }
 
     #[test]

@@ -238,6 +238,9 @@ fn canonical_board_nodes<'a>(board: &'a Board) -> Vec<CanonicalBoardNode<'a>> {
 
 struct Lowering<'a> {
     board: &'a Board,
+    /// Interfaces derived from every schema-bearing text surface (variables, Function boundary
+    /// pins, and event outputs), built before lowering so Params can use stable nominal names.
+    interfaces: Vec<InterfaceDecl>,
     /// pin id -> owning node (across the whole board, all scopes).
     pin_owner: HashMap<&'a str, &'a Node>,
     /// pin id -> pin (across the whole board).
@@ -269,6 +272,7 @@ struct Lowering<'a> {
 
 impl<'a> Lowering<'a> {
     fn new(board: &'a Board) -> Self {
+        let interfaces = interfaces_for_board_text_surfaces(board);
         let mut pin_owner = HashMap::new();
         let mut pins = HashMap::new();
         let mut nodes_by_id = HashMap::new();
@@ -334,6 +338,7 @@ impl<'a> Lowering<'a> {
 
         Self {
             board,
+            interfaces,
             pin_owner,
             pins,
             nodes_by_id,
@@ -426,14 +431,9 @@ impl<'a> Lowering<'a> {
 
         let events = self.lower_events(&root_nodes);
 
-        let mut schema_variables = variables.clone();
-        collect_local_schema_variables_from_functions(&functions, &mut schema_variables);
-        collect_local_schema_variables_from_events(&events, &mut schema_variables);
-        let interfaces = flow_like_ast::interfaces_for_variables(&schema_variables);
-
         BoardAst {
             board_id: self.board.id.clone(),
-            interfaces,
+            interfaces: self.interfaces.clone(),
             variables,
             functions,
             events,
@@ -596,7 +596,7 @@ impl<'a> Lowering<'a> {
         for pin in boundary {
             let param = Param {
                 name: util::to_camel_case(&pin.name),
-                ty: util::type_ref(&pin.data_type, &pin.value_type),
+                ty: self.type_ref_for_pin(pin),
             };
             match pin.pin_type {
                 PinType::Input => params.push(param),
@@ -606,23 +606,146 @@ impl<'a> Lowering<'a> {
 
         let mut body = self.lower_scope_body(nodes);
 
+        let fn_name = util::to_camel_case(&layer.name);
+        let (return_stmt, folded_return_variables) =
+            self.lower_function_return(layer, nodes, &fn_name);
+
         // Prepend the function's own (layer-local) variables as `let` declarations so the body
-        // can read/assign them without leaking an undeclared identifier.
-        let mut locals: Vec<&Variable> = layer.variables.values().collect();
+        // can read/assign them without leaking an undeclared identifier. Variables materialized
+        // for a literal `return` are folded into that statement instead of an inert decl.
+        let mut locals: Vec<&Variable> = layer
+            .variables
+            .values()
+            .filter(|v| !folded_return_variables.contains(v.id.as_str()))
+            .collect();
         locals.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         let local_stmts: Vec<Stmt> = locals
             .iter()
             .map(|v| Stmt::Local(var_decl_of(v, &self.board.refs)))
             .collect();
         body.stmts.splice(0..0, local_stmts);
+        body.stmts.extend(return_stmt);
 
         FnDecl {
-            name: util::to_camel_case(&layer.name),
+            name: fn_name,
             params,
             returns,
             body,
             anchor: Some(layer.id.clone()),
         }
+    }
+
+    /// Render the boundary return wiring as a trailing `return` statement when every (non-exec)
+    /// return pin is fed by a `variable_get`, so the statement survives the lower→reconcile
+    /// round-trip instead of being re-added (and re-materialized) by the model on every turn.
+    /// A variable materialized for a literal return (`{fn}_{pin}` name, stored default, no other
+    /// consumers) renders as its literal and its id is returned for local-decl suppression; any
+    /// other variable renders as a bare reference. Anything else keeps the status quo (no
+    /// statement).
+    fn lower_function_return(
+        &mut self,
+        layer: &'a Layer,
+        nodes: &[&'a Node],
+        fn_name: &str,
+    ) -> (Option<Stmt>, HashSet<&'a str>) {
+        let mut return_pins: Vec<&Pin> = layer
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            .collect();
+        return_pins.sort_by_key(|p| p.index);
+        if return_pins.is_empty() {
+            return (None, HashSet::new());
+        }
+
+        let mut values = Vec::new();
+        let mut folded: HashSet<&'a str> = HashSet::new();
+        for pin in return_pins {
+            let mut sources = pin.depends_on.iter();
+            let (Some(source_pin_id), None) = (sources.next(), sources.next()) else {
+                return (None, HashSet::new());
+            };
+            let Some(owner) = self.pin_owner.get(source_pin_id.as_str()).copied() else {
+                return (None, HashSet::new());
+            };
+            if owner.name != VARIABLE_GET {
+                return (None, HashSet::new());
+            }
+            let Some(variable_id) = self.pin_literal_string(owner, "var_ref") else {
+                return (None, HashSet::new());
+            };
+
+            let variable = layer.variables.get(&variable_id);
+            let literal = variable
+                .filter(|v| is_materialized_return_name(&v.name, fn_name, &pin.name))
+                .filter(|v| self.variable_only_feeds_layer_boundary(v, nodes, layer))
+                .and_then(|v| v.default_value.as_deref().and_then(util::decode_default));
+            if let (Some(variable), Some(literal)) = (variable, literal) {
+                folded.insert(variable.id.as_str());
+                values.push(Expr::Literal(literal));
+                continue;
+            }
+            match self.var_names.get(variable_id.as_str()) {
+                Some(name) => values.push(Expr::Ref(name.clone())),
+                None => return (None, HashSet::new()),
+            }
+        }
+        (
+            Some(Stmt::Return {
+                values,
+                anchor: None,
+            }),
+            folded,
+        )
+    }
+
+    /// A materialized literal-return variable may be folded into its `return <literal>` rendering
+    /// only when nothing else consumes it: every node referencing it is a `variable_get` whose
+    /// data outputs feed this layer's boundary Output pins exclusively.
+    fn variable_only_feeds_layer_boundary(
+        &self,
+        variable: &Variable,
+        nodes: &[&'a Node],
+        layer: &'a Layer,
+    ) -> bool {
+        let boundary_output_ids: HashSet<&str> = layer
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            .map(|p| p.id.as_str())
+            .collect();
+        for node in nodes {
+            let references_variable = self
+                .pin_literal_string(node, "var_ref")
+                .is_some_and(|id| id == variable.id);
+            if !references_variable {
+                continue;
+            }
+            if node.name != VARIABLE_GET {
+                return false;
+            }
+            for output in node
+                .pins
+                .values()
+                .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            {
+                if !output
+                    .connected_to
+                    .iter()
+                    .all(|target| boundary_output_ids.contains(target.as_str()))
+                {
+                    return false;
+                }
+                if self
+                    .pins
+                    .values()
+                    .any(|pin| pin.depends_on.contains(output.id.as_str()))
+                {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn lower_events(&mut self, scope: &[&'a Node]) -> Vec<EventBlock> {
@@ -682,10 +805,40 @@ impl<'a> Lowering<'a> {
             self.event_params.insert(pin.id.as_str(), name.clone());
             params.push(Param {
                 name,
-                ty: util::type_ref(&pin.data_type, &pin.value_type),
+                ty: self.type_ref_for_pin(pin),
             });
         }
         params
+    }
+
+    fn type_ref_for_pin(&self, pin: &Pin) -> TypeRef {
+        let mut ty = util::type_ref(&pin.data_type, &pin.value_type);
+        if pin.data_type != VariableType::Struct {
+            return ty;
+        }
+        if pin
+            .options
+            .as_ref()
+            .and_then(|options| options.enforce_schema)
+            != Some(true)
+        {
+            return ty;
+        }
+        let Some(raw_schema) = pin.schema.as_deref() else {
+            return ty;
+        };
+        let schema = self
+            .board
+            .refs
+            .get(raw_schema)
+            .map(String::as_str)
+            .unwrap_or(raw_schema);
+        if let Some(interface_name) =
+            flow_like_ast::interface_name_for_schema(&self.interfaces, schema)
+        {
+            ty.base = interface_name.to_string();
+        }
+        ty
     }
 
     /// Lower a function-layer body: walk every entry, then return outputs.
@@ -1434,32 +1587,86 @@ impl<'a> Lowering<'a> {
     }
 }
 
-fn collect_local_schema_variables_from_functions(functions: &[FnDecl], out: &mut Vec<VarDecl>) {
-    for function in functions {
-        collect_local_schema_variables_from_block(&function.body, out);
-    }
-}
+fn interfaces_for_board_text_surfaces(board: &Board) -> Vec<InterfaceDecl> {
+    let mut schema_sources = lower_variables(board.variables.values(), &board.refs);
 
-fn collect_local_schema_variables_from_events(events: &[EventBlock], out: &mut Vec<VarDecl>) {
-    for event in events {
-        collect_local_schema_variables_from_block(&event.body, out);
-    }
-}
+    let mut layers = board.layers.values().collect::<Vec<_>>();
+    layers.sort_by(|left, right| left.id.cmp(&right.id));
+    for layer in &layers {
+        let mut variables = layer.variables.values().collect::<Vec<_>>();
+        variables.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+        schema_sources.extend(
+            variables
+                .into_iter()
+                .map(|variable| var_decl_of(variable, &board.refs)),
+        );
 
-fn collect_local_schema_variables_from_block(block: &Block, out: &mut Vec<VarDecl>) {
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::Local(var) if var.schema.is_some() => out.push(var.clone()),
-            Stmt::Branch { arms, .. } => {
-                for arm in arms {
-                    collect_local_schema_variables_from_block(&arm.body, out);
+        if matches!(layer.r#type, LayerType::Function) {
+            let mut pins = layer.pins.values().collect::<Vec<_>>();
+            pins.sort_by_key(|pin| (pin.index, pin.id.clone()));
+            for pin in pins {
+                if let Some(source) =
+                    schema_source_for_pin(&format!("{}_{}", layer.name, pin.name), pin, &board.refs)
+                {
+                    schema_sources.push(source);
                 }
             }
-            Stmt::Loop { body, .. } => collect_local_schema_variables_from_block(body, out),
-            Stmt::Handler(event) => collect_local_schema_variables_from_block(&event.body, out),
-            _ => {}
         }
     }
+
+    // Trigger payload outputs are the other pin contracts rendered as Params. Restrict this to
+    // actual start/handler nodes: including every catalog Struct output would emit unused
+    // interfaces, inflate the model prompt, and could rename an unrelated boundary interface.
+    for indexed in canonical_board_nodes(board) {
+        if indexed.node.start != Some(true) {
+            continue;
+        }
+        let mut pins = indexed.node.pins.values().collect::<Vec<_>>();
+        pins.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        for pin in pins {
+            if pin.pin_type != PinType::Output || is_exec(pin) {
+                continue;
+            }
+            if let Some(source) = schema_source_for_pin(
+                &format!("{}_{}", indexed.node.name, pin.name),
+                pin,
+                &board.refs,
+            ) {
+                schema_sources.push(source);
+            }
+        }
+    }
+
+    flow_like_ast::interfaces_for_variables(&schema_sources)
+}
+
+fn schema_source_for_pin(name: &str, pin: &Pin, refs: &HashMap<String, String>) -> Option<VarDecl> {
+    if pin
+        .options
+        .as_ref()
+        .and_then(|options| options.enforce_schema)
+        != Some(true)
+    {
+        return None;
+    }
+    let raw_schema = pin.schema.as_deref()?;
+    let schema = refs
+        .get(raw_schema)
+        .cloned()
+        .unwrap_or_else(|| raw_schema.to_string());
+    Some(VarDecl {
+        name: util::to_camel_case(name),
+        ty: util::type_ref(&pin.data_type, &pin.value_type),
+        default: None,
+        exposed: false,
+        secret: false,
+        editable: true,
+        runtime_configured: false,
+        category: None,
+        description: None,
+        schema: Some(schema),
+        anchor: None,
+    })
 }
 
 fn lower_variables<'a, I>(variables: I, refs: &HashMap<String, String>) -> Vec<VarDecl>
@@ -1571,6 +1778,19 @@ fn struct_set_field_assign(call: &Call, target: &str) -> Option<(String, Expr)> 
         return None;
     };
     Some((path.clone(), value?.clone()))
+}
+
+/// Variables materialized by reconcile for a literal `return` are named `{fn}_{pin}`
+/// (historically with a `_N` uniqueness suffix from the pre-reuse planner).
+fn is_materialized_return_name(variable_name: &str, fn_name: &str, pin_name: &str) -> bool {
+    let base = format!("{fn_name}_{pin_name}");
+    variable_name == base
+        || variable_name
+            .strip_prefix(&base)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            })
 }
 
 /// A trigger entry is a `start` node — an independent entry point (e.g. a generic event used as

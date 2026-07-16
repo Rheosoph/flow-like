@@ -550,8 +550,13 @@ platform caller must not turn a validation problem into a new implementation req
 "minimal diagnostic", empty Event, one-node log/notify test, or ask_user choice to downgrade the
 workflow. If any result reports `retained_candidate`, `retained_flowscript`, or a retained draft,
 that document remains the active recovery workspace even if the persisted board is still empty.
-Retry on the SAME app/board with the original acceptance contract and observed diagnostics, and
-explicitly instruct the specialist to repair and queue the retained production candidate. Only an
+Retained drafts are bound to THIS conversation plus the ORIGINAL user request: a follow-up
+repair call resumes them only within the same conversation, never from a different one. Include
+that original user request text verbatim in the instruction, name the retained draft_id and its
+expected_revision, and direct the specialist to repair that draft in place — same draft_id, same
+revision chain, never "start a new draft" or a from-scratch rewrite. Retry on the SAME app/board
+with the original acceptance contract and observed diagnostics, and explicitly instruct the
+specialist to repair and queue the retained production candidate. Only an
 explicit NEW end-user request may discard or reduce it.
 
 When a board is already open (see CURRENTLY OPEN BOARD in your context), pass its app_id/board_id and route the user's board question here directly — do NOT ask which app or board, and do NOT answer board questions yourself.
@@ -561,7 +566,7 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
                 json!({
                     "type": "object",
                     "properties": {
-                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question for the board copilot. For mode=edit: preserve the original full acceptance contract across retries; when a prior result retained a draft, request repair of that same retained production candidate with its diagnostics, never a minimal replacement. For mode=explain: the user's question about the board." },
+                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question for the board copilot. For mode=edit: preserve the original full acceptance contract across retries; when a prior result retained a draft, include the original user request text verbatim, name the retained draft_id + expected_revision, and request repair of that same retained production candidate with its diagnostics — never a minimal replacement or a new draft id. For mode=explain: the user's question about the board." },
                         "mode": { "type": "string", "enum": ["edit", "explain"], "description": "\"explain\" to answer a question about the board (read-only, no changes, no approval); \"edit\" to build/modify it. Defaults to \"edit\"." },
                         "app_id": { "type": "string", "description": "App id (from list_apps, create_app, or the CURRENTLY OPEN BOARD context)." },
                         "board_id": { "type": "string", "description": "Target board id within the app. Optional; defaults to the app's first board (or the open board), creating one if none exists." },
@@ -884,6 +889,19 @@ mod tests {
         assert!(spec.description.contains("active recovery workspace"));
         assert!(spec.description.contains("minimal diagnostic"));
         assert!(spec.description.contains("explicit NEW end-user request"));
+        assert!(
+            spec.description
+                .contains("original user request text verbatim")
+        );
+        assert!(
+            spec.description
+                .contains("only within the same conversation")
+        );
+        assert!(
+            spec.description
+                .contains("retained draft_id and its\nexpected_revision")
+        );
+        assert!(spec.description.contains("never \"start a new draft\""));
         assert_eq!(spec.timeout_secs, 1800);
 
         let schema = (spec.schema)();
@@ -891,7 +909,9 @@ mod tests {
             .as_str()
             .expect("flowpilot_board instruction description");
         assert!(instruction.contains("same retained production candidate"));
-        assert!(instruction.contains("never a minimal replacement"));
+        assert!(instruction.contains("original user request text verbatim"));
+        assert!(instruction.contains("retained draft_id + expected_revision"));
+        assert!(instruction.contains("never a minimal replacement or a new draft id"));
     }
 
     #[test]

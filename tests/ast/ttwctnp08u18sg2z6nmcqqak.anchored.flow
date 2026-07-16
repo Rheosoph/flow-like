@@ -60,6 +60,92 @@ interface Bit {
     model_slug?: string | null = null;
     model_evaluation?: LlmModelEvaluation | null = null;
 }
+interface HistoryMessage {
+    role: "system" | "user" | "assistant" | "function" | "tool";
+    content: string | Struct[];
+    name?: string | null;
+    tool_calls?: ToolCall[] | null;
+    tool_call_id?: string | null;
+    annotations?: Annotation[] | null;
+}
+interface ImageUrl {
+    url: string;
+    detail?: string | null;
+}
+interface ToolCall {
+    id: string;
+    type: string;
+    function: ToolCallFunction;
+}
+interface ToolCallFunction {
+    name: string;
+    arguments: string;
+}
+interface Annotation {
+    type: string;
+    url_citation?: UrlCitation | null;
+}
+interface UrlCitation {
+    end_index: int;
+    start_index: int;
+    title: string;
+    url: string;
+    content?: string | null;
+}
+interface StreamOptions {
+    include_usage: bool;
+}
+interface Tool {
+    type: "function";
+    function: HistoryFunction;
+}
+interface HistoryFunction {
+    name: string;
+    description?: string | null;
+    parameters: HistoryFunctionParameters;
+}
+interface HistoryFunctionParameters {
+    type: "object" | "number" | "string" | "array" | "null" | "boolean";
+    properties?: Map<string, HistoryJSONSchemaDefine> | null;
+    required?: string[] | null;
+}
+interface HistoryJSONSchemaDefine {
+    type?: "object" | "number" | "string" | "array" | "null" | "boolean" | null;
+    description?: string | null;
+    enum?: string[] | null;
+    properties?: Map<string, HistoryJSONSchemaDefine> | null;
+    required?: string[] | null;
+    items?: HistoryJSONSchemaDefine | null;
+}
+interface Usage {
+    include: bool;
+}
+interface History {
+    model: string;
+    messages: HistoryMessage[];
+    preset?: string | null;
+    stream?: bool | null;
+    stream_options?: StreamOptions | null;
+    max_completion_tokens?: int | null;
+    top_p?: float | null;
+    temperature?: float | null;
+    thinking?: "off" | "low" | "mid" | "high" | null;
+    seed?: int | null;
+    presence_penalty?: float | null;
+    frequency_penalty?: float | null;
+    user?: string | null;
+    stop?: string[] | null;
+    response_format?: string | any | null;
+    n?: int | null;
+    tools?: Tool[] | null;
+    tool_choice?: null | Struct | null;
+    usage?: Usage | null;
+}
+interface User {
+    sub: string;
+    name: string;
+    bot?: bool | null;
+}
 
 const attachedFiles: Struct = {}   //@v:ovthhqty1jphkp6pfalvyjid
 const embeddingModel: CachedEmbeddingModel = {"cache_key":""}   //@v:g12vxae1e1buhfqo3v7lc0o7
@@ -80,7 +166,7 @@ function constructPrompt(prompt: string): (out: string) {   //@l:olhizg2b8s6seeu
     const now2 = utilsDatetimeNow()   //@n:j37yxnwykc08y10reikmija1
 }
 
-chatEvent(history: Struct, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: Struct) {   //@n:liqnumu9en44cq30tu9t5kez
+chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {   //@n:liqnumu9en44cq30tu9t5kez
     const extractAttachments = aiGenLlmHistoryExtractAttachments({ history: history, attachments: attachments })   //@n:szmvl23cetvik1iwmnsslj26
     attachedFiles = {}   //@n:xal689cwuihke7lvj801euk9
     for (const forEach4 of controlForEach({ array: extractAttachments.paths })) {   //@n:yqfyly9dkiziqqa6uqmsxdzs

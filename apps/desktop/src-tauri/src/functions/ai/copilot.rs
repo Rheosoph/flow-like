@@ -53,6 +53,10 @@ const EXTERNAL_AGENT_MESSAGE_STATE_MAX_ENTRIES: usize = 256;
 const MCP_TOOL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const SDK_CONTROL_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const SDK_CHAT_ABORT_TIMEOUT: Duration = Duration::from_secs(5);
+// A direct SDK session previously waited forever when the CLI/event transport disappeared after a
+// tool start. This is deliberately longer than the frontend bridge's 120-second approval/tool
+// deadline, and resets after every received event.
+const SDK_EVENT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(180);
 const SDK_RESPONSE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const SDK_USAGE_CALLS_MAX_ENTRIES: usize = 256;
 
@@ -1261,6 +1265,14 @@ pub async fn copilot_chat(
                 .filter(|prompt| !prompt.trim().is_empty())
         })
         .unwrap_or_else(|| user_prompt.clone());
+    // The retained-draft identity and acceptance contract must survive across nested runs spawned
+    // from one user turn. Delegated specialist instructions differ per nested run, so identity
+    // binds to the outer chat's immutable source prompt whenever the tool context carries it,
+    // scoped by the owning conversation id so identical prompt text from another conversation
+    // never shares a draft lease; a genuinely different user request still produces a different
+    // identity.
+    let request_identity_prompt =
+        request_identity_prompt_for(tool_context.as_ref(), &raw_user_prompt);
     let host_context_guidance = run_context.as_ref().map(|context| {
         format!(
             "## HOST RUN CONTEXT\nThe user is asking about execution run `{}` for app `{}` and board `{}`. Use the run/log query tools and ground the answer in that run.",
@@ -1271,7 +1283,8 @@ pub async fn copilot_chat(
         && matches!(scope, CopilotScope::Board | CopilotScope::Both)
         && let Some(board) = board.as_ref()
         && let Some(delivery) =
-            pending_flowscript_redelivery_for_request(&app_handle, board, &raw_user_prompt).await
+            pending_flowscript_redelivery_for_request(&app_handle, board, &request_identity_prompt)
+                .await
     {
         let parent_request_id = scoped_parent_request_id(tool_context.as_ref());
         let workspace_status = if delivery.stale_board {
@@ -1326,6 +1339,7 @@ pub async fn copilot_chat(
                     current_surface.as_ref(),
                     user_prompt,
                     raw_user_prompt,
+                    request_identity_prompt,
                     host_context_guidance,
                     current_images,
                     history.unwrap_or_default(),
@@ -1357,6 +1371,7 @@ pub async fn copilot_chat(
                     current_surface.as_ref(),
                     user_prompt,
                     raw_user_prompt,
+                    request_identity_prompt,
                     host_context_guidance,
                     history.unwrap_or_default(),
                     channel,
@@ -1426,7 +1441,10 @@ pub async fn copilot_chat(
             return Err("FlowPilot Bits run was cancelled during initialization".to_string());
         }
     }
-    .with_runtime_bridge(runtime_bridge);
+    .with_runtime_bridge(runtime_bridge)
+    // Bind draft/acceptance identity to the same conversation-scoped request identity the SDK and
+    // external agent backends use, while `raw_user_prompt` keeps serving routing/classification.
+    .with_request_identity_prompt(Some(request_identity_prompt));
 
     if !read_only
         && !matches!(scope, CopilotScope::Frontend)
@@ -1871,6 +1889,7 @@ pub async fn global_chat(
                     None,
                     user_prompt,
                     source_user_prompt.clone(),
+                    source_user_prompt.clone(),
                     None,
                     current_images,
                     history,
@@ -1902,6 +1921,7 @@ pub async fn global_chat(
                     &[],
                     None,
                     user_prompt,
+                    source_user_prompt.clone(),
                     source_user_prompt,
                     None,
                     history,
@@ -2166,6 +2186,96 @@ struct ExternalAgentRunOutput {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalAgentExitKind {
+    UserCancelled,
+    TransientInfrastructure,
+    Permanent,
+}
+
+fn classify_external_agent_failure(error: &str, cancelled: bool) -> ExternalAgentExitKind {
+    if cancelled {
+        return ExternalAgentExitKind::UserCancelled;
+    }
+    let normalized = error.to_ascii_lowercase();
+    let permanent_markers = [
+        "cancelled by user",
+        "canceled by user",
+        "user aborted",
+        "authentication",
+        "unauthorized",
+        "forbidden",
+        "invalid api key",
+        "permission denied",
+        "billing",
+        "unsupported",
+        "not installed",
+        "executable was not found",
+        "invalid request",
+        "context length",
+        "prompt is too long",
+        "request too large",
+    ];
+    if permanent_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentExitKind::Permanent;
+    }
+    let transient_markers = [
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection lost",
+        "disconnected",
+        "broken pipe",
+        "unexpected eof",
+        "end of stream",
+        "stream closed",
+        "transport",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "overloaded",
+        "rate limit",
+        "network error",
+        "dns error",
+        "http 429",
+        "http 502",
+        "http 503",
+        "http 504",
+        "http 529",
+    ];
+    if transient_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
+        ExternalAgentExitKind::TransientInfrastructure
+    } else {
+        ExternalAgentExitKind::Permanent
+    }
+}
+
+fn external_agent_run_failure(result: &Result<ExternalAgentRunOutput, String>) -> Option<&str> {
+    match result {
+        Ok(output) => output.error.as_deref(),
+        Err(error) => Some(error.as_str()),
+    }
+}
+
+fn can_resume_external_workflow_after_failure(
+    snapshot: Option<&WorkflowToolLoopSnapshot>,
+    error: &str,
+    cancelled: bool,
+) -> bool {
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    !snapshot.queued
+        && classify_external_agent_failure(error, cancelled)
+            == ExternalAgentExitKind::TransientInfrastructure
+}
+
 async fn external_code_agent_chat_internal(
     app_handle: AppHandle,
     backend: FlowPilotAgentBackendKind,
@@ -2178,6 +2288,7 @@ async fn external_code_agent_chat_internal(
     current_surface: Option<&Vec<SurfaceComponent>>,
     user_prompt: String,
     raw_user_prompt: String,
+    request_identity_prompt: String,
     host_context_guidance: Option<String>,
     history: Vec<UnifiedChatMessage>,
     channel: Channel<String>,
@@ -2189,14 +2300,20 @@ async fn external_code_agent_chat_internal(
     read_only: bool,
 ) -> Result<UnifiedCopilotResponse, String> {
     let live_board = live_board_handle(&app_handle, board);
+    let live_board_snapshot = match live_board.as_ref() {
+        Some(live_board) => Some(live_board.lock().await.clone()),
+        None => None,
+    };
+    let authoritative_board = live_board_snapshot.as_ref().or(board);
     let mut surface = build_flowpilot_agent_surface(
         scope,
-        board,
+        authoritative_board,
         catalog_nodes,
         selected_node_ids,
         current_surface,
         &history,
         &raw_user_prompt,
+        &request_identity_prompt,
         host_context_guidance.as_deref(),
         global.as_deref(),
         read_only,
@@ -2270,17 +2387,21 @@ async fn external_code_agent_chat_internal(
         ),
         parent_request_id.as_deref(),
     );
-    const MAX_EXTERNAL_WORKFLOW_CONTINUATIONS: u8 = 2;
-
-    let workflow_state =
-        workflow_edit_request.then(|| Arc::new(StdMutex::new(WorkflowToolLoopState::default())));
+    let workflow_state = workflow_edit_request.then(|| {
+        Arc::new(StdMutex::new(
+            WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref()),
+        ))
+    });
     let tool_activity = Arc::new(StdMutex::new(McpToolActivityState::default()));
     let mut final_workflow_snapshot = None;
     let mut last_successful_mutation = None;
     let mut continuation = 0u8;
+    let mut zero_activity_restarts = 0u8;
+    let mut previous_exhausted_budget: Option<String> = None;
     let mut prompt =
         build_external_agent_prompt(&surface.system_content, &user_prompt, workflow_edit_request);
     let agent_result = loop {
+        let phase_start_tool_calls = mcp_total_tool_calls(&tool_activity);
         // A fresh MCP server per provider phase is deliberate. It makes the phase URL an epoch:
         // delayed requests from a killed CLI cannot register as work owned by the next repair.
         let mcp_bridge = match FlowPilotMcpBridge::start(
@@ -2332,34 +2453,99 @@ async fn external_code_agent_chat_internal(
         let queued = final_workflow_snapshot
             .as_ref()
             .is_some_and(|state| state.queued);
-        let run_failed = run_result.as_ref().is_err()
-            || run_result
-                .as_ref()
-                .ok()
-                .and_then(|output| output.error.as_ref())
-                .is_some();
-        if !workflow_edit_request || queued || run_failed {
+        let run_failure = external_agent_run_failure(&run_result).map(str::to_string);
+        if !workflow_edit_request || queued || run_cancellation.is_cancelled() {
+            break run_result;
+        }
+        if run_failure.as_deref().is_some_and(|error| {
+            !can_resume_external_workflow_after_failure(
+                final_workflow_snapshot.as_ref(),
+                error,
+                run_cancellation.is_cancelled(),
+            )
+        }) {
             break run_result;
         }
 
-        if continuation >= MAX_EXTERNAL_WORKFLOW_CONTINUATIONS {
+        let exhausted_budget = final_workflow_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.exhausted_budget.clone());
+        if exhausted_budget.is_some() && exhausted_budget == previous_exhausted_budget {
+            // The previous continuation already received a fresh bounded slice for this exact
+            // budget and burned it again. Another phase would arrive equally dead; stop honestly.
             break Err(external_workflow_incomplete_error(
                 final_workflow_snapshot.as_ref(),
+                continuation,
             ));
         }
 
-        continuation = continuation.saturating_add(1);
-        let repair_request = build_external_workflow_continuation_prompt(
+        let phase_tool_calls =
+            mcp_total_tool_calls(&tool_activity).saturating_sub(phase_start_tool_calls);
+        if run_failure.is_some() && phase_tool_calls == 0 {
+            // A transient provider/infrastructure failure before the first tool call did no
+            // workflow work. Retry it on its own bounded counter instead of consuming one of the
+            // workflow continuations the repair loop needs.
+            if zero_activity_restarts >= MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS {
+                break run_result;
+            }
+            zero_activity_restarts = zero_activity_restarts.saturating_add(1);
+        } else {
+            if continuation >= MAX_EXTERNAL_WORKFLOW_CONTINUATIONS {
+                break Err(external_workflow_incomplete_error(
+                    final_workflow_snapshot.as_ref(),
+                    continuation,
+                ));
+            }
+            continuation = continuation.saturating_add(1);
+            if let Some(workflow_state) = workflow_state.as_ref()
+                && let Ok(mut state) = workflow_state.lock()
+            {
+                state.grant_continuation_slice();
+            }
+            previous_exhausted_budget = exhausted_budget;
+        }
+
+        if run_failure.is_some() {
+            // Give a transient provider/transport failure a moment to clear before restarting the
+            // phase, without ignoring an end-to-end cancellation while waiting.
+            let cancelled_during_backoff = tokio::select! {
+                _ = tokio::time::sleep(EXTERNAL_TRANSIENT_RESTART_BACKOFF) => false,
+                _ = run_cancellation.cancelled() => true,
+            };
+            if cancelled_during_backoff {
+                break run_result;
+            }
+        }
+
+        let mut repair_request = build_external_workflow_continuation_prompt(
             &raw_user_prompt,
             final_workflow_snapshot.as_ref(),
-            continuation,
+            continuation.max(1),
         );
+        if let Some(error) = run_failure.as_deref() {
+            let recovery_action = if final_workflow_snapshot.as_ref().is_some_and(|state| {
+                state.flowscript_draft_retained && state.last_flowscript.is_some()
+            }) {
+                "The host retained an exact FlowScript source revision. Continue that draft/revision and do not duplicate a queued commit."
+            } else if final_workflow_snapshot
+                .as_ref()
+                .is_some_and(|state| state.typed_draft_retained)
+            {
+                "The host retained an exact typed draft revision. Continue that draft/revision and do not start a second mutation path."
+            } else {
+                "No draft revision was retained. Resume the bounded pre-draft loop from host-retained declaration/read state, then create the first draft with write_flowscript."
+            };
+            repair_request.push_str(&format!(
+                "\n\nINTERNAL TRANSIENT RECOVERY: the previous provider/transport phase ended with `{}`. The host opened a fresh bounded phase. {recovery_action}",
+                flow_like::flow::copilot::stream::safe_text_preview(error, 600),
+            ));
+        }
         prompt = build_external_agent_prompt(&surface.system_content, &repair_request, true);
         send_external_progress_event(
             &channel,
             EXTERNAL_AGENT_TOOL_CALL_ID,
             &format!(
-                "{} ended before queueing changes; continuing the same FlowScript repair ({continuation}/{MAX_EXTERNAL_WORKFLOW_CONTINUATIONS})",
+                "{} ended before queueing changes; continuing the bounded workflow run ({continuation}/{MAX_EXTERNAL_WORKFLOW_CONTINUATIONS})",
                 backend.label()
             ),
             parent_request_id.as_deref(),
@@ -2524,6 +2710,7 @@ async fn copilot_sdk_chat_internal(
     current_surface: Option<&Vec<SurfaceComponent>>,
     user_prompt: String,
     raw_user_prompt: String,
+    request_identity_prompt: String,
     host_context_guidance: Option<String>,
     current_images: Option<Vec<ChatImage>>,
     history: Vec<UnifiedChatMessage>,
@@ -2544,14 +2731,20 @@ async fn copilot_sdk_chat_internal(
         register_copilot_run(request_id.as_deref().or(parent_request_id.as_deref()));
 
     let live_board = live_board_handle(&app_handle, board);
+    let live_board_snapshot = match live_board.as_ref() {
+        Some(live_board) => Some(live_board.lock().await.clone()),
+        None => None,
+    };
+    let authoritative_board = live_board_snapshot.as_ref().or(board);
     let mut surface = build_flowpilot_agent_surface(
         scope,
-        board,
+        authoritative_board,
         catalog_nodes,
         selected_node_ids,
         current_surface,
         &history,
         &raw_user_prompt,
+        &request_identity_prompt,
         host_context_guidance.as_deref(),
         global.as_deref(),
         read_only,
@@ -2562,8 +2755,11 @@ async fn copilot_sdk_chat_internal(
     let queued_flowscript = surface.queued_flowscript.clone();
     let emitted_surfaces = surface.emitted_surfaces.clone();
     let workflow_edit_request = surface.workflow_edit_request;
-    let workflow_state =
-        workflow_edit_request.then(|| Arc::new(StdMutex::new(WorkflowToolLoopState::default())));
+    let workflow_state = workflow_edit_request.then(|| {
+        Arc::new(StdMutex::new(
+            WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref()),
+        ))
+    });
 
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
@@ -2857,6 +3053,9 @@ async fn copilot_sdk_chat_internal(
         Option<String>,
     )> = None;
     let mut workflow_idle_continuations = 0u8;
+    // Budget name that already received a bounded continuation slice, mirroring the external
+    // phase loop: granting the same exhausted budget a second slice would only loop.
+    let mut previous_idle_exhausted_budget: Option<String> = None;
     let mut tool_names_by_call_id: HashMap<String, String> = HashMap::new();
     let mut open_tool_call_ids: HashSet<String> = HashSet::new();
     let mut session_error_note: Option<String> = None;
@@ -2898,6 +3097,36 @@ async fn copilot_sdk_chat_internal(
                     return Err("FlowPilot Copilot run was cancelled".to_string());
                 }
                 session_error_note = Some(note.to_string());
+                break;
+            }
+            _ = tokio::time::sleep(SDK_EVENT_INACTIVITY_TIMEOUT) => {
+                let note = format!(
+                    "the Copilot SDK event stream produced no activity for {} seconds",
+                    SDK_EVENT_INACTIVITY_TIMEOUT.as_secs()
+                );
+                let _ = tokio::time::timeout(SDK_CHAT_ABORT_TIMEOUT, session.abort()).await;
+                if nested {
+                    quarantine_nested_copilot_client(&client).await;
+                }
+                close_pending_tool_steps(
+                    &channel,
+                    &mut open_tool_call_ids,
+                    &tool_names_by_call_id,
+                    "error",
+                    Some(&note),
+                    parent_request_id.as_deref(),
+                );
+                if full_response.trim().is_empty()
+                    && extracted_commands.is_empty()
+                    && extracted_components.is_empty()
+                    && extracted_flowscript_workspace.is_none()
+                    && !workflow_state_has_retained_candidate(workflow_state.as_ref())
+                {
+                    return Err(format!("FlowPilot Copilot session timed out: {note}"));
+                }
+                // Preserve any exact retained draft/diagnostics so the bounded outer workflow
+                // continuation can resume them instead of pretending the timed-out phase queued.
+                session_error_note = Some(note);
                 break;
             }
         };
@@ -3276,6 +3505,26 @@ async fn copilot_sdk_chat_internal(
                         || failed_attempt_pending)
                         && workflow_idle_continuations < MAX_WORKFLOW_IDLE_CONTINUATIONS
                     {
+                        // A continuation that demands more edits must be executable on arrival:
+                        // grant an exhausted loop budget the same bounded slice the external
+                        // phase loop grants, and stop honestly when that exact budget was already
+                        // granted one and burned it again.
+                        match prepare_sdk_idle_continuation_budget(
+                            workflow_state.as_ref(),
+                            previous_idle_exhausted_budget.as_deref(),
+                        ) {
+                            IdleContinuationBudget::Terminal(reason) => {
+                                session_error_note =
+                                    Some(format!("stopped without queueing changes: {reason}"));
+                                break;
+                            }
+                            IdleContinuationBudget::SliceGranted(budget) => {
+                                previous_idle_exhausted_budget = Some(budget);
+                            }
+                            IdleContinuationBudget::Executable => {
+                                previous_idle_exhausted_budget = None;
+                            }
+                        }
                         workflow_idle_continuations = workflow_idle_continuations.saturating_add(1);
                         full_response.clear();
                         let prompt = workflow_edit_continuation_prompt(
@@ -3334,7 +3583,9 @@ async fn copilot_sdk_chat_internal(
                         || !extracted_commands.is_empty()
                         || !extracted_components.is_empty()
                         || extracted_flowscript_workspace.is_some();
-                    if !has_partial_output {
+                    if !has_partial_output
+                        && !workflow_state_has_retained_candidate(workflow_state.as_ref())
+                    {
                         return Err(format!("Session error: {error_text}"));
                     }
                     session_error_note = Some(error_text);
@@ -3353,6 +3604,7 @@ async fn copilot_sdk_chat_internal(
                     if full_response.trim().is_empty()
                         && extracted_commands.is_empty()
                         && extracted_components.is_empty()
+                        && !workflow_state_has_retained_candidate(workflow_state.as_ref())
                     {
                         return Err(
                             "GitHub Copilot session ended before producing a response.".to_string()
@@ -3384,6 +3636,7 @@ async fn copilot_sdk_chat_internal(
                 if full_response.trim().is_empty()
                     && extracted_commands.is_empty()
                     && extracted_components.is_empty()
+                    && !workflow_state_has_retained_candidate(workflow_state.as_ref())
                 {
                     return Err(
                         "GitHub Copilot stopped before producing a response (event stream closed)."
@@ -3629,6 +3882,32 @@ fn scoped_parent_request_id(context: Option<&FrontendToolContext>) -> Option<Str
         .map(str::trim)
         .filter(|request_id| !request_id.is_empty())
         .map(str::to_string)
+}
+
+/// Derive the immutable request identity that owns retained drafts and the acceptance contract.
+///
+/// Nested runs spawned from one user turn bind to the outer chat's source prompt instead of their
+/// per-run specialist instruction, so a follow-up repair run can resume the retained draft. The
+/// prompt text alone is not a safe identity: two conversations can send identical short prompts
+/// ("yes, build it") against the same board inside the draft-store lease window, so the owning
+/// conversation id is folded in whenever the host supplies one. Runs without a tool context (the
+/// board panel copilot) keep their raw-prompt identity unchanged.
+fn request_identity_prompt_for(
+    tool_context: Option<&FrontendToolContext>,
+    raw_user_prompt: &str,
+) -> String {
+    let source_prompt = tool_context
+        .and_then(|context| context.source_user_prompt.as_deref())
+        .filter(|prompt| !prompt.trim().is_empty())
+        .unwrap_or(raw_user_prompt);
+    let conversation_id = tool_context
+        .and_then(|context| context.conversation_id.as_deref())
+        .map(str::trim)
+        .filter(|conversation_id| !conversation_id.is_empty());
+    match conversation_id {
+        Some(conversation_id) => format!("{conversation_id}\n{source_prompt}"),
+        None => source_prompt.to_string(),
+    }
 }
 
 fn correlated_stream_payload(
@@ -4448,8 +4727,24 @@ fn mcp_progress_heartbeat_notification(
     rmcp::model::ProgressNotificationParam::new(progress_token, progress).with_message(message)
 }
 
+const MAX_EXTERNAL_WORKFLOW_CONTINUATIONS: u8 = 2;
 const MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS: u8 = 12;
 const MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS: u8 = 3;
+// A continuation phase whose instructions demand more patching must actually be executable:
+// exhausted stall/operation budgets receive this small bounded headroom instead of arriving dead.
+const EXTERNAL_CONTINUATION_OPERATION_HEADROOM: u16 = 6;
+const EXTERNAL_CONTINUATION_CHECK_HEADROOM: u8 = 2;
+// Provider phases that failed transiently before the CLI issued a single tool call did no work;
+// they are retried on their own bounded counter instead of consuming workflow continuations.
+const MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS: u8 = 2;
+const EXTERNAL_TRANSIENT_RESTART_BACKOFF: Duration = Duration::from_secs(2);
+// Count every model-dispatched source lifecycle operation, not only compiler checks. Otherwise a
+// provider can alternate whole-document writes and patches forever without consuming the older
+// validation-attempt budget.
+const MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS: u16 = 24;
+const MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS: u8 = 3;
+const MAX_RETAINED_STRUCTURED_DIAGNOSTICS: usize = 12;
+const MAX_RETAINED_STRUCTURED_DIAGNOSTIC_BYTES: usize = 12_000;
 // A typed build gets fixed lifecycle overhead plus roughly three operations per declared module
 // (initial upsert and two repairs), while the fixed ceiling prevents an unbounded repair loop.
 const MIN_EXTERNAL_TYPED_IR_OPERATION_BUDGET: u16 = 24;
@@ -4457,10 +4752,13 @@ const MAX_EXTERNAL_TYPED_IR_OPERATION_BUDGET: u16 = 64;
 const MAX_EXTERNAL_TYPED_IR_STALLED_ATTEMPTS: u8 = 3;
 const MAX_EXTERNAL_WORKFLOW_DECLARATION_CALLS: u8 =
     MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS.saturating_add(1);
+const MAX_INITIAL_DECLARATION_ATTEMPTS: u8 = 3;
 const MAX_REPAIR_DECLARATION_QUERIES: usize = 12;
 const MAX_REPAIR_DECLARATION_QUERY_BYTES: usize = 200;
+const MAX_REPAIR_DECLARATION_ATTEMPTS_PER_KEY: u8 = 2;
 const MAX_INJECTED_REPAIR_DECLARATIONS: usize = 32;
 const MAX_INJECTED_REPAIR_DECLARATION_BYTES: usize = 30_000;
+const MAX_RETAINED_DECLARATION_BYTES: usize = 48_000;
 
 fn submitted_flowscript(args: &serde_json::Value) -> Option<&str> {
     args.get("flowscript")
@@ -4482,6 +4780,8 @@ struct WorkflowToolLoopSnapshot {
     queued: bool,
     last_flowscript: Option<String>,
     last_declarations: Option<String>,
+    declaration_lookup_complete: bool,
+    unresolved_declaration_queries: Vec<String>,
     /// Exact live-catalog signatures injected by the latest FlowScript validation result. These
     /// are kept separately from the flattened diagnostic messages so a subprocess continuation
     /// does not lose the machine-actionable repair context.
@@ -4489,6 +4789,14 @@ struct WorkflowToolLoopSnapshot {
     last_status: Option<String>,
     last_errors: Vec<String>,
     edit_attempts: u8,
+    flowscript_operation_attempts: u16,
+    stalled_edit_attempts: u8,
+    flowscript_commit_attempts: u8,
+    /// Human-readable name of the loop budget that is currently exhausted, if any. A continuation
+    /// phase that starts in this state would be refused-on-arrival unless the host grants a fresh
+    /// bounded slice first.
+    exhausted_budget: Option<String>,
+    last_structured_diagnostics: Vec<serde_json::Value>,
     modular_fallback: Option<FlowScriptCandidateRegression>,
     retained_full_source: Option<String>,
     flowscript_draft_id: Option<String>,
@@ -4509,11 +4817,20 @@ struct WorkflowToolLoopState {
     current_reads: u8,
     declaration_calls: u8,
     declarations_since_edit: u8,
+    declaration_lookup_in_flight: bool,
+    initial_declaration_attempts: u8,
+    initial_declaration_lookup_complete: bool,
+    unresolved_declaration_queries: Vec<String>,
     completed_repair_lookup_keys: HashSet<String>,
+    in_flight_repair_lookup_keys: HashSet<String>,
+    repair_lookup_attempts: HashMap<String, u8>,
     edit_attempts: u8,
+    flowscript_operation_attempts: u16,
+    flowscript_commit_attempts: u8,
     stalled_edit_attempts: u8,
     has_previous_validation_result: bool,
     previous_validation_diagnostics: HashSet<String>,
+    flowscript_seen_repair_signatures: HashSet<String>,
     edit_in_flight: bool,
     /// Captured before invoking the frontend validator so a process/transport phase boundary cannot
     /// erase the only copy of a just-submitted rich draft.
@@ -4528,6 +4845,7 @@ struct WorkflowToolLoopState {
     last_repair_declarations: Vec<String>,
     last_status: Option<String>,
     last_errors: Vec<String>,
+    last_structured_diagnostics: Vec<serde_json::Value>,
     flowscript_draft_id: Option<String>,
     flowscript_draft_retained: bool,
     flowscript_revision: Option<u64>,
@@ -4543,6 +4861,75 @@ struct WorkflowToolLoopState {
 }
 
 impl WorkflowToolLoopState {
+    fn from_flowscript_recovery(
+        recovery: Option<&flow_like::flow::copilot::FlowScriptDraftRecovery>,
+    ) -> Self {
+        let mut state = Self::default();
+        let Some(recovery) = recovery else {
+            return state;
+        };
+        if !matches!(
+            recovery.status,
+            flow_like::flow::copilot::FlowIrDraftRecoveryStatus::ExactMatch
+        ) || !recovery.auto_resume
+        {
+            return state;
+        }
+        let Some(context) = recovery
+            .exact_match
+            .as_ref()
+            .filter(|context| !context.stale_board)
+        else {
+            return state;
+        };
+        let Some(source) = context.source.as_deref() else {
+            return state;
+        };
+
+        let status = if context.checked {
+            "valid"
+        } else {
+            context.status.as_str()
+        };
+        let payload = serde_json::json!({
+            "status": status,
+            "diagnostics": &context.diagnostics,
+        });
+        let diagnostics = workflow_result_diagnostics(Some(&payload));
+        state.last_structured_diagnostics = workflow_result_structured_diagnostics(Some(&payload));
+        state.last_repair_declarations = workflow_result_repair_declarations(Some(&payload));
+        state.last_status = Some(status.to_string());
+        state.last_errors = diagnostics.clone();
+        state.last_flowscript = Some(source.to_string());
+        state.flowscript_draft_id = Some(context.draft_id.clone());
+        state.flowscript_draft_retained = true;
+        state.flowscript_revision = Some(context.revision);
+        state.initial_declaration_lookup_complete = true;
+        state.mutation_path = Some(WorkflowMutationPath::FlowScript);
+        if !context.checked && !diagnostics.is_empty() {
+            state
+                .repair_tracker
+                .record_failed_with_diagnostics(source, Some(diagnostics.len()));
+            state.best_failed_errors = diagnostics.clone();
+            state
+                .flowscript_seen_repair_signatures
+                .insert(flowscript_repair_fingerprint(
+                    Some(status),
+                    &diagnostics,
+                    &state.last_structured_diagnostics,
+                ));
+        }
+        state
+    }
+
+    fn needs_initial_declaration_coverage(&self) -> bool {
+        // This is an explicit host-owned authorization bit. Incidental source-tool failures must
+        // never waive the first live declaration lookup merely because they populated status,
+        // diagnostics, or a non-authoritative source candidate. Exact retained recovery seeds the
+        // bit directly in `from_flowscript_recovery`.
+        !self.initial_declaration_lookup_complete
+    }
+
     fn snapshot(&self) -> WorkflowToolLoopSnapshot {
         let (retained_flowscript, retained_status, retained_errors) = if self.queued {
             (
@@ -4591,10 +4978,17 @@ impl WorkflowToolLoopState {
             queued: self.queued,
             last_flowscript: retained_flowscript,
             last_declarations: self.last_declarations.clone(),
+            declaration_lookup_complete: self.initial_declaration_lookup_complete,
+            unresolved_declaration_queries: self.unresolved_declaration_queries.clone(),
             last_repair_declarations: self.last_repair_declarations.clone(),
             last_status: retained_status,
             last_errors: retained_errors,
             edit_attempts: self.edit_attempts,
+            flowscript_operation_attempts: self.flowscript_operation_attempts,
+            stalled_edit_attempts: self.stalled_edit_attempts,
+            flowscript_commit_attempts: self.flowscript_commit_attempts,
+            exhausted_budget: self.exhausted_budget(),
+            last_structured_diagnostics: self.last_structured_diagnostics.clone(),
             modular_fallback: self
                 .queued
                 .then(|| self.pending_modular_fallback.clone())
@@ -4656,6 +5050,167 @@ impl WorkflowToolLoopState {
         self.pending_modular_fallback = None;
         self.declarations_since_edit = 0;
     }
+
+    /// Name the loop budget that would refuse further source work on arrival, if any. `None`
+    /// means the next phase can still dispatch operations.
+    fn exhausted_budget(&self) -> Option<String> {
+        if self.queued {
+            return None;
+        }
+        if self.stalled_edit_attempts >= MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS {
+            return Some(format!(
+                "stalled repair progress ({}/{} repeated compiler states)",
+                self.stalled_edit_attempts, MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS
+            ));
+        }
+        if self.flowscript_operation_attempts >= MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS {
+            return Some(format!(
+                "FlowScript source operation budget ({}/{})",
+                self.flowscript_operation_attempts, MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS
+            ));
+        }
+        if self.edit_attempts >= MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS {
+            return Some(format!(
+                "FlowScript check budget ({}/{})",
+                self.edit_attempts, MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS
+            ));
+        }
+        if self.flowscript_commit_attempts >= MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS {
+            return Some(format!(
+                "commit retry budget ({}/{})",
+                self.flowscript_commit_attempts, MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS
+            ));
+        }
+        if self.typed_stalled_attempts >= MAX_EXTERNAL_TYPED_IR_STALLED_ATTEMPTS {
+            return Some(format!(
+                "typed-IR stalled repair progress ({}/{})",
+                self.typed_stalled_attempts, MAX_EXTERNAL_TYPED_IR_STALLED_ATTEMPTS
+            ));
+        }
+        let typed_budget = typed_ir_operation_budget(self.typed_expected_modules);
+        if self.mutation_path == Some(WorkflowMutationPath::TypedIr)
+            && self.typed_operation_attempts >= typed_budget
+        {
+            return Some(format!(
+                "typed-IR operation budget ({}/{})",
+                self.typed_operation_attempts, typed_budget
+            ));
+        }
+        None
+    }
+
+    /// Make one host-granted continuation phase executable again. The stall detector restarts
+    /// from a clean signature set and exhausted counters receive a small bounded headroom, so the
+    /// continuation instructions ("repair the retained draft") are not refused-on-arrival by the
+    /// budgets the previous phase burned.
+    fn grant_continuation_slice(&mut self) {
+        if self.queued {
+            return;
+        }
+        self.stalled_edit_attempts = 0;
+        self.flowscript_seen_repair_signatures.clear();
+        self.typed_stalled_attempts = 0;
+        self.typed_seen_repair_signatures.clear();
+        if self.flowscript_operation_attempts >= MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS {
+            self.flowscript_operation_attempts = MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS
+                .saturating_sub(EXTERNAL_CONTINUATION_OPERATION_HEADROOM);
+        }
+        if self.edit_attempts >= MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS {
+            self.edit_attempts = MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS
+                .saturating_sub(EXTERNAL_CONTINUATION_CHECK_HEADROOM);
+        }
+        if self.flowscript_commit_attempts >= MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS {
+            self.flowscript_commit_attempts =
+                MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS.saturating_sub(1);
+        }
+        let typed_budget = typed_ir_operation_budget(self.typed_expected_modules);
+        if self.typed_operation_attempts >= typed_budget {
+            self.typed_operation_attempts =
+                typed_budget.saturating_sub(EXTERNAL_CONTINUATION_OPERATION_HEADROOM);
+        }
+    }
+
+    fn record_flowscript_repair_progress(
+        &mut self,
+        status: Option<&str>,
+        diagnostics: &[String],
+        requires_repair: bool,
+    ) {
+        if !requires_repair {
+            self.stalled_edit_attempts = 0;
+            if matches!(status, Some("valid" | "queued" | "already_queued")) {
+                self.flowscript_seen_repair_signatures.clear();
+            }
+            return;
+        }
+
+        let fingerprint =
+            flowscript_repair_fingerprint(status, diagnostics, &self.last_structured_diagnostics);
+        if self.flowscript_seen_repair_signatures.insert(fingerprint) {
+            self.stalled_edit_attempts = 0;
+        } else {
+            self.stalled_edit_attempts = self.stalled_edit_attempts.saturating_add(1);
+        }
+        self.declarations_since_edit = 0;
+    }
+}
+
+fn workflow_state_has_retained_candidate(
+    state: Option<&Arc<StdMutex<WorkflowToolLoopState>>>,
+) -> bool {
+    let Some(state) = state else {
+        return false;
+    };
+    match state.lock() {
+        Ok(state) => {
+            state.queued
+                || state.last_flowscript.is_some()
+                || state.in_flight_flowscript.is_some()
+                || state.flowscript_draft_retained
+                || state.typed_draft_retained
+        }
+        // A poisoned loop mutex means the lifecycle may have been interrupted after retaining a
+        // draft. Assume there is recoverable work so outer retry logic cannot silently discard it.
+        Err(_) => true,
+    }
+}
+
+/// Outcome of preparing the workflow loop budget for one SDK idle continuation.
+#[derive(Debug, PartialEq, Eq)]
+enum IdleContinuationBudget {
+    /// No budget is exhausted; the continuation instructions are executable as-is.
+    Executable,
+    /// The named budget was exhausted and received the same bounded continuation slice the
+    /// external phase loop grants, so the instructions are not refused on arrival.
+    SliceGranted(String),
+    /// Reason the continuation must not be sent: the budget already received a slice for this
+    /// exact state and burned it again, or the loop state is unusable. Another continuation
+    /// would arrive equally dead; stop honestly.
+    Terminal(String),
+}
+
+fn prepare_sdk_idle_continuation_budget(
+    workflow_state: Option<&Arc<StdMutex<WorkflowToolLoopState>>>,
+    previous_exhausted_budget: Option<&str>,
+) -> IdleContinuationBudget {
+    let Some(state) = workflow_state else {
+        return IdleContinuationBudget::Executable;
+    };
+    let Ok(mut state) = state.lock() else {
+        return IdleContinuationBudget::Terminal(
+            "the host workflow lifecycle state is unavailable".to_string(),
+        );
+    };
+    let Some(exhausted) = state.exhausted_budget() else {
+        return IdleContinuationBudget::Executable;
+    };
+    if Some(exhausted.as_str()) == previous_exhausted_budget {
+        return IdleContinuationBudget::Terminal(format!(
+            "the {exhausted} was exhausted again after its granted continuation slice"
+        ));
+    }
+    state.grant_continuation_slice();
+    IdleContinuationBudget::SliceGranted(exhausted)
 }
 
 fn workflow_loop_result(payload: serde_json::Value, is_error: bool) -> rmcp::model::CallToolResult {
@@ -4665,6 +5220,19 @@ fn workflow_loop_result(payload: serde_json::Value, is_error: bool) -> rmcp::mod
     } else {
         rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(text)])
     }
+}
+
+fn workflow_loop_state_unavailable_result() -> rmcp::model::CallToolResult {
+    workflow_loop_result(
+        serde_json::json!({
+            "status": "internal_state_unavailable",
+            "code": "WORKFLOW_LOOP_STATE_UNAVAILABLE",
+            "retryable": false,
+            "next_action": "stop_and_resume_in_new_run",
+            "message": "The host workflow lifecycle state is unavailable. No tool operation was dispatched; stop this run so a fresh host process can recover any retained draft safely."
+        }),
+        true,
+    )
 }
 
 fn workflow_tool_preflight_sdk(
@@ -4707,7 +5275,10 @@ fn workflow_database_setup_preflight(
         return None;
     }
 
-    let board_draft_queued = state.lock().ok()?.queued;
+    let board_draft_queued = match state.lock() {
+        Ok(state) => state.queued,
+        Err(_) => return Some(workflow_loop_state_unavailable_result()),
+    };
     if board_draft_queued {
         return None;
     }
@@ -4742,7 +5313,15 @@ fn guard_sdk_workflow_tools(
                 let _operation_guard = if is_order_sensitive_workflow_tool(&guarded_name) {
                     match operation_gate.try_lock() {
                         Ok(guard) => Some(guard),
-                        Err(_) => {
+                        // A handler that panicked while holding the gate poisons it permanently;
+                        // its operation was already aborted below. Refusing every later mutation
+                        // with the retryable "wait" answer would strand the run, so recover the
+                        // gate instead of failing closed forever.
+                        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                            operation_gate.clear_poison();
+                            Some(poisoned.into_inner())
+                        }
+                        Err(std::sync::TryLockError::WouldBlock) => {
                             return copilot_sdk::ToolResultObject::error(
                                 "Another order-sensitive workflow operation is still running. Wait for its retained revision/status before issuing the next mutation.",
                             );
@@ -4751,24 +5330,49 @@ fn guard_sdk_workflow_tools(
                 } else {
                     None
                 };
-                if let Some(result) =
-                    workflow_tool_preflight_sdk(&guarded_state, &guarded_name, args)
-                {
-                    return result;
+                // Catch panics before they unwind past the held gate guard, and route them
+                // through the same abort/cleanup as an MCP worker failure so `edit_in_flight`
+                // cannot stay stuck for the rest of the session.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(result) =
+                        workflow_tool_preflight_sdk(&guarded_state, &guarded_name, args)
+                    {
+                        return result;
+                    }
+                    let mut result = handler(called_name, args);
+                    workflow_tool_record(
+                        &guarded_state,
+                        &guarded_name,
+                        args,
+                        &result.text_result_for_llm,
+                    );
+                    annotate_modular_fallback_result(&guarded_state, &guarded_name, &mut result);
+                    suppress_unchanged_flowscript_source_echo(&guarded_name, args, &mut result);
+                    result
+                }));
+                match outcome {
+                    Ok(result) => result,
+                    Err(panic) => {
+                        let message = format!(
+                            "FlowPilot SDK tool '{guarded_name}' failed: {}",
+                            panic_payload_message(panic.as_ref())
+                        );
+                        workflow_tool_abort(&guarded_state, &guarded_name, &message);
+                        copilot_sdk::ToolResultObject::error(message)
+                    }
                 }
-                let mut result = handler(called_name, args);
-                workflow_tool_record(
-                    &guarded_state,
-                    &guarded_name,
-                    args,
-                    &result.text_result_for_llm,
-                );
-                annotate_modular_fallback_result(&guarded_state, &guarded_name, &mut result);
-                result
             });
             (tool, guarded_handler)
         })
         .collect()
+}
+
+fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("the tool handler panicked without a message")
 }
 
 /// Attach the owning SDK chat cancellation token to synchronous tool handlers. The Copilot SDK
@@ -5199,7 +5803,7 @@ fn workflow_tool_preflight_with_args(
     args: &serde_json::Value,
 ) -> Option<rmcp::model::CallToolResult> {
     let Ok(mut state) = state.lock() else {
-        return None;
+        return Some(workflow_loop_state_unavailable_result());
     };
 
     // Board commands are staged until the specialist returns and the host applies them. Executing
@@ -5233,6 +5837,21 @@ fn workflow_tool_preflight_with_args(
         ));
     }
 
+    if state.declaration_lookup_in_flight
+        && (tool_name == "get_declarations" || is_order_sensitive_workflow_tool(tool_name))
+    {
+        return Some(workflow_loop_result(
+            serde_json::json!({
+                "status": "declaration_lookup_in_flight",
+                "code": "DECLARATION_LOOKUP_IN_FLIGHT",
+                "retryable": true,
+                "next_action": "wait",
+                "message": "A declaration batch is already in flight. Wait for its authoritative coverage result before starting another lookup or writing source."
+            }),
+            false,
+        ));
+    }
+
     let requested_path = match tool_name {
         "plan_flow_ir"
         | "begin_flow_ir_draft"
@@ -5246,6 +5865,12 @@ fn workflow_tool_preflight_with_args(
         "emit_commands" => Some(WorkflowMutationPath::DirectCommands),
         _ => None,
     };
+    if tool_name == "emit_commands" && requested_path.is_none() {
+        // The command tool itself returns the representation guidance. Do not let a rejected
+        // executable command batch reserve an operation lease or claim a mutation path before the
+        // model switches to FlowScript.
+        return None;
+    }
     if let (Some(active), Some(requested)) = (state.mutation_path, requested_path)
         && active != requested
     {
@@ -5262,6 +5887,60 @@ fn workflow_tool_preflight_with_args(
                 "message": "A workflow mutation path is already active for this change. Continue the retained FlowScript source path (or the legacy compatibility path that already owns this run); do not mix mutation representations in one atomic edit."
             }),
             true,
+        ));
+    }
+
+    if is_flowscript_draft_operation_tool(tool_name) && state.flowscript_draft_retained {
+        let requested_draft_id = args.get("draft_id").and_then(serde_json::Value::as_str);
+        let exact_draft_id = state.flowscript_draft_id.as_deref();
+        let wrong_draft = requested_draft_id.is_some() && requested_draft_id != exact_draft_id;
+        let missing_draft = !args.is_null() && requested_draft_id.is_none();
+        let expected_revision = args
+            .get("expected_revision")
+            .and_then(serde_json::Value::as_u64);
+        let revision_required = matches!(
+            tool_name,
+            "patch_flowscript" | "check_flowscript" | "commit_flowscript"
+        );
+        let wrong_revision =
+            revision_required && !args.is_null() && expected_revision != state.flowscript_revision;
+        if wrong_draft || missing_draft || wrong_revision {
+            return Some(workflow_loop_result(
+                serde_json::json!({
+                    "status": "retained_revision_required",
+                    "code": "FLOWSCRIPT_RETAINED_REVISION_REQUIRED",
+                    "retryable": true,
+                    "next_action": match state.last_status.as_deref() {
+                        Some("valid") => "commit_flowscript",
+                        Some("validation_errors" | "error" | "no_changes") => "patch_flowscript",
+                        _ => "check_flowscript",
+                    },
+                    "draft_id": exact_draft_id,
+                    "expected_revision": state.flowscript_revision,
+                    "message": "This run owns an exact retained FlowScript draft. Continue its host-authorized draft id and revision; a different or stale source session was not dispatched."
+                }),
+                false,
+            ));
+        }
+    }
+
+    if is_flowscript_draft_operation_tool(tool_name)
+        && tool_name != "write_flowscript"
+        && !state.flowscript_draft_retained
+    {
+        return Some(workflow_loop_result(
+            serde_json::json!({
+                "status": "flowscript_draft_required",
+                "code": "FLOWSCRIPT_DRAFT_REQUIRED",
+                "retryable": true,
+                "next_action": if state.needs_initial_declaration_coverage() {
+                    "get_declarations"
+                } else {
+                    "write_flowscript"
+                },
+                "message": "No host-authorized FlowScript draft is retained for this run. Start with live declaration coverage and write_flowscript; patch, check, and commit cannot create or guess a draft."
+            }),
+            false,
         ));
     }
 
@@ -5344,14 +6023,52 @@ fn workflow_tool_preflight_with_args(
         }
     }
 
-    // Only a call that passed every conflict/concurrency/budget gate owns the mutation path. This
-    // keeps rejected calls from looking like progress or preventing the valid path from starting.
-    if state.mutation_path.is_none() {
-        state.mutation_path = requested_path;
+    let checked_valid_commit =
+        tool_name == "commit_flowscript" && state.last_status.as_deref() == Some("valid");
+    if is_flowscript_draft_operation_tool(tool_name) && !checked_valid_commit {
+        if state.stalled_edit_attempts >= MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS {
+            return Some(workflow_loop_result(
+                serde_json::json!({
+                    "status": "edit_progress_stalled",
+                    "code": "FLOWSCRIPT_REPAIR_PROGRESS_STALLED",
+                    "retryable": false,
+                    "next_action": "stop_and_resume_retained_draft_in_new_run",
+                    "draft_retained": state.flowscript_draft_retained,
+                    "draft_id": state.flowscript_draft_id.as_deref(),
+                    "revision": state.flowscript_revision,
+                    "operation_attempts": state.flowscript_operation_attempts,
+                    "operation_budget": MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+                    "errors": state.last_errors,
+                    "message": "The FlowScript repair loop revisited an already-seen compiler state too many times. No source operation was dispatched. Stop this run and report the retained revision and remaining diagnostics."
+                }),
+                true,
+            ));
+        }
+        if state.flowscript_operation_attempts >= MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS {
+            return Some(workflow_loop_result(
+                serde_json::json!({
+                    "status": "edit_budget_exhausted",
+                    "code": "FLOWSCRIPT_OPERATION_BUDGET_EXHAUSTED",
+                    "retryable": false,
+                    "next_action": "stop_and_resume_retained_draft_in_new_run",
+                    "draft_retained": state.flowscript_draft_retained,
+                    "draft_id": state.flowscript_draft_id.as_deref(),
+                    "revision": state.flowscript_revision,
+                    "operation_attempts": state.flowscript_operation_attempts,
+                    "operation_budget": MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+                    "errors": state.last_errors,
+                    "message": "The total FlowScript write/patch/check operation budget is exhausted. No source operation was dispatched; the latest retained revision remains available for a later run."
+                }),
+                true,
+            ));
+        }
     }
 
     match tool_name {
         "plan_flow_ir" => {
+            state
+                .mutation_path
+                .get_or_insert(WorkflowMutationPath::TypedIr);
             state.typed_operation_attempts = state.typed_operation_attempts.saturating_add(1);
             None
         }
@@ -5359,11 +6076,44 @@ fn workflow_tool_preflight_with_args(
         | "update_flow_ir_draft"
         | "upsert_flow_ir_module"
         | "validate_flow_ir_draft" => {
+            state
+                .mutation_path
+                .get_or_insert(WorkflowMutationPath::TypedIr);
             state.typed_operation_attempts = state.typed_operation_attempts.saturating_add(1);
             state.edit_in_flight = true;
             None
         }
+        "write_flowscript" if state.needs_initial_declaration_coverage() => {
+            if state.initial_declaration_attempts >= MAX_INITIAL_DECLARATION_ATTEMPTS {
+                return Some(workflow_loop_result(
+                    serde_json::json!({
+                        "status": "declaration_coverage_exhausted",
+                        "code": "DECLARATION_COVERAGE_EXHAUSTED",
+                        "retryable": false,
+                        "next_action": "stop_and_report_unavailable_capabilities",
+                        "attempts": state.initial_declaration_attempts,
+                        "unresolved_queries": state.unresolved_declaration_queries,
+                        "message": "Every bounded initial declaration attempt left unmatched or omitted capabilities. No FlowScript source write was dispatched; report those unavailable capabilities instead of guessing names or pins."
+                    }),
+                    true,
+                ));
+            }
+            Some(workflow_loop_result(
+                serde_json::json!({
+                    "status": "declaration_lookup_required",
+                    "retryable": true,
+                    "next_action": "get_declarations",
+                    "message": "Before the first FlowScript draft, make one batched get_declarations call covering every planned catalog capability. Exact function, pin, repeated-input, schema, and companion-call guidance from that live result must be used instead of guessed names."
+                }),
+                false,
+            ))
+        }
         "write_flowscript" | "patch_flowscript" => {
+            state
+                .mutation_path
+                .get_or_insert(WorkflowMutationPath::FlowScript);
+            state.flowscript_operation_attempts =
+                state.flowscript_operation_attempts.saturating_add(1);
             state.edit_in_flight = true;
             if tool_name == "write_flowscript" {
                 state.in_flight_flowscript = submitted_flowscript(args).map(str::to_string);
@@ -5395,7 +6145,12 @@ fn workflow_tool_preflight_with_args(
             ))
         }
         "check_flowscript" => {
+            state
+                .mutation_path
+                .get_or_insert(WorkflowMutationPath::FlowScript);
             state.edit_attempts = state.edit_attempts.saturating_add(1);
+            state.flowscript_operation_attempts =
+                state.flowscript_operation_attempts.saturating_add(1);
             state.edit_in_flight = true;
             None
         }
@@ -5430,6 +6185,28 @@ fn workflow_tool_preflight_with_args(
         // A successful check is the bounded validation attempt. Commit only claims that exact
         // retained revision, so a valid revision remains committable even at the check ceiling.
         "commit_flowscript" => {
+            if state.flowscript_commit_attempts >= MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS {
+                return Some(workflow_loop_result(
+                    serde_json::json!({
+                        "status": "commit_retry_budget_exhausted",
+                        "code": "FLOWSCRIPT_COMMIT_RETRY_BUDGET_EXHAUSTED",
+                        "retryable": false,
+                        "next_action": "stop_and_resume_retained_draft_in_new_run",
+                        "draft_retained": state.flowscript_draft_retained,
+                        "draft_id": state.flowscript_draft_id.as_deref(),
+                        "revision": state.flowscript_revision,
+                        "attempts": state.flowscript_commit_attempts,
+                        "message": "The exact valid revision could not complete its bounded commit attempts. Stop this run without rewriting the checked source; the retained revision can be resumed later."
+                    }),
+                    true,
+                ));
+            }
+            state
+                .mutation_path
+                .get_or_insert(WorkflowMutationPath::FlowScript);
+            state.flowscript_operation_attempts =
+                state.flowscript_operation_attempts.saturating_add(1);
+            state.flowscript_commit_attempts = state.flowscript_commit_attempts.saturating_add(1);
             state.edit_in_flight = true;
             None
         }
@@ -5455,6 +6232,78 @@ fn workflow_tool_preflight_with_args(
             state.current_reads = state.current_reads.saturating_add(1);
             None
         }
+        "get_declarations" if state.needs_initial_declaration_coverage() => {
+            let queries = declaration_lookup_queries(args);
+            if !queries.iter().any(|query| !query.trim().is_empty()) {
+                return Some(workflow_loop_result(
+                    serde_json::json!({
+                        "status": "declaration_batch_required",
+                        "retryable": true,
+                        "next_action": "get_declarations",
+                        "unresolved_queries": state.unresolved_declaration_queries,
+                        "message": "The initial declaration lookup must contain focused queries in `query` or `queries`. Submit one batched lookup covering the planned catalog capabilities; an empty guidance lookup does not unlock FlowScript authoring."
+                    }),
+                    false,
+                ));
+            }
+            if !state.unresolved_declaration_queries.is_empty()
+                && queries.iter().any(|query| {
+                    !query.trim().is_empty()
+                        && !state
+                            .unresolved_declaration_queries
+                            .iter()
+                            .any(|unresolved| declaration_queries_are_related(unresolved, query))
+                })
+            {
+                return Some(workflow_loop_result(
+                    serde_json::json!({
+                        "status": "declaration_follow_up_unrelated",
+                        "code": "DECLARATION_FOLLOW_UP_UNRELATED",
+                        "retryable": true,
+                        "next_action": "get_declarations",
+                        "unresolved_queries": state.unresolved_declaration_queries,
+                        "message": "A partial declaration batch may be followed only by the exact unresolved capabilities or focused rephrasings that retain a distinctive capability term. Unrelated lookups do not consume an attempt and cannot unlock source authoring."
+                    }),
+                    false,
+                ));
+            }
+            if state.initial_declaration_attempts >= MAX_INITIAL_DECLARATION_ATTEMPTS {
+                return Some(workflow_loop_result(
+                    serde_json::json!({
+                        "status": "declaration_coverage_exhausted",
+                        "code": "DECLARATION_COVERAGE_EXHAUSTED",
+                        "retryable": false,
+                        "next_action": "stop_and_report_unavailable_capabilities",
+                        "attempts": state.initial_declaration_attempts,
+                        "unresolved_queries": state.unresolved_declaration_queries,
+                        "message": "The bounded initial declaration lookup could not cover every planned capability. No source write was dispatched. Stop and report the exact unmatched or omitted capabilities instead of guessing names or pins."
+                    }),
+                    true,
+                ));
+            }
+            state.initial_declaration_attempts =
+                state.initial_declaration_attempts.saturating_add(1);
+            state.declaration_calls = state.declaration_calls.saturating_add(1);
+            state.declarations_since_edit = state.declarations_since_edit.saturating_add(1);
+            state.declaration_lookup_in_flight = true;
+            None
+        }
+        "get_declarations"
+            if state.declaration_calls == 0
+                && !declaration_lookup_queries(args)
+                    .iter()
+                    .any(|query| !query.trim().is_empty()) =>
+        {
+            Some(workflow_loop_result(
+                serde_json::json!({
+                    "status": "declaration_batch_required",
+                    "retryable": true,
+                    "next_action": "get_declarations",
+                    "message": "Declaration lookup requires at least one focused capability query."
+                }),
+                false,
+            ))
+        }
         "get_declarations" if state.declarations_since_edit >= 1 => Some(workflow_loop_result(
             serde_json::json!({
                 "status": "discovery_budget_exhausted",
@@ -5466,6 +6315,7 @@ fn workflow_tool_preflight_with_args(
         "get_declarations" if state.declaration_calls == 0 => {
             state.declaration_calls = state.declaration_calls.saturating_add(1);
             state.declarations_since_edit = state.declarations_since_edit.saturating_add(1);
+            state.declaration_lookup_in_flight = true;
             None
         }
         "get_declarations" => {
@@ -5526,6 +6376,15 @@ fn workflow_tool_preflight_with_args(
 
             let new_requested = requested
                 .difference(&state.completed_repair_lookup_keys)
+                .filter(|key| !state.in_flight_repair_lookup_keys.contains(*key))
+                .filter(|key| {
+                    state
+                        .repair_lookup_attempts
+                        .get(*key)
+                        .copied()
+                        .unwrap_or_default()
+                        < MAX_REPAIR_DECLARATION_ATTEMPTS_PER_KEY
+                })
                 .cloned()
                 .collect::<HashSet<_>>();
             if new_requested.is_empty() {
@@ -5534,18 +6393,26 @@ fn workflow_tool_preflight_with_args(
                         "status": "duplicate_declaration_lookup",
                         "next_action": "patch_flowscript",
                         "targets": requested,
-                        "message": "These diagnostic repair targets were already looked up. The duplicate request was not dispatched; apply the returned declarations to the retained draft."
+                        "message": "These diagnostic repair targets were already resolved, definitively unavailable, or exhausted their bounded exact-signature retry. The duplicate request was not dispatched; apply retained declarations or report the unavailable capability."
                     }),
                     false,
                 ));
             }
 
-            state.completed_repair_lookup_keys.extend(new_requested);
+            for key in &new_requested {
+                let attempts = state.repair_lookup_attempts.entry(key.clone()).or_default();
+                *attempts = attempts.saturating_add(1);
+            }
+            state.in_flight_repair_lookup_keys = new_requested;
             state.declaration_calls = state.declaration_calls.saturating_add(1);
             state.declarations_since_edit = state.declarations_since_edit.saturating_add(1);
+            state.declaration_lookup_in_flight = true;
             None
         }
         "commit_flow_ir_draft" => {
+            state
+                .mutation_path
+                .get_or_insert(WorkflowMutationPath::TypedIr);
             state.typed_operation_attempts = state.typed_operation_attempts.saturating_add(1);
             state.edit_attempts = state.edit_attempts.saturating_add(1);
             state.edit_in_flight = true;
@@ -5588,6 +6455,9 @@ fn workflow_tool_preflight_with_args(
             ))
         }
         tool if is_workflow_commit_tool(tool) => {
+            if let Some(requested_path) = requested_path {
+                state.mutation_path.get_or_insert(requested_path);
+            }
             state.edit_attempts = state.edit_attempts.saturating_add(1);
             state.edit_in_flight = true;
             None
@@ -5620,7 +6490,10 @@ fn workflow_candidate_preflight(
         return None;
     }
 
-    let mut state = state.lock().ok()?;
+    let mut state = match state.lock() {
+        Ok(state) => state,
+        Err(_) => return Some(workflow_loop_state_unavailable_result()),
+    };
     let Some(regression) = state.repair_tracker.queued_candidate_regression(submitted) else {
         let modular_fallback = state
             .repair_tracker
@@ -5687,6 +6560,16 @@ fn workflow_candidate_preflight(
     ))
 }
 
+fn workflow_diagnostic_has_parent(entry: &serde_json::Value) -> bool {
+    match entry.get("caused_by") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::String(cause)) => !cause.trim().is_empty(),
+        Some(serde_json::Value::Array(causes)) => !causes.is_empty(),
+        Some(serde_json::Value::Object(cause)) => !cause.is_empty(),
+        Some(_) => true,
+    }
+}
+
 fn workflow_result_diagnostics(parsed: Option<&serde_json::Value>) -> Vec<String> {
     let mut diagnostics = parsed
         .map(|value| {
@@ -5700,6 +6583,9 @@ fn workflow_result_diagnostics(parsed: Option<&serde_json::Value>) -> Vec<String
             .filter_map(|key| value.get(key).and_then(serde_json::Value::as_array))
             .flat_map(|entries| entries.iter())
             .filter_map(|entry| {
+                if workflow_diagnostic_has_parent(entry) {
+                    return None;
+                }
                 entry.as_str().map(str::to_string).or_else(|| {
                     let code = entry.get("code").and_then(serde_json::Value::as_str);
                     let message = entry.get("message").and_then(serde_json::Value::as_str);
@@ -5745,6 +6631,130 @@ fn workflow_result_diagnostics(parsed: Option<&serde_json::Value>) -> Vec<String
     let mut seen = HashSet::new();
     diagnostics.retain(|diagnostic| seen.insert(diagnostic.clone()));
     diagnostics
+}
+
+/// Compiler-pipeline order: an early-phase diagnostic is the likeliest root cause of later
+/// cascades, so retention prefers it when the budget cannot hold everything.
+fn structured_diagnostic_phase_rank(entry: &serde_json::Map<String, serde_json::Value>) -> u8 {
+    match entry.get("phase").and_then(serde_json::Value::as_str) {
+        Some("parse") => 0,
+        Some("catalog_resolution") => 1,
+        Some("type_check") => 2,
+        Some("lowering") => 3,
+        Some("execution_wiring") => 4,
+        Some("validation" | "validate") => 5,
+        _ => 6,
+    }
+}
+
+fn workflow_result_structured_diagnostics(
+    parsed: Option<&serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    const RETAINED_FIELDS: &[&str] = &[
+        "id",
+        "code",
+        "phase",
+        "severity",
+        "message",
+        "source_span",
+        "ast_path",
+        "scope",
+        "expected",
+        "actual",
+        "declaration",
+        "pin",
+        "fix",
+        "occurrences",
+        "related_messages",
+    ];
+
+    let Some(parsed) = parsed else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in ["structured_diagnostics", "diagnostics"]
+        .into_iter()
+        .filter_map(|key| parsed.get(key).and_then(serde_json::Value::as_array))
+        .flat_map(|entries| entries.iter())
+    {
+        let Some(source) = entry.as_object() else {
+            continue;
+        };
+        if workflow_diagnostic_has_parent(entry) {
+            continue;
+        }
+        let mut object = serde_json::Map::new();
+        for field in RETAINED_FIELDS {
+            if let Some(value) = source.get(*field) {
+                object.insert((*field).to_string(), value.clone());
+            }
+        }
+        if object.is_empty() {
+            continue;
+        }
+        if seen.insert(serde_json::to_string(&object).unwrap_or_default()) {
+            candidates.push(object);
+        }
+    }
+
+    // Root causes first: earlier compiler phases outrank later ones, and the first occurrence of
+    // each distinct code outranks its repeats, so truncation drops cascades instead of causes.
+    let mut ordered = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, object)| (structured_diagnostic_phase_rank(&object), index, object))
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|(phase_rank, index, _)| (*phase_rank, *index));
+    let mut seen_codes = HashSet::new();
+    let mut ranked = ordered
+        .into_iter()
+        .enumerate()
+        .map(|(rank_index, (phase_rank, _, object))| {
+            let repeated_code = match object.get("code") {
+                Some(code) => !seen_codes.insert(code.to_string()),
+                None => false,
+            };
+            (phase_rank, repeated_code, rank_index, object)
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by_key(|(phase_rank, repeated_code, rank_index, _)| {
+        (*phase_rank, *repeated_code, *rank_index)
+    });
+
+    let total = ranked.len();
+    let mut retained = Vec::new();
+    let mut retained_bytes = 0usize;
+    for (_, _, _, mut object) in ranked {
+        if retained.len() >= MAX_RETAINED_STRUCTURED_DIAGNOSTICS {
+            break;
+        }
+        let mut encoded = serde_json::to_string(&object).unwrap_or_default();
+        if retained_bytes.saturating_add(encoded.len()) > MAX_RETAINED_STRUCTURED_DIAGNOSTIC_BYTES {
+            // Exact repair declarations are retained separately. Prefer keeping the diagnostic's
+            // location/type fields over dropping the entire item because a fix payload is large.
+            object.remove("fix");
+            object.remove("related_messages");
+            encoded = serde_json::to_string(&object).unwrap_or_default();
+        }
+        if retained_bytes.saturating_add(encoded.len()) > MAX_RETAINED_STRUCTURED_DIAGNOSTIC_BYTES {
+            // One oversized item must not silently discard every remaining smaller diagnostic.
+            continue;
+        }
+        retained_bytes = retained_bytes.saturating_add(encoded.len());
+        retained.push(serde_json::Value::Object(object));
+    }
+    if retained.len() < total {
+        let omitted = total - retained.len();
+        retained.push(serde_json::json!({
+            "truncated": true,
+            "omitted_count": omitted,
+            "message": format!(
+                "{omitted} additional structured diagnostic(s) exceeded the retention budget and were omitted; root-cause phases and first occurrences of each code were kept first."
+            ),
+        }));
+    }
+    retained
 }
 
 /// Preserve exact catalog signatures carried by structured FlowScript fixes. Diagnostic text is
@@ -5835,6 +6845,48 @@ fn typed_ir_repair_fingerprint(
     )
 }
 
+fn flowscript_repair_fingerprint(
+    status: Option<&str>,
+    diagnostics: &[String],
+    structured_diagnostics: &[serde_json::Value],
+) -> String {
+    let mut normalized = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            diagnostic
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase()
+        })
+        .collect::<Vec<_>>();
+    normalized.sort_unstable();
+    normalized.dedup();
+    let mut structured_subjects = structured_diagnostics
+        .iter()
+        .map(|diagnostic| {
+            serde_json::json!({
+                "code": diagnostic.get("code"),
+                "message": diagnostic.get("message"),
+                "ast_path": diagnostic.get("ast_path"),
+                "declaration": diagnostic.get("declaration"),
+                "pin": diagnostic.get("pin"),
+                "occurrences": diagnostic.get("occurrences"),
+            })
+            .to_string()
+            .to_ascii_lowercase()
+        })
+        .collect::<Vec<_>>();
+    structured_subjects.sort_unstable();
+    structured_subjects.dedup();
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        status.unwrap_or("<missing-status>").to_ascii_lowercase(),
+        normalized.join("\u{1e}"),
+        structured_subjects.join("\u{1e}")
+    )
+}
+
 fn workflow_result_has_explicit_diagnostics(parsed: &serde_json::Value) -> bool {
     [
         "errors",
@@ -5862,7 +6914,19 @@ fn workflow_result_requires_repair(parsed: &serde_json::Value, diagnostics: &[St
         .get("status")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    let failed_status = matches!(
+    let failed_status = workflow_status_requires_repair(status);
+    let infeasible_plan = parsed.get("feasible").and_then(serde_json::Value::as_bool)
+        == Some(false)
+        || parsed
+            .get("capability_plan")
+            .and_then(|plan| plan.get("feasible"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false);
+    failed_status || infeasible_plan || !diagnostics.is_empty()
+}
+
+fn workflow_status_requires_repair(status: &str) -> bool {
+    matches!(
         status,
         "error"
             | "cancelled"
@@ -5875,21 +6939,15 @@ fn workflow_result_requires_repair(parsed: &serde_json::Value, diagnostics: &[St
             | "scope_reduction_blocked"
             | "resource_limit_rejected"
             | "revision_conflict"
+            | "request_identity_mismatch"
             | "module_needs_repair"
             | "draft_needs_repair"
             | "discovery_blocked"
             | "discovery_budget_exhausted"
             | "edit_budget_exhausted"
             | "edit_in_flight"
-    );
-    let infeasible_plan = parsed.get("feasible").and_then(serde_json::Value::as_bool)
-        == Some(false)
-        || parsed
-            .get("capability_plan")
-            .and_then(|plan| plan.get("feasible"))
-            .and_then(serde_json::Value::as_bool)
-            == Some(false);
-    failed_status || infeasible_plan || !diagnostics.is_empty()
+            | "internal_state_unavailable"
+    )
 }
 
 fn workflow_result_clears_repair(parsed: &serde_json::Value) -> bool {
@@ -5919,6 +6977,231 @@ fn workflow_result_fallback_message(parsed: &serde_json::Value) -> Option<String
     }
 }
 
+fn declaration_result_is_usable(result_text: &str) -> bool {
+    result_text.lines().any(declaration_line_is_complete)
+}
+
+fn declaration_line_is_complete(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with("declare function ")
+        && line.contains('(')
+        && line.contains(')')
+        && line.contains(';')
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DeclarationBatchCoverage {
+    processed_count: usize,
+    complete: bool,
+    matched_count: usize,
+    matched_queries: Vec<String>,
+    unmatched_queries: Vec<String>,
+    output_omitted_queries: Vec<String>,
+    omitted_queries: Vec<String>,
+    unmatched_count: usize,
+    output_omitted_count: usize,
+    omitted_count: usize,
+    truncated_query_count: usize,
+    query_names_omitted_for_size: bool,
+}
+
+fn declaration_query_key(query: &str) -> String {
+    query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn declaration_queries_are_related(left: &str, right: &str) -> bool {
+    let left_key = declaration_query_key(left);
+    let right_key = declaration_query_key(right);
+    if left_key == right_key {
+        return true;
+    }
+    const GENERIC_TERMS: &[&str] = &[
+        "add", "approval", "build", "create", "data", "delete", "email", "fetch", "file", "find",
+        "for", "from", "get", "into", "list", "mail", "make", "message", "node", "open", "read",
+        "receive", "remove", "response", "run", "send", "set", "string", "the", "update", "use",
+        "with", "workflow", "write",
+    ];
+    let distinctive = |value: &str| {
+        value
+            .split_whitespace()
+            .filter(|token| token.len() >= 3 && !GENERIC_TERMS.contains(token))
+            .map(str::to_string)
+            .collect::<HashSet<_>>()
+    };
+    let left_terms = distinctive(&left_key);
+    let right_terms = distinctive(&right_key);
+    if left_terms.is_disjoint(&right_terms) {
+        return false;
+    }
+
+    // Connector identity alone is not enough: `smtp send` and `smtp receive` are different
+    // capabilities even though both retain the distinctive `smtp` token. When both phrasings name
+    // an operation, require the operation family itself to survive the rephrase.
+    const OPERATION_TERMS: &[&str] = &[
+        "add", "compare", "connect", "convert", "create", "delete", "fetch", "find", "get", "list",
+        "parse", "read", "receive", "remove", "replace", "search", "send", "set", "trim", "update",
+        "write",
+    ];
+    let operations = |value: &str| {
+        value
+            .split_whitespace()
+            .filter(|token| OPERATION_TERMS.contains(token))
+            .map(str::to_string)
+            .collect::<HashSet<_>>()
+    };
+    let left_operations = operations(&left_key);
+    let right_operations = operations(&right_key);
+    left_operations.is_empty()
+        || right_operations.is_empty()
+        || !left_operations.is_disjoint(&right_operations)
+}
+
+fn declaration_batch_coverage(result_text: &str) -> Option<DeclarationBatchCoverage> {
+    const PREFIX: &str = "// flowpilot.declaration-batch/v1 ";
+    let metadata = result_text
+        .lines()
+        .find_map(|line| line.strip_prefix(PREFIX))?;
+    let value = serde_json::from_str::<serde_json::Value>(metadata).ok()?;
+    let strings = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    Some(DeclarationBatchCoverage {
+        processed_count: value
+            .get("processed_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_default(),
+        complete: value
+            .get("complete")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        matched_count: value
+            .get("matched_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_default(),
+        matched_queries: strings("matched_queries"),
+        unmatched_queries: strings("unmatched_queries"),
+        output_omitted_queries: strings("output_omitted_queries"),
+        omitted_queries: strings("omitted_queries"),
+        unmatched_count: value
+            .get("unmatched_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_default(),
+        output_omitted_count: value
+            .get("output_omitted_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_default(),
+        omitted_count: value
+            .get("omitted_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_default(),
+        truncated_query_count: value
+            .get("truncated_query_count")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or_default(),
+        query_names_omitted_for_size: value
+            .get("query_names_omitted_for_size")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn complete_declaration_coverage_is_coherent(
+    coverage: &DeclarationBatchCoverage,
+    args: &serde_json::Value,
+    result_text: &str,
+) -> bool {
+    if !coverage.complete {
+        return true;
+    }
+    let requested_count = declaration_lookup_queries(args)
+        .into_iter()
+        .map(declaration_query_key)
+        .filter(|query| !query.is_empty())
+        .collect::<HashSet<_>>()
+        .len();
+    let exact_declaration_count = result_text
+        .lines()
+        .filter(|line| declaration_line_is_complete(line))
+        .count();
+    coverage.processed_count > 0
+        && coverage.processed_count == requested_count
+        && coverage.matched_count == coverage.processed_count
+        && (coverage.query_names_omitted_for_size
+            || coverage.matched_queries.len() == coverage.matched_count)
+        && coverage.unmatched_count == 0
+        && coverage.output_omitted_count == 0
+        && coverage.omitted_count == 0
+        && coverage.truncated_query_count == 0
+        && exact_declaration_count >= coverage.matched_count
+}
+
+fn retain_declaration_result(existing: Option<&str>, result_text: &str) -> String {
+    // Keep the newest bounded batch whole: its catalog-authored notes carry non-obvious ordering,
+    // repeated-pin, schema-field, and companion-call guidance that signatures alone cannot encode.
+    // Then retain older unique exact signatures while they fit. Never byte-truncate a declaration
+    // line: a partial signature is worse than an explicit omission because it looks authoritative
+    // to the next model process.
+    let complete_lines = |text: &str| {
+        text.lines()
+            .map(str::trim)
+            .filter(|line| declaration_line_is_complete(line))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let newest = complete_lines(result_text);
+    let older = existing.map(complete_lines).unwrap_or_default();
+    let mut seen = newest.iter().cloned().collect::<HashSet<_>>();
+    let newest_full = result_text.trim();
+    let mut retained = if newest_full.len() <= MAX_RETAINED_DECLARATION_BYTES {
+        newest_full.to_string()
+    } else {
+        // Defensive fallback for a non-conforming worker: retain only whole exact signatures.
+        newest.join("\n")
+    };
+    for line in &older {
+        if !seen.insert(line.clone()) {
+            continue;
+        }
+        let separator_bytes = usize::from(!retained.is_empty());
+        if retained
+            .len()
+            .saturating_add(separator_bytes)
+            .saturating_add(line.len())
+            > MAX_RETAINED_DECLARATION_BYTES
+        {
+            continue;
+        }
+        if !retained.is_empty() {
+            retained.push('\n');
+        }
+        retained.push_str(line);
+    }
+    if retained.is_empty() {
+        // The caller normally invokes this only for a usable result. Keep a bounded diagnostic
+        // fallback for defensive compatibility with older workers.
+        truncate_for_preview(result_text, MAX_RETAINED_DECLARATION_BYTES)
+    } else {
+        retained
+    }
+}
+
 fn workflow_tool_record(
     state: &Arc<StdMutex<WorkflowToolLoopState>>,
     tool_name: &str,
@@ -5927,7 +7210,189 @@ fn workflow_tool_record(
 ) {
     if tool_name == "get_declarations" {
         if let Ok(mut state) = state.lock() {
-            state.last_declarations = Some(truncate_for_preview(result_text, 30_000));
+            let usable = declaration_result_is_usable(result_text);
+            let mut coverage = declaration_batch_coverage(result_text);
+            if let Some(parsed_coverage) = coverage.as_mut()
+                && !complete_declaration_coverage_is_coherent(parsed_coverage, args, result_text)
+            {
+                let requested = declaration_lookup_queries(args)
+                    .into_iter()
+                    .filter(|query| !query.trim().is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                parsed_coverage.complete = false;
+                parsed_coverage.matched_count = 0;
+                parsed_coverage.matched_queries.clear();
+                parsed_coverage.output_omitted_count = requested.len();
+                parsed_coverage.output_omitted_queries = requested;
+            }
+            state.declaration_lookup_in_flight = false;
+            let repair_lookup_keys = std::mem::take(&mut state.in_flight_repair_lookup_keys);
+            // A parsed coverage envelope is an authoritative catalog outcome even when nothing
+            // matched (or an exact signature could not fit in the bounded response). Consume the
+            // diagnostic target so the model cannot reopen the same unavailable lookup forever.
+            // Only a missing/unparseable result behaves like a transport failure and releases the
+            // lease for an exact retry.
+            let authoritative_outcome = coverage.is_some();
+            let legacy_multi_query_incomplete = !authoritative_outcome
+                && usable
+                && !repair_lookup_keys.is_empty()
+                && declaration_lookup_queries(args).len() > 1;
+            let retryable_omission = legacy_multi_query_incomplete
+                || coverage.as_ref().is_some_and(|coverage| {
+                    coverage.output_omitted_count > 0
+                        || coverage.omitted_count > 0
+                        || coverage.truncated_query_count > 0
+                });
+            let repair_lookup_failed =
+                !usable && !authoritative_outcome && !repair_lookup_keys.is_empty();
+            if (usable || authoritative_outcome) && !retryable_omission {
+                state
+                    .completed_repair_lookup_keys
+                    .extend(repair_lookup_keys.iter().cloned());
+            } else if repair_lookup_failed {
+                state.declaration_calls = state.declaration_calls.saturating_sub(1);
+                state.declarations_since_edit = state.declarations_since_edit.saturating_sub(1);
+                for key in &repair_lookup_keys {
+                    let remove = if let Some(attempts) = state.repair_lookup_attempts.get_mut(key) {
+                        *attempts = attempts.saturating_sub(1);
+                        *attempts == 0
+                    } else {
+                        false
+                    };
+                    if remove {
+                        state.repair_lookup_attempts.remove(key);
+                    }
+                }
+            } else if retryable_omission && !repair_lookup_keys.is_empty() {
+                // A large batch can omit a declaration that fits when queried alone. Release the
+                // per-edit discovery lease for one focused retry while the per-key counter and
+                // global call budget prevent an omission loop.
+                state.declarations_since_edit = 0;
+            }
+            if usable {
+                state.last_declarations = Some(retain_declaration_result(
+                    state.last_declarations.as_deref(),
+                    result_text,
+                ));
+            }
+            if state.needs_initial_declaration_coverage() {
+                match coverage {
+                    Some(coverage) => {
+                        let previous_unresolved =
+                            std::mem::take(&mut state.unresolved_declaration_queries);
+                        let mut matched_queries = coverage.matched_queries.clone();
+                        if coverage.complete && coverage.query_names_omitted_for_size {
+                            // The compact metadata header intentionally omits identities. The
+                            // exact dispatched arguments remain host-owned and are safe to use as
+                            // the matched set for this one complete batch.
+                            matched_queries.extend(
+                                declaration_lookup_queries(args)
+                                    .into_iter()
+                                    .map(str::to_string),
+                            );
+                        }
+                        let mut processed_queries = matched_queries
+                            .iter()
+                            .map(String::as_str)
+                            .chain(coverage.unmatched_queries.iter().map(String::as_str))
+                            .collect::<Vec<_>>();
+                        let mut unresolved = Vec::new();
+                        for previous in previous_unresolved {
+                            if let Some(index) = processed_queries
+                                .iter()
+                                .position(|query| declaration_queries_are_related(&previous, query))
+                            {
+                                // A successful focused rephrasing resolves the previous miss. An
+                                // unsuccessful one replaces it with the new wording below, rather
+                                // than accumulating aliases that can never all match exactly.
+                                processed_queries.remove(index);
+                            } else {
+                                unresolved.push(previous);
+                            }
+                        }
+                        let named_unmatched = coverage.unmatched_queries.len();
+                        let named_output_omitted = coverage.output_omitted_queries.len();
+                        let named_omitted = coverage.omitted_queries.len();
+                        unresolved.extend(coverage.unmatched_queries);
+                        unresolved.extend(coverage.output_omitted_queries);
+                        unresolved.extend(coverage.omitted_queries);
+                        let unnamed_unmatched =
+                            coverage.unmatched_count.saturating_sub(named_unmatched);
+                        let unnamed_omitted = coverage.omitted_count.saturating_sub(named_omitted);
+                        let unnamed_output_omitted = coverage
+                            .output_omitted_count
+                            .saturating_sub(named_output_omitted);
+                        if unnamed_unmatched > 0 {
+                            unresolved.push(format!(
+                                "{} additional unmatched declaration query or queries (names omitted for size)",
+                                unnamed_unmatched
+                            ));
+                        }
+                        if unnamed_omitted > 0 {
+                            unresolved.push(format!(
+                                "{} additional omitted declaration query or queries (names omitted for size)",
+                                unnamed_omitted
+                            ));
+                        }
+                        if unnamed_output_omitted > 0 {
+                            unresolved.push(format!(
+                                "{} additional declaration query or queries matched but their exact signatures were omitted from the bounded response",
+                                unnamed_output_omitted
+                            ));
+                        }
+                        if coverage.truncated_query_count > 0 {
+                            unresolved.push(format!(
+                                "{} overlong declaration query or queries must be shortened",
+                                coverage.truncated_query_count
+                            ));
+                        }
+                        if !coverage.complete
+                            && unresolved.is_empty()
+                            && coverage.unmatched_count == 0
+                            && coverage.output_omitted_count == 0
+                            && coverage.omitted_count == 0
+                            && coverage.truncated_query_count == 0
+                        {
+                            unresolved.push(
+                                "Declaration batch reported incomplete coverage without query identities."
+                                    .to_string(),
+                            );
+                        }
+                        unresolved.sort_unstable();
+                        unresolved.dedup();
+                        state.initial_declaration_lookup_complete =
+                            coverage.complete && unresolved.is_empty();
+                        state.unresolved_declaration_queries = unresolved;
+                    }
+                    None if usable && declaration_lookup_queries(args).len() == 1 => {
+                        // Backward compatibility for direct SDK/tests and older tool workers that
+                        // predate coverage metadata: one requested capability with one actual
+                        // declaration remains usable. Multi-query legacy results cannot prove
+                        // complete coverage and stay gated.
+                        state.initial_declaration_lookup_complete = true;
+                        state.unresolved_declaration_queries.clear();
+                    }
+                    None => {
+                        state.initial_declaration_lookup_complete = false;
+                        state.unresolved_declaration_queries = declaration_lookup_queries(args)
+                            .into_iter()
+                            .filter(|query| !query.trim().is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        if state.unresolved_declaration_queries.is_empty() {
+                            state.unresolved_declaration_queries = vec![
+                                "No requested capability matched a live catalog declaration."
+                                    .to_string(),
+                            ];
+                        }
+                    }
+                }
+                if !state.initial_declaration_lookup_complete {
+                    // Permit a bounded follow-up containing only unmatched/omitted capabilities.
+                    state.declarations_since_edit = 0;
+                }
+            }
         }
         return;
     }
@@ -5938,6 +7403,73 @@ fn workflow_tool_record(
         };
         state.edit_in_flight = false;
         let interrupted_source = state.in_flight_flowscript.take();
+        let previous_status = state.last_status.clone();
+        let response_status = parsed
+            .as_ref()
+            .and_then(|value| value.get("status"))
+            .and_then(serde_json::Value::as_str);
+        let response_code = parsed
+            .as_ref()
+            .and_then(|value| value.get("code"))
+            .and_then(serde_json::Value::as_str);
+
+        if matches!(
+            response_code,
+            Some("FLOWSCRIPT_DRAFT_MISSING" | "FLOWSCRIPT_BASE_REVISION_CONFLICT")
+        ) {
+            // These responses prove that the retained coordinates can no longer be continued.
+            // Release only the local authorization lease so the same request may write a fresh
+            // draft id against the current board. Preserve an explicitly returned old source as
+            // reference, but never synthesize retained coordinates from the rejected arguments.
+            if let Some(source) = parsed
+                .as_ref()
+                .and_then(|value| value.get("source"))
+                .and_then(serde_json::Value::as_str)
+            {
+                state.last_flowscript = Some(source.to_string());
+            }
+            state.flowscript_draft_retained = false;
+            state.flowscript_draft_id = None;
+            state.flowscript_revision = None;
+            state.flowscript_commit_attempts = 0;
+            state.last_status = response_status.map(str::to_string);
+            state.last_errors = parsed
+                .as_ref()
+                .and_then(workflow_result_fallback_message)
+                .into_iter()
+                .collect();
+            state.last_structured_diagnostics.clear();
+            state.pending_modular_fallback = None;
+            state.declarations_since_edit = 0;
+            return;
+        }
+
+        if response_status == Some("request_identity_mismatch") {
+            // The core deliberately returns a minimal envelope for a draft owned by another
+            // immutable request. Do not reconstruct its coordinates or treat the rejected source
+            // arguments as retained state. A subsequent write with a distinct draft id remains
+            // possible for the current request.
+            state.last_status = Some("request_identity_mismatch".to_string());
+            state.last_errors = parsed
+                .as_ref()
+                .and_then(workflow_result_fallback_message)
+                .into_iter()
+                .collect();
+            state.last_structured_diagnostics.clear();
+            state.pending_modular_fallback = None;
+            return;
+        }
+
+        let preserve_checked_valid_after_transient_commit = tool_name == "commit_flowscript"
+            && previous_status.as_deref() == Some("valid")
+            && response_code == Some("FLOWSCRIPT_DRAFT_STORE_UNAVAILABLE");
+        if preserve_checked_valid_after_transient_commit {
+            // A store-lock failure happened before the exact checked command claim could be
+            // inspected or changed. Preserve the host-checked revision and its validation state;
+            // the separate commit-attempt cap bounds idempotent retries.
+            state.last_status = previous_status;
+            return;
+        }
 
         let response_draft_id = parsed
             .as_ref()
@@ -5969,15 +7501,20 @@ fn workflow_tool_record(
             state.flowscript_draft_retained = true;
         }
 
-        state.last_status = parsed
-            .as_ref()
-            .and_then(|value| value.get("status"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        if parsed.is_some() {
-            state.last_repair_declarations = workflow_result_repair_declarations(parsed.as_ref());
+        state.last_status = response_status.map(str::to_string);
+        if state.last_status.as_deref() == Some("valid") {
+            state.flowscript_commit_attempts = 0;
+        }
+        if let Some(parsed) = parsed.as_ref() {
+            let repair_declarations = workflow_result_repair_declarations(Some(parsed));
+            if !repair_declarations.is_empty() {
+                state.last_repair_declarations = repair_declarations;
+            } else if workflow_result_clears_repair(parsed) {
+                state.last_repair_declarations.clear();
+            }
         }
         let mut diagnostics = workflow_result_diagnostics(parsed.as_ref());
+        state.last_structured_diagnostics = workflow_result_structured_diagnostics(parsed.as_ref());
         let requires_repair = parsed.as_ref().is_none_or(|value| {
             !workflow_result_clears_repair(value)
                 && workflow_result_requires_repair(value, &diagnostics)
@@ -6008,48 +7545,17 @@ fn workflow_tool_record(
             state.last_flowscript = Some(source);
         }
         state.last_errors = diagnostics;
-
-        match state.last_status.as_deref() {
-            Some("queued" | "already_queued") => {
-                state.queued = true;
-                state.stalled_edit_attempts = 0;
-                state.has_previous_validation_result = false;
-                state.previous_validation_diagnostics.clear();
-            }
-            Some("validation_errors" | "no_changes" | "error") => {
-                let current_diagnostics = state
-                    .last_errors
-                    .iter()
-                    .map(|diagnostic| {
-                        diagnostic
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .to_ascii_lowercase()
-                    })
-                    .collect::<HashSet<_>>();
-                let made_progress = !state.has_previous_validation_result
-                    || current_diagnostics.len() < state.previous_validation_diagnostics.len()
-                    || state
-                        .previous_validation_diagnostics
-                        .difference(&current_diagnostics)
-                        .next()
-                        .is_some();
-                if made_progress {
-                    state.stalled_edit_attempts = 0;
-                } else {
-                    state.stalled_edit_attempts = state.stalled_edit_attempts.saturating_add(1);
-                }
-                state.has_previous_validation_result = true;
-                state.previous_validation_diagnostics = current_diagnostics;
-                state.declarations_since_edit = 0;
-            }
-            Some("draft_started" | "draft_updated" | "valid") => {
-                state.stalled_edit_attempts = 0;
-                state.has_previous_validation_result = false;
-                state.previous_validation_diagnostics.clear();
-            }
-            _ => {}
+        let status = state.last_status.clone();
+        let progress_diagnostics = state.last_errors.clone();
+        state.record_flowscript_repair_progress(
+            status.as_deref(),
+            &progress_diagnostics,
+            requires_repair,
+        );
+        if matches!(status.as_deref(), Some("queued" | "already_queued")) {
+            state.queued = true;
+            state.has_previous_validation_result = false;
+            state.previous_validation_diagnostics.clear();
         }
         return;
     }
@@ -6060,6 +7566,22 @@ fn workflow_tool_record(
         };
         if is_order_sensitive_workflow_tool(tool_name) {
             state.edit_in_flight = false;
+        }
+        let status = parsed
+            .as_ref()
+            .and_then(|value| value.get("status"))
+            .and_then(serde_json::Value::as_str);
+        if status == Some("request_identity_mismatch") {
+            // A typed draft owned by another immutable request is not recovery state for this
+            // loop. Ignore both rejected arguments and any coordinates a stale/custom provider
+            // might return; preserve only already-authorized local coordinates.
+            state.last_status = Some("request_identity_mismatch".to_string());
+            state.last_errors = parsed
+                .as_ref()
+                .and_then(workflow_result_fallback_message)
+                .into_iter()
+                .collect();
+            return;
         }
         let current_draft_id = state.typed_draft_id.clone();
         let response_draft_id = parsed
@@ -6086,10 +7608,6 @@ fn workflow_tool_record(
             .and_then(|value| value.get("revision"))
             .and_then(serde_json::Value::as_u64)
             .or(state.typed_revision);
-        let status = parsed
-            .as_ref()
-            .and_then(|value| value.get("status"))
-            .and_then(serde_json::Value::as_str);
         let preserve_retained_draft_context =
             tool_name == "plan_flow_ir" && state.typed_draft_retained;
         if !preserve_retained_draft_context {
@@ -6161,6 +7679,7 @@ fn workflow_tool_record(
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     let parsed_errors = workflow_result_diagnostics(parsed.as_ref());
+    state.last_structured_diagnostics = workflow_result_structured_diagnostics(parsed.as_ref());
 
     if tool_name == "commit_flow_ir_draft" {
         let current_draft_id = state.typed_draft_id.clone();
@@ -6202,50 +7721,67 @@ fn workflow_tool_record(
         state.last_flowscript = Some(submitted_flowscript);
     }
     state.last_errors = parsed_errors;
-
-    match state.last_status.as_deref() {
-        Some("queued" | "already_queued") => {
-            state.queued = true;
-            state.stalled_edit_attempts = 0;
-            state.has_previous_validation_result = false;
-            state.previous_validation_diagnostics.clear();
-        }
-        Some("validation_errors" | "no_changes" | "error") => {
-            let current_diagnostics = state
-                .last_errors
-                .iter()
-                .map(|diagnostic| {
-                    diagnostic
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .to_ascii_lowercase()
-                })
-                .collect::<HashSet<_>>();
-            let made_progress = !state.has_previous_validation_result
-                || current_diagnostics.len() < state.previous_validation_diagnostics.len()
-                || state
-                    .previous_validation_diagnostics
-                    .difference(&current_diagnostics)
-                    .next()
-                    .is_some();
-            if made_progress {
-                state.stalled_edit_attempts = 0;
-            } else {
-                state.stalled_edit_attempts = state.stalled_edit_attempts.saturating_add(1);
-            }
-            state.has_previous_validation_result = true;
-            state.previous_validation_diagnostics = current_diagnostics;
-
-            // A new validation result may authorize a distinct node/pin or type-topic repair
-            // lookup. The preflight gate ties it to diagnostics and deduplicates it across the run.
-            state.declarations_since_edit = 0;
-        }
-        _ => {}
+    let status = state.last_status.clone();
+    let progress_diagnostics = state.last_errors.clone();
+    let requires_repair = parsed.as_ref().is_none_or(|value| {
+        !workflow_result_clears_repair(value)
+            && workflow_result_requires_repair(value, &progress_diagnostics)
+    });
+    state.record_flowscript_repair_progress(
+        status.as_deref(),
+        &progress_diagnostics,
+        requires_repair,
+    );
+    if matches!(status.as_deref(), Some("queued" | "already_queued")) {
+        state.queued = true;
+        state.has_previous_validation_result = false;
+        state.previous_validation_diagnostics.clear();
     }
 }
 
 fn workflow_tool_abort(state: &Arc<StdMutex<WorkflowToolLoopState>>, tool_name: &str, error: &str) {
+    if tool_name == "get_declarations" {
+        if let Ok(mut state) = state.lock()
+            && state.declaration_lookup_in_flight
+        {
+            let initial_lookup = state.needs_initial_declaration_coverage();
+            state.declaration_lookup_in_flight = false;
+            let repair_lookup_keys = std::mem::take(&mut state.in_flight_repair_lookup_keys);
+            for key in repair_lookup_keys {
+                let remove = if let Some(attempts) = state.repair_lookup_attempts.get_mut(&key) {
+                    *attempts = attempts.saturating_sub(1);
+                    *attempts == 0
+                } else {
+                    false
+                };
+                if remove {
+                    state.repair_lookup_attempts.remove(&key);
+                }
+            }
+            state.declaration_calls = state.declaration_calls.saturating_sub(1);
+            state.declarations_since_edit = state.declarations_since_edit.saturating_sub(1);
+            if initial_lookup {
+                // Preflight reserves initial coverage before dispatch. A worker abort produced no
+                // catalog evidence, so release only that attempt while preserving earlier partial
+                // declarations and unresolved identities.
+                state.initial_declaration_attempts =
+                    state.initial_declaration_attempts.saturating_sub(1);
+            }
+        }
+        return;
+    }
+    if tool_name == "commit_flowscript" {
+        if let Ok(mut state) = state.lock()
+            && state.edit_in_flight
+            && state.last_status.as_deref() == Some("valid")
+        {
+            // A transport/worker abort does not invalidate the host-checked source revision.
+            // Preserve its status so the bounded idempotent commit retry path remains available.
+            state.edit_in_flight = false;
+            state.in_flight_flowscript = None;
+            return;
+        }
+    }
     if !is_order_sensitive_workflow_tool(tool_name) {
         return;
     }
@@ -6313,6 +7849,72 @@ fn annotate_modular_fallback_result(
         result.text_result_for_llm =
             serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
     }
+}
+
+fn flowscript_source_fingerprint(source: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Drop the multi-kilobyte source echo from a model-facing FlowScript tool result when the host
+/// provably did not change the source the model itself just submitted or last received:
+/// - `write_flowscript`: the response source is byte-identical to the submitted document.
+/// - `check_flowscript` / `commit_flowscript`: the response revision equals `expected_revision`;
+///   neither operation mutates the retained source.
+/// `patch_flowscript` keeps its echo because the merged result is host-computed. This runs after
+/// `workflow_tool_record`, so host retention/continuation state keeps the complete source.
+fn suppress_unchanged_flowscript_source_echo(
+    tool_name: &str,
+    args: &serde_json::Value,
+    result: &mut copilot_sdk::ToolResultObject,
+) {
+    if !matches!(
+        tool_name,
+        "write_flowscript" | "check_flowscript" | "commit_flowscript"
+    ) {
+        return;
+    }
+    let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&result.text_result_for_llm)
+    else {
+        return;
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(source) = object.get("source").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let revision = object.get("revision").and_then(serde_json::Value::as_u64);
+    let unchanged = match tool_name {
+        "write_flowscript" => submitted_flowscript(args) == Some(source),
+        _ => {
+            revision.is_some()
+                && revision
+                    == args
+                        .get("expected_revision")
+                        .and_then(serde_json::Value::as_u64)
+        }
+    };
+    if !unchanged {
+        return;
+    }
+    let summary = format!(
+        "Source retained at revision {} ({} lines, fingerprint {}) — unchanged from your submitted document, so it is not re-echoed.",
+        revision
+            .map(|revision| revision.to_string())
+            .unwrap_or_else(|| "<unknown>".to_string()),
+        source.lines().count(),
+        flowscript_source_fingerprint(source),
+    );
+    object.remove("source");
+    object.insert(
+        "source_echo".to_string(),
+        serde_json::Value::String(summary),
+    );
+    result.text_result_for_llm =
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
 }
 
 #[derive(Clone)]
@@ -6405,6 +8007,9 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
         let args = serde_json::Value::Object(request.arguments.unwrap_or_default());
 
         async move {
+            if let Ok(mut activity) = self.tool_activity.lock() {
+                activity.total_tool_calls = activity.total_tool_calls.saturating_add(1);
+            }
             let workflow_operation_guard = if self.workflow_state.is_some()
                 && is_order_sensitive_workflow_tool(&tool_name)
             {
@@ -6484,6 +8089,11 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
                         &result.text_result_for_llm,
                     );
                     annotate_modular_fallback_result(state, &recorded_tool_name, &mut result);
+                    suppress_unchanged_flowscript_source_echo(
+                        &recorded_tool_name,
+                        &recorded_args,
+                        &mut result,
+                    );
                 }
 
                 if is_recoverable_platform_mutation(&recorded_tool_name)
@@ -6537,8 +8147,19 @@ struct McpToolCompletion {
 #[derive(Debug, Default)]
 struct McpToolActivityState {
     last_successful_mutation: Option<McpToolCompletion>,
+    /// Total tool-call arrivals across every provider phase of this run. A phase whose delta is
+    /// zero proves the CLI failed before doing any work, so its restart is accounted separately
+    /// from the bounded workflow continuations.
+    total_tool_calls: u64,
     next_handler_id: u64,
     active_handlers: HashMap<u64, CancellationToken>,
+}
+
+fn mcp_total_tool_calls(activity: &Arc<StdMutex<McpToolActivityState>>) -> u64 {
+    activity
+        .lock()
+        .map(|activity| activity.total_tool_calls)
+        .unwrap_or_default()
 }
 
 /// Membership guard for synchronous MCP handlers that may outlive their HTTP request future.
@@ -6596,25 +8217,7 @@ fn flowpilot_tool_result_is_error(result: &copilot_sdk::ToolResultObject) -> boo
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
-        .is_some_and(|status| {
-            matches!(
-                status.as_str(),
-                "error"
-                    | "cancelled"
-                    | "timeout"
-                    | "validation_error"
-                    | "validation_errors"
-                    | "no_changes"
-                    | "infeasible"
-                    | "candidate_regression"
-                    | "module_needs_repair"
-                    | "draft_needs_repair"
-                    | "discovery_blocked"
-                    | "discovery_budget_exhausted"
-                    | "edit_budget_exhausted"
-                    | "edit_in_flight"
-            )
-        });
+        .is_some_and(|status| workflow_status_requires_repair(&status));
 
     result.result_type == "error" || result.error.is_some() || semantic_error
 }
@@ -7102,27 +8705,101 @@ fn build_external_workflow_continuation_prompt(
     let errors = snapshot
         .filter(|state| !state.last_errors.is_empty())
         .map(|state| {
+            let total = state.last_errors.len();
+            let mut listed = state
+                .last_errors
+                .iter()
+                .take(MAX_TERMINAL_REPORT_DIAGNOSTICS)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("\n- ");
+            if total > MAX_TERMINAL_REPORT_DIAGNOSTICS {
+                listed.push_str(&format!(
+                    "\n- (+{} more diagnostics omitted here; check_flowscript returns the full list)",
+                    total - MAX_TERMINAL_REPORT_DIAGNOSTICS
+                ));
+            }
+            format!("\nValidation diagnostics ({total} total):\n- {listed}\n")
+        })
+        .unwrap_or_default();
+    let structured_diagnostics = snapshot
+        .filter(|state| !state.last_structured_diagnostics.is_empty())
+        .and_then(|state| {
+            serde_json::to_string_pretty(&state.last_structured_diagnostics)
+                .ok()
+                .map(|diagnostics| (state.last_structured_diagnostics.len(), diagnostics))
+        })
+        .map(|(count, diagnostics)| {
             format!(
-                "\nValidation diagnostics:\n- {}\n",
-                state.last_errors.join("\n- ")
+                "\nSTRUCTURED ROOT DIAGNOSTICS ({count} retained; a `truncated` entry marks host-side omissions) (preserve spans, pins, expected/actual values, and exact fixes):\n```json\n{diagnostics}\n```\n"
             )
         })
         .unwrap_or_default();
-    let draft = snapshot
-        .and_then(|state| state.last_flowscript.as_deref())
-        .map(|source| {
-            format!(
-                "\nLATEST FLOWSCRIPT DRAFT TO REVISE (keep the complete source and repair it in place):\n```flowscript\n{source}\n```\n"
-            )
-        })
-        .unwrap_or_else(|| {
-            "\nNo FlowScript draft was submitted. Read the current source, fetch declarations once, then call write_flowscript with the complete implementation.\n".to_string()
-        });
+    let typed_mode =
+        snapshot.is_some_and(|state| state.mutation_path == Some(WorkflowMutationPath::TypedIr));
+    let retained_source_mode = snapshot
+        .is_some_and(|state| state.flowscript_draft_retained && state.last_flowscript.is_some());
+    let draft = if typed_mode {
+        snapshot
+            .map(|state| {
+                if state.typed_draft_retained {
+                    format!(
+                        "\nRETAINED TYPED DRAFT: draft_id={}, latest revision={}. Continue the exact typed draft with upsert/validate/commit tools; do not edit generated FlowScript text or start another draft. Missing modules: [{}].\n",
+                        state.typed_draft_id.as_deref().unwrap_or("<unknown>"),
+                        state
+                            .typed_revision
+                            .map(|revision| revision.to_string())
+                            .unwrap_or_else(|| "<unknown>".to_string()),
+                        state.typed_missing_modules.join(", ")
+                    )
+                } else {
+                    format!(
+                        "\nTYPED DRAFT WAS NOT STARTED: attempted draft_id={}, no retained revision exists. Repair the capability plan or begin arguments before retrying; do not claim this attempted id is resumable and do not edit generated FlowScript text.\n",
+                        state.typed_draft_id.as_deref().unwrap_or("<unknown>")
+                    )
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        snapshot
+            .and_then(|state| {
+                state
+                    .last_flowscript
+                    .as_deref()
+                    .map(|source| (state.flowscript_draft_retained, source))
+            })
+            .map(|(retained, source)| {
+                if retained {
+                    format!(
+                        "\nLATEST FLOWSCRIPT DRAFT TO REVISE (keep the complete source and repair it in place):\n```flowscript\n{source}\n```\n"
+                    )
+                } else {
+                    format!(
+                        "\nUNCLAIMED FLOWSCRIPT SOURCE REFERENCE (preserve its requested behavior, but write it under a fresh draft id before patch/check/commit):\n```flowscript\n{source}\n```\n"
+                    )
+                }
+            })
+            .unwrap_or_else(|| {
+                "\nNo FlowScript draft was submitted. Read the current source, fetch declarations once, then call write_flowscript with the complete implementation.\n".to_string()
+            })
+    };
     let declarations = snapshot
         .and_then(|state| state.last_declarations.as_deref())
         .map(|result| {
             format!(
                 "\nDECLARATIONS ALREADY FETCHED BY THE PREVIOUS PROCESS (reuse these; do not search again):\n{result}\n"
+            )
+        })
+        .unwrap_or_default();
+    let unresolved_declarations = snapshot
+        .filter(|state| {
+            !state.declaration_lookup_complete
+                && !state.unresolved_declaration_queries.is_empty()
+        })
+        .map(|state| {
+            format!(
+                "\nUNRESOLVED DECLARATION COVERAGE (query only these missing capabilities; do not guess):\n- {}\n",
+                state.unresolved_declaration_queries.join("\n- ")
             )
         })
         .unwrap_or_default();
@@ -7138,6 +8815,9 @@ fn build_external_workflow_continuation_prompt(
     let prior_attempts = snapshot
         .map(|state| state.edit_attempts)
         .unwrap_or_default();
+    let source_operations = snapshot
+        .map(|state| state.flowscript_operation_attempts)
+        .unwrap_or_default();
     let retained_revision = snapshot
         .filter(|state| state.flowscript_draft_retained)
         .map(|state| {
@@ -7152,33 +8832,57 @@ fn build_external_workflow_continuation_prompt(
         })
         .unwrap_or_default();
 
+    let continuation_action = if typed_mode {
+        "Continue only the typed-IR lifecycle selected by the retained state. Repair the same module/draft, validate it, and call commit_flow_ir_draft at the latest revision. Do not switch to FlowScript text or another mutation representation."
+    } else if retained_source_mode {
+        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches or restart with a smaller candidate."
+    } else {
+        "No source draft is retained yet. Continue the bounded pre-draft lifecycle: reuse any retained declarations, resolve only reported declaration misses, then call write_flowscript once with the complete implementation before check and commit."
+    };
+
     format!(
         r#"INTERNAL FLOWPILOT EXTERNAL CONTINUATION #{attempt}
-The previous CLI turn ended without queueing workflow changes (last status: {status}, prior edit attempts: {prior_attempts}). Nothing has been applied.
-{errors}{draft}{retained_revision}{declarations}{repair_declarations}
-Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches or restart with a smaller candidate. The turn is complete only when commit returns `queued`/`already_queued` or the bounded repair budget reports its final compiler diagnostics.
+The previous CLI turn ended without queueing workflow changes (last status: {status}, prior checks: {prior_attempts}, source operations: {source_operations}/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}). Nothing has been applied.
+{errors}{structured_diagnostics}{draft}{retained_revision}{declarations}{unresolved_declarations}{repair_declarations}
+{continuation_action} The turn is complete only when commit returns `queued`/`already_queued` or the bounded repair budget reports its final compiler diagnostics.
 
 Original user request:
 {original_user_prompt}"#
     )
 }
 
-fn external_workflow_incomplete_error(snapshot: Option<&WorkflowToolLoopSnapshot>) -> String {
+const MAX_TERMINAL_REPORT_DIAGNOSTICS: usize = 20;
+
+fn external_workflow_incomplete_error(
+    snapshot: Option<&WorkflowToolLoopSnapshot>,
+    provider_continuations: u8,
+) -> String {
     let status = snapshot
         .and_then(|state| state.last_status.as_deref())
         .unwrap_or("no_edit_submitted");
-    let attempts = snapshot
-        .map(|state| state.edit_attempts)
-        .unwrap_or_default();
-    let diagnostics = snapshot
-        .filter(|state| !state.last_errors.is_empty())
-        .map(|state| format!(" Remaining diagnostics: {}", state.last_errors.join("; ")))
-        .unwrap_or_default();
+    let exhausted = snapshot
+        .and_then(|state| state.exhausted_budget.as_deref())
+        .unwrap_or("provider continuation budget");
+    let budgets = snapshot
+        .map(|state| {
+            format!(
+                "provider continuations {provider_continuations}/{MAX_EXTERNAL_WORKFLOW_CONTINUATIONS}, checks {}/{MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS}, source operations {}/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}, stalled repeats {}/{MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS}, commit attempts {}/{MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS}",
+                state.edit_attempts,
+                state.flowscript_operation_attempts,
+                state.stalled_edit_attempts,
+                state.flowscript_commit_attempts,
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "provider continuations {provider_continuations}/{MAX_EXTERNAL_WORKFLOW_CONTINUATIONS}"
+            )
+        });
     let source_state = snapshot
         .filter(|state| state.flowscript_draft_retained)
         .map(|state| {
             format!(
-                " Retained FlowScript draft: draft_id={}, revision={}.",
+                " Retained FlowScript draft: draft_id={}, revision={}. A follow-up repair run can resume this exact draft only when it originates from the same user request.",
                 state.flowscript_draft_id.as_deref().unwrap_or("unknown"),
                 state
                     .flowscript_revision
@@ -7208,8 +8912,48 @@ fn external_workflow_incomplete_error(snapshot: Option<&WorkflowToolLoopSnapshot
             )
         })
         .unwrap_or_default();
+    let diagnostics = snapshot
+        .filter(|state| !state.last_errors.is_empty())
+        .map(|state| {
+            let total = state.last_errors.len();
+            let mut rendered = state
+                .last_errors
+                .iter()
+                .take(MAX_TERMINAL_REPORT_DIAGNOSTICS)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("; ");
+            if total > MAX_TERMINAL_REPORT_DIAGNOSTICS {
+                rendered.push_str(&format!(
+                    " (+{} more)",
+                    total - MAX_TERMINAL_REPORT_DIAGNOSTICS
+                ));
+            }
+            format!(" Remaining diagnostics ({total} total): {rendered}.")
+        })
+        .unwrap_or_default();
+    let structured = snapshot
+        .filter(|state| !state.last_structured_diagnostics.is_empty())
+        .map(|state| {
+            let total = state.last_structured_diagnostics.len();
+            let mut rendered = state
+                .last_structured_diagnostics
+                .iter()
+                .take(MAX_TERMINAL_REPORT_DIAGNOSTICS)
+                .map(|entry| serde_json::to_string(entry).unwrap_or_else(|_| entry.to_string()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if total > MAX_TERMINAL_REPORT_DIAGNOSTICS {
+                rendered.push_str(&format!(
+                    " (+{} more)",
+                    total - MAX_TERMINAL_REPORT_DIAGNOSTICS
+                ));
+            }
+            format!(" Structured diagnostics ({total} retained): {rendered}")
+        })
+        .unwrap_or_default();
     format!(
-        "The external agent exhausted its bounded workflow continuation budget without queueing changes (last status: {status}, edit attempts: {attempts}).{source_state}{typed_state}{diagnostics}"
+        "The external agent exhausted its {exhausted} without queueing changes (last status: {status}; budgets: {budgets}).{source_state}{typed_state}{diagnostics}{structured}"
     )
 }
 
@@ -8801,7 +10545,9 @@ struct FlowPilotAgentSurface {
     /// time so the commit fingerprint and host queue boundary cannot rely on a captured clone.
     live_board: Option<Arc<flow_like_types::sync::Mutex<Board>>>,
     /// Original host-owned workflow request used to derive a deterministic scope-coverage
-    /// contract before the model can author its own capability plan.
+    /// contract before the model can author its own capability plan. Bound to the immutable
+    /// end-user request (not the per-run composed specialist instruction), so nested repair runs
+    /// spawned from the same user turn share draft/acceptance identity.
     request_acceptance_prompt: Option<String>,
     catalog_provider: Option<Arc<dyn CatalogProvider>>,
     side_effect_commands: Arc<StdMutex<SideEffectCommandQueue>>,
@@ -8811,6 +10557,10 @@ struct FlowPilotAgentSurface {
     /// UI trees captured from successful `emit_ui` calls, for transports that cannot parse tool
     /// results (external-agent MCP bridge).
     emitted_surfaces: Arc<StdMutex<Vec<super::copilot_sdk_tools::EmittedSurface>>>,
+    /// Host-authorized source recovery for this exact immutable request. The prompt explains it,
+    /// while the loop state separately enforces the draft id/revision without trusting the model
+    /// to reconstruct those coordinates from prose.
+    flowscript_recovery: Option<flow_like::flow::copilot::FlowScriptDraftRecovery>,
     system_content: String,
     workflow_edit_request: bool,
     capabilities: FlowPilotAgentCapabilitySet,
@@ -8838,14 +10588,15 @@ fn live_board_handle(
 async fn pending_flowscript_redelivery_for_request(
     app_handle: &AppHandle,
     captured_board: &Board,
-    raw_user_prompt: &str,
+    request_identity_prompt: &str,
 ) -> Option<FlowScriptPendingDelivery> {
     let current_board = match live_board_handle(app_handle, Some(captured_board)) {
         Some(live_board) => live_board.lock().await.clone(),
         None => captured_board.clone(),
     };
     let store = retained_flow_ir_draft_store_for_board(&current_board).ok()?;
-    let binding = store.bind_request_acceptance_contract(&current_board.id, raw_user_prompt);
+    let binding =
+        store.bind_request_acceptance_contract(&current_board.id, request_identity_prompt);
     let delivery = store.pending_flowscript_delivery_for_binding(&current_board, &binding);
     let _ = store.release_request_acceptance_contract(&binding);
     delivery
@@ -8919,6 +10670,7 @@ fn append_typed_ir_recovery_context(
 /// raw-request identity and stale-board rules as the built-in Rig path. The core renderer is the
 /// authority for what may enter model context: exact matches include source, stale exact matches
 /// include it only as a reference for a fresh draft, and request mismatches hide it completely.
+#[cfg(test)]
 fn append_flowscript_recovery_context(
     system_content: &mut String,
     board: &Board,
@@ -8928,8 +10680,15 @@ fn append_flowscript_recovery_context(
         return;
     };
     let recovery = store.editable_flowscript_draft_recovery(board, raw_user_prompt);
+    append_flowscript_recovery_payload(system_content, &recovery);
+}
+
+fn append_flowscript_recovery_payload(
+    system_content: &mut String,
+    recovery: &flow_like::flow::copilot::FlowScriptDraftRecovery,
+) {
     let Some(instruction) =
-        flow_like::flow::copilot::flowscript_recovery_system_instruction(&recovery)
+        flow_like::flow::copilot::flowscript_recovery_system_instruction(recovery)
     else {
         return;
     };
@@ -8946,6 +10705,10 @@ fn build_flowpilot_agent_surface(
     current_surface: Option<&Vec<SurfaceComponent>>,
     history: &[UnifiedChatMessage],
     original_user_prompt: &str,
+    // Immutable end-user request that owns retained drafts and the acceptance contract. For a
+    // nested specialist run this differs from `original_user_prompt` (the per-run composed
+    // instruction), so every identity bind below must use this value.
+    request_identity_prompt: &str,
     host_context_guidance: Option<&str>,
     global: Option<&str>,
     // Read-only sub-run (flowpilot_board explain): keep the board copilot out of workflow-edit mode
@@ -9044,8 +10807,18 @@ fn build_flowpilot_agent_surface(
         system_content.push_str(guidance);
     }
 
-    if workflow_edit_request && let Some(board) = board_arc.as_deref() {
-        append_flowscript_recovery_context(&mut system_content, board, original_user_prompt);
+    let flowscript_recovery = workflow_edit_request
+        .then(|| board_arc.as_deref())
+        .flatten()
+        .and_then(|board| {
+            retained_flow_ir_draft_store_for_board(board)
+                .ok()
+                .map(|store| {
+                    store.editable_flowscript_draft_recovery(board, request_identity_prompt)
+                })
+        });
+    if let Some(recovery) = flowscript_recovery.as_ref() {
+        append_flowscript_recovery_payload(&mut system_content, recovery);
     }
 
     if matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
@@ -9085,11 +10858,13 @@ fn build_flowpilot_agent_surface(
         graph_context,
         board_arc,
         live_board: None,
-        request_acceptance_prompt: workflow_edit_request.then(|| original_user_prompt.to_string()),
+        request_acceptance_prompt: workflow_edit_request
+            .then(|| request_identity_prompt.to_string()),
         catalog_provider,
         side_effect_commands: Arc::new(StdMutex::new(SideEffectCommandQueue::default())),
         queued_flowscript: Arc::new(StdMutex::new(None)),
         emitted_surfaces: Arc::new(StdMutex::new(Vec::new())),
+        flowscript_recovery,
         system_content,
         workflow_edit_request,
         capabilities,
@@ -10820,6 +12595,75 @@ mod tests {
     }
 
     #[test]
+    fn nested_runs_in_one_conversation_share_request_identity() {
+        let outer_prompt = "yes, build it";
+        let context = FrontendToolContext {
+            conversation_id: Some("conversation-1".to_string()),
+            source_user_prompt: Some(outer_prompt.to_string()),
+            ..Default::default()
+        };
+
+        let first_nested = request_identity_prompt_for(
+            Some(&context),
+            "Execute the change NOW: build the intake workflow.",
+        );
+        let repair_nested = request_identity_prompt_for(
+            Some(&context),
+            "Repair the retained draft draft-1 at revision 3.",
+        );
+
+        assert_eq!(first_nested, repair_nested);
+        assert_eq!(first_nested, format!("conversation-1\n{outer_prompt}"));
+    }
+
+    #[test]
+    fn identical_prompts_in_different_conversations_never_share_identity() {
+        let outer_prompt = "yes, build it";
+        let conversation = |id: &str| FrontendToolContext {
+            conversation_id: Some(id.to_string()),
+            source_user_prompt: Some(outer_prompt.to_string()),
+            ..Default::default()
+        };
+
+        assert_ne!(
+            request_identity_prompt_for(Some(&conversation("conversation-a")), outer_prompt),
+            request_identity_prompt_for(Some(&conversation("conversation-b")), outer_prompt),
+        );
+    }
+
+    #[test]
+    fn request_identity_falls_back_to_raw_prompt_without_conversation_scope() {
+        assert_eq!(
+            request_identity_prompt_for(None, "add a logging node"),
+            "add a logging node"
+        );
+        assert_eq!(
+            request_identity_prompt_for(
+                Some(&FrontendToolContext::default()),
+                "add a logging node"
+            ),
+            "add a logging node"
+        );
+        let conversation_only = FrontendToolContext {
+            conversation_id: Some("conversation-1".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            request_identity_prompt_for(Some(&conversation_only), "add a logging node"),
+            "conversation-1\nadd a logging node"
+        );
+        let blank_scope = FrontendToolContext {
+            conversation_id: Some("   ".to_string()),
+            source_user_prompt: Some("  ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            request_identity_prompt_for(Some(&blank_scope), "add a logging node"),
+            "add a logging node"
+        );
+    }
+
+    #[test]
     fn desktop_recovery_injects_only_exact_request_coordinates() {
         let exact = flow_like::flow::copilot::FlowIrDraftRecovery {
             status: flow_like::flow::copilot::FlowIrDraftRecoveryStatus::ExactMatch,
@@ -11436,7 +13280,20 @@ mod tests {
             Some(true),
             "the live document may only be fetched once"
         );
-        assert!(workflow_tool_preflight(&state, "get_declarations").is_none());
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
+                "get_declarations",
+                &serde_json::json!({ "queries": ["log information"] }),
+            )
+            .is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &serde_json::json!({ "queries": ["log information"] }),
+            "declare function logInfo({ message: string }): void;",
+        );
         assert_eq!(
             workflow_tool_preflight(&state, "get_declarations").and_then(|result| result.is_error),
             Some(false),
@@ -11464,14 +13321,16 @@ mod tests {
             })
             .to_string(),
         );
+        let repair_lookup = serde_json::json!({ "queries": ["brokenCall"] });
         assert!(
-            workflow_tool_preflight_with_args(
-                &state,
-                "get_declarations",
-                &serde_json::json!({ "queries": ["brokenCall"] }),
-            )
-            .is_none(),
+            workflow_tool_preflight_with_args(&state, "get_declarations", &repair_lookup).is_none(),
             "one targeted declaration lookup is available for a repair"
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &repair_lookup,
+            "declare function brokenCall({}): void;",
         );
         assert!(workflow_tool_preflight(&state, "edit_flowscript").is_none());
         workflow_tool_record(
@@ -11488,6 +13347,592 @@ mod tests {
             "a combined board + UI request may finish its UI after the workflow queues"
         );
         assert!(state.lock().expect("state lock").queued);
+    }
+
+    #[test]
+    fn first_flowscript_write_requires_one_live_declaration_batch() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let write_args = serde_json::json!({
+            "draft_id": "declaration-gated-source",
+            "source": "eventsSimple() { logInfo({ message: \"hello\" }) }"
+        });
+
+        let redirected = workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args)
+            .expect("the first write must be redirected to live declaration discovery");
+        assert_eq!(redirected.is_error, Some(false));
+        let redirected = redirected
+            .content
+            .iter()
+            .filter_map(|content| match &content.raw {
+                rmcp::model::RawContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(redirected.contains("declaration_lookup_required"));
+        assert!(redirected.contains("repeated-input"));
+        assert!(!state.lock().expect("state lock").edit_in_flight);
+
+        let empty_lookup = workflow_tool_preflight_with_args(
+            &state,
+            "get_declarations",
+            &serde_json::json!({ "queries": ["   "] }),
+        )
+        .expect("an empty initial declaration batch must be rejected");
+        let empty_lookup = empty_lookup
+            .content
+            .iter()
+            .filter_map(|content| match &content.raw {
+                rmcp::model::RawContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(empty_lookup.contains("declaration_batch_required"));
+
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
+                "get_declarations",
+                &serde_json::json!({ "queries": ["log information"] }),
+            )
+            .is_none()
+        );
+        assert!(
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_some(),
+            "dispatching a lookup is not enough; its usable result must be retained"
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &serde_json::json!({ "queries": ["log information"] }),
+            "No FlowScript declarations matched this query.",
+        );
+        let guard = state.lock().expect("state lock");
+        assert_eq!(guard.declaration_calls, 1);
+        assert_eq!(guard.initial_declaration_attempts, 1);
+        assert!(!guard.initial_declaration_lookup_complete);
+        drop(guard);
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
+                "get_declarations",
+                &serde_json::json!({ "queries": ["log information"] }),
+            )
+            .is_none(),
+            "a no-match initial lookup leaves the focused initial lookup available"
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &serde_json::json!({ "queries": ["log information"] }),
+            "declare function logInfo({ message: string }): void;  // impure",
+        );
+        assert!(
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_none(),
+            "the exact same source write is dispatched after a usable declaration result"
+        );
+    }
+
+    #[test]
+    fn partial_declaration_coverage_retains_matches_and_gates_source_until_complete() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let initial = serde_json::json!({ "queries": ["imap receive", "smtp send"] });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &initial).is_none());
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &initial,
+            concat!(
+                "// flowpilot.declaration-batch/v1 {\"processed_count\":2,\"matched_count\":1,\"matched_queries\":[\"imap receive\"],\"unmatched_count\":1,\"unmatched_queries\":[\"smtp send\"],\"complete\":false,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\n",
+                "declare function emailImapConnect({ host: string }): (connection: Struct);"
+            ),
+        );
+        {
+            let guard = state.lock().expect("state lock");
+            assert!(!guard.initial_declaration_lookup_complete);
+            assert_eq!(guard.unresolved_declaration_queries, ["smtp send"]);
+            assert!(
+                guard
+                    .last_declarations
+                    .as_deref()
+                    .is_some_and(|declarations| { declarations.contains("emailImapConnect") })
+            );
+        }
+        let write_args = serde_json::json!({
+            "draft_id": "coverage-gated",
+            "source": "eventsSimple() {}"
+        });
+        assert!(
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_some()
+        );
+
+        let unrelated = serde_json::json!({ "queries": ["string replace"] });
+        let rejected = workflow_tool_preflight_with_args(&state, "get_declarations", &unrelated)
+            .expect("an unrelated follow-up must be rejected before dispatch");
+        let rejected = workflow_call_result_json(&rejected);
+        assert_eq!(rejected["code"], "DECLARATION_FOLLOW_UP_UNRELATED");
+        {
+            let guard = state.lock().expect("state lock");
+            assert!(!guard.initial_declaration_lookup_complete);
+            assert_eq!(guard.unresolved_declaration_queries, ["smtp send"]);
+            assert_eq!(guard.initial_declaration_attempts, 1);
+        }
+        assert!(
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_some(),
+            "a complete but unrelated follow-up must not clear an earlier declaration miss"
+        );
+
+        let follow_up = serde_json::json!({ "queries": ["smtp send"] });
+        assert!(
+            workflow_tool_preflight_with_args(&state, "get_declarations", &follow_up).is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &follow_up,
+            concat!(
+                "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":1,\"matched_queries\":[\"smtp send\"],\"unmatched_count\":0,\"unmatched_queries\":[],\"complete\":true,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\n",
+                "declare function emailSmtpSend({ to: string, bodyText: string }): void;"
+            ),
+        );
+        let guard = state.lock().expect("state lock");
+        assert!(guard.initial_declaration_lookup_complete);
+        assert!(guard.unresolved_declaration_queries.is_empty());
+        assert!(
+            guard
+                .last_declarations
+                .as_deref()
+                .is_some_and(|declarations| {
+                    declarations.contains("emailImapConnect")
+                        && declarations.contains("emailSmtpSend")
+                })
+        );
+        drop(guard);
+        assert!(
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_none()
+        );
+    }
+
+    #[test]
+    fn focused_rephrasing_can_resolve_an_unmatched_declaration_query() {
+        assert!(declaration_queries_are_related(
+            "smtp send approval response",
+            "smtp send email"
+        ));
+        assert!(!declaration_queries_are_related(
+            "smtp send email",
+            "smtp receive email"
+        ));
+        assert!(!declaration_queries_are_related(
+            "smtp send email",
+            "imap receive email"
+        ));
+
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let initial = serde_json::json!({ "queries": ["smtp send approval response"] });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &initial).is_none());
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &initial,
+            "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":0,\"matched_queries\":[],\"unmatched_count\":1,\"unmatched_queries\":[\"smtp send approval response\"],\"complete\":false,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\nNo declaration matched.",
+        );
+
+        let rephrased = serde_json::json!({ "queries": ["smtp send email"] });
+        assert!(
+            workflow_tool_preflight_with_args(&state, "get_declarations", &rephrased).is_none(),
+            "a rephrasing that retains the distinctive smtp capability may repair the miss"
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &rephrased,
+            concat!(
+                "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":1,\"matched_queries\":[\"smtp send email\"],\"unmatched_count\":0,\"unmatched_queries\":[],\"complete\":true,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\n",
+                "declare function emailSmtpSend({ to: string, bodyText: string }): void;"
+            ),
+        );
+        let guard = state.lock().expect("state lock");
+        assert!(guard.initial_declaration_lookup_complete);
+        assert!(guard.unresolved_declaration_queries.is_empty());
+    }
+
+    #[test]
+    fn source_lifecycle_errors_cannot_bypass_initial_declaration_coverage() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let patch_args = serde_json::json!({
+            "draft_id": "not-retained",
+            "expected_revision": 0,
+            "old_text": "before",
+            "new_text": "after"
+        });
+        let rejected = workflow_tool_preflight_with_args(&state, "patch_flowscript", &patch_args)
+            .expect("patch cannot create an unretained draft");
+        let payload = workflow_call_result_json(&rejected);
+        assert_eq!(payload["code"], "FLOWSCRIPT_DRAFT_REQUIRED");
+        assert_eq!(payload["next_action"], "get_declarations");
+
+        // Even a stale/legacy worker result cannot turn an arbitrary error status into declaration
+        // authorization. This protects old in-flight calls across an app upgrade as well.
+        workflow_tool_record(
+            &state,
+            "patch_flowscript",
+            &patch_args,
+            &serde_json::json!({
+                "status": "error",
+                "code": "FLOWSCRIPT_DRAFT_NOT_FOUND",
+                "message": "draft missing"
+            })
+            .to_string(),
+        );
+        let write = workflow_tool_preflight_with_args(
+            &state,
+            "write_flowscript",
+            &serde_json::json!({
+                "draft_id": "still-gated",
+                "source": "eventsSimple() {}"
+            }),
+        )
+        .expect("an incidental lifecycle error must not unlock source generation");
+        let payload = workflow_call_result_json(&write);
+        assert_eq!(payload["status"], "declaration_lookup_required");
+    }
+
+    #[test]
+    fn request_identity_mismatch_does_not_adopt_rejected_source_coordinates() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
+            ..Default::default()
+        }));
+        let rejected_args = serde_json::json!({
+            "draft_id": "foreign-draft",
+            "source": "eventsSimple() { logInfo({ message: \"must not retain\" }) }"
+        });
+        assert!(
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &rejected_args).is_none()
+        );
+        let mismatch = serde_json::json!({
+            "status": "request_identity_mismatch",
+            "code": "FLOWSCRIPT_DRAFT_REQUEST_IDENTITY_MISMATCH",
+            "message": "This FlowScript draft belongs to a different immutable user request."
+        })
+        .to_string();
+        workflow_tool_record(&state, "write_flowscript", &rejected_args, &mismatch);
+
+        {
+            let state = state.lock().expect("state lock");
+            assert!(!state.flowscript_draft_retained);
+            assert!(state.flowscript_draft_id.is_none());
+            assert!(state.flowscript_revision.is_none());
+            assert!(state.last_flowscript.is_none());
+            assert_eq!(
+                state.last_status.as_deref(),
+                Some("request_identity_mismatch")
+            );
+        }
+        assert!(flowpilot_tool_result_is_error(
+            &copilot_sdk::ToolResultObject::text(mismatch)
+        ));
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
+                "write_flowscript",
+                &serde_json::json!({
+                    "draft_id": "current-request-draft",
+                    "source": "eventsSimple() {}"
+                }),
+            )
+            .is_none(),
+            "a distinct draft id for the current request remains available"
+        );
+    }
+
+    #[test]
+    fn typed_request_mismatch_does_not_adopt_rejected_coordinates() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            typed_draft_id: Some("current-draft".to_string()),
+            typed_draft_retained: true,
+            typed_revision: Some(4),
+            ..Default::default()
+        }));
+        let rejected_args = serde_json::json!({
+            "draft_id": "foreign-draft",
+            "expected_revision": 99,
+            "modules": []
+        });
+        // Include coordinates defensively: the core now omits them, but a stale/custom provider
+        // response must not be able to poison the host-owned loop state either.
+        let mismatch = serde_json::json!({
+            "status": "request_identity_mismatch",
+            "code": "IR_DRAFT_REQUEST_IDENTITY_MISMATCH",
+            "draft_id": "foreign-draft",
+            "revision": 99,
+            "message": "This typed draft belongs to a different immutable user request."
+        })
+        .to_string();
+        workflow_tool_record(&state, "validate_flow_ir_draft", &rejected_args, &mismatch);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.typed_draft_id.as_deref(), Some("current-draft"));
+        assert_eq!(state.typed_revision, Some(4));
+        assert!(state.typed_draft_retained);
+        assert_eq!(
+            state.last_status.as_deref(),
+            Some("request_identity_mismatch")
+        );
+    }
+
+    #[test]
+    fn missing_or_stale_base_releases_unusable_draft_coordinates_for_restart() {
+        for (code, include_source) in [
+            ("FLOWSCRIPT_DRAFT_MISSING", false),
+            ("FLOWSCRIPT_BASE_REVISION_CONFLICT", true),
+        ] {
+            let old_source = "eventsSimple() { logInfo({ message: \"preserve me\" }) }";
+            let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+                initial_declaration_lookup_complete: true,
+                mutation_path: Some(WorkflowMutationPath::FlowScript),
+                flowscript_draft_id: Some("expired-draft".to_string()),
+                flowscript_draft_retained: true,
+                flowscript_revision: Some(4),
+                last_flowscript: Some(old_source.to_string()),
+                last_status: Some("valid".to_string()),
+                ..Default::default()
+            }));
+            let check_args = serde_json::json!({
+                "draft_id": "expired-draft",
+                "expected_revision": 4
+            });
+            assert!(
+                workflow_tool_preflight_with_args(&state, "check_flowscript", &check_args)
+                    .is_none()
+            );
+            let mut result = serde_json::json!({
+                "status": "error",
+                "code": code,
+                "message": "the retained coordinates can no longer be continued"
+            });
+            if include_source {
+                result["source"] = serde_json::json!(old_source);
+            }
+            workflow_tool_record(&state, "check_flowscript", &check_args, &result.to_string());
+
+            {
+                let state = state.lock().expect("state lock");
+                assert!(!state.flowscript_draft_retained, "{code}");
+                assert!(state.flowscript_draft_id.is_none(), "{code}");
+                assert!(state.flowscript_revision.is_none(), "{code}");
+                assert_eq!(state.last_flowscript.as_deref(), Some(old_source), "{code}");
+            }
+            assert!(
+                workflow_tool_preflight_with_args(
+                    &state,
+                    "write_flowscript",
+                    &serde_json::json!({
+                        "draft_id": format!("fresh-{code}"),
+                        "source": old_source
+                    }),
+                )
+                .is_none(),
+                "{code} must allow a fresh host-authorized draft id"
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_declaration_coverage_stops_after_bounded_attempts() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let args = serde_json::json!({ "queries": ["unavailable capability"] });
+        let no_match = "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":0,\"matched_queries\":[],\"unmatched_count\":1,\"unmatched_queries\":[\"unavailable capability\"],\"complete\":false,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\nNo FlowScript declarations matched this query.";
+        for _ in 0..MAX_INITIAL_DECLARATION_ATTEMPTS {
+            assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+            workflow_tool_record(&state, "get_declarations", &args, no_match);
+        }
+        let rejected = workflow_tool_preflight_with_args(
+            &state,
+            "write_flowscript",
+            &serde_json::json!({
+                "draft_id": "must-not-start",
+                "source": "eventsSimple() {}"
+            }),
+        )
+        .expect("guessing source after incomplete coverage must stop locally");
+        let payload = workflow_call_result_json(&rejected);
+        assert_eq!(payload["code"], "DECLARATION_COVERAGE_EXHAUSTED");
+        assert_eq!(payload["attempts"], MAX_INITIAL_DECLARATION_ATTEMPTS);
+        assert_eq!(payload["unresolved_queries"][0], "unavailable capability");
+    }
+
+    #[test]
+    fn aborted_initial_declaration_lookup_releases_the_required_slot() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let args = serde_json::json!({ "queries": ["imap inbox messages"] });
+
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+        assert_eq!(state.lock().expect("state lock").declaration_calls, 1);
+
+        workflow_tool_abort(&state, "get_declarations", "worker disconnected");
+        let guard = state.lock().expect("state lock");
+        assert_eq!(guard.declaration_calls, 0);
+        assert_eq!(guard.declarations_since_edit, 0);
+        drop(guard);
+
+        assert!(
+            workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none(),
+            "the focused initial lookup can be retried after a worker abort"
+        );
+    }
+
+    #[test]
+    fn declaration_lookup_lease_blocks_parallel_lookup_and_source_dispatch() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let args = serde_json::json!({ "queries": ["imap inbox messages"] });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+
+        let duplicate = workflow_tool_preflight_with_args(&state, "get_declarations", &args)
+            .expect("a second lookup must not dispatch while the first result is pending");
+        assert_eq!(
+            workflow_call_result_json(&duplicate)["code"],
+            "DECLARATION_LOOKUP_IN_FLIGHT"
+        );
+        let write = workflow_tool_preflight_with_args(
+            &state,
+            "write_flowscript",
+            &serde_json::json!({
+                "draft_id": "must-wait",
+                "source": "eventsSimple() {}"
+            }),
+        )
+        .expect("source authoring must wait for declaration authority");
+        assert_eq!(
+            workflow_call_result_json(&write)["code"],
+            "DECLARATION_LOOKUP_IN_FLIGHT"
+        );
+        assert_eq!(state.lock().expect("state lock").declaration_calls, 1);
+
+        workflow_tool_abort(&state, "get_declarations", "worker disconnected");
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+    }
+
+    #[test]
+    fn poisoned_workflow_state_fails_closed_before_tool_dispatch() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let poisoned = state.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = poisoned.lock().expect("initial lock");
+            panic!("poison workflow loop state for regression coverage");
+        });
+
+        let rejected = workflow_tool_preflight(&state, "get_current_flowscript")
+            .expect("a poisoned lifecycle state must return a terminal host error");
+        assert_eq!(rejected.is_error, Some(true));
+        assert_eq!(
+            workflow_call_result_json(&rejected)["code"],
+            "WORKFLOW_LOOP_STATE_UNAVAILABLE"
+        );
+        assert!(workflow_state_has_retained_candidate(Some(&state)));
+    }
+
+    #[test]
+    fn declaration_headers_cannot_claim_complete_without_exact_bodies() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let args = serde_json::json!({ "queries": ["smtp send"] });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &args,
+            "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":1,\"matched_queries\":[\"smtp send\"],\"unmatched_count\":0,\"unmatched_queries\":[],\"output_omitted_count\":0,\"output_omitted_queries\":[],\"complete\":true,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\n// declaration body was lost",
+        );
+        {
+            let state = state.lock().expect("state lock");
+            assert!(!state.initial_declaration_lookup_complete);
+            assert_eq!(state.unresolved_declaration_queries, ["smtp send"]);
+        }
+        assert!(
+            workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none(),
+            "the exact omitted capability gets one bounded focused retry"
+        );
+    }
+
+    #[test]
+    fn metadata_less_multi_query_results_do_not_unlock_source() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let args = serde_json::json!({ "queries": ["imap receive", "smtp send"] });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &args,
+            "declare function emailImapConnect({ host: string }): Struct;",
+        );
+        let state = state.lock().expect("state lock");
+        assert!(!state.initial_declaration_lookup_complete);
+        assert_eq!(
+            state.unresolved_declaration_queries,
+            ["imap receive", "smtp send"]
+        );
+    }
+
+    #[test]
+    fn mixed_unnamed_declaration_omissions_are_counted_per_category() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let output_queries = (0..10)
+            .map(|index| format!("output omitted {index}"))
+            .collect::<Vec<_>>();
+        let mut all_queries = output_queries.clone();
+        all_queries.extend((0..5).map(|index| format!("input omitted {index}")));
+        let args = serde_json::json!({ "queries": all_queries });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none());
+        let header = format!(
+            "// flowpilot.declaration-batch/v1 {}\nNo exact declaration body fit.",
+            serde_json::json!({
+                "processed_count": 10,
+                "matched_count": 0,
+                "matched_queries": [],
+                "unmatched_count": 0,
+                "unmatched_queries": [],
+                "output_omitted_count": 10,
+                "output_omitted_queries": output_queries,
+                "complete": false,
+                "omitted_count": 5,
+                "omitted_queries": [],
+                "query_names_omitted_for_size": true,
+                "truncated_query_count": 0
+            })
+        );
+        workflow_tool_record(&state, "get_declarations", &args, &header);
+
+        let state = state.lock().expect("state lock");
+        assert_eq!(state.unresolved_declaration_queries.len(), 11);
+        assert!(
+            state
+                .unresolved_declaration_queries
+                .iter()
+                .any(|query| { query.contains("5 additional omitted declaration query") })
+        );
+    }
+
+    #[test]
+    fn declaration_retention_prioritizes_complete_new_signatures_without_partial_lines() {
+        let older = format!(
+            "declare function oldCapability({{ input: string }}): string;\n{}",
+            "old documentation ".repeat(2_000)
+        );
+        let newest = concat!(
+            "// flowpilot.declaration-batch/v1 {}\n",
+            "declare function emailSmtpConnect({ host: string, port: int }): Struct;\n",
+            "declare function emailSmtpSend({ connection: Struct, to: string, bodyText: string }): void;\n",
+            "// Usage: connect first, then pass the returned connection into the send call."
+        );
+        let retained = retain_declaration_result(Some(&older), newest);
+        assert!(retained.contains("oldCapability"));
+        assert!(retained.contains("emailSmtpConnect"));
+        assert!(retained.contains("emailSmtpSend"));
+        assert!(retained.contains("connect first"));
+        assert!(!retained.contains("old documentation"));
+        assert!(!retained.contains("…"));
     }
 
     #[test]
@@ -11912,6 +14357,21 @@ mod tests {
         assert!(
             workflow_tool_preflight_with_args(
                 &state,
+                "get_declarations",
+                &serde_json::json!({ "queries": ["log information"] }),
+            )
+            .is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &serde_json::json!({ "queries": ["log information"] }),
+            "declare function logInfo({ message: string }): void;  // impure",
+        );
+
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
                 "write_flowscript",
                 &serde_json::json!({
                     "draft_id": "redirected-source",
@@ -11951,13 +14411,20 @@ mod tests {
     #[test]
     fn declaration_repairs_allow_new_diagnostic_signatures_but_deduplicate_old_ones() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let initial_lookup = serde_json::json!({ "queries": ["imap receive", "smtp send"] });
         assert!(
-            workflow_tool_preflight_with_args(
-                &state,
-                "get_declarations",
-                &serde_json::json!({ "queries": ["imap receive", "smtp send"] }),
-            )
-            .is_none()
+            workflow_tool_preflight_with_args(&state, "get_declarations", &initial_lookup)
+                .is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &initial_lookup,
+            concat!(
+                "// flowpilot.declaration-batch/v1 {\"processed_count\":2,\"matched_count\":2,\"matched_queries\":[\"imap receive\",\"smtp send\"],\"unmatched_count\":0,\"unmatched_queries\":[],\"output_omitted_count\":0,\"output_omitted_queries\":[],\"complete\":true,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\n",
+                "declare function mailImapList({ inbox: Struct }): Struct[];\n",
+                "declare function emailSmtpSend({ to: string }): void;"
+            ),
         );
 
         let failed_edit = |signature: &str| {
@@ -11977,14 +14444,16 @@ mod tests {
         };
 
         failed_edit("firstMissingCall");
+        let first_repair = serde_json::json!({ "queries": ["exact firstMissingCall signature"] });
         assert!(
-            workflow_tool_preflight_with_args(
-                &state,
-                "get_declarations",
-                &serde_json::json!({ "queries": ["exact firstMissingCall signature"] }),
-            )
-            .is_none(),
+            workflow_tool_preflight_with_args(&state, "get_declarations", &first_repair).is_none(),
             "the first diagnostic-targeted repair should be dispatched"
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &first_repair,
+            "declare function firstMissingCall({}): void;",
         );
 
         failed_edit("firstMissingCall");
@@ -12050,7 +14519,17 @@ mod tests {
     #[test]
     fn declaration_repairs_allow_bounded_type_and_pin_lookup_batches() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
-        assert!(workflow_tool_preflight(&state, "get_declarations").is_none());
+        let initial_lookup = serde_json::json!({ "queries": ["boolean comparison"] });
+        assert!(
+            workflow_tool_preflight_with_args(&state, "get_declarations", &initial_lookup)
+                .is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &initial_lookup,
+            "declare function boolEqual({ boolean: boolean, boolean: boolean }): boolean;",
+        );
         assert!(workflow_tool_preflight(&state, "edit_flowscript").is_none());
         workflow_tool_record(
             &state,
@@ -12066,26 +14545,49 @@ mod tests {
             .to_string(),
         );
 
+        let repair_lookup = serde_json::json!({
+            "queries": [
+                "equalString notEqualString exact signatures",
+                "stringContains exact signature",
+                "stringTrim exact signature",
+                "stringStartsWith exact signature",
+                "stringReplace exact signature",
+                "integer add increment exact signature",
+                "convert Generic any to string",
+                "try catch error boundary invoke function per item"
+            ]
+        });
         assert!(
-            workflow_tool_preflight_with_args(
-                &state,
-                "get_declarations",
-                &serde_json::json!({
-                    "queries": [
-                        "equalString notEqualString exact signatures",
-                        "stringContains exact signature",
-                        "stringTrim exact signature",
-                        "stringStartsWith exact signature",
-                        "stringReplace exact signature",
-                        "integer add increment exact signature",
-                        "convert Generic any to string",
-                        "try catch error boundary invoke function per item"
-                    ]
-                }),
-            )
-            .is_none(),
+            workflow_tool_preflight_with_args(&state, "get_declarations", &repair_lookup).is_none(),
             "pin and type diagnostics should authorize one bounded corrective batch"
         );
+        let repair_result = format!(
+            "// flowpilot.declaration-batch/v1 {}\n{}",
+            serde_json::json!({
+                "processed_count": 8,
+                "matched_count": 8,
+                "matched_queries": repair_lookup["queries"],
+                "unmatched_count": 0,
+                "unmatched_queries": [],
+                "output_omitted_count": 0,
+                "output_omitted_queries": [],
+                "complete": true,
+                "omitted_count": 0,
+                "omitted_queries": [],
+                "truncated_query_count": 0
+            }),
+            concat!(
+                "declare function equalString({ left: string, right: string }): boolean;\n",
+                "declare function stringContains({ text: string, pattern: string }): boolean;\n",
+                "declare function stringTrim({ text: string }): string;\n",
+                "declare function stringStartsWith({ text: string, prefix: string }): boolean;\n",
+                "declare function stringReplace({ text: string, pattern: string, replacement: string, isRegex: boolean }): string;\n",
+                "declare function integerAdd({ integer: integer, integer: integer }): integer;\n",
+                "declare function genericToString({ value: any }): string;\n",
+                "declare function tryCatch({ invoke: Struct }): Struct;"
+            )
+        );
+        workflow_tool_record(&state, "get_declarations", &repair_lookup, &repair_result);
         let state = state.lock().expect("state lock");
         let completed = &state.completed_repair_lookup_keys;
         assert!(completed.contains("topic:comparison"));
@@ -12109,9 +14611,134 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_repair_no_match_is_deduplicated_but_abort_is_retryable() {
+        let make_state = || {
+            Arc::new(StdMutex::new(WorkflowToolLoopState {
+                declaration_calls: 1,
+                initial_declaration_lookup_complete: true,
+                last_errors: vec!["FlowScript call `missingCall` does not match a catalog declaration; call `get_declarations` and use the exact function name".to_string()],
+                ..Default::default()
+            }))
+        };
+        let args = serde_json::json!({ "queries": ["missingCall exact signature"] });
+
+        let no_match_state = make_state();
+        assert!(
+            workflow_tool_preflight_with_args(&no_match_state, "get_declarations", &args).is_none()
+        );
+        workflow_tool_record(
+            &no_match_state,
+            "get_declarations",
+            &args,
+            "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":0,\"matched_queries\":[],\"unmatched_count\":1,\"unmatched_queries\":[\"missingCall exact signature\"],\"output_omitted_count\":0,\"output_omitted_queries\":[],\"complete\":false,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\nNo declaration matched.",
+        );
+        {
+            let mut state = no_match_state.lock().expect("state lock");
+            assert!(
+                state
+                    .completed_repair_lookup_keys
+                    .contains("symbol:missingcall")
+            );
+            // A normal edit/check result opens the next diagnostic phase. Reproduce that boundary
+            // directly so this assertion exercises persistent key deduplication, not merely the
+            // one-discovery-per-edit guard.
+            state.declarations_since_edit = 0;
+        }
+        let duplicate =
+            workflow_tool_preflight_with_args(&no_match_state, "get_declarations", &args)
+                .expect("a definitive catalog miss must not reopen the same repair forever");
+        assert_eq!(
+            workflow_call_result_json(&duplicate)["status"],
+            "duplicate_declaration_lookup"
+        );
+
+        let aborted_state = make_state();
+        assert!(
+            workflow_tool_preflight_with_args(&aborted_state, "get_declarations", &args).is_none()
+        );
+        workflow_tool_abort(&aborted_state, "get_declarations", "worker disconnected");
+        assert!(
+            workflow_tool_preflight_with_args(&aborted_state, "get_declarations", &args).is_none(),
+            "a transport abort consumes neither the diagnostic key nor its retry allowance"
+        );
+    }
+
+    #[test]
+    fn output_omitted_repair_gets_one_focused_retry_then_stops() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            declaration_calls: 1,
+            initial_declaration_lookup_complete: true,
+            last_errors: vec!["FlowScript call `missingCall` does not match a catalog declaration; call `get_declarations` and use the exact function name".to_string()],
+            ..Default::default()
+        }));
+        let args = serde_json::json!({ "queries": ["missingCall exact signature"] });
+        let omitted = "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":0,\"matched_queries\":[],\"unmatched_count\":0,\"unmatched_queries\":[],\"output_omitted_count\":1,\"output_omitted_queries\":[\"missingCall exact signature\"],\"complete\":false,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\nThe exact signature did not fit.";
+
+        for attempt in 0..MAX_REPAIR_DECLARATION_ATTEMPTS_PER_KEY {
+            assert!(
+                workflow_tool_preflight_with_args(&state, "get_declarations", &args).is_none(),
+                "omitted-signature attempt {attempt} should dispatch"
+            );
+            workflow_tool_record(&state, "get_declarations", &args, omitted);
+        }
+        let exhausted = workflow_tool_preflight_with_args(&state, "get_declarations", &args)
+            .expect("the per-key omission cap must terminate exact repeats");
+        assert_eq!(
+            workflow_call_result_json(&exhausted)["status"],
+            "duplicate_declaration_lookup"
+        );
+    }
+
+    #[test]
+    fn metadata_less_multi_query_repair_does_not_claim_every_target_resolved() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            declaration_calls: 1,
+            initial_declaration_lookup_complete: true,
+            last_errors: vec!["FlowScript call `missingCall` does not match a catalog declaration; call `get_declarations` and use the exact function name".to_string()],
+            ..Default::default()
+        }));
+        let broad = serde_json::json!({
+            "queries": ["missingCall exact signature", "missingCall input pins"]
+        });
+        assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &broad).is_none());
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &broad,
+            "declare function missingCall({ input: string }): void;",
+        );
+        assert!(
+            state
+                .lock()
+                .expect("state lock")
+                .completed_repair_lookup_keys
+                .is_empty()
+        );
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
+                "get_declarations",
+                &serde_json::json!({ "queries": ["missingCall exact signature"] }),
+            )
+            .is_none(),
+            "one focused retry remains available when a legacy multi-result cannot prove coverage"
+        );
+    }
+
+    #[test]
     fn declaration_repair_rejects_unrelated_broad_searches() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
-        assert!(workflow_tool_preflight(&state, "get_declarations").is_none());
+        let initial_lookup = serde_json::json!({ "queries": ["missing call"] });
+        assert!(
+            workflow_tool_preflight_with_args(&state, "get_declarations", &initial_lookup)
+                .is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &initial_lookup,
+            "declare function missingCall({}): void;",
+        );
         assert!(workflow_tool_preflight(&state, "edit_flowscript").is_none());
         workflow_tool_record(
             &state,
@@ -12334,6 +14961,70 @@ eventsGeneric(payload: Struct) {
                 .any(|error| error.contains("severe completeness regression"))
         );
         assert!(!state.lock().expect("state lock").edit_in_flight);
+    }
+
+    #[test]
+    fn panicking_sdk_workflow_handler_aborts_state_and_recovers_the_operation_gate() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let panicking: copilot_sdk::ToolHandler =
+            Arc::new(|_name, _args| panic!("simulated tool handler crash"));
+        let follow_up_calls = Arc::new(AtomicUsize::new(0));
+        let calls = follow_up_calls.clone();
+        let benign: copilot_sdk::ToolHandler = Arc::new(move |_name, _args| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            copilot_sdk::ToolResultObject::text(
+                serde_json::json!({
+                    "status": "validation_errors",
+                    "errors": ["stub diagnostic"]
+                })
+                .to_string(),
+            )
+        });
+        // Both guarded handlers share one operation gate, like one live SDK session.
+        let mut guarded = guard_sdk_workflow_tools(
+            vec![
+                (copilot_sdk::Tool::new("edit_flowscript"), panicking),
+                (copilot_sdk::Tool::new("edit_flowscript"), benign),
+            ],
+            state.clone(),
+        );
+        let (_, benign_handler) = guarded.pop().expect("benign guarded tool");
+        let (_, panicking_handler) = guarded.pop().expect("panicking guarded tool");
+        let args = serde_json::json!({
+            "flowscript": "eventsSimple() {\n    logInfo({ message: \"works\" })\n}"
+        });
+
+        let crashed = panicking_handler("edit_flowscript", &args);
+        let crashed_text = crashed
+            .error
+            .as_deref()
+            .unwrap_or(&crashed.text_result_for_llm);
+        assert!(
+            crashed_text.contains("simulated tool handler crash"),
+            "{crashed_text}"
+        );
+        {
+            let state = state
+                .lock()
+                .expect("a handler panic must not poison the workflow loop state");
+            assert!(!state.edit_in_flight);
+            assert_eq!(state.last_status.as_deref(), Some("error"));
+        }
+
+        // The gate must be usable again: the follow-up mutation reaches its handler instead of
+        // the permanent retryable "wait" refusal a poisoned gate produced.
+        let retried = benign_handler("edit_flowscript", &args);
+        let retried_text = retried
+            .error
+            .as_deref()
+            .unwrap_or(&retried.text_result_for_llm);
+        assert!(
+            !retried_text.contains("Another order-sensitive workflow operation"),
+            "{retried_text}"
+        );
+        assert_eq!(follow_up_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -12725,17 +15416,768 @@ eventsSimple() {
         assert!(prompt.contains("EXACT LIVE-CATALOG REPAIR DECLARATIONS"));
         assert!(prompt.contains("isRegex: bool"));
         assert!(prompt.contains("missing pin"));
+        assert!(prompt.contains("Validation diagnostics (1 total)"));
         assert!(prompt.contains("draft_id=support-flow, revision=3"));
 
-        let error = external_workflow_incomplete_error(Some(&snapshot));
+        let error = external_workflow_incomplete_error(
+            Some(&snapshot),
+            MAX_EXTERNAL_WORKFLOW_CONTINUATIONS,
+        );
         assert!(error.contains("without queueing changes"));
         assert!(error.contains("missing pin"));
         assert!(error.contains("draft_id=support-flow, revision=3"));
     }
 
     #[test]
+    fn incomplete_error_reports_every_budget_and_all_retained_diagnostics() {
+        let snapshot = WorkflowToolLoopSnapshot {
+            last_status: Some("validation_errors".to_string()),
+            last_errors: (0..25)
+                .map(|index| format!("diagnostic number {index}"))
+                .collect(),
+            last_structured_diagnostics: vec![serde_json::json!({
+                "code": "FS_UNKNOWN_INPUT_PIN",
+                "phase": "type_check",
+                "message": "unknown pin `mail_subject`"
+            })],
+            edit_attempts: 2,
+            flowscript_operation_attempts: MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+            stalled_edit_attempts: 1,
+            flowscript_commit_attempts: 0,
+            exhausted_budget: Some(format!(
+                "FlowScript source operation budget ({}/{})",
+                MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+                MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS
+            )),
+            flowscript_draft_id: Some("mail-agent".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(16),
+            ..Default::default()
+        };
+
+        let error = external_workflow_incomplete_error(Some(&snapshot), 2);
+        assert!(error.contains("FlowScript source operation budget (24/24)"));
+        assert!(error.contains("provider continuations 2/2"));
+        assert!(error.contains("checks 2/12"));
+        assert!(error.contains("source operations 24/24"));
+        assert!(error.contains("stalled repeats 1/3"));
+        assert!(error.contains("commit attempts 0/3"));
+        assert!(error.contains("Remaining diagnostics (25 total)"));
+        assert!(error.contains("diagnostic number 0"));
+        assert!(error.contains("diagnostic number 19"));
+        assert!(!error.contains("diagnostic number 20"));
+        assert!(error.contains("(+5 more)"));
+        assert!(error.contains("Structured diagnostics (1 retained)"));
+        assert!(error.contains("FS_UNKNOWN_INPUT_PIN"));
+        assert!(error.contains("draft_id=mail-agent, revision=16"));
+        assert!(error.contains("same user request"));
+    }
+
+    #[test]
+    fn continuation_prompt_marks_omitted_diagnostics() {
+        let snapshot = WorkflowToolLoopSnapshot {
+            last_status: Some("validation_errors".to_string()),
+            last_errors: (0..23)
+                .map(|index| format!("diagnostic number {index}"))
+                .collect(),
+            ..Default::default()
+        };
+        let prompt = build_external_workflow_continuation_prompt("build it", Some(&snapshot), 1);
+        assert!(prompt.contains("Validation diagnostics (23 total)"));
+        assert!(prompt.contains("diagnostic number 19"));
+        assert!(!prompt.contains("diagnostic number 20"));
+        assert!(prompt.contains("+3 more diagnostics omitted"));
+    }
+
+    #[test]
+    fn workflow_snapshot_carries_terminal_budget_state() {
+        let stalled = WorkflowToolLoopState {
+            stalled_edit_attempts: MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS,
+            flowscript_commit_attempts: 1,
+            ..Default::default()
+        };
+        let snapshot = stalled.snapshot();
+        assert_eq!(
+            snapshot.stalled_edit_attempts,
+            MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS
+        );
+        assert_eq!(snapshot.flowscript_commit_attempts, 1);
+        assert!(
+            snapshot
+                .exhausted_budget
+                .as_deref()
+                .is_some_and(|budget| budget.contains("stalled repair progress"))
+        );
+
+        let ops_exhausted = WorkflowToolLoopState {
+            flowscript_operation_attempts: MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+            ..Default::default()
+        };
+        assert!(
+            ops_exhausted
+                .snapshot()
+                .exhausted_budget
+                .as_deref()
+                .is_some_and(|budget| budget.contains("source operation budget"))
+        );
+
+        let queued = WorkflowToolLoopState {
+            queued: true,
+            flowscript_operation_attempts: MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+            ..Default::default()
+        };
+        assert_eq!(queued.snapshot().exhausted_budget, None);
+
+        let healthy = WorkflowToolLoopState::default();
+        assert_eq!(healthy.snapshot().exhausted_budget, None);
+    }
+
+    #[test]
+    fn continuation_slice_makes_exhausted_budgets_executable_again() {
+        let mut state = WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
+            mutation_path: Some(WorkflowMutationPath::FlowScript),
+            flowscript_draft_id: Some("mail-agent".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(4),
+            stalled_edit_attempts: MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS,
+            flowscript_operation_attempts: MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+            edit_attempts: MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS,
+            flowscript_commit_attempts: MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS,
+            ..Default::default()
+        };
+        state
+            .flowscript_seen_repair_signatures
+            .insert("stale".to_string());
+        assert!(state.exhausted_budget().is_some());
+
+        state.grant_continuation_slice();
+        assert_eq!(state.exhausted_budget(), None);
+        assert_eq!(state.stalled_edit_attempts, 0);
+        assert!(state.flowscript_seen_repair_signatures.is_empty());
+        assert_eq!(
+            state.flowscript_operation_attempts,
+            MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS - EXTERNAL_CONTINUATION_OPERATION_HEADROOM
+        );
+        assert_eq!(
+            state.edit_attempts,
+            MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS - EXTERNAL_CONTINUATION_CHECK_HEADROOM
+        );
+        assert_eq!(
+            state.flowscript_commit_attempts,
+            MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS - 1
+        );
+
+        // A patch on the granted slice must be dispatchable, not refused-on-arrival.
+        let shared = Arc::new(StdMutex::new(state));
+        assert!(
+            workflow_tool_preflight_with_args(
+                &shared,
+                "patch_flowscript",
+                &serde_json::json!({ "draft_id": "mail-agent", "expected_revision": 4 }),
+            )
+            .is_none()
+        );
+
+        // Queued work never hands out another slice.
+        let mut queued = WorkflowToolLoopState {
+            queued: true,
+            stalled_edit_attempts: MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS,
+            ..Default::default()
+        };
+        queued.grant_continuation_slice();
+        assert_eq!(
+            queued.stalled_edit_attempts,
+            MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS
+        );
+    }
+
+    #[test]
+    fn sdk_idle_continuation_grants_one_slice_then_stops_the_same_budget_honestly() {
+        // UI-only sessions have no workflow loop state; continuations stay executable.
+        assert_eq!(
+            prepare_sdk_idle_continuation_budget(None, None),
+            IdleContinuationBudget::Executable
+        );
+
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        assert_eq!(
+            prepare_sdk_idle_continuation_budget(Some(&state), None),
+            IdleContinuationBudget::Executable
+        );
+
+        state.lock().expect("state lock").edit_attempts = MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS;
+        let granted = prepare_sdk_idle_continuation_budget(Some(&state), None);
+        let IdleContinuationBudget::SliceGranted(budget) = granted else {
+            panic!("expected a granted continuation slice, got {granted:?}");
+        };
+        assert!(budget.contains("check budget"), "{budget}");
+        // The granted slice makes the continuation instructions executable on arrival.
+        assert_eq!(state.lock().expect("state lock").exhausted_budget(), None);
+
+        // The continuation burned its slice on the same budget: no second grant, stop honestly.
+        state.lock().expect("state lock").edit_attempts = MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS;
+        let terminal = prepare_sdk_idle_continuation_budget(Some(&state), Some(budget.as_str()));
+        let IdleContinuationBudget::Terminal(reason) = terminal else {
+            panic!("expected an honest terminal outcome, got {terminal:?}");
+        };
+        assert!(reason.contains(&budget), "{reason}");
+        assert!(reason.contains("exhausted again"), "{reason}");
+    }
+
+    #[test]
+    fn parallel_flowscript_operations_are_refused_without_consuming_budget() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
+            mutation_path: Some(WorkflowMutationPath::FlowScript),
+            flowscript_draft_id: Some("mail-agent".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(2),
+            flowscript_operation_attempts: 5,
+            edit_attempts: 1,
+            edit_in_flight: true,
+            last_status: Some("valid".to_string()),
+            ..Default::default()
+        }));
+        let args = serde_json::json!({
+            "draft_id": "mail-agent",
+            "expected_revision": 2,
+            "source": "eventsSimple() { logInfo({ message: \"parallel\" }) }"
+        });
+
+        for tool in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+        ] {
+            let refusal = workflow_tool_preflight_with_args(&state, tool, &args)
+                .unwrap_or_else(|| panic!("{tool} must be refused while an edit is in flight"));
+            assert_eq!(
+                workflow_call_result_json(&refusal)["status"],
+                "edit_in_flight",
+                "{tool} refusal must be the cheap in-flight response"
+            );
+            let guard = state.lock().expect("state lock");
+            assert_eq!(
+                guard.flowscript_operation_attempts, 5,
+                "{tool} refusal must not consume the source operation budget"
+            );
+            assert_eq!(
+                guard.edit_attempts, 1,
+                "{tool} refusal must not consume the check budget"
+            );
+            assert_eq!(guard.flowscript_commit_attempts, 0);
+        }
+    }
+
+    #[test]
+    fn structured_diagnostic_retention_ranks_root_causes_and_marks_truncation() {
+        let mut diagnostics = Vec::new();
+        // Emission order intentionally lists validation noise first and the parse root cause last.
+        for index in 0..MAX_RETAINED_STRUCTURED_DIAGNOSTICS {
+            diagnostics.push(serde_json::json!({
+                "code": "FS_EXECUTION_ENTRY_UNCONNECTED",
+                "phase": "validation",
+                "message": format!("validation cascade {index}")
+            }));
+        }
+        diagnostics.push(serde_json::json!({
+            "code": "FS_UNKNOWN_INPUT_PIN",
+            "phase": "type_check",
+            "message": "unknown pin `mail_subject`"
+        }));
+        diagnostics.push(serde_json::json!({
+            "code": "FS_PARSE_ERROR",
+            "phase": "parse",
+            "message": "return value 1 is not a resolvable FlowScript value"
+        }));
+        let payload = serde_json::json!({ "diagnostics": diagnostics });
+
+        let retained = workflow_result_structured_diagnostics(Some(&payload));
+        assert_eq!(retained.len(), MAX_RETAINED_STRUCTURED_DIAGNOSTICS + 1);
+        assert_eq!(retained[0]["phase"], "parse");
+        assert_eq!(retained[1]["phase"], "type_check");
+        assert_eq!(retained[2]["phase"], "validation");
+        let sentinel = retained
+            .last()
+            .expect("truncated retention appends a sentinel");
+        assert_eq!(sentinel["truncated"], true);
+        assert_eq!(sentinel["omitted_count"], 2);
+
+        // One oversized item is skipped instead of ending retention for smaller later items.
+        let oversized = serde_json::json!({
+            "diagnostics": [
+                {
+                    "code": "FS_TYPE_MISMATCH",
+                    "phase": "type_check",
+                    "message": "x".repeat(MAX_RETAINED_STRUCTURED_DIAGNOSTIC_BYTES + 1)
+                },
+                {
+                    "code": "FS_PARSE_ERROR",
+                    "phase": "validation",
+                    "message": "small trailing diagnostic"
+                }
+            ]
+        });
+        let retained = workflow_result_structured_diagnostics(Some(&oversized));
+        assert!(
+            retained
+                .iter()
+                .any(|entry| entry["message"] == "small trailing diagnostic")
+        );
+        assert!(
+            retained
+                .iter()
+                .any(|entry| entry["truncated"] == true && entry["omitted_count"] == 1)
+        );
+    }
+
+    #[test]
+    fn unchanged_source_echo_is_replaced_with_a_retention_summary() {
+        let source = "eventsSimple() {\n    logInfo({ message: \"hello\" })\n}\n";
+
+        // write_flowscript: byte-identical response source is not re-echoed.
+        let mut write_result = copilot_sdk::ToolResultObject::text(
+            serde_json::json!({
+                "status": "draft_written",
+                "draft_id": "mail-agent",
+                "revision": 3,
+                "source": source
+            })
+            .to_string(),
+        );
+        suppress_unchanged_flowscript_source_echo(
+            "write_flowscript",
+            &serde_json::json!({ "draft_id": "mail-agent", "source": source }),
+            &mut write_result,
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&write_result.text_result_for_llm).expect("payload stays JSON");
+        assert!(payload.get("source").is_none());
+        let echo = payload["source_echo"].as_str().expect("summary line");
+        assert!(echo.contains("revision 3"));
+        assert!(echo.contains("3 lines"));
+        assert!(echo.contains(&flowscript_source_fingerprint(source)));
+
+        // Host-normalized writes keep the full echo.
+        let mut normalized_result = copilot_sdk::ToolResultObject::text(
+            serde_json::json!({
+                "status": "draft_written",
+                "revision": 0,
+                "source": format!("{source}// host-added anchor\n")
+            })
+            .to_string(),
+        );
+        suppress_unchanged_flowscript_source_echo(
+            "write_flowscript",
+            &serde_json::json!({ "source": source }),
+            &mut normalized_result,
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&normalized_result.text_result_for_llm).expect("payload is JSON");
+        assert!(payload["source"].as_str().is_some());
+
+        // check_flowscript on the expected revision cannot change the source.
+        let mut check_result = copilot_sdk::ToolResultObject::text(
+            serde_json::json!({
+                "status": "valid",
+                "draft_id": "mail-agent",
+                "revision": 3,
+                "source": source
+            })
+            .to_string(),
+        );
+        suppress_unchanged_flowscript_source_echo(
+            "check_flowscript",
+            &serde_json::json!({ "draft_id": "mail-agent", "expected_revision": 3 }),
+            &mut check_result,
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&check_result.text_result_for_llm).expect("payload is JSON");
+        assert!(payload.get("source").is_none());
+        assert_eq!(payload["status"], "valid");
+
+        // A revision conflict returns a source the model has not seen; keep it.
+        let mut conflict_result = copilot_sdk::ToolResultObject::text(
+            serde_json::json!({
+                "status": "error",
+                "code": "FLOWSCRIPT_REVISION_CONFLICT",
+                "revision": 4,
+                "source": source
+            })
+            .to_string(),
+        );
+        suppress_unchanged_flowscript_source_echo(
+            "check_flowscript",
+            &serde_json::json!({ "expected_revision": 3 }),
+            &mut conflict_result,
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&conflict_result.text_result_for_llm).expect("payload is JSON");
+        assert!(payload["source"].as_str().is_some());
+
+        // patch_flowscript results are host-computed merges and always keep the echo.
+        let mut patch_result = copilot_sdk::ToolResultObject::text(
+            serde_json::json!({
+                "status": "draft_patched",
+                "revision": 4,
+                "source": source
+            })
+            .to_string(),
+        );
+        suppress_unchanged_flowscript_source_echo(
+            "patch_flowscript",
+            &serde_json::json!({ "expected_revision": 4 }),
+            &mut patch_result,
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&patch_result.text_result_for_llm).expect("payload is JSON");
+        assert!(payload["source"].as_str().is_some());
+    }
+
+    #[test]
+    fn external_failure_recovery_is_bounded_to_transient_unqueued_work() {
+        let retained = WorkflowToolLoopSnapshot {
+            last_flowscript: Some("eventsSimple() { logInfo({ message: \"resume\" }) }".into()),
+            flowscript_draft_id: Some("resume-source".into()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(2),
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_external_agent_failure("transport stream closed unexpectedly", false),
+            ExternalAgentExitKind::TransientInfrastructure
+        );
+        assert!(can_resume_external_workflow_after_failure(
+            Some(&retained),
+            "transport stream closed unexpectedly",
+            false,
+        ));
+        assert!(!can_resume_external_workflow_after_failure(
+            Some(&retained),
+            "transport stream closed unexpectedly",
+            true,
+        ));
+        assert!(!can_resume_external_workflow_after_failure(
+            Some(&retained),
+            "authentication failed: invalid API key",
+            false,
+        ));
+
+        let declaration_only = WorkflowToolLoopSnapshot {
+            last_declarations: Some("declare function logInfo({ message: string }): void;".into()),
+            declaration_lookup_complete: true,
+            ..Default::default()
+        };
+        assert!(can_resume_external_workflow_after_failure(
+            Some(&declaration_only),
+            "connection reset",
+            false,
+        ));
+        assert!(can_resume_external_workflow_after_failure(
+            Some(&WorkflowToolLoopSnapshot::default()),
+            "connection reset before the first tool call",
+            false,
+        ));
+
+        let queued = WorkflowToolLoopSnapshot {
+            queued: true,
+            ..retained.clone()
+        };
+        assert!(!can_resume_external_workflow_after_failure(
+            Some(&queued),
+            "connection reset",
+            false,
+        ));
+        assert!(!can_resume_external_workflow_after_failure(
+            None,
+            "connection reset",
+            false,
+        ));
+    }
+
+    #[test]
+    fn exact_source_recovery_seeds_authoritative_loop_coordinates_only() {
+        use flow_like::flow::copilot::{
+            FlowIrDraftRecoveryStatus, FlowScriptDraftRecovery, FlowScriptEditableDraftContext,
+        };
+
+        let context = FlowScriptEditableDraftContext {
+            board_id: "recovery-board".into(),
+            draft_id: "exact-source".into(),
+            revision: 7,
+            status: "validation_errors".into(),
+            base_fingerprint: "base-1".into(),
+            source: Some("eventsSimple() { brokenCall() }".into()),
+            diagnostics: Vec::new(),
+            checked: false,
+            stale_board: false,
+        };
+        let exact = FlowScriptDraftRecovery {
+            status: FlowIrDraftRecoveryStatus::ExactMatch,
+            auto_resume: true,
+            exact_match: Some(context.clone()),
+            conflicting_draft: None,
+            next_actions: vec!["resume_exact_flowscript_draft".into()],
+            message: "resume".into(),
+        };
+        let state = Arc::new(StdMutex::new(
+            WorkflowToolLoopState::from_flowscript_recovery(Some(&exact)),
+        ));
+        {
+            let guard = state.lock().expect("state lock");
+            assert_eq!(guard.mutation_path, Some(WorkflowMutationPath::FlowScript));
+            assert_eq!(guard.flowscript_draft_id.as_deref(), Some("exact-source"));
+            assert_eq!(guard.flowscript_revision, Some(7));
+            assert_eq!(
+                guard.last_flowscript.as_deref(),
+                Some("eventsSimple() { brokenCall() }")
+            );
+        }
+
+        let wrong = workflow_tool_preflight_with_args(
+            &state,
+            "patch_flowscript",
+            &serde_json::json!({
+                "draft_id": "different-source",
+                "expected_revision": 7,
+                "old_text": "brokenCall",
+                "new_text": "logInfo"
+            }),
+        )
+        .expect("a different source session must be rejected before dispatch");
+        let payload = workflow_call_result_json(&wrong);
+        assert_eq!(payload["code"], "FLOWSCRIPT_RETAINED_REVISION_REQUIRED");
+        assert_eq!(payload["draft_id"], "exact-source");
+        assert_eq!(payload["expected_revision"], 7);
+
+        let stale = FlowScriptDraftRecovery {
+            auto_resume: false,
+            exact_match: Some(FlowScriptEditableDraftContext {
+                stale_board: true,
+                ..context.clone()
+            }),
+            ..exact.clone()
+        };
+        let stale_state = WorkflowToolLoopState::from_flowscript_recovery(Some(&stale));
+        assert!(!stale_state.flowscript_draft_retained);
+        assert!(stale_state.flowscript_draft_id.is_none());
+
+        let mismatch = FlowScriptDraftRecovery {
+            status: FlowIrDraftRecoveryStatus::RequestMismatch,
+            auto_resume: false,
+            exact_match: None,
+            conflicting_draft: Some(FlowScriptEditableDraftContext {
+                source: None,
+                ..context
+            }),
+            next_actions: vec!["begin_separate_draft_for_current_request".into()],
+            message: "belongs to another request".into(),
+        };
+        let mismatch_state = WorkflowToolLoopState::from_flowscript_recovery(Some(&mismatch));
+        assert!(!mismatch_state.flowscript_draft_retained);
+        assert!(mismatch_state.flowscript_draft_id.is_none());
+        assert!(mismatch_state.last_flowscript.is_none());
+    }
+
+    #[test]
+    fn source_operation_budget_counts_writes_patches_and_checks() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
+            mutation_path: Some(WorkflowMutationPath::FlowScript),
+            flowscript_draft_id: Some("bounded-source".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(0),
+            last_status: Some("validation_errors".to_string()),
+            ..Default::default()
+        }));
+        for attempt in 0..MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS {
+            assert!(
+                workflow_tool_preflight_with_args(
+                    &state,
+                    "patch_flowscript",
+                    &serde_json::json!({
+                        "draft_id": "bounded-source",
+                        "expected_revision": 0,
+                        "edits": []
+                    }),
+                )
+                .is_none(),
+                "dispatched source operation {attempt} should remain inside the hard budget"
+            );
+            workflow_tool_abort(&state, "patch_flowscript", "transient worker failure");
+        }
+        assert_eq!(
+            state
+                .lock()
+                .expect("state lock")
+                .flowscript_operation_attempts,
+            MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS
+        );
+        let exhausted = workflow_tool_preflight_with_args(
+            &state,
+            "write_flowscript",
+            &serde_json::json!({
+                "draft_id": "bounded-source",
+                "source": "eventsSimple() {}"
+            }),
+        )
+        .expect("the operation after the hard source budget must be rejected");
+        let text = exhausted
+            .content
+            .iter()
+            .filter_map(|content| match &content.raw {
+                rmcp::model::RawContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("FLOWSCRIPT_OPERATION_BUDGET_EXHAUSTED"));
+    }
+
+    #[test]
+    fn flowscript_repair_history_detects_a_b_a_cycles() {
+        let mut state = WorkflowToolLoopState::default();
+        for diagnostic in ["diagnostic A", "diagnostic B", "diagnostic A"] {
+            state.last_structured_diagnostics.clear();
+            state.record_flowscript_repair_progress(
+                Some("validation_errors"),
+                &[diagnostic.to_string()],
+                true,
+            );
+        }
+        assert_eq!(
+            state.stalled_edit_attempts, 1,
+            "returning to an older compiler state is not fresh progress"
+        );
+    }
+
+    #[test]
+    fn decreasing_grouped_diagnostic_occurrences_count_as_repair_progress() {
+        let mut state = WorkflowToolLoopState::default();
+        for occurrences in [8, 6, 4] {
+            state.last_structured_diagnostics = vec![serde_json::json!({
+                "code": "FS_INPUT_PIN_NOT_FOUND",
+                "message": "boolOr has no input pin named a",
+                "pin": "a",
+                "occurrences": occurrences
+            })];
+            state.record_flowscript_repair_progress(
+                Some("validation_errors"),
+                &["[FS_INPUT_PIN_NOT_FOUND] boolOr has no input pin named a".to_string()],
+                true,
+            );
+            assert_eq!(state.stalled_edit_attempts, 0);
+        }
+
+        state.record_flowscript_repair_progress(
+            Some("validation_errors"),
+            &["[FS_INPUT_PIN_NOT_FOUND] boolOr has no input pin named a".to_string()],
+            true,
+        );
+        assert_eq!(state.stalled_edit_attempts, 1);
+    }
+
+    #[test]
+    fn continuation_diagnostics_keep_root_repair_fields_and_drop_cascades() {
+        let payload = serde_json::json!({
+            "status": "validation_errors",
+            "diagnostics": [
+                {
+                    "id": "root-1",
+                    "code": "FS_PIN_TYPE",
+                    "message": "pin has the wrong type",
+                    "source_span": { "line": 4, "column": 9 },
+                    "pin": "message",
+                    "expected": "string",
+                    "actual": "Struct",
+                    "caused_by": [],
+                    "fix": { "summary": "Use the declared text output." }
+                },
+                {
+                    "id": "cascade-1",
+                    "code": "FS_EXECUTION_TAIL",
+                    "message": "execution continuation is missing",
+                    "caused_by": "root-1"
+                }
+            ]
+        });
+        assert_eq!(
+            workflow_result_diagnostics(Some(&payload)),
+            ["[FS_PIN_TYPE] pin has the wrong type"]
+        );
+        let structured = workflow_result_structured_diagnostics(Some(&payload));
+        assert_eq!(structured.len(), 1);
+        assert_eq!(structured[0]["pin"], "message");
+        assert_eq!(structured[0]["expected"], "string");
+        assert_eq!(structured[0]["actual"], "Struct");
+        assert_eq!(structured[0]["source_span"]["line"], 4);
+        assert_eq!(
+            structured[0]["fix"]["summary"],
+            "Use the declared text output."
+        );
+    }
+
+    #[test]
+    fn repair_declarations_survive_transient_source_failures_and_clear_on_valid() {
+        let exact =
+            "declare function emailSmtpSend({ connection: Struct, from: string, to: string, bodyText: string }): void;"
+                .to_string();
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            last_repair_declarations: vec![exact.clone()],
+            ..Default::default()
+        }));
+
+        workflow_tool_record(
+            &state,
+            "patch_flowscript",
+            &serde_json::json!({ "draft_id": "support-flow", "expected_revision": 3 }),
+            &serde_json::json!({
+                "status": "revision_conflict",
+                "message": "The retained revision advanced before this patch."
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            state.lock().expect("state lock").last_repair_declarations,
+            [exact],
+            "a transient response without replacement fixes must retain exact repair signatures"
+        );
+
+        workflow_tool_record(
+            &state,
+            "check_flowscript",
+            &serde_json::json!({ "draft_id": "support-flow", "expected_revision": 4 }),
+            &serde_json::json!({ "status": "valid", "diagnostics": [] }).to_string(),
+        );
+        assert!(
+            state
+                .lock()
+                .expect("state lock")
+                .last_repair_declarations
+                .is_empty(),
+            "a valid source no longer needs stale repair signatures"
+        );
+    }
+
+    #[test]
     fn source_lifecycle_results_retain_exact_revision_for_repair() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        assert!(
+            workflow_tool_preflight_with_args(
+                &state,
+                "get_declarations",
+                &serde_json::json!({ "queries": ["support email workflow"] }),
+            )
+            .is_none()
+        );
+        workflow_tool_record(
+            &state,
+            "get_declarations",
+            &serde_json::json!({ "queries": ["support email workflow"] }),
+            "declare function emailImapConnect({ host: string }): Struct;",
+        );
         assert!(
             workflow_tool_preflight_with_args(
                 &state,
@@ -12804,22 +16246,90 @@ eventsSimple() {
     #[test]
     fn checked_valid_source_remains_committable_at_repair_budget_ceiling() {
         let valid = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
             mutation_path: Some(WorkflowMutationPath::FlowScript),
             edit_attempts: MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS,
+            flowscript_draft_id: Some("valid-source".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(7),
+            last_flowscript: Some("eventsSimple() {}".to_string()),
             last_status: Some("valid".to_string()),
             ..Default::default()
         }));
-        assert!(workflow_tool_preflight(&valid, "commit_flowscript").is_none());
+        assert!(
+            workflow_tool_preflight_with_args(
+                &valid,
+                "commit_flowscript",
+                &serde_json::json!({
+                    "draft_id": "valid-source",
+                    "expected_revision": 7
+                }),
+            )
+            .is_none()
+        );
 
         let invalid = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
             mutation_path: Some(WorkflowMutationPath::FlowScript),
             edit_attempts: MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS,
+            flowscript_draft_id: Some("invalid-source".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(2),
             last_status: Some("validation_errors".to_string()),
             last_errors: vec!["missing execution edge".to_string()],
             ..Default::default()
         }));
         assert!(workflow_tool_preflight(&invalid, "check_flowscript").is_some());
         assert!(workflow_tool_preflight(&invalid, "commit_flowscript").is_some());
+    }
+
+    #[test]
+    fn transient_commit_store_failures_preserve_valid_revision_for_bounded_retry() {
+        let args = serde_json::json!({
+            "draft_id": "valid-source",
+            "expected_revision": 7
+        });
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            initial_declaration_lookup_complete: true,
+            mutation_path: Some(WorkflowMutationPath::FlowScript),
+            edit_attempts: MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS,
+            flowscript_operation_attempts: MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS,
+            flowscript_draft_id: Some("valid-source".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(7),
+            last_flowscript: Some("eventsSimple() {}".to_string()),
+            last_status: Some("valid".to_string()),
+            ..Default::default()
+        }));
+
+        for attempt in 0..MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS {
+            assert!(
+                workflow_tool_preflight_with_args(&state, "commit_flowscript", &args).is_none(),
+                "valid commit retry {attempt} should bypass the exhausted repair budget"
+            );
+            workflow_tool_record(
+                &state,
+                "commit_flowscript",
+                &args,
+                &serde_json::json!({
+                    "status": "error",
+                    "code": "FLOWSCRIPT_DRAFT_STORE_UNAVAILABLE",
+                    "message": "FlowScript draft store lock is unavailable"
+                })
+                .to_string(),
+            );
+            assert_eq!(
+                state.lock().expect("state lock").last_status.as_deref(),
+                Some("valid")
+            );
+        }
+
+        let exhausted = workflow_tool_preflight_with_args(&state, "commit_flowscript", &args)
+            .expect("the bounded commit retry cap must terminate store failures");
+        assert_eq!(
+            workflow_call_result_json(&exhausted)["code"],
+            "FLOWSCRIPT_COMMIT_RETRY_BUDGET_EXHAUSTED"
+        );
     }
 
     #[test]

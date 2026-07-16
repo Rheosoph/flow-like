@@ -37,7 +37,7 @@ use super::tools::{
     detect_flowscript_candidate_regression, flowscript_workspace_tag, profile_flowscript_candidate,
     render_edit_flowscript_result,
 };
-use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata};
+use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
     FlowScriptDiagnostic, FlowScriptDiagnosticCode, FlowScriptDiagnosticFix,
     FlowScriptDiagnosticPhase, ReconcileMode, ReconcileResult, RenderOptions, board_to_flowscript,
@@ -51,7 +51,7 @@ const MAX_FLOW_IR_DRAFT_ID_BYTES: usize = 128;
 const MAX_FLOWSCRIPT_SOURCE_BYTES: usize = 1_048_576;
 const MAX_FLOWSCRIPT_DRAFT_STORE_BYTES: usize = 8 * 1_048_576;
 const MAX_FLOWSCRIPT_REPAIR_DECLARATIONS: usize = 3;
-const MAX_FLOWSCRIPT_REPAIR_COMPANION_DECLARATIONS: usize = 6;
+const MAX_FLOWSCRIPT_REPAIR_COMPANION_DECLARATIONS: usize = 8;
 const MIN_FLOWSCRIPT_REPAIR_DECLARATION_SIMILARITY: f64 = 0.86;
 const MAX_FLOW_IR_CAPABILITY_PLAN_BYTES: usize = 262_144;
 const MAX_FLOW_IR_DRAFT_STORE_BYTES: usize = 8 * 1_048_576;
@@ -65,6 +65,8 @@ const MAX_FLOW_IR_ACCEPTANCE_CRITERIA: usize = 32;
 const MAX_FLOW_IR_ACCEPTANCE_SUMMARY_CHARS: usize = 240;
 const FLOW_IR_REQUEST_IDENTITY_DOMAIN: &[u8] = b"flowpilot.request-identity/v1\0";
 const FLOW_IR_UNBOUND_IDENTITY_DOMAIN: &[u8] = b"flowpilot.request-identity/unbound/v1\0";
+const FLOWSCRIPT_CATALOG_FINGERPRINT_DOMAIN: &[u8] =
+    b"flowpilot.flowscript-catalog-fingerprint/v1\0";
 
 /// A deliberately small, host-derived guardrail for explicit multi-part requests. The model can
 /// choose catalog declarations, module boundaries, and implementation details, but it cannot make
@@ -83,6 +85,12 @@ struct RequestAcceptanceCriterion {
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 struct RequestAcceptanceContract {
     criteria: Vec<RequestAcceptanceCriterion>,
+    /// Host-derived prohibitions the machine could not enforce: recipient/timing-scoped bans that
+    /// need dataflow proof, and bans dropped because they contradicted an explicit requirement.
+    /// They never block or weaken the remaining criteria; they are surfaced once in the check and
+    /// commit messages so the human review sees exactly which bans were left to it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    omitted_prohibitions: Vec<String>,
     /// A structural host predicate for human-in-the-loop approval requests. Unlike the generic
     /// catalog criteria above, this proves branch placement, reviewer identity, and correlation
     /// values from the reachable typed IR instead of trusting model-authored capability prose.
@@ -95,6 +103,17 @@ struct RequestApprovalLoopContract {
     /// Exact addresses copied from reviewer/approval context in the immutable raw request.
     /// An empty list still requires one stable literal reviewer address in both review sends.
     reviewer_emails: Vec<String>,
+    /// Approval may arrive as an inbound reviewer email or as two distinct page actions.
+    /// These transports have different trust and dataflow boundaries: a page action must not be
+    /// forced to invent an inbound sender/decision payload merely to satisfy the email contract.
+    channel: RequestApprovalChannel,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RequestApprovalChannel {
+    EmailReply,
+    PageAction,
 }
 
 /// Domain-separated digest of the immutable, host-supplied raw request. Model-authored tool JSON
@@ -292,6 +311,10 @@ struct StoredDraft {
 #[derive(Debug, Clone)]
 struct EvaluatedFlowScriptSource {
     diagnostics: Vec<FlowScriptDiagnostic>,
+    /// Non-blocking acceptance findings. The acceptance projection is a heuristic that can
+    /// false-positive on provably correct scripts, so incomplete-scope and approval-shape findings
+    /// are surfaced to the human review instead of permanently blocking check/commit.
+    review_notes: Vec<FlowScriptDiagnostic>,
     commands: Vec<BoardCommand>,
     corrections: Vec<String>,
 }
@@ -314,9 +337,23 @@ struct RetainedFlowScriptCandidate {
 struct CheckedFlowScriptRevision {
     revision: u64,
     board_fingerprint: String,
+    /// Deterministic digest of the exact live catalog contract used to derive `commands`.
+    /// Commit must observe the same digest so a pin/type/schema change cannot release a stale
+    /// checked batch merely because the board itself remained unchanged.
+    catalog_fingerprint: String,
     /// Exact compiler/reconciler output retained at check time. Commit moves this same batch into
     /// the pending claim; it never recompiles and silently substitutes a different command list.
     commands: Vec<BoardCommand>,
+}
+
+/// The last fully checked revision retained across later failed patches. It allows an explicit
+/// commit to fall back to this exact source and command batch when the mutable head cannot be
+/// repaired, instead of discarding a whole session of validated work.
+#[derive(Debug, Clone)]
+struct SalvageFlowScriptRevision {
+    checked: CheckedFlowScriptRevision,
+    source: String,
+    evaluation: EvaluatedFlowScriptSource,
 }
 
 #[derive(Debug, Clone)]
@@ -332,8 +369,13 @@ struct StoredFlowScriptDraft {
     mode: FlowIrDraftMode,
     source: String,
     evaluation: EvaluatedFlowScriptSource,
+    /// Deterministic digest of the exact live catalog `evaluation` was computed against. A check
+    /// at the same revision, board, and catalog returns this stored evaluation instead of running
+    /// a redundant parse+reconcile.
+    evaluation_catalog_fingerprint: String,
     best_candidate: RetainedFlowScriptCandidate,
     checked: Option<CheckedFlowScriptRevision>,
+    salvage: Option<SalvageFlowScriptRevision>,
     committed_revision: Option<u64>,
     pending_revision: Option<u64>,
     pending_claim_id: Option<String>,
@@ -464,8 +506,8 @@ impl FlowIrDraftRecovery {
 }
 
 /// Host-only recovery payload for code-first drafts. Unlike the typed recovery summary, this
-/// deliberately carries the exact retained source so a timeout/new chat can resume editing at the
-/// same revision without reconstructing code from prose or JSON.
+/// deliberately carries the exact retained source only when the immutable request identity
+/// matches, so a timeout/new chat can resume editing without exposing another request's draft.
 #[derive(Debug, Clone, Serialize)]
 pub struct FlowScriptEditableDraftContext {
     pub board_id: String,
@@ -474,7 +516,7 @@ pub struct FlowScriptEditableDraftContext {
     pub status: String,
     pub base_fingerprint: String,
     /// Present only for an exact request-identity match (or a direct host-only latest lookup).
-    /// Conflicting requests receive metadata but never another request's authored source.
+    /// Conflicting requests receive no draft context at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -529,7 +571,11 @@ pub struct FlowIrDraftRequestMismatch {
     pub code: &'static str,
     pub retryable: bool,
     pub auto_resume: bool,
+    /// Host-only coordinates used to classify recovery. Never disclose them to a differently
+    /// bound model request.
+    #[serde(skip_serializing)]
     pub draft_id: String,
+    #[serde(skip_serializing)]
     pub revision: u64,
     pub next_actions: Vec<String>,
     pub message: String,
@@ -611,6 +657,21 @@ impl FlowIrDraftStore {
         )
     }
 
+    fn evaluate_flowscript(
+        &self,
+        board: &Board,
+        catalog: &[NodeMetadata],
+        source: &str,
+        mode: FlowIrDraftMode,
+        acceptance_contract: Option<&RequestAcceptanceContract>,
+    ) -> EvaluatedFlowScriptSource {
+        #[cfg(test)]
+        self.evaluation_test_control
+            .global_evaluations
+            .fetch_add(1, Ordering::Relaxed);
+        evaluate_flowscript_source(board, catalog, source, mode, acceptance_contract)
+    }
+
     #[cfg(test)]
     fn global_evaluation_count(&self) -> u64 {
         self.evaluation_test_control
@@ -655,24 +716,7 @@ impl FlowIrDraftStore {
             .request_acceptance_contracts
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if contracts.len() >= MAX_FLOW_IR_ACCEPTANCE_CONTRACTS_PER_STORE {
-            let victim = contracts
-                .iter()
-                .filter(|(_, pending)| pending.claimed_draft_id.is_none())
-                .min_by_key(|(_, pending)| pending.access_sequence)
-                .map(|(id, _)| id.clone())
-                .or_else(|| {
-                    contracts
-                        .iter()
-                        .min_by_key(|(_, pending)| pending.access_sequence)
-                        .map(|(id, _)| id.clone())
-                });
-            if let Some(victim) = victim {
-                // If every slot is claimed, expiring the oldest handle is fail-closed: a late
-                // retry receives IR_ACCEPTANCE_BINDING_INVALID instead of silently losing scope.
-                contracts.remove(&victim);
-            }
-        }
+        evict_pending_contract_capacity(&mut contracts);
         contracts.insert(
             binding.id.clone(),
             PendingRequestAcceptanceContract {
@@ -752,6 +796,73 @@ impl FlowIrDraftStore {
         }
     }
 
+    /// A base-revision conflict is a dead end for the claimed source draft: the retained source
+    /// stays available as reference, but every subsequent write/patch/check/commit on it fails and
+    /// the model is told to start a new draft from the current board. Re-open the pending contract
+    /// under its original binding so that fresh draft can claim the SAME immutable request scope
+    /// within the same run. The identity checks keep a differently bound request from claiming it.
+    fn reopen_request_acceptance_contract(
+        &self,
+        binding: Option<&FlowIrAcceptanceBinding>,
+        draft: &StoredFlowScriptDraft,
+    ) {
+        let Some(binding) = binding else {
+            return;
+        };
+        if binding.board_id != draft.board_id || binding.request_identity != draft.request_identity
+        {
+            return;
+        }
+        let mut contracts = self
+            .request_acceptance_contracts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let access_sequence = self.next_access_sequence();
+        if let Some(pending) = contracts.get_mut(&binding.id) {
+            if pending.board_id == binding.board_id
+                && pending.request_identity == binding.request_identity
+            {
+                pending.claimed_draft_id = None;
+                pending.access_sequence = access_sequence;
+            }
+            return;
+        }
+        evict_pending_contract_capacity(&mut contracts);
+        contracts.insert(
+            binding.id.clone(),
+            PendingRequestAcceptanceContract {
+                board_id: draft.board_id.clone(),
+                contract: draft.request_acceptance_contract.clone(),
+                request_identity: draft.request_identity.clone(),
+                claimed_draft_id: None,
+                access_sequence,
+            },
+        );
+    }
+
+    /// A missing draft can still hold the claim on its pending request contract when the write
+    /// that claimed it failed before retention (or the draft was evicted). Release exactly that
+    /// claim so the same binding can start a fresh draft; the retained contract is unchanged.
+    fn release_missing_draft_claim(
+        &self,
+        binding: Option<&FlowIrAcceptanceBinding>,
+        draft_id: &str,
+    ) {
+        let Some(binding) = binding else {
+            return;
+        };
+        let mut contracts = self
+            .request_acceptance_contracts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(pending) = contracts.get_mut(&binding.id)
+            && pending.claimed_draft_id.as_deref() == Some(draft_id)
+        {
+            pending.claimed_draft_id = None;
+            pending.access_sequence = self.next_access_sequence();
+        }
+    }
+
     pub fn write_flowscript(
         &self,
         board: &Board,
@@ -798,12 +909,6 @@ impl FlowIrDraftStore {
             );
         }
 
-        // Parse and reconcile before taking a store lock. BoardAst lives only inside this helper;
-        // neither the retained state nor the model-visible response can smuggle it across turns.
-        let preflight_evaluation =
-            evaluate_flowscript_source(board, catalog, &args.source, args.mode, None);
-        let preflight_candidate =
-            retained_flowscript_candidate(&args.source, &preflight_evaluation);
         let base_fingerprint = board_fingerprint(board);
 
         let existing = self
@@ -815,7 +920,7 @@ impl FlowIrDraftStore {
             if let Some(denied) =
                 source_draft_request_authorization_error(&board.id, &draft_id, existing, binding)
             {
-                return flowscript_request_mismatch_response(denied, existing);
+                return flowscript_request_mismatch_response(denied);
             }
             if existing.committed_revision.is_some() {
                 let mut response = FlowScriptDraftResponse::for_draft(
@@ -837,13 +942,9 @@ impl FlowIrDraftStore {
                 response.code = Some("FLOWSCRIPT_DRAFT_ALREADY_EXISTS".to_string());
                 return response;
             }
-            if !args.allow_scope_reduction
-                && let Some(regression) = detect_flowscript_candidate_regression(
-                    &existing.best_candidate.profile,
-                    &preflight_candidate.profile,
-                )
-            {
-                return flowscript_candidate_regression_response(draft_id, existing, regression);
+            if existing.base_fingerprint != base_fingerprint {
+                self.reopen_request_acceptance_contract(binding, existing);
+                return flowscript_base_revision_conflict_response(draft_id, existing);
             }
         }
 
@@ -870,11 +971,12 @@ impl FlowIrDraftStore {
             }
         };
 
-        // The request contract is host-owned and deliberately absent from model arguments. Once
-        // it has been claimed for this immutable draft, project the parsed FlowScript AST into the
-        // representation-neutral acceptance evaluator. The model still authors and repairs only
-        // source text; this second evaluation merely adds fail-closed semantic diagnostics.
-        let evaluation = evaluate_flowscript_source(
+        // The request contract is host-owned and deliberately absent from model arguments. Parse
+        // and reconcile exactly once per submitted revision, directly against the claimed
+        // contract; check_flowscript reuses this stored evaluation while board and catalog are
+        // unchanged. BoardAst lives only inside this helper; neither the retained state nor the
+        // model-visible response can smuggle it across turns.
+        let evaluation = self.evaluate_flowscript(
             board,
             catalog,
             &args.source,
@@ -882,6 +984,15 @@ impl FlowIrDraftStore {
             Some(&claimed_request.contract),
         );
         let candidate = retained_flowscript_candidate(&args.source, &evaluation);
+        if let Some(existing) = &existing
+            && !args.allow_scope_reduction
+            && let Some(regression) = detect_flowscript_candidate_regression(
+                &existing.best_candidate.profile,
+                &candidate.profile,
+            )
+        {
+            return flowscript_candidate_regression_response(draft_id, existing, regression);
+        }
 
         let state_sequence = self.next_access_sequence();
         let revision = existing
@@ -913,8 +1024,10 @@ impl FlowIrDraftStore {
             mode: args.mode,
             source: args.source,
             evaluation,
+            evaluation_catalog_fingerprint: flowscript_catalog_fingerprint(catalog),
             best_candidate,
             checked: None,
+            salvage: existing.as_ref().and_then(salvageable_flowscript_revision),
             committed_revision: None,
             pending_revision: None,
             pending_claim_id: None,
@@ -949,6 +1062,11 @@ impl FlowIrDraftStore {
         };
         match (existing.as_ref(), drafts.get(&draft_id)) {
             (None, Some(current)) => {
+                if let Some(denied) =
+                    source_draft_request_authorization_error(&board.id, &draft_id, current, binding)
+                {
+                    return flowscript_request_mismatch_response(denied);
+                }
                 return FlowScriptDraftResponse::revision_conflict(
                     draft_id,
                     current.revision,
@@ -960,6 +1078,11 @@ impl FlowIrDraftStore {
                 if current.state_sequence != snapshot.state_sequence
                     || current.revision != snapshot.revision =>
             {
+                if let Some(denied) =
+                    source_draft_request_authorization_error(&board.id, &draft_id, current, binding)
+                {
+                    return flowscript_request_mismatch_response(denied);
+                }
                 return FlowScriptDraftResponse::revision_conflict(
                     draft_id,
                     current.revision,
@@ -1055,9 +1178,12 @@ impl FlowIrDraftStore {
         binding: Option<&FlowIrAcceptanceBinding>,
     ) -> FlowScriptDraftResponse {
         let draft_key = args.draft_id.trim();
+        let current_board_fingerprint = board_fingerprint(board);
         let snapshot = match self.source_drafts.lock() {
             Ok(mut drafts) => {
                 let Some(draft) = drafts.get_mut(draft_key) else {
+                    drop(drafts);
+                    self.release_missing_draft_claim(binding, draft_key);
                     return FlowScriptDraftResponse::error(
                         "FLOWSCRIPT_DRAFT_MISSING",
                         "FlowScript draft does not exist",
@@ -1066,7 +1192,14 @@ impl FlowIrDraftStore {
                 if let Some(denied) =
                     source_draft_request_authorization_error(&board.id, draft_key, draft, binding)
                 {
-                    return flowscript_request_mismatch_response(denied, draft);
+                    return flowscript_request_mismatch_response(denied);
+                }
+                if draft.base_fingerprint != current_board_fingerprint {
+                    self.reopen_request_acceptance_contract(binding, draft);
+                    return flowscript_base_revision_conflict_response(
+                        draft_key.to_string(),
+                        draft,
+                    );
                 }
                 draft.access_sequence = self.next_access_sequence();
                 draft.clone()
@@ -1131,7 +1264,7 @@ impl FlowIrDraftStore {
             response.code = Some("FLOWSCRIPT_SOURCE_SIZE_LIMIT_EXCEEDED".to_string());
             return response;
         }
-        let evaluation = evaluate_flowscript_source(
+        let evaluation = self.evaluate_flowscript(
             board,
             catalog,
             &candidate_source,
@@ -1158,11 +1291,22 @@ impl FlowIrDraftStore {
             }
         };
         let Some(current) = drafts.get(draft_key).cloned() else {
+            drop(drafts);
+            self.release_missing_draft_claim(binding, draft_key);
             return FlowScriptDraftResponse::error(
                 "FLOWSCRIPT_DRAFT_MISSING",
                 "FlowScript draft disappeared while the patch was evaluated",
             );
         };
+        if let Some(denied) =
+            source_draft_request_authorization_error(&board.id, draft_key, &current, binding)
+        {
+            return flowscript_request_mismatch_response(denied);
+        }
+        if current.base_fingerprint != current_board_fingerprint {
+            self.reopen_request_acceptance_contract(binding, &current);
+            return flowscript_base_revision_conflict_response(args.draft_id, &current);
+        }
         if current.revision != snapshot.revision
             || current.state_sequence != snapshot.state_sequence
         {
@@ -1177,11 +1321,15 @@ impl FlowIrDraftStore {
         prospective.revision = prospective.revision.saturating_add(1);
         prospective.source = candidate_source;
         prospective.evaluation = evaluation;
+        prospective.evaluation_catalog_fingerprint = flowscript_catalog_fingerprint(catalog);
         prospective.best_candidate = if args.allow_scope_reduction {
             candidate
         } else {
             select_best_flowscript_candidate(&snapshot.best_candidate, candidate)
         };
+        // A patch invalidates the head check, but the last fully checked revision stays
+        // salvageable: an explicit commit at that exact revision can still release its batch.
+        prospective.salvage = salvageable_flowscript_revision(&current);
         prospective.checked = None;
         let state_sequence = self.next_access_sequence();
         prospective.state_sequence = state_sequence;
@@ -1252,6 +1400,8 @@ impl FlowIrDraftStore {
         let snapshot = match self.source_drafts.lock() {
             Ok(drafts) => {
                 let Some(draft) = drafts.get(draft_key) else {
+                    drop(drafts);
+                    self.release_missing_draft_claim(binding, draft_key);
                     return FlowScriptDraftResponse::error(
                         "FLOWSCRIPT_DRAFT_MISSING",
                         "FlowScript draft does not exist",
@@ -1260,7 +1410,7 @@ impl FlowIrDraftStore {
                 if let Some(denied) =
                     source_draft_request_authorization_error(&board.id, draft_key, draft, binding)
                 {
-                    return flowscript_request_mismatch_response(denied, draft);
+                    return flowscript_request_mismatch_response(denied);
                 }
                 draft.clone()
             }
@@ -1281,22 +1431,23 @@ impl FlowIrDraftStore {
         }
         let current_fingerprint = board_fingerprint(board);
         if current_fingerprint != snapshot.base_fingerprint {
-            let mut response = FlowScriptDraftResponse::for_draft(
-                "error",
-                "The board changed after this source draft began. Start a new draft from the current board.",
-                args.draft_id,
-                &snapshot,
-            );
-            response.code = Some("FLOWSCRIPT_BASE_REVISION_CONFLICT".to_string());
-            return response;
+            self.reopen_request_acceptance_contract(binding, &snapshot);
+            return flowscript_base_revision_conflict_response(args.draft_id, &snapshot);
         }
-        let evaluation = evaluate_flowscript_source(
-            board,
-            catalog,
-            &snapshot.source,
-            snapshot.mode,
-            Some(&snapshot.request_acceptance_contract),
-        );
+        // The stored evaluation was computed against this exact source, board revision, and
+        // request contract. Re-run parse+reconcile only when the live catalog moved since then.
+        let catalog_fingerprint = flowscript_catalog_fingerprint(catalog);
+        let evaluation = if snapshot.evaluation_catalog_fingerprint == catalog_fingerprint {
+            snapshot.evaluation.clone()
+        } else {
+            self.evaluate_flowscript(
+                board,
+                catalog,
+                &snapshot.source,
+                snapshot.mode,
+                Some(&snapshot.request_acceptance_contract),
+            )
+        };
         let mut drafts = match self.source_drafts.lock() {
             Ok(drafts) => drafts,
             Err(_) => {
@@ -1307,11 +1458,22 @@ impl FlowIrDraftStore {
             }
         };
         let Some(current) = drafts.get(draft_key).cloned() else {
+            drop(drafts);
+            self.release_missing_draft_claim(binding, draft_key);
             return FlowScriptDraftResponse::error(
                 "FLOWSCRIPT_DRAFT_MISSING",
                 "FlowScript draft disappeared while check was running",
             );
         };
+        if let Some(denied) =
+            source_draft_request_authorization_error(&board.id, draft_key, &current, binding)
+        {
+            return flowscript_request_mismatch_response(denied);
+        }
+        if current.base_fingerprint != current_fingerprint {
+            self.reopen_request_acceptance_contract(binding, &current);
+            return flowscript_base_revision_conflict_response(args.draft_id, &current);
+        }
         if current.revision != snapshot.revision
             || current.state_sequence != snapshot.state_sequence
         {
@@ -1324,6 +1486,7 @@ impl FlowIrDraftStore {
         }
         let mut prospective = current.clone();
         prospective.evaluation = evaluation;
+        prospective.evaluation_catalog_fingerprint = catalog_fingerprint.clone();
         prospective.checked =
             prospective
                 .evaluation
@@ -1331,8 +1494,13 @@ impl FlowIrDraftStore {
                 .then(|| CheckedFlowScriptRevision {
                     revision: prospective.revision,
                     board_fingerprint: current_fingerprint,
+                    catalog_fingerprint,
                     commands: prospective.evaluation.commands.clone(),
                 });
+        if prospective.checked.is_some() {
+            // A successful head check supersedes any older salvageable revision.
+            prospective.salvage = None;
+        }
         let state_sequence = self.next_access_sequence();
         prospective.state_sequence = state_sequence;
         prospective.access_sequence = state_sequence;
@@ -1373,34 +1541,41 @@ impl FlowIrDraftStore {
             response.code = Some("FLOWSCRIPT_NO_CHANGES".to_string());
             return response;
         }
-        FlowScriptDraftResponse::for_draft(
-            "valid",
-            "FlowScript is valid and its exact command batch is retained for commit.",
-            args.draft_id,
-            &retained,
-        )
+        let mut message = if retained.evaluation.review_notes.is_empty() {
+            "FlowScript is valid and its exact command batch is retained for commit.".to_string()
+        } else {
+            format!(
+                "FlowScript is valid and its exact command batch is retained for commit. Commit may proceed; {} non-blocking acceptance review note(s) will be surfaced in the human review.",
+                retained.evaluation.review_notes.len()
+            )
+        };
+        append_omitted_prohibition_notice(&mut message, &retained.request_acceptance_contract);
+        FlowScriptDraftResponse::for_draft("valid", message, args.draft_id, &retained)
     }
 
     pub fn commit_flowscript(
         &self,
         board: &Board,
+        catalog: &[NodeMetadata],
         args: CommitFlowScriptArgs,
     ) -> FlowScriptDraftResponse {
-        self.commit_flowscript_internal(board, args, None)
+        self.commit_flowscript_internal(board, catalog, args, None)
     }
 
     pub fn commit_flowscript_with_acceptance_binding(
         &self,
         board: &Board,
+        catalog: &[NodeMetadata],
         args: CommitFlowScriptArgs,
         binding: &FlowIrAcceptanceBinding,
     ) -> FlowScriptDraftResponse {
-        self.commit_flowscript_internal(board, args, Some(binding))
+        self.commit_flowscript_internal(board, catalog, args, Some(binding))
     }
 
     fn commit_flowscript_internal(
         &self,
         board: &Board,
+        catalog: &[NodeMetadata],
         args: CommitFlowScriptArgs,
         binding: Option<&FlowIrAcceptanceBinding>,
     ) -> FlowScriptDraftResponse {
@@ -1448,7 +1623,10 @@ impl FlowIrDraftStore {
             }
         };
         let draft_key = args.draft_id.trim();
-        let Some(snapshot) = drafts.get(draft_key).cloned() else {
+        let Some(mut snapshot) = drafts.get(draft_key).cloned() else {
+            drop(drafts);
+            drop(typed_drafts);
+            self.release_missing_draft_claim(binding, draft_key);
             return FlowScriptDraftResponse::error(
                 "FLOWSCRIPT_DRAFT_MISSING",
                 "FlowScript draft does not exist",
@@ -1457,15 +1635,37 @@ impl FlowIrDraftStore {
         if let Some(denied) =
             source_draft_request_authorization_error(&board.id, draft_key, &snapshot, binding)
         {
-            return flowscript_request_mismatch_response(denied, &snapshot);
+            return flowscript_request_mismatch_response(denied);
         }
+        let mut restored_from_salvage = false;
         if snapshot.revision != args.expected_revision {
-            return FlowScriptDraftResponse::revision_conflict(
-                args.draft_id,
-                snapshot.revision,
-                args.expected_revision,
-                &snapshot,
-            );
+            let salvage_matches = snapshot.committed_revision.is_none()
+                && snapshot.pending_revision.is_none()
+                && snapshot.salvage.as_ref().is_some_and(|salvage| {
+                    salvage.checked.revision == args.expected_revision
+                        && salvage.checked.board_fingerprint == snapshot.base_fingerprint
+                });
+            if !salvage_matches {
+                return FlowScriptDraftResponse::revision_conflict(
+                    args.draft_id,
+                    snapshot.revision,
+                    args.expected_revision,
+                    &snapshot,
+                );
+            }
+            // An explicit commit at the retained checked revision abandons the moved head and
+            // restores that exact source/evaluation/batch. Board and catalog fingerprints are
+            // still verified below, so this never releases stale commands.
+            let salvage = snapshot
+                .salvage
+                .take()
+                .expect("salvage presence was just verified");
+            snapshot.revision = salvage.checked.revision;
+            snapshot.source = salvage.source;
+            snapshot.evaluation_catalog_fingerprint = salvage.checked.catalog_fingerprint.clone();
+            snapshot.evaluation = salvage.evaluation;
+            snapshot.checked = Some(salvage.checked);
+            restored_from_salvage = true;
         }
         if snapshot.committed_revision == Some(snapshot.revision) {
             let mut response = FlowScriptDraftResponse::for_draft(
@@ -1478,14 +1678,8 @@ impl FlowIrDraftStore {
             return response;
         }
         if board_fingerprint(board) != snapshot.base_fingerprint {
-            let mut response = FlowScriptDraftResponse::for_draft(
-                "error",
-                "The board changed after this source draft began. Start a new draft from the current board.",
-                args.draft_id,
-                &snapshot,
-            );
-            response.code = Some("FLOWSCRIPT_BASE_REVISION_CONFLICT".to_string());
-            return response;
+            self.reopen_request_acceptance_contract(binding, &snapshot);
+            return flowscript_base_revision_conflict_response(args.draft_id, &snapshot);
         }
         let Some(checked) = snapshot.checked.as_ref().filter(|checked| {
             checked.revision == snapshot.revision
@@ -1500,6 +1694,16 @@ impl FlowIrDraftStore {
             response.code = Some("FLOWSCRIPT_CHECK_REQUIRED".to_string());
             return response;
         };
+        if checked.catalog_fingerprint != flowscript_catalog_fingerprint(catalog) {
+            let mut response = FlowScriptDraftResponse::for_draft(
+                "error",
+                "The live catalog changed after this revision was checked. Run check_flowscript again at this exact revision before commit.",
+                args.draft_id,
+                &snapshot,
+            );
+            response.code = Some("FLOWSCRIPT_CATALOG_REVISION_CONFLICT".to_string());
+            return response;
+        }
         if typed_drafts.values().any(|draft| {
             draft.pending_revision.is_some() && draft.base_fingerprint == snapshot.base_fingerprint
         }) || drafts.iter().any(|(id, draft)| {
@@ -1551,15 +1755,25 @@ impl FlowIrDraftStore {
         }
         drafts.insert(draft_key.to_string(), prospective.clone());
         let retained = prospective;
-        let mut response = FlowScriptDraftResponse::for_draft(
-            "queued",
-            format!(
-                "Checked FlowScript queued {} exact atomic board change(s).",
-                commands.len()
-            ),
-            args.draft_id,
-            &retained,
+        let mut message = format!(
+            "Checked FlowScript queued {} exact atomic board change(s).",
+            commands.len()
         );
+        if restored_from_salvage {
+            message.push_str(&format!(
+                " The retained checked revision {} was restored; later unchecked head edits were discarded.",
+                retained.revision
+            ));
+        }
+        if !retained.evaluation.review_notes.is_empty() {
+            message.push_str(&format!(
+                " {} non-blocking acceptance review note(s) accompany this batch for the human review.",
+                retained.evaluation.review_notes.len()
+            ));
+        }
+        append_omitted_prohibition_notice(&mut message, &retained.request_acceptance_contract);
+        let mut response =
+            FlowScriptDraftResponse::for_draft("queued", message, args.draft_id, &retained);
         response.diagnostics.clear();
         response.queued_count = commands.len();
         response.commands = commands;
@@ -3615,16 +3829,16 @@ impl FlowIrDraftStore {
         let conflicting = candidates
             .into_iter()
             .max_by_key(|(_, draft)| draft.access_sequence);
-        let Some((draft_id, draft)) = conflicting else {
+        let Some((_draft_id, _draft)) = conflicting else {
             return FlowScriptDraftRecovery::none();
         };
         FlowScriptDraftRecovery {
             status: FlowIrDraftRecoveryStatus::RequestMismatch,
             auto_resume: false,
             exact_match: None,
-            conflicting_draft: Some(editable_flowscript_draft_context(
-                board, draft_id, draft, false,
-            )),
+            // A mismatch is only a host control-flow signal. Draft identifiers and revisions are
+            // capabilities for the source lifecycle, so do not disclose them to another request.
+            conflicting_draft: None,
             next_actions: vec![
                 "recover_with_original_request".to_string(),
                 "abandon_retained_draft_via_host".to_string(),
@@ -3964,6 +4178,30 @@ pub struct FlowIrEditableDraftContext {
     pub diagnostics: Vec<FlowIrDiagnostic>,
 }
 
+fn evict_pending_contract_capacity(
+    contracts: &mut HashMap<String, PendingRequestAcceptanceContract>,
+) {
+    if contracts.len() < MAX_FLOW_IR_ACCEPTANCE_CONTRACTS_PER_STORE {
+        return;
+    }
+    let victim = contracts
+        .iter()
+        .filter(|(_, pending)| pending.claimed_draft_id.is_none())
+        .min_by_key(|(_, pending)| pending.access_sequence)
+        .map(|(id, _)| id.clone())
+        .or_else(|| {
+            contracts
+                .iter()
+                .min_by_key(|(_, pending)| pending.access_sequence)
+                .map(|(id, _)| id.clone())
+        });
+    if let Some(victim) = victim {
+        // If every slot is claimed, expiring the oldest handle is fail-closed: a late retry
+        // receives IR_ACCEPTANCE_BINDING_INVALID instead of silently losing scope.
+        contracts.remove(&victim);
+    }
+}
+
 fn draft_request_mismatch(
     draft_id: &str,
     revision: u64,
@@ -4047,11 +4285,43 @@ fn source_draft_request_authorization_error(
 
 fn flowscript_request_mismatch_response(
     denied: FlowIrDraftRequestMismatch,
+) -> FlowScriptDraftResponse {
+    // Do not use `for_draft` here. A request mismatch must not disclose or authorize the source,
+    // draft id, revision, base fingerprint, diagnostics, or correction hints owned by the other
+    // immutable request.
+    let message = format!(
+        "{} Begin a separate draft for the current request with a new draft id.",
+        denied.message
+    );
+    let mut response = FlowScriptDraftResponse::error(denied.code, message);
+    response.status = denied.status.to_string();
+    response
+}
+
+/// Surface the prohibitions the machine could not enforce exactly where the batch is handed
+/// onward, so the human review sees which bans it alone must verify.
+fn append_omitted_prohibition_notice(message: &mut String, contract: &RequestAcceptanceContract) {
+    if contract.omitted_prohibitions.is_empty() {
+        return;
+    }
+    message.push_str(&format!(
+        " {} user prohibition(s) could not be machine-enforced and must be verified in the human review: {}.",
+        contract.omitted_prohibitions.len(),
+        contract.omitted_prohibitions.join("; ")
+    ));
+}
+
+fn flowscript_base_revision_conflict_response(
+    draft_id: String,
     draft: &StoredFlowScriptDraft,
 ) -> FlowScriptDraftResponse {
-    let mut response =
-        FlowScriptDraftResponse::for_draft(denied.status, denied.message, denied.draft_id, draft);
-    response.code = Some(denied.code.to_string());
+    let mut response = FlowScriptDraftResponse::for_draft(
+        "error",
+        "The board changed after this source draft began. Preserve it as reference and start a new draft from the current board.",
+        draft_id,
+        draft,
+    );
+    response.code = Some("FLOWSCRIPT_BASE_REVISION_CONFLICT".to_string());
     response
 }
 
@@ -4110,9 +4380,17 @@ fn evaluate_flowscript_source(
     };
     let mut diagnostics = reconcile.structured_diagnostics_for_source(source);
     enrich_flowscript_diagnostics_with_catalog(&mut diagnostics, catalog);
-    diagnostics.extend(acceptance_diagnostics);
+    // Only explicit prohibitions remain fail-closed. Incomplete-scope and approval-shape findings
+    // come from a prose-derived heuristic with known false positives on correct scripts; they are
+    // demoted to review notes so a converging repair loop can still commit.
+    let (blocking, review_notes): (Vec<_>, Vec<_>) =
+        acceptance_diagnostics.into_iter().partition(|diagnostic| {
+            diagnostic.code == FlowScriptDiagnosticCode::FsRequestAcceptanceForbidden
+        });
+    diagnostics.extend(blocking);
     EvaluatedFlowScriptSource {
         diagnostics,
+        review_notes,
         commands: reconcile.commands,
         corrections: reconcile.corrections,
     }
@@ -4196,9 +4474,7 @@ fn catalog_repair_declarations(
         let mut companion_declarations = Vec::new();
         for metadata in exact_metadata {
             for companion_name in &metadata.companion_nodes {
-                let Some(companion) = catalog
-                    .iter()
-                    .find(|candidate| candidate.name == *companion_name)
+                let Some(companion) = unique_catalog_repair_companion(catalog, companion_name)
                 else {
                     continue;
                 };
@@ -4257,6 +4533,28 @@ fn catalog_repair_declarations(
         }
     }
     (declarations, Vec::new(), false)
+}
+
+/// Companion repair hints are labeled as exact live-catalog evidence, so they must satisfy the
+/// same uniqueness rule as declaration lookup. Suppress both duplicate internal node types and
+/// distinct node types that collide on one FlowScript display name.
+fn unique_catalog_repair_companion<'a>(
+    catalog: &'a [NodeMetadata],
+    companion_name: &str,
+) -> Option<&'a NodeMetadata> {
+    let mut internal_matches = catalog
+        .iter()
+        .filter(|candidate| candidate.name == companion_name);
+    let companion = internal_matches.next()?;
+    if internal_matches.next().is_some() {
+        return None;
+    }
+    let display = metadata_to_signature(companion).display;
+    let mut display_matches = catalog
+        .iter()
+        .filter(|candidate| metadata_to_signature(candidate).display == display);
+    display_matches.next()?;
+    display_matches.next().is_none().then_some(companion)
 }
 
 fn normalize_catalog_symbol(symbol: &str) -> String {
@@ -4992,20 +5290,47 @@ fn select_best_flowscript_candidate(
     }
 }
 
+/// The most recent fully checked revision worth retaining across a mutating edit: the head check
+/// itself when it is current, otherwise the salvage already carried by the draft.
+fn salvageable_flowscript_revision(
+    draft: &StoredFlowScriptDraft,
+) -> Option<SalvageFlowScriptRevision> {
+    match draft.checked.as_ref() {
+        Some(checked)
+            if checked.revision == draft.revision
+                && checked.board_fingerprint == draft.base_fingerprint =>
+        {
+            Some(SalvageFlowScriptRevision {
+                checked: checked.clone(),
+                source: draft.source.clone(),
+                evaluation: draft.evaluation.clone(),
+            })
+        }
+        _ => draft.salvage.clone(),
+    }
+}
+
 fn stored_flowscript_draft_size(draft: &StoredFlowScriptDraft) -> usize {
     draft
         .source
         .len()
         .saturating_add(draft.best_candidate.source.len())
         .saturating_add(encoded_json_size(&draft.evaluation.diagnostics))
+        .saturating_add(encoded_json_size(&draft.evaluation.review_notes))
         .saturating_add(encoded_json_size(&draft.evaluation.corrections))
         .saturating_add(encoded_board_commands_size(&draft.evaluation.commands))
-        .saturating_add(
-            draft
-                .checked
-                .as_ref()
-                .map_or(0, |checked| encoded_board_commands_size(&checked.commands)),
-        )
+        .saturating_add(draft.checked.as_ref().map_or(0, |checked| {
+            checked
+                .catalog_fingerprint
+                .len()
+                .saturating_add(encoded_board_commands_size(&checked.commands))
+        }))
+        .saturating_add(draft.salvage.as_ref().map_or(0, |salvage| {
+            salvage
+                .source
+                .len()
+                .saturating_add(encoded_board_commands_size(&salvage.checked.commands))
+        }))
         .saturating_add(
             draft
                 .pending_commands
@@ -5147,10 +5472,14 @@ fn validate_flowscript_deletion_authorization(
 }
 
 fn draft_request_mismatch_response(denied: FlowIrDraftRequestMismatch) -> FlowIrDraftResponse {
-    let mut response = FlowIrDraftResponse::error(denied.code, denied.message);
+    let mut response = FlowIrDraftResponse::error(
+        denied.code,
+        format!(
+            "{} Begin a separate typed draft for the current request with a new draft id.",
+            denied.message
+        ),
+    );
     response.status = denied.status.to_string();
-    response.draft_id = Some(denied.draft_id);
-    response.revision = Some(denied.revision);
     response
 }
 
@@ -5407,6 +5736,7 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
         .collect::<String>();
     let clauses = explicit_request_clauses(&bounded_prompt);
     let mut criteria = Vec::new();
+    let mut omitted_prohibitions: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
 
     for (clause, explicit_list_item) in clauses {
@@ -5447,7 +5777,9 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
         // catalog metadata cannot prove. Enforcing them as a global protocol ban would make valid
         // approval flows impossible (for example, reviewer mail is allowed while automatic
         // customer mail is not), so omit them instead of weakening or inverting their meaning.
+        // The omission is traced so the human review sees which bans were left to it.
         if forbidden && forbidden_scope_requires_dataflow(&tokens) {
+            record_omitted_prohibition(&mut omitted_prohibitions, bounded_summary(&clause));
             continue;
         }
         // Generic requests such as "make it better" are not reliable enough to enforce.
@@ -5466,16 +5798,12 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
                 || objects
                     .iter()
                     .any(|object| matches!(object.as_str(), "schedule" | "cron_catalog"));
+            // The summary is deliberately not part of the identity: two clauses that demand the
+            // same actions on the same subjects are one criterion, even when their prose differs.
             let identity = if singleton_subject {
                 format!("{}|singleton|{}", forbidden, objects.join(","))
             } else {
-                format!(
-                    "{}|{}|{}|{}",
-                    forbidden,
-                    normalize(&summary),
-                    actions.join(","),
-                    objects.join(",")
-                )
+                format!("{}|{}|{}", forbidden, actions.join(","), objects.join(","))
             };
             if !seen.insert(identity) {
                 continue;
@@ -5495,6 +5823,47 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
         }
     }
 
+    // A contract must never simultaneously require and ban the same scope. When a derived
+    // prohibition collides with a derived requirement, the requirement wins: an inverted or
+    // over-generalized ban would make the whole request unsatisfiable, while dropping it merely
+    // defers that clause to human review (traced above). The collision test is action-aware: a
+    // presence-only ban yields to any requirement touching its subjects, but an action-scoped ban
+    // (for example "never SEND email") survives requirements that merely read the same subject
+    // and yields only to a requirement demanding that same action on all of the banned subjects.
+    let required_scopes = criteria
+        .iter()
+        .filter(|criterion| !criterion.forbidden)
+        .map(|criterion| (criterion.actions.clone(), criterion.objects.clone()))
+        .collect::<Vec<_>>();
+    criteria.retain(|criterion| {
+        if !criterion.forbidden {
+            return true;
+        }
+        let contradicted = if forbidden_criterion_is_presence_only(criterion) {
+            required_scopes.iter().any(|(_, objects)| {
+                criterion
+                    .objects
+                    .iter()
+                    .any(|object| objects.contains(object))
+            })
+        } else {
+            required_scopes.iter().any(|(actions, objects)| {
+                criterion
+                    .actions
+                    .iter()
+                    .any(|action| actions.contains(action))
+                    && criterion
+                        .objects
+                        .iter()
+                        .all(|object| objects.contains(object))
+            })
+        };
+        if contradicted {
+            record_omitted_prohibition(&mut omitted_prohibitions, criterion.summary.clone());
+        }
+        !contradicted
+    });
+
     // A single generic action is too ambiguous to enforce, but an explicit protocol/service such
     // as Slack, SMTP, or cron is a strong host-authored acceptance signal on its own.
     if criteria.len() < 2
@@ -5507,7 +5876,25 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
     }
     RequestAcceptanceContract {
         criteria,
+        omitted_prohibitions,
         approval_loop: derive_request_approval_loop_contract(&bounded_prompt),
+    }
+}
+
+/// Presence-only wording ("no cron node", "never use IMAP") bans a subject regardless of the
+/// operation performed on it. A ban naming a concrete operation is action-scoped; generic
+/// authoring verbs do not count as one.
+fn forbidden_criterion_is_presence_only(criterion: &RequestAcceptanceCriterion) -> bool {
+    criterion.actions.is_empty()
+        || criterion
+            .actions
+            .iter()
+            .all(|action| action == "create" || action == "change")
+}
+
+fn record_omitted_prohibition(omitted: &mut Vec<String>, summary: String) {
+    if omitted.len() < MAX_FLOW_IR_ACCEPTANCE_CRITERIA && !omitted.contains(&summary) {
+        omitted.push(summary);
     }
 }
 
@@ -5561,13 +5948,51 @@ fn derive_request_approval_loop_contract(prompt: &str) -> Option<RequestApproval
         )
     }) || lower.contains("re-send")
         || lower.contains("resend");
-    if !(has_approval && has_branch && has_revision_or_reask) {
+    let has_ui_action_contract = explicit_ui_approval_action_contract(&lower);
+    // Separate approve/revise action routes are already an explicit branch contract even when the
+    // delegated page instruction does not literally contain an "if" or "otherwise" sentence.
+    if !(has_approval && has_revision_or_reask && (has_branch || has_ui_action_contract)) {
         return None;
     }
 
     Some(RequestApprovalLoopContract {
         reviewer_emails: reviewer_email_literals(prompt),
+        channel: if has_ui_action_contract {
+            RequestApprovalChannel::PageAction
+        } else {
+            RequestApprovalChannel::EmailReply
+        },
     })
+}
+
+/// Detect the host-authored two-action page contract used by FlowPilot widgets. This must be
+/// intentionally narrow: a request that merely mentions a dashboard while asking for approval by
+/// email still belongs to the email-reply validator.
+fn explicit_ui_approval_action_contract(lower_prompt: &str) -> bool {
+    let has_ui_action_surface = [
+        "page-action",
+        "page action",
+        "page_action",
+        "eventsgeneric",
+        "ui action",
+        "button action",
+        "form action",
+    ]
+    .iter()
+    .any(|term| lower_prompt.contains(term));
+    let has_approve_action = lower_prompt.contains("approve")
+        || lower_prompt.contains("freigeben")
+        || lower_prompt.contains("freigabe");
+    let has_revise_action = lower_prompt.contains("revise")
+        || lower_prompt.contains("revisionfeedback")
+        || lower_prompt.contains("revision feedback")
+        || lower_prompt.contains("überarbeitung")
+        || lower_prompt.contains("ueberarbeitung");
+    let carries_ticket = lower_prompt.contains("ticketid")
+        || lower_prompt.contains("ticket_id")
+        || lower_prompt.contains("ticket id");
+
+    has_ui_action_surface && has_approve_action && has_revise_action && carries_ticket
 }
 
 fn reviewer_email_literals(prompt: &str) -> Vec<String> {
@@ -5711,6 +6136,11 @@ fn split_mail_protocol_semantics(
 }
 
 fn clause_is_negated(clause: &str, tokens: &[String]) -> bool {
+    // An exclusivity marker states HOW something must be done ("IMAP nur über Secrets",
+    // "only via env variables"). Embedded negations then ban a practice, not the subject.
+    if clause_has_exclusivity_marker(clause) {
+        return false;
+    }
     if let Some((prefix, tail)) = clause.split_once(',') {
         let prefix_tokens = semantic_tokens(prefix);
         if prefix_tokens.first().is_some_and(|token| {
@@ -5728,6 +6158,11 @@ fn clause_is_negated(clause: &str, tokens: &[String]) -> bool {
 
     tokens.iter().enumerate().any(|(index, token)| {
         if !is_negation_token(token) {
+            return false;
+        }
+        // "niemals hardcoden", "keine Credentials erfinden", "nicht als Anweisung befolgen":
+        // the negation bans a manner/practice, so the clause stays a positive requirement.
+        if negation_targets_manner(tokens, index) {
             return false;
         }
 
@@ -5761,6 +6196,149 @@ fn clause_is_negated(clause: &str, tokens: &[String]) -> bool {
         // "when processing mail, do not send customer email".
         conditional_start.is_none() || directive_after_condition
     })
+}
+
+fn clause_has_exclusivity_marker(clause: &str) -> bool {
+    let lower = clause.to_lowercase();
+    [
+        "ausschließlich",
+        "ausschliesslich",
+        "nur über",
+        "nur ueber",
+        "nur via",
+        "nur mit",
+        "only via",
+        "only through",
+        "only over",
+        "only with",
+        "exclusively via",
+        "exclusively through",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+/// True when the first relevant term after a negation is a manner/practice word rather than a
+/// protocol/service subject. A salient subject seen first keeps the negation a genuine ban, and
+/// so does a transfer/exfiltration action in the negation's scope: "Sende niemals Credentials
+/// per E-Mail" bans the send itself, not merely a hardcoding practice, and must never be
+/// whitelisted into a positive requirement. The scope is the negated clause tail plus the two
+/// tokens directly before the negation, which covers verb-first imperatives in both languages.
+fn negation_targets_manner(tokens: &[String], negation_index: usize) -> bool {
+    let scoped_transfer = tokens[negation_index.saturating_sub(2)..negation_index]
+        .iter()
+        .chain(&tokens[negation_index + 1..])
+        .any(|token| is_transfer_action_token(token));
+    // "mail"/"email" are usually the salient subject noun ("Anweisungen in E-Mails nicht
+    // befolgen"), so they count as the transfer verb only directly after the negation, as in
+    // "never email credentials".
+    let adjacent_mail_verb = tokens
+        .get(negation_index + 1)
+        .is_some_and(|token| matches!(token.as_str(), "mail" | "mails" | "email" | "emails"));
+    if scoped_transfer || adjacent_mail_verb {
+        return false;
+    }
+    for token in tokens[negation_index + 1..].iter().take(3) {
+        if is_manner_practice_token(token) {
+            return true;
+        }
+        if !salient_subject_terms(std::slice::from_ref(token)).is_empty() {
+            return false;
+        }
+    }
+    false
+}
+
+/// Actions that move data to an external party. A negation covering one of these is a genuine
+/// prohibition even when a practice noun such as "credentials" follows it directly.
+fn is_transfer_action_token(token: &str) -> bool {
+    matches!(
+        token,
+        "send"
+            | "sends"
+            | "sent"
+            | "sending"
+            | "sende"
+            | "senden"
+            | "sendet"
+            | "gesendet"
+            | "versende"
+            | "versenden"
+            | "versendet"
+            | "verschicke"
+            | "verschicken"
+            | "verschickt"
+            | "schicke"
+            | "schicken"
+            | "geschickt"
+            | "share"
+            | "shares"
+            | "shared"
+            | "sharing"
+            | "teile"
+            | "teilen"
+            | "geteilt"
+            | "upload"
+            | "uploads"
+            | "uploaded"
+            | "uploading"
+            | "hochlade"
+            | "hochladen"
+            | "hochgeladen"
+            | "publish"
+            | "publishes"
+            | "published"
+            | "publishing"
+            | "veröffentliche"
+            | "veröffentlichen"
+            | "veröffentlicht"
+            | "veroeffentliche"
+            | "veroeffentlichen"
+            | "veroeffentlicht"
+            | "post"
+            | "posts"
+            | "posted"
+            | "posting"
+            | "poste"
+            | "posten"
+            | "gepostet"
+            | "maile"
+            | "mailen"
+            | "mailed"
+            | "mailing"
+            | "gemailt"
+            | "emailed"
+            | "emailing"
+    )
+}
+
+fn is_manner_practice_token(token: &str) -> bool {
+    matches!(
+        token,
+        "hardcode"
+            | "hardcoded"
+            | "hardcoden"
+            | "hardcodieren"
+            | "hardcodiert"
+            | "erfinden"
+            | "erfindet"
+            | "erfunden"
+            | "invent"
+            | "invented"
+            | "inventing"
+            | "befolgen"
+            | "befolgt"
+            | "follow"
+            | "followed"
+            | "following"
+            | "anweisung"
+            | "anweisungen"
+            | "instruction"
+            | "instructions"
+            | "credential"
+            | "credentials"
+            | "zugangsdaten"
+    )
 }
 
 fn is_negation_token(token: &str) -> bool {
@@ -6142,8 +6720,8 @@ fn canonical_german_action(token: &str) -> Option<&'static str> {
         "änder" | "ändere" | "ändern" | "ändert" | "geändert" | "aender" | "aendere"
         | "aendern" | "aendert" | "geaendert" => "change",
         "abruf" | "abrufe" | "abrufen" | "abgerufen" | "ruf" | "rufe" | "ruft" | "abfragen"
-        | "abfrage" | "abgefragt" | "lese" | "lesen" | "liest" | "gelesen" | "hole" | "holen"
-        | "holt" | "geholt" => "read",
+        | "abfrage" | "abgefragt" | "lese" | "lesen" | "lies" | "liest" | "gelesen" | "hole"
+        | "holen" | "holt" | "geholt" => "read",
         "empfange" | "empfangen" | "empfängt" | "empfaengt" | "empfangenes" | "eingehend"
         | "eingehende" | "eingehenden" => "receive",
         "parse" | "parsen" | "geparst" | "dekodiere" | "dekodieren" | "dekodiert" => "parse",
@@ -6489,11 +7067,14 @@ fn acceptance_contract_diagnostics(
         })
         .collect::<Vec<_>>();
     if let Some(approval_loop) = &contract.approval_loop {
-        diagnostics.extend(approval_loop_diagnostics(
-            approval_loop,
-            program,
-            &catalog_by_name,
-        ));
+        diagnostics.extend(match approval_loop.channel {
+            RequestApprovalChannel::EmailReply => {
+                approval_loop_diagnostics(approval_loop, program, &catalog_by_name)
+            }
+            RequestApprovalChannel::PageAction => {
+                ui_approval_loop_diagnostics(approval_loop, program, &catalog_by_name)
+            }
+        });
     }
     diagnostics
 }
@@ -6542,6 +7123,7 @@ impl ApprovalValueEvidence {
 
 #[derive(Debug, Clone)]
 struct ApprovalNodeEvidence {
+    module_index: usize,
     sequence: usize,
     is_email_send: bool,
     is_draft_generation: bool,
@@ -6569,6 +7151,7 @@ struct ApprovalEvidenceCollector<'a> {
     catalog_by_name: &'a HashMap<String, &'a NodeMetadata>,
     functions: HashMap<String, &'a FlowIrModule>,
     flow: ApprovalFlowEvidence,
+    module_index: usize,
 }
 
 impl<'a> ApprovalEvidenceCollector<'a> {
@@ -6608,6 +7191,7 @@ impl<'a> ApprovalEvidenceCollector<'a> {
                         })
                         .unwrap_or((false, false));
                     self.flow.nodes.push(ApprovalNodeEvidence {
+                        module_index: self.module_index,
                         sequence: self.flow.next_sequence,
                         is_email_send,
                         is_draft_generation,
@@ -6788,11 +7372,13 @@ fn collect_approval_flow_evidence(
         catalog_by_name,
         functions,
         flow: ApprovalFlowEvidence::default(),
+        module_index: 0,
     };
     for (module_index, module) in program.modules.iter().enumerate() {
         let FlowIrModule::Event { params, steps, .. } = module else {
             continue;
         };
+        collector.module_index = module_index;
         let mut symbols = globals.clone();
         seed_approval_params(params, &mut symbols);
         collector.collect_steps(
@@ -6964,6 +7550,235 @@ fn add_approval_json_evidence(value: &serde_json::Value, evidence: &mut Approval
         }
         serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
     }
+}
+
+fn ui_approval_loop_diagnostics(
+    contract: &RequestApprovalLoopContract,
+    program: &FlowIrProgram,
+    catalog_by_name: &HashMap<String, &NodeMetadata>,
+) -> Vec<FlowIrDiagnostic> {
+    let evidence = collect_approval_flow_evidence(program, catalog_by_name);
+    let event_params = program
+        .modules
+        .iter()
+        .enumerate()
+        .filter_map(|(module_index, module)| {
+            let FlowIrModule::Event {
+                node_type, params, ..
+            } = module
+            else {
+                return None;
+            };
+            let node_type = normalize(node_type);
+            if !node_type.contains("eventsgeneric") && !node_type.contains("eventgeneric") {
+                return None;
+            }
+            Some((
+                module_index,
+                params
+                    .iter()
+                    .map(|param| normalize(&param.name))
+                    .collect::<HashSet<_>>(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let approve_entries = event_params
+        .iter()
+        .filter(|(_, params)| {
+            ui_params_have_ticket(params)
+                && ui_params_have_draft_reply(params)
+                && !ui_params_have_revision_feedback(params)
+        })
+        .map(|(module_index, _)| *module_index)
+        .collect::<HashSet<_>>();
+    let revise_entries = event_params
+        .iter()
+        .filter(|(_, params)| {
+            ui_params_have_ticket(params) && ui_params_have_revision_feedback(params)
+        })
+        .map(|(module_index, _)| *module_index)
+        .collect::<HashSet<_>>();
+
+    let mut diagnostics = Vec::new();
+    if approve_entries.is_empty() || revise_entries.is_empty() {
+        diagnostics.push(approval_diagnostic(
+            "IR_REQUEST_APPROVAL_UI_ACTIONS_MISSING",
+            "/modules",
+            "The requested approval page needs distinct typed approve and revise action entries.",
+            "one eventsGeneric entry with ticketId + draftReply and one with ticketId + revisionFeedback",
+            &format!(
+                "approve entries {}, revise entries {}",
+                approve_entries.len(),
+                revise_entries.len()
+            ),
+            "Create separate approve and revise eventsGeneric handlers. The page action selects the handler; do not invent reviewerEmail or decision payload fields.",
+        ));
+        return diagnostics;
+    }
+
+    let expected_reviewers = contract
+        .reviewer_emails
+        .iter()
+        .map(|email| email.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let inferred_reviewers = evidence
+        .nodes
+        .iter()
+        .filter(|node| revise_entries.contains(&node.module_index) && node.is_email_send)
+        .flat_map(|node| node.recipient.literal_emails.iter().cloned())
+        .collect::<HashSet<_>>();
+    let reviewer_addresses = if expected_reviewers.is_empty() {
+        inferred_reviewers
+    } else {
+        expected_reviewers
+    };
+    let approve_nodes = evidence
+        .nodes
+        .iter()
+        .filter(|node| approve_entries.contains(&node.module_index))
+        .collect::<Vec<_>>();
+    let approve_customer_sends = approve_nodes
+        .iter()
+        .filter(|node| node.is_email_send && !approval_node_is_reviewer(node, &reviewer_addresses))
+        .count();
+    let approve_generations = approve_nodes
+        .iter()
+        .filter(|node| node.is_draft_generation)
+        .count();
+    let approve_reviewer_sends = approve_nodes
+        .iter()
+        .filter(|node| approval_node_is_reviewer(node, &reviewer_addresses))
+        .count();
+    if approve_customer_sends == 0 || approve_generations > 0 || approve_reviewer_sends > 0 {
+        diagnostics.push(approval_diagnostic(
+            "IR_REQUEST_APPROVAL_UI_APPROVE_UNSAFE",
+            "/modules",
+            "The approve action must send the submitted draft to the customer without regenerating it or re-routing it to the reviewer.",
+            "a customer email send in the approve entry, with no model generation and no reviewer re-send",
+            &format!(
+                "customer sends {approve_customer_sends}, generations {approve_generations}, reviewer sends {approve_reviewer_sends}"
+            ),
+            "Keep customer delivery only in the ticketId + draftReply handler. A malformed approval must fail instead of falling into the revise path.",
+        ));
+    }
+
+    let revise_nodes = evidence
+        .nodes
+        .iter()
+        .filter(|node| revise_entries.contains(&node.module_index))
+        .collect::<Vec<_>>();
+    let revise_generations = revise_nodes
+        .iter()
+        .copied()
+        .filter(|node| node.is_draft_generation && approval_has_feedback(&node.args))
+        .collect::<Vec<_>>();
+    let revise_reviewer_sends = revise_nodes
+        .iter()
+        .copied()
+        .filter(|node| {
+            approval_node_is_reviewer(node, &reviewer_addresses)
+                && revise_generations
+                    .iter()
+                    .any(|generation| generation.sequence < node.sequence)
+        })
+        .collect::<Vec<_>>();
+    let revise_customer_sends = revise_nodes
+        .iter()
+        .filter(|node| node.is_email_send && !approval_node_is_reviewer(node, &reviewer_addresses))
+        .count();
+    if revise_generations.is_empty()
+        || revise_reviewer_sends.is_empty()
+        || revise_customer_sends > 0
+    {
+        diagnostics.push(approval_diagnostic(
+            "IR_REQUEST_APPROVAL_UI_REVISE_INCOMPLETE",
+            "/modules",
+            "The revise action must consume reviewer feedback, regenerate the draft, and then send the new draft back to the exact reviewer without emailing the customer.",
+            "feedback-driven generation followed by an exact-reviewer email in the revise entry and no customer send",
+            &format!(
+                "feedback generations {}, reviewer re-sends {}, customer sends {revise_customer_sends}",
+                revise_generations.len(),
+                revise_reviewer_sends.len()
+            ),
+            "Use the ticketId + revisionFeedback handler exclusively for revision, persist the new revision, then re-send its approval link to the same reviewer.",
+        ));
+    }
+
+    let initial_reviewer_sends = evidence
+        .nodes
+        .iter()
+        .filter(|node| {
+            !revise_entries.contains(&node.module_index)
+                && !approve_entries.contains(&node.module_index)
+                && approval_node_is_reviewer(node, &reviewer_addresses)
+        })
+        .collect::<Vec<_>>();
+    if reviewer_addresses.is_empty()
+        || initial_reviewer_sends.is_empty()
+        || revise_reviewer_sends.is_empty()
+    {
+        diagnostics.push(approval_diagnostic(
+            "IR_REQUEST_APPROVAL_REVIEWER_MISMATCH",
+            "/modules",
+            "The UI approval loop does not send both the initial and revised draft to the same exact reviewer.",
+            &if contract.reviewer_emails.is_empty() {
+                "one stable literal reviewer recipient used by the initial request and revise re-send".to_string()
+            } else {
+                format!("literal reviewer recipient [{}]", sorted_owned_terms(&reviewer_addresses))
+            },
+            &format!(
+                "initial reviewer sends {}, revise reviewer sends {}",
+                initial_reviewer_sends.len(),
+                revise_reviewer_sends.len()
+            ),
+            "Use the reviewer address from the immutable request in the initial approval email and every revise re-send; do not accept reviewerEmail from the page payload.",
+        ));
+    }
+
+    let initial_ticket_correlation = initial_reviewer_sends
+        .iter()
+        .any(|node| approval_has_ticket(&node.args));
+    let revise_ticket_correlation = revise_reviewer_sends
+        .iter()
+        .any(|node| approval_has_ticket(&node.args));
+    if !initial_ticket_correlation || !revise_ticket_correlation {
+        diagnostics.push(approval_diagnostic(
+            "IR_REQUEST_APPROVAL_CORRELATION_MISSING",
+            "/modules",
+            "The initial and revised approval notifications must carry the runtime ticket identity used by the page actions.",
+            "dynamic ticketId evidence in the initial reviewer request and revise re-send",
+            &format!(
+                "initial ticket correlation {initial_ticket_correlation}, revise ticket correlation {revise_ticket_correlation}"
+            ),
+            "Thread the same runtime ticketId through persistence, approval links, approve/revise handlers, and reviewer re-notifications.",
+        ));
+    }
+
+    diagnostics
+}
+
+fn ui_params_have_ticket(params: &HashSet<String>) -> bool {
+    params.iter().any(|param| {
+        param == "ticketid" || param == "caseid" || param == "supportid" || param == "correlationid"
+    })
+}
+
+fn ui_params_have_draft_reply(params: &HashSet<String>) -> bool {
+    params.iter().any(|param| {
+        param == "draftreply"
+            || param == "editeddraft"
+            || param == "replytext"
+            || param == "approvedreply"
+    })
+}
+
+fn ui_params_have_revision_feedback(params: &HashSet<String>) -> bool {
+    params.iter().any(|param| {
+        param == "revisionfeedback"
+            || param == "reviewerfeedback"
+            || param == "changefeedback"
+            || param == "reviewcomment"
+    })
 }
 
 fn approval_loop_diagnostics(
@@ -7471,13 +8286,28 @@ fn sorted_owned_terms(values: &HashSet<String>) -> String {
 }
 
 fn bounded_summary(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(MAX_FLOW_IR_ACCEPTANCE_SUMMARY_CHARS)
-        .collect()
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= MAX_FLOW_IR_ACCEPTANCE_SUMMARY_CHARS {
+        return collapsed;
+    }
+    // Cut on a word boundary and mark the elision so a truncated scope never ends mid-word.
+    let budget = MAX_FLOW_IR_ACCEPTANCE_SUMMARY_CHARS.saturating_sub(2);
+    let mut bounded = String::new();
+    for word in collapsed.split(' ') {
+        let separator = usize::from(!bounded.is_empty());
+        if bounded.chars().count() + separator + word.chars().count() > budget {
+            break;
+        }
+        if separator == 1 {
+            bounded.push(' ');
+        }
+        bounded.push_str(word);
+    }
+    if bounded.is_empty() {
+        bounded = collapsed.chars().take(budget).collect();
+    }
+    bounded.push_str(" …");
+    bounded
 }
 
 fn normalize(value: &str) -> String {
@@ -7885,6 +8715,102 @@ fn board_fingerprint(board: &Board) -> String {
     format!("{hash:016x}")
 }
 
+#[derive(Serialize)]
+struct FlowScriptCatalogNodeContract<'a> {
+    name: &'a str,
+    friendly_name: &'a str,
+    description: &'a str,
+    category: &'a Option<String>,
+    capability_tags: Vec<&'a str>,
+    inputs: Vec<FlowScriptCatalogPinContract<'a>>,
+    outputs: Vec<FlowScriptCatalogPinContract<'a>>,
+    required_inputs: Vec<&'a str>,
+}
+
+#[derive(Serialize)]
+struct FlowScriptCatalogPinContract<'a> {
+    name: &'a str,
+    data_type: &'a str,
+    value_type: &'a str,
+    default_value: &'a Option<String>,
+    schema: &'a Option<String>,
+    is_generic: bool,
+    valid_values: &'a Option<Vec<String>>,
+    enforce_schema: bool,
+}
+
+impl<'a> From<&'a PinMetadata> for FlowScriptCatalogPinContract<'a> {
+    fn from(pin: &'a PinMetadata) -> Self {
+        Self {
+            name: &pin.name,
+            data_type: &pin.data_type,
+            value_type: &pin.value_type,
+            default_value: &pin.default_value,
+            schema: &pin.schema,
+            is_generic: pin.is_generic,
+            valid_values: &pin.valid_values,
+            enforce_schema: pin.enforce_schema,
+        }
+    }
+}
+
+impl<'a> From<&'a NodeMetadata> for FlowScriptCatalogNodeContract<'a> {
+    fn from(metadata: &'a NodeMetadata) -> Self {
+        let mut required_inputs = metadata
+            .required_inputs
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        required_inputs.sort_unstable();
+        required_inputs.dedup();
+        let mut capability_tags = metadata
+            .capability_tags
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        capability_tags.sort_unstable();
+        capability_tags.dedup();
+        Self {
+            name: &metadata.name,
+            friendly_name: &metadata.friendly_name,
+            description: &metadata.description,
+            category: &metadata.category,
+            capability_tags,
+            inputs: metadata.inputs.iter().map(Into::into).collect(),
+            outputs: metadata.outputs.iter().map(Into::into).collect(),
+            required_inputs,
+        }
+    }
+}
+
+/// Hash the executable and host-acceptance catalog contract independently of provider iteration
+/// order. Node descriptions, labels, categories, and capability tags are included because request
+/// acceptance intentionally derives semantic coverage from them. Companion-search hints and pin
+/// presentation text are excluded because they cannot change a checked command batch or its
+/// acceptance result. Pin order remains significant because repeated same-name pins are
+/// occurrence-addressed during reconciliation. Each node is serialized independently and sorted as
+/// bytes, preserving duplicate declarations while making equivalent catalog permutations produce
+/// the same fingerprint.
+fn flowscript_catalog_fingerprint(catalog: &[NodeMetadata]) -> String {
+    let mut contracts = catalog
+        .iter()
+        .map(|metadata| {
+            serde_json::to_vec(&FlowScriptCatalogNodeContract::from(metadata))
+                .expect("catalog contracts contain only deterministically serializable fields")
+        })
+        .collect::<Vec<_>>();
+    contracts.sort_unstable();
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(FLOWSCRIPT_CATALOG_FINGERPRINT_DOMAIN);
+    hasher.update(&(contracts.len() as u64).to_le_bytes());
+    for contract in contracts {
+        hasher.update(&(contract.len() as u64).to_le_bytes());
+        hasher.update(&contract);
+    }
+    format!("b3:{}", hasher.finalize().to_hex())
+}
+
 /// Scope represented by a typed draft when it is reconciled with the live board.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -7982,6 +8908,10 @@ pub struct FlowScriptDraftResponse {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<FlowScriptDiagnostic>,
+    /// Non-blocking acceptance findings surfaced to the human review. They never flip the status
+    /// to validation_errors and never block check or commit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_notes: Vec<FlowScriptDiagnostic>,
     /// Deterministic, non-blocking aliases used during reconciliation. The retained source remains
     /// model-authored, so callers should apply these exact rewrites on their next patch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -8006,6 +8936,7 @@ impl FlowScriptDraftResponse {
             base_fingerprint: None,
             source: None,
             diagnostics: Vec::new(),
+            review_notes: Vec::new(),
             corrections: Vec::new(),
             derived_command_count: None,
             queued_count: 0,
@@ -8028,6 +8959,7 @@ impl FlowScriptDraftResponse {
             base_fingerprint: Some(draft.base_fingerprint.clone()),
             source: Some(draft.source.clone()),
             diagnostics: draft.evaluation.diagnostics.clone(),
+            review_notes: draft.evaluation.review_notes.clone(),
             corrections: draft.evaluation.corrections.clone(),
             derived_command_count: Some(draft.evaluation.commands.len()),
             queued_count: 0,
@@ -8724,6 +9656,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn catalog_repair_omits_ambiguous_companion_declarations() {
+        let mut primary = metadata(
+            "primary_call",
+            vec![pin("input", "String")],
+            vec![pin("output", "String")],
+        );
+        primary.companion_nodes = vec!["duplicate_companion".to_string()];
+        let catalog = vec![
+            primary,
+            metadata(
+                "duplicate_companion",
+                vec![pin("left", "String")],
+                vec![pin("value", "String")],
+            ),
+            metadata(
+                "duplicate_companion",
+                vec![pin("right", "Integer")],
+                vec![pin("value", "Integer")],
+            ),
+        ];
+
+        let (declarations, companions, exact) = catalog_repair_declarations(
+            &catalog,
+            "primaryCall",
+            FlowScriptDiagnosticCode::FsUnknownInputPin,
+        );
+        assert!(exact);
+        assert_eq!(declarations.len(), 1);
+        assert!(companions.is_empty());
+    }
+
     fn program(message: &str) -> FlowIrProgram {
         FlowIrProgram {
             modules: vec![FlowIrModule::Event {
@@ -8777,6 +9741,8 @@ mod tests {
             "mail_imap_inbox".to_string(),
             "mail_imap_list".to_string(),
             "email_get_headers".to_string(),
+            "email_get_content".to_string(),
+            "mail_address_fields".to_string(),
             "email_imap_mark_seen".to_string(),
             "email_imap_move_message".to_string(),
         ];
@@ -8831,6 +9797,16 @@ mod tests {
                 "email_get_headers",
                 vec![pin("email", "Struct")],
                 vec![pin("from", "Struct")],
+            ),
+            metadata(
+                "email_get_content",
+                vec![pin("email", "Struct")],
+                vec![pin("plain", "String"), pin("html", "String")],
+            ),
+            metadata(
+                "mail_address_fields",
+                vec![pin("address", "Struct")],
+                vec![pin("email", "String")],
             ),
             metadata(
                 "email_imap_mark_seen",
@@ -8915,8 +9891,16 @@ mod tests {
                 structural_imap_repair.catalog_declarations[0]
                     .contains("emailImapInboxFetchMail({ emailRef: Struct })")
             );
-            assert_eq!(structural_imap_repair.companion_declarations.len(), 6);
-            for companion in ["emailImapConnect", "mailImapInbox", "mailImapList"] {
+            assert_eq!(structural_imap_repair.companion_declarations.len(), 8);
+            for companion in [
+                "emailImapConnect",
+                "mailImapInbox",
+                "mailImapList",
+                "emailGetHeaders",
+                "emailGetContent",
+                "mailAddressFields",
+                "emailImapMarkSeen",
+            ] {
                 assert!(
                     structural_imap_repair
                         .companion_declarations
@@ -9368,20 +10352,36 @@ eventsSimple() {
     }
 
     #[test]
-    fn flowscript_check_and_commit_fail_closed_when_required_scope_is_missing() {
+    fn incomplete_scope_findings_become_review_notes_and_never_block_commit() {
         let request = "Format the customer message, then send a Slack notification.";
         let source =
             "eventsSimple() {\n    slackSend({ message: \"customer message\" })\n}\n".to_string();
         let (store, board, binding, checked) =
             check_bound_flowscript(request, source.clone(), &acceptance_flowscript_catalog());
-        assert_eq!(checked.status, "validation_errors", "{checked:#?}");
+        assert_eq!(checked.status, "valid", "{checked:#?}");
         assert_eq!(checked.source.as_deref(), Some(source.as_str()));
-        assert!(checked.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == FlowScriptDiagnosticCode::FsRequestAcceptanceIncomplete
-        }));
+        assert!(checked.diagnostics.is_empty(), "{checked:#?}");
+        assert!(
+            checked.review_notes.iter().any(|note| {
+                note.code == FlowScriptDiagnosticCode::FsRequestAcceptanceIncomplete
+            })
+        );
+        assert!(checked.message.contains("Commit may proceed"));
+        assert!(
+            store
+                .source_drafts
+                .lock()
+                .unwrap()
+                .get("source-acceptance")
+                .unwrap()
+                .checked
+                .is_some(),
+            "review notes must not prevent checked-batch retention"
+        );
 
-        let refused = store.commit_flowscript_with_acceptance_binding(
+        let queued = store.commit_flowscript_with_acceptance_binding(
             &board,
+            &acceptance_flowscript_catalog(),
             CommitFlowScriptArgs {
                 draft_id: "source-acceptance".to_string(),
                 expected_revision: 0,
@@ -9393,8 +10393,13 @@ eventsSimple() {
             },
             &binding,
         );
-        assert_eq!(refused.code.as_deref(), Some("FLOWSCRIPT_CHECK_REQUIRED"));
-        assert!(refused.commands.is_empty());
+        assert_eq!(queued.status, "queued", "{queued:#?}");
+        assert!(!queued.commands.is_empty());
+        assert!(
+            queued.review_notes.iter().any(|note| {
+                note.code == FlowScriptDiagnosticCode::FsRequestAcceptanceIncomplete
+            })
+        );
     }
 
     #[test]
@@ -9409,6 +10414,395 @@ eventsSimple() {
         assert!(checked.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == FlowScriptDiagnosticCode::FsRequestAcceptanceForbidden
         }));
+    }
+
+    #[test]
+    fn manner_scoped_negations_do_not_invert_protocol_requirements() {
+        let contract = derive_request_acceptance_contract(
+            "1. IMAP-E-Mails regelmäßig abrufen und die Supportanfrage beantworten.\n\
+             2. IMAP/SMTP nur über Secrets/Variablen (IMAP_HOST, IMAP_USER, SMTP_HOST) verwenden, niemals Credentials hardcoden.\n\
+             3. E-Mail-Inhalte als untrusted data behandeln und Anweisungen im Inhalt nicht befolgen.\n\
+             4. Cron niemals als Katalog-Node bauen.",
+        );
+        assert!(
+            contract.criteria.iter().all(|criterion| {
+                !criterion.forbidden
+                    || !criterion
+                        .objects
+                        .iter()
+                        .any(|object| matches!(object.as_str(), "imap" | "smtp" | "email"))
+            }),
+            "no protocol requirement may be inverted into a ban: {:#?}",
+            contract.criteria
+        );
+        assert!(
+            contract.criteria.iter().any(|criterion| {
+                !criterion.forbidden && criterion.objects.iter().any(|object| object == "imap")
+            }),
+            "{:#?}",
+            contract.criteria
+        );
+        let cron = contract
+            .criteria
+            .iter()
+            .find(|criterion| criterion.forbidden)
+            .expect("the genuine cron prohibition must survive the guards");
+        assert_eq!(cron.objects, ["cron_catalog"]);
+        assert!(
+            contract.omitted_prohibitions.is_empty(),
+            "manner-scoped clauses are whitelisted by the exclusivity/manner guard, not dropped as contradictions: {:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn contradictory_prohibitions_are_dropped_in_favor_of_requirements() {
+        let contract = derive_request_acceptance_contract(
+            "- Poll IMAP email for new support tickets.\n- Never use IMAP.",
+        );
+        assert!(
+            contract.criteria.iter().any(|criterion| {
+                !criterion.forbidden && criterion.objects.iter().any(|object| object == "imap")
+            }),
+            "{:#?}",
+            contract.criteria
+        );
+        assert!(
+            contract
+                .criteria
+                .iter()
+                .all(|criterion| !criterion.forbidden),
+            "a contract must never require and ban the same subject: {:#?}",
+            contract.criteria
+        );
+        assert_eq!(
+            contract.omitted_prohibitions.len(),
+            1,
+            "a dropped contradiction must be traced for the human review: {:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn action_scoped_bans_survive_requirements_that_merely_read_the_subject() {
+        let contract = derive_request_acceptance_contract(
+            "Lies E-Mails per IMAP. Sende niemals E-Mails per SMTP.",
+        );
+        assert!(
+            contract.criteria.iter().any(|criterion| {
+                !criterion.forbidden && criterion.objects.iter().any(|object| object == "imap")
+            }),
+            "IMAP polling must stay required: {:#?}",
+            contract.criteria
+        );
+        let ban = contract
+            .criteria
+            .iter()
+            .find(|criterion| criterion.forbidden)
+            .expect("the SMTP send ban shares only the read subject and must survive");
+        assert!(
+            ban.actions.iter().any(|action| action == "send"),
+            "{ban:#?}"
+        );
+        assert!(
+            ban.objects.iter().any(|object| object == "smtp"),
+            "{ban:#?}"
+        );
+    }
+
+    #[test]
+    fn transfer_scoped_credential_bans_are_never_inverted_into_requirements() {
+        for request in [
+            "Sende niemals Credentials per E-Mail.",
+            "Never send credentials by email.",
+        ] {
+            let contract = derive_request_acceptance_contract(request);
+            assert!(
+                !contract.criteria.iter().any(|criterion| {
+                    !criterion.forbidden && criterion.objects.iter().any(|object| object == "email")
+                }),
+                "a credential-exfiltration ban must never become a positive email requirement for {request:?}: {:#?}",
+                contract.criteria
+            );
+            let ban = contract
+                .criteria
+                .iter()
+                .find(|criterion| criterion.forbidden)
+                .unwrap_or_else(|| panic!("the transfer-scoped ban must survive for {request:?}"));
+            assert!(
+                ban.actions.iter().any(|action| action == "send"),
+                "{ban:#?}"
+            );
+            assert_eq!(ban.objects, ["email"], "{ban:#?}");
+        }
+    }
+
+    #[test]
+    fn unenforceable_prohibitions_are_traced_for_human_review() {
+        let contract = derive_request_acceptance_contract(
+            "- Send a Slack notification for every ticket.\n- Never email the customer directly.",
+        );
+        assert!(
+            contract
+                .criteria
+                .iter()
+                .all(|criterion| !criterion.forbidden),
+            "recipient-scoped bans need dataflow proof and must not become protocol bans: {:#?}",
+            contract.criteria
+        );
+        assert_eq!(contract.omitted_prohibitions.len(), 1);
+        assert!(
+            contract.omitted_prohibitions[0].contains("Never email the customer directly"),
+            "{:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn check_surfaces_prohibitions_the_machine_could_not_enforce() {
+        let request = "Send a Slack notification. Never send email to the customer directly.";
+        let (_, _, _, checked) = check_bound_flowscript(
+            request,
+            complete_acceptance_flowscript(false),
+            &acceptance_flowscript_catalog(),
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+        assert!(
+            checked.message.contains("could not be machine-enforced"),
+            "{}",
+            checked.message
+        );
+        assert!(
+            checked
+                .message
+                .contains("Never send email to the customer directly"),
+            "{}",
+            checked.message
+        );
+    }
+
+    #[test]
+    fn near_identical_send_clauses_collapse_to_one_criterion() {
+        let contract = derive_request_acceptance_contract(
+            "- Send a summary email with delivery stats.\n\
+             - Send a summary email with delivery statistics to the team.",
+        );
+        let send_email_criteria = contract
+            .criteria
+            .iter()
+            .filter(|criterion| {
+                !criterion.forbidden
+                    && criterion.actions == ["send"]
+                    && criterion.objects == ["email"]
+            })
+            .count();
+        assert_eq!(send_email_criteria, 1, "{:#?}", contract.criteria);
+    }
+
+    #[test]
+    fn bounded_summary_cuts_on_word_boundaries_with_an_ellipsis_marker() {
+        let short = bounded_summary("Send a Slack notification.");
+        assert_eq!(short, "Send a Slack notification.");
+
+        let words = ["Sende", "eine", "Statusmail", "mit", "Fehlerstatistik"];
+        let long = words.join(" ").repeat(20);
+        let long = long.replace("FehlerstatistikSende", "Fehlerstatistik Sende");
+        let summary = bounded_summary(&long);
+        assert!(summary.chars().count() <= MAX_FLOW_IR_ACCEPTANCE_SUMMARY_CHARS);
+        assert!(summary.ends_with(" …"), "{summary:?}");
+        let last_word = summary
+            .trim_end_matches(" …")
+            .split_whitespace()
+            .next_back()
+            .expect("summary keeps at least one word");
+        assert!(
+            words.contains(&last_word),
+            "summary must end on a whole word: {summary:?}"
+        );
+    }
+
+    #[test]
+    fn check_reuses_the_stored_evaluation_until_the_catalog_moves() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let catalog = flowscript_catalog();
+        assert_eq!(store.global_evaluation_count(), 0);
+        let written = store.write_flowscript(
+            &board,
+            &catalog,
+            WriteFlowScriptArgs {
+                draft_id: "single-eval".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(written.revision, Some(0), "{written:#?}");
+        assert_eq!(store.global_evaluation_count(), 1);
+
+        let checked = store.check_flowscript(
+            &board,
+            &catalog,
+            CheckFlowScriptArgs {
+                draft_id: "single-eval".to_string(),
+                expected_revision: 0,
+            },
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+        assert_eq!(
+            store.global_evaluation_count(),
+            1,
+            "check must reuse the evaluation stored by write when board and catalog are unchanged"
+        );
+
+        let mut changed_catalog = catalog;
+        changed_catalog[1].outputs.push(pin("status", "String"));
+        let rechecked = store.check_flowscript(
+            &board,
+            &changed_catalog,
+            CheckFlowScriptArgs {
+                draft_id: "single-eval".to_string(),
+                expected_revision: 0,
+            },
+        );
+        assert_eq!(rechecked.status, "valid", "{rechecked:#?}");
+        assert_eq!(
+            store.global_evaluation_count(),
+            2,
+            "a live catalog change must trigger exactly one re-evaluation"
+        );
+    }
+
+    #[test]
+    fn failed_patch_keeps_the_last_checked_revision_committable() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let catalog = flowscript_catalog();
+        let written = store.write_flowscript(
+            &board,
+            &catalog,
+            WriteFlowScriptArgs {
+                draft_id: "source-salvage".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(written.revision, Some(0), "{written:#?}");
+        let checked = store.check_flowscript(
+            &board,
+            &catalog,
+            CheckFlowScriptArgs {
+                draft_id: "source-salvage".to_string(),
+                expected_revision: 0,
+            },
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+        let checked_commands = store
+            .source_drafts
+            .lock()
+            .unwrap()
+            .get("source-salvage")
+            .unwrap()
+            .checked
+            .as_ref()
+            .unwrap()
+            .commands
+            .clone();
+
+        let broken = store.patch_flowscript(
+            &board,
+            &catalog,
+            PatchFlowScriptArgs {
+                draft_id: "source-salvage".to_string(),
+                expected_revision: 0,
+                old_text: "logInfo".to_string(),
+                new_text: "logInfoo".to_string(),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(broken.status, "validation_errors", "{broken:#?}");
+        assert_eq!(broken.revision, Some(1));
+
+        let stale = store.commit_flowscript(
+            &board,
+            &catalog,
+            CommitFlowScriptArgs {
+                draft_id: "source-salvage".to_string(),
+                expected_revision: 3,
+                allow_deletions: false,
+                remove_node_ids: Vec::new(),
+                remove_variable_ids: Vec::new(),
+                remove_layer_ids: Vec::new(),
+                remove_comment_ids: Vec::new(),
+            },
+        );
+        assert_eq!(stale.code.as_deref(), Some("FLOWSCRIPT_REVISION_CONFLICT"));
+
+        let queued = store.commit_flowscript(
+            &board,
+            &catalog,
+            CommitFlowScriptArgs {
+                draft_id: "source-salvage".to_string(),
+                expected_revision: 0,
+                allow_deletions: false,
+                remove_node_ids: Vec::new(),
+                remove_variable_ids: Vec::new(),
+                remove_layer_ids: Vec::new(),
+                remove_comment_ids: Vec::new(),
+            },
+        );
+        assert_eq!(queued.status, "queued", "{queued:#?}");
+        assert_eq!(queued.revision, Some(0));
+        assert!(queued.message.contains("restored"), "{queued:#?}");
+        assert!(
+            queued
+                .source
+                .as_deref()
+                .is_some_and(|source| source.contains("logInfo(")),
+            "the exact checked source is restored: {queued:#?}"
+        );
+        assert_eq!(
+            serde_json::to_value(&queued.commands).unwrap(),
+            serde_json::to_value(&checked_commands).unwrap()
+        );
+
+        let token = store
+            .latest_pending_commit_token(&board.id)
+            .expect("salvage commit produces a standard pending claim");
+        assert_eq!(token.revision, 0);
+        let retained = store
+            .pending_commands_if_current(
+                &board,
+                &token.draft_id,
+                token.revision,
+                &token.base_fingerprint,
+                &token.claim_id,
+            )
+            .expect("salvaged batch resolves through the shared claim API");
+        assert_eq!(
+            serde_json::to_value(retained).unwrap(),
+            serde_json::to_value(checked_commands).unwrap()
+        );
+
+        let blocked = store.patch_flowscript(
+            &board,
+            &catalog,
+            PatchFlowScriptArgs {
+                draft_id: "source-salvage".to_string(),
+                expected_revision: 0,
+                old_text: "hello".to_string(),
+                new_text: "goodbye".to_string(),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(
+            blocked.code.as_deref(),
+            Some("FLOWSCRIPT_DRAFT_COMMIT_PENDING"),
+            "{blocked:#?}"
+        );
     }
 
     #[test]
@@ -9535,6 +10929,7 @@ eventsSimple() {
             .clone();
         let queued = store.commit_flowscript(
             &board,
+            &flowscript_catalog(),
             CommitFlowScriptArgs {
                 draft_id: "source-claim".to_string(),
                 expected_revision: 0,
@@ -9577,6 +10972,144 @@ eventsSimple() {
     }
 
     #[test]
+    fn typed_request_mismatch_envelopes_hide_foreign_coordinates() {
+        let denied = draft_request_mismatch(
+            "foreign-draft",
+            17,
+            "IR_DRAFT_REQUEST_IDENTITY_MISMATCH",
+            "This typed draft belongs to another request.",
+        );
+        let serialized = serde_json::to_value(&denied).unwrap();
+        assert!(serialized.get("draft_id").is_none());
+        assert!(serialized.get("revision").is_none());
+
+        let response = draft_request_mismatch_response(denied);
+        assert_eq!(response.status, "request_identity_mismatch");
+        assert!(response.draft_id.is_none());
+        assert!(response.revision.is_none());
+        assert!(response.base_fingerprint.is_none());
+        assert!(response.flowscript.is_none());
+        assert!(response.commands.is_empty());
+    }
+
+    #[test]
+    fn flowscript_catalog_fingerprint_is_order_independent_and_contract_sensitive() {
+        let catalog = flowscript_catalog();
+        let baseline = flowscript_catalog_fingerprint(&catalog);
+
+        let mut reordered = catalog.clone();
+        reordered.reverse();
+        assert_eq!(flowscript_catalog_fingerprint(&reordered), baseline);
+
+        let mut changed_type = catalog.clone();
+        changed_type[1].inputs[1].data_type = "Struct".to_string();
+        assert_ne!(flowscript_catalog_fingerprint(&changed_type), baseline);
+
+        let mut changed_schema = catalog;
+        changed_schema[1].inputs[1].schema = Some(r#"{"type":"string"}"#.to_string());
+        assert_ne!(flowscript_catalog_fingerprint(&changed_schema), baseline);
+    }
+
+    #[test]
+    fn flowscript_catalog_fingerprint_ignores_nonsemantic_pin_and_companion_metadata() {
+        let catalog = flowscript_catalog();
+        let baseline = flowscript_catalog_fingerprint(&catalog);
+        let mut presentation_change = catalog;
+        presentation_change[0].companion_nodes = vec!["some_search_hint".to_string()];
+        presentation_change[1].inputs[0].friendly_name = "New pin label".to_string();
+        presentation_change[1].inputs[0].description = "New pin documentation".to_string();
+
+        assert_eq!(
+            flowscript_catalog_fingerprint(&presentation_change),
+            baseline
+        );
+    }
+
+    #[test]
+    fn flowscript_catalog_fingerprint_tracks_acceptance_semantics() {
+        let catalog = flowscript_catalog();
+        let baseline = flowscript_catalog_fingerprint(&catalog);
+
+        let mutations: [fn(&mut NodeMetadata); 4] = [
+            |metadata: &mut NodeMetadata| metadata.friendly_name = "Send Email".to_string(),
+            |metadata: &mut NodeMetadata| {
+                metadata.description = "Publishes a support reply".to_string()
+            },
+            |metadata: &mut NodeMetadata| metadata.category = Some("support/email".to_string()),
+            |metadata: &mut NodeMetadata| {
+                metadata.capability_tags = vec!["send".to_string(), "email".to_string()]
+            },
+        ];
+        for mutate in mutations {
+            let mut changed = catalog.clone();
+            mutate(&mut changed[0]);
+            assert_ne!(flowscript_catalog_fingerprint(&changed), baseline);
+        }
+    }
+
+    #[test]
+    fn flowscript_commit_rejects_commands_checked_against_a_stale_catalog() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let catalog = flowscript_catalog();
+        let draft_id = "source-stale-catalog";
+        let written = store.write_flowscript(
+            &board,
+            &catalog,
+            WriteFlowScriptArgs {
+                draft_id: draft_id.to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(written.revision, Some(0), "{written:#?}");
+        let checked = store.check_flowscript(
+            &board,
+            &catalog,
+            CheckFlowScriptArgs {
+                draft_id: draft_id.to_string(),
+                expected_revision: 0,
+            },
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+
+        let mut changed_catalog = catalog;
+        changed_catalog[1].outputs.push(pin("status", "String"));
+        let commit_args = CommitFlowScriptArgs {
+            draft_id: draft_id.to_string(),
+            expected_revision: 0,
+            allow_deletions: false,
+            remove_node_ids: Vec::new(),
+            remove_variable_ids: Vec::new(),
+            remove_layer_ids: Vec::new(),
+            remove_comment_ids: Vec::new(),
+        };
+        let refused = store.commit_flowscript(&board, &changed_catalog, commit_args.clone());
+        assert_eq!(
+            refused.code.as_deref(),
+            Some("FLOWSCRIPT_CATALOG_REVISION_CONFLICT"),
+            "{refused:#?}"
+        );
+        assert!(refused.commands.is_empty());
+        assert!(store.latest_pending_commit_token(&board.id).is_none());
+
+        let rechecked = store.check_flowscript(
+            &board,
+            &changed_catalog,
+            CheckFlowScriptArgs {
+                draft_id: draft_id.to_string(),
+                expected_revision: 0,
+            },
+        );
+        assert_eq!(rechecked.status, "valid", "{rechecked:#?}");
+        let queued = store.commit_flowscript(&board, &changed_catalog, commit_args);
+        assert_eq!(queued.status, "queued", "{queued:#?}");
+        assert!(!queued.commands.is_empty());
+    }
+
+    #[test]
     fn pending_flowscript_delivery_redelivers_the_exact_claim_without_consuming_it() {
         let store = FlowIrDraftStore::new();
         let board = empty_board();
@@ -9608,6 +11141,7 @@ eventsSimple() {
         assert_eq!(checked.status, "valid", "{checked:#?}");
         let queued = store.commit_flowscript_with_acceptance_binding(
             &board,
+            &flowscript_catalog(),
             CommitFlowScriptArgs {
                 draft_id: "source-redelivery".to_string(),
                 expected_revision: 0,
@@ -9733,11 +11267,82 @@ eventsSimple() {
             &board.id,
             "Build an unrelated database cleanup workflow.",
         );
-        let denied = store.patch_flowscript_with_acceptance_binding(
+        let denied_responses = [
+            store.write_flowscript_with_acceptance_binding(
+                &board,
+                &flowscript_catalog(),
+                WriteFlowScriptArgs {
+                    draft_id: "source-recovery".to_string(),
+                    replace_existing: true,
+                    mode: FlowIrDraftMode::Additive,
+                    source: valid_flowscript("attacker"),
+                    allow_scope_reduction: false,
+                },
+                &unrelated_binding,
+            ),
+            store.patch_flowscript_with_acceptance_binding(
+                &board,
+                &flowscript_catalog(),
+                PatchFlowScriptArgs {
+                    draft_id: "source-recovery".to_string(),
+                    expected_revision: 0,
+                    old_text: "customer".to_string(),
+                    new_text: "attacker".to_string(),
+                    allow_scope_reduction: false,
+                },
+                &unrelated_binding,
+            ),
+            store.check_flowscript_with_acceptance_binding(
+                &board,
+                &flowscript_catalog(),
+                CheckFlowScriptArgs {
+                    draft_id: "source-recovery".to_string(),
+                    expected_revision: 0,
+                },
+                &unrelated_binding,
+            ),
+            store.commit_flowscript_with_acceptance_binding(
+                &board,
+                &flowscript_catalog(),
+                CommitFlowScriptArgs {
+                    draft_id: "source-recovery".to_string(),
+                    expected_revision: 0,
+                    allow_deletions: false,
+                    remove_node_ids: Vec::new(),
+                    remove_variable_ids: Vec::new(),
+                    remove_layer_ids: Vec::new(),
+                    remove_comment_ids: Vec::new(),
+                },
+                &unrelated_binding,
+            ),
+        ];
+        for denied in denied_responses {
+            assert_eq!(
+                denied.code.as_deref(),
+                Some("FLOWSCRIPT_DRAFT_REQUEST_IDENTITY_MISMATCH")
+            );
+            assert_eq!(denied.status, "request_identity_mismatch");
+            assert!(denied.draft_id.is_none());
+            assert!(denied.revision.is_none());
+            assert!(denied.base_fingerprint.is_none());
+            assert!(denied.source.is_none());
+            assert!(denied.diagnostics.is_empty());
+            assert!(denied.corrections.is_empty());
+            assert!(denied.derived_command_count.is_none());
+            assert_eq!(denied.queued_count, 0);
+            assert!(denied.commands.is_empty());
+            let serialized = serde_json::to_value(&denied).unwrap();
+            assert!(serialized.get("draft_id").is_none());
+            assert!(serialized.get("revision").is_none());
+            assert!(serialized.get("base_fingerprint").is_none());
+            assert!(serialized.get("source").is_none());
+        }
+
+        let missing = store.patch_flowscript_with_acceptance_binding(
             &board,
             &flowscript_catalog(),
             PatchFlowScriptArgs {
-                draft_id: "source-recovery".to_string(),
+                draft_id: "not-a-retained-draft".to_string(),
                 expected_revision: 0,
                 old_text: "customer".to_string(),
                 new_text: "attacker".to_string(),
@@ -9745,10 +11350,16 @@ eventsSimple() {
             },
             &unrelated_binding,
         );
-        assert_eq!(
-            denied.code.as_deref(),
-            Some("FLOWSCRIPT_DRAFT_REQUEST_IDENTITY_MISMATCH")
-        );
+        assert_eq!(missing.code.as_deref(), Some("FLOWSCRIPT_DRAFT_MISSING"));
+        assert!(missing.draft_id.is_none());
+        assert!(missing.revision.is_none());
+        assert!(missing.source.is_none());
+
+        let retained = store.source_drafts.lock().unwrap();
+        let original = retained.get("source-recovery").unwrap();
+        assert_eq!(original.revision, 0);
+        assert_eq!(original.source, source);
+        drop(retained);
 
         let conflicting = store.editable_flowscript_draft_recovery(
             &board,
@@ -9760,12 +11371,51 @@ eventsSimple() {
             FlowIrDraftRecoveryStatus::RequestMismatch
         );
         assert!(conflicting.exact_match.is_none());
+        assert!(conflicting.conflicting_draft.is_none());
+        let serialized = serde_json::to_string(&conflicting).unwrap();
+        assert!(!serialized.contains("source-recovery"));
+        assert!(!serialized.contains(&source));
+
+        let separate = store.write_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "unrelated-recovery".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("unrelated"),
+                allow_scope_reduction: false,
+            },
+            &unrelated_binding,
+        );
+        assert_eq!(separate.revision, Some(0));
+        let unrelated = store.editable_flowscript_draft_recovery(
+            &board,
+            "Build an unrelated database cleanup workflow.",
+        );
+        assert!(unrelated.auto_resume);
+        assert_eq!(
+            unrelated
+                .exact_match
+                .as_ref()
+                .map(|draft| draft.draft_id.as_str()),
+            Some("unrelated-recovery")
+        );
+        let original = store.editable_flowscript_draft_recovery(&board, original_request);
+        assert_eq!(
+            original
+                .exact_match
+                .as_ref()
+                .and_then(|draft| draft.source.as_deref()),
+            Some(source.as_str())
+        );
     }
 
     #[test]
     fn flowscript_check_rejects_a_stale_board_fingerprint() {
         let store = FlowIrDraftStore::new();
         let board = empty_board();
+        let source = valid_flowscript("hello");
         store.write_flowscript(
             &board,
             &flowscript_catalog(),
@@ -9773,7 +11423,7 @@ eventsSimple() {
                 draft_id: "source-stale".to_string(),
                 replace_existing: false,
                 mode: FlowIrDraftMode::Additive,
-                source: valid_flowscript("hello"),
+                source: source.clone(),
                 allow_scope_reduction: false,
             },
         );
@@ -9793,6 +11443,44 @@ eventsSimple() {
             checked.code.as_deref(),
             Some("FLOWSCRIPT_BASE_REVISION_CONFLICT")
         );
+        assert_eq!(checked.source.as_deref(), Some(source.as_str()));
+
+        let patched = store.patch_flowscript(
+            &advanced,
+            &flowscript_catalog(),
+            PatchFlowScriptArgs {
+                draft_id: "source-stale".to_string(),
+                expected_revision: 0,
+                old_text: "hello".to_string(),
+                new_text: "changed".to_string(),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(
+            patched.code.as_deref(),
+            Some("FLOWSCRIPT_BASE_REVISION_CONFLICT")
+        );
+        let replaced = store.write_flowscript(
+            &advanced,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "source-stale".to_string(),
+                replace_existing: true,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("replacement"),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(
+            replaced.code.as_deref(),
+            Some("FLOWSCRIPT_BASE_REVISION_CONFLICT")
+        );
+        let retained_drafts = store.source_drafts.lock().unwrap();
+        let retained = retained_drafts.get("source-stale").unwrap();
+        assert_eq!(retained.revision, 0);
+        assert_eq!(retained.source, source);
+        drop(retained_drafts);
+
         let recovery = store.editable_flowscript_draft_recovery_for_identity(
             &advanced,
             &FlowIrRequestIdentity::unbound(),
@@ -9807,6 +11495,109 @@ eventsSimple() {
         assert_eq!(
             recovery.next_actions,
             ["start_new_draft_from_current_board"]
+        );
+    }
+
+    #[test]
+    fn base_revision_conflict_reopens_the_request_binding_for_a_new_draft() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let request = "Send a Slack notification.";
+        let binding = store.bind_request_acceptance_contract(&board.id, request);
+        let written = store.write_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "conflict-first".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+            &binding,
+        );
+        assert_eq!(written.revision, Some(0), "{written:#?}");
+
+        let mut advanced = board.clone();
+        let mut variable = Variable::new("conflictMarker", VariableType::String, ValueType::Normal);
+        variable.id = "conflict-marker".to_string();
+        advanced.variables.insert(variable.id.clone(), variable);
+        let checked = store.check_flowscript_with_acceptance_binding(
+            &advanced,
+            &flowscript_catalog(),
+            CheckFlowScriptArgs {
+                draft_id: "conflict-first".to_string(),
+                expected_revision: 0,
+            },
+            &binding,
+        );
+        assert_eq!(
+            checked.code.as_deref(),
+            Some("FLOWSCRIPT_BASE_REVISION_CONFLICT")
+        );
+
+        // The re-opened contract still belongs to its immutable request: a binding carrying a
+        // different request identity must not claim it.
+        let forged = FlowIrAcceptanceBinding {
+            id: binding.id.clone(),
+            board_id: board.id.clone(),
+            criterion_count: binding.criterion_count,
+            request_identity: FlowIrRequestIdentity::from_raw_request(
+                "Build an unrelated database cleanup workflow.",
+            ),
+        };
+        let denied = store.write_flowscript_with_acceptance_binding(
+            &advanced,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "conflict-foreign".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+            &forged,
+        );
+        assert_eq!(
+            denied.code.as_deref(),
+            Some("IR_ACCEPTANCE_BINDING_IDENTITY_MISMATCH"),
+            "{denied:#?}"
+        );
+
+        let recovered = store.write_flowscript_with_acceptance_binding(
+            &advanced,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "conflict-second".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+            &binding,
+        );
+        assert_eq!(
+            recovered.revision,
+            Some(0),
+            "a fresh draft under the same binding must succeed after the conflict: {recovered:#?}"
+        );
+        let drafts = store.source_drafts.lock().unwrap();
+        let first = drafts.get("conflict-first").unwrap();
+        let second = drafts.get("conflict-second").unwrap();
+        assert_eq!(second.request_identity, first.request_identity);
+        assert_eq!(
+            second.request_acceptance_contract, first.request_acceptance_contract,
+            "the recovered draft must carry the identical request contract"
+        );
+        assert!(!second.request_acceptance_contract.criteria.is_empty());
+        drop(drafts);
+        assert!(
+            store
+                .request_acceptance_contracts
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "the successful recovery write consumes the re-opened contract again"
         );
     }
 
@@ -10227,16 +12018,17 @@ eventsSimple() {
         );
         assert_eq!(
             contract.criteria.len(),
-            6,
+            5,
             "derived criteria: {:#?}",
             contract.criteria
         );
         assert_eq!(contract.criteria[0].actions, vec!["read"]);
         assert_eq!(contract.criteria[1].actions, vec!["generate"]);
+        // The review mail and customer mail clauses demand the same action on the same subject,
+        // so they collapse into one criterion instead of duplicating it.
         assert_eq!(contract.criteria[2].actions, vec!["send"]);
-        assert_eq!(contract.criteria[3].actions, vec!["send"]);
-        assert_eq!(contract.criteria[4].actions, vec!["update"]);
-        assert_eq!(contract.criteria[5].actions, vec!["call"]);
+        assert_eq!(contract.criteria[3].actions, vec!["update"]);
+        assert_eq!(contract.criteria[4].actions, vec!["call"]);
 
         let mut catalog = vec![metadata("events_simple", Vec::new(), Vec::new())];
         catalog.extend([
@@ -10471,6 +12263,141 @@ eventsSimple() {
             acceptance_contract_diagnostics(&contract, &missing_reask_correlation, &catalog,)
                 .iter()
                 .any(|diagnostic| diagnostic.code == "IR_REQUEST_APPROVAL_CORRELATION_MISSING")
+        );
+    }
+
+    #[test]
+    fn page_action_approval_uses_distinct_ui_action_contract() {
+        let prompt = "Human-in-the-Loop Freigabe auf einer Seite. \
+            Page-Action approve erhält ticketId und draftReply. \
+            Page-Action revise erhält ticketId und revisionFeedback.";
+        let contract = derive_request_approval_loop_contract(prompt)
+            .expect("the explicit approval loop should be detected");
+        assert_eq!(contract.channel, RequestApprovalChannel::PageAction);
+    }
+
+    #[test]
+    fn ui_action_approval_accepts_separate_approve_and_revise_entries() {
+        fn reference(name: &str) -> FlowIrValue {
+            FlowIrValue::Ref {
+                name: name.to_string(),
+            }
+        }
+
+        fn literal(value: &str) -> FlowIrValue {
+            FlowIrValue::Literal {
+                value: FlowIrLiteral::String(value.to_string()),
+            }
+        }
+
+        fn arg(pin: &str, value: FlowIrValue) -> FlowIrArg {
+            FlowIrArg {
+                pin: pin.to_string(),
+                occurrence: 0,
+                value,
+            }
+        }
+
+        fn node(id: &str, node_type: &str, args: Vec<FlowIrArg>) -> FlowIrStep {
+            FlowIrStep::Node {
+                id: id.to_string(),
+                node_type: node_type.to_string(),
+                args,
+                continue_from: None,
+                exec_arms: Vec::new(),
+                anchor: None,
+            }
+        }
+
+        fn param(name: &str) -> FlowIrParam {
+            FlowIrParam {
+                name: name.to_string(),
+                value_type: acceptance_projection_type(),
+            }
+        }
+
+        fn event(params: Vec<FlowIrParam>, steps: Vec<FlowIrStep>) -> FlowIrModule {
+            FlowIrModule::Event {
+                name: "eventsGeneric".to_string(),
+                node_type: "events_generic".to_string(),
+                params,
+                steps,
+                anchor: None,
+            }
+        }
+
+        let reviewer = "example@example.com";
+        let program = FlowIrProgram {
+            modules: vec![
+                FlowIrModule::Event {
+                    name: "eventsSimple".to_string(),
+                    node_type: "events_simple".to_string(),
+                    params: Vec::new(),
+                    steps: vec![node(
+                        "initial_review",
+                        "smtp_email_send",
+                        vec![
+                            arg("to", literal(reviewer)),
+                            arg("ticket_id", reference("ticket_id")),
+                        ],
+                    )],
+                    anchor: None,
+                },
+                event(
+                    vec![param("payload"), param("ticketId"), param("draftReply")],
+                    vec![node(
+                        "send_customer",
+                        "smtp_email_send",
+                        vec![
+                            arg("to", reference("requester_email")),
+                            arg("body", reference("draftReply")),
+                        ],
+                    )],
+                ),
+                event(
+                    vec![
+                        param("payload"),
+                        param("ticketId"),
+                        param("revisionFeedback"),
+                    ],
+                    vec![
+                        node(
+                            "regenerate",
+                            "ai_model_generate",
+                            vec![arg("feedback", reference("revisionFeedback"))],
+                        ),
+                        node(
+                            "reask_reviewer",
+                            "smtp_email_send",
+                            vec![
+                                arg("to", literal(reviewer)),
+                                arg("ticket_id", reference("ticketId")),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+            ..Default::default()
+        };
+        let catalog = vec![
+            metadata("events_simple", Vec::new(), Vec::new()),
+            metadata("events_generic", Vec::new(), Vec::new()),
+            metadata("smtp_email_send", Vec::new(), Vec::new()),
+            metadata("ai_model_generate", Vec::new(), Vec::new()),
+        ];
+        let catalog_by_name = catalog
+            .iter()
+            .map(|metadata| (normalize(&metadata.name), metadata))
+            .collect::<HashMap<_, _>>();
+        let contract = RequestApprovalLoopContract {
+            reviewer_emails: vec![reviewer.to_string()],
+            channel: RequestApprovalChannel::PageAction,
+        };
+
+        assert!(
+            ui_approval_loop_diagnostics(&contract, &program, &catalog_by_name).is_empty(),
+            "UI diagnostics: {:#?}",
+            ui_approval_loop_diagnostics(&contract, &program, &catalog_by_name)
         );
     }
 
@@ -10873,7 +12800,7 @@ eventsSimple() {
                 objects: vec!["email".to_string()],
                 forbidden: true,
             }],
-            approval_loop: None,
+            ..Default::default()
         };
         assert!(
             acceptance_contract_diagnostics(

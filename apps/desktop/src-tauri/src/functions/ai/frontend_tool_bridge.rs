@@ -170,6 +170,10 @@ pub struct FrontendToolContext {
     /// Correlates runtime/database calls made by a nested FlowPilot run with the outer
     /// `flowpilot_board`/`flowpilot_widget` request that started it.
     pub parent_request_id: Option<String>,
+    /// Stable id of the chat conversation that owns this tool tree. Scopes retained-draft and
+    /// acceptance-contract identity so identical prompt text sent from two different
+    /// conversations can never share a draft lease.
+    pub conversation_id: Option<String>,
     /// Immutable top-level user message that owns this tool tree. Delegated specialist prompts
     /// may add their own instruction, but host orchestration suffixes must never replace it.
     pub source_user_prompt: Option<String>,
@@ -855,6 +859,7 @@ fn safe_request_context(context: &FrontendToolSafeContext) -> Option<FrontendToo
             app_id: context.app_id.clone(),
             board_id: context.board_id.clone(),
             parent_request_id: context.parent_request_id.clone(),
+            conversation_id: None,
             source_user_prompt: None,
         })
 }
@@ -1296,6 +1301,7 @@ mod tests {
             app_id: Some("scoped-app".to_string()),
             board_id: Some("scoped-board".to_string()),
             parent_request_id: Some("outer-request".to_string()),
+            conversation_id: None,
             source_user_prompt: None,
         };
 
@@ -1328,6 +1334,7 @@ mod tests {
             app_id: Some("app-safe".to_string()),
             board_id: Some("board-safe".to_string()),
             parent_request_id: Some("flowpilot-tool-parent-1".to_string()),
+            conversation_id: None,
             source_user_prompt: None,
         };
         let approval = FrontendToolApproval::mutating(
@@ -1402,6 +1409,7 @@ mod tests {
                 app_id: Some("app".to_string()),
                 board_id: Some("board".to_string()),
                 parent_request_id: Some("parent".to_string()),
+                conversation_id: None,
                 source_user_prompt: None,
             }),
             dispatched_at_ms: 1_000,

@@ -32,7 +32,7 @@ use crate::flow::copilot::{
 };
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
-use crate::flow::variable::VariableType;
+use crate::flow::variable::{Variable, VariableType};
 
 /// Outcome of reconciling a parsed `BoardAst` against a live board.
 #[derive(Debug, Default, Clone)]
@@ -361,8 +361,40 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
         }
     }
 
+    fn register_normalized_boundary_duplicates<'a>(
+        names: impl IntoIterator<Item = &'a str>,
+        noun: &str,
+        scope: &str,
+        diagnostics: &mut Vec<String>,
+    ) {
+        let mut originals = BTreeMap::<String, Vec<&str>>::new();
+        for name in names {
+            originals.entry(to_camel_case(name)).or_default().push(name);
+        }
+        for (normalized, mut names) in originals {
+            names.sort_unstable();
+            names.dedup();
+            if names.len() > 1 {
+                diagnostics.push(format!(
+                    "FlowScript {noun} names {} collide as normalized boundary name `{normalized}` {scope}; no commands were derived",
+                    names
+                        .into_iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+
     fn visit_event(event: &EventBlock, scope: &str, diagnostics: &mut Vec<String>) {
         register_duplicates(
+            event.params.iter().map(|param| param.name.as_str()),
+            "event parameter",
+            scope,
+            diagnostics,
+        );
+        register_normalized_boundary_duplicates(
             event.params.iter().map(|param| param.name.as_str()),
             "event parameter",
             scope,
@@ -438,12 +470,62 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
             &scope,
             &mut diagnostics,
         );
+        register_normalized_boundary_duplicates(
+            function.params.iter().map(|param| param.name.as_str()),
+            "function parameter",
+            &scope,
+            &mut diagnostics,
+        );
         register_duplicates(
             function.returns.iter().map(|param| param.name.as_str()),
             "function return",
             &scope,
             &mut diagnostics,
         );
+        register_normalized_boundary_duplicates(
+            function.returns.iter().map(|param| param.name.as_str()),
+            "function return",
+            &scope,
+            &mut diagnostics,
+        );
+        let parameter_names = function
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<HashSet<_>>();
+        let mut collisions = function
+            .returns
+            .iter()
+            .map(|param| param.name.as_str())
+            .filter(|name| parameter_names.contains(name))
+            .collect::<Vec<_>>();
+        collisions.sort_unstable();
+        collisions.dedup();
+        for name in collisions {
+            diagnostics.push(format!(
+                "FlowScript function boundary name `{name}` is used by both a parameter and return {scope}; no commands were derived"
+            ));
+        }
+        let parameter_names = function
+            .params
+            .iter()
+            .map(|param| to_camel_case(&param.name))
+            .collect::<HashSet<_>>();
+        let mut normalized_collisions = function
+            .returns
+            .iter()
+            .filter_map(|param| {
+                let normalized = to_camel_case(&param.name);
+                parameter_names.contains(&normalized).then_some(normalized)
+            })
+            .collect::<Vec<_>>();
+        normalized_collisions.sort_unstable();
+        normalized_collisions.dedup();
+        for name in normalized_collisions {
+            diagnostics.push(format!(
+                "FlowScript function normalized boundary name `{name}` is used by both a parameter and return {scope}; no commands were derived"
+            ));
+        }
         visit_block(&function.body, &scope, &mut diagnostics);
     }
     for (index, event) in ast.events.iter().enumerate() {
@@ -1227,7 +1309,11 @@ fn binary_operator_call(
 /// work into function layers instead.
 pub const MAX_NODES_PER_LAYER: usize = 50;
 
-fn function_layer_pins(func: &FnDecl, impure: bool) -> Vec<LayerPinMetadata> {
+fn function_layer_pins(
+    func: &FnDecl,
+    impure: bool,
+    interface_schemas: &HashMap<String, String>,
+) -> Vec<LayerPinMetadata> {
     let exec_pins = impure
         .then(|| {
             vec![
@@ -1237,6 +1323,8 @@ fn function_layer_pins(func: &FnDecl, impure: bool) -> Vec<LayerPinMetadata> {
                     data_type: "Execution".to_string(),
                     value_type: "Normal".to_string(),
                     pin_type: "Input".to_string(),
+                    schema: None,
+                    enforce_schema: false,
                 },
                 LayerPinMetadata {
                     name: FUNCTION_EXEC_OUT.to_string(),
@@ -1244,6 +1332,8 @@ fn function_layer_pins(func: &FnDecl, impure: bool) -> Vec<LayerPinMetadata> {
                     data_type: "Execution".to_string(),
                     value_type: "Normal".to_string(),
                     pin_type: "Output".to_string(),
+                    schema: None,
+                    enforce_schema: false,
                 },
             ]
         })
@@ -1253,12 +1343,12 @@ fn function_layer_pins(func: &FnDecl, impure: bool) -> Vec<LayerPinMetadata> {
         .chain(
             func.params
                 .iter()
-                .map(|param| layer_pin_from_param(param, "Input")),
+                .map(|param| layer_pin_from_param(param, "Input", interface_schemas)),
         )
         .chain(
             func.returns
                 .iter()
-                .map(|param| layer_pin_from_param(param, "Output")),
+                .map(|param| layer_pin_from_param(param, "Output", interface_schemas)),
         )
         .collect()
 }
@@ -1278,22 +1368,49 @@ fn execution_pin_metadata(name: &str, friendly_name: &str) -> PinMetadata {
     }
 }
 
-fn param_pin_metadata(param: &Param) -> PinMetadata {
+fn param_pin_metadata(param: &Param, interface_schemas: &HashMap<String, String>) -> PinMetadata {
+    let schema = interface_schemas.get(&param.ty.base).cloned();
+    let data_type = type_ref_data_type(&param.ty).to_string();
     PinMetadata {
         name: param.name.clone(),
         friendly_name: param.name.clone(),
         description: String::new(),
-        data_type: type_ref_data_type(&param.ty).to_string(),
+        data_type: data_type.clone(),
         value_type: type_ref_value_type(&param.ty).to_string(),
         default_value: None,
-        schema: None,
-        is_generic: false,
+        schema: schema.clone(),
+        is_generic: data_type == "Generic",
+        valid_values: None,
+        enforce_schema: schema.is_some(),
+    }
+}
+
+fn variable_value_pin_metadata(
+    name: &str,
+    data_type: String,
+    value_type: String,
+    schema: Option<String>,
+) -> PinMetadata {
+    let is_generic = data_type == "Generic";
+    PinMetadata {
+        name: name.to_string(),
+        friendly_name: name.to_string(),
+        description: String::new(),
+        data_type,
+        value_type,
+        default_value: None,
+        schema,
+        is_generic,
         valid_values: None,
         enforce_schema: false,
     }
 }
 
-fn param_output_pin_def(param: &Param) -> PlaceholderPinDef {
+fn param_output_pin_def(
+    param: &Param,
+    interface_schemas: &HashMap<String, String>,
+) -> PlaceholderPinDef {
+    let schema = interface_schemas.get(&param.ty.base).cloned();
     PlaceholderPinDef {
         name: param.name.clone(),
         friendly_name: param.name.clone(),
@@ -1301,6 +1418,8 @@ fn param_output_pin_def(param: &Param) -> PlaceholderPinDef {
         pin_type: "Output".to_string(),
         data_type: type_ref_data_type(&param.ty).to_string(),
         value_type: Some(type_ref_value_type(&param.ty).to_string()),
+        schema: schema.clone(),
+        enforce_schema: schema.is_some(),
     }
 }
 
@@ -1314,18 +1433,36 @@ struct PlannedFunction {
     /// resolve against the catalog. Structural/purity diagnostics are derivative until that
     /// primary resolution error is repaired, so they must not drown out the actionable cause.
     has_unresolved_calls: bool,
-    params: Vec<Param>,
-    returns: Vec<Param>,
+    params: Vec<PinMetadata>,
+    returns: Vec<PinMetadata>,
 }
 
-fn layer_pin_from_param(param: &Param, pin_type: &str) -> LayerPinMetadata {
+fn layer_pin_from_param(
+    param: &Param,
+    pin_type: &str,
+    interface_schemas: &HashMap<String, String>,
+) -> LayerPinMetadata {
+    let schema = interface_schemas.get(&param.ty.base).cloned();
     LayerPinMetadata {
         name: param.name.clone(),
         friendly_name: param.name.clone(),
         data_type: type_ref_data_type(&param.ty).to_string(),
         value_type: type_ref_value_type(&param.ty).to_string(),
         pin_type: pin_type.to_string(),
+        schema: schema.clone(),
+        enforce_schema: schema.is_some(),
     }
+}
+
+fn interface_schema_map(ast: &BoardAst) -> HashMap<String, String> {
+    ast.interfaces
+        .iter()
+        .filter_map(|interface| {
+            flow_like_ast::schema_from_interface_with_defs(interface, &ast.interfaces)
+                .or_else(|| interface.schema.clone())
+                .map(|schema| (interface.name.clone(), schema))
+        })
+        .collect()
 }
 
 fn type_ref_data_type(ty: &TypeRef) -> &'static str {
@@ -1433,6 +1570,38 @@ fn literal_expr_to_value(expr: &Expr) -> Option<flow_like_types::Value> {
             Some(Value::Array(values))
         }
         _ => None,
+    }
+}
+
+/// Compact single-line rendering of an expression for diagnostics, truncated to ~80 chars.
+fn describe_expr(expr: &Expr) -> String {
+    fn render(expr: &Expr) -> String {
+        match expr {
+            Expr::Ref(name) => name.clone(),
+            Expr::Call(call) => format!("{}(...)", call.display),
+            Expr::Field { base, pin } => format!("{}.{pin}", render(base)),
+            Expr::Member { base, field } => format!("{}.{field}", render(base)),
+            Expr::Index { base, .. } => format!("{}[...]", render(base)),
+            Expr::Binary { op, lhs, rhs } => format!("{} {op} {}", render(lhs), render(rhs)),
+            Expr::Ternary { cond, .. } => format!("{} ? ... : ...", render(cond)),
+            Expr::Object(_) => "{...}".to_string(),
+            Expr::Array(_) => "[...]".to_string(),
+            Expr::Literal(literal) => match literal {
+                Literal::String(value) => format!("\"{value}\""),
+                Literal::Int(value) => value.to_string(),
+                Literal::Float(value) => value.to_string(),
+                Literal::Bool(value) => value.to_string(),
+                Literal::Null => "null".to_string(),
+                Literal::Json(value) => value.clone(),
+            },
+        }
+    }
+    let rendered = render(expr);
+    if rendered.chars().count() > 80 {
+        let truncated: String = rendered.chars().take(77).collect();
+        format!("{truncated}...")
+    } else {
+        rendered
     }
 }
 
@@ -1546,6 +1715,45 @@ fn find_input_pin_by_ref<'a>(node: &'a Node, pin_ref: &str) -> Option<&'a Pin> {
         return matching.get(occurrence).copied();
     }
     find_input_pin(node, pin_ref)
+}
+
+fn find_boundary_pin_by_ref<'a>(
+    pins: &'a HashMap<String, Pin>,
+    pin_ref: &str,
+    expected: PinType,
+) -> Option<&'a Pin> {
+    if let Some(pin) = pins.get(pin_ref) {
+        return (pin.pin_type == expected).then_some(pin);
+    }
+    let (name, occurrence) = parse_pin_occurrence_ref(pin_ref).unwrap_or((pin_ref, 0));
+    let mut matching = pins
+        .values()
+        .filter(|pin| pin.pin_type == expected && node_pin_name_matches(pin, name))
+        .collect::<Vec<_>>();
+    matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+    matching.get(occurrence).copied()
+}
+
+fn boundary_pin_metadata(pin: &Pin) -> PinMetadata {
+    PinMetadata {
+        name: pin.name.clone(),
+        friendly_name: pin.friendly_name.clone(),
+        description: pin.description.clone(),
+        data_type: format!("{:?}", pin.data_type),
+        value_type: format!("{:?}", pin.value_type),
+        default_value: None,
+        schema: pin.schema.clone(),
+        is_generic: pin.data_type == VariableType::Generic,
+        valid_values: pin
+            .options
+            .as_ref()
+            .and_then(|options| options.valid_values.clone()),
+        enforce_schema: pin
+            .options
+            .as_ref()
+            .and_then(|options| options.enforce_schema)
+            .unwrap_or(false),
+    }
 }
 
 /// All input pins matching `name`, deterministically ordered: populated pins (connected or
@@ -2048,19 +2256,200 @@ fn metadata_output_pin<'a>(meta: &'a NodeMetadata, name: &str) -> Option<&'a Pin
         .find(|p| p.data_type != "Execution" && metadata_pin_name_matches(p, name))
 }
 
-fn metadata_pins_are_compatible(input: &PinMetadata, output: &PinMetadata) -> bool {
-    let data_type_ok = input.is_generic
-        || output.is_generic
-        || input.data_type == "Generic"
-        || output.data_type == "Generic"
-        || input.data_type == output.data_type;
-    if !data_type_ok {
-        return false;
+fn canonical_schema_value(value: &flow_like_types::Value) -> String {
+    match value {
+        flow_like_types::Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_schema_value)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        flow_like_types::Value::Object(fields) => {
+            let mut names = fields.keys().collect::<Vec<_>>();
+            names.sort_unstable();
+            format!(
+                "{{{}}}",
+                names
+                    .into_iter()
+                    .map(|name| format!(
+                        "{}:{}",
+                        serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string()),
+                        canonical_schema_value(&fields[name])
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        _ => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+fn normalized_pin_schema(schema: Option<&str>, refs: &HashMap<String, String>) -> Option<String> {
+    let schema = schema?.trim();
+    if schema.is_empty() {
+        return None;
+    }
+    let expanded = refs
+        .get(schema)
+        .map(String::as_str)
+        .unwrap_or(schema)
+        .trim();
+    flow_like_types::json::from_str::<flow_like_types::Value>(expanded)
+        .map(|value| canonical_schema_value(&value))
+        .ok()
+        .or_else(|| Some(expanded.to_string()))
+}
+
+fn schema_constraints_are_compatible(
+    input_name: &str,
+    input_data_type: &str,
+    input_value_type: &str,
+    input_schema: Option<&str>,
+    input_enforce_schema: bool,
+    output_name: &str,
+    output_data_type: &str,
+    output_value_type: &str,
+    output_schema: Option<&str>,
+    output_enforce_schema: bool,
+    refs: &HashMap<String, String>,
+) -> bool {
+    let input_schema = normalized_pin_schema(input_schema, refs);
+    let output_schema = normalized_pin_schema(output_schema, refs);
+
+    // struct_make/struct_break/struct_set boundary pins adopt the connected schema dynamically.
+    // Preserve that behavior before applying the ordinary two-sided schema equality rule.
+    if matches!(input_name, "struct" | "struct_in" | "struct_out")
+        || matches!(output_name, "struct" | "struct_in" | "struct_out")
+    {
+        if input_data_type == "Struct" && output_data_type == "Struct" {
+            return input_value_type == output_value_type;
+        }
     }
 
-    input.value_type == output.value_type
-        || input.value_type == "Normal"
-        || output.value_type == "Normal"
+    // Match the runtime/UI contract: descriptive schemas are permissive unless one endpoint opts
+    // into enforcement. Canonical JSON still avoids rejecting whitespace/key-order-only changes.
+    if (input_enforce_schema || output_enforce_schema)
+        && !matches!(input_name, "value_ref" | "value_in")
+        && !matches!(output_name, "value_ref" | "value_in")
+        && input_data_type != "Generic"
+        && output_data_type != "Generic"
+    {
+        return matches!(
+            (input_schema.as_deref(), output_schema.as_deref()),
+            (Some(input), Some(output)) if input == output
+        );
+    }
+
+    true
+}
+
+fn metadata_pins_are_compatible(
+    input: &PinMetadata,
+    output: &PinMetadata,
+    refs: &HashMap<String, String>,
+) -> bool {
+    if !schema_constraints_are_compatible(
+        &input.name,
+        &input.data_type,
+        &input.value_type,
+        input.schema.as_deref(),
+        input.enforce_schema,
+        &output.name,
+        &output.data_type,
+        &output.value_type,
+        output.schema.as_deref(),
+        output.enforce_schema,
+        refs,
+    ) {
+        return false;
+    }
+    let input_generic = input.is_generic || input.data_type == "Generic";
+    let output_generic = output.is_generic || output.data_type == "Generic";
+    if input_generic || output_generic {
+        if input_generic
+            && input.value_type != "Normal"
+            && input.value_type != output.value_type
+            && !(output_generic && output.value_type == "Normal")
+        {
+            return false;
+        }
+        if output_generic
+            && output.value_type != "Normal"
+            && output.value_type != input.value_type
+            && !(input_generic && input.value_type == "Normal")
+        {
+            return false;
+        }
+        return true;
+    }
+
+    input.data_type == output.data_type && input.value_type == output.value_type
+}
+
+fn planned_output_is_compatible(
+    input: &PinMetadata,
+    output: &PlannedOutputType,
+    refs: &HashMap<String, String>,
+) -> bool {
+    if !schema_constraints_are_compatible(
+        &input.name,
+        &input.data_type,
+        &input.value_type,
+        input.schema.as_deref(),
+        input.enforce_schema,
+        &output.pin_name,
+        &output.data_type,
+        &output.value_type,
+        output.schema.as_deref(),
+        output.enforce_schema,
+        refs,
+    ) {
+        return false;
+    }
+    let input_generic = input.is_generic || input.data_type == "Generic";
+    let output_generic = output.is_generic || output.data_type == "Generic";
+    if input_generic || output_generic {
+        // A dynamic Generic/Normal pin can specialize to any concrete shape. Once either side
+        // declares a collection container, though, the container is part of the contract: do not
+        // silently wire Generic[] to a scalar (or a scalar to Generic[]).
+        if input_generic
+            && input.value_type != "Normal"
+            && input.value_type != output.value_type
+            && !(output_generic && output.value_type == "Normal")
+        {
+            return false;
+        }
+        if output_generic
+            && output.value_type != "Normal"
+            && output.value_type != input.value_type
+            && !(input_generic && input.value_type == "Normal")
+        {
+            return false;
+        }
+        return true;
+    }
+
+    input.data_type == output.data_type && input.value_type == output.value_type
+}
+
+/// Variable nodes specialize their Generic catalog pins from the selected variable. Their runtime
+/// `on_update` contract permits a schema-less side, but if both sides carry schemas they must
+/// describe the same structure. This check complements the generic pin compatibility rules, whose
+/// `value_in`/`value_ref` exception is needed while those nodes are still unspecialized.
+fn variable_assignment_schemas_are_compatible(
+    input: &PinMetadata,
+    output: &PlannedOutputType,
+    refs: &HashMap<String, String>,
+) -> bool {
+    match (
+        normalized_pin_schema(input.schema.as_deref(), refs),
+        normalized_pin_schema(output.schema.as_deref(), refs),
+    ) {
+        (Some(input), Some(output)) => input == output,
+        _ => true,
+    }
 }
 
 fn default_metadata_output_pin(meta: &NodeMetadata) -> Option<String> {
@@ -2213,6 +2602,8 @@ struct LayerPinMetadata {
     data_type: String,
     value_type: String,
     pin_type: String,
+    schema: Option<String>,
+    enforce_schema: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2293,6 +2684,21 @@ struct OutputShape {
     schema: Option<String>,
 }
 
+/// Concrete type information for an output whose identity is unambiguous while planning new
+/// FlowScript wiring. Function boundaries do not preserve Struct schemas, but catalog and existing
+/// board pins do; newly authored edges must obey those exact contracts. Legacy edges are
+/// grandfathered separately only when the same endpoints are already connected.
+#[derive(Debug, Clone)]
+struct PlannedOutputType {
+    source: String,
+    pin_name: String,
+    data_type: String,
+    value_type: String,
+    is_generic: bool,
+    schema: Option<String>,
+    enforce_schema: bool,
+}
+
 /// Extract the declared keys from a concrete object schema. Catalog schemas generated by
 /// `schemars` normally expose `properties` at the root, but optional/ref-wrapped structs occur as
 /// well. Stay conservative around unions: only a single non-null object variant is authoritative
@@ -2320,9 +2726,10 @@ fn catalog_object_schema_fields(schema: &str) -> Option<(Option<String>, Vec<Str
             .get("properties")
             .and_then(flow_like_types::Value::as_object)
         {
-            // An explicitly extensible object does not have an exhaustive property list. Absence
-            // is treated as the concrete catalog shape used by schemars-generated Rust structs;
-            // an explicit schema/pattern for extra keys keeps runtime member access permissive.
+            // `enforce_schema` governs pin-to-pin connection identity, not JSON object closure.
+            // JSON Schema allows extra properties by default, so a property list is exhaustive
+            // only when the schema itself closes additional/unevaluated properties. Explicit
+            // extension and pattern keys always keep runtime member access permissive.
             if schema
                 .get("additionalProperties")
                 .is_some_and(|value| value.as_bool() != Some(false))
@@ -2334,6 +2741,15 @@ fn catalog_object_schema_fields(schema: &str) -> Option<(Option<String>, Vec<Str
                     .and_then(flow_like_types::Value::as_object)
                     .is_some_and(|patterns| !patterns.is_empty())
             {
+                return None;
+            }
+            let explicitly_closed = schema
+                .get("additionalProperties")
+                .is_some_and(|value| value.as_bool() == Some(false))
+                || schema
+                    .get("unevaluatedProperties")
+                    .is_some_and(|value| value.as_bool() == Some(false));
+            if !explicitly_closed {
                 return None;
             }
             let mut names = properties.keys().cloned().collect::<Vec<_>>();
@@ -2385,14 +2801,17 @@ enum SymbolValue {
 struct CatalogIndex {
     by_display: HashMap<String, Vec<NodeMetadata>>,
     by_display_lower: HashMap<String, Vec<NodeMetadata>>,
-    by_type: HashMap<String, NodeMetadata>,
+    // Catalogs can contain one entry per installed package or live board instance. Keep every
+    // declaration for an internal name: selecting the last HashMap insertion makes reconciliation
+    // depend on provider iteration order when two packages expose conflicting contracts.
+    by_type: HashMap<String, Vec<NodeMetadata>>,
 }
 
 impl CatalogIndex {
     fn new(catalog: &[NodeMetadata]) -> Self {
         let mut by_display: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
         let mut by_display_lower: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
-        let mut by_type = HashMap::new();
+        let mut by_type: HashMap<String, Vec<NodeMetadata>> = HashMap::new();
         for meta in catalog {
             let display = to_camel_case(&meta.name);
             by_display
@@ -2403,7 +2822,10 @@ impl CatalogIndex {
                 .entry(display.to_lowercase())
                 .or_default()
                 .push(meta.clone());
-            by_type.insert(meta.name.clone(), meta.clone());
+            by_type
+                .entry(meta.name.clone())
+                .or_default()
+                .push(meta.clone());
         }
         Self {
             by_display,
@@ -2414,9 +2836,9 @@ impl CatalogIndex {
 
     fn resolve_call(&self, call: &Call) -> Result<NodeMetadata, String> {
         if !call.node_type.trim().is_empty() {
-            return self.by_type.get(&call.node_type).cloned().ok_or_else(|| {
+            return self.resolve_type(&call.node_type).map_err(|reason| {
                 format!(
-                    "FlowScript call `{}` declares exact node_type `{}`, which is not available in the catalog",
+                    "FlowScript call `{}` declares exact node_type `{}`: {reason}",
                     call.display, call.node_type
                 )
             });
@@ -2475,6 +2897,13 @@ impl CatalogIndex {
                 Ok(meta)
             }
         }
+    }
+
+    fn resolve_type(&self, node_type: &str) -> Result<NodeMetadata, String> {
+        let Some(matches) = self.by_type.get(node_type) else {
+            return Err("it is not available in the catalog".to_string());
+        };
+        one_catalog_match(&to_camel_case(node_type), matches)
     }
 
     fn resolve_display(&self, display: &str) -> Result<NodeMetadata, String> {
@@ -2582,7 +3011,7 @@ fn unsafe_catalog_call_shape_diagnostic(call: &Call, meta: &NodeMetadata) -> Opt
         .collect::<Vec<_>>()
         .join(", ");
     Some(format!(
-        "node `emailImapInboxFetchMail` has no input pin named {names}; this mailbox-fetch shape cannot be auto-corrected. `emailImapInboxFetchMail` accepts exactly `emailRef` and returns one `email`. Use `mailImapInbox({{ connection, inbox: \"INBOX\" }})`, then `mailImapList({{ inbox: inbox.inboxStruct, filter: \"UNSEEN\" }})`; for each returned EmailRef call `emailImapInboxFetchMail({{ emailRef: ref }})`, and only after successful processing call `emailImapMarkSeen({{ email: ref, markAsSeen: true }})`."
+        "node `emailImapInboxFetchMail` has no input pin named {names}; this mailbox-fetch shape cannot be auto-corrected. `emailImapInboxFetchMail` accepts exactly `emailRef` and returns one `email`. Use `const inbox = mailImapInbox({{ connection: connection, inbox: \"INBOX\" }})`, then `const refs = mailImapList({{ inbox: inbox, filter: \"UNSEEN\" }})`; iterate with `for (const item of controlForEach({{ array: refs }}))`, call `const email = emailImapInboxFetchMail({{ emailRef: item.value }})`, read body fields with `emailGetContent({{ email: email }})` and sender fields with `const headers = emailGetHeaders({{ email: email }})` plus `mailAddressFields({{ address: headers.from }})`, and only after successful processing call `emailImapMarkSeen({{ email: item.value, markAsSeen: true }})`."
     ))
 }
 
@@ -2594,10 +3023,22 @@ fn one_catalog_match(display: &str, matches: &[NodeMetadata]) -> Result<NodeMeta
         )),
         many => {
             // Board-derived catalogs carry one entry per node INSTANCE — identical node types
-            // are one logical declaration, not an ambiguity.
+            // are one logical declaration, not an ambiguity. Conflicting same-name declarations
+            // must fail closed: otherwise a catalog reorder silently changes the executable pin
+            // contract chosen by reconciliation while the order-independent catalog fingerprint
+            // remains unchanged.
             let first = &many[0];
             if many.iter().all(|m| m.name == first.name) {
-                return Ok(first.clone());
+                if many
+                    .iter()
+                    .all(|candidate| reconcile_node_contract_eq(first, candidate))
+                {
+                    return Ok(deterministic_catalog_match(many));
+                }
+                return Err(format!(
+                    "FlowScript call `{display}` matched conflicting catalog declarations for internal node type `{}`; no declaration was selected",
+                    first.name
+                ));
             }
             let node_types: Vec<&str> = many.iter().map(|m| m.name.as_str()).collect();
             Err(format!(
@@ -2608,13 +3049,156 @@ fn one_catalog_match(display: &str, matches: &[NodeMetadata]) -> Result<NodeMeta
     }
 }
 
+fn reconcile_node_contract_eq(left: &NodeMetadata, right: &NodeMetadata) -> bool {
+    left.name == right.name
+        && left.required_inputs == right.required_inputs
+        && left.inputs.len() == right.inputs.len()
+        && left
+            .inputs
+            .iter()
+            .zip(&right.inputs)
+            .all(|(left, right)| reconcile_pin_contract_eq(left, right))
+        && left.outputs.len() == right.outputs.len()
+        && left
+            .outputs
+            .iter()
+            .zip(&right.outputs)
+            .all(|(left, right)| reconcile_pin_contract_eq(left, right))
+}
+
+fn reconcile_pin_contract_eq(left: &PinMetadata, right: &PinMetadata) -> bool {
+    left.name == right.name
+        && left.data_type == right.data_type
+        && left.value_type == right.value_type
+        && left.default_value == right.default_value
+        && reconcile_schema_contract_eq(left.schema.as_deref(), right.schema.as_deref())
+        && left.is_generic == right.is_generic
+        && left.valid_values == right.valid_values
+        && left.enforce_schema == right.enforce_schema
+}
+
+fn reconcile_schema_contract_eq(left: Option<&str>, right: Option<&str>) -> bool {
+    let refs = HashMap::new();
+    reconcile_schema_contract_eq_with_refs(left, right, &refs)
+}
+
+fn reconcile_schema_contract_eq_with_refs(
+    left: Option<&str>,
+    right: Option<&str>,
+    refs: &HashMap<String, String>,
+) -> bool {
+    normalized_pin_schema(left, refs) == normalized_pin_schema(right, refs)
+}
+
+fn interface_representable_schema(schema: &str) -> Option<String> {
+    let source = VarDecl {
+        name: "boundary".to_string(),
+        ty: TypeRef::new("Struct", Container::Normal),
+        default: None,
+        exposed: false,
+        secret: false,
+        editable: true,
+        runtime_configured: false,
+        category: None,
+        description: None,
+        schema: Some(schema.to_string()),
+        anchor: None,
+    };
+    let interfaces = flow_like_ast::interfaces_for_variables(&[source]);
+    let interface_name = flow_like_ast::interface_name_for_schema(&interfaces, schema)?;
+    let interface = interfaces
+        .iter()
+        .find(|interface| interface.name == interface_name)?;
+    flow_like_ast::schema_from_interface_with_defs(interface, &interfaces)
+}
+
+fn function_boundary_contract_matches(
+    live: &PinMetadata,
+    authored: &PinMetadata,
+    refs: &HashMap<String, String>,
+) -> bool {
+    if to_camel_case(&live.name) != to_camel_case(&authored.name)
+        || live.data_type != authored.data_type
+        || live.value_type != authored.value_type
+        || live.is_generic != authored.is_generic
+    {
+        return false;
+    }
+
+    // Legacy lowering could not surface a live boundary schema in FlowScript. Do not interpret a
+    // plain `Struct` as a schema removal. An interface can surface field/type/required structure,
+    // but not richer JSON Schema constraints such as `additionalProperties`; compare the authored
+    // schema to that representable projection while retaining the exact live schema for wiring.
+    match authored.schema.as_deref() {
+        Some(schema) => {
+            authored.enforce_schema
+                && live.enforce_schema
+                && live
+                    .schema
+                    .as_deref()
+                    .map(|schema| refs.get(schema).map(String::as_str).unwrap_or(schema))
+                    .and_then(interface_representable_schema)
+                    .is_some_and(|live_schema| {
+                        reconcile_schema_contract_eq(Some(&live_schema), Some(schema))
+                    })
+        }
+        None => {
+            // A representable enforced live schema is part of the visible signature now. Treat
+            // replacing its nominal interface with bare Struct as drift instead of silently
+            // ignoring the edit. Legacy/non-enforced or non-representable schemas stay compatible.
+            !live.enforce_schema
+                || live
+                    .schema
+                    .as_deref()
+                    .map(|schema| refs.get(schema).map(String::as_str).unwrap_or(schema))
+                    .and_then(interface_representable_schema)
+                    .is_none()
+        }
+    }
+}
+
+fn event_parameter_contracts_match(
+    node: &Node,
+    params: &[Param],
+    interface_schemas: &HashMap<String, String>,
+    refs: &HashMap<String, String>,
+) -> bool {
+    let mut live = node
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution)
+        .collect::<Vec<_>>();
+    live.sort_by_key(|pin| (pin.index, pin.id.clone()));
+    live.len() == params.len()
+        && live.iter().zip(params).all(|(pin, param)| {
+            function_boundary_contract_matches(
+                &boundary_pin_metadata(pin),
+                &param_pin_metadata(param, interface_schemas),
+                refs,
+            )
+        })
+}
+
+fn deterministic_catalog_match(matches: &[NodeMetadata]) -> NodeMetadata {
+    matches
+        .iter()
+        .min_by_key(|metadata| {
+            serde_json::to_vec(metadata)
+                .expect("catalog metadata contains only deterministically serializable fields")
+        })
+        .expect("catalog match selection is called only for non-empty matches")
+        .clone()
+}
+
 struct BoardIndex<'a> {
     pin_owner: HashMap<&'a str, (&'a Node, &'a Pin)>,
+    boundary_sources: HashMap<&'a str, ValueSource>,
 }
 
 impl<'a> BoardIndex<'a> {
     fn new(board: &'a Board) -> Self {
         let mut pin_owner = HashMap::new();
+        let mut boundary_sources = HashMap::new();
         for node in all_board_nodes(board) {
             let mut pins = node.pins.values().collect::<Vec<_>>();
             pins.sort_by(|left, right| left.id.cmp(&right.id));
@@ -2622,7 +3206,25 @@ impl<'a> BoardIndex<'a> {
                 pin_owner.insert(pin.id.as_str(), (node, pin));
             }
         }
-        Self { pin_owner }
+        let mut layers = board.layers.values().collect::<Vec<_>>();
+        layers.sort_by(|left, right| left.id.cmp(&right.id));
+        for layer in layers {
+            let mut pins = layer.pins.values().collect::<Vec<_>>();
+            pins.sort_by(|left, right| left.id.cmp(&right.id));
+            for pin in pins {
+                boundary_sources.insert(
+                    pin.id.as_str(),
+                    ValueSource {
+                        node: NodeEntity::Existing(layer.id.clone()),
+                        output_pin: Some(pin.name.clone()),
+                    },
+                );
+            }
+        }
+        Self {
+            pin_owner,
+            boundary_sources,
+        }
     }
 
     fn exec_incoming_edges(&self, node: &Node, input_pin_name: &str) -> Vec<(String, String)> {
@@ -2636,26 +3238,52 @@ impl<'a> BoardIndex<'a> {
             .depends_on
             .iter()
             .filter_map(|pin_id| {
-                self.pin_owner
-                    .get(pin_id.as_str())
-                    .map(|(source_node, source_pin)| {
-                        (source_node.id.clone(), source_pin.name.clone())
-                    })
+                self.pin_owner.get(pin_id.as_str()).map_or_else(
+                    || {
+                        self.boundary_sources.get(pin_id.as_str()).map(|source| {
+                            (
+                                source.node.node_ref(),
+                                source.output_pin.clone().unwrap_or_default(),
+                            )
+                        })
+                    },
+                    |(source_node, source_pin)| {
+                        Some((source_node.id.clone(), source_pin.name.clone()))
+                    },
+                )
             })
             .collect()
     }
 
     fn data_source_for_input(&self, node: &Node, input_pin_name: &str) -> Option<ValueSource> {
         let input = find_input_pin(node, input_pin_name)?;
+        self.data_source_for_pin(input)
+    }
+
+    fn data_source_for_pin(&self, input: &Pin) -> Option<ValueSource> {
+        self.data_sources_for_pin(input).into_iter().next()
+    }
+
+    fn data_sources_for_pin(&self, input: &Pin) -> Vec<ValueSource> {
         if is_exec_pin(input) {
-            return None;
+            return Vec::new();
         }
-        let mut source_pin_id = input.depends_on.iter().next()?;
+        input
+            .depends_on
+            .iter()
+            .filter_map(|source_pin_id| self.data_source_for_pin_id(source_pin_id))
+            .collect()
+    }
+
+    fn data_source_for_pin_id(&self, source_pin_id: &str) -> Option<ValueSource> {
+        let mut source_pin_id = source_pin_id;
         // Reroutes are pure wire-bends that the renderer collapses; trace through them so the
         // reuse path sees the real origin node — the one the FlowScript text actually shows.
         // Otherwise every inline chain behind a reroute is re-created on reconcile.
         for _ in 0..64 {
-            let (source_node, source_pin) = self.pin_owner.get(source_pin_id.as_str())?;
+            let Some((source_node, source_pin)) = self.pin_owner.get(source_pin_id) else {
+                return self.boundary_sources.get(source_pin_id).cloned();
+            };
             if source_node.name != "reroute" {
                 return Some(ValueSource {
                     node: NodeEntity::Existing(source_node.id.clone()),
@@ -2683,7 +3311,16 @@ struct StructuralPlanner<'a> {
     update_commands: Vec<BoardCommand>,
     symbols: Vec<HashMap<String, SymbolValue>>,
     variable_refs: VariableRefLookup,
-    function_return_targets: Vec<(NodeEntity, Vec<String>)>,
+    /// Exact data contract of every board variable visible to this planned source revision. New
+    /// variable get/set nodes start Generic in the static catalog, but their `on_update` handlers
+    /// specialize to this contract before connections are applied.
+    variable_value_contracts: HashMap<String, PinMetadata>,
+    /// `(layer, declared return pins, function name)` for the function bodies currently being
+    /// planned; the name keeps return diagnostics attributable to their function.
+    function_return_targets: Vec<(NodeEntity, Vec<PinMetadata>, String)>,
+    /// Canonical schemas for named FlowScript interfaces. Function/event boundary pins use these
+    /// contracts instead of degrading every named Struct to an untyped `Struct` placeholder.
+    interface_schemas: HashMap<String, String>,
     unresolved_variable_refs: HashSet<String>,
     /// Newly added impure nodes: (ref_id, execution input pin, friendly name). Checked at the end
     /// for a missing incoming execution edge.
@@ -2709,6 +3346,10 @@ struct StructuralPlanner<'a> {
     /// Declared FlowScript functions by camelCase name, pre-created before events/bodies are
     /// planned so `functionName(...)` call sites resolve to `control_call_function` nodes.
     planned_functions: HashMap<String, PlannedFunction>,
+    /// Literal-return sources materialized during THIS plan, keyed by the deterministic
+    /// `var_{function}_{pin}` id, so repeated literal returns (branch arms, re-planned bodies)
+    /// share one variable + `variable_get` instead of minting suffixed duplicates.
+    planned_literal_return_sources: HashMap<String, ValueSource>,
     /// Optional hook to materialize a node's dynamic (`on_update`-generated) pins for a call, so a
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
@@ -2733,7 +3374,9 @@ impl<'a> StructuralPlanner<'a> {
             update_commands: Vec::new(),
             symbols: Vec::new(),
             variable_refs: VariableRefLookup::from_board(existing),
+            variable_value_contracts: HashMap::new(),
             function_return_targets: Vec::new(),
+            interface_schemas: HashMap::new(),
             unresolved_variable_refs: HashSet::new(),
             new_impure_nodes: Vec::new(),
             exec_check_exempt: HashSet::new(),
@@ -2742,6 +3385,7 @@ impl<'a> StructuralPlanner<'a> {
             pending_exec_splices: Vec::new(),
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
+            planned_literal_return_sources: HashMap::new(),
             enricher,
         }
     }
@@ -2764,6 +3408,7 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
+        self.interface_schemas = interface_schema_map(ast);
         self.push_scope();
         self.seed_top_level_variables(ast);
         // Function layers are created (and their impurity decided) up front so call sites in
@@ -2817,17 +3462,110 @@ impl<'a> StructuralPlanner<'a> {
             let Some(entity) = self.function_layer_entity(func, impure) else {
                 continue;
             };
+            let Some((params, returns)) = self.function_contract_metadata(func, &entity, impure)
+            else {
+                continue;
+            };
             self.planned_functions.insert(
                 func.name.clone(),
                 PlannedFunction {
                     entity,
                     impure,
                     has_unresolved_calls,
-                    params: func.params.clone(),
-                    returns: func.returns.clone(),
+                    params,
+                    returns,
                 },
             );
         }
+    }
+
+    fn function_contract_metadata(
+        &mut self,
+        func: &FnDecl,
+        entity: &NodeEntity,
+        impure: bool,
+    ) -> Option<(Vec<PinMetadata>, Vec<PinMetadata>)> {
+        let expected_params = func
+            .params
+            .iter()
+            .map(|param| param_pin_metadata(param, &self.interface_schemas))
+            .collect::<Vec<_>>();
+        let expected_returns = func
+            .returns
+            .iter()
+            .map(|param| param_pin_metadata(param, &self.interface_schemas))
+            .collect::<Vec<_>>();
+
+        let NodeEntity::Existing(layer_id) = entity else {
+            return Some((expected_params, expected_returns));
+        };
+        let layer = self.existing.layers.get(layer_id)?;
+        let has_exec_in = layer
+            .pins
+            .values()
+            .any(|pin| pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution);
+        let has_exec_out = layer
+            .pins
+            .values()
+            .any(|pin| pin.pin_type == PinType::Output && pin.data_type == VariableType::Execution);
+        if has_exec_in != impure || has_exec_out != impure {
+            self.result.diagnostics.push(format!(
+                "function `{}` changes the execution-boundary contract of anchored Function layer `{layer_id}`; anchored function signatures cannot be rewritten by FlowScript",
+                func.name
+            ));
+            return None;
+        }
+
+        let mut live_params = layer
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Input && pin.data_type != VariableType::Execution
+            })
+            .collect::<Vec<_>>();
+        let mut live_returns = layer
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+            })
+            .collect::<Vec<_>>();
+        live_params.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        live_returns.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        let live_params = live_params
+            .into_iter()
+            .map(boundary_pin_metadata)
+            .collect::<Vec<_>>();
+        let live_returns = live_returns
+            .into_iter()
+            .map(boundary_pin_metadata)
+            .collect::<Vec<_>>();
+
+        let params_match = live_params.len() == expected_params.len()
+            && live_params
+                .iter()
+                .zip(&expected_params)
+                .all(|(live, expected)| {
+                    function_boundary_contract_matches(live, expected, &self.existing.refs)
+                });
+        let returns_match = live_returns.len() == expected_returns.len()
+            && live_returns
+                .iter()
+                .zip(&expected_returns)
+                .all(|(live, expected)| {
+                    function_boundary_contract_matches(live, expected, &self.existing.refs)
+                });
+        if !params_match || !returns_match {
+            self.result.diagnostics.push(format!(
+                "function `{}` changes the data-boundary contract of anchored Function layer `{layer_id}`; parameter/return names, order, types, containers, and authored schemas must match the live layer",
+                func.name
+            ));
+            return None;
+        }
+
+        // The live layer remains authoritative for schemas not representable in legacy lowered
+        // FlowScript. Synthetic call nodes and return wiring therefore use these exact contracts.
+        Some((live_params, live_returns))
     }
 
     /// Static prescan: does this function body contain anything that needs an execution chain
@@ -3063,6 +3801,18 @@ impl<'a> StructuralPlanner<'a> {
                         ));
                         return None;
                     }
+                    if !event_parameter_contracts_match(
+                        node,
+                        &event.params,
+                        &self.interface_schemas,
+                        &self.existing.refs,
+                    ) {
+                        self.result.diagnostics.push(format!(
+                            "event `{}` changes the parameter contract of anchored entry `{anchor}`; parameter names, order, types, containers, and authored schemas must match the live event outputs",
+                            event.name
+                        ));
+                        return None;
+                    }
                     Some(NodeEntity::Existing(anchor.clone()))
                 });
                 if entry.is_none() {
@@ -3114,10 +3864,8 @@ impl<'a> StructuralPlanner<'a> {
         self.seed_function_params(&func.params, &layer);
         self.function_return_targets.push((
             layer.clone(),
-            func.returns
-                .iter()
-                .map(|param| param.name.clone())
-                .collect(),
+            planned.returns.clone(),
+            func.name.clone(),
         ));
         let entry = if planned.impure {
             self.function_entry_cursor(&layer, &func.name)
@@ -3506,6 +4254,24 @@ impl<'a> StructuralPlanner<'a> {
                     return entity.map(PlannedStmt::new);
                 }
 
+                // Rebinding an outer-scope `const` node output inside a nested block is
+                // last-writer-wins on the symbol table: statements after the block would
+                // silently wire into whichever arm was planned last. Surface it instead.
+                if let Some(declared_scope) = self
+                    .symbols
+                    .iter()
+                    .rposition(|scope| scope.contains_key(target.as_str()))
+                    && declared_scope + 1 < self.symbols.len()
+                    && matches!(
+                        self.symbols[declared_scope].get(target.as_str()),
+                        Some(SymbolValue::Source(_))
+                    )
+                {
+                    self.result.diagnostics.push(format!(
+                        "assignment to `{target}` inside a nested block rebinds an outer-scope binding (a function parameter or `const` node output); statements after the block would silently read only this arm's value. For a parameter, assign to a variable with a different name instead; for a call output, declare that variable with `let` and a literal initializer before the block, then assign it in each arm"
+                    ));
+                }
+
                 let Some(resolved) = self.resolve_expr(value, target_layer.clone()) else {
                     self.result.diagnostics.push(format!(
                         "assignment to `{target}` is not a literal or resolvable node output; skipped local alias"
@@ -3572,8 +4338,20 @@ impl<'a> StructuralPlanner<'a> {
 
                 if promote_local_alias {
                     let variable_id = self.create_local_variable(name, value, target_layer.clone());
-                    self.insert_symbol(name.clone(), SymbolValue::VariableRef { variable_id });
-                    return None;
+                    self.insert_symbol(
+                        name.clone(),
+                        SymbolValue::VariableRef {
+                            variable_id: variable_id.clone(),
+                        },
+                    );
+                    if literal_expr_to_value(value).is_some() {
+                        return None;
+                    }
+                    // A non-literal initializer (`let x = call(...)`) cannot become the
+                    // variable's default value; seed it with an explicit variable_set so the
+                    // initializing expression still materializes and joins the exec chain.
+                    let entity = self.add_variable_set_node(&variable_id, value, target_layer)?;
+                    return Some(PlannedStmt::new(entity));
                 }
 
                 let Some(resolved) = self.resolve_expr(value, target_layer.clone()) else {
@@ -3791,8 +4569,50 @@ impl<'a> StructuralPlanner<'a> {
             Stmt::Return { values, anchor } => {
                 self.plan_return(values, anchor.as_deref(), target_layer)
             }
-            Stmt::Local(_) | Stmt::Comment(_) => None,
+            Stmt::Local(var) => {
+                self.register_local_variable_decl(var, target_layer.as_deref());
+                None
+            }
+            Stmt::Comment(_) => None,
         }
+    }
+
+    /// Register a function-local `let name: Type` declaration as a variable symbol when it
+    /// identifies a live variable (by `//@v:` anchor, else by name — the current layer first).
+    /// The lowered form of a promoted local is this declaration plus an anchored seed
+    /// assignment; without the symbol that assignment can no longer resolve as a `variable_set`
+    /// and the board's own round-trip stops applying.
+    fn register_local_variable_decl(&mut self, var: &VarDecl, target_layer: Option<&str>) {
+        let variable_id = var.anchor.clone().or_else(|| {
+            let name_matches = |existing: &&Variable| {
+                existing.name == var.name || to_camel_case(&existing.name) == var.name
+            };
+            target_layer
+                .and_then(|layer_id| self.existing.layers.get(layer_id))
+                .and_then(|layer| layer.variables.values().find(name_matches))
+                .or_else(|| {
+                    self.existing
+                        .layers
+                        .values()
+                        .find_map(|layer| layer.variables.values().find(name_matches))
+                })
+                .or_else(|| self.existing.variables.values().find(name_matches))
+                .map(|existing| existing.id.clone())
+        });
+        let Some(variable_id) = variable_id else {
+            return;
+        };
+        self.variable_value_contracts.insert(
+            variable_id.clone(),
+            variable_value_pin_metadata(
+                "value_in",
+                type_ref_data_type(&var.ty).to_string(),
+                type_ref_value_type(&var.ty).to_string(),
+                var.schema.clone(),
+            ),
+        );
+        self.variable_refs.insert(&variable_id, &var.name);
+        self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
     }
 
     fn function_layer_entity(&mut self, func: &FnDecl, impure: bool) -> Option<NodeEntity> {
@@ -3821,7 +4641,7 @@ impl<'a> StructuralPlanner<'a> {
 
         let ref_id = format!("${}", self.next_ref);
         self.next_ref += 1;
-        let pins = function_layer_pins(func, impure);
+        let pins = function_layer_pins(func, impure, &self.interface_schemas);
         let position = self.next_position(None);
         self.add_commands.push(BoardCommand::CreateLayer {
             name: func.name.clone(),
@@ -3837,6 +4657,8 @@ impl<'a> StructuralPlanner<'a> {
                         pin_type: pin.pin_type.clone(),
                         data_type: pin.data_type.clone(),
                         value_type: Some(pin.value_type.clone()),
+                        schema: pin.schema.clone(),
+                        enforce_schema: pin.enforce_schema,
                     })
                     .collect(),
             ),
@@ -3867,39 +4689,50 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> Option<PlannedStmt> {
         // Inside a function layer: connect each value to the layer's boundary output pin.
-        if let Some((layer, return_pins)) = self.function_return_targets.last().cloned() {
+        if let Some((layer, return_params, function_name)) =
+            self.function_return_targets.last().cloned()
+        {
             for (index, value) in values.iter().enumerate() {
-                let Some(return_pin) = return_pins.get(index).cloned() else {
+                let rendered = describe_expr(value);
+                let Some(return_param) = return_params.get(index).cloned() else {
                     self.result.diagnostics.push(format!(
-                        "return value {} has no matching function return pin",
-                        index + 1
+                        "return value {} (`{rendered}`) in function `{function_name}` has no matching function return pin; the signature declares {} return value(s) — declare a return pin for it or drop the extra value",
+                        index + 1,
+                        return_params.len()
                     ));
                     continue;
                 };
-                let Some(source) = self
-                    .resolve_expr(value, target_layer.clone())
-                    .and_then(|symbol| self.symbol_to_source(symbol, target_layer.clone()))
-                else {
+                let source = self.resolve_return_value_source(
+                    value,
+                    &layer,
+                    &return_param,
+                    &function_name,
+                    target_layer.clone(),
+                );
+                let Some(source) = source else {
                     self.result.diagnostics.push(format!(
-                        "return value {} is not a resolvable FlowScript value",
+                        "return value {} (`{rendered}`) in function `{function_name}` is not a resolvable FlowScript value; return a literal, a call output bound earlier in the body (`const x = call(...)`), or a variable",
                         index + 1
                     ));
                     continue;
                 };
                 let Some(output_pin) = self.resolve_source_output_pin(&source) else {
                     self.result.diagnostics.push(format!(
-                        "could not choose output pin for return value {}",
+                        "could not choose output pin for return value {} (`{rendered}`) in function `{function_name}`; read a named output (e.g. `call().pinName`) so the value has one exact source",
                         index + 1
                     ));
                     continue;
                 };
-                self.connect_commands.push(BoardCommand::ConnectPins {
-                    from_node: source.node.node_ref(),
-                    from_pin: output_pin,
-                    to_node: layer.node_ref(),
-                    to_pin: return_pin,
-                    summary: Some("Connect FlowScript function return".to_string()),
-                });
+                self.queue_validated_data_connection(
+                    &source,
+                    output_pin,
+                    &layer,
+                    &return_param,
+                    &return_param.name,
+                    "Connect FlowScript function return".to_string(),
+                    &format!("return value {} for `{}`", index + 1, return_param.name),
+                    false,
+                );
             }
             return None;
         }
@@ -3907,6 +4740,39 @@ impl<'a> StructuralPlanner<'a> {
         // Outside a function layer: an event/tool-entry `return` reverses the
         // `events_generic_return_result` sugar so agent tools and event handlers can return a value.
         self.plan_event_return(values, anchor, target_layer)
+    }
+
+    /// Resolve one function `return` value to a data source, consulting the boundary pin's
+    /// existing wiring FIRST (like `plan_call_arguments` does for arguments) so an unchanged
+    /// round-trip reuses the live producer instead of minting a duplicate `variable_get` (and a
+    /// stale half-edge) on every apply.
+    fn resolve_return_value_source(
+        &mut self,
+        value: &Expr,
+        layer: &NodeEntity,
+        return_param: &PinMetadata,
+        function_name: &str,
+        target_layer: Option<String>,
+    ) -> Option<ValueSource> {
+        for existing in self.existing_sources_for_input_ref(layer, &return_param.name) {
+            if let Some(symbol) =
+                self.resolve_expr_using_existing_source(value, existing, target_layer.clone())
+            {
+                return self.symbol_to_source(symbol, target_layer);
+            }
+        }
+        match self.resolve_expr(value, target_layer.clone())? {
+            // A literal has no producing node to wire from; materialize it as a typed
+            // layer-local variable read through a `variable_get` in the function body.
+            SymbolValue::Literal(literal) => self.literal_return_source(
+                layer,
+                function_name,
+                return_param,
+                literal,
+                target_layer,
+            ),
+            symbol => self.symbol_to_source(symbol, target_layer),
+        }
     }
 
     /// Reverse the `events_generic_return_result` sugar: reuse the anchored result node (or add a
@@ -3918,6 +4784,12 @@ impl<'a> StructuralPlanner<'a> {
         anchor: Option<&str>,
         target_layer: Option<String>,
     ) -> Option<PlannedStmt> {
+        if values.len() > 1 {
+            self.result.diagnostics.push(format!(
+                "event returns accept a single value; got {} — wrap the extra values in a struct and return that",
+                values.len()
+            ));
+        }
         let entity = match anchor {
             Some(anchor) if find_board_node(self.existing, anchor).is_some() => {
                 NodeEntity::Existing(anchor.to_string())
@@ -3971,21 +4843,16 @@ impl<'a> StructuralPlanner<'a> {
         let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) else {
             return;
         };
-        let already_wired = self
-            .existing_source_for_input(entity, input)
-            .is_some_and(|existing| {
-                existing.node.node_ref() == source.node.node_ref()
-                    && existing.output_pin.as_deref() == Some(output_pin.as_str())
-            });
-        if !already_wired {
-            self.connect_commands.push(BoardCommand::ConnectPins {
-                from_node: source.node.node_ref(),
-                from_pin: output_pin,
-                to_node: entity.node_ref(),
-                to_pin: input.name.clone(),
-                summary: Some("Connect FlowScript return value".to_string()),
-            });
-        }
+        self.queue_validated_data_connection(
+            &source,
+            output_pin,
+            entity,
+            input,
+            &input.name,
+            "Connect FlowScript return value".to_string(),
+            "event return value",
+            false,
+        );
     }
 
     fn plan_call_statement(
@@ -4017,7 +4884,13 @@ impl<'a> StructuralPlanner<'a> {
             // pins exist only in the live metadata, so neither source can safely replace the
             // other wholesale.
             let mut meta = node_to_metadata(node);
-            self.merge_catalog_required_inputs(&mut meta);
+            if let Err(reason) = self.merge_catalog_required_inputs(&mut meta) {
+                self.result.diagnostics.push(format!(
+                    "call `{}` cannot use anchor `{anchor}`: {reason}",
+                    call.display
+                ));
+                return None;
+            }
             let planned_function_target = self
                 .planned_functions
                 .get(&call.display)
@@ -4080,11 +4953,14 @@ impl<'a> StructuralPlanner<'a> {
         params: &[Param],
     ) -> Option<NodeEntity> {
         if !node_type.trim().is_empty() {
-            let Some(meta) = self.catalog.by_type.get(node_type).cloned() else {
-                self.result.diagnostics.push(format!(
-                    "event `{display}` declares exact node_type `{node_type}`, which is not available in the catalog"
-                ));
-                return None;
+            let meta = match self.catalog.resolve_type(node_type) {
+                Ok(meta) => meta,
+                Err(reason) => {
+                    self.result.diagnostics.push(format!(
+                        "event `{display}` declares exact node_type `{node_type}`: {reason}"
+                    ));
+                    return None;
+                }
             };
             if let Some(reason) = event_entry_incompatibility(&meta) {
                 self.result.diagnostics.push(format!(
@@ -4161,7 +5037,7 @@ impl<'a> StructuralPlanner<'a> {
                 continue;
             }
 
-            let pin_meta = param_pin_metadata(param);
+            let pin_meta = param_pin_metadata(param, &self.interface_schemas);
             if pin_meta.data_type == "Execution" {
                 self.result.diagnostics.push(format!(
                     "could not choose an output pin for event parameter `{}`: custom Generic Event parameters must be data values, not Execution",
@@ -4170,7 +5046,7 @@ impl<'a> StructuralPlanner<'a> {
                 continue;
             }
 
-            additional_pins.push(param_output_pin_def(param));
+            additional_pins.push(param_output_pin_def(param, &self.interface_schemas));
             meta.outputs.push(pin_meta);
         }
 
@@ -4237,10 +5113,11 @@ impl<'a> StructuralPlanner<'a> {
     /// live metadata contributes dynamic pins and actual defaults; the catalog contributes
     /// requirements that an older or shape-shifted instance may no longer expose. Taking the
     /// maximum occurrence count avoids doubling the same requirement when both sources contain it.
-    fn merge_catalog_required_inputs(&self, live: &mut NodeMetadata) {
-        let Some(catalog) = self.catalog.by_type.get(&live.name) else {
-            return;
+    fn merge_catalog_required_inputs(&self, live: &mut NodeMetadata) -> Result<(), String> {
+        let Some(matches) = self.catalog.by_type.get(&live.name) else {
+            return Ok(());
         };
+        let catalog = one_catalog_match(&to_camel_case(&live.name), matches)?;
 
         let canonical_name = |required: &str| {
             live.inputs
@@ -4269,6 +5146,7 @@ impl<'a> StructuralPlanner<'a> {
             *merged_counts.entry(key).or_default() += 1;
         }
         live.required_inputs = merged;
+        Ok(())
     }
 
     /// Catalog metadata carries the data inputs that must be configured for a node to be usable.
@@ -4464,12 +5342,15 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> Option<(NodeEntity, Vec<ValueSource>)> {
         let planned = self.planned_functions.get(&call.display).cloned()?;
-        let Some(base) = self.catalog.by_type.get(CALL_FUNCTION_NODE_TYPE).cloned() else {
-            self.result.diagnostics.push(format!(
-                "cannot call function `{}`: `{CALL_FUNCTION_NODE_TYPE}` is missing from the catalog",
-                call.display
-            ));
-            return None;
+        let base = match self.catalog.resolve_type(CALL_FUNCTION_NODE_TYPE) {
+            Ok(meta) => meta,
+            Err(reason) => {
+                self.result.diagnostics.push(format!(
+                    "cannot call function `{}`: `{CALL_FUNCTION_NODE_TYPE}` {reason}",
+                    call.display
+                ));
+                return None;
+            }
         };
 
         let mut meta = base;
@@ -4497,10 +5378,10 @@ impl<'a> StructuralPlanner<'a> {
                 .push(execution_pin_metadata(FUNCTION_EXEC_OUT, "Exec Out"));
         }
         for param in &planned.params {
-            meta.inputs.push(param_pin_metadata(param));
+            meta.inputs.push(param.clone());
         }
         for ret in &planned.returns {
-            meta.outputs.push(param_pin_metadata(ret));
+            meta.outputs.push(ret.clone());
         }
 
         let entity = self.queue_add_node(meta.clone(), target_layer.clone());
@@ -4633,13 +5514,18 @@ impl<'a> StructuralPlanner<'a> {
                 continue;
             }
 
-            let Some(source) =
-                self.resolve_expr_for_argument(&arg.value, entity, input, target_layer.clone())
-            else {
+            let Some(source) = self.resolve_expr_for_argument(
+                &arg.value,
+                entity,
+                &input_command_ref,
+                target_layer.clone(),
+            ) else {
                 // Expression forms v1 cannot resolve (ternaries, binaries, event returns) but
                 // whose input is already wired on the board: keep the existing wiring silently —
                 // the rendered text CAME from that wiring, so this is not an authoring error.
-                if let Some(existing_source) = self.existing_source_for_input(entity, input) {
+                if let Some(existing_source) =
+                    self.existing_source_for_input_ref(entity, &input_command_ref)
+                {
                     input_sources.push(existing_source);
                     continue;
                 }
@@ -4688,22 +5574,17 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 continue;
             };
-            // Roundtrip no-op: the board may already carry exactly this data edge — re-emitting
-            // it would flood every reconcile of an unchanged document with ConnectPins commands.
-            let already_wired =
-                self.existing_source_for_input(entity, input)
-                    .is_some_and(|existing_source| {
-                        existing_source.node.node_ref() == source.node.node_ref()
-                            && existing_source.output_pin.as_deref() == Some(output_pin.as_str())
-                    });
-            if !already_wired {
-                self.connect_commands.push(BoardCommand::ConnectPins {
-                    from_node: source.node.node_ref(),
-                    from_pin: output_pin.clone(),
-                    to_node: entity.node_ref(),
-                    to_pin: input_command_ref,
-                    summary: Some(format!("Connect {} into {}", arg.name, meta.friendly_name)),
-                });
+            if !self.queue_validated_data_connection(
+                &source,
+                output_pin.clone(),
+                entity,
+                input,
+                &input_command_ref,
+                format!("Connect {} into {}", arg.name, meta.friendly_name),
+                &format!("argument `{}` on `{}`", arg.name, call.display),
+                false,
+            ) {
+                continue;
             }
             input_sources.push(ValueSource {
                 node: source.node,
@@ -4717,29 +5598,235 @@ impl<'a> StructuralPlanner<'a> {
         &mut self,
         expr: &Expr,
         target_entity: &NodeEntity,
-        input: &PinMetadata,
+        input_command_ref: &str,
         target_layer: Option<String>,
     ) -> Option<SymbolValue> {
-        if let Some(source) = self.existing_source_for_input(target_entity, input)
-            && let Some(symbol) =
+        for source in self.existing_sources_for_input_ref(target_entity, input_command_ref) {
+            if let Some(symbol) =
                 self.resolve_expr_using_existing_source(expr, source, target_layer.clone())
-        {
-            return Some(symbol);
+            {
+                return Some(symbol);
+            }
         }
 
         self.resolve_expr(expr, target_layer)
     }
 
-    fn existing_source_for_input(
+    fn existing_source_for_input_ref(
         &self,
         target_entity: &NodeEntity,
-        input: &PinMetadata,
+        input_ref: &str,
     ) -> Option<ValueSource> {
+        self.existing_sources_for_input_ref(target_entity, input_ref)
+            .into_iter()
+            .next()
+    }
+
+    fn existing_sources_for_input_ref(
+        &self,
+        target_entity: &NodeEntity,
+        input_ref: &str,
+    ) -> Vec<ValueSource> {
         let NodeEntity::Existing(node_id) = target_entity else {
-            return None;
+            return Vec::new();
         };
-        let node = find_board_node(self.existing, node_id)?;
-        self.board_index.data_source_for_input(node, &input.name)
+        let input = if let Some(node) = find_board_node(self.existing, node_id) {
+            find_input_pin_by_ref(node, input_ref)
+        } else {
+            self.existing
+                .layers
+                .get(node_id)
+                .and_then(|layer| find_boundary_pin_by_ref(&layer.pins, input_ref, PinType::Output))
+        };
+        input
+            .map(|input| self.board_index.data_sources_for_pin(input))
+            .unwrap_or_default()
+    }
+
+    fn existing_target_contract_matches(
+        &self,
+        target_entity: &NodeEntity,
+        input_ref: &str,
+        authored: &PinMetadata,
+    ) -> bool {
+        let NodeEntity::Existing(node_id) = target_entity else {
+            return false;
+        };
+        let node = find_board_node(self.existing, node_id);
+        let live = if let Some(node) = node {
+            find_input_pin_by_ref(node, input_ref)
+        } else {
+            self.existing
+                .layers
+                .get(node_id)
+                .and_then(|layer| find_boundary_pin_by_ref(&layer.pins, input_ref, PinType::Output))
+        };
+        // A `variable_set` value pin may be intentionally unspecialized (Generic) on the live
+        // board. As with `variable_get` sources, only an authored variable contract change in
+        // this revision invalidates grandfathering — not that legacy representation detail.
+        if let (Some(node), Some(live_pin)) = (node, live)
+            && node.name == "variable_set"
+            && matches!(live_pin.name.as_str(), "value_in" | "new_value" | "value")
+            && live_pin.data_type == VariableType::Generic
+            && let Some(variable_id) = node_pin_literal_string(node, "var_ref")
+        {
+            return !self.variable_contract_changed_from_board(&variable_id);
+        }
+        live.map(boundary_pin_metadata).is_some_and(|live| {
+            live.data_type == authored.data_type
+                && live.value_type == authored.value_type
+                && live.is_generic == (authored.is_generic || authored.data_type == "Generic")
+                && live.enforce_schema == authored.enforce_schema
+                && reconcile_schema_contract_eq_with_refs(
+                    live.schema.as_deref(),
+                    authored.schema.as_deref(),
+                    &self.existing.refs,
+                )
+        })
+    }
+
+    fn existing_source_contract_matches(&self, source: &ValueSource, output_pin: &str) -> bool {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return false;
+        };
+        let live = if let Some(node) = find_board_node(self.existing, node_id) {
+            if node.name == "variable_get"
+                && output_pin == "value_ref"
+                && let Some(variable_id) = node_pin_literal_string(node, "var_ref")
+            {
+                // Generic variable nodes may be intentionally unspecialized on the live board.
+                // What invalidates grandfathering is an authored variable contract change in
+                // this revision, not that legacy representation detail.
+                return !self.variable_contract_changed_from_board(&variable_id);
+            }
+            find_output_pin(node, output_pin)
+        } else {
+            self.existing
+                .layers
+                .get(node_id)
+                .and_then(|layer| find_boundary_pin_by_ref(&layer.pins, output_pin, PinType::Input))
+        };
+        let Some(live) = live.map(boundary_pin_metadata) else {
+            return false;
+        };
+        let effective_source = ValueSource {
+            node: source.node.clone(),
+            output_pin: Some(output_pin.to_string()),
+        };
+        let Some(effective) = self.planned_source_output_type(&effective_source) else {
+            return false;
+        };
+        live.data_type == effective.data_type
+            && live.value_type == effective.value_type
+            && live.is_generic == effective.is_generic
+            && live.enforce_schema == effective.enforce_schema
+            && reconcile_schema_contract_eq_with_refs(
+                live.schema.as_deref(),
+                effective.schema.as_deref(),
+                &self.existing.refs,
+            )
+    }
+
+    fn variable_contract_changed_from_board(&self, variable_id: &str) -> bool {
+        let Some(authored) = self.variable_value_contracts.get(variable_id) else {
+            return false;
+        };
+        let Some(existing) = self.existing.variables.get(variable_id).or_else(|| {
+            self.existing
+                .layers
+                .values()
+                .find_map(|layer| layer.variables.get(variable_id))
+        }) else {
+            return true;
+        };
+        authored.data_type != format!("{:?}", existing.data_type)
+            || authored.value_type != format!("{:?}", existing.value_type)
+            || !reconcile_schema_contract_eq_with_refs(
+                authored.schema.as_deref(),
+                existing.schema.as_deref(),
+                &self.existing.refs,
+            )
+    }
+
+    /// Queue one newly authored DATA edge only after resolving both endpoints to concrete live or
+    /// planned contracts. Exact pre-existing endpoints are retained without re-validating legacy
+    /// wiring; every changed endpoint must pass type, container, and schema checks.
+    fn queue_validated_data_connection(
+        &mut self,
+        source: &ValueSource,
+        output_pin: String,
+        target_entity: &NodeEntity,
+        input: &PinMetadata,
+        input_command_ref: &str,
+        summary: String,
+        context: &str,
+        variable_schema_contract: bool,
+    ) -> bool {
+        let already_wired = self
+            .existing_sources_for_input_ref(target_entity, input_command_ref)
+            .into_iter()
+            .any(|existing| {
+                existing.node.node_ref() == source.node.node_ref()
+                    && existing.output_pin.as_deref() == Some(output_pin.as_str())
+            });
+        if already_wired
+            && self.existing_target_contract_matches(target_entity, input_command_ref, input)
+            && self.existing_source_contract_matches(source, &output_pin)
+        {
+            return true;
+        }
+
+        // The identical edge may already be planned this run (e.g. two branch arms returning a
+        // literal through one shared materialized getter); connecting it twice is meaningless.
+        let already_planned = self.connect_commands.iter().any(|command| {
+            matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == &source.node.node_ref()
+                        && from_pin == &output_pin
+                        && to_node == &target_entity.node_ref()
+                        && to_pin == input_command_ref
+            )
+        });
+        if already_planned {
+            return true;
+        }
+
+        let resolved_source = ValueSource {
+            node: source.node.clone(),
+            output_pin: Some(output_pin.clone()),
+        };
+        let Some(output) = self.planned_source_output_type(&resolved_source) else {
+            self.result.diagnostics.push(format!(
+                "{context} has no exact source output contract for `{}.{output_pin}`; skipped connection",
+                source.node.node_ref()
+            ));
+            return false;
+        };
+        let compatible = planned_output_is_compatible(input, &output, &self.existing.refs)
+            && (!variable_schema_contract
+                || variable_assignment_schemas_are_compatible(input, &output, &self.existing.refs));
+        if !compatible {
+            self.result.diagnostics.push(format!(
+                "{context} has incompatible pin types or schemas: source `{}` is `{}/{}`, but input `{}` requires `{}/{}`; use a catalog-declared conversion before connecting it",
+                output.source,
+                output.data_type,
+                output.value_type,
+                input.name,
+                input.data_type,
+                input.value_type
+            ));
+            return false;
+        }
+
+        self.connect_commands.push(BoardCommand::ConnectPins {
+            from_node: source.node.node_ref(),
+            from_pin: output_pin,
+            to_node: target_entity.node_ref(),
+            to_pin: input_command_ref.to_string(),
+            summary: Some(summary),
+        });
+        true
     }
 
     fn resolve_expr_using_existing_source(
@@ -4801,9 +5888,9 @@ impl<'a> StructuralPlanner<'a> {
         (configured == variable_id).then_some(SymbolValue::Source(source))
     }
 
-    /// Reuse the existing struct/array accessor node a `base.field` member access lowered
-    /// from (`struct_get`, `struct_break`, or `array_length`). The base is recursed so
-    /// literal edits deeper in the chain still apply.
+    /// Reuse the existing struct/container accessor node a `base.field` member access lowered
+    /// from (`struct_get`, `struct_break`, `map_get`, or a container-size node). The base is
+    /// recursed so literal edits deeper in the chain still apply.
     fn reuse_existing_member_source(
         &mut self,
         base: &Expr,
@@ -4829,6 +5916,9 @@ impl<'a> StructuralPlanner<'a> {
                 "struct_in"
             }
             "array_length" if field == "length" => "array",
+            "set_get_size" if field == "length" => "set_in",
+            "map_size" if field == "length" => "map_in",
+            "map_get" if node_pin_literal_string(node, "key").as_deref() == Some(field) => "map_in",
             _ => return None,
         };
         if let Some(base_source) = self.board_index.data_source_for_input(node, base_input) {
@@ -5301,18 +6391,29 @@ impl<'a> StructuralPlanner<'a> {
     fn source_output_shape(&self, source: &ValueSource) -> Option<OutputShape> {
         match &source.node {
             NodeEntity::Existing(id) => {
-                let node = find_board_node(self.existing, id)?;
-                let pin = source
-                    .output_pin
-                    .as_deref()
-                    .and_then(|name| find_output_pin(node, name))
-                    .or_else(|| {
-                        default_node_output_pin(node)
-                            .as_deref()
-                            .and_then(|name| find_output_pin(node, name))
-                    })?;
+                if let Some(node) = find_board_node(self.existing, id) {
+                    let pin = source
+                        .output_pin
+                        .as_deref()
+                        .and_then(|name| find_output_pin(node, name))
+                        .or_else(|| {
+                            default_node_output_pin(node)
+                                .as_deref()
+                                .and_then(|name| find_output_pin(node, name))
+                        })?;
+                    return Some(OutputShape {
+                        node_type: node.name.clone(),
+                        pin_name: pin.name.clone(),
+                        data_type: format!("{:?}", pin.data_type),
+                        value_type: format!("{:?}", pin.value_type),
+                        schema: pin.schema.clone(),
+                    });
+                }
+                let layer = self.existing.layers.get(id)?;
+                let requested = source.output_pin.as_deref()?;
+                let pin = find_boundary_pin_by_ref(&layer.pins, requested, PinType::Input)?;
                 Some(OutputShape {
-                    node_type: node.name.clone(),
+                    node_type: layer.name.clone(),
                     pin_name: pin.name.clone(),
                     data_type: format!("{:?}", pin.data_type),
                     value_type: format!("{:?}", pin.value_type),
@@ -5337,27 +6438,133 @@ impl<'a> StructuralPlanner<'a> {
                     schema: pin.schema.clone(),
                 })
             }
-            // Function/event boundary pins currently carry no schema in PlaceholderPinDef. Keep
-            // their member access permissive instead of pretending their shape is authoritative.
-            NodeEntity::Layer { .. } => None,
+            NodeEntity::Layer { ref_id, pins } => {
+                let requested = source.output_pin.as_deref()?;
+                let pin = pins.iter().find(|pin| {
+                    pin.pin_type == "Input"
+                        && pin.data_type != "Execution"
+                        && pin_name_matches(&pin.name, requested)
+                })?;
+                Some(OutputShape {
+                    node_type: ref_id.clone(),
+                    pin_name: pin.name.clone(),
+                    data_type: pin.data_type.clone(),
+                    value_type: pin.value_type.clone(),
+                    schema: pin.schema.clone(),
+                })
+            }
         }
     }
 
-    fn source_is_collection(&self, source: &ValueSource) -> bool {
-        self.source_output_shape(source)
-            .is_some_and(|shape| matches!(shape.value_type.as_str(), "Array" | "HashSet"))
+    /// Resolve only output types that are authoritative for newly planned wiring. An explicit
+    /// output is deterministic; an unselected new-node result is deterministic only when it has
+    /// exactly one data output. Function-layer parameters retain their complete declared
+    /// FlowScript contract, including a named-interface schema when one was authored.
+    fn planned_source_output_type(&self, source: &ValueSource) -> Option<PlannedOutputType> {
+        match &source.node {
+            NodeEntity::New { meta, .. } => {
+                let output = if let Some(requested) = source.output_pin.as_deref() {
+                    metadata_output_pin(meta, requested)?
+                } else {
+                    let mut outputs = meta
+                        .outputs
+                        .iter()
+                        .filter(|pin| pin.data_type != "Execution");
+                    let output = outputs.next()?;
+                    if outputs.next().is_some() {
+                        return None;
+                    }
+                    output
+                };
+                Some(PlannedOutputType {
+                    source: format!("{}.{}", meta.name, output.name),
+                    pin_name: output.name.clone(),
+                    data_type: output.data_type.clone(),
+                    value_type: output.value_type.clone(),
+                    is_generic: output.is_generic || output.data_type == "Generic",
+                    schema: output.schema.clone(),
+                    enforce_schema: output.enforce_schema,
+                })
+            }
+            NodeEntity::Layer { ref_id, pins } => {
+                let requested = source.output_pin.as_deref()?;
+                let output = pins.iter().find(|pin| {
+                    pin.pin_type == "Input"
+                        && pin.data_type != "Execution"
+                        && pin_name_matches(&pin.name, requested)
+                })?;
+                Some(PlannedOutputType {
+                    source: format!("{ref_id}.{}", output.name),
+                    pin_name: output.name.clone(),
+                    data_type: output.data_type.clone(),
+                    value_type: output.value_type.clone(),
+                    is_generic: output.data_type == "Generic",
+                    schema: output.schema.clone(),
+                    enforce_schema: output.enforce_schema,
+                })
+            }
+            NodeEntity::Existing(id) => {
+                let requested = source.output_pin.as_deref()?;
+                if let Some(node) = find_board_node(self.existing, id) {
+                    let output = find_output_pin(node, requested)?;
+                    if node.name == "variable_get"
+                        && output.name == "value_ref"
+                        && let Some(variable_id) = node_pin_literal_string(node, "var_ref")
+                        && let Some(contract) =
+                            self.variable_value_contract(&variable_id, &output.name)
+                    {
+                        return Some(PlannedOutputType {
+                            source: format!("{}.{}", node.name, output.name),
+                            pin_name: output.name.clone(),
+                            data_type: contract.data_type,
+                            value_type: contract.value_type,
+                            is_generic: contract.is_generic,
+                            schema: contract.schema,
+                            enforce_schema: contract.enforce_schema,
+                        });
+                    }
+                    return Some(PlannedOutputType {
+                        source: format!("{}.{}", node.name, output.name),
+                        pin_name: output.name.clone(),
+                        data_type: format!("{:?}", output.data_type),
+                        value_type: format!("{:?}", output.value_type),
+                        is_generic: output.data_type == VariableType::Generic,
+                        schema: output.schema.clone(),
+                        enforce_schema: output
+                            .options
+                            .as_ref()
+                            .and_then(|options| options.enforce_schema)
+                            .unwrap_or(false),
+                    });
+                }
+
+                // Existing Function layers use their boundary parameter pins as sources inside
+                // the body. They share `NodeEntity::Existing` with ordinary nodes, so resolve the
+                // layer only after node lookup fails.
+                let layer = self.existing.layers.get(id)?;
+                let output = find_boundary_pin_by_ref(&layer.pins, requested, PinType::Input)?;
+                Some(PlannedOutputType {
+                    source: format!("{}.{}", layer.name, output.name),
+                    pin_name: output.name.clone(),
+                    data_type: format!("{:?}", output.data_type),
+                    value_type: format!("{:?}", output.value_type),
+                    is_generic: output.data_type == VariableType::Generic,
+                    schema: output.schema.clone(),
+                    enforce_schema: output
+                        .options
+                        .as_ref()
+                        .and_then(|options| options.enforce_schema)
+                        .unwrap_or(false),
+                })
+            }
+        }
     }
 
-    /// Reject the generic `struct_get` fallback only when catalog metadata proves it wrong.
-    /// Schema-less Struct/Generic outputs and map-shaped values remain intentionally open-ended.
+    /// Reject the generic `struct_get` fallback when catalog metadata proves it wrong.
+    /// Schema-less scalar Struct and dynamic Generic/Normal outputs remain intentionally open;
+    /// concrete scalars and collection containers are authoritative even without a schema.
     fn schema_allows_member_access(&mut self, source: &ValueSource, field: &str) -> bool {
         let Some(shape) = self.source_output_shape(source) else {
-            return true;
-        };
-        if shape.data_type != "Struct" || shape.value_type == "HashMap" {
-            return true;
-        }
-        let Some(schema) = shape.schema.as_deref() else {
             return true;
         };
 
@@ -5371,6 +6578,21 @@ impl<'a> StructuralPlanner<'a> {
             ));
             return false;
         }
+        if shape.value_type == "HashMap"
+            || (shape.data_type == "Generic" && shape.value_type == "Normal")
+        {
+            return true;
+        }
+        if shape.data_type != "Struct" {
+            self.result.diagnostics.push(format!(
+                "catalog output `{}.{}` has scalar type `{}`, so member `{field}` cannot use struct-field fallback",
+                shape.node_type, shape.pin_name, shape.data_type
+            ));
+            return false;
+        }
+        let Some(schema) = shape.schema.as_deref() else {
+            return true;
+        };
         if shape.value_type != "Normal" {
             return true;
         }
@@ -5467,13 +6689,18 @@ impl<'a> StructuralPlanner<'a> {
                 .clone()
                 .or_else(|| self.resolve_entity_output_pin(&base.node, None));
             if let Some(from_pin) = from_pin {
-                self.connect_commands.push(BoardCommand::ConnectPins {
-                    from_node: base.node.node_ref(),
+                if !self.queue_validated_data_connection(
+                    &base,
                     from_pin,
-                    to_node: entity.node_ref(),
-                    to_pin: struct_pin.name.clone(),
-                    summary: Some(format!("Read struct field `{field}`")),
-                });
+                    &entity,
+                    struct_pin,
+                    &struct_pin.name,
+                    format!("Read struct field `{field}`"),
+                    &format!("struct member access `{field}`"),
+                    false,
+                ) {
+                    return None;
+                }
             }
         }
 
@@ -5505,13 +6732,18 @@ impl<'a> StructuralPlanner<'a> {
                 .clone()
                 .or_else(|| self.resolve_entity_output_pin(&base.node, None));
             if let Some(from_pin) = from_pin {
-                self.connect_commands.push(BoardCommand::ConnectPins {
-                    from_node: base.node.node_ref(),
+                if !self.queue_validated_data_connection(
+                    &base,
                     from_pin,
-                    to_node: entity.node_ref(),
-                    to_pin: array_pin.name.clone(),
-                    summary: Some("Read array length".to_string()),
-                });
+                    &entity,
+                    array_pin,
+                    &array_pin.name,
+                    "Read array length".to_string(),
+                    "array length access",
+                    false,
+                ) {
+                    return None;
+                }
             }
         }
 
@@ -5522,6 +6754,152 @@ impl<'a> StructuralPlanner<'a> {
             node: entity,
             output_pin: output,
         }))
+    }
+
+    fn lower_container_size_access(
+        &mut self,
+        base: ValueSource,
+        node_type: &str,
+        display: &str,
+        input_name: &str,
+        output_name: &str,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let probe = Call {
+            node_type: node_type.to_string(),
+            display: display.to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+        let meta = self.catalog.resolve_call(&probe).ok()?;
+        let entity = self.queue_add_node(meta.clone(), target_layer);
+        let input = metadata_input_pin(&meta, input_name)?;
+        let from_pin = base
+            .output_pin
+            .clone()
+            .or_else(|| self.resolve_entity_output_pin(&base.node, None))?;
+        if !self.queue_validated_data_connection(
+            &base,
+            from_pin,
+            &entity,
+            input,
+            &input.name,
+            format!("Read {display}"),
+            &format!("{display} access"),
+            false,
+        ) {
+            return None;
+        }
+        let output = self
+            .resolve_entity_output_pin(&entity, Some(output_name))
+            .or_else(|| self.resolve_entity_output_pin(&entity, None));
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: output,
+        }))
+    }
+
+    fn lower_collection_length_access(
+        &mut self,
+        base: ValueSource,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        match self
+            .source_output_shape(&base)
+            .map(|shape| shape.value_type)
+            .as_deref()
+        {
+            Some("HashSet") => self.lower_container_size_access(
+                base,
+                "set_get_size",
+                "set size",
+                "set_in",
+                "size",
+                target_layer,
+            ),
+            Some("HashMap") => self.lower_container_size_access(
+                base,
+                "map_size",
+                "map size",
+                "map_in",
+                "size",
+                target_layer,
+            ),
+            Some("Array") | None => self.lower_array_length_access(base, target_layer),
+            Some(_) => None,
+        }
+    }
+
+    fn lower_hash_map_member_access(
+        &mut self,
+        base: ValueSource,
+        field: &str,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let probe = Call {
+            node_type: "map_get".to_string(),
+            display: "mapGet".to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+        let meta = self.catalog.resolve_call(&probe).ok()?;
+        let entity = self.queue_add_node(meta.clone(), target_layer);
+        if let Some(key_pin) = metadata_input_pin(&meta, "key") {
+            self.queue_update_input(
+                &entity,
+                key_pin,
+                flow_like_types::Value::String(field.to_string()),
+                &meta,
+            );
+        }
+        let map_pin = metadata_input_pin(&meta, "map_in")?;
+        let from_pin = base
+            .output_pin
+            .clone()
+            .or_else(|| self.resolve_entity_output_pin(&base.node, None))?;
+        if !self.queue_validated_data_connection(
+            &base,
+            from_pin,
+            &entity,
+            map_pin,
+            &map_pin.name,
+            format!("Read map key `{field}`"),
+            &format!("map member access `{field}`"),
+            false,
+        ) {
+            return None;
+        }
+        let output = self.resolve_entity_output_pin(&entity, Some("value"))?;
+        Some(SymbolValue::Source(ValueSource {
+            node: entity,
+            output_pin: Some(output),
+        }))
+    }
+
+    fn lower_member_access(
+        &mut self,
+        base: ValueSource,
+        field: &str,
+        target_layer: Option<String>,
+    ) -> Option<SymbolValue> {
+        let shape = self.source_output_shape(&base);
+        match shape.as_ref().map(|shape| shape.value_type.as_str()) {
+            Some("HashMap") if field == "length" => {
+                self.lower_collection_length_access(base, target_layer)
+            }
+            Some("HashMap") => self.lower_hash_map_member_access(base, field, target_layer),
+            Some("Array" | "HashSet") if field == "length" => {
+                self.lower_collection_length_access(base, target_layer)
+            }
+            Some("Array" | "HashSet") => {
+                let _ = self.schema_allows_member_access(&base, field);
+                None
+            }
+            _ if self.schema_allows_member_access(&base, field) => {
+                self.lower_struct_field_access(base, field, target_layer)
+            }
+            _ => None,
+        }
     }
 
     /// Materialize an `array_get` node for a `base[index]` access, reading its `element`
@@ -5599,13 +6977,7 @@ impl<'a> StructuralPlanner<'a> {
                     // DATA keys (`mail.subject`), which the parser classifies as Field. Fall
                     // back to the struct_get lowering the Member arm uses instead of dropping
                     // the connection.
-                    None if pin == "length" && self.source_is_collection(&source) => {
-                        self.lower_array_length_access(source, target_layer)
-                    }
-                    None if self.schema_allows_member_access(&source, pin) => {
-                        self.lower_struct_field_access(source, pin, target_layer)
-                    }
-                    None => None,
+                    None => self.lower_member_access(source, pin, target_layer),
                 }
             }
             Expr::Call(call) => self.add_call_node(call, target_layer).map(|node| {
@@ -5625,13 +6997,7 @@ impl<'a> StructuralPlanner<'a> {
                 // wire the consumer straight to the base value).
                 let base_symbol = self.resolve_expr(base, target_layer.clone())?;
                 let base_source = self.symbol_to_source(base_symbol, target_layer.clone())?;
-                if field == "length" {
-                    self.lower_array_length_access(base_source, target_layer)
-                } else if self.schema_allows_member_access(&base_source, field) {
-                    self.lower_struct_field_access(base_source, field, target_layer)
-                } else {
-                    None
-                }
+                self.lower_member_access(base_source, field, target_layer)
             }
             Expr::Index { base, index } => self.lower_array_index_access(base, index, target_layer),
             Expr::Binary { op, lhs, rhs } => self.lower_binary_operator(op, lhs, rhs, target_layer),
@@ -5710,15 +7076,15 @@ impl<'a> StructuralPlanner<'a> {
             })
             .filter_map(|(_, _, result_type, node_type)| {
                 self.catalog
-                    .by_type
-                    .get(*node_type)
+                    .resolve_type(node_type)
+                    .ok()
                     .map(|meta| (*result_type, meta))
             })
             .filter(|(result_type, meta)| {
                 binary_data_inputs(meta).is_some()
                     && meta.outputs.iter().any(|pin| pin.data_type == *result_type)
             })
-            .map(|(_, meta)| meta.clone())
+            .map(|(_, meta)| meta)
             .collect::<Vec<_>>();
 
         match candidates.as_slice() {
@@ -5883,12 +7249,60 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    fn variable_value_contract(&self, variable_id: &str, pin_name: &str) -> Option<PinMetadata> {
+        let mut contract = if let Some(contract) = self.variable_value_contracts.get(variable_id) {
+            contract.clone()
+        } else {
+            let variable = self.existing.variables.get(variable_id).or_else(|| {
+                self.existing
+                    .layers
+                    .values()
+                    .find_map(|layer| layer.variables.get(variable_id))
+            })?;
+            variable_value_pin_metadata(
+                pin_name,
+                format!("{:?}", variable.data_type),
+                format!("{:?}", variable.value_type),
+                variable.schema.clone(),
+            )
+        };
+        contract.name = pin_name.to_string();
+        contract.friendly_name = pin_name.to_string();
+        Some(contract)
+    }
+
+    fn specialize_variable_node_metadata(&self, meta: &mut NodeMetadata, variable_id: &str) {
+        for input in &mut meta.inputs {
+            if matches!(input.name.as_str(), "value_in" | "new_value" | "value")
+                && let Some(contract) =
+                    self.variable_value_contract(variable_id, input.name.as_str())
+            {
+                input.data_type = contract.data_type;
+                input.value_type = contract.value_type;
+                input.schema = contract.schema;
+                input.is_generic = contract.is_generic;
+            }
+        }
+        for output in &mut meta.outputs {
+            if output.name == "value_ref"
+                && let Some(contract) =
+                    self.variable_value_contract(variable_id, output.name.as_str())
+            {
+                output.data_type = contract.data_type;
+                output.value_type = contract.value_type;
+                output.schema = contract.schema;
+                output.is_generic = contract.is_generic;
+            }
+        }
+    }
+
     fn add_variable_get_source(
         &mut self,
         variable_id: &str,
         target_layer: Option<String>,
     ) -> Option<ValueSource> {
-        let meta = self.resolve_variable_node("variable_get", "variableGet")?;
+        let mut meta = self.resolve_variable_node("variable_get", "variableGet")?;
+        self.specialize_variable_node_metadata(&mut meta, variable_id);
         let entity = self.queue_add_node(meta.clone(), target_layer);
         if let Some(input) = metadata_input_pin(&meta, "var_ref") {
             self.update_commands.push(BoardCommand::UpdateNodePin {
@@ -5910,7 +7324,8 @@ impl<'a> StructuralPlanner<'a> {
         value: &Expr,
         target_layer: Option<String>,
     ) -> Option<NodeEntity> {
-        let meta = self.resolve_variable_node("variable_set", "variableSet")?;
+        let mut meta = self.resolve_variable_node("variable_set", "variableSet")?;
+        self.specialize_variable_node_metadata(&mut meta, variable_id);
         let entity = self.queue_add_node(meta.clone(), target_layer.clone());
 
         if let Some(input) = metadata_input_pin(&meta, "var_ref") {
@@ -5950,13 +7365,16 @@ impl<'a> StructuralPlanner<'a> {
         };
 
         if let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) {
-            self.connect_commands.push(BoardCommand::ConnectPins {
-                from_node: source.node.node_ref(),
-                from_pin: output_pin,
-                to_node: entity.node_ref(),
-                to_pin: input.name.clone(),
-                summary: Some("Set FlowScript variable value".to_string()),
-            });
+            self.queue_validated_data_connection(
+                &source,
+                output_pin,
+                &entity,
+                input,
+                &input.name,
+                "Set FlowScript variable value".to_string(),
+                &format!("assignment to variable `{variable_id}`"),
+                true,
+            );
         }
 
         Some(entity)
@@ -5995,15 +7413,18 @@ impl<'a> StructuralPlanner<'a> {
             ));
             return;
         };
+        let target_input = self
+            .variable_value_contract(variable_id, &input.name)
+            .unwrap_or_else(|| input.clone());
 
         if let Some(mut literal) = literal_expr_to_value(value) {
-            self.normalize_input_value(input, &mut literal);
+            self.normalize_input_value(&target_input, &mut literal);
             self.queue_update_input(entity, input, literal, &meta);
             return;
         }
 
         let Some(source) = self
-            .resolve_expr_for_argument(value, entity, input, target_layer.clone())
+            .resolve_expr_for_argument(value, entity, &input.name, target_layer.clone())
             .and_then(|symbol| self.symbol_to_source(symbol, target_layer))
         else {
             self.result.diagnostics.push(format!(
@@ -6012,20 +7433,30 @@ impl<'a> StructuralPlanner<'a> {
             return;
         };
 
-        if let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, input) {
-            self.connect_commands.push(BoardCommand::ConnectPins {
-                from_node: source.node.node_ref(),
-                from_pin: output_pin,
-                to_node: entity.node_ref(),
-                to_pin: input.name.clone(),
-                summary: Some("Set FlowScript variable value".to_string()),
-            });
+        if let Some(output_pin) = self.resolve_source_output_pin_for_input(&source, &target_input) {
+            self.queue_validated_data_connection(
+                &source,
+                output_pin,
+                entity,
+                &target_input,
+                &input.name,
+                "Set FlowScript variable value".to_string(),
+                &format!("assignment to variable `{variable_id}`"),
+                true,
+            );
         }
     }
 
     fn resolve_variable_node(&mut self, node_type: &str, display: &str) -> Option<NodeMetadata> {
-        if let Some(meta) = self.catalog.by_type.get(node_type) {
-            return Some(meta.clone());
+        match self.catalog.resolve_type(node_type) {
+            Ok(meta) => return Some(meta),
+            Err(reason) if self.catalog.by_type.contains_key(node_type) => {
+                self.result.diagnostics.push(format!(
+                    "catalog node `{node_type}` required for `{display}` is unusable: {reason}"
+                ));
+                return None;
+            }
+            Err(_) => {}
         }
         match self.catalog.resolve_display(display) {
             Ok(meta) => Some(meta),
@@ -6042,10 +7473,35 @@ impl<'a> StructuralPlanner<'a> {
         value: &Expr,
         target_layer: Option<String>,
     ) -> String {
-        let variable_id = generated_variable_id(name);
-        self.variable_refs.insert(&variable_id, name);
         let default_value = literal_expr_to_value(value);
-        let (data_type, value_type) = infer_variable_types(default_value.as_ref());
+        let (data_type, value_type) = if default_value.is_some() {
+            infer_variable_types(default_value.as_ref())
+        } else {
+            // A non-literal initializer carries no default, but its output contract still
+            // types the variable so downstream connections are validated against it.
+            (
+                self.expr_data_type_hint(value)
+                    .unwrap_or_else(|| "Generic".to_string()),
+                "Normal".to_string(),
+            )
+        };
+        self.create_typed_local_variable(name, default_value, data_type, value_type, target_layer)
+    }
+
+    fn create_typed_local_variable(
+        &mut self,
+        name: &str,
+        default_value: Option<flow_like_types::Value>,
+        data_type: String,
+        value_type: String,
+        target_layer: Option<String>,
+    ) -> String {
+        let variable_id = self.unique_local_variable_id(name);
+        self.variable_refs.insert(&variable_id, name);
+        self.variable_value_contracts.insert(
+            variable_id.clone(),
+            variable_value_pin_metadata("value_in", data_type.clone(), value_type.clone(), None),
+        );
         self.add_commands.push(BoardCommand::CreateVariable {
             variable_id: Some(variable_id.clone()),
             name: name.to_string(),
@@ -6063,6 +7519,202 @@ impl<'a> StructuralPlanner<'a> {
             summary: Some(format!("Create local FlowScript variable {name}")),
         });
         variable_id
+    }
+
+    /// Resolve a literal `return` value to its materialized variable source, reusing (in order)
+    /// the getter already wired into the boundary pin, the source planned for this return earlier
+    /// in this run (another branch arm), and an existing layer-local variable, before creating
+    /// anything new — re-applying the same script must not grow the board.
+    fn literal_return_source(
+        &mut self,
+        layer: &NodeEntity,
+        function_name: &str,
+        return_param: &PinMetadata,
+        literal: flow_like_types::Value,
+        target_layer: Option<String>,
+    ) -> Option<ValueSource> {
+        let base_name = format!("{function_name}_{}", return_param.name);
+        let deterministic_id = generated_variable_id(&base_name);
+
+        for existing in self.existing_sources_for_input_ref(layer, &return_param.name) {
+            let Some(variable_id) = self.materialized_return_variable_id(&existing, &base_name)
+            else {
+                continue;
+            };
+            self.queue_literal_return_default_update(&variable_id, &literal);
+            self.planned_literal_return_sources
+                .insert(deterministic_id, existing.clone());
+            return Some(existing);
+        }
+
+        if let Some(source) = self.planned_literal_return_sources.get(&deterministic_id) {
+            return Some(source.clone());
+        }
+
+        // The variable survived but its getter/edge was removed: reuse it instead of minting a
+        // `_2` sibling. Restricted to THIS function layer so an unrelated same-named variable in
+        // another scope is never hijacked.
+        let orphaned = target_layer
+            .as_deref()
+            .and_then(|layer_id| self.existing.layers.get(layer_id))
+            .is_some_and(|existing_layer| existing_layer.variables.contains_key(&deterministic_id));
+        if orphaned {
+            self.queue_literal_return_default_update(&deterministic_id, &literal);
+            let source = self.add_variable_get_source(&deterministic_id, target_layer)?;
+            self.planned_literal_return_sources
+                .insert(deterministic_id, source.clone());
+            return Some(source);
+        }
+
+        let source = self.materialize_literal_return_source(
+            function_name,
+            return_param,
+            literal,
+            target_layer,
+        )?;
+        self.planned_literal_return_sources
+            .insert(deterministic_id, source.clone());
+        Some(source)
+    }
+
+    /// If `source` is a live `variable_get` reading a variable materialized for this literal
+    /// return — its name is the deterministic `{function}_{pin}`, historically with a `_N`
+    /// uniqueness suffix — return that variable's id.
+    fn materialized_return_variable_id(
+        &self,
+        source: &ValueSource,
+        base_name: &str,
+    ) -> Option<String> {
+        let NodeEntity::Existing(node_id) = &source.node else {
+            return None;
+        };
+        let node = find_board_node(self.existing, node_id)?;
+        if node.name != "variable_get" {
+            return None;
+        }
+        let variable_id = node_pin_literal_string(node, "var_ref")?;
+        let variable = self.find_existing_variable(&variable_id)?;
+        let matches = variable.name == base_name
+            || variable
+                .name
+                .strip_prefix(base_name)
+                .and_then(|rest| rest.strip_prefix('_'))
+                .is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                });
+        matches.then_some(variable_id)
+    }
+
+    fn find_existing_variable(&self, variable_id: &str) -> Option<&Variable> {
+        self.existing.variables.get(variable_id).or_else(|| {
+            self.existing
+                .layers
+                .values()
+                .find_map(|layer| layer.variables.get(variable_id))
+        })
+    }
+
+    /// Emit an `UpdateVariable` for a reused materialized return variable when the authored
+    /// literal differs from its stored default (type follows the literal).
+    fn queue_literal_return_default_update(
+        &mut self,
+        variable_id: &str,
+        literal: &flow_like_types::Value,
+    ) {
+        let Some(existing) = self.find_existing_variable(variable_id) else {
+            return;
+        };
+        let current = existing
+            .default_value
+            .as_deref()
+            .and_then(|bytes| flow_like_types::json::from_slice(bytes).ok());
+        if current.as_ref() == Some(literal) {
+            return;
+        }
+        let (data_type, value_type) = infer_variable_types(Some(literal));
+        let data_type = (data_type != format!("{:?}", existing.data_type)).then_some(data_type);
+        let value_type = (value_type != format!("{:?}", existing.value_type)).then_some(value_type);
+        self.update_commands.push(BoardCommand::UpdateVariable {
+            variable_id: variable_id.to_string(),
+            name: None,
+            data_type,
+            value_type,
+            default_value: Some(literal.clone()),
+            clear_default_value: false,
+            description: None,
+            clear_description: false,
+            category: None,
+            clear_category: false,
+            schema: None,
+            clear_schema: false,
+            exposed: None,
+            secret: None,
+            editable: None,
+            runtime_configured: None,
+            value: None,
+            summary: Some("Update FlowScript literal return value".to_string()),
+        });
+    }
+
+    /// A literal `return` value has no producing node; materialize it as a typed layer-local
+    /// variable whose default is the literal, read through a `variable_get` inside the function
+    /// layer, so the boundary return pin gets a real data source.
+    fn materialize_literal_return_source(
+        &mut self,
+        function_name: &str,
+        return_param: &PinMetadata,
+        literal: flow_like_types::Value,
+        target_layer: Option<String>,
+    ) -> Option<ValueSource> {
+        let name =
+            self.unique_local_variable_name(&format!("{function_name}_{}", return_param.name));
+        let (data_type, value_type) = infer_variable_types(Some(&literal));
+        let variable_id = self.create_typed_local_variable(
+            &name,
+            Some(literal),
+            data_type,
+            value_type,
+            target_layer.clone(),
+        );
+        self.add_variable_get_source(&variable_id, target_layer)
+    }
+
+    fn unique_local_variable_name(&self, base: &str) -> String {
+        let mut candidate = base.to_string();
+        let mut suffix = 2;
+        loop {
+            if !self.local_variable_id_taken(&generated_variable_id(&candidate)) {
+                return candidate;
+            }
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+    }
+
+    /// Local variable ids derive from bare local names, which legally repeat across function
+    /// layers (`let count = …` in two functions). Ids must stay unique board-wide, so suffix the
+    /// id — not the display name — when the derived id is already claimed.
+    fn unique_local_variable_id(&self, name: &str) -> String {
+        let base = generated_variable_id(name);
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        loop {
+            if !self.local_variable_id_taken(&candidate) {
+                return candidate;
+            }
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+    }
+
+    fn local_variable_id_taken(&self, id: &str) -> bool {
+        self.variable_value_contracts.contains_key(id)
+            || self.existing.variables.contains_key(id)
+            || self
+                .existing
+                .layers
+                .values()
+                .any(|layer| layer.variables.contains_key(id))
     }
 
     fn variable_id_for_assignment_target(&mut self, target: &str) -> Option<String> {
@@ -6094,7 +7746,7 @@ impl<'a> StructuralPlanner<'a> {
                     .outputs
                     .iter()
                     .filter(|pin| pin.data_type != "Execution")
-                    .filter(|pin| metadata_pins_are_compatible(input, pin))
+                    .filter(|pin| metadata_pins_are_compatible(input, pin, &self.existing.refs))
                     .collect();
                 match compatible.as_slice() {
                     [pin] => Some(pin.name.clone()),
@@ -6103,8 +7755,7 @@ impl<'a> StructuralPlanner<'a> {
                         .find(|pin| {
                             matches!(pin.name.as_str(), "result" | "value" | "output" | "out")
                         })
-                        .map(|pin| pin.name.clone())
-                        .or_else(|| self.resolve_entity_output_pin(&source.node, None)),
+                        .map(|pin| pin.name.clone()),
                 }
             }
             NodeEntity::Existing(_) | NodeEntity::Layer { .. } => {
@@ -6163,6 +7814,15 @@ impl<'a> StructuralPlanner<'a> {
     fn seed_top_level_variables(&mut self, ast: &BoardAst) {
         for var in &ast.variables {
             let variable_id = self.variable_id_for_decl(var);
+            self.variable_value_contracts.insert(
+                variable_id.clone(),
+                variable_value_pin_metadata(
+                    "value_in",
+                    type_ref_data_type(&var.ty).to_string(),
+                    type_ref_value_type(&var.ty).to_string(),
+                    visible_variable_schema(ast, var).or_else(|| var.schema.clone()),
+                ),
+            );
             self.variable_refs.insert(&variable_id, &var.name);
             self.insert_symbol(var.name.clone(), SymbolValue::VariableRef { variable_id });
         }
@@ -6474,8 +8134,17 @@ fn collect_statement_stmt<'a>(stmt: &'a Stmt, out: &mut HashMap<String, &'a Call
             collect_statement_block(body, out);
         }
         Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
+            // The renderer prints only the STATEMENT anchor on assignments, so an assigned call
+            // whose own anchor names a DIFFERENT node (a `variable_set` line inlining its
+            // initializer call) is a render convenience: that anchor can never survive the text
+            // round-trip, and keying deletions on it would remove the initializer node from
+            // every unchanged apply.
             if let Some(anchor) = anchor.as_deref()
                 && let Some((call, _)) = assigned_call_expr(value)
+                && call
+                    .anchor
+                    .as_deref()
+                    .is_none_or(|call_anchor| call_anchor == anchor)
             {
                 collect_call_anchor_only(call, Some(anchor), out);
             }
@@ -6790,9 +8459,10 @@ mod tests {
     use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
-    use crate::flow::pin::ValueType;
+    use crate::flow::pin::{PinOptions, ValueType};
     use crate::flow::variable::{Variable, VariableType};
     use flow_like_storage::Path;
+    use flow_like_types::tokio;
     use std::collections::HashMap;
     use std::time::SystemTime;
 
@@ -7451,7 +9121,16 @@ mod tests {
         assert_eq!(matching.len(), 1, "{:?}", result.diagnostics);
         assert!(matching[0].contains("accepts exactly `emailRef`"));
         assert!(matching[0].contains("mailImapList"));
+        assert!(matching[0].contains("inbox: inbox"));
+        assert!(matching[0].contains("controlForEach({ array: refs })"));
+        assert!(matching[0].contains("emailRef: item.value"));
+        assert!(matching[0].contains("emailGetContent"));
+        assert!(matching[0].contains("email: email"));
+        assert!(matching[0].contains("emailGetHeaders"));
+        assert!(matching[0].contains("mailAddressFields"));
+        assert!(matching[0].contains("address: headers.from"));
         assert!(matching[0].contains("emailImapMarkSeen"));
+        assert!(matching[0].contains("email: item.value"));
     }
 
     #[test]
@@ -7865,7 +9544,7 @@ function helper() {
     id: string;
 }
 
-function helper(ticket: string, ticket: string) {
+function helper(ticket: string, ticket: string): (ticket: string) {
 }
 "#,
         )
@@ -7882,6 +9561,31 @@ function helper(ticket: string, ticket: string) {
         );
         assert!(result.diagnostics.iter().any(|diagnostic| {
             diagnostic.contains("duplicate FlowScript function parameter `ticket`")
+        }));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function boundary name `ticket`")
+                && diagnostic.contains("both a parameter and return")
+        }));
+    }
+
+    #[test]
+    fn normalized_function_boundary_name_collisions_are_rejected() {
+        let ast = flow_like_ast::parse(
+            r#"function helper(foo_bar: string, fooBar: string): (result_value: string, resultValue: string) {
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile(&empty_board(), &ast);
+        assert!(result.commands.is_empty());
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function parameter names")
+                && diagnostic.contains("normalized boundary name `fooBar`")
+        }));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("function return names")
+                && diagnostic.contains("normalized boundary name `resultValue`")
         }));
     }
 
@@ -8333,8 +10037,9 @@ simpleEvent() {   //@n:event
 
     fn schema_member_catalog() -> Vec<NodeMetadata> {
         let mut email = pin_meta("email", "Struct", PinType::Output);
+        email.enforce_schema = true;
         email.schema = Some(
-            r#"{"title":"Email","type":"object","properties":{"subject":{"type":"string"},"plain":{"type":"string"},"html":{"type":"string"}}}"#
+            r#"{"title":"Email","type":"object","properties":{"subject":{"type":"string"},"plain":{"type":"string"},"html":{"type":"string"}},"additionalProperties":false}"#
                 .to_string(),
         );
         let mut emails = pin_meta_friendly("emails", "Emails", "Struct", "Array", PinType::Output);
@@ -8483,6 +10188,36 @@ simpleEvent() {   //@n:event
             BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
         )));
 
+        let mut enforced_but_open_catalog = schema_member_catalog();
+        let fetch = enforced_but_open_catalog
+            .iter_mut()
+            .find(|meta| meta.name == "email_imap_inbox_fetch_mail")
+            .expect("fetch metadata");
+        let email = fetch
+            .outputs
+            .iter_mut()
+            .find(|pin| pin.name == "email")
+            .expect("email output");
+        email.schema = Some(
+            r#"{"title":"OpenEmail","type":"object","properties":{"plain":{"type":"string"}}}"#
+                .to_string(),
+        );
+        assert!(email.enforce_schema);
+        let enforced_but_open = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const mail = emailImapInboxFetchMail({})
+    log({ text: mail.body })
+}
+"#,
+            &enforced_but_open_catalog,
+        );
+        assert!(
+            enforced_but_open.diagnostics.is_empty(),
+            "pin schema enforcement must not override JSON Schema's open-object default: {:?}",
+            enforced_but_open.diagnostics
+        );
+
         let mut extensible_catalog = schema_member_catalog();
         let fetch = extensible_catalog
             .iter_mut()
@@ -8551,6 +10286,198 @@ simpleEvent() {   //@n:event
         assert!(length.commands.iter().any(|command| matches!(
             command,
             BoardCommand::AddNode { node_type, .. } if node_type == "array_length"
+        )));
+    }
+
+    #[test]
+    fn schema_less_collection_rejects_member_fallback_but_keeps_length() {
+        let mut catalog = schema_member_catalog();
+        catalog
+            .iter_mut()
+            .find(|meta| meta.name == "mail_imap_list")
+            .expect("list metadata")
+            .outputs
+            .iter_mut()
+            .find(|pin| pin.name == "emails")
+            .expect("emails output")
+            .schema = None;
+
+        let invalid = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const fetched = mailImapList({})
+    log({ text: fetched.mails })
+}
+"#,
+            &catalog,
+        );
+        assert!(
+            invalid.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("mail_imap_list.emails")
+                    && diagnostic.contains("collection type `Array`")
+                    && diagnostic.contains("member `mails`")
+            }),
+            "{:?}",
+            invalid.diagnostics
+        );
+        assert!(!invalid.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
+        )));
+
+        let length = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const fetched = mailImapList({})
+    log({ text: fetched.length })
+}
+"#,
+            &catalog,
+        );
+        assert!(length.diagnostics.is_empty(), "{:?}", length.diagnostics);
+        assert!(length.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "array_length"
+        )));
+    }
+
+    #[test]
+    fn member_access_uses_map_and_set_accessors_without_container_coercion() {
+        let mut catalog = schema_member_catalog();
+        catalog.extend([
+            catalog_meta(
+                "map_source",
+                "Map Source",
+                Vec::new(),
+                vec![pin_meta_friendly(
+                    "map",
+                    "Map",
+                    "Generic",
+                    "HashMap",
+                    PinType::Output,
+                )],
+            ),
+            catalog_meta(
+                "set_source",
+                "Set Source",
+                Vec::new(),
+                vec![pin_meta_friendly(
+                    "set",
+                    "Set",
+                    "Generic",
+                    "HashSet",
+                    PinType::Output,
+                )],
+            ),
+            catalog_meta(
+                "map_get",
+                "Map Get",
+                vec![
+                    pin_meta_friendly("map_in", "Map", "Generic", "HashMap", PinType::Input),
+                    pin_meta("key", "String", PinType::Input),
+                ],
+                vec![
+                    pin_meta("value", "Generic", PinType::Output),
+                    pin_meta("found", "Boolean", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "map_size",
+                "Map Size",
+                vec![pin_meta_friendly(
+                    "map_in",
+                    "Map",
+                    "Generic",
+                    "HashMap",
+                    PinType::Input,
+                )],
+                vec![pin_meta("size", "Integer", PinType::Output)],
+            ),
+            catalog_meta(
+                "set_get_size",
+                "Set Size",
+                vec![pin_meta_friendly(
+                    "set_in",
+                    "Set",
+                    "Generic",
+                    "HashSet",
+                    PinType::Input,
+                )],
+                vec![pin_meta("size", "Integer", PinType::Output)],
+            ),
+        ]);
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const values = mapSource({})
+    log({ text: values.customer })
+    log({ text: values.length })
+    const members = setSource({})
+    log({ text: members.length })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for expected in ["map_get", "map_size", "set_get_size"] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == expected
+                )),
+                "missing {expected}: {:?}",
+                result.commands
+            );
+        }
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "struct_get" | "array_length")
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { to_pin, .. } if to_pin == "map_in"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { to_pin, .. } if to_pin == "set_in"
+        )));
+    }
+
+    #[test]
+    fn concrete_scalar_member_access_is_rejected_before_struct_fallback() {
+        let mut catalog = schema_member_catalog();
+        catalog.push(catalog_meta(
+            "string_source",
+            "String Source",
+            Vec::new(),
+            vec![pin_meta("value", "String", PinType::Output)],
+        ));
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const value = stringSource({})
+    log({ text: value.unknown })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("string_source.value")
+                    && diagnostic.contains("scalar type `String`")
+                    && diagnostic.contains("member `unknown`")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. } if node_type == "struct_get"
         )));
     }
 
@@ -8629,6 +10556,27 @@ simpleEvent() {   //@n:event
             "no-op variable-ref round-trip must be empty; got {:?} from text:\n{text}",
             result.commands
         );
+
+        let changed_text = text.replacen("greeting: string", "greeting: Date", 1);
+        assert_ne!(
+            changed_text, text,
+            "the lowered variable type must be editable"
+        );
+        let changed = reconcile_text_with_catalog(&board, &changed_text, &catalog);
+        assert!(
+            changed.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("incompatible pin types or schemas")
+                    && diagnostic.contains("Date/Normal")
+                    && diagnostic.contains("String/Normal")
+            }),
+            "a retained variable_get edge must use the edited variable contract: {:?}",
+            changed.diagnostics
+        );
+        assert!(!changed.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, to_node, .. }
+                if from_node == "reader" && to_node == "log"
+        )));
     }
 
     #[test]
@@ -10255,6 +12203,2067 @@ eventsGeneric(payload: Struct) {
     }
 
     #[test]
+    fn rejects_concrete_date_output_for_string_helper_parameter() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "utils_datetime_now",
+                "Now",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("date", "Date", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function saveTicket(updatedAt: string) {
+    log({ message: updatedAt })
+}
+
+eventsSimple() {
+    const now = utilsDatetimeNow()
+    saveTicket({ updatedAt: now.date })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("argument `updatedAt` on `saveTicket`")
+                && diagnostic.contains("`Date/Normal`")
+                && diagnostic.contains("`String/Normal`")
+                && diagnostic.contains("catalog-declared conversion")
+        }));
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_pin, .. } if to_pin == "updatedAt"
+            )),
+            "an incompatible helper argument must not be wired: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn planned_output_type_requires_concrete_container_match_but_keeps_generic_permissive() {
+        let scalar_struct = pin_meta("row", "Struct", PinType::Input);
+        let mut array_struct = pin_meta("rows", "Struct", PinType::Input);
+        array_struct.value_type = "Array".to_string();
+
+        let scalar_output = PlannedOutputType {
+            source: "source.row".to_string(),
+            pin_name: "row".to_string(),
+            data_type: "Struct".to_string(),
+            value_type: "Normal".to_string(),
+            is_generic: false,
+            schema: None,
+            enforce_schema: false,
+        };
+        let array_output = PlannedOutputType {
+            source: "source.rows".to_string(),
+            pin_name: "rows".to_string(),
+            data_type: "Struct".to_string(),
+            value_type: "Array".to_string(),
+            is_generic: false,
+            schema: None,
+            enforce_schema: false,
+        };
+
+        let refs = HashMap::new();
+        assert!(planned_output_is_compatible(
+            &scalar_struct,
+            &scalar_output,
+            &refs
+        ));
+        assert!(!planned_output_is_compatible(
+            &scalar_struct,
+            &array_output,
+            &refs
+        ));
+        assert!(!planned_output_is_compatible(
+            &array_struct,
+            &scalar_output,
+            &refs
+        ));
+
+        let generic_input = pin_meta("value", "Generic", PinType::Input);
+        assert!(planned_output_is_compatible(
+            &generic_input,
+            &array_output,
+            &refs
+        ));
+        let generic_output = PlannedOutputType {
+            source: "source.value".to_string(),
+            pin_name: "value".to_string(),
+            data_type: "Generic".to_string(),
+            value_type: "Normal".to_string(),
+            is_generic: true,
+            schema: None,
+            enforce_schema: false,
+        };
+        assert!(planned_output_is_compatible(
+            &array_struct,
+            &generic_output,
+            &refs
+        ));
+
+        let mut generic_array_input = pin_meta("values", "Generic", PinType::Input);
+        generic_array_input.value_type = "Array".to_string();
+        let scalar_struct_output = pin_meta("row", "Struct", PinType::Output);
+        assert!(!planned_output_is_compatible(
+            &generic_array_input,
+            &scalar_output,
+            &refs
+        ));
+        assert!(!metadata_pins_are_compatible(
+            &generic_array_input,
+            &scalar_struct_output,
+            &refs
+        ));
+        let generic_array_output = PlannedOutputType {
+            source: "source.values".to_string(),
+            pin_name: "values".to_string(),
+            data_type: "Generic".to_string(),
+            value_type: "Array".to_string(),
+            is_generic: true,
+            schema: None,
+            enforce_schema: false,
+        };
+        assert!(!planned_output_is_compatible(
+            &scalar_struct,
+            &generic_array_output,
+            &refs
+        ));
+        assert!(planned_output_is_compatible(
+            &generic_input,
+            &generic_array_output,
+            &refs
+        ));
+        let generic_dynamic_output = pin_meta("value", "Generic", PinType::Output);
+        assert!(metadata_pins_are_compatible(
+            &generic_array_input,
+            &generic_dynamic_output,
+            &refs
+        ));
+    }
+
+    #[test]
+    fn new_connections_require_compatible_enforced_struct_schemas() {
+        let mut input = pin_meta("payload", "Struct", PinType::Input);
+        input.schema =
+            Some(r#"{"type":"object","properties":{"subject":{"type":"string"}}}"#.to_string());
+        input.enforce_schema = true;
+        let mut output = pin_meta("message", "Struct", PinType::Output);
+        output.schema =
+            Some(r#"{"properties":{"uid":{"type":"integer"}},"type":"object"}"#.to_string());
+        output.enforce_schema = true;
+        let refs = HashMap::new();
+
+        assert!(!metadata_pins_are_compatible(&input, &output, &refs));
+        let planned = PlannedOutputType {
+            source: "mail.message".to_string(),
+            pin_name: output.name.clone(),
+            data_type: output.data_type.clone(),
+            value_type: output.value_type.clone(),
+            is_generic: false,
+            schema: output.schema.clone(),
+            enforce_schema: true,
+        };
+        assert!(!planned_output_is_compatible(&input, &planned, &refs));
+
+        output.schema = Some(
+            r#"{ "properties": { "subject": { "type": "string" } }, "type": "object" }"#
+                .to_string(),
+        );
+        assert!(
+            metadata_pins_are_compatible(&input, &output, &refs),
+            "schema comparison must ignore JSON whitespace and key order"
+        );
+
+        output.schema =
+            Some(r#"{"type":"object","properties":{"uid":{"type":"integer"}}}"#.to_string());
+        input.name = "struct_in".to_string();
+        assert!(
+            metadata_pins_are_compatible(&input, &output, &refs),
+            "schema-adopting struct nodes must accept the connected Struct schema"
+        );
+        input.name = "payload".to_string();
+        assert!(
+            !metadata_pins_are_compatible(&input, &output, &refs),
+            "ordinary Struct pins must still reject mismatched schemas"
+        );
+        input.enforce_schema = false;
+        output.enforce_schema = false;
+        assert!(
+            metadata_pins_are_compatible(&input, &output, &refs),
+            "differing descriptive schemas must remain connectable when neither side enforces"
+        );
+    }
+
+    #[test]
+    fn new_edge_from_existing_node_is_checked_but_identical_legacy_edge_is_retained() {
+        let mut board = empty_board();
+        let mut source_node = Node::new("string_source", "String Source", "", "test");
+        source_node.id = "source".to_string();
+        let source_pin_id = source_node
+            .add_output_pin("value", "Value", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(source_node.id.clone(), source_node);
+
+        let mut legacy_sink = Node::new("date_sink", "Date Sink", "", "test");
+        legacy_sink.id = "legacy_sink".to_string();
+        let legacy_input_id = legacy_sink
+            .add_input_pin("date", "Date", "", VariableType::Date)
+            .id
+            .clone();
+        board.nodes.insert(legacy_sink.id.clone(), legacy_sink);
+        // Deliberately retain an old invalid edge: reconcile must not make unchanged boards
+        // uneditable, but it must not use this grandfathering for any newly authored edge.
+        connect(
+            &mut board,
+            "source",
+            &source_pin_id,
+            "legacy_sink",
+            &legacy_input_id,
+        );
+
+        let source = ValueSource {
+            node: NodeEntity::Existing("source".to_string()),
+            output_pin: Some("value".to_string()),
+        };
+        let call = Call {
+            node_type: "date_sink".to_string(),
+            display: "dateSink".to_string(),
+            args: vec![Arg {
+                name: "date".to_string(),
+                value: Expr::Ref("existingValue".to_string()),
+            }],
+            anchor: None,
+        };
+
+        let legacy_meta = node_to_metadata(&board.nodes["legacy_sink"]);
+        let mut retained = StructuralPlanner::new(&board, &[], None);
+        retained.push_scope();
+        retained.symbols.last_mut().unwrap().insert(
+            "existingValue".to_string(),
+            SymbolValue::Source(source.clone()),
+        );
+        retained.plan_call_arguments(
+            &call,
+            &NodeEntity::Existing("legacy_sink".to_string()),
+            &legacy_meta,
+            None,
+            true,
+        );
+        assert!(retained.result.diagnostics.is_empty());
+        assert!(retained.connect_commands.is_empty());
+
+        let new_meta = catalog_meta(
+            "date_sink",
+            "Date Sink",
+            vec![pin_meta("date", "Date", PinType::Input)],
+            Vec::new(),
+        );
+        let mut newly_authored = StructuralPlanner::new(&board, &[], None);
+        newly_authored.push_scope();
+        newly_authored
+            .symbols
+            .last_mut()
+            .unwrap()
+            .insert("existingValue".to_string(), SymbolValue::Source(source));
+        newly_authored.plan_call_arguments(
+            &call,
+            &NodeEntity::New {
+                ref_id: "$new_sink".to_string(),
+                meta: new_meta.clone(),
+            },
+            &new_meta,
+            None,
+            true,
+        );
+        assert!(newly_authored.result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("incompatible pin types or schemas")
+                && diagnostic.contains("String/Normal")
+                && diagnostic.contains("Date/Normal")
+        }));
+        assert!(newly_authored.connect_commands.is_empty());
+    }
+
+    #[test]
+    fn function_return_rejects_a_new_incompatible_data_edge() {
+        let catalog = vec![catalog_meta(
+            "date_source",
+            "Date Source",
+            Vec::new(),
+            vec![pin_meta("date", "Date", PinType::Output)],
+        )];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function makeMessage(): (message: string) {
+    const value = dateSource()
+    return value.date
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("return value 1")
+                && diagnostic.contains("incompatible pin types or schemas")
+                && diagnostic.contains("Date/Normal")
+                && diagnostic.contains("String/Normal")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { to_pin, .. } if to_pin == "message"
+        )));
+    }
+
+    #[test]
+    fn function_literal_returns_materialize_typed_variable_sources() {
+        let catalog = vec![catalog_meta(
+            "variable_get",
+            "Get Variable",
+            vec![pin_meta("var_ref", "String", PinType::Input)],
+            vec![pin_meta("value_ref", "Generic", PinType::Output)],
+        )];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function constantTag(): (tag: string) {
+    return "final"
+}
+
+function constantCount(): (count: int) {
+    return 42
+}
+
+function constantFlag(): (flag: bool) {
+    return true
+}
+"#,
+            &catalog,
+        );
+
+        // Literal-only functions must reconcile cleanly: no FS_FUNCTION_RETURN_MISMATCH and no
+        // FS_HELPER_EMPTY cascade (the materialized variable_get IS a body node).
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        for (function, return_pin, data_type, default_value) in [
+            (
+                "constantTag",
+                "tag",
+                "String",
+                flow_like_types::Value::from("final"),
+            ),
+            (
+                "constantCount",
+                "count",
+                "Integer",
+                flow_like_types::Value::from(42),
+            ),
+            (
+                "constantFlag",
+                "flag",
+                "Boolean",
+                flow_like_types::Value::from(true),
+            ),
+        ] {
+            let layer_ref = result
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    BoardCommand::CreateLayer {
+                        name,
+                        ref_id: Some(ref_id),
+                        ..
+                    } if name == function => Some(ref_id.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing function layer for {function}"));
+            let variable_id = result
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    BoardCommand::CreateVariable {
+                        variable_id: Some(id),
+                        name,
+                        data_type: created_type,
+                        default_value: Some(default),
+                        target_layer: Some(target),
+                        ..
+                    } if name == &format!("{function}_{return_pin}")
+                        && created_type == data_type
+                        && default == &default_value
+                        && target == &layer_ref =>
+                    {
+                        Some(id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing typed literal variable for {function}: {:?}",
+                        result.commands
+                    )
+                });
+            let getter_ref = result
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    BoardCommand::AddNode {
+                        node_type,
+                        ref_id: Some(ref_id),
+                        target_layer: Some(target),
+                        ..
+                    } if node_type == "variable_get" && target == &layer_ref => {
+                        Some(ref_id.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing variable_get in {function} layer"));
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                        if node_id == &getter_ref
+                            && pin_id == "var_ref"
+                            && value == &flow_like_types::Value::String(variable_id.clone())
+                )),
+                "variable_get for {function} must select the literal variable"
+            );
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                        if from_node == &getter_ref
+                            && from_pin == "value_ref"
+                            && to_node == &layer_ref
+                            && to_pin == return_pin
+                )),
+                "missing boundary return connection for {function}: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    /// Board mirroring what applying `function constantTag(): (tag: string) { return "final" }`
+    /// produces: a Function layer whose boundary return pin is fed by a `variable_get` reading
+    /// the materialized layer-local literal variable.
+    fn board_with_materialized_literal_return() -> Board {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "fn-layer".to_string(),
+            "constantTag".to_string(),
+            LayerType::Function,
+        );
+
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        let return_pin = template
+            .add_output_pin("tag", "Tag", "", VariableType::String)
+            .clone();
+        layer.pins.insert(return_pin.id.clone(), return_pin.clone());
+
+        let mut variable =
+            Variable::new("constantTag_tag", VariableType::String, ValueType::Normal);
+        variable.id = "var_constantTag_tag".to_string();
+        variable.set_default_value(flow_like_types::Value::String("final".to_string()));
+        layer.variables.insert(variable.id.clone(), variable);
+
+        let mut getter = Node::new("variable_get", "Get Variable", "", "variables");
+        getter.id = "getter".to_string();
+        getter.layer = Some(layer.id.clone());
+        getter
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .default_value = Some(b"\"var_constantTag_tag\"".to_vec());
+        let value_ref = getter.add_output_pin("value_ref", "Value", "", VariableType::String);
+        value_ref.connected_to.insert(return_pin.id.clone());
+        let value_ref_id = value_ref.id.clone();
+        board.nodes.insert(getter.id.clone(), getter);
+
+        layer
+            .pins
+            .get_mut(&return_pin.id)
+            .expect("boundary return pin")
+            .depends_on
+            .insert(value_ref_id);
+        board.layers.insert(layer.id.clone(), layer);
+        board
+    }
+
+    #[test]
+    fn lowered_literal_return_folds_decl_and_roundtrips_cleanly() {
+        let board = board_with_materialized_literal_return();
+        let text = anchored_text(&board);
+
+        assert!(
+            text.contains("return \"final\""),
+            "lowering must preserve the literal return statement:\n{text}"
+        );
+        assert!(
+            !text.contains("constantTag_tag") && !text.contains("constantTagTag"),
+            "the materialized variable's inert local decl must be folded into the return:\n{text}"
+        );
+
+        let result = reconcile_text_with_catalog(&board, &text, &[]);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "literal-return roundtrip must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn changed_literal_return_updates_the_materialized_variable_in_place() {
+        let board = board_with_materialized_literal_return();
+        let text = anchored_text(&board).replace("return \"final\"", "return \"changed\"");
+
+        let result = reconcile_text_with_catalog(&board, &text, &[]);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result.commands.len(),
+            1,
+            "a changed literal must reuse the materialized variable: {:?}",
+            result.commands
+        );
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::UpdateVariable {
+                variable_id,
+                default_value: Some(flow_like_types::Value::String(value)),
+                ..
+            } if variable_id == "var_constantTag_tag" && value == "changed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn applied_literal_return_roundtrip_is_idempotent() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "variables");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+        let catalog_nodes = vec![variable_get];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"function constantTag(): (tag: string) {
+    return "final"
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("literal return script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+        assert_eq!(
+            board
+                .layers
+                .values()
+                .map(|layer| layer.variables.len())
+                .sum::<usize>(),
+            1,
+            "apply materializes exactly one literal variable"
+        );
+
+        let text = anchored_text(&board);
+        assert!(
+            text.contains("return \"final\""),
+            "lowered board must keep the return statement:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "re-reconciling the board's own lowered script must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn branch_arm_literal_returns_share_one_materialized_variable() {
+        let catalog = vec![
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function pickTag(): (tag: string) {
+    if (true) {
+        return "a"
+    } else {
+        return "b"
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let created_variables = result
+            .commands
+            .iter()
+            .filter(|command| matches!(command, BoardCommand::CreateVariable { .. }))
+            .count();
+        assert_eq!(
+            created_variables, 1,
+            "both arms must share one materialized variable: {:?}",
+            result.commands
+        );
+        let getters = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, .. } if node_type == "variable_get"
+                )
+            })
+            .count();
+        assert_eq!(getters, 1, "{:?}", result.commands);
+        let return_edges = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    BoardCommand::ConnectPins { to_pin, .. } if to_pin == "tag"
+                )
+            })
+            .count();
+        assert_eq!(return_edges, 1, "{:?}", result.commands);
+    }
+
+    #[tokio::test]
+    async fn promoted_local_roundtrip_reapplies_cleanly() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "variables");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+
+        let mut variable_set = Node::new("variable_set", "Set Variable", "", "variables");
+        variable_set.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        variable_set.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_set.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        variable_set.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        variable_set.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+
+        let mut string_trim = Node::new("string_trim", "String Trim", "", "strings");
+        string_trim.add_input_pin("string", "String", "", VariableType::String);
+        string_trim.add_output_pin("trimmed", "Trimmed", "", VariableType::String);
+
+        let mut control_branch = Node::new("control_branch", "Branch", "", "control");
+        control_branch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        control_branch.add_input_pin("condition", "Condition", "", VariableType::Boolean);
+        control_branch.add_output_pin("true", "True", "", VariableType::Execution);
+        control_branch.add_output_pin("false", "False", "", VariableType::Execution);
+
+        let catalog_nodes = vec![variable_get, variable_set, string_trim, control_branch];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let script = r#"function makeTag(): (tag: string) {
+    let label = stringTrim({ string: " raw " })
+    if (true) {
+        label = stringTrim({ string: " hot " })
+    }
+    return label
+}
+"#;
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            script,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("promoted local script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        let text = anchored_text(&board);
+        assert!(
+            text.contains("let label:"),
+            "the promoted local must keep its declaration:\n{text}"
+        );
+        assert!(
+            text.contains("return label"),
+            "the variable return must survive lowering:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "the board's own lowered script must keep applying: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "promoted-local roundtrip must be a no-op: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn same_named_promoted_locals_in_two_functions_get_distinct_variable_ids() {
+        let catalog = vec![
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_set",
+                "Set Variable",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("var_ref", "String", PinType::Input),
+                    pin_meta("value_in", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("value_ref", "Generic", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function first(): (result: int) {
+    let count = 1
+    if (true) {
+        count = 2
+    }
+    return count
+}
+
+function second(): (result: int) {
+    let count = 3
+    if (true) {
+        count = 4
+    }
+    return count
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let created: Vec<(String, String)> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::CreateVariable {
+                    variable_id: Some(id),
+                    name,
+                    target_layer: Some(target),
+                    ..
+                } if name == "count" => Some((id.clone(), target.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            created.len(),
+            2,
+            "each function promotes its own local: {:?}",
+            result.commands
+        );
+        assert_ne!(
+            created[0].0, created[1].0,
+            "same-named locals in different layers must not share a variable id"
+        );
+        assert_ne!(
+            created[0].1, created[1].1,
+            "one variable per function layer"
+        );
+
+        // Every var_ref selection must point at the variable created for ITS node's layer.
+        let variable_by_layer: HashMap<&str, &str> = created
+            .iter()
+            .map(|(id, layer)| (layer.as_str(), id.as_str()))
+            .collect();
+        let layer_by_node: HashMap<String, String> = result
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    ref_id: Some(ref_id),
+                    target_layer: Some(target),
+                    ..
+                } => Some((ref_id.clone(), target.clone())),
+                _ => None,
+            })
+            .collect();
+        let mut var_ref_updates = 0;
+        for command in &result.commands {
+            let BoardCommand::UpdateNodePin {
+                node_id,
+                pin_id,
+                value: flow_like_types::Value::String(value),
+                ..
+            } = command
+            else {
+                continue;
+            };
+            if pin_id != "var_ref" {
+                continue;
+            }
+            var_ref_updates += 1;
+            let layer = layer_by_node
+                .get(node_id)
+                .unwrap_or_else(|| panic!("var_ref update on unknown node {node_id}"));
+            assert_eq!(
+                Some(value.as_str()),
+                variable_by_layer.get(layer.as_str()).copied(),
+                "variable node in layer {layer} must reference that layer's variable: {:?}",
+                result.commands
+            );
+        }
+        assert!(
+            var_ref_updates >= 4,
+            "expected setter+getter selections per function: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn promoted_mutable_let_seeds_non_literal_initializer_into_exec_chain() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Get Variable",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_set",
+                "Set Variable",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("var_ref", "String", PinType::Input),
+                    pin_meta("value_in", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("value_ref", "Generic", PinType::Output),
+                ],
+            ),
+            // Pure: no exec pins.
+            catalog_meta(
+                "int_add",
+                "Add Integers",
+                vec![
+                    pin_meta("a", "Integer", PinType::Input),
+                    pin_meta("b", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("result", "Integer", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"run() {
+    let out = intAdd({ a: 1, b: 2 })
+    if (true) {
+        out = 7
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        // The promoted variable must carry the initializer's output type, not Generic.
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::CreateVariable { name, data_type, .. }
+                    if name == "out" && data_type == "Integer"
+            )),
+            "promoted `out` must be typed Integer: {:?}",
+            result.commands
+        );
+
+        let adder_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "int_add" => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("the int_add initializer must materialize");
+
+        // The seeding variable_set is the one data-wired from the initializer call.
+        let seed_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_node,
+                    to_pin,
+                    ..
+                } if from_node == &adder_ref && from_pin == "result" && to_pin == "value_in" => {
+                    Some(to_node.clone())
+                }
+                _ => None,
+            })
+            .expect("the initializer must seed a variable_set");
+        assert_eq!(
+            command_node_type(&result.commands, &seed_ref).as_deref(),
+            Some("variable_set")
+        );
+
+        // The seed joins the exec chain: event -> seed set -> branch.
+        let branch_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::AddNode {
+                    node_type,
+                    ref_id: Some(ref_id),
+                    ..
+                } if node_type == "control_branch" => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("control_branch node");
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_node, to_pin, .. }
+                    if from_pin == "exec_out" && to_node == &seed_ref && to_pin == "exec_in"
+            )),
+            "seed variable_set must be exec-chained after the event: {:?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if from_node == &seed_ref
+                        && from_pin == "exec_out"
+                        && to_node == &branch_ref
+                        && to_pin == "exec_in"
+            )),
+            "branch must chain after the seed variable_set: {:?}",
+            result.commands
+        );
+
+        // The arm reassignment stays a separate literal variable_set wired from the true arm.
+        let arm_set_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value,
+                    ..
+                } if node_id != &seed_ref
+                    && pin_id == "value_in"
+                    && value == &flow_like_types::Value::from(7) =>
+                {
+                    Some(node_id.clone())
+                }
+                _ => None,
+            })
+            .expect("arm reassignment variable_set");
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == &branch_ref
+                    && from_pin == "true"
+                    && to_node == &arm_set_ref
+                    && to_pin == "exec_in"
+        )));
+    }
+
+    #[test]
+    fn const_call_rebound_in_branch_arm_is_diagnosed() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "make_ticket",
+                "Make Ticket",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("ticket", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"run() {
+    const ticket = makeTicket()
+    if (true) {
+        ticket = makeTicket()
+    }
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("rebinds an outer-scope binding")
+                    && diagnostic.contains("function parameter or `const` node output")
+                    && diagnostic.contains("`ticket`")
+            }),
+            "nested const rebinding must be diagnosed: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn event_level_multi_value_return_is_diagnosed() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "make_ticket",
+                "Make Ticket",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("ticket", "Struct", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "events_generic_return_result",
+                "Return Result",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("response", "Generic", PinType::Input),
+                ],
+                Vec::new(),
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"run() {
+    const value = makeTicket()
+    return value.ticket, value.ticket
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| diagnostic
+                .contains("event returns accept a single value; got 2")),
+            "multi-value event return must be diagnosed: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn function_return_diagnostics_name_the_function_and_expression() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function brokenOne(): (tag: string) {
+    return missingRef
+}
+
+function brokenTwo(): (tag: string) {
+    return otherMissing
+}
+"#,
+            &[],
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`brokenOne`")
+                    && diagnostic.contains("`missingRef`")
+                    && diagnostic.contains("is not a resolvable FlowScript value")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`brokenTwo`")
+                    && diagnostic.contains("`otherMissing`")
+                    && diagnostic.contains("is not a resolvable FlowScript value")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn anchored_function_signature_drift_is_rejected_before_return_wiring() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function-layer".to_string(),
+            "make message".to_string(),
+            LayerType::Function,
+        );
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        let return_pin = template
+            .add_output_pin("message", "Message", "", VariableType::String)
+            .clone();
+        layer.pins.insert(return_pin.id.clone(), return_pin);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let catalog = vec![catalog_meta(
+            "date_source",
+            "Date Source",
+            Vec::new(),
+            vec![pin_meta("date", "Date", PinType::Output)],
+        )];
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function makeMessage(): (message: Date) {   //@l:function-layer
+    const value = dateSource()
+    return value.date
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("changes the data-boundary contract")
+                && diagnostic.contains("function-layer")
+        }));
+        assert!(
+            result.commands.is_empty(),
+            "signature drift must not create a producer or return edge: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn named_interface_function_boundaries_keep_and_validate_their_schema() {
+        let source = r#"interface Ticket {
+    id: string;
+}
+
+function makeTicket(): (result: Ticket) {
+    const value = ticketSource()
+    return value.ticket
+}
+"#;
+        let ast = flow_like_ast::parse(source).expect("parse");
+        let schema = interface_schema_map(&ast)
+            .remove("Ticket")
+            .expect("generated Ticket schema");
+        let mut output = pin_meta("ticket", "Struct", PinType::Output);
+        output.schema = Some(schema.clone());
+        output.enforce_schema = true;
+        let catalog = vec![catalog_meta(
+            "ticket_source",
+            "Ticket Source",
+            Vec::new(),
+            vec![output],
+        )];
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::CreateLayer { pins: Some(pins), .. }
+                if pins.iter().any(|pin| pin.name == "result"
+                    && pin.schema.as_deref() == Some(schema.as_str())
+                    && pin.enforce_schema)
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_pin, to_pin, .. }
+                if from_pin == "ticket" && to_pin == "result"
+        )));
+    }
+
+    #[test]
+    fn schema_bearing_function_boundary_lowers_and_reconciles_nominally() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "typed-function".to_string(),
+            "make ticket".to_string(),
+            LayerType::Function,
+        );
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        let result_pin = template.add_output_pin("result", "Result", "", VariableType::Struct);
+        result_pin.schema = Some(
+            r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}"#
+                .to_string(),
+        );
+        result_pin.options = Some(PinOptions {
+            enforce_schema: Some(true),
+            ..PinOptions::default()
+        });
+        let result_pin = result_pin.clone();
+        let result_pin_id = result_pin.id.clone();
+        layer.pins.insert(result_pin.id.clone(), result_pin);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let text = anchored_text(&board);
+        assert!(text.contains("interface MakeTicketResult"), "{text}");
+        assert!(
+            text.contains("(result: MakeTicketResult)"),
+            "function return must retain its nominal interface: {text}"
+        );
+
+        let result = reconcile_text_with_catalog(&board, &text, &[]);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "create→lower→reconcile must be a no-op: {:?}",
+            result.commands
+        );
+
+        let erased_nominal_type = text.replacen("result: MakeTicketResult", "result: Struct", 1);
+        let erased_result = reconcile_text_with_catalog(&board, &erased_nominal_type, &[]);
+        assert!(
+            erased_result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.contains("changes the data-boundary contract") })
+        );
+
+        board.cleanup();
+        let compacted_schema = board.layers["typed-function"].pins[&result_pin_id]
+            .schema
+            .as_deref()
+            .unwrap();
+        assert!(
+            board.refs.contains_key(compacted_schema),
+            "normal cleanup must exercise the schema-ref round-trip"
+        );
+        let compacted_text = anchored_text(&board);
+        assert!(compacted_text.contains("interface MakeTicketResult"));
+        let compacted_result = reconcile_text_with_catalog(&board, &compacted_text, &[]);
+        assert!(
+            compacted_result.diagnostics.is_empty(),
+            "schema refs must be expanded before boundary comparison: {:?}",
+            compacted_result.diagnostics
+        );
+        assert!(compacted_result.commands.is_empty());
+
+        board
+            .layers
+            .get_mut("typed-function")
+            .unwrap()
+            .pins
+            .get_mut(&result_pin_id)
+            .unwrap()
+            .options
+            .as_mut()
+            .unwrap()
+            .enforce_schema = Some(false);
+        let legacy_text = anchored_text(&board);
+        assert!(!legacy_text.contains("interface "), "{legacy_text}");
+        assert!(legacy_text.contains("(result: Struct)"), "{legacy_text}");
+        let legacy_result = reconcile_text_with_catalog(&board, &legacy_text, &[]);
+        assert!(
+            legacy_result.diagnostics.is_empty(),
+            "non-enforced descriptive schemas must remain a no-op: {:?}",
+            legacy_result.diagnostics
+        );
+        assert!(legacy_result.commands.is_empty());
+    }
+
+    #[test]
+    fn anchored_event_parameter_schema_roundtrips_and_rejects_nominal_drift() {
+        let mut board = empty_board();
+        let mut event = Node::new("events_chat", "Chat Event", "", "events");
+        event.id = "chat-event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let history = event.add_output_pin("history", "History", "", VariableType::Struct);
+        history.schema = Some(
+            r#"{"type":"object","properties":{"messages":{"type":"array","items":{"type":"string"}}},"required":["messages"],"additionalProperties":false}"#
+                .to_string(),
+        );
+        history.options = Some(PinOptions {
+            enforce_schema: Some(true),
+            ..PinOptions::default()
+        });
+        board.nodes.insert(event.id.clone(), event);
+        board.cleanup();
+
+        let text = anchored_text(&board);
+        assert!(text.contains("interface EventsChatHistory"), "{text}");
+        assert!(text.contains("history: EventsChatHistory"), "{text}");
+        let unchanged = reconcile_text_with_catalog(&board, &text, &[]);
+        assert!(
+            unchanged.diagnostics.is_empty(),
+            "cleaned event schema must round-trip: {:?}",
+            unchanged.diagnostics
+        );
+        assert!(unchanged.commands.is_empty());
+
+        let changed = text.replacen("history: EventsChatHistory", "history: Struct", 1);
+        let drift = reconcile_text_with_catalog(&board, &changed, &[]);
+        assert!(drift.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("changes the parameter contract")
+                && diagnostic.contains("chat-event")
+        }));
+        assert!(drift.commands.is_empty());
+    }
+
+    #[test]
+    fn variable_assignment_rejects_a_new_incompatible_data_edge() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "date_source",
+                "Date Source",
+                Vec::new(),
+                vec![pin_meta("date", "Date", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_set",
+                "Set Variable",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("var_ref", "String", PinType::Input),
+                    pin_meta("value_in", "Generic", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("value_ref", "Generic", PinType::Output),
+                ],
+            ),
+        ];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"const message: string = ""
+
+eventsSimple() {
+    const value = dateSource()
+    message = value.date
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("assignment to variable `var_message`")
+                && diagnostic.contains("incompatible pin types or schemas")
+                && diagnostic.contains("Date/Normal")
+                && diagnostic.contains("String/Normal")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { to_node, to_pin, .. }
+                if to_pin == "value_in"
+                    && command_node_type(&result.commands, to_node).as_deref()
+                        == Some("variable_set")
+        )));
+    }
+
+    #[test]
+    fn retained_variable_edge_is_revalidated_after_contract_change() {
+        let mut board = empty_board();
+        let mut source_node = Node::new("string_source", "String Source", "", "test");
+        source_node.id = "source".to_string();
+        let source_pin = source_node
+            .add_output_pin("value", "Value", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(source_node.id.clone(), source_node);
+
+        let mut setter = Node::new("variable_set", "Set Variable", "", "variable");
+        setter.id = "setter".to_string();
+        let input_pin = setter
+            .add_input_pin("value_in", "Value", "", VariableType::String)
+            .id
+            .clone();
+        board.nodes.insert(setter.id.clone(), setter);
+        connect(&mut board, "source", &source_pin, "setter", &input_pin);
+
+        let mut planner = StructuralPlanner::new(&board, &[], None);
+        let authored_date_contract = pin_meta("value_in", "Date", PinType::Input);
+        let queued = planner.queue_validated_data_connection(
+            &ValueSource {
+                node: NodeEntity::Existing("source".to_string()),
+                output_pin: Some("value".to_string()),
+            },
+            "value".to_string(),
+            &NodeEntity::Existing("setter".to_string()),
+            &authored_date_contract,
+            "value_in",
+            "Retain variable assignment".to_string(),
+            "assignment after variable type change",
+            true,
+        );
+
+        assert!(!queued);
+        assert!(planner.result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("assignment after variable type change")
+                && diagnostic.contains("String/Normal")
+                && diagnostic.contains("Date/Normal")
+        }));
+        assert!(planner.connect_commands.is_empty());
+    }
+
+    #[test]
+    fn cleaned_schema_refs_match_inline_authored_edge_and_variable_contracts() {
+        let schema = r#"{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"#
+            .to_string();
+        let enforced = || {
+            Some(PinOptions {
+                enforce_schema: Some(true),
+                ..PinOptions::default()
+            })
+        };
+        let mut board = empty_board();
+        let mut source = Node::new("struct_source", "Struct Source", "", "test");
+        source.id = "source".to_string();
+        let source_pin = source.add_output_pin("value", "Value", "", VariableType::Struct);
+        source_pin.schema = Some(schema.clone());
+        source_pin.options = enforced();
+        let source_pin_id = source_pin.id.clone();
+        board.nodes.insert(source.id.clone(), source);
+
+        let mut target = Node::new("struct_sink", "Struct Sink", "", "test");
+        target.id = "target".to_string();
+        let target_pin = target.add_input_pin("value", "Value", "", VariableType::Struct);
+        target_pin.schema = Some(schema.clone());
+        target_pin.options = enforced();
+        let target_pin_id = target_pin.id.clone();
+        board.nodes.insert(target.id.clone(), target);
+        connect(
+            &mut board,
+            "source",
+            &source_pin_id,
+            "target",
+            &target_pin_id,
+        );
+
+        let mut variable = Variable::new("payload", VariableType::Struct, ValueType::Normal);
+        variable.id = "payload-variable".to_string();
+        variable.schema = Some(schema.clone());
+        board.variables.insert(variable.id.clone(), variable);
+        board.cleanup();
+
+        let mut planner = StructuralPlanner::new(&board, &[], None);
+        let mut authored_input = pin_meta("value", "Struct", PinType::Input);
+        authored_input.schema = Some(schema.clone());
+        authored_input.enforce_schema = true;
+        let retained = planner.queue_validated_data_connection(
+            &ValueSource {
+                node: NodeEntity::Existing("source".to_string()),
+                output_pin: Some("value".to_string()),
+            },
+            "value".to_string(),
+            &NodeEntity::Existing("target".to_string()),
+            &authored_input,
+            "value",
+            "Retain cleaned schema edge".to_string(),
+            "cleaned schema edge",
+            false,
+        );
+        assert!(retained, "{:?}", planner.result.diagnostics);
+        assert!(planner.connect_commands.is_empty());
+
+        let mut authored_variable = pin_meta("value_ref", "Struct", PinType::Output);
+        authored_variable.schema = Some(schema);
+        planner
+            .variable_value_contracts
+            .insert("payload-variable".to_string(), authored_variable);
+        assert!(!planner.variable_contract_changed_from_board("payload-variable"));
+    }
+
+    #[test]
+    fn duplicate_catalog_types_are_order_independent_and_conflicts_fail_closed() {
+        let string_source = catalog_meta(
+            "shared_source",
+            "Z Source",
+            Vec::new(),
+            vec![pin_meta("value", "String", PinType::Output)],
+        );
+        let mut identical_source = string_source.clone();
+        identical_source.friendly_name = "A Source".to_string();
+        let call = Call {
+            node_type: "shared_source".to_string(),
+            display: "sharedSource".to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+
+        let forward = CatalogIndex::new(&[string_source.clone(), identical_source.clone()])
+            .resolve_call(&call)
+            .expect("identical executable contracts should collapse");
+        let reversed = CatalogIndex::new(&[identical_source.clone(), string_source.clone()])
+            .resolve_call(&call)
+            .expect("catalog order must not affect the selected declaration");
+        assert_eq!(forward.friendly_name, "A Source");
+        assert_eq!(forward.friendly_name, reversed.friendly_name);
+
+        let mut schema_source = catalog_meta(
+            "schema_source",
+            "Schema Source Z",
+            Vec::new(),
+            vec![pin_meta("value", "Struct", PinType::Output)],
+        );
+        schema_source.outputs[0].schema =
+            Some(r#"{"type":"object","properties":{"id":{"type":"string"}}}"#.to_string());
+        schema_source.outputs[0].enforce_schema = true;
+        let mut reordered_schema_source = schema_source.clone();
+        reordered_schema_source.friendly_name = "Schema Source A".to_string();
+        reordered_schema_source.outputs[0].schema = Some(
+            r#"{ "properties": { "id": { "type": "string" } }, "type": "object" }"#.to_string(),
+        );
+        let schema_call = Call {
+            node_type: "schema_source".to_string(),
+            display: "schemaSource".to_string(),
+            args: Vec::new(),
+            anchor: None,
+        };
+        CatalogIndex::new(&[schema_source, reordered_schema_source])
+            .resolve_call(&schema_call)
+            .expect("canonical JSON-equivalent schemas are one executable contract");
+
+        let mut conflicting_source = identical_source;
+        conflicting_source.outputs[0].data_type = "Date".to_string();
+        for catalog in [
+            vec![string_source.clone(), conflicting_source.clone()],
+            vec![conflicting_source.clone(), string_source.clone()],
+        ] {
+            let error = CatalogIndex::new(&catalog)
+                .resolve_call(&call)
+                .expect_err("conflicting same-name declarations must not be selected");
+            assert!(
+                error.contains("conflicting catalog declarations"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_existing_inputs_grandfather_only_the_exact_occurrence() {
+        let mut board = empty_board();
+        let mut source_node = Node::new("bool_source", "Bool Source", "", "test");
+        source_node.id = "source".to_string();
+        let source_pin_id = source_node
+            .add_output_pin("value", "Value", "", VariableType::Boolean)
+            .id
+            .clone();
+        board.nodes.insert(source_node.id.clone(), source_node);
+
+        let mut target = Node::new("bool_or", "Boolean Or", "", "test");
+        target.id = "target".to_string();
+        let first_input_id = target
+            .add_input_pin("boolean", "Boolean", "", VariableType::Boolean)
+            .id
+            .clone();
+        target.add_input_pin("boolean", "Boolean", "", VariableType::Boolean);
+        board.nodes.insert(target.id.clone(), target);
+        connect(
+            &mut board,
+            "source",
+            &source_pin_id,
+            "target",
+            &first_input_id,
+        );
+
+        let source = ValueSource {
+            node: NodeEntity::Existing("source".to_string()),
+            output_pin: Some("value".to_string()),
+        };
+        let target_meta = node_to_metadata(&board.nodes["target"]);
+        let call = Call {
+            node_type: "bool_or".to_string(),
+            display: "boolOr".to_string(),
+            args: vec![
+                Arg {
+                    name: "boolean".to_string(),
+                    value: Expr::Ref("value".to_string()),
+                },
+                Arg {
+                    name: "boolean".to_string(),
+                    value: Expr::Ref("value".to_string()),
+                },
+            ],
+            anchor: None,
+        };
+        let mut planner = StructuralPlanner::new(&board, &[], None);
+        planner.push_scope();
+        planner
+            .symbols
+            .last_mut()
+            .unwrap()
+            .insert("value".to_string(), SymbolValue::Source(source));
+        planner.plan_call_arguments(
+            &call,
+            &NodeEntity::Existing("target".to_string()),
+            &target_meta,
+            None,
+            true,
+        );
+
+        assert!(planner.result.diagnostics.is_empty());
+        assert_eq!(planner.connect_commands.len(), 1);
+        assert!(matches!(
+            &planner.connect_commands[0],
+            BoardCommand::ConnectPins { to_node, to_pin, .. }
+                if to_node == "target" && to_pin == "boolean[#2]"
+        ));
+    }
+
+    #[test]
+    fn malformed_multi_source_input_grandfathers_the_matching_endpoint_not_the_first() {
+        let mut board = empty_board();
+        let mut source_ids = Vec::new();
+        for id in ["source-a", "source-b"] {
+            let mut source = Node::new("bool_source", "Bool Source", "", "test");
+            source.id = id.to_string();
+            let pin_id = source
+                .add_output_pin("value", "Value", "", VariableType::Boolean)
+                .id
+                .clone();
+            source_ids.push((id.to_string(), pin_id));
+            board.nodes.insert(source.id.clone(), source);
+        }
+        source_ids.sort_by(|left, right| left.1.cmp(&right.1));
+
+        let mut target = Node::new("bool_sink", "Bool Sink", "", "test");
+        target.id = "target".to_string();
+        let target_pin_id = target
+            .add_input_pin("value", "Value", "", VariableType::Boolean)
+            .id
+            .clone();
+        // Simulate a malformed legacy/fan-in board without relying on the ordinary DATA connect
+        // command, which correctly replaces the prior source.
+        target
+            .pins
+            .get_mut(&target_pin_id)
+            .unwrap()
+            .depends_on
+            .extend(source_ids.iter().map(|(_, pin_id)| pin_id.clone()));
+        for (_, pin_id) in &source_ids {
+            let source = board
+                .nodes
+                .values_mut()
+                .find(|node| node.pins.contains_key(pin_id))
+                .unwrap();
+            source
+                .pins
+                .get_mut(pin_id)
+                .unwrap()
+                .connected_to
+                .insert(target_pin_id.clone());
+        }
+        board.nodes.insert(target.id.clone(), target);
+
+        let requested_source = source_ids[1].0.clone();
+        let mut planner = StructuralPlanner::new(&board, &[], None);
+        let queued = planner.queue_validated_data_connection(
+            &ValueSource {
+                node: NodeEntity::Existing(requested_source),
+                output_pin: Some("value".to_string()),
+            },
+            "value".to_string(),
+            &NodeEntity::Existing("target".to_string()),
+            &pin_meta("value", "Boolean", PinType::Input),
+            "value",
+            "Retain matching edge".to_string(),
+            "malformed fan-in edge",
+            false,
+        );
+
+        assert!(queued);
+        assert!(planner.result.diagnostics.is_empty());
+        assert!(planner.connect_commands.is_empty());
+    }
+
+    #[test]
+    fn malformed_multi_source_resolution_reuses_the_matching_variable_get() {
+        let mut board = empty_board();
+        let mut source_pins = Vec::new();
+        for (node_id, variable_id, variable_name) in [
+            ("reader-a", "var-a", "alpha"),
+            ("reader-b", "var-b", "beta"),
+        ] {
+            let mut variable =
+                Variable::new(variable_name, VariableType::String, ValueType::Normal);
+            variable.id = variable_id.to_string();
+            board.variables.insert(variable.id.clone(), variable);
+
+            let mut reader = Node::new("variable_get", "Get Variable", "", "variables");
+            reader.id = node_id.to_string();
+            reader
+                .add_input_pin("var_ref", "Variable", "", VariableType::String)
+                .default_value = Some(format!("\"{variable_id}\"").into_bytes());
+            let output_id = reader
+                .add_output_pin("value_ref", "Value", "", VariableType::Generic)
+                .id
+                .clone();
+            source_pins.push(output_id);
+            board.nodes.insert(reader.id.clone(), reader);
+        }
+
+        let mut target = Node::new("string_sink", "String Sink", "", "test");
+        target.id = "target".to_string();
+        let target_pin_id = target
+            .add_input_pin("value", "Value", "", VariableType::String)
+            .id
+            .clone();
+        target
+            .pins
+            .get_mut(&target_pin_id)
+            .unwrap()
+            .depends_on
+            .extend(source_pins.iter().cloned());
+        for source_pin_id in &source_pins {
+            let source = board
+                .nodes
+                .values_mut()
+                .find(|node| node.pins.contains_key(source_pin_id))
+                .unwrap();
+            source
+                .pins
+                .get_mut(source_pin_id)
+                .unwrap()
+                .connected_to
+                .insert(target_pin_id.clone());
+        }
+        board.nodes.insert(target.id.clone(), target);
+
+        let mut planner = StructuralPlanner::new(&board, &[], None);
+        let sources = planner
+            .existing_sources_for_input_ref(&NodeEntity::Existing("target".to_string()), "value");
+        assert_eq!(sources.len(), 2);
+        let expected = sources[1].clone();
+        let expected_node = find_board_node(&board, &expected.node.node_ref()).unwrap();
+        let expected_variable_id = node_pin_literal_string(expected_node, "var_ref").unwrap();
+        let expected_variable_name = board.variables[&expected_variable_id].name.clone();
+
+        planner.push_scope();
+        planner.insert_symbol(
+            expected_variable_name.clone(),
+            SymbolValue::VariableRef {
+                variable_id: expected_variable_id,
+            },
+        );
+        let resolved = planner.resolve_expr_for_argument(
+            &Expr::Ref(expected_variable_name),
+            &NodeEntity::Existing("target".to_string()),
+            "value",
+            None,
+        );
+
+        assert!(matches!(
+            resolved,
+            Some(SymbolValue::Source(source))
+                if source.node.node_ref() == expected.node.node_ref()
+                    && source.output_pin == expected.output_pin
+        ));
+        assert!(planner.add_commands.is_empty());
+        assert!(planner.result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn implicit_output_selection_does_not_coerce_array_to_scalar() {
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "multi_output_source",
+                "Multi Output Source",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta_friendly("result", "Rows", "Struct", "Array", PinType::Output),
+                    pin_meta("count", "Integer", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "consume_struct",
+                "Consume Struct",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("row", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const produced = multiOutputSource({})
+    consumeStruct({ row: produced })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("could not choose an output pin")
+                    && diagnostic.contains("argument `row`")
+                    && diagnostic.contains("consumeStruct")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_pin, .. } if to_pin == "row"
+            )),
+            "an array output must not be wired to a scalar input: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn rejects_declared_struct_parameter_connected_directly_to_string_pin() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "struct_source",
+                "Struct Source",
+                vec![],
+                vec![pin_meta("record", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function processMail(mail: Struct) {
+    log({ message: mail })
+}
+
+eventsSimple() {
+    const row = structSource()
+    processMail({ mail: row.record })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("argument `message` on `log`")
+                && diagnostic.contains("`Struct/Normal`")
+                && diagnostic.contains("`String/Normal`")
+        }));
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_pin, .. } if to_pin == "message"
+            )),
+            "a declared Struct parameter must not wire directly into a String pin: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn keeps_schema_less_struct_and_generic_helper_connections_permissive() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                vec![],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_call_function",
+                "Call Function",
+                vec![pin_meta("function_layer_id", "String", PinType::Input)],
+                vec![],
+            ),
+            catalog_meta(
+                "struct_source",
+                "Struct Source",
+                vec![],
+                vec![pin_meta("record", "Struct", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function processMail(mail: Struct) {
+    log({ message: mail })
+}
+
+eventsSimple() {
+    const row = structSource()
+    processMail({ mail: row.record })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { to_pin, .. } if to_pin == "mail"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { to_pin, .. } if to_pin == "message"
+        )));
+    }
+
+    #[test]
     fn new_empty_event_body_is_rejected() {
         let board = empty_board();
         let catalog = vec![catalog_meta(
@@ -11821,6 +15830,15 @@ eventsSimple() {
                 Vec::new(),
                 vec![pin_meta("cuid", "String", PinType::Output)],
             ),
+            catalog_meta(
+                "consume_struct",
+                "Consume Struct",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("value", "Struct", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
         ]);
         catalog
     }
@@ -12751,7 +16769,7 @@ eventsSimple() {
             .clone();
         board.nodes.insert(acc.id.clone(), acc);
 
-        let mut sink = Node::new("batch_insert_local_db", "Batch Insert Local DB", "", "data");
+        let mut sink = Node::new("consume_struct", "Consume Struct", "", "data");
         sink.id = "sink".to_string();
         let sink_exec_in = sink
             .add_input_pin("exec_in", "In", "", VariableType::Execution)
@@ -12844,10 +16862,10 @@ eventsSimple() {
                     if command_node_type(&result.commands, from_node).as_deref() == Some("struct_set")
                         && from_pin == "struct_out"
                         && command_node_type(&result.commands, to_node).as_deref()
-                            == Some("batch_insert_local_db")
+                            == Some("consume_struct")
                         && to_pin == "value"
             )),
-            "expected struct_set.struct_out -> batch_insert_local_db.value; commands: {:?}",
+            "expected struct_set.struct_out -> consume_struct.value; commands: {:?}",
             result.commands
         );
     }
@@ -13283,7 +17301,7 @@ eventsSimple() {
                     pin_meta("source_url", "String", PinType::Input),
                 ],
                 vec![
-                    pin_meta("items", "Struct", PinType::Output),
+                    pin_meta_friendly("items", "Items", "Struct", "Array", PinType::Output),
                     pin_meta("item_count", "Integer", PinType::Output),
                 ],
             ),

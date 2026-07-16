@@ -176,6 +176,8 @@ export interface FrontendToolRequest {
 	context?: {
 		parentRequestId?: string;
 		parent_request_id?: string;
+		conversationId?: string;
+		conversation_id?: string;
 		sourceUserPrompt?: string;
 		source_user_prompt?: string;
 	};
@@ -232,6 +234,20 @@ function sourceUserPrompt(request: FrontendToolRequest): string | undefined {
 		}
 	}
 	return undefined;
+}
+
+/**
+ * Conversation id that scopes a delegated run's retained-draft identity. Prefer the id carried by
+ * the owning request; fall back to the active conversation (the same source `sourceUserPrompt`
+ * falls back to) so nested and follow-up repair runs of one conversation share identity while
+ * other conversations never can.
+ */
+function conversationScopeId(request: FrontendToolRequest): string | undefined {
+	const owned =
+		request.context?.conversationId ?? request.context?.conversation_id;
+	if (owned?.trim()) return owned.trim();
+	const active = useGlobalChatStore.getState().activeConversationId;
+	return active?.trim() ? active : undefined;
 }
 
 function requestDeadline(request: FrontendToolRequest) {
@@ -560,6 +576,137 @@ function createSubRunStream(options: {
 		runIsLive,
 		publishSubSteps,
 		failProgressSteps,
+	};
+}
+
+const FLOWSCRIPT_VALIDATION_TOOL_SUFFIXES = [
+	"write_flowscript",
+	"patch_flowscript",
+	"check_flowscript",
+	"commit_flowscript",
+	"edit_flowscript",
+] as const;
+
+interface NestedFlowScriptValidationEvidence {
+	/** Structured diagnostics from the latest FlowScript validation tool result (may be empty). */
+	diagnostics: unknown[];
+	draftId?: string;
+	revision?: number | string;
+}
+
+/** Keep the actionable diagnostic fields and bound free text so the result stays compact. */
+function compactFlowScriptDiagnostic(diagnostic: unknown): unknown {
+	if (typeof diagnostic === "string") return diagnostic.slice(0, 400);
+	if (
+		!diagnostic ||
+		typeof diagnostic !== "object" ||
+		Array.isArray(diagnostic)
+	) {
+		return diagnostic;
+	}
+	const record = diagnostic as Record<string, unknown>;
+	const compacted: Record<string, unknown> = {};
+	for (const key of [
+		"code",
+		"phase",
+		"severity",
+		"message",
+		"line",
+		"column",
+		"span",
+		"path",
+		"function",
+	]) {
+		const value = record[key];
+		if (value === undefined) continue;
+		compacted[key] = typeof value === "string" ? value.slice(0, 400) : value;
+	}
+	return Object.keys(compacted).length > 0 ? compacted : record;
+}
+
+/**
+ * Pull structured diagnostics and the retained draft identity out of a nested FlowScript
+ * validation tool result (write/patch/check/commit/edit_flowscript), whether the result arrives
+ * as plain JSON, tagged text, or an MCP content envelope. This is what lets the outer agent see
+ * the concrete defect list when the sub-run ends with `validation_errors`.
+ */
+function extractNestedFlowScriptValidationEvidence(
+	data: unknown,
+): NestedFlowScriptValidationEvidence | undefined {
+	if (!data || typeof data !== "object") return undefined;
+	const record = data as Record<string, unknown>;
+	const toolName = String(
+		record.tool_name ?? record.toolName ?? record.tool ?? record.name ?? "",
+	).toLowerCase();
+	if (
+		!FLOWSCRIPT_VALIDATION_TOOL_SUFFIXES.some((suffix) =>
+			toolName.endsWith(suffix),
+		)
+	) {
+		return undefined;
+	}
+	const found: {
+		diagnostics?: unknown[];
+		draftId?: string;
+		revision?: number | string;
+	} = {};
+	const visit = (value: unknown, depth: number) => {
+		if (depth > 6 || value === null || value === undefined) return;
+		if (typeof value === "string") {
+			const tagged = value.match(
+				/<structured_diagnostics>([\s\S]*?)<\/structured_diagnostics>/,
+			);
+			if (tagged?.[1]) {
+				try {
+					const parsed = JSON.parse(tagged[1]);
+					if (Array.isArray(parsed)) found.diagnostics = parsed;
+				} catch {
+					// Malformed tag payloads are ignored; the raw text stays in the debug report.
+				}
+			}
+			const trimmed = value.trim();
+			if (
+				(trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+				(trimmed.startsWith("[") && trimmed.endsWith("]"))
+			) {
+				try {
+					visit(JSON.parse(trimmed), depth + 1);
+				} catch {
+					// Not a JSON document.
+				}
+			}
+			return;
+		}
+		if (Array.isArray(value)) {
+			for (const entry of value) visit(entry, depth + 1);
+			return;
+		}
+		if (typeof value !== "object") return;
+		const container = value as Record<string, unknown>;
+		const structured = Array.isArray(container.structured_diagnostics)
+			? container.structured_diagnostics
+			: Array.isArray(container.diagnostics)
+				? container.diagnostics
+				: undefined;
+		if (structured) found.diagnostics = structured;
+		if (typeof container.draft_id === "string" && container.draft_id) {
+			found.draftId = container.draft_id;
+		}
+		if (
+			typeof container.revision === "number" ||
+			(typeof container.revision === "string" && container.revision)
+		) {
+			found.revision = container.revision;
+		}
+		if (typeof container.text === "string") visit(container.text, depth + 1);
+		if (container.content !== undefined) visit(container.content, depth + 1);
+	};
+	visit(record.result_preview ?? record.result ?? record.output, 0);
+	if (!found.diagnostics && found.draftId === undefined) return undefined;
+	return {
+		diagnostics: found.diagnostics ?? [],
+		draftId: found.draftId,
+		revision: found.revision,
 	};
 }
 
@@ -1862,6 +2009,7 @@ export function GlobalToolBridge() {
 						// Run the board copilot as a sub-agent, using the global chat's selected model.
 						const chat = useGlobalChatStore.getState();
 						const owningUserPrompt = sourceUserPrompt(request);
+						const owningConversationId = conversationScopeId(request);
 						const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
 							owningUserPrompt,
 							instruction,
@@ -1893,6 +2041,12 @@ export function GlobalToolBridge() {
 						});
 						let workspaceCandidates: FlowScriptWorkspaceCandidate[] =
 							retainedCandidateAtStart ? [retainedCandidateAtStart] : [];
+						// Latest FlowScript validation tool result observed on the nested stream. When
+						// the run ends with validation_errors this carries the concrete defect list and
+						// the retained draft identity back to the outer agent.
+						let lastFlowScriptValidation:
+							| NestedFlowScriptValidationEvidence
+							| undefined;
 						const publishDraftingWorkspace = () => {
 							draftingWorkspaceTimer = undefined;
 							const candidate = pendingDraftingWorkspace;
@@ -1980,6 +2134,12 @@ export function GlobalToolBridge() {
 									if (stat)
 										useGlobalChatStore.getState().addSubUsageStats([stat]);
 									continue;
+								}
+								if (event.type === "tool_end") {
+									const evidence = extractNestedFlowScriptValidationEvidence(
+										event.data,
+									);
+									if (evidence) lastFlowScriptValidation = evidence;
 								}
 								if (event.type === "text") continue;
 								applyStreamEvent(subAcc, event);
@@ -2094,6 +2254,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									appId,
 									boardId,
 									parentRequestId: request.requestId,
+									conversationId: owningConversationId,
 									sourceUserPrompt: owningUserPrompt,
 								},
 								nestedRunRequestId,
@@ -2306,9 +2467,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									const surfaceNow =
 										useAssistantSurface.getState().boardSurface;
 									const applyLive =
-										liveSurface &&
-										surfaceNow &&
-										surfaceNow.appId === appId &&
+										surfaceNow?.appId === appId &&
 										surfaceNow.boardId === boardId
 											? surfaceNow
 											: null;
@@ -2567,12 +2726,24 @@ Completion contract: build complete helper logic first and add the Event entry l
 							publishSubSteps();
 						}
 
-						// Show the board and keep chatting in the docked overlay (target is /flow, so
-						// the conversation always needs the dock). With a live surface the user is
-						// already looking at the board — no navigation. If the board was closed
-						// mid-run (apply fell back to detached), navigate so the change is visible.
+						// Surface the board only after a verified apply (or an authoritative
+						// no-changes result). Scheduling /flow for a submitted/failed workspace makes
+						// an empty board look like a successful apply and can overwrite an earlier
+						// page-builder destination. Re-resolve the surface here because navigation or
+						// mounting may have changed while the nested run was active.
 						assertRequestActive(request, "board result publication");
-						if (!liveSurface || appliedViaLive === false) {
+						const surfaceAtPublication =
+							useAssistantSurface.getState().boardSurface;
+						const targetBoardIsVisible =
+							surfaceAtPublication?.appId === appId &&
+							surfaceAtPublication.boardId === boardId;
+						const verifiedBoardResult =
+							!applyFailed &&
+							(workspaceStatus === "no_changes" ||
+								(appliedCommands > 0 &&
+									(persistedReadbackVerified ||
+										(!source && appliedViaLive === true))));
+						if (verifiedBoardResult && !targetBoardIsVisible) {
 							useGlobalChatStore
 								.getState()
 								.setPendingNavigation(`/flow?id=${boardId}&app=${appId}`);
@@ -2631,6 +2802,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 							}
 						}
 
+						// Prefer the structured diagnostics captured from the nested validation tools;
+						// the local apply-path diagnostics are the fallback.
+						const validationDiagnostics = lastFlowScriptValidation?.diagnostics
+							.length
+							? lastFlowScriptValidation.diagnostics
+							: diagnostics;
 						const result = {
 							status: resultStatus,
 							message: response.message,
@@ -2668,6 +2845,24 @@ Completion contract: build complete helper logic first and add the Event entry l
 											selectedWorkspace?.completion === "regression_blocked"
 												? "candidate_regression"
 												: "validation_errors",
+										...(validationDiagnostics.length > 0
+											? {
+													diagnostics: validationDiagnostics
+														.slice(0, 10)
+														.map(compactFlowScriptDiagnostic),
+													diagnostics_total: validationDiagnostics.length,
+												}
+											: {}),
+										...(lastFlowScriptValidation?.draftId
+											? {
+													retained_draft: {
+														draft_id: lastFlowScriptValidation.draftId,
+														...(lastFlowScriptValidation.revision !== undefined
+															? { revision: lastFlowScriptValidation.revision }
+															: {}),
+													},
+												}
+											: {}),
 										...(selectedWorkspace?.completion === "regression_blocked"
 											? {
 													retained_flowscript_summary:
@@ -2778,6 +2973,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					// Run the widget copilot as a sub-agent, using the global chat's selected model.
 					const chat = useGlobalChatStore.getState();
 					const owningUserPrompt = sourceUserPrompt(request);
+					const owningConversationId = conversationScopeId(request);
 					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
 						owningUserPrompt,
 						instruction,
@@ -2917,6 +3113,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								appId,
 								boardId,
 								parentRequestId: request.requestId,
+								conversationId: owningConversationId,
 								sourceUserPrompt: owningUserPrompt,
 							},
 							nestedRunRequestId,
@@ -3094,7 +3291,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							page: { id: pageId, name: pageName, route },
 							widgets: createdWidgets,
 							...(createdBoard ? { created_board_id: boardId } : {}),
-							note: "Created a new page (and any reusable widgets it needs), applied the UI, and opened the page builder. To wire the logic, call flowpilot_board with this app_id and reference the page (route) and these widgets/action_ids in the instruction.",
+							note: "Created a new page (and any reusable widgets it needs), applied the UI, and scheduled the page builder to open after this agent turn. To wire the logic, call flowpilot_board with this app_id and reference the page (route) and these widgets/action_ids in the instruction.",
 						});
 					}
 

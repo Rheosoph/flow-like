@@ -296,6 +296,23 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
             "Reconcile through the catalog-aware FlowScript entry point.",
             None,
         );
+    } else if message.contains("argument") && message.contains("has incompatible pin types") {
+        diagnostic.code = FlowScriptDiagnosticCode::FsTypeMismatch;
+        diagnostic.phase = FlowScriptDiagnosticPhase::TypeCheck;
+        diagnostic.pin = ticks.first().cloned();
+        diagnostic.declaration = ticks.get(1).cloned();
+        diagnostic.actual = ticks.get(3).cloned();
+        diagnostic.expected = ticks.get(5).cloned();
+        diagnostic.ast_path = diagnostic.declaration.as_deref().map(|declaration| {
+            diagnostic.pin.as_deref().map_or_else(
+                || format!("calls.{declaration}.arguments"),
+                |pin| format!("calls.{declaration}.arguments.{pin}"),
+            )
+        });
+        diagnostic.fix = fix(
+            "Insert a catalog-declared conversion whose output matches the target pin type.",
+            diagnostic.expected.clone(),
+        );
     } else if message.contains("binary comparison")
         && message.contains("incompatible operand types")
     {
@@ -528,17 +545,33 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
     } else if message.contains("return value") {
         diagnostic.code = FlowScriptDiagnosticCode::FsFunctionReturnMismatch;
         diagnostic.phase = FlowScriptDiagnosticPhase::TypeCheck;
-        diagnostic.ast_path = Some("statements.return".into());
-        diagnostic.expected = if message.contains("no matching function return pin") {
-            Some("a declared function return pin for every returned value".into())
+        let function_name = message
+            .split_once("in function `")
+            .and_then(|(_, rest)| rest.split_once('`'))
+            .map(|(name, _)| name.to_string());
+        diagnostic.ast_path = Some(match function_name.as_deref() {
+            Some(name) => format!("functions.{name}.statements.return"),
+            None => "statements.return".to_string(),
+        });
+        diagnostic.scope = function_name.map(|name| format!("function:{name}"));
+        diagnostic.actual = ticks
+            .first()
+            .map(|expression| format!("return value `{expression}`"))
+            .or(Some("an unresolved or undeclared return value".into()));
+        if message.contains("no matching function return pin") {
+            diagnostic.expected =
+                Some("a declared function return pin for every returned value".into());
+            diagnostic.fix = fix(
+                "Declare a named return pin in the function signature for each returned value (in order), or return fewer values.",
+                None,
+            );
         } else {
-            Some("a resolvable value and compatible output pin".into())
-        };
-        diagnostic.actual = Some("an unresolved or undeclared return value".into());
-        diagnostic.fix = fix(
-            "Declare named function outputs and return resolvable values in the same order.",
-            None,
-        );
+            diagnostic.expected = Some("a resolvable value and compatible output pin".into());
+            diagnostic.fix = fix(
+                "Return a literal (materialized automatically as a typed local variable), a call output bound earlier in the body (`const x = call(...)` then `return x.pinName`), or a variable reference.",
+                None,
+            );
+        }
     } else if message.contains("variable reference") && message.contains("does not resolve") {
         diagnostic.code = FlowScriptDiagnosticCode::FsVariableUnresolved;
         diagnostic.phase = FlowScriptDiagnosticPhase::CatalogResolution;
@@ -837,6 +870,28 @@ mod tests {
     }
 
     #[test]
+    fn structures_argument_pin_type_mismatch_with_call_and_pin_metadata() {
+        let structured = result(&[
+            "argument `updatedAt` on `saveTicket` has incompatible pin types: source `utils_datetime_now.date` is `Date/Normal`, but input `updatedAt` requires `String/Normal`; use a catalog-declared conversion before connecting it",
+        ])
+        .structured_diagnostics();
+
+        assert_eq!(structured.len(), 1);
+        let diagnostic = &structured[0];
+        assert_eq!(diagnostic.code, FlowScriptDiagnosticCode::FsTypeMismatch);
+        assert_eq!(diagnostic.phase, FlowScriptDiagnosticPhase::TypeCheck);
+        assert_eq!(diagnostic.declaration.as_deref(), Some("saveTicket"));
+        assert_eq!(diagnostic.pin.as_deref(), Some("updatedAt"));
+        assert_eq!(diagnostic.actual.as_deref(), Some("Date/Normal"));
+        assert_eq!(diagnostic.expected.as_deref(), Some("String/Normal"));
+        assert_eq!(
+            diagnostic.ast_path.as_deref(),
+            Some("calls.saveTicket.arguments.updatedAt")
+        );
+        assert!(diagnostic.fix.is_some());
+    }
+
+    #[test]
     fn structures_unknown_pin_with_call_ast_path_and_catalog_search() {
         let structured = result(&[
             "node `agentRegisterFunctionTools` has no input pin named `tools`; skipped that argument",
@@ -929,6 +984,40 @@ mod tests {
         assert_eq!(
             structured[1].caused_by.as_deref(),
             Some(structured[0].id.as_str())
+        );
+    }
+
+    #[test]
+    fn groups_function_return_mismatches_per_function_with_scope_and_expression() {
+        let structured = result(&[
+            "return value 1 (`missingRef`) in function `brokenOne` is not a resolvable FlowScript value; return a literal, a call output bound earlier in the body (`const x = call(...)`), or a variable",
+            "return value 1 (`otherMissing`) in function `brokenTwo` is not a resolvable FlowScript value; return a literal, a call output bound earlier in the body (`const x = call(...)`), or a variable",
+        ])
+        .structured_diagnostics();
+
+        assert_eq!(
+            structured.len(),
+            2,
+            "two broken functions must stay two groups: {structured:?}"
+        );
+        assert!(structured.iter().all(|diagnostic| {
+            diagnostic.code == FlowScriptDiagnosticCode::FsFunctionReturnMismatch
+        }));
+        assert_eq!(structured[0].scope.as_deref(), Some("function:brokenOne"));
+        assert_eq!(
+            structured[0].ast_path.as_deref(),
+            Some("functions.brokenOne.statements.return")
+        );
+        assert_eq!(
+            structured[0].actual.as_deref(),
+            Some("return value `missingRef`")
+        );
+        assert_eq!(structured[1].scope.as_deref(), Some("function:brokenTwo"));
+        let fix = structured[0].fix.as_ref().expect("repair guidance");
+        assert!(
+            fix.summary.contains("literal"),
+            "fix must mention that literals are supported: {}",
+            fix.summary
         );
     }
 

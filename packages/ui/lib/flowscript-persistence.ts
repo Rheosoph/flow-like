@@ -13,6 +13,8 @@ export type PersistableFlowScript =
 			safe: true;
 			source: string;
 			redactedDeclarations: number;
+			/** Unquoted string-initializer values that were redacted; used to scrub echoes elsewhere. */
+			redactedLiterals: string[];
 	  }
 	| {
 			safe: false;
@@ -80,12 +82,18 @@ export function sanitizeFlowScriptForPersistence(
 
 	const markerCount = [...source.matchAll(SECRET_MARKER)].length;
 	if (markerCount === 0) {
-		return { safe: true, source, redactedDeclarations: 0 };
+		return {
+			safe: true,
+			source,
+			redactedDeclarations: 0,
+			redactedLiterals: [],
+		};
 	}
 
 	const newline = source.includes("\r\n") ? "\r\n" : "\n";
 	const lines = source.split(/\r?\n/);
 	let redactedDeclarations = 0;
+	const redactedLiterals: string[] = [];
 	for (let index = 0; index < lines.length; index += 1) {
 		const line = lines[index] ?? "";
 		if (!line.includes("@secret")) continue;
@@ -141,6 +149,12 @@ export function sanitizeFlowScriptForPersistence(
 				reason: `Non-literal or unsupported @secret initializer at line ${declarationIndex + 1}.`,
 			};
 		}
+		if (STRING_LITERAL.test(initializer)) {
+			const inner = initializer.slice(1, -1);
+			const unescaped = inner.replace(/\\(.)/g, "$1");
+			redactedLiterals.push(unescaped);
+			if (inner !== unescaped) redactedLiterals.push(inner);
+		}
 
 		lines[declarationIndex] =
 			`${match[1]}${replacement}${hasSemicolon ? ";" : ""}${anchor}`;
@@ -159,16 +173,163 @@ export function sanitizeFlowScriptForPersistence(
 		safe: true,
 		source: lines.join(newline),
 		redactedDeclarations,
+		redactedLiterals,
 	};
 }
 
-/** Safe text for persisted plan/debug fields. Unsupported secret-bearing text is omitted. */
+const REDACTION_NOTICE_PREFIX =
+	"[REDACTED] Persisted FlowScript copy omitted for secret safety (not a parser/reconcile error):";
+const SOURCE_LIKE_KEY =
+	/^(?:source|flowscript|script|content|retained_full_source)$/i;
+// MCP-style envelopes nest the actual payload under `text` inside a source-like container
+// (`content: [{ type: "text", text: <source> }]`). The key only inherits source-likeness; it is
+// not source-like on its own.
+const TEXT_ENVELOPE_KEY = /^text$/i;
+const MAX_NESTED_JSON_SANITIZE_DEPTH = 8;
+const SCRUBBED_SECRET_PLACEHOLDER = "[REDACTED]";
+const MIN_SCRUBBED_LITERAL_LENGTH = 5;
+
+function redactionNotice(reason: string): string {
+	// The notice must never contain the literal secret-annotation trigger substring: a repeated
+	// sanitizer pass would otherwise treat the notice itself as secret-bearing text and re-redact
+	// it, corrupting the reported reason (observed as a wrongly re-reported line number).
+	return `${REDACTION_NOTICE_PREFIX} ${reason.replaceAll("@secret", "(at)secret")}`;
+}
+
+function parseJsonContainer(text: string): unknown {
+	const trimmed = text.trim();
+	if (
+		!(
+			(trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+			(trimmed.startsWith("[") && trimmed.endsWith("]"))
+		)
+	) {
+		return undefined;
+	}
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return undefined;
+	}
+}
+
+function collectRedactedLiterals(
+	literals: readonly string[],
+	collected: Set<string>,
+): void {
+	for (const literal of literals) {
+		if (literal.length >= MIN_SCRUBBED_LITERAL_LENGTH) collected.add(literal);
+	}
+}
+
+/**
+ * Replace every occurrence of a redacted `@secret` initializer value that was echoed into other
+ * fields (diagnostics `actual`, error messages, …) of the same document. Every JSON escape level
+ * up to the nested-JSON depth limit is scrubbed — an echo inside a doubly nested envelope
+ * (`content` → `text` → payload) appears multiply escaped in the serialized document and must not
+ * survive. Deeper (longer) forms are replaced first so a shallow match cannot split a deep one.
+ */
+function scrubCollectedLiterals(text: string, collected: Set<string>): string {
+	let output = text;
+	for (const literal of collected) {
+		const forms: string[] = [];
+		let form = literal;
+		for (let level = 0; level <= MAX_NESTED_JSON_SANITIZE_DEPTH; level += 1) {
+			forms.push(form);
+			const escaped = JSON.stringify(form).slice(1, -1);
+			if (escaped === form) break;
+			form = escaped;
+		}
+		for (let index = forms.length - 1; index >= 0; index -= 1) {
+			output = output.replaceAll(
+				forms[index] ?? "",
+				SCRUBBED_SECRET_PLACEHOLDER,
+			);
+		}
+	}
+	return output;
+}
+
+function sanitizeJsonValue(
+	value: unknown,
+	sourceLike: boolean,
+	depth: number,
+	collected: Set<string>,
+): unknown {
+	if (typeof value === "string") {
+		// Content-based, key-independent: ANY string carrying an @secret marker is sanitized,
+		// whatever field it sits in (patch old_text/new_text, message, error, summary, …). The
+		// source-like key list is only an optimization hint for secret-free source fields, never
+		// an exemption. Secret-free non-source strings pass through untouched.
+		if (sourceLike || value.includes("@secret")) {
+			return sanitizeTextInternal(value, depth + 1, collected);
+		}
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry) =>
+			sanitizeJsonValue(entry, sourceLike, depth + 1, collected),
+		);
+	}
+	if (value && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [
+				key,
+				sanitizeJsonValue(
+					entry,
+					SOURCE_LIKE_KEY.test(key) ||
+						(sourceLike && TEXT_ENVELOPE_KEY.test(key)),
+					depth + 1,
+					collected,
+				),
+			]),
+		);
+	}
+	return value;
+}
+
+function sanitizeTextInternal(
+	text: string,
+	depth: number,
+	collected: Set<string>,
+): string {
+	// No prefix-based short-circuit: a well-formed redaction notice never contains the literal
+	// `@secret` trigger (redactionNotice rewrites it), so it is covered by the marker check below.
+	// Text that merely STARTS with the notice but still carries `@secret` (legacy notices,
+	// `<notice> + @secret …` concatenations) must be re-scanned, not passed through verbatim.
+	if (!text.includes("@secret")) return text;
+	if (depth < MAX_NESTED_JSON_SANITIZE_DEPTH) {
+		const container = parseJsonContainer(text);
+		if (container !== null && typeof container === "object") {
+			try {
+				return JSON.stringify(
+					sanitizeJsonValue(container, false, depth, collected),
+				);
+			} catch {
+				// Fall through to the fail-closed plain-text path.
+			}
+		}
+	}
+	const sanitized = sanitizeFlowScriptForPersistence(text);
+	if (!sanitized.safe) return redactionNotice(sanitized.reason);
+	collectRedactedLiterals(sanitized.redactedLiterals, collected);
+	return sanitized.source;
+}
+
+/**
+ * Safe text for persisted plan/debug fields.
+ *
+ * JSON tool payloads are sanitized structurally and content-based: every string field carrying an
+ * `@secret` marker is redacted regardless of its key, while secret-free sibling evidence (status,
+ * diagnostics, review notes, revision) survives verbatim. Redacted string-initializer values are
+ * additionally scrubbed from every other field of the same document so echoed secrets
+ * (diagnostics `actual`, error messages) cannot leak. Idempotent: sanitized output passes through
+ * unchanged. Genuinely unparseable secret-bearing plain text is still omitted fail-closed.
+ */
 export function sanitizePotentialFlowScriptTextForPersistence(
 	text: string,
 ): string {
-	if (!text.includes("@secret")) return text;
-	const sanitized = sanitizeFlowScriptForPersistence(text);
-	return sanitized.safe
-		? sanitized.source
-		: `[REDACTED] Persisted FlowScript copy omitted for secret safety (not a parser/reconcile error): ${sanitized.reason}`;
+	const collected = new Set<string>();
+	const sanitized = sanitizeTextInternal(text, 0, collected);
+	return scrubCollectedLiterals(sanitized, collected);
 }

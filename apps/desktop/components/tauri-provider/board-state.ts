@@ -62,6 +62,10 @@ import {
 	getRemoteBoardSkipReason,
 	shouldApplyRemoteBoard,
 } from "./board-merge";
+import {
+	OFFLINE_SYNC_COMMAND_MAX_AGE_MS,
+	chunkCommandsForSync,
+} from "./command-sync";
 import { mergeBoardOffThread } from "./board-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
@@ -462,6 +466,22 @@ export class BoardState implements IBoardState {
 						continue;
 					}
 
+					if (localBoard) {
+						const pendingSync = await this.backend.getOfflineSyncCommands(
+							appId,
+							board.id,
+						);
+						if (pendingSync.length > 0) {
+							// Local edits are still queued for the server; the remote snapshot
+							// predates them and applying it would clobber the local content.
+							console.warn(
+								"Skipping remote board with pending offline sync commands:",
+								{ boardId: board.id, pendingBatches: pendingSync.length },
+							);
+							continue;
+						}
+					}
+
 					const { merged, changed } = await mergeBoardOffThread(
 						board,
 						localBoard,
@@ -598,6 +618,20 @@ export class BoardState implements IBoardState {
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
 			try {
+				const pendingSync = await this.backend.getOfflineSyncCommands(
+					appId,
+					boardId,
+				);
+				if (pendingSync.length > 0) {
+					// Local edits are still queued for the server; the remote snapshot
+					// predates them, so the local board is the fresher one.
+					console.warn(
+						"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
+						{ boardId, pendingBatches: pendingSync.length },
+					);
+					return board;
+				}
+
 				const url = `apps/${appId}/board/${boardId}`;
 				const remoteData = await fetcher<IBoard>(
 					this.backend.profile,
@@ -657,26 +691,16 @@ export class BoardState implements IBoardState {
 		const promise = injectDataFunction(
 			async () => {
 				const unsyncedCommands = await getOfflineSyncCommands(appId, boardId);
+				let drainFailed = false;
 				for (const commandSync of unsyncedCommands) {
-					try {
-						// Only sync commands up to a week old
-						if (
-							commandSync.createdAt.getTime() <
-							Date.now() - 7 * 24 * 60 * 60 * 1000
-						)
-							await fetcher(
-								this.backend.profile!,
-								`apps/${appId}/board/${boardId}`,
-								{
-									method: "POST",
-									body: JSON.stringify({
-										commands: commandSync.commands,
-									}),
-								},
-								this.backend.auth,
-							);
-						console.log(
-							"Executed offline sync command:",
+					// Replaying stale edits over a week of newer remote history does more
+					// harm than dropping them.
+					if (
+						commandSync.createdAt.getTime() <
+						Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS
+					) {
+						console.warn(
+							"Dropping expired offline sync command:",
 							commandSync.commandId,
 						);
 						await clearOfflineSyncCommands(
@@ -684,9 +708,47 @@ export class BoardState implements IBoardState {
 							appId,
 							boardId,
 						);
-					} catch (e) {
-						console.warn("Failed to execute offline sync command:", e);
+						continue;
 					}
+
+					try {
+						for (const chunk of chunkCommandsForSync(commandSync.commands)) {
+							await fetcher(
+								this.backend.profile!,
+								`apps/${appId}/board/${boardId}`,
+								{
+									method: "POST",
+									body: JSON.stringify({
+										commands: chunk,
+									}),
+								},
+								this.backend.auth,
+							);
+						}
+						await clearOfflineSyncCommands(
+							commandSync.commandId,
+							appId,
+							boardId,
+						);
+						console.log(
+							"Executed offline sync command:",
+							commandSync.commandId,
+						);
+					} catch (e) {
+						// Keep the batch queued and stop: later batches must not overtake it.
+						console.warn(
+							"Failed to push offline sync command; keeping it queued:",
+							e,
+						);
+						drainFailed = true;
+						break;
+					}
+				}
+
+				if (drainFailed) {
+					// Local edits are not on the server yet. Applying the remote snapshot
+					// now would clobber them with a board that predates the queued batch.
+					return board;
 				}
 
 				const remoteData = await fetcher<IBoard>(
@@ -1635,6 +1697,68 @@ export class BoardState implements IBoardState {
 		});
 	}
 
+	/**
+	 * Push executed commands to the server in order-preserving, size-bounded chunks.
+	 *
+	 * Every failure path appends the undelivered tail to the offline sync queue, and a
+	 * non-empty queue forces queueing instead of a direct push: a later small command must
+	 * never overtake an earlier failed batch, otherwise the remote board becomes "newer"
+	 * while missing that batch and the next sync clobbers the local content with it.
+	 */
+	private async syncExecutedCommandsToServer(
+		appId: string,
+		boardId: string,
+		commands: IGenericCommand[],
+	): Promise<void> {
+		if (commands.length === 0) return;
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline) return;
+
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.backend.queryClient
+		) {
+			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
+			return;
+		}
+
+		const pending = await this.backend.getOfflineSyncCommands(appId, boardId);
+		if (pending.length > 0) {
+			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
+			return;
+		}
+
+		const chunks = chunkCommandsForSync(commands);
+		for (let index = 0; index < chunks.length; index++) {
+			try {
+				await fetcher(
+					this.backend.profile,
+					`apps/${appId}/board/${boardId}`,
+					{
+						method: "POST",
+						body: JSON.stringify({
+							commands: chunks[index],
+						}),
+					},
+					this.backend.auth,
+				);
+			} catch (error) {
+				console.error(
+					"Failed to push commands to server; queueing the remainder for ordered sync:",
+					error,
+				);
+				await this.backend.pushOfflineSyncCommand(
+					appId,
+					boardId,
+					chunks.slice(index).flat(),
+				);
+				return;
+			}
+		}
+	}
+
 	async executeCommand(
 		appId: string,
 		boardId: string,
@@ -1646,40 +1770,7 @@ export class BoardState implements IBoardState {
 			command: command,
 		});
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
-			return executedCommand;
-		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			await this.backend.pushOfflineSyncCommand(appId, boardId, [
-				executedCommand,
-			]);
-			return executedCommand;
-		}
-
-		try {
-			await fetcher(
-				this.backend.profile,
-				`apps/${appId}/board/${boardId}`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						commands: [executedCommand],
-					}),
-				},
-				this.backend.auth,
-			);
-		} catch (error) {
-			console.error("Failed to push command to server:", error);
-			await this.backend.pushOfflineSyncCommand(appId, boardId, [
-				executedCommand,
-			]);
-		}
+		await this.syncExecutedCommandsToServer(appId, boardId, [executedCommand]);
 
 		return executedCommand;
 	}
@@ -1698,44 +1789,7 @@ export class BoardState implements IBoardState {
 			},
 		);
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
-			return executedCommands;
-		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			await this.backend.pushOfflineSyncCommand(
-				appId,
-				boardId,
-				executedCommands,
-			);
-			return executedCommands;
-		}
-
-		try {
-			await fetcher(
-				this.backend.profile,
-				`apps/${appId}/board/${boardId}`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						commands: executedCommands,
-					}),
-				},
-				this.backend.auth,
-			);
-		} catch (error) {
-			console.error("Failed to push commands to server:", error);
-			await this.backend.pushOfflineSyncCommand(
-				appId,
-				boardId,
-				executedCommands,
-			);
-		}
+		await this.syncExecutedCommandsToServer(appId, boardId, executedCommands);
 
 		return executedCommands;
 	}
@@ -1761,44 +1815,7 @@ export class BoardState implements IBoardState {
 			return result;
 		}
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
-			return result;
-		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			await this.backend.pushOfflineSyncCommand(
-				appId,
-				boardId,
-				result.commands,
-			);
-			return result;
-		}
-
-		try {
-			await fetcher(
-				this.backend.profile,
-				`apps/${appId}/board/${boardId}`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						commands: result.commands,
-					}),
-				},
-				this.backend.auth,
-			);
-		} catch (error) {
-			console.error("Failed to push FlowScript commands to server:", error);
-			await this.backend.pushOfflineSyncCommand(
-				appId,
-				boardId,
-				result.commands,
-			);
-		}
+		await this.syncExecutedCommandsToServer(appId, boardId, result.commands);
 
 		return result;
 	}
@@ -1995,42 +2012,11 @@ export class BoardState implements IBoardState {
 		}
 
 		try {
-			const isOffline = await this.backend.isOffline(appId);
-			if (isOffline) return result;
-			if (
-				!this.backend.profile ||
-				!this.backend.auth ||
-				!this.backend.queryClient
-			) {
-				await this.backend.pushOfflineSyncCommand(
-					appId,
-					token.board_id,
-					result.commands,
-				);
-				return result;
-			}
-
-			try {
-				await fetcher(
-					this.backend.profile,
-					`apps/${appId}/board/${token.board_id}`,
-					{
-						method: "POST",
-						body: JSON.stringify({ commands: result.commands }),
-					},
-					this.backend.auth,
-				);
-			} catch (error) {
-				console.error(
-					"Failed to push typed FlowPilot commands to server:",
-					error,
-				);
-				await this.backend.pushOfflineSyncCommand(
-					appId,
-					token.board_id,
-					result.commands,
-				);
-			}
+			await this.syncExecutedCommandsToServer(
+				appId,
+				token.board_id,
+				result.commands,
+			);
 		} catch (error) {
 			// Native apply has already committed and acknowledged the exact batch. A
 			// remote-sync bookkeeping failure is recoverable and must not make the caller

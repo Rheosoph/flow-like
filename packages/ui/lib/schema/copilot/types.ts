@@ -56,6 +56,12 @@ export interface CopilotToolContext {
 	boardId?: string;
 	/** Correlates tools called inside a delegated run with its outer frontend request. */
 	parentRequestId?: string;
+	/**
+	 * Stable id of the chat conversation that owns the delegated run. Scopes retained-draft and
+	 * acceptance-contract identity so identical prompt text from another conversation can never
+	 * resume this conversation's drafts.
+	 */
+	conversationId?: string;
 	/** Immutable top-level user request that owns a delegated specialist run. */
 	sourceUserPrompt?: string;
 }

@@ -77,6 +77,7 @@ pub struct UnifiedCopilot {
     runtime_bridge: Option<Arc<dyn PlatformToolBridge>>,
     flow_ir_drafts: Arc<FlowIrDraftStore>,
     typed_flow_ir_lifecycle: bool,
+    request_identity_prompt: Option<String>,
 }
 
 impl UnifiedCopilot {
@@ -95,7 +96,18 @@ impl UnifiedCopilot {
             runtime_bridge: None,
             flow_ir_drafts: Arc::new(FlowIrDraftStore::new()),
             typed_flow_ir_lifecycle: false,
+            request_identity_prompt: None,
         })
+    }
+
+    /// Bind retained-draft and acceptance-contract identity to a host-derived request identity
+    /// (e.g. conversation id + immutable source prompt) instead of the raw prompt text alone.
+    /// When unset, identity falls back to `raw_user_prompt`/`user_prompt` so existing callers
+    /// keep their behavior; `raw_user_prompt` continues to drive routing and edit classification
+    /// either way.
+    pub fn with_request_identity_prompt(mut self, prompt: Option<String>) -> Self {
+        self.request_identity_prompt = prompt.filter(|prompt| !prompt.trim().is_empty());
+        self
     }
 
     /// Attach the host runtime bridge used by board-scoped profile/Bits models to execute
@@ -310,6 +322,7 @@ impl UnifiedCopilot {
         copilot = copilot.with_flow_ir_draft_store(self.flow_ir_drafts.clone());
         copilot = copilot.with_typed_flow_ir_enabled(self.typed_flow_ir_lifecycle);
         copilot = copilot.with_raw_user_prompt(Some(raw_user_prompt));
+        copilot = copilot.with_request_identity_prompt(self.request_identity_prompt.clone());
 
         // Convert history to flow ChatMessage format
         let board_history = history

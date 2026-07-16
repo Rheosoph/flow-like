@@ -19,8 +19,9 @@ import {
 	upsertLayerCommand,
 	upsertVariableCommand,
 } from "../lib";
-import { toastError } from "../lib/messages";
+import { expectedCopilotPinType } from "../lib/copilot-command-pins";
 import { flowPilotDebugLog } from "../lib/flowpilot-debug";
+import { toastError } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import {
 	type IBoard,
@@ -59,6 +60,11 @@ type UpdateNodePinCommand = Extract<
 	{ command_type: "UpdateNodePin" }
 >;
 
+type PinConnectionCommand = Extract<
+	BoardCommand,
+	{ command_type: "ConnectPins" | "DisconnectPins" }
+>;
+
 function cloneNode(node: INode): INode {
 	return JSON.parse(JSON.stringify(node)) as INode;
 }
@@ -86,16 +92,7 @@ function layerTypeFromCommand(value?: string): ILayerType {
 }
 
 function pinsFromDefs(
-	pinDefs:
-		| Array<{
-				name: string;
-				friendly_name: string;
-				description?: string;
-				pin_type: "Input" | "Output";
-				data_type: string;
-				value_type?: string;
-		  }>
-		| undefined,
+	pinDefs: PlaceholderPinDef[] | undefined,
 	includeDefaultExec: boolean,
 ): Record<string, IPin> {
 	const pins: Record<string, IPin> = {};
@@ -108,6 +105,8 @@ function pinsFromDefs(
 		dataType: IVariableType,
 		valueType = IValueType.Normal,
 		description = "",
+		schema?: string,
+		enforceSchema = false,
 	) => {
 		const pin: IPin = {
 			id: createId(),
@@ -121,6 +120,8 @@ function pinsFromDefs(
 			value_type: valueType,
 			data_type: dataType,
 			default_value: null,
+			schema: schema ?? null,
+			options: enforceSchema ? { enforce_schema: true } : null,
 		};
 		pins[pin.id] = pin;
 	};
@@ -138,6 +139,8 @@ function pinsFromDefs(
 			pinDef.data_type as IVariableType,
 			(pinDef.value_type as IValueType) || IValueType.Normal,
 			pinDef.description || "",
+			pinDef.schema,
+			pinDef.enforce_schema ?? false,
 		);
 	}
 
@@ -192,6 +195,8 @@ function appendAdditionalNodePins(
 			connected_to: [],
 			depends_on: [],
 			default_value: null,
+			schema: pinDef.schema ?? null,
+			options: pinDef.enforce_schema ? { enforce_schema: true } : null,
 		};
 	}
 
@@ -309,6 +314,11 @@ export function useCopilotCommands({
 }: UseCopilotCommandsProps) {
 	const handleExecuteCommands = useCallback(
 		async (commands: BoardCommand[]) => {
+			const pendingConnectionCommands = commands.filter(
+				(command): command is PinConnectionCommand =>
+					command.command_type === "ConnectPins" ||
+					command.command_type === "DisconnectPins",
+			);
 			let latestBoardNodes: Record<string, INode> = board.data?.nodes ?? {};
 			let latestBoardLayers: Record<string, ILayer> = board.data?.layers ?? {};
 			let latestBoardVariables: Record<string, IVariable> =
@@ -433,13 +443,17 @@ export function useCopilotCommands({
 				pinRef: string,
 				expectedPinType?: IPinType,
 			): string | undefined => {
+				const effectivePinType = expectedCopilotPinType(
+					expectedPinType,
+					Boolean(resolveLayer(nodeRef)),
+				);
 				const nodePinMap = pinIdMap.get(nodeRef);
 				if (nodePinMap) {
 					const node = resolveNode(nodeRef);
 					for (const lookupKey of pinLookupKeys(pinRef)) {
 						const mappedPinId = nodePinMap.get(lookupKey);
 						const mappedPin = mappedPinId ? node?.pins[mappedPinId] : undefined;
-						if (pinMatchesDirection(mappedPin, expectedPinType)) {
+						if (pinMatchesDirection(mappedPin, effectivePinType)) {
 							return mappedPinId;
 						}
 					}
@@ -449,11 +463,11 @@ export function useCopilotCommands({
 				if (!node) return undefined;
 
 				const pinById = node.pins[pinRef];
-				if (pinMatchesDirection(pinById, expectedPinType)) return pinRef;
+				if (pinMatchesDirection(pinById, effectivePinType)) return pinRef;
 
 				for (const pin of Object.values(node.pins)) {
 					if (
-						pinMatchesDirection(pin, expectedPinType) &&
+						pinMatchesDirection(pin, effectivePinType) &&
 						pinMatchesRef(pin, pinRef)
 					) {
 						return pin.id;
@@ -461,11 +475,11 @@ export function useCopilotCommands({
 				}
 
 				if (
-					expectedPinType !== IPinType.Input &&
+					effectivePinType !== IPinType.Input &&
 					DEFAULT_OUTPUT_PIN_ALIASES.has(pinRef.toLowerCase())
 				) {
 					const defaultOutputPin = defaultDataOutputPin(node);
-					if (pinMatchesDirection(defaultOutputPin, expectedPinType)) {
+					if (pinMatchesDirection(defaultOutputPin, effectivePinType)) {
 						return defaultOutputPin.id;
 					}
 				}
@@ -997,116 +1011,11 @@ export function useCopilotCommands({
 						break;
 					}
 
-					case "ConnectPins": {
-						const fromNode = resolveNode(cmd.from_node);
-						const toNode = resolveNode(cmd.to_node);
-
-						if (!fromNode || !toNode) {
-							const missingNode = !fromNode ? cmd.from_node : cmd.to_node;
-							console.error(
-								`[ConnectPins] FAILED - Node not found: "${missingNode}"`,
-								{
-									command: cmd,
-									availableNodeRefs: Array.from(nodeReferenceMap.keys()),
-									boardNodeIds: Object.keys(latestBoardNodes),
-								},
-							);
-							toastError(
-								`Connection failed: Node "${missingNode}" not found`,
-								<XIcon />,
-							);
-							break;
-						}
-
-						const fromPinId = resolvePinId(
-							cmd.from_node,
-							cmd.from_pin,
-							IPinType.Output,
-						);
-						const toPinId = resolvePinId(
-							cmd.to_node,
-							cmd.to_pin,
-							IPinType.Input,
-						);
-
-						if (!fromPinId || !toPinId) {
-							const missingPin = !fromPinId
-								? `${fromNode.friendly_name}.${cmd.from_pin}`
-								: `${toNode.friendly_name}.${cmd.to_pin}`;
-							console.error(
-								`[ConnectPins] FAILED - Pin not found: "${missingPin}"`,
-								{
-									command: cmd,
-									from_pin_requested: cmd.from_pin,
-									to_pin_requested: cmd.to_pin,
-									fromPinId_resolved: fromPinId,
-									toPinId_resolved: toPinId,
-									fromNodePins: Object.values(fromNode.pins).map((p) => ({
-										name: p.name,
-										id: p.id,
-										type: p.pin_type,
-									})),
-									toNodePins: Object.values(toNode.pins).map((p) => ({
-										name: p.name,
-										id: p.id,
-										type: p.pin_type,
-									})),
-								},
-							);
-							toastError(
-								`Connection failed: Pin "${missingPin}" not found`,
-								<XIcon />,
-							);
-							break;
-						}
-
-						flowPilotDebugLog(
-							`[ConnectPins] Queued ${fromNode.friendly_name}.${cmd.from_pin} -> ${toNode.friendly_name}.${cmd.to_pin}`,
-							{
-								from_node_id: fromNode.id,
-								from_pin_id: fromPinId,
-								to_node_id: toNode.id,
-								to_pin_id: toPinId,
-							},
-						);
-						remainingGenericCommands.push(
-							connectPinsCommand({
-								from_node: fromNode.id,
-								from_pin: fromPinId,
-								to_node: toNode.id,
-								to_pin: toPinId,
-							}),
-						);
+					case "ConnectPins":
+					case "DisconnectPins":
+						// Resolve connection endpoints only after all contract-changing board edits
+						// have executed and the dynamic node pins have been refreshed.
 						break;
-					}
-
-					case "DisconnectPins": {
-						const fromNode = resolveNode(cmd.from_node);
-						const toNode = resolveNode(cmd.to_node);
-						if (!fromNode || !toNode) break;
-
-						const fromPinId = resolvePinId(
-							cmd.from_node,
-							cmd.from_pin,
-							IPinType.Output,
-						);
-						const toPinId = resolvePinId(
-							cmd.to_node,
-							cmd.to_pin,
-							IPinType.Input,
-						);
-						if (!fromPinId || !toPinId) break;
-
-						remainingGenericCommands.push(
-							disconnectPinsCommand({
-								from_node: fromNode.id,
-								from_pin: fromPinId,
-								to_node: toNode.id,
-								to_pin: toPinId,
-							}),
-						);
-						break;
-					}
 
 					case "MoveNode": {
 						const node = resolveNode(cmd.node_id);
@@ -1410,6 +1319,119 @@ export function useCopilotCommands({
 				refreshedAfterLastExecution = false;
 				await refreshBoardSnapshot();
 				refreshedAfterLastExecution = true;
+			}
+
+			// Setup edits (especially variable contract changes and configuration-driven dynamic
+			// pins) must settle before endpoint names are resolved. Otherwise a stale optimistic
+			// pin id can be queued in the same batch and then pruned by the post-update hook.
+			if (
+				pendingConnectionCommands.length > 0 &&
+				executedAnyCommands &&
+				!refreshedAfterLastExecution
+			) {
+				await refreshBoardSnapshot();
+				refreshedAfterLastExecution = true;
+			}
+
+			const connectionGenericCommands: IGenericCommand[] = [];
+			for (const cmd of pendingConnectionCommands) {
+				const fromNode = resolveNode(cmd.from_node);
+				const toNode = resolveNode(cmd.to_node);
+				if (!fromNode || !toNode) {
+					if (cmd.command_type === "ConnectPins") {
+						const missingNode = !fromNode ? cmd.from_node : cmd.to_node;
+						console.error(
+							`[ConnectPins] FAILED - Node not found: "${missingNode}"`,
+							{
+								command: cmd,
+								availableNodeRefs: Array.from(nodeReferenceMap.keys()),
+								boardNodeIds: Object.keys(latestBoardNodes),
+							},
+						);
+						toastError(
+							`Connection failed: Node "${missingNode}" not found`,
+							<XIcon />,
+						);
+					}
+					continue;
+				}
+
+				const fromPinId = resolvePinId(
+					cmd.from_node,
+					cmd.from_pin,
+					IPinType.Output,
+				);
+				const toPinId = resolvePinId(cmd.to_node, cmd.to_pin, IPinType.Input);
+				if (!fromPinId || !toPinId) {
+					if (cmd.command_type === "ConnectPins") {
+						const missingPin = !fromPinId
+							? `${fromNode.friendly_name}.${cmd.from_pin}`
+							: `${toNode.friendly_name}.${cmd.to_pin}`;
+						console.error(
+							`[ConnectPins] FAILED - Pin not found: "${missingPin}"`,
+							{
+								command: cmd,
+								from_pin_requested: cmd.from_pin,
+								to_pin_requested: cmd.to_pin,
+								fromPinId_resolved: fromPinId,
+								toPinId_resolved: toPinId,
+								fromNodePins: Object.values(fromNode.pins).map((pin) => ({
+									name: pin.name,
+									id: pin.id,
+									type: pin.pin_type,
+								})),
+								toNodePins: Object.values(toNode.pins).map((pin) => ({
+									name: pin.name,
+									id: pin.id,
+									type: pin.pin_type,
+								})),
+							},
+						);
+						toastError(
+							`Connection failed: Pin "${missingPin}" not found`,
+							<XIcon />,
+						);
+					}
+					continue;
+				}
+
+				if (cmd.command_type === "ConnectPins") {
+					flowPilotDebugLog(
+						`[ConnectPins] Queued ${fromNode.friendly_name}.${cmd.from_pin} -> ${toNode.friendly_name}.${cmd.to_pin}`,
+						{
+							from_node_id: fromNode.id,
+							from_pin_id: fromPinId,
+							to_node_id: toNode.id,
+							to_pin_id: toPinId,
+						},
+					);
+					connectionGenericCommands.push(
+						connectPinsCommand({
+							from_node: fromNode.id,
+							from_pin: fromPinId,
+							to_node: toNode.id,
+							to_pin: toPinId,
+						}),
+					);
+				} else {
+					connectionGenericCommands.push(
+						disconnectPinsCommand({
+							from_node: fromNode.id,
+							from_pin: fromPinId,
+							to_node: toNode.id,
+							to_pin: toPinId,
+						}),
+					);
+				}
+			}
+
+			const executedConnectionCommands = await executeInBatches(
+				connectionGenericCommands,
+				"connection",
+			);
+			if (executedConnectionCommands.length > 0) {
+				executedAnyCommands = true;
+				refreshedAfterLastExecution = false;
 			}
 
 			if (executedAnyCommands && !refreshedAfterLastExecution) {

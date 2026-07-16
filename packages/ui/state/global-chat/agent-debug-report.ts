@@ -20,6 +20,8 @@ const MAX_GENERATION_DIAGNOSTIC_KEY_CHARS = 160;
 const REPORT_SIZE_CACHE = new WeakMap<IAgentDebugReport, number>();
 const GENERATION_CANDIDATE_KEYS = new WeakMap<IAgentDebugReport, string[]>();
 const GENERATION_TOOL_EVIDENCE = Symbol("flowpilot-generation-tool-evidence");
+const EVENT_PREVIEWS_NORMALIZED = Symbol("flowpilot-event-previews-normalized");
+const FLOWSCRIPT_ARTIFACT_SOURCE_HASH = new WeakMap<IAgentDebugEvent, string>();
 const SENSITIVE_KEY =
 	/(authorization|cookie|credential|password|passwd|secret|token|api.?key|private.?key|client.?secret|access.?key|signature)/i;
 const SECRET_VALUE_SIBLING = /^(?:default|default_value|value)$/i;
@@ -32,7 +34,8 @@ export type AgentDebugOutcome =
 	| "partial"
 	| "error"
 	| "cancelled"
-	| "timeout";
+	| "timeout"
+	| "interrupted";
 
 export type AgentDebugEventKind =
 	| "lifecycle"
@@ -325,6 +328,22 @@ function redactSecretsInText(
 	);
 }
 
+function parseNestedJsonContainer(value: string): unknown | undefined {
+	const trimmed = value.trim();
+	if (
+		!(
+			(trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+			(trimmed.startsWith("[") && trimmed.endsWith("]"))
+		)
+	)
+		return undefined;
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return undefined;
+	}
+}
+
 function redactValue(
 	value: unknown,
 	key = "",
@@ -333,12 +352,29 @@ function redactValue(
 	allowWorkspaceEnvelopes = true,
 ): unknown {
 	if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
-	if (depth > 5) return "[TRUNCATED_DEPTH]";
-	if (typeof value === "string")
+	// MCP content -> text -> JSON adds two legitimate wrapper levels before the diagnostic list.
+	// Keep enough depth for stable diagnostic codes while arrays/objects remain independently
+	// bounded below.
+	if (depth > 8) return "[TRUNCATED_DEPTH]";
+	if (typeof value === "string") {
+		// MCP text-content envelopes frequently carry the actual tool result as a second JSON
+		// document. Parse that document before FlowScript-aware sanitization so a fail-closed
+		// redaction of its `source` field cannot erase sibling status/diagnostic evidence.
+		const nestedJson = parseNestedJsonContainer(value);
+		if (nestedJson !== undefined) {
+			return redactValue(
+				nestedJson,
+				key,
+				depth + 1,
+				stringLimit,
+				allowWorkspaceEnvelopes,
+			);
+		}
 		return truncatePreview(
 			redactSecretsInText(value, stringLimit, allowWorkspaceEnvelopes),
 			stringLimit,
 		);
+	}
 	if (value === null || typeof value === "number" || typeof value === "boolean")
 		return value;
 	if (Array.isArray(value)) {
@@ -410,30 +446,50 @@ export function agentDebugPreview(value: unknown, limit = MAX_PREVIEW_CHARS) {
 	}
 }
 
+type PreNormalizedEvent = IAgentDebugEvent & {
+	[EVENT_PREVIEWS_NORMALIZED]?: true;
+};
+
+/** Builder events already carry bounded, redacted previews — skip the second redaction pass. */
+function markEventPreviewsNormalized<T extends IAgentDebugEvent>(event: T): T {
+	(event as PreNormalizedEvent)[EVENT_PREVIEWS_NORMALIZED] = true;
+	return event;
+}
+
 function normalizeEvent(event: IAgentDebugEvent): IAgentDebugEvent {
 	const startedAt = event.started_at_ms;
 	const endedAt = event.ended_at_ms;
-	const previewLimit =
-		event.stage === "artifact" ||
-		(event.kind === "nested" &&
-			(event.stage === "nested_run_started" ||
-				event.stage === "nested_run_finished"))
-			? MAX_EVIDENCE_PREVIEW_CHARS
-			: MAX_PREVIEW_CHARS;
-	const normalized: IAgentDebugEvent = {
-		...event,
-		summary: cleanSummary(event.summary),
-		arguments_preview: agentDebugPreview(event.arguments_preview, previewLimit),
-		result_summary: cleanSummary(event.result_summary),
-		result_preview: agentDebugPreview(event.result_preview, previewLimit),
-		reasoning: agentDebugPreview(event.reasoning),
-		error: cleanSummary(event.error, MAX_PREVIEW_CHARS),
-		duration_ms:
-			event.duration_ms ??
-			(startedAt !== undefined && endedAt !== undefined
-				? Math.max(0, endedAt - startedAt)
-				: undefined),
-	};
+	const duration =
+		event.duration_ms ??
+		(startedAt !== undefined && endedAt !== undefined
+			? Math.max(0, endedAt - startedAt)
+			: undefined);
+	const normalized: IAgentDebugEvent = (event as PreNormalizedEvent)[
+		EVENT_PREVIEWS_NORMALIZED
+	]
+		? { ...event, duration_ms: duration }
+		: (() => {
+				const previewLimit =
+					event.stage === "artifact" ||
+					(event.kind === "nested" &&
+						(event.stage === "nested_run_started" ||
+							event.stage === "nested_run_finished"))
+						? MAX_EVIDENCE_PREVIEW_CHARS
+						: MAX_PREVIEW_CHARS;
+				return {
+					...event,
+					summary: cleanSummary(event.summary),
+					arguments_preview: agentDebugPreview(
+						event.arguments_preview,
+						previewLimit,
+					),
+					result_summary: cleanSummary(event.result_summary),
+					result_preview: agentDebugPreview(event.result_preview, previewLimit),
+					reasoning: agentDebugPreview(event.reasoning),
+					error: cleanSummary(event.error, MAX_PREVIEW_CHARS),
+					duration_ms: duration,
+				};
+			})();
 	return Object.fromEntries(
 		Object.entries(normalized).filter(([, value]) => value !== undefined),
 	) as unknown as IAgentDebugEvent;
@@ -599,12 +655,15 @@ function compactReportToLimit(report: IAgentDebugReport) {
 	dropPriority(0);
 	shrinkPriority(1, 1_024);
 	dropPriority(1);
-	shrinkPriority(3, 4 * 1024);
-	shrinkPriority(3, 1_024);
-	dropPriority(3);
+	// Artifact snapshots shed payload first and are dropped before terminal evidence: terminal
+	// tool_end/lifecycle events carry the diagnostics that explain a failed run and must survive
+	// the longest (nested run boundaries excepted).
 	shrinkPriority(4, 8 * 1024);
+	shrinkPriority(3, 4 * 1024);
 	shrinkPriority(4, 2 * 1024);
+	shrinkPriority(3, 1_024);
 	dropPriority(4);
+	dropPriority(3);
 
 	// Nested run boundaries are the last-resort payload to compact and the last events removed.
 	shrinkPriority(5, 16 * 1024);
@@ -629,6 +688,57 @@ function compactReportToLimit(report: IAgentDebugReport) {
 	return next;
 }
 
+function fnv1aHex(value: string) {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < value.length; index += 1) {
+		hash ^= value.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * FlowScript workspace artifacts re-embed the complete source per validation snapshot. Keep the
+ * first copy of each distinct source and replace repeats with a reference line so a long repair
+ * loop cannot spend the entire report budget on identical multi-KB sources. Status, revision and
+ * diagnostics of the repeated snapshot are kept in full.
+ */
+function dedupeFlowScriptArtifactSource(
+	report: IAgentDebugReport,
+	event: IAgentDebugEvent,
+): { event: IAgentDebugEvent; sourceHash?: string } {
+	if (event.stage !== "artifact" || event.name !== "flowscript_workspace") {
+		return { event };
+	}
+	const preview = event.result_preview;
+	if (typeof preview !== "string") return { event };
+	let payload: Record<string, unknown>;
+	try {
+		const parsed = JSON.parse(preview);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return { event };
+		}
+		payload = parsed as Record<string, unknown>;
+	} catch {
+		return { event };
+	}
+	const source = payload.source;
+	if (typeof source !== "string" || source.length === 0) return { event };
+	const sourceHash = fnv1aHex(source);
+	const seen = report.events.some(
+		(existing) => FLOWSCRIPT_ARTIFACT_SOURCE_HASH.get(existing) === sourceHash,
+	);
+	if (!seen) return { event, sourceHash };
+	const reference = `[FlowScript source unchanged: ${source.split(/\r?\n/).length} lines, ${source.length} chars, hash ${sourceHash} — full copy retained on the first artifact with this hash]`;
+	return {
+		event: {
+			...event,
+			result_preview: JSON.stringify({ ...payload, source: reference }),
+		},
+		sourceHash,
+	};
+}
+
 /**
  * Append or merge an event by id. New events are capped and the report is byte-bounded so a noisy
  * provider cannot make chat history unbounded. Terminal updates to an existing event are retained
@@ -641,10 +751,12 @@ export function recordAgentDebugEvent(
 	const incomingEvidence = (event as GenerationEvidenceEvent)[
 		GENERATION_TOOL_EVIDENCE
 	];
-	const normalized = normalizeEvent(event);
+	const deduped = dedupeFlowScriptArtifactSource(report, event);
+	const normalized = normalizeEvent(deduped.event);
 	const index = report.events.findIndex((existing) => existing.id === event.id);
 	let reportWithTruncation = report;
 	let events: IAgentDebugEvent[];
+	let eventsSizeDelta: number;
 	if (index >= 0) {
 		events = [...report.events];
 		// Both sides are already normalized. Preserve the earlier bounded previews as-is and only
@@ -658,8 +770,11 @@ export function recordAgentDebugEvent(
 				: undefined);
 		events[index] =
 			duration === undefined ? merged : { ...merged, duration_ms: duration };
+		eventsSizeDelta =
+			valueSize(events[index]) - valueSize(report.events[index]);
 	} else if (report.events.length < MAX_EVENTS) {
 		events = [...report.events, normalized];
+		eventsSizeDelta = valueSize(normalized) + 1;
 	} else {
 		const incomingPriority = retentionPriority(normalized);
 		let removableIndex = report.events.findIndex(
@@ -683,11 +798,16 @@ export function recordAgentDebugEvent(
 			...report.events.slice(removableIndex + 1),
 			normalized,
 		];
+		eventsSizeDelta = valueSize(normalized) - valueSize(removed);
 		reportWithTruncation = withReportTruncation(report, {
 			events_dropped: (report.truncation?.events_dropped ?? 0) + 1,
 			bytes_dropped:
 				(report.truncation?.bytes_dropped ?? 0) + valueSize(removed),
 		});
+	}
+	if (deduped.sourceHash) {
+		const stored = index >= 0 ? events[index] : events[events.length - 1];
+		if (stored) FLOWSCRIPT_ARTIFACT_SOURCE_HASH.set(stored, deduped.sourceHash);
 	}
 	const evaluationEvent =
 		index >= 0 ? events[index] : (events[events.length - 1] ?? normalized);
@@ -698,12 +818,28 @@ export function recordAgentDebugEvent(
 		evaluationEvent,
 		evidence,
 	);
+	const evaluationDelta =
+		generation.evaluation === report.generation_evaluation
+			? 0
+			: (generation.evaluation ? valueSize(generation.evaluation) + 32 : 0) -
+				(report.generation_evaluation
+					? valueSize(report.generation_evaluation)
+					: 0);
 	const next: IAgentDebugReport = {
 		...reportWithTruncation,
 		events,
 		generation_evaluation: generation.evaluation,
 	};
 	GENERATION_CANDIDATE_KEYS.set(next, generation.candidateKeys);
+	// Incremental, slightly conservative size accounting: a full-report JSON.stringify per recorded
+	// event is O(report) and dominated this hot path. The exact size is re-measured only when the
+	// running estimate crosses the cap, immediately before evidence would be shed.
+	REPORT_SIZE_CACHE.set(
+		next,
+		reportSize(reportWithTruncation) + eventsSizeDelta + evaluationDelta + 16,
+	);
+	if (reportSize(next) <= MAX_REPORT_BYTES) return next;
+	REPORT_SIZE_CACHE.delete(next);
 	const compacted = compactReportToLimit(next);
 	if (compacted !== next) {
 		GENERATION_CANDIDATE_KEYS.set(compacted, generation.candidateKeys);
@@ -751,6 +887,45 @@ export function finalizeAgentDebugReport(
 		GENERATION_CANDIDATE_KEYS.set(compacted, candidateKeys);
 	}
 	return compacted;
+}
+
+/**
+ * Mark a restored report whose run is no longer alive. A checkpoint persisted mid-run keeps
+ * `outcome: "running"` forever otherwise; restore paths call this so dead runs render and export
+ * as interrupted, ending at their last recorded event instead of appearing live. Reports with a
+ * real terminal outcome pass through unchanged.
+ */
+export function markAgentDebugReportInterrupted(
+	report: IAgentDebugReport,
+): IAgentDebugReport {
+	if (report.outcome !== "running") return report;
+	let lastEventMs = report.started_at_ms;
+	for (const event of report.events) {
+		lastEventMs = Math.max(
+			lastEventMs,
+			event.timestamp_ms,
+			event.ended_at_ms ?? 0,
+		);
+	}
+	return {
+		...report,
+		outcome: "interrupted",
+		ended_at_ms: lastEventMs,
+		duration_ms: Math.max(0, lastEventMs - report.started_at_ms),
+		terminal_stage: report.terminal_stage ?? "interrupted",
+		terminal_code: report.terminal_code ?? "RUN_INTERRUPTED",
+		summary:
+			report.summary ??
+			"The run is no longer active. This restored report ends at its last recorded event; the final outcome was never written.",
+		...(report.generation_evaluation
+			? {
+					generation_evaluation: {
+						...report.generation_evaluation,
+						status: "failed" as const,
+					},
+				}
+			: {}),
+	};
 }
 
 function eventRecord(data: unknown) {
@@ -815,20 +990,35 @@ type GenerationEvidenceEvent = IAgentDebugEvent & {
 	[GENERATION_TOOL_EVIDENCE]?: GenerationToolEvidence;
 };
 
-function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {
-	if (value && typeof value === "object" && !Array.isArray(value)) {
-		return value as Record<string, unknown>;
+function parseJsonRecord(
+	value: unknown,
+	depth = 0,
+): Record<string, unknown> | undefined {
+	if (depth > 4) return undefined;
+	if (typeof value === "string") {
+		const parsed = parseNestedJsonContainer(value);
+		return parsed === undefined
+			? undefined
+			: parseJsonRecord(parsed, depth + 1);
 	}
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	try {
-		const parsed = JSON.parse(trimmed);
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-			? (parsed as Record<string, unknown>)
-			: undefined;
-	} catch {
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			const parsed = parseJsonRecord(entry, depth + 1);
+			if (parsed) return parsed;
+		}
 		return undefined;
 	}
+	if (!value || typeof value !== "object") return undefined;
+	const record = value as Record<string, unknown>;
+	if (record.type === "text" && typeof record.text === "string") {
+		const parsedText = parseJsonRecord(record.text, depth + 1);
+		if (parsedText) return parsedText;
+	}
+	if (Array.isArray(record.content)) {
+		const parsedContent = parseJsonRecord(record.content, depth + 1);
+		if (parsedContent) return parsedContent;
+	}
+	return record;
 }
 
 function taggedJson(value: unknown, tag: string): unknown {
@@ -918,7 +1108,13 @@ function generationEvidenceForToolEnd(
 		"validate_flow_ir_draft",
 		"commit_flow_ir_draft",
 	].some((toolName) => normalizedName.endsWith(toolName));
-	const raw = normalizedName.endsWith("edit_flowscript");
+	const raw = [
+		"edit_flowscript",
+		"write_flowscript",
+		"patch_flowscript",
+		"check_flowscript",
+		"commit_flowscript",
+	].some((toolName) => normalizedName.endsWith(toolName));
 	if (!typed && !raw) return undefined;
 
 	if (typed) {
@@ -1420,7 +1616,7 @@ export function nestedAgentRunEvent(options: {
 	const now = options.nowMs ?? Date.now();
 	const terminal = normalizedTerminalStatus(options.status);
 	const started = options.stage === "started";
-	return {
+	return markEventPreviewsNormalized({
 		id: `nested:${options.requestId}:run`,
 		kind: "nested",
 		stage: started ? "nested_run_started" : "nested_run_finished",
@@ -1440,7 +1636,7 @@ export function nestedAgentRunEvent(options: {
 			? undefined
 			: agentDebugPreview(options.output, MAX_EVIDENCE_PREVIEW_CHARS),
 		error: started ? undefined : agentDebugPreview(options.error),
-	};
+	});
 }
 
 /**
@@ -1484,7 +1680,7 @@ export function agentGenerationReviewDispositionEvent(options: {
 		disposition: options.disposition,
 		accepted: options.disposition === "applied",
 	};
-	return event;
+	return markEventPreviewsNormalized(event);
 }
 
 export function summarizeAgentDebugRootOutcomes(events: IAgentDebugEvent[]) {
@@ -1625,7 +1821,7 @@ function artifactDebugEvent(
 		: count !== undefined
 			? `${count} generated item${count === 1 ? "" : "s"}`
 			: "Generated artifact";
-	return {
+	return markEventPreviewsNormalized({
 		id: `${options.scope}:${options.requestId ?? "run"}:artifact:${event.type}:${options.nowMs}:${options.sequence ?? 0}`,
 		kind: options.scope === "nested" ? "nested" : "tool",
 		stage: "artifact",
@@ -1638,7 +1834,7 @@ function artifactDebugEvent(
 		ended_at_ms: options.nowMs,
 		result_summary: summary,
 		result_preview: agentDebugPreview(value, MAX_EVIDENCE_PREVIEW_CHARS),
-	};
+	});
 }
 
 /** Convert the shared Copilot stream grammar into chronological report events. */
@@ -1675,7 +1871,7 @@ export function debugEventFromCopilotStream(
 
 	if (event.type === "plan_step") {
 		const id = rawId || `plan-${now}`;
-		return {
+		return markEventPreviewsNormalized({
 			...common,
 			id: `${prefix}:plan:${id}`,
 			kind: options.scope === "nested" ? "nested" : "plan",
@@ -1691,7 +1887,7 @@ export function debugEventFromCopilotStream(
 				typeof record.start_time === "number" ? record.start_time : undefined,
 			ended_at_ms:
 				typeof record.end_time === "number" ? record.end_time : undefined,
-		};
+		});
 	}
 
 	if (
@@ -1705,7 +1901,7 @@ export function debugEventFromCopilotStream(
 		record.tool_name ?? record.toolName ?? record.tool ?? record.name,
 	);
 	if (event.type === "tool_start") {
-		return {
+		return markEventPreviewsNormalized({
 			...common,
 			id: `${prefix}:tool:${id}`,
 			kind: options.scope === "nested" ? "nested" : "tool",
@@ -1717,10 +1913,10 @@ export function debugEventFromCopilotStream(
 				record.arguments_preview ?? record.arguments ?? record.args,
 			),
 			started_at_ms: now,
-		};
+		});
 	}
 	if (event.type === "tool_progress") {
-		return {
+		return markEventPreviewsNormalized({
 			...common,
 			id: `${prefix}:tool:${id}`,
 			kind: options.scope === "nested" ? "nested" : "tool",
@@ -1728,7 +1924,7 @@ export function debugEventFromCopilotStream(
 			status: "progress",
 			name,
 			summary: cleanSummary(record.summary ?? record.message),
-		};
+		});
 	}
 	const normalized = normalizedTerminalStatus(
 		record.status ?? record.terminal_status,
@@ -1756,7 +1952,7 @@ export function debugEventFromCopilotStream(
 		record.result_preview ?? record.result ?? record.output,
 	);
 	if (evidence) terminalEvent[GENERATION_TOOL_EVIDENCE] = evidence;
-	return terminalEvent;
+	return markEventPreviewsNormalized(terminalEvent);
 }
 
 function generationMetricEventFromCopilotStream(
@@ -1793,7 +1989,7 @@ function generationMetricEventFromCopilotStream(
 		ended_at_ms: options.nowMs,
 	};
 	metricEvent[GENERATION_TOOL_EVIDENCE] = evidence;
-	return metricEvent;
+	return markEventPreviewsNormalized(metricEvent);
 }
 
 export function createAgentDebugStreamRecorder(options: {

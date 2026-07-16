@@ -12,10 +12,10 @@ pub fn get_component_schema(component_type: &str) -> String {
         "column" => r#"Column - Vertical flex container
 Properties:
 - type: "column" (required)
-- gap: string (e.g., "16px", "1rem") - Space between children
-- align: "start" | "center" | "end" | "stretch" | "baseline"
-- justify: "start" | "center" | "end" | "between" | "around" | "evenly"
-- wrap: boolean - Whether children can wrap
+- gap: BoundValue string (e.g., { "literalString": "16px" }) - Space between children
+- align: BoundValue string - "start" | "center" | "end" | "stretch" | "baseline"
+- justify: BoundValue string - "start" | "center" | "end" | "between" | "around" | "evenly"
+- wrap: BoundValue boolean - Whether children can wrap
 - children: { explicitList: ["child-id-1", "child-id-2"] }
 
 Example:
@@ -24,7 +24,7 @@ Example:
   "style": { "className": "p-4 gap-4" },
   "component": {
     "type": "column",
-    "gap": "16px",
+    "gap": { "literalString": "16px" },
     "children": { "explicitList": ["header", "content", "footer"] }
   }
 }"#
@@ -33,10 +33,10 @@ Example:
         "row" => r#"Row - Horizontal flex container
 Properties:
 - type: "row" (required)
-- gap: string - Space between children
-- align: "start" | "center" | "end" | "stretch" | "baseline"
-- justify: "start" | "center" | "end" | "between" | "around" | "evenly"
-- wrap: boolean
+- gap: BoundValue string - Space between children
+- align: BoundValue string - "start" | "center" | "end" | "stretch" | "baseline"
+- justify: BoundValue string - "start" | "center" | "end" | "between" | "around" | "evenly"
+- wrap: BoundValue boolean
 - children: { explicitList: [...] }
 
 Example:
@@ -45,8 +45,8 @@ Example:
   "style": { "className": "gap-2" },
   "component": {
     "type": "row",
-    "gap": "8px",
-    "justify": "end",
+    "gap": { "literalString": "8px" },
+    "justify": { "literalString": "end" },
     "children": { "explicitList": ["cancel-btn", "submit-btn"] }
   }
 }"#
@@ -55,10 +55,10 @@ Example:
         "grid" => r#"Grid - CSS Grid container
 Properties:
 - type: "grid" (required)
-- columns: string (e.g., "repeat(3, 1fr)", "1fr 2fr")
-- rows: string (optional)
-- gap: string
-- autoFlow: "row" | "column" | "dense"
+- columns: BoundValue string (e.g., { "literalString": "repeat(3, 1fr)" })
+- rows: BoundValue string (optional)
+- gap: BoundValue string
+- autoFlow: BoundValue string - "row" | "column" | "dense"
 - children: { explicitList: [...] }
 
 Example:
@@ -67,8 +67,8 @@ Example:
   "style": { "className": "gap-4" },
   "component": {
     "type": "grid",
-    "columns": "repeat(auto-fill, minmax(250px, 1fr))",
-    "gap": "16px",
+    "columns": { "literalString": "repeat(auto-fill, minmax(250px, 1fr))" },
+    "gap": { "literalString": "16px" },
     "children": { "explicitList": ["card-1", "card-2", "card-3"] }
   }
 }"#
@@ -78,11 +78,11 @@ Example:
 Properties:
 - type: "text" (required)
 - content: BoundValue - { literalString: "..." } or { path: "$.data.title" }
-- variant: "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "body" | "caption" | "code" | "label"
-- size: "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl"
-- weight: "normal" | "medium" | "semibold" | "bold"
-- color: string (Tailwind color like "text-primary")
-- align: "left" | "center" | "right"
+- variant: BoundValue string - "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "body" | "caption" | "code" | "label"
+- size: BoundValue string - "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl"
+- weight: BoundValue string - "normal" | "medium" | "semibold" | "bold"
+- color: BoundValue string (Tailwind color like "text-primary")
+- align: BoundValue string - "left" | "center" | "right"
 
 Example:
 {
@@ -91,7 +91,7 @@ Example:
   "component": {
     "type": "text",
     "content": { "literalString": "Welcome" },
-    "variant": "h1"
+    "variant": { "literalString": "h1" }
   }
 }"#
         .to_string(),
@@ -100,8 +100,8 @@ Example:
 Properties:
 - type: "button" (required)
 - label: BoundValue - Button text
-- variant: "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
-- size: "sm" | "md" | "lg" | "icon"
+- variant: BoundValue string - "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
+- size: BoundValue string - "sm" | "md" | "lg" | "icon"
 - disabled: BoundValue (boolean)
 - loading: BoundValue (boolean) - Shows loading spinner when true
 - icon: BoundValue (string) - Lucide icon name (e.g., "send", "plus", "trash")
@@ -115,7 +115,7 @@ Example:
   "component": {
     "type": "button",
     "label": { "literalString": "Submit" },
-    "variant": "default",
+    "variant": { "literalString": "default" },
     "icon": { "literalString": "send" },
     "iconPosition": { "literalString": "left" }
   },
@@ -224,13 +224,13 @@ Example:
 Properties:
 - type: "textField" (required)
 - value: BoundValue - Current value
-- placeholder: string
-- inputType: "text" | "email" | "password" | "number" | "tel" | "url"
-- multiline: boolean
-- rows: number (for multiline)
+- placeholder: BoundValue string
+- inputType: BoundValue string - "text" | "email" | "password" | "number" | "tel" | "url"
+- multiline: BoundValue boolean
+- rows: BoundValue number (for multiline)
 - disabled: BoundValue (boolean)
 - error: BoundValue (string, error message)
-- label: string
+- label: BoundValue string
 - actions: { onChange: { type: "update", path: "..." } }
 
 Example:
@@ -239,9 +239,9 @@ Example:
   "component": {
     "type": "textField",
     "value": { "path": "$.form.email" },
-    "placeholder": "Enter email",
-    "inputType": "email",
-    "label": "Email Address"
+    "placeholder": { "literalString": "Enter email" },
+    "inputType": { "literalString": "email" },
+    "label": { "literalString": "Email Address" }
   },
   "actions": {
     "onChange": { "type": "update", "path": "$.form.email" }

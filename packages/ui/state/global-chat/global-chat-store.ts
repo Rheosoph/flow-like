@@ -22,10 +22,25 @@ import {
 	createAgentDebugReport,
 	finalizeAgentDebugReport,
 	finalizeAgentGenerationMetrics,
+	markAgentDebugReportInterrupted,
 	recordAgentDebugEvent,
 	recordAgentGenerationMetricEvent,
 } from "./agent-debug-report";
 import type { IMessage } from "./global-chat-db";
+
+/**
+ * A checkpoint persisted mid-run carries a debug report frozen at `outcome: "running"`. When a
+ * conversation is restored, that run is no longer driving this report: either it died with the
+ * old window, or a resumed run finalizes a fresh report over the same message id. Mark it
+ * interrupted so a dead run never keeps rendering as live.
+ */
+export function markRestoredMessageDebugReportStale(
+	message: IMessage,
+): IMessage {
+	const report = message.debug_report;
+	if (!report || report.outcome !== "running") return message;
+	return { ...message, debug_report: markAgentDebugReportInterrupted(report) };
+}
 
 /** Id prefix marking plan steps that belong to a nested sub-agent run (e.g. flowpilot_board). */
 export const SUB_STEP_PREFIX = "sub:";
@@ -570,7 +585,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	loadConversation: (conversationId, messages) =>
 		set({
 			activeConversationId: conversationId,
-			messages,
+			messages: messages.map(markRestoredMessageDebugReportStale),
 			isStreaming: false,
 			streamingMessage: null,
 			inlineAppChats: [],

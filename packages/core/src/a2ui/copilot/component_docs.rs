@@ -1,6 +1,6 @@
-/// A2UI Component Documentation for AI Copilot
-/// This module contains comprehensive documentation for all A2UI components
-/// that can be used by the AI copilot to generate UIs.
+//! A2UI Component Documentation for AI Copilot
+//! This module contains comprehensive documentation for all A2UI components
+//! that can be used by the AI copilot to generate UIs.
 
 pub const COMPONENT_CATALOG: &str = r##"
 # A2UI Component Catalog

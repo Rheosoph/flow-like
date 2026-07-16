@@ -98,6 +98,12 @@ pub struct PlaceholderPinDef {
     pub pin_type: String,           // "Input" or "Output"
     pub data_type: String, // "String", "Integer", "Float", "Boolean", "Struct", "Generic", "Execution"
     pub value_type: Option<String>, // "Normal", "Array", "HashMap", "HashSet" (default: "Normal")
+    /// JSON Schema carried by a typed Struct boundary. Older command payloads omit it.
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// Whether connections must agree with `schema`. Older payloads default to permissive.
+    #[serde(default)]
+    pub enforce_schema: bool,
 }
 
 /// Edge in the graph

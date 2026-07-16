@@ -476,13 +476,14 @@ pub(super) fn create_board_tools(
             tools.push(create_check_flowscript_tool(
                 board.clone(),
                 live_board.clone(),
-                provider,
+                provider.clone(),
                 flow_ir_drafts.clone(),
                 acceptance_binding.clone(),
             ));
             tools.push(create_commit_flowscript_tool(
                 board,
                 live_board,
+                provider,
                 flow_ir_drafts,
                 acceptance_binding,
                 side_effect_commands.clone(),
@@ -1427,6 +1428,7 @@ fn create_check_flowscript_tool(
 fn create_commit_flowscript_tool(
     board: Arc<Board>,
     live_board: Option<Arc<AsyncMutex<Board>>>,
+    provider: Arc<dyn CatalogProvider>,
     store: Arc<FlowIrDraftStore>,
     acceptance_binding: FlowIrAcceptanceBinding,
     side_effect_commands: Option<Arc<Mutex<SideEffectCommandQueue>>>,
@@ -1434,6 +1436,7 @@ fn create_commit_flowscript_tool(
 ) -> (Tool, ToolHandler) {
     let tool = tool_from_rig_definition(&CommitFlowScriptTool {
         board: board.clone(),
+        provider: provider.clone(),
         store: store.clone(),
         acceptance_binding: acceptance_binding.clone(),
     });
@@ -1459,14 +1462,19 @@ fn create_commit_flowscript_tool(
                 Some(expected_revision),
             );
         }
+        let catalog = block_on_tool(provider.get_all_metadata());
 
         with_current_board(&board, live_board.as_ref(), |board| {
             // Keep the registry-backed board guard across fingerprint validation and host queue
             // installation. The client never supplies a command batch: only commands retained by
             // check_flowscript for this exact revision cross the Apply/Dismiss boundary.
             store.observe_board(board);
-            let result =
-                store.commit_flowscript_with_acceptance_binding(board, args, &acceptance_binding);
+            let result = store.commit_flowscript_with_acceptance_binding(
+                board,
+                &catalog,
+                args,
+                &acceptance_binding,
+            );
             let commit_token = if result.status == "queued" {
                 store
                     .latest_pending_commit_token(&board.id)

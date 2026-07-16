@@ -50,6 +50,10 @@ export interface PlaceholderPinDef {
 		| "PathBuf"
 		| "Byte";
 	value_type?: "Normal" | "Array" | "HashMap" | "HashSet";
+	/** JSON Schema carried by a typed Struct boundary. */
+	schema?: string;
+	/** Require connected pins to agree with schema. */
+	enforce_schema?: boolean;
 }
 
 /// Commands that can be executed on the board
