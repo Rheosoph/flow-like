@@ -65,6 +65,19 @@ pub struct CopilotChatRequest {
     #[serde(default)]
     pub raw_user_prompt: Option<String>,
 
+    /// Stable id of the chat conversation that owns this request. Scopes retained-draft and
+    /// acceptance-contract identity so identical prompt text from another conversation can never
+    /// resume this conversation's drafts. Older clients may omit it, in which case identity binds
+    /// to the prompt text alone.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+
+    /// Immutable top-level user request that owns a delegated specialist run. Identity binds to it
+    /// (instead of the per-run specialist instruction) so a follow-up repair run spawned from the
+    /// same user turn can resume the retained draft.
+    #[serde(default)]
+    pub source_user_prompt: Option<String>,
+
     /// Images attached to the current prompt
     #[serde(default)]
     pub request_images: Option<Vec<ChatImage>>,
@@ -99,6 +112,7 @@ const MAX_IMAGE_BASE64_CHARS: usize = 7_000_000;
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_SELECTED_IDS: usize = 200;
 const MAX_SELECTED_ID_CHARS: usize = 256;
+const MAX_CONVERSATION_ID_CHARS: usize = 256;
 const ALLOWED_IMAGE_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError> {
@@ -114,6 +128,24 @@ fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError
     {
         return Err(ApiError::bad_request(format!(
             "Raw prompt is too large. Maximum is {MAX_PROMPT_CHARS} characters."
+        )));
+    }
+    if payload
+        .source_user_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.chars().count() > MAX_PROMPT_CHARS)
+    {
+        return Err(ApiError::bad_request(format!(
+            "Source prompt is too large. Maximum is {MAX_PROMPT_CHARS} characters."
+        )));
+    }
+    if payload
+        .conversation_id
+        .as_ref()
+        .is_some_and(|id| id.chars().count() > MAX_CONVERSATION_ID_CHARS)
+    {
+        return Err(ApiError::bad_request(format!(
+            "Conversation id is too large. Maximum is {MAX_CONVERSATION_ID_CHARS} characters."
         )));
     }
 
@@ -385,6 +417,32 @@ pub(crate) async fn master_flow_like_state(
     Ok(flow_like_state)
 }
 
+/// Derive the immutable request identity that owns retained drafts and the acceptance contract.
+///
+/// Mirrors the desktop's binding: identity prefers the outer turn's immutable source prompt over
+/// the per-run specialist instruction, and folds in the owning conversation id whenever the client
+/// supplies one — prompt text alone is not a safe identity because two conversations can send
+/// identical short prompts ("yes, build it") against the same board inside the draft-store lease
+/// window. Requests without a conversation id keep their prompt-only identity unchanged.
+fn request_identity_prompt_for(
+    conversation_id: Option<&str>,
+    source_user_prompt: Option<&str>,
+    raw_user_prompt: Option<&str>,
+    user_prompt: &str,
+) -> String {
+    let source_prompt = source_user_prompt
+        .filter(|prompt| !prompt.trim().is_empty())
+        .or_else(|| raw_user_prompt.filter(|prompt| !prompt.trim().is_empty()))
+        .unwrap_or(user_prompt);
+    let conversation_id = conversation_id
+        .map(str::trim)
+        .filter(|conversation_id| !conversation_id.is_empty());
+    match conversation_id {
+        Some(conversation_id) => format!("{conversation_id}\n{source_prompt}"),
+        None => source_prompt.to_string(),
+    }
+}
+
 async fn build_unified_copilot(
     state: &AppState,
     scope: CopilotScope,
@@ -482,8 +540,15 @@ pub async fn copilot_chat(
                 .get_with(key, || Arc::new(FlowIrDraftStore::new()))
         })
     });
-    let copilot =
-        build_unified_copilot(&state, payload.scope, profile, flow_ir_draft_store).await?;
+    let request_identity_prompt = request_identity_prompt_for(
+        payload.conversation_id.as_deref(),
+        payload.source_user_prompt.as_deref(),
+        payload.raw_user_prompt.as_deref(),
+        &payload.user_prompt,
+    );
+    let copilot = build_unified_copilot(&state, payload.scope, profile, flow_ir_draft_store)
+        .await?
+        .with_request_identity_prompt(Some(request_identity_prompt));
 
     if !payload.stream {
         let response = copilot
@@ -582,4 +647,64 @@ pub async fn copilot_chat(
             .interval(Duration::from_secs(1)),
     );
     Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::request_identity_prompt_for;
+
+    #[test]
+    fn identity_folds_in_the_owning_conversation_id() {
+        let identity = request_identity_prompt_for(
+            Some("conversation-1"),
+            None,
+            Some("yes, build it"),
+            "yes, build it",
+        );
+        assert_eq!(identity, "conversation-1\nyes, build it");
+    }
+
+    #[test]
+    fn identical_prompts_from_different_conversations_get_distinct_identities() {
+        let first = request_identity_prompt_for(
+            Some("conversation-1"),
+            None,
+            Some("yes, build it"),
+            "yes, build it",
+        );
+        let second = request_identity_prompt_for(
+            Some("conversation-2"),
+            None,
+            Some("yes, build it"),
+            "yes, build it",
+        );
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn nested_runs_in_one_conversation_share_request_identity() {
+        let first_nested = request_identity_prompt_for(
+            Some("conversation-1"),
+            Some("build me a weather workflow"),
+            Some("specialist instruction A"),
+            "specialist instruction A",
+        );
+        let repair_nested = request_identity_prompt_for(
+            Some("conversation-1"),
+            Some("build me a weather workflow"),
+            Some("specialist instruction B"),
+            "specialist instruction B",
+        );
+        assert_eq!(first_nested, repair_nested);
+        assert_eq!(first_nested, "conversation-1\nbuild me a weather workflow");
+    }
+
+    #[test]
+    fn requests_without_a_conversation_id_keep_prompt_identity() {
+        let identity =
+            request_identity_prompt_for(None, None, Some("raw prompt"), "wrapped prompt");
+        assert_eq!(identity, "raw prompt");
+        let fallback = request_identity_prompt_for(Some("  "), None, None, "wrapped prompt");
+        assert_eq!(fallback, "wrapped prompt");
+    }
 }

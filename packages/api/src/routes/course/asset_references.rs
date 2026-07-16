@@ -111,7 +111,10 @@ struct Segment<'a> {
 }
 
 fn split_preserving_code_fences(content: &str) -> Vec<Segment<'_>> {
-    let fence_re = regex::Regex::new(r"(?ms)^(```|~~~)[^\n]*\n.*?^\1\s*$").expect("valid fence");
+    // The `regex` crate has no backreferences; spell out one branch per fence type so the
+    // closing fence still has to match the opening one.
+    let fence_re = regex::Regex::new(r"(?ms)^(?:```[^\n]*\n.*?^```|~~~[^\n]*\n.*?^~~~)\s*$")
+        .expect("valid fence");
     let mut segments = Vec::new();
     let mut last = 0;
     for m in fence_re.find_iter(content) {

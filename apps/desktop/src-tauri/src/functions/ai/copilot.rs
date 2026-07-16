@@ -1419,6 +1419,23 @@ pub async fn copilot_chat(
             .as_deref()
             .or(stream_parent_request_id.as_deref()),
     );
+    // The in-process Bits/rig loop shares the board-scoped retained draft stores with the agent
+    // backends, so its nested runs take the same per-board gate (same-board runs serialize,
+    // different boards proceed concurrently). Held for the entire run.
+    let _nested_run_permit = if nested {
+        Some(
+            acquire_nested_copilot_run_permit(
+                nested_copilot_run_gate(&nested_copilot_run_gate_key(
+                    board.as_ref(),
+                    tool_context.as_ref(),
+                )),
+                run_cancellation.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let runtime_frontend_bridge = if nested {
         super::frontend_tool_bridge::FrontendToolBridge::new_with_event(
             app_handle.clone(),
@@ -2334,6 +2351,20 @@ async fn external_code_agent_chat_internal(
     let parent_request_id = scoped_parent_request_id(tool_context.as_ref());
     let (run_cancellation, _run_registration) =
         register_copilot_run(request_id.as_deref().or(parent_request_id.as_deref()));
+    // Codex/Claude Code CLI processes are already per-invocation, so no process pool is needed
+    // here; the per-board gate alone gives nested runs the same same-board serialization as the
+    // SDK and Bits paths (retained draft base-fingerprint integrity). Held for the entire run.
+    let _nested_run_permit = if nested {
+        Some(
+            acquire_nested_copilot_run_permit(
+                nested_copilot_run_gate(&nested_copilot_run_gate_key(board, tool_context.as_ref())),
+                run_cancellation.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
         scope,
@@ -2727,6 +2758,7 @@ async fn copilot_sdk_chat_internal(
     const MAX_WORKFLOW_IDLE_CONTINUATIONS: u8 = 2;
 
     let parent_request_id = scoped_parent_request_id(tool_context.as_ref());
+    let nested_gate_key = nested_copilot_run_gate_key(board, tool_context.as_ref());
     let (run_cancellation, _run_registration) =
         register_copilot_run(request_id.as_deref().or(parent_request_id.as_deref()));
 
@@ -2854,13 +2886,13 @@ async fn copilot_sdk_chat_internal(
         allowed_tool_names.len()
     );
 
-    // The nested CLI only supports one active request reliably. Keep a permit for the entire run;
-    // serializing create_session alone still lets concurrent event loops deadlock the process.
-    // Queueing behind the current owner has no arbitrary timeout, but explicit cancellation wins.
+    // Same-board nested runs must not interleave (retained draft base-fingerprint integrity).
+    // Keep the per-board permit for the entire run. Queueing behind the current owner has no
+    // arbitrary timeout, but explicit cancellation wins.
     let nested_run_permit = if nested {
         Some(
             acquire_nested_copilot_run_permit(
-                NESTED_COPILOT_RUN_GATE.clone(),
+                nested_copilot_run_gate(&nested_gate_key),
                 run_cancellation.clone(),
             )
             .await?,
@@ -2869,33 +2901,21 @@ async fn copilot_sdk_chat_internal(
         None
     };
 
-    // Clone the shared client slot before awaiting any RPC. A wedged create_session must not hold
-    // the global mutex and block stop/status/recovery calls.
-    let client = if nested {
-        let existing = NESTED_COPILOT_CLIENT.lock().await.clone();
-        if let Some(client) = existing {
-            client
-        } else {
-            let options = COPILOT_START_OPTIONS.lock().await.clone().unwrap_or(
-                FlowPilotBackendStartOptions {
-                    use_stdio: true,
-                    cli_url: None,
-                    app_handle: None,
-                },
-            );
-            flowpilot_debug_log!(
-                "[copilot_sdk_chat] starting dedicated CLI process for nested runs"
-            );
-            let client = Arc::new(build_and_start_copilot_client(&options).await?);
-            let mut guard = NESTED_COPILOT_CLIENT.lock().await;
-            guard.get_or_insert_with(|| client.clone()).clone()
-        }
+    // A nested run checks a dedicated CLI process out of the pool (exclusive ownership keeps the
+    // per-process one-request constraint). The main client slot is cloned before awaiting any RPC:
+    // a wedged create_session must not hold the global mutex and block stop/status/recovery calls.
+    let nested_client_lease = if nested {
+        Some(checkout_nested_copilot_client(run_cancellation.clone()).await?)
     } else {
-        COPILOT_CLIENT
+        None
+    };
+    let client = match nested_client_lease.as_ref() {
+        Some(lease) => lease.client(),
+        None => COPILOT_CLIENT
             .lock()
             .await
             .clone()
-            .ok_or("Copilot SDK not running. Please start it first.")?
+            .ok_or("Copilot SDK not running. Please start it first.")?,
     };
 
     let create_session = client.create_session(config);
@@ -2932,6 +2952,7 @@ async fn copilot_sdk_chat_internal(
         session: Arc<copilot_sdk::Session>,
         session_id: String,
         nested_run_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+        nested_client_lease: Option<NestedCopilotClientLease>,
     }
     impl Drop for CopilotSessionCleanup {
         fn drop(&mut self) {
@@ -2939,9 +2960,14 @@ async fn copilot_sdk_chat_internal(
             let session = self.session.clone();
             let session_id = self.session_id.clone();
             let nested_run_permit = self.nested_run_permit.take();
+            let nested_client_lease = self.nested_client_lease.take();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 runtime.spawn(async move {
                     let _nested_run_permit = nested_run_permit;
+                    // Held past session deletion: a pooled client may only rejoin the idle pool
+                    // once its previous session is gone, or the next checkout could deadlock the
+                    // CLI process with a second concurrent session.
+                    let _nested_client_lease = nested_client_lease;
                     let _ = tokio::time::timeout(SDK_CHAT_ABORT_TIMEOUT, session.abort()).await;
                     // Client::delete_session also evicts the SDK's local Arc<Session> cache.
                     let _ = tokio::time::timeout(
@@ -2950,6 +2976,10 @@ async fn copilot_sdk_chat_internal(
                     )
                     .await;
                 });
+            } else if let Some(lease) = nested_client_lease {
+                // Without a runtime the pending session cannot be cleaned up; drop the process
+                // from the pool instead of re-pooling a client with an undeleted session.
+                lease.deregister();
             }
         }
     }
@@ -2960,6 +2990,7 @@ async fn copilot_sdk_chat_internal(
         session: session.clone(),
         session_id: session.session_id().to_string(),
         nested_run_permit,
+        nested_client_lease,
     };
     if nested {
         flowpilot_debug_log!("[copilot_sdk_chat] creating session on the nested CLI");
@@ -10321,23 +10352,52 @@ use tokio::sync::Mutex;
 /// `Arc` before awaiting RPCs so a wedged CLI cannot block status/stop/start on this mutex.
 static COPILOT_CLIENT: Lazy<Mutex<Option<Arc<Client>>>> = Lazy::new(|| Mutex::new(None));
 
-/// Dedicated CLI process for NESTED FlowPilot runs (flowpilot_board / flowpilot_widget
-/// sub-agents spawned while a parent Copilot session is mid-turn). The copilot CLI serializes
-/// requests within one process: a `session.create` sent while the parent session has a pending
-/// tool call is never answered, deadlocking the sub-run until the tool bridge times out. A
-/// second process isolates nested sessions completely. Started lazily with the same options as
-/// the main client and kept alive for subsequent nested runs.
-static NESTED_COPILOT_CLIENT: Lazy<Mutex<Option<Arc<Client>>>> = Lazy::new(|| Mutex::new(None));
-
-/// The dedicated nested CLI protocol serializes requests internally and cannot safely service a
-/// second session while the first one is inside a parent tool call. Explicitly serialize complete
-/// nested runs rather than merely serializing session creation.
-static NESTED_COPILOT_RUN_GATE: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(1)));
 static COPILOT_START_GATE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
 
-/// Options the main Copilot client was started with, reused to start the nested client.
+/// Options the main Copilot client was started with, reused to start nested pool clients.
 static COPILOT_START_OPTIONS: Lazy<Mutex<Option<FlowPilotBackendStartOptions>>> =
     Lazy::new(|| Mutex::new(None));
+
+/// Retained draft stores are board-scoped and their base-fingerprint integrity requires that two
+/// nested runs mutating the same board never interleave. Runs targeting DIFFERENT boards are
+/// independent and may proceed concurrently, so nested runs are serialized per gate key instead
+/// of process-wide. All four agent backends (Bits/rig, GitHub Copilot SDK, Codex CLI, Claude Code
+/// CLI) acquire the same per-board gate for nested runs.
+static NESTED_COPILOT_RUN_GATES: Lazy<StdMutex<HashMap<String, Arc<Semaphore>>>> =
+    Lazy::new(|| StdMutex::new(HashMap::new()));
+
+/// Gate key for a nested run: the targeted board id (board runs), the widget/page target board id
+/// carried by the frontend tool context (widget runs), or a shared global key when no target
+/// exists at all.
+fn nested_copilot_run_gate_key(
+    board: Option<&Board>,
+    tool_context: Option<&FrontendToolContext>,
+) -> String {
+    board
+        .map(|board| board.id.clone())
+        .filter(|id| !id.trim().is_empty())
+        .or_else(|| {
+            tool_context
+                .and_then(|context| context.board_id.clone())
+                .filter(|id| !id.trim().is_empty())
+        })
+        .map(|id| format!("board:{id}"))
+        .unwrap_or_else(|| "global".to_string())
+}
+
+/// Resolve the serialization gate for one gate key. Gates whose only owner is the map itself
+/// (no permit holder, no queued waiter — both hold an `Arc` clone) are pruned on every lookup so
+/// the map stays bounded by the number of concurrently active/queued nested runs.
+fn nested_copilot_run_gate(key: &str) -> Arc<Semaphore> {
+    let mut gates = NESTED_COPILOT_RUN_GATES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+    gates
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(Semaphore::new(1)))
+        .clone()
+}
 
 async fn acquire_nested_copilot_run_permit(
     gate: Arc<Semaphore>,
@@ -10353,19 +10413,162 @@ async fn acquire_nested_copilot_run_permit(
     }
 }
 
-async fn quarantine_nested_copilot_client(client: &Arc<Client>) {
-    let removed = {
-        let mut slot = NESTED_COPILOT_CLIENT.lock().await;
-        if slot
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, client))
-        {
-            slot.take()
-        } else {
-            None
+/// Dedicated CLI processes for NESTED FlowPilot runs (flowpilot_board / flowpilot_widget
+/// sub-agents spawned while a parent Copilot session is mid-turn). The copilot CLI serializes
+/// requests within one process: a `session.create` sent while the parent session has a pending
+/// tool call is never answered, deadlocking the sub-run until the tool bridge times out. Separate
+/// processes isolate nested sessions completely. This is a PER-PROCESS constraint, so nested runs
+/// use a small pool: clients start lazily with the same options as the main client (up to
+/// `NESTED_COPILOT_POOL_SIZE`) and idle processes are reused. A checked-out client is exclusively
+/// owned by one run, preserving one-session-at-a-time per process by construction.
+const NESTED_COPILOT_POOL_SIZE: usize = 3;
+
+struct NestedCopilotPool {
+    slots: Arc<Semaphore>,
+    idle: StdMutex<Vec<Arc<Client>>>,
+    /// Every live pooled process, idle or checked out. Quarantine removes an entry so the owning
+    /// lease drops the process instead of returning it to `idle`; backend stop drains everything.
+    registered: StdMutex<Vec<Arc<Client>>>,
+}
+
+impl NestedCopilotPool {
+    fn new(size: usize) -> Self {
+        Self {
+            slots: Arc::new(Semaphore::new(size)),
+            idle: StdMutex::new(Vec::new()),
+            registered: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn take_idle(&self) -> Option<Arc<Client>> {
+        self.idle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop()
+    }
+
+    fn register(&self, client: Arc<Client>) {
+        self.registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(client);
+    }
+
+    fn deregister(&self, client: &Arc<Client>) -> bool {
+        let removed = {
+            let mut registered = self
+                .registered
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let before = registered.len();
+            registered.retain(|entry| !Arc::ptr_eq(entry, client));
+            registered.len() != before
+        };
+        self.idle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|entry| !Arc::ptr_eq(entry, client));
+        removed
+    }
+
+    fn is_registered(&self, client: &Arc<Client>) -> bool {
+        self.registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|entry| Arc::ptr_eq(entry, client))
+    }
+
+    fn return_to_idle(&self, client: Arc<Client>) {
+        if self.is_registered(&client) {
+            self.idle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(client);
+        }
+    }
+
+    fn drain(&self) -> Vec<Arc<Client>> {
+        self.idle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        self.registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain(..)
+            .collect()
+    }
+}
+
+static NESTED_COPILOT_POOL: Lazy<NestedCopilotPool> =
+    Lazy::new(|| NestedCopilotPool::new(NESTED_COPILOT_POOL_SIZE));
+
+/// Exclusive checkout of one pooled nested CLI process. Dropping the lease returns the client to
+/// the idle pool unless it was quarantined/deregistered first; the pool slot frees either way so
+/// a replacement process can start lazily on the next checkout.
+struct NestedCopilotClientLease {
+    client: Arc<Client>,
+    _slot: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl NestedCopilotClientLease {
+    fn client(&self) -> Arc<Client> {
+        self.client.clone()
+    }
+
+    /// Remove the leased client from the pool without stopping it, for drop paths that cannot
+    /// await session cleanup: leaking one process is safe, re-pooling a client whose previous
+    /// session may still be pending is not.
+    fn deregister(&self) {
+        NESTED_COPILOT_POOL.deregister(&self.client);
+    }
+}
+
+impl Drop for NestedCopilotClientLease {
+    fn drop(&mut self) {
+        NESTED_COPILOT_POOL.return_to_idle(self.client.clone());
+    }
+}
+
+async fn checkout_nested_copilot_client(
+    cancellation: CancellationToken,
+) -> Result<NestedCopilotClientLease, String> {
+    let slot = tokio::select! {
+        permit = NESTED_COPILOT_POOL.slots.clone().acquire_owned() => {
+            permit.map_err(|_| "The nested Copilot process pool was closed".to_string())?
+        }
+        _ = cancellation.cancelled() => {
+            return Err("FlowPilot Copilot run was cancelled before it started".to_string());
         }
     };
-    if let Some(client) = removed {
+    if let Some(client) = NESTED_COPILOT_POOL.take_idle() {
+        return Ok(NestedCopilotClientLease {
+            client,
+            _slot: slot,
+        });
+    }
+    let options =
+        COPILOT_START_OPTIONS
+            .lock()
+            .await
+            .clone()
+            .unwrap_or(FlowPilotBackendStartOptions {
+                use_stdio: true,
+                cli_url: None,
+                app_handle: None,
+            });
+    flowpilot_debug_log!("[copilot_sdk_chat] starting dedicated CLI process for a nested run");
+    let client = Arc::new(build_and_start_copilot_client(&options).await?);
+    NESTED_COPILOT_POOL.register(client.clone());
+    Ok(NestedCopilotClientLease {
+        client,
+        _slot: slot,
+    })
+}
+
+async fn quarantine_nested_copilot_client(client: &Arc<Client>) {
+    if NESTED_COPILOT_POOL.deregister(client) {
         let _ = tokio::time::timeout(SDK_CHAT_ABORT_TIMEOUT, client.force_stop()).await;
     }
 }
@@ -12082,10 +12285,7 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
             let mut guard = COPILOT_CLIENT.lock().await;
             guard.take()
         };
-        let nested_client = {
-            let mut guard = NESTED_COPILOT_CLIENT.lock().await;
-            guard.take()
-        };
+        let nested_clients = NESTED_COPILOT_POOL.drain();
 
         let mut errors: Vec<String> = Vec::new();
         if let Some(client) = client {
@@ -12103,7 +12303,7 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
                 errors.push(format!("{:?}", stop_errors));
             }
         }
-        if let Some(client) = nested_client {
+        for client in nested_clients {
             let stop_errors = match tokio::time::timeout(SDK_CONTROL_RPC_TIMEOUT, client.stop())
                 .await
             {
@@ -13059,6 +13259,202 @@ mod tests {
             .expect("waiter task")
             .expect_err("cancelled nested permit");
         assert!(error.contains("cancelled"));
+    }
+
+    #[test]
+    fn nested_gate_key_prefers_board_then_widget_target_then_global() {
+        let board = flowscript_recovery_test_board();
+        let context = FrontendToolContext {
+            board_id: Some("widget-target-board".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            nested_copilot_run_gate_key(Some(&board), Some(&context)),
+            format!("board:{}", board.id)
+        );
+        assert_eq!(
+            nested_copilot_run_gate_key(None, Some(&context)),
+            "board:widget-target-board"
+        );
+        let empty_context = FrontendToolContext {
+            board_id: Some("   ".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            nested_copilot_run_gate_key(None, Some(&empty_context)),
+            "global"
+        );
+        assert_eq!(nested_copilot_run_gate_key(None, None), "global");
+    }
+
+    #[tokio::test]
+    async fn nested_gate_serializes_same_board_but_not_different_boards() {
+        let gate_a = nested_copilot_run_gate("board:gate-test-a");
+        let gate_a_again = nested_copilot_run_gate("board:gate-test-a");
+        let gate_b = nested_copilot_run_gate("board:gate-test-b");
+        assert!(Arc::ptr_eq(&gate_a, &gate_a_again));
+
+        let owner = gate_a
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("first same-board run");
+        let cancellation = CancellationToken::new();
+        let same_board_waiter = tokio::spawn(acquire_nested_copilot_run_permit(
+            gate_a_again,
+            cancellation.clone(),
+        ));
+        let other_board_run = tokio::spawn(acquire_nested_copilot_run_permit(
+            gate_b,
+            cancellation.clone(),
+        ));
+
+        // A different board's run must complete while the same-board run is still queued.
+        let other_permit = tokio::time::timeout(Duration::from_secs(1), other_board_run)
+            .await
+            .expect("a different board must not queue behind this board's run")
+            .expect("other-board task")
+            .expect("other-board permit");
+        tokio::task::yield_now().await;
+        assert!(
+            !same_board_waiter.is_finished(),
+            "a second run on the SAME board must stay queued while the first one runs"
+        );
+
+        drop(owner);
+        let same_permit = tokio::time::timeout(Duration::from_secs(1), same_board_waiter)
+            .await
+            .expect("same-board run should acquire promptly after release")
+            .expect("same-board task")
+            .expect("same-board permit");
+        drop(same_permit);
+        drop(other_permit);
+    }
+
+    #[tokio::test]
+    async fn nested_gate_map_prunes_gates_without_holders_or_waiters() {
+        let key = "board:gate-prune-test";
+        let gate = nested_copilot_run_gate(key);
+        let permit = gate
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("prune-test permit");
+        drop(gate);
+
+        // The held permit keeps an Arc clone alive, so lookups of other keys must not prune it.
+        let _other = nested_copilot_run_gate("board:gate-prune-test-other");
+        assert!(
+            NESTED_COPILOT_RUN_GATES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(key),
+            "a gate with an active permit holder must survive pruning"
+        );
+
+        drop(permit);
+        let _other = nested_copilot_run_gate("board:gate-prune-test-other");
+        assert!(
+            !NESTED_COPILOT_RUN_GATES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(key),
+            "a gate with no holders and no waiters must be pruned on the next lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_pool_checkout_checkin_and_quarantine_replacement() {
+        fn unstarted_client() -> Arc<Client> {
+            Arc::new(Client::builder().build().expect("unstarted pool client"))
+        }
+        // Seed idle clients so checkout never spawns a real CLI process in tests.
+        for _ in 0..NESTED_COPILOT_POOL_SIZE {
+            let client = unstarted_client();
+            NESTED_COPILOT_POOL.register(client.clone());
+            NESTED_COPILOT_POOL.return_to_idle(client);
+        }
+
+        let cancellation = CancellationToken::new();
+        let lease_one = checkout_nested_copilot_client(cancellation.clone())
+            .await
+            .expect("first checkout");
+        let lease_two = checkout_nested_copilot_client(cancellation.clone())
+            .await
+            .expect("second checkout");
+        let lease_three = checkout_nested_copilot_client(cancellation.clone())
+            .await
+            .expect("third checkout");
+        assert!(
+            !Arc::ptr_eq(&lease_one.client, &lease_two.client)
+                && !Arc::ptr_eq(&lease_two.client, &lease_three.client)
+                && !Arc::ptr_eq(&lease_one.client, &lease_three.client),
+            "each checked-out lease must exclusively own its own process"
+        );
+
+        // All slots busy: a fourth checkout queues, and a cancelled one returns promptly.
+        let cancelled_token = CancellationToken::new();
+        let cancelled_waiter =
+            tokio::spawn(checkout_nested_copilot_client(cancelled_token.clone()));
+        cancelled_token.cancel();
+        let cancelled_result = tokio::time::timeout(Duration::from_secs(1), cancelled_waiter)
+            .await
+            .expect("cancelled checkout should return promptly")
+            .expect("cancelled checkout task");
+        match cancelled_result {
+            Ok(_) => panic!("cancelled checkout must not receive a client"),
+            Err(error) => assert!(error.contains("cancelled")),
+        }
+
+        let waiter = tokio::spawn(checkout_nested_copilot_client(cancellation.clone()));
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "a checkout past the pool cap must wait for a checkin"
+        );
+
+        // Checkin: dropping a lease returns its exact process to the idle pool.
+        let released = lease_one.client();
+        drop(lease_one);
+        let lease_four = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("queued checkout should acquire promptly after a checkin")
+            .expect("queued checkout task")
+            .expect("queued checkout lease");
+        assert!(
+            Arc::ptr_eq(&lease_four.client, &released),
+            "the queued checkout must reuse the checked-in idle process"
+        );
+
+        // Quarantine: the client leaves the pool, its lease drop must not re-pool it, and the
+        // freed slot allows a lazy replacement.
+        let quarantined = lease_two.client();
+        quarantine_nested_copilot_client(&quarantined).await;
+        drop(lease_two);
+        assert!(
+            !NESTED_COPILOT_POOL.is_registered(&quarantined),
+            "a quarantined client must leave the pool registry"
+        );
+        assert_eq!(
+            NESTED_COPILOT_POOL.slots.available_permits(),
+            1,
+            "the quarantined client's slot must free up for a lazy replacement"
+        );
+
+        drop(lease_three);
+        drop(lease_four);
+        let drained = NESTED_COPILOT_POOL.drain();
+        assert_eq!(
+            drained.len(),
+            NESTED_COPILOT_POOL_SIZE - 1,
+            "drain must return every live pooled client except the quarantined one"
+        );
+        assert!(
+            drained
+                .iter()
+                .all(|client| !Arc::ptr_eq(client, &quarantined)),
+            "the quarantined client must not reappear in the drained pool"
+        );
     }
 
     #[test]

@@ -855,6 +855,8 @@ export class WebBoardState implements IBoardState {
 					selected_component_ids: selectedComponentIds,
 					user_prompt: userPrompt,
 					raw_user_prompt: rawUserPrompt,
+					conversation_id: toolContext?.conversationId,
+					source_user_prompt: toolContext?.sourceUserPrompt,
 					history,
 					request_images: requestImages,
 					model_id: modelId,

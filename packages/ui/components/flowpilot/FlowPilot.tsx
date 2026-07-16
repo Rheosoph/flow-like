@@ -94,6 +94,7 @@ import {
 	type FrontendToolRequestLease,
 } from "./frontend-tool-request-guard";
 import { FlowPilotGenerationMetricsRun } from "./generation-metrics";
+import { flowPilotPanelConversationId } from "./panel-conversation-scope";
 import { buildBudgetedHistory } from "./history-budget";
 import {
 	InlineFlowScriptPreview,
@@ -2734,6 +2735,9 @@ function FlowPilotImpl({
 							? {
 									appId: activeAppId,
 									boardId: board?.id,
+									conversationId: flowPilotPanelConversationId(
+										board?.id ?? activeAppId,
+									),
 									sourceUserPrompt: currentInput,
 								}
 							: undefined,

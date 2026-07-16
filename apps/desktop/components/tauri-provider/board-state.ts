@@ -63,8 +63,11 @@ import {
 	shouldApplyRemoteBoard,
 } from "./board-merge";
 import {
+	MAX_UNDO_REDO_SYNC_BODY_BYTES,
 	OFFLINE_SYNC_COMMAND_MAX_AGE_MS,
 	chunkCommandsForSync,
+	evaluateBoardLineage,
+	systemTimeToNanos,
 } from "./command-sync";
 import { mergeBoardOffThread } from "./board-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
@@ -76,6 +79,11 @@ interface DiffEntry {
 }
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
+
+// A burst of queued batches (chunked pushes all failing against the same
+// outage) must surface as a single toast, not one per batch.
+const QUEUED_EDITS_TOAST_DEBOUNCE_MS = 15_000;
+let lastQueuedEditsToastAt = 0;
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -480,6 +488,12 @@ export class BoardState implements IBoardState {
 							);
 							continue;
 						}
+
+						if (
+							!(await this.lineageAllowsRemoteApply(appId, board.id, board))
+						) {
+							continue;
+						}
 					}
 
 					const { merged, changed } = await mergeBoardOffThread(
@@ -499,6 +513,7 @@ export class BoardState implements IBoardState {
 							executionMode: merged.execution_mode,
 							boardData: merged,
 						});
+						await this.recordAppliedRemoteLineage(appId, board.id, board);
 					}
 
 					// Keep the local reference when content is unchanged so downstream
@@ -590,6 +605,7 @@ export class BoardState implements IBoardState {
 				});
 			}
 			if (typeof version === "undefined") {
+				await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 				dispatchRemoteBoardApplied(appId, boardId);
 			}
 			return remoteData;
@@ -641,6 +657,12 @@ export class BoardState implements IBoardState {
 				);
 
 				if (remoteData) {
+					if (
+						!(await this.lineageAllowsRemoteApply(appId, boardId, remoteData))
+					) {
+						return board;
+					}
+
 					const { merged, changed } = await mergeBoardOffThread(
 						remoteData,
 						board,
@@ -659,6 +681,7 @@ export class BoardState implements IBoardState {
 							executionMode: merged.execution_mode,
 							boardData: merged,
 						});
+						await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 						dispatchRemoteBoardApplied(appId, boardId);
 
 						if (this.backend.queryClient) {
@@ -683,67 +706,12 @@ export class BoardState implements IBoardState {
 			return board;
 		}
 
-		const getOfflineSyncCommands =
-			this.backend.getOfflineSyncCommands.bind(this);
-		const clearOfflineSyncCommands =
-			this.backend.clearOfflineSyncCommands.bind(this);
-
 		const promise = injectDataFunction(
 			async () => {
-				const unsyncedCommands = await getOfflineSyncCommands(appId, boardId);
-				let drainFailed = false;
-				for (const commandSync of unsyncedCommands) {
-					// Replaying stale edits over a week of newer remote history does more
-					// harm than dropping them.
-					if (
-						commandSync.createdAt.getTime() <
-						Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS
-					) {
-						console.warn(
-							"Dropping expired offline sync command:",
-							commandSync.commandId,
-						);
-						await clearOfflineSyncCommands(
-							commandSync.commandId,
-							appId,
-							boardId,
-						);
-						continue;
-					}
-
-					try {
-						for (const chunk of chunkCommandsForSync(commandSync.commands)) {
-							await fetcher(
-								this.backend.profile!,
-								`apps/${appId}/board/${boardId}`,
-								{
-									method: "POST",
-									body: JSON.stringify({
-										commands: chunk,
-									}),
-								},
-								this.backend.auth,
-							);
-						}
-						await clearOfflineSyncCommands(
-							commandSync.commandId,
-							appId,
-							boardId,
-						);
-						console.log(
-							"Executed offline sync command:",
-							commandSync.commandId,
-						);
-					} catch (e) {
-						// Keep the batch queued and stop: later batches must not overtake it.
-						console.warn(
-							"Failed to push offline sync command; keeping it queued:",
-							e,
-						);
-						drainFailed = true;
-						break;
-					}
-				}
+				const { failed: drainFailed } = await this.drainOfflineSyncQueue(
+					appId,
+					boardId,
+				);
 
 				if (drainFailed) {
 					// Local edits are not on the server yet. Applying the remote snapshot
@@ -781,6 +749,12 @@ export class BoardState implements IBoardState {
 					return board;
 				}
 
+				if (
+					!(await this.lineageAllowsRemoteApply(appId, boardId, remoteData))
+				) {
+					return board;
+				}
+
 				const { merged, changed } = await mergeBoardOffThread(
 					remoteData,
 					board,
@@ -801,6 +775,7 @@ export class BoardState implements IBoardState {
 						executionMode: merged.execution_mode,
 						boardData: merged,
 					});
+					await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 					dispatchRemoteBoardApplied(appId, boardId);
 					return merged;
 				}
@@ -1553,14 +1528,22 @@ export class BoardState implements IBoardState {
 			);
 		}
 
+		// Undo must ship as a single request — a chunked/partial undo would
+		// diverge the board — so fail fast instead of hitting a raw HTTP 413.
+		const body = JSON.stringify({ commands: commands });
+		if (body.length > MAX_UNDO_REDO_SYNC_BODY_BYTES) {
+			toast.error("Undo batch too large to sync. Undo in smaller steps.");
+			throw new Error(
+				`Undo batch of ${commands.length} commands (${body.length} bytes) exceeds the ${MAX_UNDO_REDO_SYNC_BODY_BYTES} byte sync limit`,
+			);
+		}
+
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}/undo`,
 			{
 				method: "PATCH",
-				body: JSON.stringify({
-					commands: commands,
-				}),
+				body,
 			},
 			this.backend.auth,
 		);
@@ -1588,14 +1571,22 @@ export class BoardState implements IBoardState {
 			);
 		}
 
+		// Redo must ship as a single request — a chunked/partial redo would
+		// diverge the board — so fail fast instead of hitting a raw HTTP 413.
+		const body = JSON.stringify({ commands: commands });
+		if (body.length > MAX_UNDO_REDO_SYNC_BODY_BYTES) {
+			toast.error("Redo batch too large to sync. Redo in smaller steps.");
+			throw new Error(
+				`Redo batch of ${commands.length} commands (${body.length} bytes) exceeds the ${MAX_UNDO_REDO_SYNC_BODY_BYTES} byte sync limit`,
+			);
+		}
+
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}/redo`,
 			{
 				method: "PATCH",
-				body: JSON.stringify({
-					commands: commands,
-				}),
+				body,
 			},
 			this.backend.auth,
 		);
@@ -1684,6 +1675,13 @@ export class BoardState implements IBoardState {
 				template,
 				authoritativeUpdatedAt,
 			});
+			// Only advance the lineage once the local cache holds this revision;
+			// otherwise a refused remote echo could block cache recovery.
+			if (boardUpdate.updated_at) {
+				await this.recordAppliedRemoteLineage(appId, boardId, {
+					updated_at: boardUpdate.updated_at,
+				});
+			}
 		} catch (error) {
 			// The remote write already succeeded. Do not turn a cache failure into a failed
 			// create_app response (and a duplicate retry); the readiness path can still fetch it.
@@ -1695,6 +1693,204 @@ export class BoardState implements IBoardState {
 		await invoke("close_board", {
 			boardId: boardId,
 		});
+	}
+
+	/**
+	 * Lineage guard on top of the existing updated_at checks: refuse a remote
+	 * board that is not strictly newer than the last revision this client
+	 * applied or pushed past. A cache miss or lookup failure falls back to the
+	 * existing guards, so this can only add refusals.
+	 */
+	private async lineageAllowsRemoteApply(
+		appId: string,
+		boardId: string,
+		remoteBoard: IBoard,
+	): Promise<boolean> {
+		try {
+			const cachedLineageNs = await this.backend.getBoardLineage(
+				appId,
+				boardId,
+			);
+			const decision = evaluateBoardLineage(
+				systemTimeToNanos(remoteBoard.updated_at),
+				cachedLineageNs,
+			);
+			if (!decision.apply) {
+				console.warn("Skipping remote board due to sync lineage guard:", {
+					boardId,
+					skipReason: decision.refusalReason,
+					remoteUpdatedAt: remoteBoard.updated_at,
+					cachedLineageNs,
+				});
+			}
+			return decision.apply;
+		} catch (error) {
+			console.warn(
+				"Board lineage lookup failed; falling back to existing sync guards:",
+				error,
+			);
+			return true;
+		}
+	}
+
+	private async recordAppliedRemoteLineage(
+		appId: string,
+		boardId: string,
+		remoteBoard: Pick<IBoard, "updated_at">,
+	): Promise<void> {
+		try {
+			await this.backend.recordBoardLineage(
+				appId,
+				boardId,
+				systemTimeToNanos(remoteBoard.updated_at),
+			);
+		} catch (error) {
+			console.warn("Failed to record board sync lineage:", error);
+		}
+	}
+
+	/**
+	 * After a successful command push the server holds at least the revision of
+	 * the board snapshot this client is working on. The push response carries no
+	 * timestamp, so record the cached board's updated_at (max-merge — it never
+	 * moves the lineage backwards).
+	 */
+	private async recordLineageAfterPush(
+		appId: string,
+		boardId: string,
+	): Promise<void> {
+		const cachedBoard = this.backend.queryClient?.getQueryData<IBoard>([
+			this.getBoard.name || "backendFn",
+			appId,
+			boardId,
+		]);
+		if (!cachedBoard?.updated_at) return;
+		await this.recordAppliedRemoteLineage(appId, boardId, cachedBoard);
+	}
+
+	private notifyEditsQueued(appId: string, boardId: string): void {
+		const now = Date.now();
+		if (now - lastQueuedEditsToastAt < QUEUED_EDITS_TOAST_DEBOUNCE_MS) return;
+		lastQueuedEditsToastAt = now;
+
+		toast.warning(
+			"Server sync failed — your edits are queued and will retry on the next board load.",
+			{
+				action: {
+					label: "Retry now",
+					onClick: () => {
+						void this.retryOfflineSync(appId, boardId);
+					},
+				},
+			},
+		);
+	}
+
+	/**
+	 * Ordered, chunked drain of the offline sync queue. Stops on the first
+	 * failed batch so a later batch can never overtake an earlier one. Shared by
+	 * getBoard's background sync and manual retries so the two paths cannot
+	 * diverge.
+	 */
+	private async drainOfflineSyncQueue(
+		appId: string,
+		boardId: string,
+	): Promise<{ failed: boolean; pushedBatches: number }> {
+		const unsyncedCommands = await this.backend.getOfflineSyncCommands(
+			appId,
+			boardId,
+		);
+		let failed = false;
+		let pushedBatches = 0;
+
+		for (const commandSync of unsyncedCommands) {
+			// Replaying stale edits over a week of newer remote history does more
+			// harm than dropping them.
+			if (
+				commandSync.createdAt.getTime() <
+				Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS
+			) {
+				console.warn(
+					"Dropping expired offline sync command:",
+					commandSync.commandId,
+				);
+				await this.backend.clearOfflineSyncCommands(
+					commandSync.commandId,
+					appId,
+					boardId,
+				);
+				continue;
+			}
+
+			try {
+				for (const chunk of chunkCommandsForSync(commandSync.commands)) {
+					await fetcher(
+						this.backend.profile!,
+						`apps/${appId}/board/${boardId}`,
+						{
+							method: "POST",
+							body: JSON.stringify({
+								commands: chunk,
+							}),
+						},
+						this.backend.auth,
+					);
+				}
+				await this.backend.clearOfflineSyncCommands(
+					commandSync.commandId,
+					appId,
+					boardId,
+				);
+				pushedBatches += 1;
+				console.log("Executed offline sync command:", commandSync.commandId);
+			} catch (e) {
+				// Keep the batch queued and stop: later batches must not overtake it.
+				console.warn(
+					"Failed to push offline sync command; keeping it queued:",
+					e,
+				);
+				failed = true;
+				break;
+			}
+		}
+
+		if (!failed && pushedBatches > 0) {
+			await this.recordLineageAfterPush(appId, boardId);
+		}
+
+		return { failed, pushedBatches };
+	}
+
+	async retryOfflineSync(
+		appId: string,
+		boardId: string,
+	): Promise<{ pushedBatches: number; remainingBatches: number }> {
+		const countRemaining = async () =>
+			(await this.backend.getOfflineSyncCommands(appId, boardId)).length;
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			toast.error("Cannot sync queued edits while offline or signed out.");
+			return { pushedBatches: 0, remainingBatches: await countRemaining() };
+		}
+
+		const { failed, pushedBatches } = await this.drainOfflineSyncQueue(
+			appId,
+			boardId,
+		);
+		const remainingBatches = await countRemaining();
+
+		if (failed) {
+			toast.error(
+				`Sync retry failed — ${remainingBatches} edit ${remainingBatches === 1 ? "batch is" : "batches are"} still queued.`,
+			);
+		} else if (pushedBatches > 0) {
+			toast.success("Queued edits synced to the server.");
+		} else {
+			toast.info("No queued edits to sync.");
+		}
+
+		return { pushedBatches, remainingBatches };
 	}
 
 	/**
@@ -1727,6 +1923,7 @@ export class BoardState implements IBoardState {
 		const pending = await this.backend.getOfflineSyncCommands(appId, boardId);
 		if (pending.length > 0) {
 			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
+			this.notifyEditsQueued(appId, boardId);
 			return;
 		}
 
@@ -1754,9 +1951,12 @@ export class BoardState implements IBoardState {
 					boardId,
 					chunks.slice(index).flat(),
 				);
+				this.notifyEditsQueued(appId, boardId);
 				return;
 			}
 		}
+
+		await this.recordLineageAfterPush(appId, boardId);
 	}
 
 	async executeCommand(

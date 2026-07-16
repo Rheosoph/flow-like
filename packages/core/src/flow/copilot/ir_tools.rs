@@ -806,11 +806,41 @@ impl FlowIrDraftStore {
         binding: Option<&FlowIrAcceptanceBinding>,
         draft: &StoredFlowScriptDraft,
     ) {
+        self.reopen_request_acceptance_contract_scope(
+            binding,
+            &draft.board_id,
+            &draft.request_acceptance_contract,
+            &draft.request_identity,
+        );
+    }
+
+    /// Typed-IR twin of [`Self::reopen_request_acceptance_contract`]: a typed draft that dead-ends
+    /// on a base-revision conflict must hand its immutable request scope back to the binding so a
+    /// fresh draft in the same run can claim it.
+    fn reopen_typed_request_acceptance_contract(
+        &self,
+        binding: Option<&FlowIrAcceptanceBinding>,
+        draft: &StoredDraft,
+    ) {
+        self.reopen_request_acceptance_contract_scope(
+            binding,
+            &draft.board_id,
+            &draft.request_acceptance_contract,
+            &draft.request_identity,
+        );
+    }
+
+    fn reopen_request_acceptance_contract_scope(
+        &self,
+        binding: Option<&FlowIrAcceptanceBinding>,
+        board_id: &str,
+        contract: &RequestAcceptanceContract,
+        request_identity: &FlowIrRequestIdentity,
+    ) {
         let Some(binding) = binding else {
             return;
         };
-        if binding.board_id != draft.board_id || binding.request_identity != draft.request_identity
-        {
+        if binding.board_id != board_id || binding.request_identity != *request_identity {
             return;
         }
         let mut contracts = self
@@ -831,9 +861,9 @@ impl FlowIrDraftStore {
         contracts.insert(
             binding.id.clone(),
             PendingRequestAcceptanceContract {
-                board_id: draft.board_id.clone(),
-                contract: draft.request_acceptance_contract.clone(),
-                request_identity: draft.request_identity.clone(),
+                board_id: board_id.to_string(),
+                contract: contract.clone(),
+                request_identity: request_identity.clone(),
                 claimed_draft_id: None,
                 access_sequence,
             },
@@ -2111,6 +2141,8 @@ impl FlowIrDraftStore {
                 }
             };
             let Some(draft) = drafts.get_mut(draft_key) else {
+                drop(drafts);
+                self.release_missing_draft_claim(binding, draft_key);
                 return FlowIrDraftResponse::error(
                     "IR_DRAFT_MISSING",
                     "begin_flow_ir_draft must be called before upserting modules",
@@ -2410,6 +2442,8 @@ impl FlowIrDraftStore {
                 }
             };
             let Some(draft) = drafts.get_mut(draft_key) else {
+                drop(drafts);
+                self.release_missing_draft_claim(binding, draft_key);
                 return FlowIrDraftResponse::error(
                     "IR_DRAFT_MISSING",
                     "begin_flow_ir_draft must be called before updating its header or module set",
@@ -2878,6 +2912,8 @@ impl FlowIrDraftStore {
                 }
             };
             let Some(draft) = drafts.get_mut(draft_key) else {
+                drop(drafts);
+                self.release_missing_draft_claim(binding, draft_key);
                 return FlowIrDraftResponse::error(
                     "IR_DRAFT_MISSING",
                     "typed draft does not exist",
@@ -3096,6 +3132,8 @@ impl FlowIrDraftStore {
                 }
             };
             let Some(target) = drafts.get(draft_key) else {
+                drop(drafts);
+                self.release_missing_draft_claim(binding, draft_key);
                 return FlowIrCommitResult::error("IR_DRAFT_MISSING", "typed draft does not exist");
             };
             if let Some(denied) =
@@ -3156,6 +3194,7 @@ impl FlowIrDraftStore {
         }
         let current_fingerprint = board_fingerprint(board);
         if current_fingerprint != draft.base_fingerprint {
+            self.reopen_typed_request_acceptance_contract(binding, &draft);
             return FlowIrCommitResult::error(
                 "IR_BASE_REVISION_CONFLICT",
                 "the board changed after this draft began; start a new draft from the fresh board",
@@ -7079,6 +7118,11 @@ fn acceptance_contract_diagnostics(
     diagnostics
 }
 
+/// A call to a FlowScript/typed-IR function executes its body at the call site with params bound
+/// to the caller's arguments. Evidence collection therefore inlines reachable function bodies,
+/// cycle-guarded per call chain and capped at this depth.
+const MAX_APPROVAL_FUNCTION_INLINE_DEPTH: usize = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApprovalBranchSide {
     Then,
@@ -7137,7 +7181,7 @@ struct ApprovalIfEvidence {
     index: usize,
     path: String,
     condition: ApprovalValueEvidence,
-    condition_is_reference: bool,
+    condition_has_runtime_input: bool,
 }
 
 #[derive(Debug, Default)]
@@ -7227,7 +7271,9 @@ impl<'a> ApprovalEvidenceCollector<'a> {
                     let mut call_output = args_evidence.clone();
                     call_output.add_dynamic(id);
                     call_output.add_label(function);
-                    if visiting.insert(key.clone()) {
+                    if visiting.len() < MAX_APPROVAL_FUNCTION_INLINE_DEPTH
+                        && visiting.insert(key.clone())
+                    {
                         if let Some(module) = self.functions.get(&key).copied()
                             && let FlowIrModule::Function { params, steps, .. } = module
                         {
@@ -7265,10 +7311,7 @@ impl<'a> ApprovalEvidenceCollector<'a> {
                         index: if_index,
                         path: step_path.clone(),
                         condition: approval_value_evidence(condition, symbols, outputs),
-                        condition_is_reference: matches!(
-                            condition,
-                            FlowIrValue::Ref { .. } | FlowIrValue::Output { .. }
-                        ),
+                        condition_has_runtime_input: flow_ir_value_has_runtime_input(condition),
                     });
                     self.flow.next_sequence += 1;
 
@@ -7481,7 +7524,14 @@ fn approval_value_evidence(
             evidence
         }
         FlowIrValue::Output { step, pin, .. } => {
-            let mut evidence = outputs.get(&normalize(step)).cloned().unwrap_or_default();
+            // Field access on a bound function parameter, loop item, or local alias arrives here
+            // with the symbol name in `step`; fall back to its bound evidence so values threaded
+            // through helper layers keep their caller-side provenance.
+            let mut evidence = outputs
+                .get(&normalize(step))
+                .or_else(|| symbols.get(&normalize(step)))
+                .cloned()
+                .unwrap_or_default();
             evidence.add_dynamic(step);
             evidence.add_dynamic(pin);
             evidence
@@ -8087,10 +8137,24 @@ fn approval_has_customer_recipient(evidence: &ApprovalValueEvidence) -> bool {
 }
 
 fn approval_condition_valid(branch: &ApprovalIfEvidence) -> bool {
-    branch.condition_is_reference
+    branch.condition_has_runtime_input
         && approval_has_decision(&branch.condition)
         && approval_has_ticket(&branch.condition)
         && approval_has_version(&branch.condition)
+}
+
+/// Whether any runtime ref/output flows into this value. A comparison or boolean expression over
+/// runtime values (projected as an [`FlowIrValue::Object`]) is a runtime decision; a value built
+/// purely from literals is not.
+fn flow_ir_value_has_runtime_input(value: &FlowIrValue) -> bool {
+    match value {
+        FlowIrValue::Ref { .. } | FlowIrValue::Output { .. } => true,
+        FlowIrValue::List { items } => items.iter().any(flow_ir_value_has_runtime_input),
+        FlowIrValue::Object { fields } => fields
+            .iter()
+            .any(|field| flow_ir_value_has_runtime_input(&field.value)),
+        FlowIrValue::Literal { .. } | FlowIrValue::FunctionRefs { .. } => false,
+    }
 }
 
 fn approval_has_decision(evidence: &ApprovalValueEvidence) -> bool {
@@ -10821,6 +10885,108 @@ eventsSimple() {
         assert!(checked.diagnostics.is_empty());
     }
 
+    const LAYERED_APPROVAL_REQUEST: &str = "Bau mir eine App:\n\
+        1. IMAP-E-Mails abrufen -> Das Modell beantwortet die Supportanfrage\n\
+        2. Eine Freigabemail an example@example.com senden\n\
+        3. Bei Freigabe eine Kundenmail senden\n\
+        4. Sonst den Entwurf anpassen und erneut eine Freigabe anfragen";
+
+    /// Event -> processMailbox -> loop -> processOneMail -> sendFinal: every approval obligation
+    /// (reviewer send, sender-literal comparison, revision correlation, approved-branch customer
+    /// send, rejection-branch regenerate + re-send) lives inside helper functions.
+    fn layered_approval_flowscript(include_sender_check: bool) -> String {
+        let sender_check = if include_sender_check {
+            "mail.incomingSender == APPROVER_EMAIL && "
+        } else {
+            ""
+        };
+        format!(
+            r#"const APPROVER_EMAIL: string = "example@example.com"
+
+function sendFinal(mail: object, draft: object) {{
+    smtpEmailSend({{ to: mail.requesterEmail, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion }})
+}}
+function processOneMail(mail: object) {{
+    const draft = aiModelGenerate()
+    smtpEmailSend({{ to: APPROVER_EMAIL, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion }})
+    if ({sender_check}mail.reviewerApprovalDecision == "approved" && mail.ticketId == draft.ticketId && mail.draftVersion == draft.draftVersion) {{
+        sendFinal({{ mail: mail, draft: draft }})
+    }} else {{
+        const revised = aiModelGenerate({{ reviewerFeedback: mail.reviewerChangeFeedback }})
+        smtpEmailSend({{ to: APPROVER_EMAIL, body: revised.text, ticketId: mail.ticketId, draftVersion: revised.draftVersion }})
+    }}
+}}
+function processMailbox() {{
+    const fetched = imapEmailFetch()
+    for (const mail of forEach({{ array: fetched.mails }})) {{
+        processOneMail({{ mail: mail }})
+    }}
+}}
+eventsSimple() {{
+    processMailbox()
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn function_layered_approval_workflow_produces_no_false_notes() {
+        let contract = derive_request_acceptance_contract(LAYERED_APPROVAL_REQUEST);
+        let ast = flow_like_ast::parse(&layered_approval_flowscript(true))
+            .expect("layered source parses");
+        let diagnostics =
+            flowscript_acceptance_diagnostics(&contract, &ast, &approval_flowscript_catalog());
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
+    fn function_layered_approval_with_reviewer_passed_as_argument_produces_no_false_notes() {
+        let source = r#"function sendFinal(mail: object, draft: object) {
+    smtpEmailSend({ to: mail.requesterEmail, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion })
+}
+function processOneMail(mail: object, approver: string) {
+    const draft = aiModelGenerate()
+    smtpEmailSend({ to: approver, body: draft.text, ticketId: mail.ticketId, draftVersion: draft.draftVersion })
+    if (mail.incomingSender == approver && mail.reviewerApprovalDecision == "approved" && mail.ticketId == draft.ticketId && mail.draftVersion == draft.draftVersion) {
+        sendFinal({ mail: mail, draft: draft })
+    } else {
+        const revised = aiModelGenerate({ reviewerFeedback: mail.reviewerChangeFeedback })
+        smtpEmailSend({ to: approver, body: revised.text, ticketId: mail.ticketId, draftVersion: revised.draftVersion })
+    }
+}
+function processMailbox() {
+    const fetched = imapEmailFetch()
+    for (const mail of forEach({ array: fetched.mails })) {
+        processOneMail({ mail: mail, approver: "example@example.com" })
+    }
+}
+eventsSimple() {
+    processMailbox()
+}
+"#;
+        let contract = derive_request_acceptance_contract(LAYERED_APPROVAL_REQUEST);
+        let ast = flow_like_ast::parse(source).expect("layered source parses");
+        let diagnostics =
+            flowscript_acceptance_diagnostics(&contract, &ast, &approval_flowscript_catalog());
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
+    fn function_layered_approval_missing_sender_check_still_flags_the_sender() {
+        let contract = derive_request_acceptance_contract(LAYERED_APPROVAL_REQUEST);
+        let ast = flow_like_ast::parse(&layered_approval_flowscript(false))
+            .expect("layered source parses");
+        let diagnostics =
+            flowscript_acceptance_diagnostics(&contract, &ast, &approval_flowscript_catalog());
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == FlowScriptDiagnosticCode::FsRequestApprovalInvalid
+                    && diagnostic.message.contains("inbound sender")
+            }),
+            "{diagnostics:#?}"
+        );
+    }
+
     #[test]
     fn flowscript_patch_is_unique_and_revision_cas_safe() {
         let store = FlowIrDraftStore::new();
@@ -11599,6 +11765,188 @@ eventsSimple() {
                 .is_empty(),
             "the successful recovery write consumes the re-opened contract again"
         );
+    }
+
+    #[test]
+    fn typed_base_revision_conflict_reopens_the_request_binding_for_a_new_draft() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let request = "Send a Slack notification.";
+        let binding = store.bind_request_acceptance_contract(&board.id, request);
+        let started = store.begin_with_acceptance_binding(
+            &board,
+            &catalog(),
+            BeginFlowIrDraftArgs {
+                draft_id: "typed-conflict-first".to_string(),
+                replace_existing: false,
+                expected_modules: vec!["eventsSimple".to_string()],
+                capability_plan: capability_plan(),
+                mode: FlowIrDraftMode::Additive,
+                program: program("before"),
+            },
+            &binding,
+        );
+        assert_eq!(started.status, "draft_started", "{started:#?}");
+
+        let mut advanced = board.clone();
+        let mut variable = Variable::new("conflictMarker", VariableType::String, ValueType::Normal);
+        variable.id = "typed-conflict-marker".to_string();
+        advanced.variables.insert(variable.id.clone(), variable);
+        let conflicted = store.commit_with_acceptance_binding(
+            &advanced,
+            &catalog(),
+            CommitFlowIrDraftArgs {
+                draft_id: "typed-conflict-first".to_string(),
+                expected_revision: 0,
+                allow_deletions: false,
+                remove_node_ids: Vec::new(),
+                remove_variable_ids: Vec::new(),
+                remove_layer_ids: Vec::new(),
+                remove_comment_ids: Vec::new(),
+                use_best_candidate: false,
+            },
+            &binding,
+        );
+        assert_eq!(
+            conflicted.code.as_deref(),
+            Some("IR_BASE_REVISION_CONFLICT"),
+            "{conflicted:#?}"
+        );
+
+        // The re-opened contract still belongs to its immutable request: a binding carrying a
+        // different request identity must not claim it.
+        let forged = FlowIrAcceptanceBinding {
+            id: binding.id.clone(),
+            board_id: board.id.clone(),
+            criterion_count: binding.criterion_count,
+            request_identity: FlowIrRequestIdentity::from_raw_request(
+                "Build an unrelated database cleanup workflow.",
+            ),
+        };
+        let denied = store.begin_with_acceptance_binding(
+            &advanced,
+            &catalog(),
+            BeginFlowIrDraftArgs {
+                draft_id: "typed-conflict-foreign".to_string(),
+                replace_existing: false,
+                expected_modules: vec!["eventsSimple".to_string()],
+                capability_plan: capability_plan(),
+                mode: FlowIrDraftMode::Additive,
+                program: program("before"),
+            },
+            &forged,
+        );
+        assert_eq!(
+            denied.code.as_deref(),
+            Some("IR_ACCEPTANCE_BINDING_IDENTITY_MISMATCH"),
+            "{denied:#?}"
+        );
+
+        let recovered = store.begin_with_acceptance_binding(
+            &advanced,
+            &catalog(),
+            BeginFlowIrDraftArgs {
+                draft_id: "typed-conflict-second".to_string(),
+                replace_existing: false,
+                expected_modules: vec!["eventsSimple".to_string()],
+                capability_plan: capability_plan(),
+                mode: FlowIrDraftMode::Additive,
+                program: program("before"),
+            },
+            &binding,
+        );
+        assert_eq!(
+            recovered.status, "draft_started",
+            "a fresh typed draft under the same binding must succeed after the conflict: {recovered:#?}"
+        );
+        let drafts = store.drafts.lock().unwrap();
+        let first = drafts.get("typed-conflict-first").unwrap();
+        let second = drafts.get("typed-conflict-second").unwrap();
+        assert_eq!(second.request_identity, first.request_identity);
+        assert_eq!(
+            second.request_acceptance_contract, first.request_acceptance_contract,
+            "the recovered typed draft must carry the identical request contract"
+        );
+        assert!(!second.request_acceptance_contract.criteria.is_empty());
+        drop(drafts);
+        assert!(
+            store
+                .request_acceptance_contracts
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "the successful recovery begin consumes the re-opened contract again"
+        );
+    }
+
+    #[test]
+    fn typed_missing_draft_releases_the_request_claim_for_a_new_draft() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        store.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "occupied".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+        );
+        let binding =
+            store.bind_request_acceptance_contract(&board.id, "Send a Slack notification.");
+        let begin_args = |draft_id: &str| BeginFlowIrDraftArgs {
+            draft_id: draft_id.to_string(),
+            replace_existing: false,
+            expected_modules: vec!["eventsSimple".to_string()],
+            capability_plan: capability_plan(),
+            mode: FlowIrDraftMode::Additive,
+            program: program("before"),
+        };
+        // The claim succeeds before the id collision is detected, so the failed begin leaves the
+        // pending contract attached to a typed draft that was never stored.
+        let collided = store.begin_with_acceptance_binding(
+            &board,
+            &catalog(),
+            begin_args("occupied"),
+            &binding,
+        );
+        assert_eq!(
+            collided.code.as_deref(),
+            Some("IR_DRAFT_ID_COLLISION"),
+            "{collided:#?}"
+        );
+        let blocked = store.begin_with_acceptance_binding(
+            &board,
+            &catalog(),
+            begin_args("typed-recovery"),
+            &binding,
+        );
+        assert_eq!(
+            blocked.code.as_deref(),
+            Some("IR_ACCEPTANCE_BINDING_ALREADY_CLAIMED"),
+            "{blocked:#?}"
+        );
+        // Observing the missing typed draft releases exactly that stale claim.
+        let missing = store.validate_with_acceptance_binding(
+            &board,
+            &catalog(),
+            ValidateFlowIrDraftArgs {
+                draft_id: "occupied".to_string(),
+                include_header: false,
+                modules: Vec::new(),
+            },
+            &binding,
+        );
+        assert_eq!(missing.code.as_deref(), Some("IR_DRAFT_MISSING"));
+        let recovered = store.begin_with_acceptance_binding(
+            &board,
+            &catalog(),
+            begin_args("typed-recovery"),
+            &binding,
+        );
+        assert_eq!(recovered.status, "draft_started", "{recovered:#?}");
     }
 
     #[test]
