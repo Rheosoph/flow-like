@@ -951,7 +951,7 @@ impl Board {
         Ok(())
     }
 
-    /// PAGE FUNCTIONS
+    // PAGE FUNCTIONS
 
     fn pages_dir(&self) -> Path {
         self.board_dir.child(format!("_{}", self.id))
@@ -1226,7 +1226,7 @@ impl Board {
         Ok(elements)
     }
 
-    /// TEMPLATE FUNCTIONS
+    // TEMPLATE FUNCTIONS
 
     pub async fn save_as_template(
         &self,

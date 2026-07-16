@@ -1368,7 +1368,6 @@ impl InternalRun {
                 let profile = profile.clone();
                 let callback = callback.clone();
                 let stage = stage.clone();
-                let log_level = log_level;
                 let completion_callbacks = self.completion_callbacks.clone();
                 let credentials = self.credentials.clone();
                 let token = self.token.clone();
@@ -1377,7 +1376,6 @@ impl InternalRun {
                 let user_context = user_context.clone();
                 let has_node_errors = has_node_errors.clone();
                 let cancellation_token = cancellation_token.clone();
-                let cancellation_log_level = cancellation_log_level;
                 let cancellation_log_message = cancellation_log_message.clone();
 
                 async move {

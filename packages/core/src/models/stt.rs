@@ -1,5 +1,3 @@
-#![cfg(feature = "local-stt")]
-
 pub mod local;
 
 pub use local::{

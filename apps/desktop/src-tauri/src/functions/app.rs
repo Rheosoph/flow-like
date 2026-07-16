@@ -235,9 +235,6 @@ pub async fn upsert_board(
         board.version = board_data.version;
         board.viewport = board_data.viewport;
         board.page_ids = board_data.page_ids;
-        board.stage = board.stage.clone();
-        board.log_level = board.log_level;
-        board.execution_mode = board.execution_mode.clone();
         board.created_at = board_data.created_at;
         board.updated_at = board_data.updated_at;
         board.hash();
