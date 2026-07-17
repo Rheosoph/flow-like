@@ -101,6 +101,9 @@ function BubbleOrb({
 		const prog = vs && fs ? gl.createProgram() : null;
 		if (!vs || !fs || !prog) {
 			setFailed(true);
+			if (vs) gl.deleteShader(vs);
+			if (fs) gl.deleteShader(fs);
+			if (prog) gl.deleteProgram(prog);
 			return;
 		}
 		gl.attachShader(prog, vs);
@@ -108,6 +111,8 @@ function BubbleOrb({
 		gl.linkProgram(prog);
 		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
 			setFailed(true);
+			gl.deleteShader(vs);
+			gl.deleteShader(fs);
 			gl.deleteProgram(prog);
 			return;
 		}
@@ -573,7 +578,11 @@ export function TutorialDialog() {
 	const active = STEPS[step];
 
 	useEffect(() => {
-		setShowTutorial(localStorage.getItem("tutorial-finished-new") !== "true");
+		try {
+			setShowTutorial(localStorage.getItem("tutorial-finished-new") !== "true");
+		} catch {
+			setShowTutorial(true);
+		}
 	}, []);
 
 	// Lock background scroll while the tour is shown.
@@ -606,7 +615,11 @@ export function TutorialDialog() {
 	}, []);
 
 	const finish = useCallback(() => {
-		localStorage.setItem("tutorial-finished-new", "true");
+		try {
+			localStorage.setItem("tutorial-finished-new", "true");
+		} catch {
+			// storage may be unavailable (private mode / sandboxed iframe)
+		}
 		setShowTutorial(false);
 	}, []);
 
@@ -669,9 +682,10 @@ export function TutorialDialog() {
 			{/* Scrim */}
 			<button
 				type="button"
+				tabIndex={-1}
 				aria-label="Close getting started"
 				onClick={finish}
-				className={`absolute inset-0 bg-background/80 ${supportsBackdrop ? "backdrop-blur-md" : "bg-background/92"}`}
+				className={`absolute inset-0 ${supportsBackdrop ? "bg-background/80 backdrop-blur-md" : "bg-background/92"}`}
 			/>
 
 			{/* Panel */}
