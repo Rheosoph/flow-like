@@ -38,7 +38,9 @@ serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 uuid.workspace = true
 async-trait.workspace = true
-ndarray.workspace = true
+# linfa 0.8 is built against ndarray 0.16, so this catalog stays on 0.16 while the ort-backed
+# catalogs (onnx, model-provider) track the workspace ndarray 0.17 required by ort rc.12.
+ndarray = "0.16"
 
 # ML dependencies - only included when execute feature is enabled
 linfa = { version = "0.8.0", features = ["serde"], optional = true }

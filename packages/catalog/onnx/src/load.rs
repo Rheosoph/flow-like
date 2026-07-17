@@ -1,7 +1,7 @@
 /// # ONNX Model Loader Nodes
 use crate::onnx::NodeOnnxSession;
 #[cfg(feature = "execute")]
-use crate::onnx::execution_providers::{get_ep_info, is_initialized};
+use crate::onnx::execution_providers::{configured_session_builder, ensure_ort_initialized};
 #[cfg(feature = "execute")]
 use crate::onnx::{Provider, SessionWithMeta, classification, detection};
 use flow_like::flow::{
@@ -12,7 +12,7 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
-use flow_like_model_provider::ml::ort::session::{Input, Output, Session};
+use flow_like_model_provider::ml::ort::{session::Session, value::Outlet};
 #[cfg(feature = "execute")]
 use flow_like_types::json::json;
 use flow_like_types::{Result, anyhow, async_trait};
@@ -53,8 +53,8 @@ static YOLOV3_OUTPUTS: [&str; 3] = ["boxes", "scores", "indices"];
 #[cfg(feature = "execute")]
 /// Factory Function Matching ONNX Assets to a Provider-Frameworks
 pub fn determine_provider(session: &Session) -> Result<Provider> {
-    let input_names: Vec<&str> = session.inputs.iter().map(|i| i.name.as_str()).collect();
-    let output_names: Vec<&str> = session.outputs.iter().map(|o| o.name.as_str()).collect();
+    let input_names: Vec<&str> = session.inputs().iter().map(|i| i.name()).collect();
+    let output_names: Vec<&str> = session.outputs().iter().map(|o| o.name()).collect();
     if input_names == DFINE_INPUTS && output_names == DFINE_OUTPUTS {
         let (input_width, input_height) = determine_input_shape(session, "images")?;
         Ok(Provider::DfineLike(detection::DfineLike {
@@ -92,19 +92,19 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
         yolo_v3_outputs(session, &output_names)
     {
         let image_input = session
-            .inputs
+            .inputs()
             .iter()
             .find(|input| input_rank(input) == Some(4))
             .ok_or_else(|| anyhow!("Failed to determine YOLOv3 image input"))?;
         let shape_input = session
-            .inputs
+            .inputs()
             .iter()
-            .find(|input| input.name != image_input.name)
+            .find(|input| input.name() != image_input.name())
             .ok_or_else(|| anyhow!("Failed to determine YOLOv3 image-shape input"))?;
         let (input_width, input_height) = fixed_input_size(image_input, 416, InputLayout::Nchw);
         Ok(Provider::YoloV3Like(detection::YoloV3Like {
-            image_input_name: image_input.name.clone(),
-            image_shape_input_name: shape_input.name.clone(),
+            image_input_name: image_input.name().to_string(),
+            image_shape_input_name: shape_input.name().to_string(),
             boxes_output_name,
             scores_output_name,
             indices_output_name,
@@ -116,7 +116,7 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
         box_label_score_outputs(session, &output_names)
     {
         let input = session
-            .inputs
+            .inputs()
             .first()
             .ok_or_else(|| anyhow!("Object detection model has no inputs"))?;
         let rank = input_rank(input).unwrap_or(4);
@@ -132,7 +132,7 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
         };
         Ok(Provider::BoxLabelsScoresLike(
             detection::BoxLabelsScoresLike {
-                input_name: input.name.clone(),
+                input_name: input.name().to_string(),
                 boxes_output_name,
                 labels_output_name,
                 scores_output_name,
@@ -159,17 +159,17 @@ pub fn determine_provider(session: &Session) -> Result<Provider> {
         }))
     } else if is_retinanet_like(session) {
         let input = session
-            .inputs
+            .inputs()
             .first()
             .ok_or_else(|| anyhow!("RetinaNet model has no inputs"))?;
         let static_input_size = static_input_size(input, InputLayout::Nchw);
         let (input_width, input_height) = static_input_size.unwrap_or((0, 0));
         Ok(Provider::RetinaNetLike(detection::RetinaNetLike {
-            input_name: input.name.clone(),
+            input_name: input.name().to_string(),
             output_names: session
-                .outputs
+                .outputs()
                 .iter()
-                .map(|output| output.name.clone())
+                .map(|output| output.name().to_string())
                 .collect(),
             input_width,
             input_height,
@@ -195,29 +195,29 @@ fn has_outputs(output_names: &[&str], expected: &[&str]) -> bool {
 #[cfg(feature = "execute")]
 fn first_input_name(session: &Session) -> Result<String> {
     session
-        .inputs
+        .inputs()
         .first()
-        .map(|input| input.name.clone())
+        .map(|input| input.name().to_string())
         .ok_or_else(|| anyhow!("ONNX model has no inputs"))
 }
 
 #[cfg(feature = "execute")]
-fn input_rank(input: &Input) -> Option<usize> {
-    input.input_type.tensor_shape().map(|dims| dims.len())
+fn input_rank(input: &Outlet) -> Option<usize> {
+    input.dtype().tensor_shape().map(|dims| dims.len())
 }
 
 #[cfg(feature = "execute")]
-fn output_shape(output: &Output) -> Option<Vec<i64>> {
+fn output_shape(output: &Outlet) -> Option<Vec<i64>> {
     output
-        .output_type
+        .dtype()
         .tensor_shape()
         .map(|dims| dims.iter().copied().collect())
 }
 
 #[cfg(feature = "execute")]
-fn input_shape(input: &Input) -> Option<Vec<i64>> {
+fn input_shape(input: &Outlet) -> Option<Vec<i64>> {
     input
-        .input_type
+        .dtype()
         .tensor_shape()
         .map(|dims| dims.iter().copied().collect())
 }
@@ -229,12 +229,12 @@ enum InputLayout {
 }
 
 #[cfg(feature = "execute")]
-fn fixed_input_size(input: &Input, fallback: u32, layout: InputLayout) -> (u32, u32) {
+fn fixed_input_size(input: &Outlet, fallback: u32, layout: InputLayout) -> (u32, u32) {
     static_input_size(input, layout).unwrap_or((fallback, fallback))
 }
 
 #[cfg(feature = "execute")]
-fn static_input_size(input: &Input, layout: InputLayout) -> Option<(u32, u32)> {
+fn static_input_size(input: &Outlet, layout: InputLayout) -> Option<(u32, u32)> {
     let Some(shape) = input_shape(input) else {
         return None;
     };
@@ -256,8 +256,8 @@ fn positive_dim(dim: i64) -> Option<u32> {
 }
 
 #[cfg(feature = "execute")]
-fn numeric_input_kind(input: &Input) -> detection::YoloImageShapeKind {
-    let ty = format!("{:?}", input.input_type);
+fn numeric_input_kind(input: &Outlet) -> detection::YoloImageShapeKind {
+    let ty = format!("{:?}", input.dtype());
     if ty.contains("Int64") {
         detection::YoloImageShapeKind::I64
     } else if ty.contains("Int32") {
@@ -299,7 +299,7 @@ fn box_label_score_outputs(
         return Some(("boxes".into(), "labels".into(), "scores".into()));
     }
 
-    let boxes = session.outputs.iter().find(|output| {
+    let boxes = session.outputs().iter().find(|output| {
         is_float_output(output)
             && output_shape(output)
                 .map(|shape| {
@@ -308,29 +308,33 @@ fn box_label_score_outputs(
                 .unwrap_or(false)
     })?;
 
-    let labels = session.outputs.iter().find(|output| {
-        output.name != boxes.name
+    let labels = session.outputs().iter().find(|output| {
+        output.name() != boxes.name()
             && is_integer_output(output)
             && output_shape(output)
                 .map(|shape| shape.len() == 1 || shape.len() == 2)
                 .unwrap_or(false)
     })?;
 
-    let scores = session.outputs.iter().find(|output| {
-        output.name != boxes.name
-            && output.name != labels.name
+    let scores = session.outputs().iter().find(|output| {
+        output.name() != boxes.name()
+            && output.name() != labels.name()
             && is_float_output(output)
             && output_shape(output)
                 .map(|shape| shape.len() == 1 || shape.len() == 2)
                 .unwrap_or(false)
     })?;
 
-    Some((boxes.name.clone(), labels.name.clone(), scores.name.clone()))
+    Some((
+        boxes.name().to_string(),
+        labels.name().to_string(),
+        scores.name().to_string(),
+    ))
 }
 
 #[cfg(feature = "execute")]
 fn yolo_v3_outputs(session: &Session, output_names: &[&str]) -> Option<(String, String, String)> {
-    if session.inputs.len() < 2 {
+    if session.inputs().len() < 2 {
         return None;
     }
 
@@ -338,24 +342,24 @@ fn yolo_v3_outputs(session: &Session, output_names: &[&str]) -> Option<(String, 
         return Some(("boxes".into(), "scores".into(), "indices".into()));
     }
 
-    let boxes = session.outputs.iter().find(|output| {
+    let boxes = session.outputs().iter().find(|output| {
         is_float_output(output)
             && output_shape(output)
                 .map(|shape| shape.len() == 3 && shape.last().copied() == Some(4))
                 .unwrap_or(false)
     })?;
 
-    let scores = session.outputs.iter().find(|output| {
-        output.name != boxes.name
+    let scores = session.outputs().iter().find(|output| {
+        output.name() != boxes.name()
             && is_float_output(output)
             && output_shape(output)
                 .map(|shape| shape.len() == 3 && shape.get(1).copied() == Some(80))
                 .unwrap_or(false)
     })?;
 
-    let indices = session.outputs.iter().find(|output| {
-        output.name != boxes.name
-            && output.name != scores.name
+    let indices = session.outputs().iter().find(|output| {
+        output.name() != boxes.name()
+            && output.name() != scores.name()
             && is_integer_output(output)
             && output_shape(output)
                 .map(|shape| {
@@ -365,31 +369,31 @@ fn yolo_v3_outputs(session: &Session, output_names: &[&str]) -> Option<(String, 
     })?;
 
     Some((
-        boxes.name.clone(),
-        scores.name.clone(),
-        indices.name.clone(),
+        boxes.name().to_string(),
+        scores.name().to_string(),
+        indices.name().to_string(),
     ))
 }
 
 #[cfg(feature = "execute")]
-fn is_float_output(output: &Output) -> bool {
-    format!("{:?}", output.output_type).contains("Float")
+fn is_float_output(output: &Outlet) -> bool {
+    format!("{:?}", output.dtype()).contains("Float")
 }
 
 #[cfg(feature = "execute")]
-fn is_integer_output(output: &Output) -> bool {
-    let ty = format!("{:?}", output.output_type);
+fn is_integer_output(output: &Outlet) -> bool {
+    let ty = format!("{:?}", output.dtype());
     ty.contains("Int32") || ty.contains("Int64")
 }
 
 #[cfg(feature = "execute")]
 fn yolo_v2_grid_signature(session: &Session) -> Option<(String, String, u32, u32, usize)> {
-    if session.inputs.len() != 1 || session.outputs.len() != 1 {
+    if session.inputs().len() != 1 || session.outputs().len() != 1 {
         return None;
     }
 
-    let input = session.inputs.first()?;
-    let output = session.outputs.first()?;
+    let input = session.inputs().first()?;
+    let output = session.outputs().first()?;
     let shape = output_shape(output)?;
     if shape.len() != 4 || shape[2] != 13 || shape[3] != 13 {
         return None;
@@ -402,8 +406,8 @@ fn yolo_v2_grid_signature(session: &Session) -> Option<(String, String, u32, u32
     };
     let (input_width, input_height) = fixed_input_size(input, 416, InputLayout::Nchw);
     Some((
-        input.name.clone(),
-        output.name.clone(),
+        input.name().to_string(),
+        output.name().to_string(),
         input_width,
         input_height,
         num_classes,
@@ -412,11 +416,11 @@ fn yolo_v2_grid_signature(session: &Session) -> Option<(String, String, u32, u32
 
 #[cfg(feature = "execute")]
 fn yolo_v4_signature(session: &Session) -> Option<(String, u32, u32)> {
-    if session.inputs.len() != 1 {
+    if session.inputs().len() != 1 {
         return None;
     }
 
-    let has_yolov4_output = session.outputs.iter().any(|output| {
+    let has_yolov4_output = session.outputs().iter().any(|output| {
         output_shape(output)
             .map(|shape| shape.len() == 5 && shape[3] == 3 && shape[4] == 85)
             .unwrap_or(false)
@@ -425,16 +429,16 @@ fn yolo_v4_signature(session: &Session) -> Option<(String, u32, u32)> {
         return None;
     }
 
-    let input = session.inputs.first()?;
+    let input = session.inputs().first()?;
     let (input_width, input_height) = fixed_input_size(input, 416, InputLayout::Nhwc);
-    Some((input.name.clone(), input_width, input_height))
+    Some((input.name().to_string(), input_width, input_height))
 }
 
 #[cfg(feature = "execute")]
 fn is_retinanet_like(session: &Session) -> bool {
     let mut class_heads = 0usize;
     let mut box_heads = 0usize;
-    for output in &session.outputs {
+    for output in session.outputs() {
         let Some(shape) = output_shape(output) else {
             continue;
         };
@@ -453,9 +457,9 @@ fn is_retinanet_like(session: &Session) -> bool {
 
 #[cfg(feature = "execute")]
 pub fn determine_input_shape(session: &Session, input_name: &str) -> Result<(u32, u32)> {
-    for input in &session.inputs {
-        if input.name == input_name
-            && let Some(dims) = input.input_type.tensor_shape()
+    for input in session.inputs() {
+        if input.name() == input_name
+            && let Some(dims) = input.dtype().tensor_shape()
         {
             let d = dims.len();
             if d > 1 {
@@ -519,15 +523,15 @@ impl NodeLogic for LoadOnnxNode {
 
         node.add_output_pin(
             "accelerated",
-            "Accelerated",
-            "Whether GPU/NPU acceleration is active",
+            "Acceleration Configured",
+            "Whether a GPU/NPU execution provider was configured; individual sessions may still fall back to CPU",
             VariableType::Boolean,
         );
 
         node.add_output_pin(
             "active_provider",
-            "Active Provider",
-            "The execution provider(s) that are actually in use",
+            "Configured Providers",
+            "Execution providers configured in priority order, including CPU fallback",
             VariableType::String,
         );
 
@@ -544,16 +548,11 @@ impl NodeLogic for LoadOnnxNode {
             let path: FlowPath = context.evaluate_pin("path").await?;
             let bytes = path.get(context, false).await?;
 
-            // Get global EP info (ORT should be initialized at app startup)
-            let ep_info = get_ep_info().unwrap_or_default();
-            if !is_initialized() {
-                tracing::warn!(
-                    "ORT not initialized - call initialize_ort() at app startup for GPU acceleration"
-                );
-            }
+            // Idempotent and cheap after the first call. This also protects embedded/library
+            // callers that reach the node without going through a FlowLike runtime bootstrap.
+            let ep_info = ensure_ort_initialized()?;
 
-            // Build session - it will use the globally configured EPs
-            let session = Session::builder()?.commit_from_memory(&bytes)?;
+            let session = configured_session_builder()?.commit_from_memory(&bytes)?;
 
             // wrap ONNX session with provider metadata
             // we try to determine the here to fail fast in case of incompatible ONNX assets

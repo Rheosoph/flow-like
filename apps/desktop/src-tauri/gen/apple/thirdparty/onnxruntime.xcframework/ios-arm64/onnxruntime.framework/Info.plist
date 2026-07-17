@@ -9,12 +9,13 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.microsoft.onnxruntime</string>
 	<key>CFBundleVersion</key>
-	<string>1.22.0</string>
+	<string>1.24.3</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.22.0</string>
+	<string>1.24.3</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundlePackageType</key>
 	<string>FMWK</string>
-</dict>
+    <key>MinimumOSVersion</key>
+    <string>15.1</string></dict>
 </plist>

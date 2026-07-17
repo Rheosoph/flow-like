@@ -68,6 +68,12 @@ export interface IChatProps {
 	onRespondToInteraction?: (interactionId: string, value: any) => void;
 	/** Rendered pinned between the message feed and the input — e.g. tool approval prompts. */
 	inlinePrompt?: React.ReactNode;
+	/** App id owning the chat — needed to render + trigger embedded widgets. */
+	appId?: string;
+	/** Board id of the chat event — target for widget action workflows. */
+	boardId?: string;
+	/** Chat event id — forwarded to embedded widget surfaces. */
+	eventId?: string;
 }
 
 export interface IChatRef {
@@ -92,6 +98,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			activeInteractions,
 			onRespondToInteraction,
 			inlinePrompt,
+			appId,
+			boardId,
+			eventId,
 		},
 		ref,
 	) => {
@@ -466,6 +475,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								<MessageComponent
 									message={item.data as IMessage}
 									onMessageUpdate={onMessageUpdate}
+									appId={appId}
+									boardId={boardId}
+									eventId={eventId}
 								/>
 							</div>
 						))}
@@ -497,7 +509,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								className="w-full max-w-5xl px-4"
 								key={`msg-${currentMessage.id}`}
 							>
-								<MessageComponent loading message={currentMessage} />
+								<MessageComponent
+									loading
+									message={currentMessage}
+									appId={appId}
+									boardId={boardId}
+									eventId={eventId}
+								/>
 							</div>
 						)}
 						{interactionItems.map((item) =>

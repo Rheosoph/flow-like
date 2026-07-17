@@ -19,6 +19,7 @@ fn side_car_path(command: &PathBuf) -> flow_like_types::Result<PathBuf> {
     return Ok(executable.join(command));
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn set_library_path(cmd: &mut StdCommand, binary_path: &std::path::Path) {
     if let Some(dir) = binary_path.parent() {
         #[cfg(target_os = "macos")]
@@ -27,6 +28,9 @@ fn set_library_path(cmd: &mut StdCommand, binary_path: &std::path::Path) {
         cmd.env("LD_LIBRARY_PATH", dir);
     }
 }
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn set_library_path(_: &mut StdCommand, _: &std::path::Path) {}
 
 #[cfg(windows)]
 fn hide_sidecar_window(cmd: &mut StdCommand) {
@@ -39,6 +43,7 @@ fn hide_sidecar_window(cmd: &mut StdCommand) {
 #[cfg(not(windows))]
 fn hide_sidecar_window(_: &mut StdCommand) {}
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn set_library_path_async(cmd: &mut Command, binary_path: &std::path::Path) {
     if let Some(dir) = binary_path.parent() {
         #[cfg(target_os = "macos")]
@@ -47,6 +52,9 @@ fn set_library_path_async(cmd: &mut Command, binary_path: &std::path::Path) {
         cmd.env("LD_LIBRARY_PATH", dir);
     }
 }
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn set_library_path_async(_: &mut Command, _: &std::path::Path) {}
 
 /// Creates a sidecar command to run a script or executable.
 /// If `with_bash` is true, it will run the command using `bash`. Important for some Systems and binaries

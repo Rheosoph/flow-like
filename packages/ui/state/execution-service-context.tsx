@@ -90,7 +90,7 @@ function allPackagesTrusted(packageIds: string[]): boolean {
 	return packageIds.every((id) => hasWasmConsent("package", id));
 }
 
-interface ExecutionServiceContextValue {
+export interface ExecutionServiceContextValue {
 	/**
 	 * Execute a board with runtime variables check.
 	 * If runtime-configured variables are missing, shows a prompt.
@@ -159,7 +159,7 @@ interface ExecutionServiceContextValue {
 	) => Promise<ILogMetadata | undefined>;
 }
 
-const ExecutionServiceContext = createContext<
+export const ExecutionServiceContext = createContext<
 	ExecutionServiceContextValue | undefined
 >(undefined);
 

@@ -24,7 +24,7 @@ pub use onnx::*;
 
 // Re-export submodules for external access
 pub use onnx::{
-    audio, batch, classification, depth, detection, face, feature, load, ner, ocr, pose,
+    audio, batch, classification, depth, detection, face, face_id, feature, load, ner, ocr, pose,
     segmentation,
 };
 

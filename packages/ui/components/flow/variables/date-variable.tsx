@@ -1,6 +1,6 @@
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Calendar } from "../../../components/ui/calendar";
 import { cn } from "../../../lib";
 import type { IVariable } from "../../../lib/schema/flow/variable";
@@ -49,8 +49,16 @@ export function DateVariable({
 	const [timeValue, setTimeValue] = useState<string>(
 		format(defaultDate, "HH:mm"),
 	);
+	// Only emit on user-driven changes; emitting on mount would spuriously mark
+	// the variable dirty and rewrite a minute-truncated value on every open.
+	const didMountRef = useRef(false);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: emit only on user-driven selected/timeValue changes; adding variable/onChange would re-emit every parent re-render
 	useEffect(() => {
+		if (!didMountRef.current) {
+			didMountRef.current = true;
+			return;
+		}
 		if (!selected) return;
 
 		const [hours, minutes] = timeValue

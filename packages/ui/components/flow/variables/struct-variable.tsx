@@ -221,6 +221,25 @@ const getDefaultFromSchema = (schema: JsonSchema): Record<string, unknown> => {
 	return result;
 };
 
+/**
+ * Build the schema-derived default object for a pin/variable schema string.
+ * Used by array editors to seed newly added items. Refs inside properties
+ * resolve against the original root schema (which carries `$defs`).
+ */
+export const buildSchemaDefaults = (
+	schemaStr: string | null | undefined,
+	refs: Record<string, string> | undefined,
+): Record<string, unknown> => {
+	const schema = parseSchema(schemaStr, refs);
+	if (!schema) return {};
+	const resolved = resolveSchema(schema, schema);
+	const result: Record<string, unknown> = {};
+	for (const [key, prop] of Object.entries(resolved.properties ?? {})) {
+		result[key] = defaultForSchema(prop, schema);
+	}
+	return result;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 

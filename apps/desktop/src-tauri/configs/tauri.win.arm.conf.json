@@ -6,6 +6,7 @@
 			"binaries/win/arm/llama-server.exe"
 		],
 		"resources": {
+			"binaries/win/arm/DirectML.dll-aarch64-pc-windows-msvc": "DirectML.dll",
 			"binaries/win/arm/ggml-base.dll-aarch64-pc-windows-msvc": "ggml-base.dll",
 			"binaries/win/arm/ggml-cpu.dll-aarch64-pc-windows-msvc": "ggml-cpu.dll",
 			"binaries/win/arm/ggml-rpc.dll-aarch64-pc-windows-msvc": "ggml-rpc.dll",

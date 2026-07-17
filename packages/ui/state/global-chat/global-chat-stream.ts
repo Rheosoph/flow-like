@@ -210,6 +210,8 @@ export async function driveGlobalChatStream({
 		responseMessage.app_refs =
 			state.pendingAppRefs.length > 0 ? [...state.pendingAppRefs] : undefined;
 		responseMessage.files = state.subAttachments;
+		responseMessage.widgets =
+			state.subWidgets.length > 0 ? state.subWidgets : undefined;
 		const combinedUsage = mergeUsageStats(acc.usageStats, state.subUsageStats);
 		responseMessage.usage_stats =
 			combinedUsage.length > 0 ? combinedUsage : undefined;
@@ -382,6 +384,10 @@ export async function driveGlobalChatStream({
 					? [...finalState.pendingAppRefs]
 					: undefined;
 			responseMessage.files = finalState.subAttachments;
+			responseMessage.widgets =
+				finalState.subWidgets.length > 0
+					? [...finalState.subWidgets]
+					: undefined;
 			const finalUsage = mergeUsageStats(
 				acc.usageStats,
 				finalState.subUsageStats,
@@ -399,6 +405,7 @@ export async function driveGlobalChatStream({
 			finalState.clearSubPlanSteps();
 			finalState.clearSubAttachments();
 			finalState.clearSubUsageStats();
+			finalState.clearSubWidgets();
 		}
 
 		// Always release the stream regardless of commit vs. kept-checkpoint.

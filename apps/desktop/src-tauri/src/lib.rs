@@ -508,6 +508,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            let storage_cleanup_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                flow_like_types::tokio::time::sleep(Duration::from_secs(2)).await;
+                if let Err(error) = functions::storage_management::run_configured_log_cleanup(
+                    &storage_cleanup_handle,
+                )
+                .await
+                {
+                    tracing::warn!(error = %error, "Automatic local log cleanup failed");
+                }
+            });
+
             // Start the WasmEngine epoch ticker inside the async runtime
             if let Some(wasm_state) = app.try_state::<state::TauriWasmEngineState>() {
                 let engine = wasm_state.0.clone();
@@ -848,6 +860,10 @@ pub fn run() {
             functions::system::get_system_info,
             functions::system::list_apps_for_file,
             functions::system::open_file_with_app,
+            functions::storage_management::get_local_storage_overview,
+            functions::storage_management::set_log_retention_policy,
+            functions::storage_management::run_log_cleanup,
+            functions::storage_management::delete_local_storage_items,
             #[cfg(desktop)]
             tray::tray_update_state,
             #[cfg(not(desktop))]

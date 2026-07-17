@@ -3876,6 +3876,7 @@ export function FlowBoard({
 				existingValues={existingRuntimeVars}
 				onSave={handleRuntimeVarsSave}
 				onCancel={handleRuntimeVarsCancel}
+				refs={board.data?.refs}
 			/>
 
 			{/* WASM Sandbox Warning */}

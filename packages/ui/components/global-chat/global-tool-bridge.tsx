@@ -3625,6 +3625,24 @@ Completion contract: build complete helper logic first and add the Event entry l
 						publishSubSteps();
 					};
 
+					// Widgets the app pushes must keep executing against THEIR board once
+					// embedded in the global chat — tag each with the pushing run's
+					// context so widget actions route to the original use-case board.
+					const widgetOrigin = {
+						appId,
+						boardId: chatEvent.board_id,
+						eventId: chatEvent.id,
+					};
+					const publishWidgets = () => {
+						const widgets = responseMessage.widgets;
+						if (!widgets?.length) return;
+						useGlobalChatStore
+							.getState()
+							.addSubWidgets(
+								widgets.map((widget) => ({ ...widget, origin: widgetOrigin })),
+							);
+					};
+
 					try {
 						await backend.eventState.executeEvent(
 							appId,
@@ -3656,6 +3674,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										);
 									}
 								}
+								publishWidgets();
 								// Surface app-chat dialogs (single/multiple choice, form) inline so the
 								// user can answer — respond_to_interaction unblocks the app workflow
 								// while this call_app_chat tool call is still awaiting its result.
@@ -3713,6 +3732,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 					const forwardedFileNames = forwardedAttachments.map((file) =>
 						typeof file === "string" ? file : (file.name ?? file.url),
 					);
+					const embeddedWidgetCount = responseMessage.widgets?.length ?? 0;
+
 					referenceApp(appId);
 					return {
 						status: "ok",
@@ -3722,6 +3743,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 							forwardedFileNames.length > 0 ? forwardedFileNames : undefined,
 						attachments:
 							attachmentSummaries.length > 0 ? attachmentSummaries : undefined,
+						embedded_widgets:
+							embeddedWidgetCount > 0 ? embeddedWidgetCount : undefined,
+						note:
+							embeddedWidgetCount > 0
+								? `The app pushed ${embeddedWidgetCount} interactive widget(s) that are already embedded and visible in your reply — do not describe or re-create their content, just reference them.`
+								: undefined,
 					};
 				}
 				default:

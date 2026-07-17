@@ -6,6 +6,7 @@
 			"binaries/win/x64/llama-server"
 		],
 		"resources": {
+			"binaries/win/x64/DirectML.dll-x86_64-pc-windows-msvc": "DirectML.dll",
 			"binaries/win/x64/ggml-base.dll": "ggml-base.dll",
 			"binaries/win/x64/ggml-cpu-alderlake.dll": "ggml-cpu-alderlake.dll",
 			"binaries/win/x64/ggml-cpu-cannonlake.dll": "ggml-cpu-cannonlake.dll",

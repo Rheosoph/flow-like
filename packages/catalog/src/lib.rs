@@ -367,8 +367,8 @@ pub fn get_catalog_without(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic
 ///
 /// fn main() {
 ///     let info = initialize();
-///     println!("Active providers: {:?}", info.onnx_providers);
-///     println!("GPU acceleration: {}", info.onnx_accelerated);
+///     println!("Configured providers: {:?}", info.onnx_providers);
+///     println!("Acceleration configured: {}", info.onnx_accelerated);
 /// }
 /// ```
 #[cfg(feature = "execute")]
@@ -390,9 +390,9 @@ pub fn initialize() -> InitInfo {
 #[cfg(feature = "execute")]
 #[derive(Debug, Clone, Default)]
 pub struct InitInfo {
-    /// Active ONNX execution providers
+    /// Configured ONNX execution providers, including CPU fallback
     pub onnx_providers: Vec<String>,
-    /// Whether ONNX has GPU/NPU acceleration
+    /// Whether ONNX has a GPU/NPU provider configured
     pub onnx_accelerated: bool,
     /// Any warnings during ONNX initialization
     pub onnx_warnings: Vec<String>,
