@@ -111,6 +111,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
                 "No database selected on the 'Database' pin"
             ));
         }
+        LanceDBVectorStore::validate_table_name(&table)?;
 
         let access_mode = if write_access { "write" } else { "read" };
         // "::" cannot appear in table names, so this key can never collide

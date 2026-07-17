@@ -10,6 +10,7 @@ export * from "./learn/types";
 export * from "./date";
 export * from "./app-category";
 export * from "./event-type-label";
+export * from "./add-app-to-profile";
 export * from "./llm/history";
 export * from "./llm/response";
 export * from "./platform";

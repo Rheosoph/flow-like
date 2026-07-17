@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
+import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
@@ -334,12 +335,7 @@ export function UsePageContent({
 	const isRoutePending = Boolean(appId && resolvedRouteKey !== routeKey);
 
 	useEffect(() => {
-		if (
-			!appId ||
-			embedded ||
-			redirectCheckPending ||
-			!shouldRedirectToStore
-		) {
+		if (!appId || embedded || redirectCheckPending || !shouldRedirectToStore) {
 			return;
 		}
 
@@ -448,10 +444,14 @@ export function UsePageContent({
 	const pageEventId = pageEvent?.id ?? null;
 	const pageId = pageEvent?.default_page_id ?? null;
 	const pageBoardId = pageEvent?.board_id || undefined;
+	const pageBoardVersion = useMemo(
+		() => normalizeBoardVersion(pageEvent?.board_version),
+		[pageEvent?.board_version],
+	);
 
 	const pageKey =
 		appId && pageEventId && pageId
-			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}`
+			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
 	const isPagePending = Boolean(pageKey && resolvedPageKey !== pageKey);
 
@@ -463,7 +463,12 @@ export function UsePageContent({
 		const target = activeEvent;
 		if (!appId || !target?.board_id) return;
 		backend.boardState
-			.getBoard(appId, target.board_id, undefined, true)
+			.getBoard(
+				appId,
+				target.board_id,
+				normalizeBoardVersion(target.board_version),
+				true,
+			)
 			.catch(() => {});
 	}, [appId, activeEvent, backend.boardState]);
 

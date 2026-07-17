@@ -225,9 +225,8 @@ impl NodeLogic for UdpReceiveNode {
                             })
                             .map(|(_, p)| p.clone())
                             .collect();
-                        for pin in pins {
+                        if let Some(pin) = pins.first() {
                             pin.set_value(json!(text.as_ref())).await;
-                            break;
                         }
                     } else if single_byte {
                         let pins: Vec<_> = ctx
@@ -242,9 +241,8 @@ impl NodeLogic for UdpReceiveNode {
                             })
                             .map(|(_, p)| p.clone())
                             .collect();
-                        for pin in pins {
+                        if let Some(pin) = pins.first() {
                             pin.set_value(json!(data.clone())).await;
-                            break;
                         }
                     } else {
                         let payload_pins: Vec<_> = ctx

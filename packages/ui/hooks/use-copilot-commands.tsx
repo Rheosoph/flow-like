@@ -19,6 +19,8 @@ import {
 	upsertLayerCommand,
 	upsertVariableCommand,
 } from "../lib";
+import { expectedCopilotPinType } from "../lib/copilot-command-pins";
+import { flowPilotDebugLog } from "../lib/flowpilot-debug";
 import { toastError } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import {
@@ -28,6 +30,7 @@ import {
 	ILayerType,
 	type IVariable,
 } from "../lib/schema/flow/board";
+import type { PlaceholderPinDef } from "../lib/schema/flow/copilot";
 import { type INode, IVariableType } from "../lib/schema/flow/node";
 import { type IPin, IPinType } from "../lib/schema/flow/pin";
 import type { ILayer } from "../lib/schema/flow/run";
@@ -57,6 +60,11 @@ type UpdateNodePinCommand = Extract<
 	{ command_type: "UpdateNodePin" }
 >;
 
+type PinConnectionCommand = Extract<
+	BoardCommand,
+	{ command_type: "ConnectPins" | "DisconnectPins" }
+>;
+
 function cloneNode(node: INode): INode {
 	return JSON.parse(JSON.stringify(node)) as INode;
 }
@@ -84,16 +92,7 @@ function layerTypeFromCommand(value?: string): ILayerType {
 }
 
 function pinsFromDefs(
-	pinDefs:
-		| Array<{
-				name: string;
-				friendly_name: string;
-				description?: string;
-				pin_type: "Input" | "Output";
-				data_type: string;
-				value_type?: string;
-		  }>
-		| undefined,
+	pinDefs: PlaceholderPinDef[] | undefined,
 	includeDefaultExec: boolean,
 ): Record<string, IPin> {
 	const pins: Record<string, IPin> = {};
@@ -106,6 +105,8 @@ function pinsFromDefs(
 		dataType: IVariableType,
 		valueType = IValueType.Normal,
 		description = "",
+		schema?: string,
+		enforceSchema = false,
 	) => {
 		const pin: IPin = {
 			id: createId(),
@@ -119,6 +120,8 @@ function pinsFromDefs(
 			value_type: valueType,
 			data_type: dataType,
 			default_value: null,
+			schema: schema ?? null,
+			options: enforceSchema ? { enforce_schema: true } : null,
 		};
 		pins[pin.id] = pin;
 	};
@@ -136,10 +139,68 @@ function pinsFromDefs(
 			pinDef.data_type as IVariableType,
 			(pinDef.value_type as IValueType) || IValueType.Normal,
 			pinDef.description || "",
+			pinDef.schema,
+			pinDef.enforce_schema ?? false,
 		);
 	}
 
 	return pins;
+}
+
+function appendAdditionalNodePins(
+	node: INode,
+	pinDefs: PlaceholderPinDef[] | undefined,
+): INode {
+	if (!pinDefs?.length) return node;
+	if (node.name !== "events_generic") {
+		throw new Error(
+			"Additional catalog-node pins are only supported on events_generic",
+		);
+	}
+
+	const pins = { ...node.pins };
+	let outputCount = Object.values(pins).filter(
+		(pin) => pin.pin_type === IPinType.Output,
+	).length;
+
+	for (const pinDef of pinDefs) {
+		if (
+			pinDef.pin_type !== IPinType.Output ||
+			pinDef.data_type === IVariableType.Execution
+		) {
+			throw new Error(
+				`Additional events_generic pin "${pinDef.name}" must be a non-execution Output`,
+			);
+		}
+		if (
+			Object.values(pins).some(
+				(pin) => pin.pin_type === IPinType.Output && pin.name === pinDef.name,
+			)
+		) {
+			throw new Error(
+				`events_generic already has an output pin named "${pinDef.name}"`,
+			);
+		}
+
+		const id = createId();
+		pins[id] = {
+			id,
+			name: pinDef.name,
+			friendly_name: pinDef.friendly_name,
+			description: pinDef.description ?? "",
+			pin_type: IPinType.Output,
+			data_type: pinDef.data_type as IVariableType,
+			value_type: (pinDef.value_type as IValueType) ?? IValueType.Normal,
+			index: ++outputCount,
+			connected_to: [],
+			depends_on: [],
+			default_value: null,
+			schema: pinDef.schema ?? null,
+			options: pinDef.enforce_schema ? { enforce_schema: true } : null,
+		};
+	}
+
+	return { ...node, pins };
 }
 
 function isSetupLayerCommand(cmd: BoardCommand): boolean {
@@ -253,6 +314,11 @@ export function useCopilotCommands({
 }: UseCopilotCommandsProps) {
 	const handleExecuteCommands = useCallback(
 		async (commands: BoardCommand[]) => {
+			const pendingConnectionCommands = commands.filter(
+				(command): command is PinConnectionCommand =>
+					command.command_type === "ConnectPins" ||
+					command.command_type === "DisconnectPins",
+			);
 			let latestBoardNodes: Record<string, INode> = board.data?.nodes ?? {};
 			let latestBoardLayers: Record<string, ILayer> = board.data?.layers ?? {};
 			let latestBoardVariables: Record<string, IVariable> =
@@ -377,13 +443,17 @@ export function useCopilotCommands({
 				pinRef: string,
 				expectedPinType?: IPinType,
 			): string | undefined => {
+				const effectivePinType = expectedCopilotPinType(
+					expectedPinType,
+					Boolean(resolveLayer(nodeRef)),
+				);
 				const nodePinMap = pinIdMap.get(nodeRef);
 				if (nodePinMap) {
 					const node = resolveNode(nodeRef);
 					for (const lookupKey of pinLookupKeys(pinRef)) {
 						const mappedPinId = nodePinMap.get(lookupKey);
 						const mappedPin = mappedPinId ? node?.pins[mappedPinId] : undefined;
-						if (pinMatchesDirection(mappedPin, expectedPinType)) {
+						if (pinMatchesDirection(mappedPin, effectivePinType)) {
 							return mappedPinId;
 						}
 					}
@@ -393,11 +463,11 @@ export function useCopilotCommands({
 				if (!node) return undefined;
 
 				const pinById = node.pins[pinRef];
-				if (pinMatchesDirection(pinById, expectedPinType)) return pinRef;
+				if (pinMatchesDirection(pinById, effectivePinType)) return pinRef;
 
 				for (const pin of Object.values(node.pins)) {
 					if (
-						pinMatchesDirection(pin, expectedPinType) &&
+						pinMatchesDirection(pin, effectivePinType) &&
 						pinMatchesRef(pin, pinRef)
 					) {
 						return pin.id;
@@ -405,11 +475,11 @@ export function useCopilotCommands({
 				}
 
 				if (
-					expectedPinType !== IPinType.Input &&
+					effectivePinType !== IPinType.Input &&
 					DEFAULT_OUTPUT_PIN_ALIASES.has(pinRef.toLowerCase())
 				) {
 					const defaultOutputPin = defaultDataOutputPin(node);
-					if (pinMatchesDirection(defaultOutputPin, expectedPinType)) {
+					if (pinMatchesDirection(defaultOutputPin, effectivePinType)) {
 						return defaultOutputPin.id;
 					}
 				}
@@ -541,10 +611,13 @@ export function useCopilotCommands({
 				const flush = async () => {
 					if (batch.length === 0) return;
 					batchIndex++;
-					console.log(`[FlowPilot] Executing ${label} batch ${batchIndex}`, {
-						commands: batch.length,
-						approxBytes: batchBytes,
-					});
+					flowPilotDebugLog(
+						`[FlowPilot] Executing ${label} batch ${batchIndex}`,
+						{
+							commands: batch.length,
+							approxBytes: batchBytes,
+						},
+					);
 					const result = await executeCommands([...batch], {
 						refetch: options.refetch ?? false,
 					});
@@ -609,7 +682,7 @@ export function useCopilotCommands({
 						[cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId],
 						layerAsNode(layer),
 					);
-					console.log(`[CreateLayer] Queued "${cmd.name}" (${layerId})`, {
+					flowPilotDebugLog(`[CreateLayer] Queued "${cmd.name}" (${layerId})`, {
 						refs: [cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId].filter(
 							Boolean,
 						),
@@ -637,11 +710,14 @@ export function useCopilotCommands({
 					const targetLayer = resolveLayerId(cmd.target_layer) ?? currentLayer;
 
 					const result = addNodeCommand({
-						node: {
-							...cloneNode(catalogNode),
-							coordinates: [position.x, position.y, 0],
-							friendly_name: cmd.friendly_name ?? catalogNode.friendly_name,
-						},
+						node: appendAdditionalNodePins(
+							{
+								...cloneNode(catalogNode),
+								coordinates: [position.x, position.y, 0],
+								friendly_name: cmd.friendly_name ?? catalogNode.friendly_name,
+							},
+							cmd.additional_pins,
+						),
 						current_layer: targetLayer,
 					});
 					const plannedNode = result.node as INode;
@@ -652,7 +728,7 @@ export function useCopilotCommands({
 						plannedNode,
 					);
 
-					console.log(
+					flowPilotDebugLog(
 						`[AddNode] Queued "${plannedNode.friendly_name}" (${plannedNode.id})`,
 						{
 							refs: [
@@ -701,11 +777,14 @@ export function useCopilotCommands({
 						[cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId],
 						placeholderNode,
 					);
-					console.log(`[AddPlaceholder] Queued "${cmd.name}" (${layerId})`, {
-						refs: [cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId].filter(
-							Boolean,
-						),
-					});
+					flowPilotDebugLog(
+						`[AddPlaceholder] Queued "${cmd.name}" (${layerId})`,
+						{
+							refs: [cmd.ref_id, `$${nodeIndex}`, cmd.name, layerId].filter(
+								Boolean,
+							),
+						},
+					);
 					nodeIndex++;
 				}
 			}
@@ -743,7 +822,9 @@ export function useCopilotCommands({
 					runtime_configured: cmd.runtime_configured ?? false,
 				};
 
-				console.log(`[CreateVariable] Queued ${cmd.name} (${cmd.data_type})`);
+				flowPilotDebugLog(
+					`[CreateVariable] Queued ${cmd.name} (${cmd.data_type})`,
+				);
 				variableCreateCommands.push(
 					upsertVariableCommand({ variable, layer_id: targetLayer }),
 				);
@@ -819,7 +900,7 @@ export function useCopilotCommands({
 					encodedValue = Array.from(encoded);
 				}
 
-				console.log(
+				flowPilotDebugLog(
 					`[UpdateNodePin] Queued ${node.friendly_name}.${cmd.pin_id} = ${JSON.stringify(cmd.value)}`,
 					{ encodedValue, originalValue: cmd.value, pinId },
 				);
@@ -930,116 +1011,11 @@ export function useCopilotCommands({
 						break;
 					}
 
-					case "ConnectPins": {
-						const fromNode = resolveNode(cmd.from_node);
-						const toNode = resolveNode(cmd.to_node);
-
-						if (!fromNode || !toNode) {
-							const missingNode = !fromNode ? cmd.from_node : cmd.to_node;
-							console.error(
-								`[ConnectPins] FAILED - Node not found: "${missingNode}"`,
-								{
-									command: cmd,
-									availableNodeRefs: Array.from(nodeReferenceMap.keys()),
-									boardNodeIds: Object.keys(latestBoardNodes),
-								},
-							);
-							toastError(
-								`Connection failed: Node "${missingNode}" not found`,
-								<XIcon />,
-							);
-							break;
-						}
-
-						const fromPinId = resolvePinId(
-							cmd.from_node,
-							cmd.from_pin,
-							IPinType.Output,
-						);
-						const toPinId = resolvePinId(
-							cmd.to_node,
-							cmd.to_pin,
-							IPinType.Input,
-						);
-
-						if (!fromPinId || !toPinId) {
-							const missingPin = !fromPinId
-								? `${fromNode.friendly_name}.${cmd.from_pin}`
-								: `${toNode.friendly_name}.${cmd.to_pin}`;
-							console.error(
-								`[ConnectPins] FAILED - Pin not found: "${missingPin}"`,
-								{
-									command: cmd,
-									from_pin_requested: cmd.from_pin,
-									to_pin_requested: cmd.to_pin,
-									fromPinId_resolved: fromPinId,
-									toPinId_resolved: toPinId,
-									fromNodePins: Object.values(fromNode.pins).map((p) => ({
-										name: p.name,
-										id: p.id,
-										type: p.pin_type,
-									})),
-									toNodePins: Object.values(toNode.pins).map((p) => ({
-										name: p.name,
-										id: p.id,
-										type: p.pin_type,
-									})),
-								},
-							);
-							toastError(
-								`Connection failed: Pin "${missingPin}" not found`,
-								<XIcon />,
-							);
-							break;
-						}
-
-						console.log(
-							`[ConnectPins] Queued ${fromNode.friendly_name}.${cmd.from_pin} -> ${toNode.friendly_name}.${cmd.to_pin}`,
-							{
-								from_node_id: fromNode.id,
-								from_pin_id: fromPinId,
-								to_node_id: toNode.id,
-								to_pin_id: toPinId,
-							},
-						);
-						remainingGenericCommands.push(
-							connectPinsCommand({
-								from_node: fromNode.id,
-								from_pin: fromPinId,
-								to_node: toNode.id,
-								to_pin: toPinId,
-							}),
-						);
+					case "ConnectPins":
+					case "DisconnectPins":
+						// Resolve connection endpoints only after all contract-changing board edits
+						// have executed and the dynamic node pins have been refreshed.
 						break;
-					}
-
-					case "DisconnectPins": {
-						const fromNode = resolveNode(cmd.from_node);
-						const toNode = resolveNode(cmd.to_node);
-						if (!fromNode || !toNode) break;
-
-						const fromPinId = resolvePinId(
-							cmd.from_node,
-							cmd.from_pin,
-							IPinType.Output,
-						);
-						const toPinId = resolvePinId(
-							cmd.to_node,
-							cmd.to_pin,
-							IPinType.Input,
-						);
-						if (!fromPinId || !toPinId) break;
-
-						remainingGenericCommands.push(
-							disconnectPinsCommand({
-								from_node: fromNode.id,
-								from_pin: fromPinId,
-								to_node: toNode.id,
-								to_pin: toPinId,
-							}),
-						);
-						break;
-					}
 
 					case "MoveNode": {
 						const node = resolveNode(cmd.node_id);
@@ -1112,7 +1088,7 @@ export function useCopilotCommands({
 								cmd.runtime_configured ?? existingVariable.runtime_configured,
 						};
 
-						console.log(
+						flowPilotDebugLog(
 							`[UpdateVariable] Queued ${existingVariable.name} = ${JSON.stringify(cmd.value)}`,
 						);
 						remainingGenericCommands.push(
@@ -1135,7 +1111,9 @@ export function useCopilotCommands({
 							break;
 						}
 
-						console.log(`[DeleteVariable] Queued ${variableToDelete.name}`);
+						flowPilotDebugLog(
+							`[DeleteVariable] Queued ${variableToDelete.name}`,
+						);
 						remainingGenericCommands.push(
 							removeVariableCommand({ variable: variableToDelete }),
 						);
@@ -1164,7 +1142,7 @@ export function useCopilotCommands({
 						const targetLayer =
 							resolveLayerId(cmd.target_layer) ?? currentLayer;
 
-						console.log(
+						flowPilotDebugLog(
 							`[CreateComment] Queued "${cmd.content.slice(0, 30)}..."`,
 						);
 						remainingGenericCommands.push(
@@ -1190,7 +1168,7 @@ export function useCopilotCommands({
 							color: cmd.color ?? existingComment.color,
 						};
 
-						console.log(
+						flowPilotDebugLog(
 							`[UpdateComment] Queued "${updatedComment.content.slice(0, 30)}..."`,
 						);
 						remainingGenericCommands.push(
@@ -1214,7 +1192,7 @@ export function useCopilotCommands({
 							break;
 						}
 
-						console.log(
+						flowPilotDebugLog(
 							`[DeleteComment] Queued "${commentToDelete.content.slice(0, 30)}..."`,
 						);
 						remainingGenericCommands.push(
@@ -1247,7 +1225,7 @@ export function useCopilotCommands({
 							parent_id: targetLayer,
 						};
 
-						console.log(
+						flowPilotDebugLog(
 							`[CreateLayer] Queued "${cmd.name}" with ${nodeIds.length} nodes`,
 						);
 						remainingGenericCommands.push(
@@ -1280,7 +1258,7 @@ export function useCopilotCommands({
 						const allNodeIds = [...new Set([...existingNodeIds, ...nodeIds])];
 						const updatedLayer = layerWithNodeIds(existingLayer, allNodeIds);
 
-						console.log(
+						flowPilotDebugLog(
 							`[AddNodesToLayer] Queued ${nodeIds.length} nodes for "${existingLayer.name}"`,
 						);
 						remainingGenericCommands.push(
@@ -1315,7 +1293,7 @@ export function useCopilotCommands({
 							remainingNodeIds,
 						);
 
-						console.log(
+						flowPilotDebugLog(
 							`[RemoveNodesFromLayer] Queued ${nodeIds.length} nodes from "${layerToUpdate.name}"`,
 						);
 						remainingGenericCommands.push(
@@ -1343,11 +1321,124 @@ export function useCopilotCommands({
 				refreshedAfterLastExecution = true;
 			}
 
+			// Setup edits (especially variable contract changes and configuration-driven dynamic
+			// pins) must settle before endpoint names are resolved. Otherwise a stale optimistic
+			// pin id can be queued in the same batch and then pruned by the post-update hook.
+			if (
+				pendingConnectionCommands.length > 0 &&
+				executedAnyCommands &&
+				!refreshedAfterLastExecution
+			) {
+				await refreshBoardSnapshot();
+				refreshedAfterLastExecution = true;
+			}
+
+			const connectionGenericCommands: IGenericCommand[] = [];
+			for (const cmd of pendingConnectionCommands) {
+				const fromNode = resolveNode(cmd.from_node);
+				const toNode = resolveNode(cmd.to_node);
+				if (!fromNode || !toNode) {
+					if (cmd.command_type === "ConnectPins") {
+						const missingNode = !fromNode ? cmd.from_node : cmd.to_node;
+						console.error(
+							`[ConnectPins] FAILED - Node not found: "${missingNode}"`,
+							{
+								command: cmd,
+								availableNodeRefs: Array.from(nodeReferenceMap.keys()),
+								boardNodeIds: Object.keys(latestBoardNodes),
+							},
+						);
+						toastError(
+							`Connection failed: Node "${missingNode}" not found`,
+							<XIcon />,
+						);
+					}
+					continue;
+				}
+
+				const fromPinId = resolvePinId(
+					cmd.from_node,
+					cmd.from_pin,
+					IPinType.Output,
+				);
+				const toPinId = resolvePinId(cmd.to_node, cmd.to_pin, IPinType.Input);
+				if (!fromPinId || !toPinId) {
+					if (cmd.command_type === "ConnectPins") {
+						const missingPin = !fromPinId
+							? `${fromNode.friendly_name}.${cmd.from_pin}`
+							: `${toNode.friendly_name}.${cmd.to_pin}`;
+						console.error(
+							`[ConnectPins] FAILED - Pin not found: "${missingPin}"`,
+							{
+								command: cmd,
+								from_pin_requested: cmd.from_pin,
+								to_pin_requested: cmd.to_pin,
+								fromPinId_resolved: fromPinId,
+								toPinId_resolved: toPinId,
+								fromNodePins: Object.values(fromNode.pins).map((pin) => ({
+									name: pin.name,
+									id: pin.id,
+									type: pin.pin_type,
+								})),
+								toNodePins: Object.values(toNode.pins).map((pin) => ({
+									name: pin.name,
+									id: pin.id,
+									type: pin.pin_type,
+								})),
+							},
+						);
+						toastError(
+							`Connection failed: Pin "${missingPin}" not found`,
+							<XIcon />,
+						);
+					}
+					continue;
+				}
+
+				if (cmd.command_type === "ConnectPins") {
+					flowPilotDebugLog(
+						`[ConnectPins] Queued ${fromNode.friendly_name}.${cmd.from_pin} -> ${toNode.friendly_name}.${cmd.to_pin}`,
+						{
+							from_node_id: fromNode.id,
+							from_pin_id: fromPinId,
+							to_node_id: toNode.id,
+							to_pin_id: toPinId,
+						},
+					);
+					connectionGenericCommands.push(
+						connectPinsCommand({
+							from_node: fromNode.id,
+							from_pin: fromPinId,
+							to_node: toNode.id,
+							to_pin: toPinId,
+						}),
+					);
+				} else {
+					connectionGenericCommands.push(
+						disconnectPinsCommand({
+							from_node: fromNode.id,
+							from_pin: fromPinId,
+							to_node: toNode.id,
+							to_pin: toPinId,
+						}),
+					);
+				}
+			}
+
+			const executedConnectionCommands = await executeInBatches(
+				connectionGenericCommands,
+				"connection",
+			);
+			if (executedConnectionCommands.length > 0) {
+				executedAnyCommands = true;
+				refreshedAfterLastExecution = false;
+			}
+
 			if (executedAnyCommands && !refreshedAfterLastExecution) {
 				await refreshBoardSnapshot();
 			}
 
-			console.log(
+			flowPilotDebugLog(
 				`[handleExecuteCommands] Completed ${commands.length} FlowPilot commands`,
 			);
 		},

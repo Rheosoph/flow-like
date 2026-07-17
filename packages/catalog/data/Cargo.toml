@@ -73,7 +73,7 @@ tracing.workspace = true
 schemars.workspace = true
 futures.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util"] }
 uuid.workspace = true
 async-trait.workspace = true
 base64.workspace = true

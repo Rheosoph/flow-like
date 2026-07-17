@@ -476,7 +476,7 @@ impl App {
         Ok(())
     }
 
-    /// EVENTS
+    // EVENTS
 
     pub async fn get_event_versions(
         &self,
@@ -538,7 +538,7 @@ impl App {
         Ok(())
     }
 
-    /// TEMPLATES
+    // TEMPLATES
 
     pub async fn upsert_template(
         &mut self,

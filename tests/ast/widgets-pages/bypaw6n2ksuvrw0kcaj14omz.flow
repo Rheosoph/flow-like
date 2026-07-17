@@ -343,7 +343,7 @@ showBriefing() {
                 a2uiSetElementText({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/content", text: sQLFilterDatabase.values[0].report })
                 a2uiShowScreen()
             }
-        } else { // exec_out
+        } else { // exec_out[#2]
             a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "exjwj78m9nryq5r8rfvmz7lt/article-grid" }).element })
             const openDatabase5 = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
             const createDataFusionSession3 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })

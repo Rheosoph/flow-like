@@ -189,7 +189,7 @@ const data = {
 	navDev: [
 		{
 			title: "Developer Tools",
-			url: "/developer/new",
+			url: "/developer",
 			icon: AnimatedCodeIcon,
 			isActive: false,
 		},

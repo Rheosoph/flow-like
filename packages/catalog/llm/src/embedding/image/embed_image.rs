@@ -100,7 +100,7 @@ impl NodeLogic for EmbedImageNode {
             bail!("Bit not an image embedding model");
         }
 
-        if embeddings.len() <= 0 {
+        if embeddings.is_empty() {
             bail!("Failed to embed the query");
         }
 

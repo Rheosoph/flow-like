@@ -15,6 +15,7 @@ import type {
 } from "./backend-state/app-state";
 import type { IBitState } from "./backend-state/bit-state";
 import type {
+	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
 	IBoardState,
 	IFlowScriptDiagnostic,
@@ -44,6 +45,7 @@ import type { IGraphState } from "./backend-state/graph-state";
 import type {
 	IHelperState,
 	ITemporaryFlowPath,
+	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 } from "./backend-state/helper-state";
 import type { IPageState } from "./backend-state/page-state";
@@ -82,6 +84,7 @@ export type {
 	IAppRouteState,
 	IBitState,
 	IBoardState,
+	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
 	IFlowScriptDiagnostic,
 	IEventState,
@@ -100,6 +103,7 @@ export type {
 	IAnalyticsState,
 	IGraphState,
 	ITemporaryFlowPath,
+	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 };
 

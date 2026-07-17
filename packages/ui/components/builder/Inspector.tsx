@@ -4316,7 +4316,6 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 									nodeId,
 									appId: actionContext?.appId,
 									boardId: actionContext?.boardId,
-									boardVersion: actionContext?.boardVersion,
 								},
 							})
 						}
@@ -4338,11 +4337,6 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 							)}
 						</SelectContent>
 					</Select>
-					{actionContext?.boardVersion && (
-						<p className="text-xs text-muted-foreground">
-							Uses board version v{actionContext.boardVersion.join(".")}
-						</p>
-					)}
 				</div>
 			)}
 		</div>

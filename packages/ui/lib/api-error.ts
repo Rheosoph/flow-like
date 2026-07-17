@@ -1,0 +1,95 @@
+export interface ApiResponseErrorOptions {
+	status: number;
+	statusText?: string;
+	message: string;
+	code?: string;
+	errorId?: string;
+	path?: string;
+}
+
+/**
+ * Error returned by the FlowLike API. Keep the public correlation metadata on
+ * the error object so background tasks, audit reports, and UI error boundaries
+ * can report the same server-side failure without parsing a console string.
+ */
+export class ApiResponseError extends Error {
+	readonly status: number;
+	readonly statusText?: string;
+	readonly code?: string;
+	readonly errorId?: string;
+	readonly path?: string;
+
+	constructor(options: ApiResponseErrorOptions) {
+		const label = options.code || `HTTP_${options.status}`;
+		const reference = options.errorId ? `; ref ${options.errorId}` : "";
+		super(`[${label}${reference}] ${options.message}`);
+		this.name = "ApiResponseError";
+		this.status = options.status;
+		this.statusText = options.statusText;
+		this.code = options.code;
+		this.errorId = options.errorId;
+		this.path = options.path;
+	}
+
+	toJSON() {
+		return {
+			name: this.name,
+			message: this.message,
+			status: this.status,
+			statusText: this.statusText,
+			code: this.code,
+			errorId: this.errorId,
+			path: this.path,
+		};
+	}
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function apiResponseError(
+	response: Pick<Response, "status" | "statusText" | "headers">,
+	body: string,
+	path?: string,
+): ApiResponseError {
+	let code: string | undefined;
+	let errorId: string | undefined;
+	let message: string | undefined;
+
+	if (body) {
+		try {
+			const parsed = JSON.parse(body) as Record<string, unknown>;
+			const nested =
+				parsed.error && typeof parsed.error === "object"
+					? (parsed.error as Record<string, unknown>)
+					: undefined;
+			code = nonEmptyString(nested?.code) ?? nonEmptyString(parsed.code);
+			errorId = nonEmptyString(nested?.id) ?? nonEmptyString(parsed.id);
+			message =
+				nonEmptyString(nested?.message) ??
+				nonEmptyString(parsed.message) ??
+				nonEmptyString(parsed.error);
+		} catch {
+			message = nonEmptyString(body);
+		}
+	}
+
+	errorId =
+		errorId ??
+		nonEmptyString(response.headers.get("x-error-id")) ??
+		nonEmptyString(response.headers.get("x-request-id"));
+	message =
+		message ||
+		nonEmptyString(response.statusText) ||
+		`HTTP request failed with status ${response.status}`;
+
+	return new ApiResponseError({
+		status: response.status,
+		statusText: nonEmptyString(response.statusText),
+		message,
+		code,
+		errorId,
+		path,
+	});
+}

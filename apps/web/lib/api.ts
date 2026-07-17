@@ -1,4 +1,8 @@
 import type { IProfile } from "@flow-like/flow-like-ui";
+import {
+	ApiResponseError,
+	apiResponseError,
+} from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -75,14 +79,20 @@ function ensureProtectedAppRouteAuth(
 	if (auth?.user?.access_token) return;
 
 	if (auth?.isAuthenticated) {
-		try {
-			auth.startSilentRenew();
-		} catch (error) {
-			console.warn("[Auth] Silent renew failed before API request:", error);
-		}
+		requestSilentRenew(auth, "before API request");
 	}
 
 	throw new Error(`Authentication token required for app request: ${path}`);
+}
+
+function requestSilentRenew(auth: AuthContextProps, reason: string): void {
+	try {
+		void Promise.resolve(auth.startSilentRenew()).catch((error) => {
+			console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+		});
+	} catch (error) {
+		console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+	}
 }
 
 export async function get<T>(
@@ -233,15 +243,20 @@ export async function fetcher<T>(
 
 		if (!response.ok) {
 			if (response.status === 401 && auth) {
-				auth?.startSilentRenew();
+				requestSilentRenew(auth, "after 401");
 			}
-			console.error(`Error fetching ${path}:`, response);
-			console.error(await response.text());
-			throw new Error(`HTTP error! status: ${response.status}`);
+			const errorText = await response.text();
+			const error = apiResponseError(response, errorText, path);
+			console.error(
+				`API error ${response.status} for ${path}:`,
+				error.toJSON(),
+			);
+			throw error;
 		}
 
 		return await response.json();
 	} catch (error) {
+		if (error instanceof ApiResponseError) throw error;
 		console.error(`Error fetching ${path}:`, error);
 		throw error;
 	}

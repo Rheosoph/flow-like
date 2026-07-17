@@ -138,7 +138,12 @@ const FlowNodeInner = memo(
 		const { pushCommand } = useUndoRedo(props.data.appId, props.data.boardId);
 		const { resolvedTheme } = useTheme();
 		const invalidate = useInvalidateInvoke();
-		const { currentMetadata, heatmapEnabled, heatmap } = useLogAggregation();
+		// Field selectors: subscribing to the whole log store re-renders every
+		// node on currentLogs/isLoading churn during runs — with hundreds of
+		// nodes that bypasses the memo comparator on every log tick.
+		const currentMetadata = useLogAggregation((state) => state.currentMetadata);
+		const heatmapEnabled = useLogAggregation((state) => state.heatmapEnabled);
+		const heatmap = useLogAggregation((state) => state.heatmap);
 
 		const [payload, setPayload] = useState({
 			open: false,

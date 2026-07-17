@@ -44,20 +44,12 @@ pub async fn upsert_page(
     Path((app_id, page_id)): Path<(String, String)>,
     Json(page_data): Json<PageUpsert>,
 ) -> Result<Json<Page>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
+    let sub = permission.sub()?;
 
     if page_id.is_empty() || app_id.is_empty() {
         return Err(ApiError::FORBIDDEN);
     }
-
-    let app = state
-        .scoped_app(
-            &user.sub()?,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
 
     let mut page = page_data.page;
     page.id = page_id.clone();
@@ -69,6 +61,17 @@ pub async fn upsert_page(
         .board_id
         .clone()
         .ok_or_else(|| ApiError::bad_request("page payload is missing `board_id`".to_string()))?;
+    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
+    let _mutation_guard = mutation_lock.lock().await;
+
+    let app = state
+        .scoped_app(
+            &sub,
+            &app_id,
+            &state,
+            crate::credentials::CredentialsAccess::EditApp,
+        )
+        .await?;
 
     let board = app
         .open_board(board_id.clone(), None, None)

@@ -20,6 +20,10 @@ import {
 	presignCanvasSettings,
 	presignPageAssets,
 } from "../../lib/presign-assets";
+import {
+	resolveEventBoardVersion,
+	withBoardVersion,
+} from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -124,6 +128,21 @@ function PageInterfaceInner({
 
 	const pageRoute = route || (config?.route as string);
 	const cacheSource = providedPage ?? page;
+	const activePageEvent = event ?? routeEvent;
+	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
+	const pageExecutionVersion = useMemo(
+		() =>
+			resolveEventBoardVersion(
+				activePageEvent?.board_id,
+				activePageEvent?.board_version,
+				pageExecutionBoardId,
+			),
+		[
+			activePageEvent?.board_id,
+			activePageEvent?.board_version,
+			pageExecutionBoardId,
+		],
+	);
 
 	useEffect(() => {
 		if (providedPage) {
@@ -534,7 +553,7 @@ function PageInterfaceInner({
 		) => {
 			if (!eventNodeId || !page) return;
 
-			const boardId = page.boardId || routeEvent?.board_id;
+			const boardId = pageExecutionBoardId;
 			if (!boardId) {
 				console.warn(`[PageInterface] No boardId for ${eventName} event`);
 				return;
@@ -552,17 +571,20 @@ function PageInterfaceInner({
 					});
 				}
 
-				const payload = {
-					id: eventNodeId,
-					payload: {
-						_elements: surfaceElements,
-						_route: pageRoute || "/",
-						_query_params: queryParams,
-						_page_id: page.id,
-						_event_type: eventName,
-						...extraPayload,
+				const payload = withBoardVersion(
+					{
+						id: eventNodeId,
+						payload: {
+							_elements: surfaceElements,
+							_route: pageRoute || "/",
+							_query_params: queryParams,
+							_page_id: page.id,
+							_event_type: eventName,
+							...extraPayload,
+						},
 					},
-				};
+					pageExecutionVersion,
+				);
 
 				// Use execution service if available (checks runtime variables)
 				const execFn =
@@ -585,7 +607,8 @@ function PageInterfaceInner({
 		[
 			appId,
 			page,
-			routeEvent,
+			pageExecutionBoardId,
+			pageExecutionVersion,
 			pageRoute,
 			backend.boardState,
 			executionService,
@@ -600,11 +623,11 @@ function PageInterfaceInner({
 		const executeOnLoadEvent = async () => {
 			if (!page?.onLoadEventId) return;
 
-			const boardId = page.boardId || routeEvent?.board_id;
+			const boardId = pageExecutionBoardId;
 			if (!boardId) return;
 
 			// Prevent duplicate execution for the same page + event combination
-			const executionKey = `${page.id}:${page.onLoadEventId}:${boardId}`;
+			const executionKey = `${page.id}:${page.onLoadEventId}:${boardId}:${pageExecutionVersion?.join(".") ?? "latest"}`;
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
@@ -622,7 +645,13 @@ function PageInterfaceInner({
 		};
 
 		executeOnLoadEvent();
-	}, [appId, page, routeEvent, executePageEvent]);
+	}, [
+		appId,
+		page,
+		pageExecutionBoardId,
+		pageExecutionVersion,
+		executePageEvent,
+	]);
 
 	// Execute onUnload event when page unmounts or user navigates away
 	useEffect(() => {
@@ -775,8 +804,9 @@ function PageInterfaceInner({
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}
-						boardId={page?.boardId || routeEvent?.board_id}
-						eventId={event?.id || routeEvent?.id}
+						boardId={pageExecutionBoardId}
+						boardVersion={pageExecutionVersion}
+						eventId={activePageEvent?.id}
 						onA2UIMessage={handleA2UIMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}

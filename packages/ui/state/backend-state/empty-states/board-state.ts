@@ -170,6 +170,7 @@ export class EmptyBoardState implements IBoardState {
 		boardId: string,
 		pageId: string,
 		wildcard?: boolean,
+		version?: [number, number, number],
 	): Promise<Record<string, unknown>> {
 		throw new Error("Method not implemented.");
 	}
@@ -186,11 +187,15 @@ export class EmptyBoardState implements IBoardState {
 		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
+		reasoningEffort?: string,
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
 		nested?: boolean,
 		readOnly?: boolean,
+		toolContext?: import("../../../lib/schema/copilot").CopilotToolContext,
+		_requestId?: string,
+		_rawUserPrompt?: string,
 		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		throw new Error("Method not implemented.");

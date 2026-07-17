@@ -4,6 +4,8 @@
  * used to validate and sanitize AI-generated components.
  */
 
+import { SEMANTIC_BOX_TAGS } from "../a2ui/semantic-box-tags";
+
 export type PropType =
 	| "string"
 	| "number"
@@ -106,16 +108,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		type: { type: "string", required: true },
 		as: {
 			type: "boundValue",
-			enum: [
-				"div",
-				"section",
-				"article",
-				"main",
-				"aside",
-				"header",
-				"footer",
-				"nav",
-			],
+			enum: [...SEMANTIC_BOX_TAGS],
 		},
 		children: { type: "children", required: false },
 	},
@@ -405,9 +398,15 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 	boundingBoxOverlay: {
 		type: { type: "string", required: true },
 		src: { type: "boundValue", required: true },
+		alt: { type: "boundValue" },
 		boxes: { type: "boundValue" },
-		editable: { type: "boundValue" },
 		showLabels: { type: "boundValue" },
+		showConfidence: { type: "boundValue" },
+		strokeWidth: { type: "boundValue" },
+		fontSize: { type: "boundValue" },
+		fit: { type: "boundValue", enum: ["contain", "cover", "fill"] },
+		normalized: { type: "boundValue" },
+		interactive: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
 

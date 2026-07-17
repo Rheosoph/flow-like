@@ -21,13 +21,22 @@ import {
 
 const PROVIDER_STORAGE_KEY = "flowpilot.hero.provider";
 const MODEL_STORAGE_KEY = "flowpilot.hero.model";
-// Persisted provider/model live in an in-memory store shared with /chat; hydrate
-// them from localStorage a single time per session so the user's pick sticks.
+const REASONING_EFFORT_STORAGE_KEY = "flowpilot.hero.reasoning-effort";
+// Persisted provider/model/effort live in an in-memory store shared with /chat;
+// hydrate them from localStorage once per session so the user's picks stick.
 let hydrated = false;
+
+export interface AgentReasoningEffortOption {
+	id: string;
+	name: string;
+	description?: string;
+}
 
 export interface AgentModelOption {
 	id: string;
 	name: string;
+	supportedReasoningEfforts?: AgentReasoningEffortOption[];
+	defaultReasoningEffort?: string;
 }
 
 export interface AgentProviderOption {
@@ -45,8 +54,10 @@ const AGENT_PROVIDERS: AgentProviderOption[] = [
 export function useAgentSelection() {
 	const provider = useGlobalChatStore((s) => s.provider);
 	const selectedModelId = useGlobalChatStore((s) => s.selectedModelId);
+	const reasoningEffort = useGlobalChatStore((s) => s.reasoningEffort);
 	const setProvider = useGlobalChatStore((s) => s.setProvider);
 	const setSelectedModelId = useGlobalChatStore((s) => s.setSelectedModelId);
+	const setReasoningEffort = useGlobalChatStore((s) => s.setReasoningEffort);
 
 	const backend = useBackend();
 	const settingsProfile = useInvoke(
@@ -90,12 +101,16 @@ export function useAgentSelection() {
 		try {
 			const savedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
 			const savedModel = localStorage.getItem(MODEL_STORAGE_KEY);
+			const savedReasoningEffort = localStorage.getItem(
+				REASONING_EFFORT_STORAGE_KEY,
+			);
 			if (savedProvider) setProvider(savedProvider as AIProvider);
 			if (savedModel) setSelectedModelId(savedModel);
+			if (savedReasoningEffort) setReasoningEffort(savedReasoningEffort);
 		} catch {
 			// storage unavailable — remembering is best-effort
 		}
-	}, [setProvider, setSelectedModelId]);
+	}, [setProvider, setReasoningEffort, setSelectedModelId]);
 
 	useEffect(() => {
 		try {
@@ -108,6 +123,11 @@ export function useAgentSelection() {
 			localStorage.setItem(MODEL_STORAGE_KEY, selectedModelId);
 		} catch {}
 	}, [selectedModelId]);
+	useEffect(() => {
+		try {
+			localStorage.setItem(REASONING_EFFORT_STORAGE_KEY, reasoningEffort);
+		} catch {}
+	}, [reasoningEffort]);
 
 	// Start the chosen agent backend so its models/auth load (mirrors the chat).
 	useEffect(() => {
@@ -132,6 +152,8 @@ export function useAgentSelection() {
 			return copilotSDK.models.map((model) => ({
 				id: model.id,
 				name: model.name || model.id,
+				supportedReasoningEfforts: model.supportedReasoningEfforts,
+				defaultReasoningEffort: model.defaultReasoningEffort,
 			}));
 		}
 		return bitsModels.map((bit) => ({
@@ -148,12 +170,49 @@ export function useAgentSelection() {
 		}
 	}, [models, selectedModelId, setSelectedModelId]);
 
+	const selectedModel = models.find((model) => model.id === selectedModelId);
+	const reasoningEffortOptions = selectedModel?.supportedReasoningEfforts ?? [];
+
+	// Model catalogs are loaded asynchronously. `undefined` means the temporary
+	// static fallback is still visible; an actual empty array means the backend
+	// advertised that this model has no configurable effort levels.
+	useEffect(() => {
+		if (!reasoningEffort) return;
+		if (!isAgent) {
+			setReasoningEffort("");
+			return;
+		}
+		if (
+			!selectedModel ||
+			selectedModel.supportedReasoningEfforts === undefined
+		) {
+			return;
+		}
+		if (
+			!selectedModel.supportedReasoningEfforts.some(
+				(option) => option.id === reasoningEffort,
+			)
+		) {
+			setReasoningEffort("");
+		}
+	}, [isAgent, reasoningEffort, selectedModel, setReasoningEffort]);
+
 	const providerLabel =
 		availableProviders.find((option) => option.id === normalizedProvider)
 			?.label ?? PROFILE_PROVIDER.label;
 	const selectedModelName =
-		models.find((model) => model.id === selectedModelId)?.name ??
+		selectedModel?.name ??
 		(isAgent && copilotSDK.isConnecting ? "Connecting…" : "Auto");
+	const defaultReasoningEffortName = reasoningEffortOptions.find(
+		(option) => option.id === selectedModel?.defaultReasoningEffort,
+	)?.name;
+	const autoReasoningEffortName = defaultReasoningEffortName
+		? `Auto (${defaultReasoningEffortName} default)`
+		: "Auto (provider default)";
+	const reasoningEffortName = reasoningEffort
+		? (reasoningEffortOptions.find((option) => option.id === reasoningEffort)
+				?.name ?? reasoningEffort)
+		: autoReasoningEffortName;
 
 	return {
 		provider: normalizedProvider,
@@ -164,7 +223,13 @@ export function useAgentSelection() {
 		providerLabel,
 		models,
 		selectedModelName,
+		reasoningEffort,
+		setReasoningEffort,
+		reasoningEffortOptions,
+		reasoningEffortName,
+		autoReasoningEffortName,
 		isAgent,
 		connecting: copilotSDK.isConnecting,
+		connected: copilotSDK.isRunning && isAgent,
 	};
 }

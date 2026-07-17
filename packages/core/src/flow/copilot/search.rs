@@ -367,10 +367,39 @@ fn companion_nodes_for(node_name: &str) -> Vec<String> {
             "email_imap_mark_seen".to_string(),
         ],
         "email_imap_inbox_fetch_mail" => vec![
+            "email_imap_connect".to_string(),
+            "mail_imap_inbox".to_string(),
+            "mail_imap_list".to_string(),
             "email_get_headers".to_string(),
+            "email_get_content".to_string(),
+            "mail_address_fields".to_string(),
             "email_imap_mark_seen".to_string(),
             "email_imap_move_message".to_string(),
         ],
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imap_fetch_companions_include_the_required_upstream_chain() {
+        let companions = companion_nodes_for("email_imap_inbox_fetch_mail");
+        for required in [
+            "email_imap_connect",
+            "mail_imap_inbox",
+            "mail_imap_list",
+            "email_get_headers",
+            "email_get_content",
+            "mail_address_fields",
+            "email_imap_mark_seen",
+        ] {
+            assert!(
+                companions.iter().any(|companion| companion == required),
+                "missing {required} in {companions:?}"
+            );
+        }
     }
 }

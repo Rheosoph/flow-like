@@ -354,12 +354,20 @@ fn catalog_node_key(node: &Node) -> (Option<String>, String) {
 #[tauri::command(async)]
 pub async fn get_execution_elements(
     handler: AppHandle,
+    app_id: String,
     board_id: String,
     page_id: String,
     wildcard: bool,
+    version: Option<(u32, u32, u32)>,
 ) -> Result<std::collections::HashMap<String, flow_like_types::Value>, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
-    let board = flow_like_state.get_board(&board_id, None)?;
+    let board = match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => board,
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state.clone()).await?;
+            app.open_board(board_id, Some(true), version).await?
+        }
+    };
     let board = board.lock().await;
 
     let elements = board

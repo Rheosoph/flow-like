@@ -201,6 +201,7 @@ async fn execute_internal(
     app_id: String,
     mut board_id: String,
     mut payload: RunPayload,
+    requested_version: Option<(u32, u32, u32)>,
     events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
     event_id: Option<String>,
     stream_state: bool,
@@ -212,7 +213,7 @@ async fn execute_internal(
     let mut event = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
-    let mut version = None;
+    let mut version = requested_version;
     let Ok(app) = App::load(app_id.clone(), flow_like_state.clone()).await else {
         return Err(TauriFunctionError::new("App not found"));
     };
@@ -415,7 +416,7 @@ async fn execute_internal(
         println!("Error flushing buffered sender: {}", err);
     }
 
-    if let Some(meta) = &meta {
+    let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
         let (db_fn, write_options) = {
             let guard = flow_like_state.config.read().await;
             (
@@ -423,21 +424,27 @@ async fn execute_internal(
                 guard.callbacks.lance_write_options.clone(),
             )
         };
-        let db_fn = db_fn
-            .as_ref()
-            .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-        let base_path = Path::from("runs").child(app_id).child(board_id);
-        let db = flow_like_state
-            .with_lance_session(db_fn(base_path.clone()))
-            .execute()
-            .await
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+        async {
+            let db_fn = db_fn
+                .as_ref()
+                .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
+            let base_path = Path::from("runs").child(app_id).child(board_id);
+            let db = flow_like_state
+                .with_lance_session(db_fn(base_path.clone()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+                })?;
+            meta.flush(db, write_options.as_ref()).await.map_err(|e| {
+                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
             })?;
-        meta.flush(db, write_options.as_ref())
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
-    }
+            Ok(())
+        }
+        .await
+    } else {
+        Ok(())
+    };
 
     // Report online local runs so backend analytics can count executions.
     if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
@@ -450,7 +457,11 @@ async fn execute_internal(
         });
     }
 
+    // Always release the finished run from the registry, even if flushing its
+    // logs failed. Otherwise the run stays flagged "in use" and its logs can
+    // never be deleted from storage management until the app restarts.
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);
+    flush_result?;
 
     Ok(meta)
 }
@@ -538,6 +549,7 @@ pub(crate) async fn execute_daemon_event(
             filter_secrets: Some(false),
         },
         None,
+        None,
         Some(event_id),
         false,
         credentials,
@@ -561,6 +573,7 @@ pub async fn execute_board(
     app_id: String,
     board_id: String,
     payload: RunPayload,
+    version: Option<(u32, u32, u32)>,
     stream_state: Option<bool>,
     events: tauri::ipc::Channel<Vec<InterComEvent>>,
     credentials: Option<SharedCredentials>,
@@ -573,6 +586,7 @@ pub async fn execute_board(
         app_id,
         board_id,
         payload,
+        version,
         Some(events),
         None,
         stream_state,
@@ -602,6 +616,7 @@ pub async fn execute_event(
         app_id,
         String::new(), // Will be read from the event anyways
         payload,
+        None,
         Some(events),
         Some(event_id),
         stream_state,

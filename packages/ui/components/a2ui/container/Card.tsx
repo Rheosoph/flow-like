@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, type KeyboardEvent, type MouseEvent } from "react";
 import { cn } from "../../../lib/utils";
 import {
 	CardContent,
@@ -38,6 +38,26 @@ export function A2UICard({
 	const clickable = useResolved<boolean>(component.clickable);
 
 	const children = resolveChildSpecs(component.children, resolve);
+	const triggerCardAction = () => {
+		void triggerAction(component.actions);
+	};
+	const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+		const target = event.target;
+		const interactiveTarget =
+			target instanceof Element
+				? target.closest(
+						"button, a, input, textarea, select, label, [role='button'], [role='link'], [data-card-action-stop]",
+					)
+				: null;
+		if (interactiveTarget && interactiveTarget !== event.currentTarget) return;
+		triggerCardAction();
+	};
+	const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+		if (event.target !== event.currentTarget) return;
+		if (event.key !== "Enter" && event.key !== " ") return;
+		event.preventDefault();
+		triggerCardAction();
+	};
 
 	return (
 		<ShadCard
@@ -47,13 +67,10 @@ export function A2UICard({
 				clickable && "cursor-pointer",
 			)}
 			style={resolveInlineStyle(style)}
-			onClick={
-				clickable
-					? () => {
-							void triggerAction(component.actions);
-						}
-					: undefined
-			}
+			onClick={clickable ? handleClick : undefined}
+			onKeyDown={clickable ? handleKeyDown : undefined}
+			role={clickable ? "button" : undefined}
+			tabIndex={clickable ? 0 : undefined}
 		>
 			{(title || description) && (
 				<CardHeader>

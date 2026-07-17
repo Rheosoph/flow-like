@@ -4,6 +4,24 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tauri::AppHandle;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LogRetentionSettings {
+    pub enabled: bool,
+    pub days: u32,
+    pub last_cleanup_ms: Option<u64>,
+}
+
+impl Default for LogRetentionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            days: 30,
+            last_cleanup_ms: None,
+        }
+    }
+}
+
 // Mobile-only centralized, sandbox-safe roots (iOS + Android).
 #[cfg(target_os = "ios")]
 fn app_data_root() -> PathBuf {
@@ -175,6 +193,8 @@ pub struct Settings {
     #[serde(default = "default_temporary_dir")]
     pub temporary_dir: PathBuf,
     pub user_dir: PathBuf,
+    #[serde(default)]
+    pub log_retention: LogRetentionSettings,
     pub profiles: HashMap<String, UserProfile>,
     pub updated: SystemTime,
     pub created: SystemTime,
@@ -238,6 +258,7 @@ impl Settings {
             logs_dir: default_logs_dir(),
             temporary_dir: default_temporary_dir(),
             user_dir,
+            log_retention: LogRetentionSettings::default(),
             profiles: HashMap::new(),
             created: SystemTime::now(),
             updated: SystemTime::now(),

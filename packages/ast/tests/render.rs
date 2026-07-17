@@ -34,6 +34,7 @@ fn renders_event_with_let_and_named_args() {
         events: vec![EventBlock {
             name: "onStart".to_string(),
             node_type: "events_simple_start".to_string(),
+            event_name: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -97,6 +98,7 @@ fn renders_if_else_branch() {
         events: vec![EventBlock {
             name: "onStart".to_string(),
             node_type: "start".to_string(),
+            event_name: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -155,6 +157,7 @@ fn expr_text(value: Expr) -> String {
         events: vec![EventBlock {
             name: "onTest".to_string(),
             node_type: "test".to_string(),
+            event_name: None,
             params: vec![],
             anchor: None,
             body: Block {
@@ -326,6 +329,7 @@ fn renders_return_statement() {
         events: vec![EventBlock {
             name: "writeReport".to_string(),
             node_type: "events_generic".to_string(),
+            event_name: None,
             params: vec![Param {
                 name: "title".to_string(),
                 ty: TypeRef::new("string", Container::Normal),
@@ -358,6 +362,7 @@ fn renders_event_with_multiple_params() {
         events: vec![EventBlock {
             name: "now".to_string(),
             node_type: "events_generic".to_string(),
+            event_name: None,
             params: vec![
                 Param {
                     name: "date".to_string(),

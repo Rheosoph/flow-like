@@ -1,6 +1,10 @@
 "use client";
 
-import { LoadingScreen, useBackend } from "@flow-like/flow-like-ui";
+import {
+	addAppToProfile,
+	LoadingScreen,
+	useBackend,
+} from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -17,22 +21,6 @@ export default function JoinPage() {
 	const hasAttempted = useRef(false);
 	const [attempt, setAttempt] = useState(0);
 
-	const addToProfile = useCallback(
-		async (appId: string) => {
-			try {
-				const profile = await backend.userState.getSettingsProfile();
-				await backend.userState.updateProfileApp(
-					profile,
-					{ app_id: appId, favorite: false, pinned: false },
-					"Upsert",
-				);
-			} catch (error) {
-				console.error("Failed to add app to profile:", error);
-			}
-		},
-		[backend],
-	);
-
 	const joinApp = useCallback(async () => {
 		if (!appId || !token) {
 			toast.error("Invalid invite link — missing app ID or token.");
@@ -44,7 +32,7 @@ export default function JoinPage() {
 			setAttempt(i);
 			try {
 				await backend.teamState.joinInviteLink(appId, token);
-				await addToProfile(appId);
+				await addAppToProfile(backend, appId);
 				toast.success("Successfully joined the app!");
 				router.push(`/use?id=${appId}`);
 				return;
@@ -61,7 +49,7 @@ export default function JoinPage() {
 				await new Promise((r) => setTimeout(r, delay));
 			}
 		}
-	}, [backend, appId, token, addToProfile, router]);
+	}, [backend, appId, token, router]);
 
 	useEffect(() => {
 		if (hasAttempted.current) return;

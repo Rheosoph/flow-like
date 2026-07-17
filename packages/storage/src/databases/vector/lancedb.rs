@@ -67,11 +67,17 @@ impl Cacheable for LanceDBVectorStore {
     }
 }
 impl LanceDBVectorStore {
+    pub fn validate_table_name(table_name: &str) -> Result<()> {
+        lancedb::utils::validate_table_name(table_name)?;
+        Ok(())
+    }
+
     pub fn table_name(&self) -> &str {
         &self.table_name
     }
 
     pub async fn new(path: PathBuf, table_name: String) -> Result<Self> {
+        Self::validate_table_name(&table_name)?;
         let connection = connect(path.to_str().unwrap()).execute().await.ok();
         let connection: Connection = connection.ok_or(anyhow!("Error connecting to LanceDB"))?;
 
@@ -86,7 +92,15 @@ impl LanceDBVectorStore {
     }
 
     pub async fn from_connection(connection: Connection, table_name: String) -> Self {
-        let table = connection.open_table(&table_name).execute().await.ok();
+        // LanceDB 0.27's listing backend unwraps table-name validation while
+        // deriving the table URI. Never call it with invalid input; callers
+        // that need a table will receive the existing "Table not initialized"
+        // error instead of taking down the runtime with a dependency panic.
+        let table = if Self::validate_table_name(&table_name).is_ok() {
+            connection.open_table(&table_name).execute().await.ok()
+        } else {
+            None
+        };
 
         LanceDBVectorStore {
             connection,
@@ -98,6 +112,62 @@ impl LanceDBVectorStore {
 
     pub fn set_write_options(&mut self, options: WriteOptions) {
         self.write_options = Some(options);
+    }
+
+    /// Create an empty table from an explicit schema, without inserting a seed row.
+    ///
+    /// Returns `true` when this call created the table and `false` when the table already
+    /// existed and `if_not_exists` was enabled.
+    pub async fn create_empty_table(
+        &mut self,
+        schema: Schema,
+        if_not_exists: bool,
+    ) -> Result<bool> {
+        let existed = self.table.is_some();
+        if existed && if_not_exists {
+            let existing_schema = self
+                .table
+                .as_ref()
+                .expect("table existence was checked")
+                .schema()
+                .await?;
+            if existing_schema.as_ref() == &schema {
+                return Ok(false);
+            }
+            return Err(anyhow!(
+                "Table '{}' already exists with a different schema",
+                self.table_name
+            ));
+        }
+
+        let requested_schema = Arc::new(schema);
+        let mut builder = self
+            .connection
+            .create_empty_table(&self.table_name, requested_schema.clone());
+        if let Some(opts) = &self.write_options {
+            builder = builder.write_options(opts.clone());
+        }
+
+        let (table, created) = match builder.execute().await {
+            Ok(table) => (table, true),
+            Err(lancedb::Error::TableAlreadyExists { .. }) if if_not_exists => {
+                let table = self
+                    .connection
+                    .open_table(&self.table_name)
+                    .execute()
+                    .await?;
+                (table, false)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !created && table.schema().await?.as_ref() != requested_schema.as_ref() {
+            return Err(anyhow!(
+                "Table '{}' already exists with a different schema",
+                self.table_name
+            ));
+        }
+        self.table = Some(table);
+        Ok(created)
     }
 
     /// Drop the whole table (data AND schema). Unlike `purge`, this allows the table to be
@@ -710,6 +780,7 @@ mod tests {
 
     use super::*;
     use crate::databases::vector::buffered::BufferedVectorStore;
+    use arrow_schema::Field;
     use flow_like_types::{
         create_id,
         json::{from_value, json, to_value},
@@ -736,6 +807,39 @@ mod tests {
         name: String,
         #[serde(default)]
         tag: Option<String>,
+    }
+
+    #[tokio::test]
+    async fn metadata_only_connection_lists_empty_database_without_opening_table() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let connection = connect(&test_path).execute().await?;
+        let db = LanceDBVectorStore::from_connection(connection, String::new()).await;
+
+        assert!(db.list_tables().await?.is_empty());
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_empty_table_is_strictly_idempotent() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let mut db =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "schema_test".to_string()).await?;
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+
+        assert!(db.create_empty_table(schema.clone(), true).await?);
+        assert_eq!(db.count(None).await?, 0);
+        assert!(!db.create_empty_table(schema, true).await?);
+
+        let mismatch = Schema::new(vec![Field::new("id", DataType::Utf8, false)]);
+        let error = db.create_empty_table(mismatch, true).await.unwrap_err();
+        assert!(error.to_string().contains("different schema"));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
     }
 
     #[tokio::test]
