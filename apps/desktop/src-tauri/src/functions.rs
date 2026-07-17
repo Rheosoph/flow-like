@@ -18,6 +18,7 @@ pub mod recording;
 pub mod registry;
 pub mod settings;
 pub mod statistics;
+pub mod storage_management;
 pub mod system;
 pub mod tmp;
 

@@ -4,6 +4,8 @@ import type { SurfaceComponent } from "../../a2ui/types";
 import { FlowPilot } from "../../flowpilot";
 
 export interface A2UICopilotProps {
+	/** App owning this UI surface; used for hosted-model usage attribution. */
+	appId?: string;
 	currentComponents: SurfaceComponent[];
 	selectedComponentIds: string[];
 	onComponentsGenerated?: (components: SurfaceComponent[]) => void;
@@ -28,6 +30,7 @@ export interface A2UICopilotProps {
  * configured for UI mode (agentMode="ui")
  */
 export function A2UICopilot({
+	appId,
 	currentComponents,
 	selectedComponentIds,
 	onComponentsGenerated,
@@ -39,6 +42,7 @@ export function A2UICopilot({
 	return (
 		<FlowPilot
 			agentMode="ui"
+			appId={appId}
 			title="FlowPilot"
 			className={className}
 			onClose={onClose}

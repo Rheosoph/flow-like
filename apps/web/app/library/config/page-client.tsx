@@ -42,6 +42,7 @@ import {
 	TooltipTrigger,
 	VerificationDialog,
 	formatAppCategory,
+	formatEventTypeLabel,
 	sanitizeImageUrl,
 	toastError,
 	useBackend,
@@ -644,7 +645,7 @@ export default function LibraryConfigPage() {
 														variant="outline"
 														className="text-xs shrink-0 ml-2"
 													>
-														{event.event_type}
+														{formatEventTypeLabel(event.event_type)}
 													</Badge>
 												</div>
 											))}
@@ -1216,6 +1217,7 @@ export default function LibraryConfigPage() {
 									}}
 								>
 									<TextEditor
+										appId={id ?? undefined}
 										editable={canEdit}
 										isMarkdown
 										initialContent={

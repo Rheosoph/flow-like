@@ -1,5 +1,6 @@
 pub mod buffered;
 pub mod lancedb;
+pub mod schema;
 use flow_like_types::{Result, Value, async_trait};
 
 #[async_trait]

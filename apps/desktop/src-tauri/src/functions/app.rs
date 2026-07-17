@@ -163,6 +163,7 @@ pub async fn upsert_board(
     execution_mode: Option<ExecutionMode>,
     board_data: Option<Board>,
     template: Option<Board>,
+    authoritative_updated_at: Option<std::time::SystemTime>,
 ) -> Result<(), TauriFunctionError> {
     let board_id = board_id.unwrap_or_else(create_id);
     let has_board_data = board_data.is_some();
@@ -201,7 +202,13 @@ pub async fn upsert_board(
                 board.hash();
             }
 
-            if !has_board_data {
+            if let Some(updated_at) = authoritative_updated_at {
+                // Online metadata writes already received their authoritative revision from the
+                // API. Re-stamping the cache with the desktop clock can make a stale local board
+                // look newer and cause remote synchronization to reject the real server state.
+                board.updated_at = updated_at;
+                board.hash();
+            } else if !has_board_data {
                 board.mark_changed();
             }
             board.save(None).await?;
@@ -228,9 +235,6 @@ pub async fn upsert_board(
         board.version = board_data.version;
         board.viewport = board_data.viewport;
         board.page_ids = board_data.page_ids;
-        board.stage = board.stage.clone();
-        board.log_level = board.log_level;
-        board.execution_mode = board.execution_mode.clone();
         board.created_at = board_data.created_at;
         board.updated_at = board_data.updated_at;
         board.hash();
@@ -256,7 +260,12 @@ pub async fn upsert_board(
     if let Some(execution_mode) = execution_mode {
         board.execution_mode = execution_mode;
     }
-    board.mark_changed();
+    if let Some(updated_at) = authoritative_updated_at {
+        board.updated_at = updated_at;
+        board.hash();
+    } else {
+        board.mark_changed();
+    }
     board.save(None).await?;
 
     Ok(())

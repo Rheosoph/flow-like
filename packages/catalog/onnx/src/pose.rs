@@ -429,8 +429,8 @@ impl NodeLogic for PoseEstimationNode {
 
                 // Determine input shape from session
                 let (input_width, input_height) =
-                    if let Some(input) = session_guard.session.inputs.first() {
-                        if let Some(dims) = input.input_type.tensor_shape() {
+                    if let Some(input) = session_guard.session.inputs().first() {
+                        if let Some(dims) = input.dtype().tensor_shape() {
                             let d = dims.len();
                             if d >= 2 {
                                 (dims[d - 1] as u32, dims[d - 2] as u32)

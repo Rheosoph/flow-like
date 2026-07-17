@@ -215,10 +215,7 @@ mod tests {
 
         let correlation = crate::correlation::CorrelationContext {
             trace_id: Some("run_root".to_string()),
-            keys: std::collections::HashMap::from([(
-                "order_id".to_string(),
-                "1234".to_string(),
-            )]),
+            keys: std::collections::HashMap::from([("order_id".to_string(), "1234".to_string())]),
         };
         let params = AppConnectionJwtParams {
             sub: Some("user123".to_string()),

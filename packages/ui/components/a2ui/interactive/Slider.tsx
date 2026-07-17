@@ -46,7 +46,9 @@ export function A2UISlider({
 				context: { value: newValue },
 			});
 		}
-		void triggerAction(component.actions, { value: newValue });
+	};
+	const handleCommit = (newValues: number[]) => {
+		void triggerAction(component.actions, { value: newValues[0] });
 	};
 
 	return (
@@ -67,6 +69,7 @@ export function A2UISlider({
 				step={step}
 				disabled={disabled}
 				onValueChange={handleChange}
+				onValueCommit={handleCommit}
 			/>
 		</div>
 	);

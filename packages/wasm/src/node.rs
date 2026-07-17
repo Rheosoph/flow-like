@@ -638,7 +638,9 @@ impl NodeLogic for WasmNodeLogic {
         host_state.model_context = Some(ModelContext {
             app_state: context.app_state.clone(),
             token: context.token.clone(),
+            cache: Some(context.cache.clone()),
         });
+        host_state.model_usage_context = context.model_usage_context();
 
         // Execute
         let exec_input = WasmExecutionInput {

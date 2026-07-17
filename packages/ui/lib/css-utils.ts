@@ -81,7 +81,19 @@ function sanitizeDeclaration(decl: Declaration): void {
 	}
 }
 
-function scopeSelector(selector: string, scope: string): string {
+export interface SafeScopedCssOptions {
+	/**
+	 * Treat `:root` as the scoped container instead of the document root.
+	 * This is useful for self-contained surfaces that expose CSS variables.
+	 */
+	scopeRoot?: boolean;
+}
+
+function scopeSelector(
+	selector: string,
+	scope: string,
+	options: SafeScopedCssOptions,
+): string {
 	const trimmed = selector.trim();
 
 	// Don't scope empty selectors
@@ -94,9 +106,10 @@ function scopeSelector(selector: string, scope: string): string {
 		return trimmed;
 	}
 
-	// Don't scope :root
-	if (trimmed === ":root") {
-		return trimmed;
+	// Self-contained surfaces can use :root as an ergonomic alias for their
+	// own root without leaking variables into the rest of the application.
+	if (trimmed.startsWith(":root")) {
+		return options.scopeRoot ? trimmed.replace(/^:root/, scope) : trimmed;
 	}
 
 	// Replace body/html with the scope selector itself (these are "root" selectors for the page)
@@ -113,17 +126,24 @@ function processRule(
 	rule: Rule,
 	scope: string,
 	insideKeyframes: boolean,
+	options: SafeScopedCssOptions,
 ): void {
 	// Sanitize all declarations
 	rule.walkDecls((decl) => sanitizeDeclaration(decl));
 
 	// Scope selectors (unless inside @keyframes)
 	if (!insideKeyframes) {
-		rule.selectors = rule.selectors.map((sel) => scopeSelector(sel, scope));
+		rule.selectors = rule.selectors.map((sel) =>
+			scopeSelector(sel, scope, options),
+		);
 	}
 }
 
-function processAtRule(atRule: AtRule, scope: string): void {
+function processAtRule(
+	atRule: AtRule,
+	scope: string,
+	options: SafeScopedCssOptions,
+): void {
 	const name = atRule.name.toLowerCase();
 
 	// Remove blocked at-rules
@@ -134,14 +154,14 @@ function processAtRule(atRule: AtRule, scope: string): void {
 
 	// For keyframes, sanitize but don't scope the internal selectors
 	if (name === "keyframes") {
-		atRule.walkRules((rule) => processRule(rule, scope, true));
+		atRule.walkRules((rule) => processRule(rule, scope, true, options));
 		atRule.walkDecls((decl) => sanitizeDeclaration(decl));
 		return;
 	}
 
 	// For media, supports, container, layer - scope the internal rules
 	if (["media", "supports", "container", "layer"].includes(name)) {
-		atRule.walkRules((rule) => processRule(rule, scope, false));
+		atRule.walkRules((rule) => processRule(rule, scope, false, options));
 		atRule.walkDecls((decl) => sanitizeDeclaration(decl));
 		return;
 	}
@@ -156,11 +176,13 @@ function processAtRule(atRule: AtRule, scope: string): void {
  *
  * @param css - The CSS string to process
  * @param scopeSelector - The attribute selector for scoping (e.g., '[data-page-id="abc"]')
+ * @param options - Optional scoping behavior for self-contained surfaces
  * @returns Safe, scoped CSS ready for injection. Returns empty string on parse errors.
  */
 export function safeScopedCss(
 	css: string,
 	scopeSelector: string,
+	options: SafeScopedCssOptions = {},
 ): SanitizedCSS {
 	if (!css || typeof css !== "string") {
 		return "" as SanitizedCSS;
@@ -212,14 +234,14 @@ export function safeScopedCss(
 		if (rule.parent?.type === "atrule") {
 			return;
 		}
-		processRule(rule, scopeSelector, false);
+		processRule(rule, scopeSelector, false, options);
 	});
 
 	// Process at-rules
 	root.walkAtRules((atRule) => {
 		// Only process top-level at-rules
 		if (atRule.parent?.type === "root") {
-			processAtRule(atRule, scopeSelector);
+			processAtRule(atRule, scopeSelector, options);
 		}
 	});
 

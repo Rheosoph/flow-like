@@ -30,7 +30,27 @@ export interface IAddColumnPayload {
 	sql_expression: string;
 }
 
+export interface IDatabaseSchemaField {
+	name: string;
+	type: string;
+	nullable?: boolean;
+	vector_size?: number;
+}
+
+export interface ICreateTableResult {
+	table_name: string;
+	created: boolean;
+	if_not_exists: boolean;
+}
+
 export interface IDatabaseState {
+	createTable(
+		appId: string,
+		tableName: string,
+		fields: IDatabaseSchemaField[],
+		ifNotExists?: boolean,
+		userScoped?: boolean,
+	): Promise<ICreateTableResult>;
 	buildIndex(
 		appId: string,
 		tableName: string,

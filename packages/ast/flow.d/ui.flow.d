@@ -224,6 +224,18 @@ declare function a2uiGetButtonLoading({ elementRef: Struct }): bool;
 declare function a2uiSetButtonLabel({ elementRef: Struct, label: string }): void;
 
 
+// === UI/Elements/Calendar ===
+
+/**
+ * Add, remove, or update calendar events and view configuration
+ * @param elementRef — Reference to the calendar element
+ * @param operation (optional) — What operation to perform
+ * @param events — Array of events
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiUpdateCalendar({ elementRef: Struct, operation?: string, events: Struct[] }): void;
+
+
 // === UI/Elements/Charts ===
 
 /**
@@ -425,6 +437,18 @@ declare function a2uiUpdateScene3d({ elementRef: Struct, property?: string, came
  * @impure has side effects / drives control flow
  */
 declare function a2uiUpdateSprite({ elementRef: Struct, property?: string, src: string }): void;
+
+
+// === UI/Elements/Gantt ===
+
+/**
+ * Add, remove, or update gantt tasks, dependencies and configuration
+ * @param elementRef — Reference to the gantt element
+ * @param operation (optional) — What operation to perform
+ * @param tasks — Array of tasks
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiUpdateGantt({ elementRef: Struct, operation?: string, tasks: Struct[] }): void;
 
 
 // === UI/Elements/GeoMap ===

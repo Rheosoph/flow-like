@@ -69,6 +69,7 @@ impl Cacheable for A2UIUpdateLog {
 pub struct ExecutionContextCache {
     pub stores: FlowLikeStores,
     pub app_id: String,
+    pub model_usage_app_id: Option<String>,
     pub board_dir: Path,
     pub board_id: String,
     pub node_id: String,
@@ -81,13 +82,20 @@ impl ExecutionContextCache {
         state: &Arc<FlowLikeState>,
         node_id: &str,
     ) -> Option<Self> {
-        let (app_id, board_dir, board_id, sub) = match run.upgrade() {
+        let (app_id, model_usage_app_id, board_dir, board_id, sub) = match run.upgrade() {
             Some(run) => {
                 let run = run.lock().await;
                 let app_id = run.app_id.clone();
+                let model_usage_app_id = run.model_usage_app_id.clone();
                 let board = &run.board;
                 let sub = run.sub.clone();
-                (app_id, board.board_dir.clone(), board.id.clone(), sub)
+                (
+                    app_id,
+                    model_usage_app_id,
+                    board.board_dir.clone(),
+                    board.id.clone(),
+                    sub,
+                )
             }
             None => return None,
         };
@@ -97,6 +105,7 @@ impl ExecutionContextCache {
         Some(ExecutionContextCache {
             stores,
             app_id,
+            model_usage_app_id,
             board_dir,
             board_id,
             node_id: node_id.to_string(),
@@ -115,6 +124,7 @@ impl ExecutionContextCache {
         ExecutionContextCache {
             stores,
             app_id: meta.app_id.clone(),
+            model_usage_app_id: meta.model_usage_app_id.clone(),
             board_dir: meta.board_dir.clone(),
             board_id: meta.board_id.clone(),
             node_id: node_id.to_string(),
@@ -320,7 +330,7 @@ impl ExecutionContext {
     pub fn model_usage_context(&self) -> Option<ModelUsageContext> {
         let cache = self.execution_cache.as_ref()?;
         Some(ModelUsageContext {
-            app_id: Some(cache.app_id.clone()),
+            app_id: cache.model_usage_app_id.clone(),
             run_id: Some(self.run_id.clone()),
         })
     }

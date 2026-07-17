@@ -2,6 +2,7 @@ import { getOrUploadTemporaryFile } from "@flow-like/flow-like-ui";
 import type {
 	IHelperState,
 	ITemporaryFlowPath,
+	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 } from "@flow-like/flow-like-ui";
 import type { IFileMetadata } from "@flow-like/flow-like-ui/lib";
@@ -47,14 +48,23 @@ export class WebHelperState implements IHelperState {
 		file: File,
 		offline?: boolean,
 		appId?: string,
+		executionTarget?: ITemporaryUploadExecutionTarget,
 	): Promise<string> {
-		return (await this.fileToTemporaryFile(file, offline, appId)).url;
+		return (
+			await this.fileToTemporaryFile(
+				file,
+				offline,
+				appId,
+				executionTarget,
+			)
+		).url;
 	}
 
 	async fileToTemporaryFile(
 		file: File,
 		_offline?: boolean,
 		appId?: string,
+		_executionTarget?: ITemporaryUploadExecutionTarget,
 	): Promise<ITemporaryUploadedFile> {
 		const profileScope =
 			this.backend.profile?.id ?? this.backend.profile?.hub ?? "no-profile";
@@ -78,7 +88,7 @@ export class WebHelperState implements IHelperState {
 				this.backend.auth,
 			);
 
-			await fetch(response.uploadUrl, {
+			const uploadResponse = await fetch(response.uploadUrl, {
 				method: "PUT",
 				headers: {
 					"Content-Type": file.type,
@@ -86,6 +96,11 @@ export class WebHelperState implements IHelperState {
 				},
 				body: file,
 			});
+			if (!uploadResponse.ok) {
+				throw new Error(
+					`Temporary file upload failed (${uploadResponse.status} ${uploadResponse.statusText})`,
+				);
+			}
 
 			return {
 				url: response.downloadUrl,

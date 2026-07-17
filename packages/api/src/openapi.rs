@@ -217,6 +217,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::board::query_logs::query_logs,
         crate::routes::app::board::get_runs::get_runs,
         crate::routes::app::board::get_execution_elements::get_execution_elements,
+        crate::routes::app::board::flow_ir_commit::flow_ir_commit_disposition,
+        crate::routes::app::board::flow_ir_commit::apply_flow_ir_commit,
         // Page routes
         crate::routes::app::page::get_page::get_page,
         crate::routes::app::page::get_pages::get_pages,
@@ -350,6 +352,7 @@ impl Modify for SecurityAddon {
         // Database routes
         crate::routes::app::db::list_tables::list_tables,
         crate::routes::app::db::db_list::list_items,
+        crate::routes::app::db::create_table::create_table,
         crate::routes::app::db::db_add::add_to_table,
         crate::routes::app::db::db_delete::delete_from_table,
         crate::routes::app::db::db_update::update_table,

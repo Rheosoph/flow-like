@@ -1,6 +1,8 @@
 import type { IDatabaseState } from "@flow-like/flow-like-ui";
 import {
 	type IAddColumnPayload,
+	type ICreateTableResult,
+	type IDatabaseSchemaField,
 	type IIndexConfig,
 	IIndexType,
 	type IQueryTablePayload,
@@ -15,6 +17,20 @@ import {
 
 export class WebDatabaseState implements IDatabaseState {
 	constructor(private readonly backend: WebBackendRef) {}
+
+	async createTable(
+		appId: string,
+		tableName: string,
+		fields: IDatabaseSchemaField[],
+		ifNotExists = true,
+		userScoped?: boolean,
+	): Promise<ICreateTableResult> {
+		return apiPost<ICreateTableResult>(
+			`apps/${appId}/db/${encodeURIComponent(tableName)}${this.scopeQuery(userScoped)}`,
+			{ fields, if_not_exists: ifNotExists },
+			this.backend.auth,
+		);
+	}
 
 	private indexTypeToString(indexType: IIndexType): string {
 		const map: Record<IIndexType, string> = {

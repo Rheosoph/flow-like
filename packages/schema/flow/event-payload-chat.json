@@ -35,6 +35,16 @@
         "null"
       ]
     },
+    "voice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChatVoiceParameters"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "tools": {
       "type": [
         "array",
@@ -60,6 +70,111 @@
       ],
       "items": {
         "type": "string"
+      }
+    },
+    "attach_widget_snapshots": {
+      "description": "Attach PNG snapshots of the latest assistant message's embedded widgets\nto the outgoing user turn so vision-capable models see the rendered UI.\nDefaults to enabled.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "custom_css": {
+      "description": "Custom CSS scoped to the chat interface.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "background_image": {
+      "description": "Background image URL or app storage path for the chat interface.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "color_scheme": {
+      "description": "Preferred chat color scheme: \"system\" | \"light\" | \"dark\".",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ai_disclosure": {
+      "description": "User-facing disclosure that the conversation is with an AI.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "ChatVoiceParameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Capture mode: \"disabled\" | \"stt\" (frontend transcript) | \"record\" (audio).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invoke": {
+          "description": "Invoke mode: \"manual\" | \"hold\" | \"auto\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "description": "Visual style: \"conservative\" | \"waveform\" | \"orb\" | \"vortex\" | \"shader\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Element size: \"sm\" | \"md\" | \"lg\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "description": "Base accent color (CSS color string).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recording_color": {
+          "description": "Accent color while recording (CSS color string).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "playback": {
+          "description": "Answer playback: \"text\" | \"audio\" | \"both\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_duration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "auto_stop": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
       }
     }
   }

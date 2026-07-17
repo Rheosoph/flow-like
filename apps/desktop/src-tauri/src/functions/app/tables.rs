@@ -9,6 +9,7 @@ use flow_like::{
         databases::vector::{
             VectorStore,
             lancedb::{IndexConfigDto, LanceDBVectorStore, record_batches_to_vec},
+            schema::{DatabaseSchemaField, database_fields_to_arrow_schema},
         },
         datafusion::prelude::SessionContext,
     },
@@ -38,6 +39,11 @@ fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
     {
         return Err(flow_like_types::anyhow!(
             "Table name contains invalid characters (allowed: alphanumeric, -, _, .)"
+        ));
+    }
+    if name.starts_with("__") && name.ends_with("__") && name.len() > 4 {
+        return Err(flow_like_types::anyhow!(
+            "Table name is reserved for internal use"
         ));
     }
     Ok(())
@@ -194,6 +200,43 @@ pub async fn db_schema(
     .await?;
     let schema = db.schema().await?;
     Ok(schema)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CreateTableResponse {
+    pub table_name: String,
+    pub created: bool,
+    pub if_not_exists: bool,
+}
+
+#[tauri::command(async)]
+pub async fn db_create_table(
+    app_handle: AppHandle,
+    app_id: String,
+    table_name: String,
+    fields: Vec<DatabaseSchemaField>,
+    if_not_exists: Option<bool>,
+    credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
+) -> Result<CreateTableResponse, TauriFunctionError> {
+    let schema = database_fields_to_arrow_schema(&fields)?;
+    let if_not_exists = if_not_exists.unwrap_or(true);
+    let mut db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name.clone()),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
+    let created = db.create_empty_table(schema, if_not_exists).await?;
+    Ok(CreateTableResponse {
+        table_name,
+        created,
+        if_not_exists,
+    })
 }
 
 #[tauri::command(async)]

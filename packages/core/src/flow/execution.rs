@@ -2,6 +2,7 @@ use super::board::{ExecutionStage, LayerType};
 use super::event::Event;
 use super::oauth::OAuthToken;
 use super::{board::Board, node::NodeState, variable::Variable};
+use crate::app::AppVisibility;
 use crate::credentials::SharedCredentials;
 use crate::flow::execution::internal_node::ExecutionTarget;
 use crate::profile::Profile;
@@ -442,6 +443,9 @@ impl LogMeta {
 pub struct Run {
     pub id: String,
     pub app_id: String,
+    /// Server-backed app ID used for hosted-model usage attribution.
+    /// Offline apps keep their local `app_id` for storage, but leave this unset.
+    pub model_usage_app_id: Option<String>,
     pub traces: Vec<Trace>,
     pub status: RunStatus,
     pub start: SystemTime,
@@ -752,6 +756,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 pub struct RunMeta {
     pub run_id: String,
     pub app_id: String,
+    pub model_usage_app_id: Option<String>,
     pub board_id: String,
     pub board_dir: Path,
     pub sub: String,
@@ -772,6 +777,13 @@ impl RunMeta {
     pub fn get_nodes_executed(&self) -> u64 {
         self.nodes_executed
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+fn model_usage_app_id_for_visibility(app_id: &str, visibility: &AppVisibility) -> Option<String> {
+    match visibility {
+        AppVisibility::Offline => None,
+        _ => Some(app_id.to_string()),
     }
 }
 
@@ -897,6 +909,7 @@ impl InternalRun {
         let run = Run {
             id: run_id.clone(),
             app_id: app_id.to_string(),
+            model_usage_app_id: Some(app_id.to_string()),
             traces: vec![],
             status: RunStatus::Running,
             start: SystemTime::now(),
@@ -1224,6 +1237,7 @@ impl InternalRun {
             meta: RunMeta {
                 run_id: run_id.clone(),
                 app_id: app_id.to_string(),
+                model_usage_app_id: Some(app_id.to_string()),
                 board_id: board.id.clone(),
                 board_dir: board.board_dir.clone(),
                 sub: sub_value.clone(),
@@ -1274,6 +1288,17 @@ impl InternalRun {
 
     pub fn set_execution_mode(&mut self, mode: ExecutionMode) {
         self.meta.execution_mode = mode;
+    }
+
+    /// Configure hosted-model usage attribution from the app's persisted visibility.
+    /// Offline app IDs only exist locally and must not be authorized as cloud app IDs.
+    pub async fn set_usage_attribution_from_visibility(&mut self, visibility: &AppVisibility) {
+        let app_id = model_usage_app_id_for_visibility(&self.meta.app_id, visibility);
+        {
+            let mut run = self.run.lock().await;
+            run.model_usage_app_id = app_id.clone();
+        }
+        self.meta.model_usage_app_id = app_id;
     }
 
     /// Set the user execution context for this run
@@ -1368,7 +1393,6 @@ impl InternalRun {
                 let profile = profile.clone();
                 let callback = callback.clone();
                 let stage = stage.clone();
-                let log_level = log_level;
                 let completion_callbacks = self.completion_callbacks.clone();
                 let credentials = self.credentials.clone();
                 let token = self.token.clone();
@@ -1377,7 +1401,6 @@ impl InternalRun {
                 let user_context = user_context.clone();
                 let has_node_errors = has_node_errors.clone();
                 let cancellation_token = cancellation_token.clone();
-                let cancellation_log_level = cancellation_log_level;
                 let cancellation_log_message = cancellation_log_message.clone();
 
                 async move {
@@ -2040,5 +2063,33 @@ pub async fn flush_run_cancelled(
         Ok(result.meta)
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_apps_are_not_attributed_as_server_apps() {
+        assert_eq!(
+            model_usage_app_id_for_visibility("local-app", &AppVisibility::Offline),
+            None
+        );
+    }
+
+    #[test]
+    fn server_backed_apps_keep_app_attribution() {
+        for visibility in [
+            AppVisibility::Public,
+            AppVisibility::PublicRequestAccess,
+            AppVisibility::Private,
+            AppVisibility::Prototype,
+        ] {
+            assert_eq!(
+                model_usage_app_id_for_visibility("cloud-app", &visibility),
+                Some("cloud-app".to_string())
+            );
+        }
     }
 }

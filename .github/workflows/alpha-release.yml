@@ -165,6 +165,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Configure macOS ONNX Runtime
+        if: runner.os == 'macOS'
+        run: |
+          echo "ORT_LIB_LOCATION=${GITHUB_WORKSPACE}/apps/desktop/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+
       - name: Prepare Windows VC runtime DLLs
         if: runner.os == 'Windows'
         working-directory: apps/desktop

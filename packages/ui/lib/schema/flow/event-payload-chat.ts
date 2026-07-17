@@ -22,11 +22,15 @@ export interface IVoiceConfig {
 }
 
 export interface IEventPayloadChat {
+	ai_disclosure?: string | null;
 	allow_file_upload?: boolean | null;
 	attach_widget_snapshots?: boolean | null;
 	allow_voice_input?: boolean | null;
 	allow_voice_output?: boolean | null;
 	allow_voice_mode?: boolean | null;
+	background_image?: string | null;
+	color_scheme?: "system" | "light" | "dark" | null;
+	custom_css?: string | null;
 	voice?: IVoiceConfig | null;
 	navigate_to_routes?: string[] | null;
 	default_tools?: string[] | null;

@@ -90,7 +90,7 @@ export function A2UIVoiceInput({
 	const triggerAction = useComponentActionTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 	const backend = useBackend();
-	const { appId } = useActionContext();
+	const { appId, resolveTemporaryUploadTarget } = useActionContext();
 	const { setByPath } = useData();
 
 	const value = useResolved<VoiceData>(component.value);
@@ -131,6 +131,7 @@ export function A2UIVoiceInput({
 	const [hover, setHover] = useState(false);
 	const [localUrl, setLocalUrl] = useState<string | null>(null);
 	const localUrlRef = useRef<string | null>(null);
+	const uploadOperationRef = useRef(0);
 	const [dismissedResponse, setDismissedResponse] = useState<string | null>(
 		null,
 	);
@@ -144,6 +145,7 @@ export function A2UIVoiceInput({
 
 	useEffect(
 		() => () => {
+			uploadOperationRef.current += 1;
 			if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
 		},
 		[],
@@ -166,6 +168,7 @@ export function A2UIVoiceInput({
 
 	const handleRecorded = useCallback(
 		async (file: File, duration: number) => {
+			const operationId = ++uploadOperationRef.current;
 			const voiceData: VoiceData = {
 				name: file.name,
 				size: file.size,
@@ -177,11 +180,24 @@ export function A2UIVoiceInput({
 			setLocalVoice(voiceData);
 			setIsUploading(true);
 			try {
+				const executionTarget = await resolveTemporaryUploadTarget?.(
+					component.actions?.[0],
+				);
+				if (uploadOperationRef.current !== operationId) return;
 				const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
 					file,
 					false,
 					appId,
-				)) ?? { url: await backend.helperState.fileToUrl(file, false, appId) };
+					executionTarget,
+				)) ?? {
+					url: await backend.helperState.fileToUrl(
+						file,
+						false,
+						appId,
+						executionTarget,
+					),
+				};
+				if (uploadOperationRef.current !== operationId) return;
 				const uploaded: VoiceData = {
 					...voiceData,
 					url: temporaryFile.url,
@@ -192,7 +208,7 @@ export function A2UIVoiceInput({
 				setLocalVoice(uploaded);
 				setIsUploading(false);
 				if (component.value && "path" in component.value) {
-					setByPath(component.value.path, uploaded);
+					setByPath(component.value.path, toStoredVoice(uploaded));
 				}
 				onAction?.({
 					type: "userAction",
@@ -211,6 +227,7 @@ export function A2UIVoiceInput({
 					duration,
 				});
 			} catch {
+				if (uploadOperationRef.current !== operationId) return;
 				setLocalVoice({
 					...voiceData,
 					uploading: false,
@@ -227,6 +244,7 @@ export function A2UIVoiceInput({
 			componentId,
 			onAction,
 			replaceLocalUrl,
+			resolveTemporaryUploadTarget,
 			setByPath,
 			surfaceId,
 			triggerAction,
@@ -311,6 +329,8 @@ export function A2UIVoiceInput({
 
 	const beginCapture = useCallback(() => {
 		if (disabled) return;
+		uploadOperationRef.current += 1;
+		setIsUploading(false);
 		setLocalVoice(null);
 		replaceLocalUrl(null);
 		setDismissedResponse(responseMediaRef.current);
@@ -338,50 +358,60 @@ export function A2UIVoiceInput({
 		onSilence: () => recorder.stop(),
 	});
 
-	const clearRecording = useCallback(() => {
-		setLocalVoice(null);
-		replaceLocalUrl(null);
-		setDismissedResponse(responseMediaRef.current);
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, null);
-		}
-		onAction?.({
-			type: "userAction",
-			name: "change",
+	const clearRecording = useCallback(
+		(executeConfiguredAction: boolean) => {
+			uploadOperationRef.current += 1;
+			setIsUploading(false);
+			setLocalVoice(null);
+			replaceLocalUrl(null);
+			setDismissedResponse(responseMediaRef.current);
+			if (component.value && "path" in component.value) {
+				setByPath(component.value.path, null);
+			}
+			onAction?.({
+				type: "userAction",
+				name: "change",
+				surfaceId,
+				sourceComponentId: componentId,
+				timestamp: Date.now(),
+				context: { value: null },
+			});
+			if (executeConfiguredAction) {
+				void triggerAction(component.actions, {
+					signedUrls: null,
+					transcript: null,
+					duration: 0,
+				});
+			}
+		},
+		[
+			component.actions,
+			component.value,
+			componentId,
+			onAction,
+			replaceLocalUrl,
+			setByPath,
 			surfaceId,
-			sourceComponentId: componentId,
-			timestamp: Date.now(),
-			context: { value: null },
-		});
-	}, [
-		component.value,
-		componentId,
-		onAction,
-		replaceLocalUrl,
-		setByPath,
-		surfaceId,
-	]);
+			triggerAction,
+		],
+	);
 
 	useEffect(() => {
-		const handleClear = (
-			event: CustomEvent<{ surfaceId: string; componentId: string }>,
-		) => {
+		const handleClear = (event: Event) => {
+			const { detail } = event as CustomEvent<{
+				surfaceId: string;
+				componentId: string;
+			}>;
 			if (
-				event.detail.surfaceId === surfaceId &&
-				event.detail.componentId === componentId
+				detail.surfaceId === surfaceId &&
+				detail.componentId === componentId
 			) {
-				clearRecording();
+				clearRecording(false);
 			}
 		};
-		window.addEventListener(
-			"a2ui:clearFileInput" as never,
-			handleClear as EventListener,
-		);
+		window.addEventListener("a2ui:clearFileInput", handleClear);
 		return () => {
-			window.removeEventListener(
-				"a2ui:clearFileInput" as never,
-				handleClear as EventListener,
-			);
+			window.removeEventListener("a2ui:clearFileInput", handleClear);
 		};
 	}, [surfaceId, componentId, clearRecording]);
 
@@ -436,7 +466,11 @@ export function A2UIVoiceInput({
 	const inlineStyle = resolveInlineStyle(style);
 
 	return (
-		<div className={cn("space-y-2", containerStyle)} style={inlineStyle}>
+		<div
+			data-card-action-stop
+			className={cn("space-y-2", containerStyle)}
+			style={inlineStyle}
+		>
 			{label && <Label className="text-sm font-medium">{label}</Label>}
 
 			<div
@@ -462,7 +496,7 @@ export function A2UIVoiceInput({
 							autoPlay
 							recordControl={blocked ? undefined : interactionProps}
 							recordHint={recordAgainHint}
-							onDelete={clearRecording}
+							onDelete={() => clearRecording(true)}
 						/>
 					) : awaitingResponse ? (
 						<div className="flex w-full flex-col items-center gap-3">
@@ -500,7 +534,7 @@ export function A2UIVoiceInput({
 									size="sm"
 									variant="ghost"
 									className="size-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
-									onClick={clearRecording}
+									onClick={() => clearRecording(true)}
 								>
 									<Trash2 className="size-4" />
 								</Button>
@@ -522,7 +556,7 @@ export function A2UIVoiceInput({
 							busy={display.uploading || isTriggering}
 							recordControl={blocked ? undefined : interactionProps}
 							recordHint={recordAgainHint}
-							onDelete={clearRecording}
+							onDelete={() => clearRecording(true)}
 						/>
 					) : display && !capturing ? (
 						<div className="flex w-full items-center gap-4">
@@ -555,7 +589,7 @@ export function A2UIVoiceInput({
 									size="sm"
 									variant="ghost"
 									className="size-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
-									onClick={clearRecording}
+									onClick={() => clearRecording(true)}
 								>
 									<Trash2 className="size-4" />
 								</Button>

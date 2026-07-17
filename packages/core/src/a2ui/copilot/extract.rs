@@ -18,7 +18,7 @@ pub struct ExtractedSurface {
 ///
 /// Tries, in order:
 /// 1. Markdown-fenced ````json … ```` blocks
-/// 2. The largest balanced `{ … }` block in the text
+/// 2. Balanced `{ … }` blocks in the text, largest first
 pub fn extract_surface_from_response(response: &str) -> ExtractedSurface {
     if let Some(surface) = extract_from_fenced_json(response) {
         return surface;
@@ -29,13 +29,26 @@ pub fn extract_surface_from_response(response: &str) -> ExtractedSurface {
     ExtractedSurface::default()
 }
 
+/// ASCII-case-insensitive substring search that returns byte offsets valid in
+/// `haystack` (unlike searching a `to_lowercase()` copy, whose byte offsets
+/// diverge as soon as a character changes UTF-8 length when lowercased).
+fn find_ascii_ci(haystack: &str, needle: &str, from: usize) -> Option<usize> {
+    let haystack = haystack.as_bytes().get(from..)?;
+    let needle = needle.as_bytes();
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
+        .map(|i| from + i)
+}
+
 /// Try each ````json … ```` (and bare ```` … ````) block.
 fn extract_from_fenced_json(response: &str) -> Option<ExtractedSurface> {
-    let response_lower = response.to_lowercase();
-
     let mut search_from = 0;
-    while let Some(start) = response_lower[search_from..].find("```json") {
-        let json_start = search_from + start + 7;
+    while let Some(start) = find_ascii_ci(response, "```json", search_from) {
+        let json_start = start + 7;
         let json_start = response[json_start..]
             .find(|c: char| !c.is_whitespace() || c == '\n')
             .map(|i| json_start + i)
@@ -67,10 +80,12 @@ fn extract_from_fenced_json(response: &str) -> Option<ExtractedSurface> {
     None
 }
 
-/// Find the largest balanced `{ … }` block in the text.
+/// Try every balanced `{ … }` block in the text, largest first, and return the
+/// first one that parses as a surface. Trying only the single largest block
+/// loses the tree whenever the model also emitted a bigger non-surface JSON
+/// object (e.g. a reasoning/config blob).
 fn extract_from_raw_json(response: &str) -> Option<ExtractedSurface> {
-    let mut best_json: Option<&str> = None;
-    let mut best_len = 0;
+    let mut candidates: Vec<&str> = Vec::new();
 
     let chars: Vec<char> = response.chars().collect();
     let mut i = 0;
@@ -99,18 +114,15 @@ fn extract_from_raw_json(response: &str) -> Option<ExtractedSurface> {
             if depth == 0 {
                 let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
                 let byte_end = chars[..i].iter().map(|c| c.len_utf8()).sum::<usize>();
-                let candidate = &response[byte_start..byte_end];
-                if candidate.len() > best_len {
-                    best_len = candidate.len();
-                    best_json = Some(candidate);
-                }
+                candidates.push(&response[byte_start..byte_end]);
             }
         } else {
             i += 1;
         }
     }
 
-    best_json.and_then(parse_surface_json)
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.len()));
+    candidates.into_iter().find_map(parse_surface_json)
 }
 
 /// Parse a JSON string into an `ExtractedSurface`.
@@ -151,4 +163,104 @@ fn parse_surface_json(json_str: &str) -> Option<ExtractedSurface> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn surface_json() -> &'static str {
+        r#"{"rootComponentId":"root","canvasSettings":{"backgroundColor":"bg-background"},"components":[{"id":"root","component":{"type":"text","content":{"literalString":"hi"}}}]}"#
+    }
+
+    #[test]
+    fn fenced_json_block_extracts_components_root_and_canvas() {
+        let response = format!("Here is the UI:\n```json\n{}\n```\nDone.", surface_json());
+        let surface = extract_surface_from_response(&response);
+        assert_eq!(surface.components.len(), 1);
+        assert_eq!(surface.components[0].id, "root");
+        assert_eq!(surface.root_component_id.as_deref(), Some("root"));
+        assert!(surface.canvas_settings.is_some());
+    }
+
+    #[test]
+    fn uppercase_fence_is_recognized() {
+        let response = format!("```JSON\n{}\n```", surface_json());
+        let surface = extract_surface_from_response(&response);
+        assert_eq!(surface.components.len(), 1);
+    }
+
+    #[test]
+    fn multibyte_uppercase_prefix_does_not_panic_or_lose_the_fence() {
+        // 'İ' (U+0130) grows from 2 to 3 bytes when lowercased; byte offsets
+        // computed on the lowercased text are invalid in the original string.
+        let prefix = "İ".repeat(100);
+        let response = format!("{}```json\n{}\n```", prefix, surface_json());
+        let surface = extract_from_fenced_json(&response).expect("fenced path must find the block");
+        assert_eq!(surface.components.len(), 1);
+        assert_eq!(surface.root_component_id.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn multibyte_prefix_with_short_tail_does_not_slice_out_of_bounds() {
+        // With enough multibyte-uppercase prefix and a short JSON tail, the
+        // lowercased-offset arithmetic previously pointed past the end of the
+        // original string and panicked.
+        let prefix = "İ".repeat(100);
+        let response = format!(
+            "{}```json\n{{\"components\":[{{\"id\":\"a\",\"component\":{{}}}}]}}\n```",
+            prefix
+        );
+        let surface = extract_surface_from_response(&response);
+        assert_eq!(surface.components.len(), 1);
+    }
+
+    #[test]
+    fn bare_fence_block_is_extracted() {
+        let response = format!("```\n{}\n```", surface_json());
+        let surface = extract_surface_from_response(&response);
+        assert_eq!(surface.components.len(), 1);
+    }
+
+    #[test]
+    fn second_fence_is_used_when_first_is_not_a_surface() {
+        let response = format!(
+            "```json\n{{\"plan\": \"first draft\"}}\n```\ntext\n```json\n{}\n```",
+            surface_json()
+        );
+        let surface = extract_surface_from_response(&response);
+        assert_eq!(surface.components.len(), 1);
+    }
+
+    #[test]
+    fn direct_component_array_is_extracted() {
+        let response = r#"```json
+[{"id":"a","component":{"type":"text","content":{"literalString":"x"}}}]
+```"#;
+        let surface = extract_surface_from_response(response);
+        assert_eq!(surface.components.len(), 1);
+        assert!(surface.root_component_id.is_none());
+    }
+
+    #[test]
+    fn smaller_surface_block_wins_over_larger_non_surface_block() {
+        // No fences: raw-JSON extraction must not give up just because the
+        // LARGEST balanced block is not a surface.
+        let big_noise = format!(
+            "{{\"reasoning\": \"{}\"}}",
+            "long analysis text ".repeat(30)
+        );
+        let response = format!("My notes {} and the tree {}", big_noise, surface_json());
+        let surface = extract_surface_from_response(&response);
+        assert_eq!(surface.components.len(), 1);
+        assert_eq!(surface.root_component_id.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn response_without_json_yields_empty_surface() {
+        let surface = extract_surface_from_response("No UI here, just prose.");
+        assert!(surface.components.is_empty());
+        assert!(surface.root_component_id.is_none());
+        assert!(surface.canvas_settings.is_none());
+    }
 }

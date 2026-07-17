@@ -1,18 +1,35 @@
-import { GitHubLogoIcon } from "@radix-ui/react-icons";
+"use client";
+
 import { Button } from "@flow-like/flow-like-ui";
-import { Book, Heart, MessageCircle, Rocket, Zap } from "lucide-react";
+import { GitHubLogoIcon } from "@radix-ui/react-icons";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+	ArrowLeft,
+	ArrowRight,
+	BookOpen,
+	Boxes,
+	Cloud,
+	GitFork,
+	LayoutGrid,
+	type LucideIcon,
+	Package,
+	Search,
+	Sparkles,
+	X,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	FRAG,
+	VERT,
+	readTokenRGB,
+	themeIsLight,
+} from "../../global-chat/hero-variants/bubble-shader";
 
-type WelcomeStep = "welcome" | "docs" | "discord" | "github";
+const DOCS_URL = "https://docs.flow-like.com";
+const DISCORD_URL = "https://discord.gg/mdBA9kMjFJ";
+const GITHUB_URL = "https://github.com/Rheosoph/flow-like";
 
-const STEPS: WelcomeStep[] = ["welcome", "docs", "discord", "github"];
-
-interface AnimatedBackgroundProps {
-	children: React.ReactNode;
-	variant?: WelcomeStep;
-}
-
-// A11y: honor reduced motion preference
+// A11y: honor reduced motion preference.
 function usePrefersReducedMotion() {
 	const [reduced, setReduced] = useState(false);
 	useEffect(() => {
@@ -25,775 +42,837 @@ function usePrefersReducedMotion() {
 	return reduced;
 }
 
-// Spectacular animated starfield background with parallax and comets
-function UniverseBackground({
-	variant = "welcome",
-}: { variant?: WelcomeStep }) {
-	const canvasRef = useRef<HTMLCanvasElement | null>(null);
-	const rafRef = useRef<number | null>(null);
-	const starsRef = useRef<
-		Array<{
-			x: number;
-			y: number;
-			z: number; // depth 0..1
-			size: number;
-			baseAlpha: number;
-			twinkle: number;
-			hue: number;
-		}>
-	>([]);
-	const cometsRef = useRef<
-		Array<{
-			x: number;
-			y: number;
-			vx: number;
-			vy: number;
-			life: number;
-			maxLife: number;
-		}>
-	>([]);
-	const pointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-	const reducedMotion = usePrefersReducedMotion();
-
-	const palette = useMemo(() => {
-		switch (variant) {
-			case "discord":
-				return { hueMin: 230, hueMax: 260 };
-			case "docs":
-				return { hueMin: 200, hueMax: 220 };
-			case "github":
-				return { hueMin: 0, hueMax: 0 };
-			default:
-				return { hueMin: 250, hueMax: 300 };
-		}
-	}, [variant]);
-
-	const resizeCanvas = useCallback((canvas: HTMLCanvasElement) => {
-		const dpr = Math.min(window.devicePixelRatio || 1, 2);
-		const { clientWidth, clientHeight } = canvas;
-		canvas.width = Math.floor(clientWidth * dpr);
-		canvas.height = Math.floor(clientHeight * dpr);
-		const ctx = canvas.getContext("2d");
-		if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-	}, []);
-
-	const seedStars = useCallback(
-		(canvas: HTMLCanvasElement) => {
-			const area = canvas.clientWidth * canvas.clientHeight;
-			const density = reducedMotion ? 0.00015 : 0.00035; // stars per px
-			const count = Math.max(80, Math.min(900, Math.floor(area * density)));
-			const arr: typeof starsRef.current = [];
-			for (let i = 0; i < count; i++) {
-				const z = Math.random();
-				const size = 0.7 + Math.pow(z, 2) * 1.8;
-				const baseAlpha = 0.25 + Math.random() * 0.55;
-				const twinkle = 0.5 + Math.random() * 1.5;
-				const hue =
-					palette.hueMin + Math.random() * (palette.hueMax - palette.hueMin);
-				arr.push({
-					x: Math.random() * canvas.clientWidth,
-					y: Math.random() * canvas.clientHeight,
-					z,
-					size,
-					baseAlpha,
-					twinkle,
-					hue,
-				});
-			}
-			starsRef.current = arr;
-		},
-		[palette, reducedMotion],
+// The CC0 Discord glyph (simple-icons, CC0 1.0) — lucide ships no brand marks.
+function DiscordIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			viewBox="0 0 24 24"
+			fill="currentColor"
+			aria-hidden="true"
+			className={className}
+		>
+			<path d="M20.317 4.3698a19.7913 19.7913 0 0 0-4.8851-1.5152.0741.0741 0 0 0-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 0 0-.0785-.037 19.7363 19.7363 0 0 0-4.8852 1.515.0699.0699 0 0 0-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 0 0 .0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 0 0 .0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 0 0-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 0 1-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 0 1 .0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 0 1 .0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 0 1-.0066.1276 12.2986 12.2986 0 0 1-1.873.8914.0766.0766 0 0 0-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 0 0 .0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 0 0 .0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 0 0-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
+		</svg>
 	);
+}
+
+// Reusable soap-film bubble — the exact FlowPilot shader (bubble-shader.ts), drawn as a free-floating
+// round film (u_morph 0, full radius). The canvas is oversized (`bloom`×) and unclipped so the halo
+// fades to true transparency instead of a hard square edge, matching the launcher. `size` is the
+// layout box; a lower `bloom` keeps the halo tight so it stays inside a compact container (e.g. the
+// inline callout) instead of bleeding onto neighbouring text.
+function BubbleOrb({
+	size = 120,
+	bloom = 2.11,
+}: { size?: number; bloom?: number }) {
+	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const [failed, setFailed] = useState(false);
+	const canvasPx = Math.round(size * bloom);
+	const offset = (canvasPx - size) / 2;
 
 	useEffect(() => {
 		const canvas = canvasRef.current;
 		if (!canvas) return;
-		resizeCanvas(canvas);
-		seedStars(canvas);
 
-		let last = performance.now();
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
-
-		const draw = (now: number) => {
-			const dt = Math.min(0.05, (now - last) / 1000);
-			last = now;
-			ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-
-			const centerX = canvas.clientWidth / 2;
-			const centerY = canvas.clientHeight / 2;
-			const parallaxX = (pointerRef.current.x - centerX) / centerX;
-			const parallaxY = (pointerRef.current.y - centerY) / centerY;
-
-			// Stars
-			for (let i = 0; i < starsRef.current.length; i++) {
-				const s = starsRef.current[i];
-				const depth = 0.3 + s.z * 0.7;
-				const px = s.x + parallaxX * (1 - depth) * 12;
-				const py = s.y + parallaxY * (1 - depth) * 12;
-				const alpha =
-					s.baseAlpha *
-					(reducedMotion
-						? 1
-						: 0.5 + 0.5 * Math.sin(now * 0.002 * s.twinkle + i));
-
-				ctx.beginPath();
-				ctx.fillStyle = `hsla(${s.hue}, 80%, ${variant === "github" ? 88 : 74}%, ${alpha})`;
-				ctx.shadowBlur = 8 * depth;
-				ctx.shadowColor = `hsla(${s.hue}, 100%, 70%, ${alpha})`;
-				ctx.arc(px, py, s.size * depth, 0, Math.PI * 2);
-				ctx.fill();
-			}
-
-			// Comets
-			if (!reducedMotion && Math.random() < 0.012) {
-				const fromTop = Math.random() < 0.5;
-				const x = fromTop ? Math.random() * canvas.clientWidth : -40;
-				const y = fromTop ? -40 : Math.random() * canvas.clientHeight * 0.4;
-				const angle = (fromTop ? 1 : 0.7) + Math.random() * 0.3;
-				const speed = 280 + Math.random() * 140;
-				cometsRef.current.push({
-					x,
-					y,
-					vx: speed * angle,
-					vy: speed * 0.45,
-					life: 0,
-					maxLife: 1.8 + Math.random() * 0.8,
-				});
-			}
-
-			ctx.globalCompositeOperation = "lighter";
-			for (let i = cometsRef.current.length - 1; i >= 0; i--) {
-				const c = cometsRef.current[i];
-				c.life += dt;
-				c.x += c.vx * dt;
-				c.y += c.vy * dt;
-				const t = 1 - c.life / c.maxLife;
-				if (t <= 0) {
-					cometsRef.current.splice(i, 1);
-					continue;
-				}
-				const grad = ctx.createLinearGradient(c.x, c.y, c.x - 120, c.y - 60);
-				grad.addColorStop(0, `hsla(${palette.hueMax}, 100%, 80%, ${0.7 * t})`);
-				grad.addColorStop(1, `hsla(${palette.hueMin}, 100%, 60%, 0)`);
-				ctx.strokeStyle = grad;
-				ctx.lineWidth = 2;
-				ctx.beginPath();
-				ctx.moveTo(c.x, c.y);
-				ctx.lineTo(c.x - 120, c.y - 60);
-				ctx.stroke();
-				ctx.beginPath();
-				ctx.fillStyle = `hsla(${palette.hueMax}, 100%, 90%, ${0.9 * t})`;
-				ctx.arc(c.x, c.y, 1.8 + 2.2 * t, 0, Math.PI * 2);
-				ctx.fill();
-			}
-			ctx.globalCompositeOperation = "source-over";
-
-			// Aurora waves (subtle flowing ribbons)
-			if (!reducedMotion) {
-				const baseHueA = palette.hueMin;
-				const baseHueB = palette.hueMax || palette.hueMin + 20;
-				const w = canvas.clientWidth;
-				const h = canvas.clientHeight;
-
-				const drawAurora = (
-					offset: number,
-					amp: number,
-					thickness: number,
-					speed: number,
-				) => {
-					ctx.save();
-					ctx.globalCompositeOperation = "lighter";
-					ctx.globalAlpha = 0.08;
-					ctx.lineWidth = thickness;
-					const grad = ctx.createLinearGradient(
-						0,
-						h * 0.25 + offset,
-						w,
-						h * 0.75 + offset,
-					);
-					grad.addColorStop(0, `hsla(${baseHueA}, 100%, 70%, 0.6)`);
-					grad.addColorStop(0.5, `hsla(${baseHueB}, 100%, 60%, 0.35)`);
-					grad.addColorStop(1, `hsla(${baseHueA}, 100%, 75%, 0.5)`);
-					ctx.strokeStyle = grad;
-					ctx.beginPath();
-					const k = now * 0.001 * speed;
-					for (let x = -50; x <= w + 50; x += 6) {
-						const y =
-							h * 0.5 +
-							Math.sin(x * 0.008 + k + offset) * amp +
-							Math.cos(x * 0.015 - k * 0.6) * (amp * 0.4);
-						if (x === -50) ctx.moveTo(x, y);
-						else ctx.lineTo(x, y);
-					}
-					ctx.stroke();
-					ctx.restore();
-				};
-				drawAurora(-60, 32, 20, 1);
-				drawAurora(40, 22, 14, 1.4);
-			}
-
-			if (!reducedMotion) rafRef.current = requestAnimationFrame(draw);
-		};
-
-		if (reducedMotion) {
-			draw(performance.now());
-			return; // draw once, no animation
+		const gl = canvas.getContext("webgl", {
+			alpha: true,
+			premultipliedAlpha: true,
+			antialias: false,
+		});
+		if (!gl) {
+			setFailed(true);
+			return;
 		}
 
-		rafRef.current = requestAnimationFrame(draw);
+		const compile = (type: number, src: string) => {
+			const shader = gl.createShader(type);
+			if (!shader) return null;
+			gl.shaderSource(shader, src);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				gl.deleteShader(shader);
+				return null;
+			}
+			return shader;
+		};
 
-		const onResize = () => {
-			resizeCanvas(canvas);
-			seedStars(canvas);
+		const vs = compile(gl.VERTEX_SHADER, VERT);
+		const fs = compile(gl.FRAGMENT_SHADER, FRAG);
+		const prog = vs && fs ? gl.createProgram() : null;
+		if (!vs || !fs || !prog) {
+			setFailed(true);
+			if (vs) gl.deleteShader(vs);
+			if (fs) gl.deleteShader(fs);
+			if (prog) gl.deleteProgram(prog);
+			return;
+		}
+		gl.attachShader(prog, vs);
+		gl.attachShader(prog, fs);
+		gl.linkProgram(prog);
+		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+			setFailed(true);
+			gl.deleteShader(vs);
+			gl.deleteShader(fs);
+			gl.deleteProgram(prog);
+			return;
+		}
+		gl.useProgram(prog);
+
+		const buf = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+		gl.bufferData(
+			gl.ARRAY_BUFFER,
+			new Float32Array([-1, -1, 3, -1, -1, 3]),
+			gl.STATIC_DRAW,
+		);
+		const loc = gl.getAttribLocation(prog, "p");
+		gl.enableVertexAttribArray(loc);
+		gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+		const uRes = gl.getUniformLocation(prog, "u_res");
+		const uTime = gl.getUniformLocation(prog, "u_time");
+		const uFocus = gl.getUniformLocation(prog, "u_focus");
+		const uBox = gl.getUniformLocation(prog, "u_box");
+		const uMouse = gl.getUniformLocation(prog, "u_mouse");
+		const uMstr = gl.getUniformLocation(prog, "u_mstr");
+		const uMorph = gl.getUniformLocation(prog, "u_morph");
+		const uLight = gl.getUniformLocation(prog, "u_light");
+		const uPrimary = gl.getUniformLocation(prog, "u_primary");
+
+		const reduced = window.matchMedia(
+			"(prefers-reduced-motion: reduce)",
+		).matches;
+
+		const setPrimary = () => {
+			const [r, g, b] = readTokenRGB("--primary", [242, 90, 60]);
+			gl.uniform3f(uPrimary, r / 255, g / 255, b / 255);
 		};
-		const onPointerMove = (e: PointerEvent) => {
-			pointerRef.current.x = e.clientX;
-			pointerRef.current.y = e.clientY;
+		setPrimary();
+
+		let lightTarget = themeIsLight() ? 1 : 0;
+		let light = lightTarget;
+		const themeObserver = new MutationObserver(() => {
+			lightTarget = themeIsLight() ? 1 : 0;
+			setPrimary();
+			if (reduced) {
+				light = lightTarget;
+				draw(4200);
+			}
+		});
+		themeObserver.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["class", "style", "data-theme"],
+		});
+
+		const draw = (ms: number) => {
+			gl.uniform2f(uRes, canvas.width, canvas.height);
+			gl.uniform1f(uTime, ms / 1000);
+			gl.uniform1f(uFocus, 0);
+			gl.uniform2f(uBox, 0.48, 0.48);
+			gl.uniform2f(uMouse, 0, 0);
+			gl.uniform1f(uMstr, 0);
+			gl.uniform1f(uMorph, 0);
+			gl.uniform1f(uLight, light);
+			gl.clearColor(0, 0, 0, 0);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			gl.drawArrays(gl.TRIANGLES, 0, 3);
 		};
-		window.addEventListener("resize", onResize);
-		window.addEventListener("pointermove", onPointerMove, { passive: true });
+
+		const resize = () => {
+			const dpr = Math.min(window.devicePixelRatio || 1, 2);
+			const w = canvas.clientWidth;
+			const h = canvas.clientHeight;
+			if (!w || !h) return;
+			canvas.width = Math.round(w * dpr);
+			canvas.height = Math.round(h * dpr);
+			gl.viewport(0, 0, canvas.width, canvas.height);
+			if (reduced) draw(4200);
+		};
+		resize();
+		const observer = new ResizeObserver(resize);
+		observer.observe(canvas);
+
+		let raf = 0;
+		let frame = 0;
+		if (reduced) {
+			draw(4200);
+		} else {
+			const loop = (ms: number) => {
+				if (++frame % 20 === 0) lightTarget = themeIsLight() ? 1 : 0;
+				light += (lightTarget - light) * 0.08;
+				draw(ms);
+				raf = requestAnimationFrame(loop);
+			};
+			raf = requestAnimationFrame(loop);
+		}
+
 		return () => {
-			if (rafRef.current) cancelAnimationFrame(rafRef.current);
-			window.removeEventListener("resize", onResize);
-			window.removeEventListener("pointermove", onPointerMove as any);
+			cancelAnimationFrame(raf);
+			observer.disconnect();
+			themeObserver.disconnect();
+			gl.deleteBuffer(buf);
+			gl.deleteProgram(prog);
+			gl.deleteShader(vs);
+			gl.deleteShader(fs);
 		};
-	}, [palette, reducedMotion, resizeCanvas, seedStars, variant]);
+	}, []);
+
+	if (failed) {
+		return (
+			<span
+				aria-hidden="true"
+				className="block flex-none rounded-full bg-linear-to-br from-primary/40 via-purple-500/30 to-purple-600/20 ring-1 ring-primary/40"
+				style={{ width: size, height: size }}
+			/>
+		);
+	}
 
 	return (
-		<div className="absolute inset-0 pointer-events-none">
-			{/* Soft nebulas using theme colors to avoid hard-coded color tokens */}
-			<div className="absolute -top-24 -left-24 w-[40vw] h-[40vw] max-w-[680px] max-h-[680px] rounded-full bg-primary/15 blur-3xl" />
-			<div className="absolute -bottom-24 -right-24 w-[35vw] h-[35vw] max-w-[560px] max-h-[560px] rounded-full bg-secondary/15 blur-3xl" />
-			<div className="absolute top-1/4 left-[10%] w-72 h-72 rounded-full bg-accent/10 blur-2xl" />
-			<canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+		<span
+			className="relative block flex-none"
+			aria-hidden="true"
+			style={{ width: size, height: size }}
+		>
+			<canvas
+				ref={canvasRef}
+				className="pointer-events-none absolute"
+				style={{
+					width: canvasPx,
+					height: canvasPx,
+					left: -offset,
+					top: -offset,
+				}}
+			/>
+		</span>
+	);
+}
+
+interface Feature {
+	icon: LucideIcon;
+	title: string;
+	body: string;
+	tint: string;
+}
+
+interface StepDef {
+	id: string;
+	name: string;
+	eyebrow: string;
+	title: React.ReactNode;
+	lead: React.ReactNode;
+}
+
+const STEPS: StepDef[] = [
+	{
+		id: "welcome",
+		name: "Welcome",
+		eyebrow: "Step 01 / 04",
+		title: (
+			<>
+				Welcome to <span className="highlight">Flow-Like</span>
+			</>
+		),
+		lead: (
+			<>
+				Flow-Like is a visual platform for building node-based automations —{" "}
+				<b className="text-foreground">run them locally or in the cloud</b>, and
+				extend them however you like.
+			</>
+		),
+	},
+	{
+		id: "flowpilot",
+		name: "FlowPilot",
+		eyebrow: "Step 02 / 04 · First move",
+		title: (
+			<>
+				Meet <span className="highlight">FlowPilot</span>, your copilot
+			</>
+		),
+		lead: (
+			<>
+				<b className="text-foreground">Describe what you want to build</b> and
+				FlowPilot does the wiring — it creates apps, finds packages, and
+				navigates Flow-Like for you.
+			</>
+		),
+	},
+	{
+		id: "explore",
+		name: "Explore",
+		eyebrow: "Step 03 / 04 · Second move",
+		title: (
+			<>
+				Explore the <span className="highlight">app store</span>
+			</>
+		),
+		lead: (
+			<>
+				<b className="text-foreground">Community apps, ready to use or fork.</b>{" "}
+				Don't start from a blank canvas — install a template from Explore and
+				make it yours in minutes.
+			</>
+		),
+	},
+	{
+		id: "community",
+		name: "Community",
+		eyebrow: "Step 04 / 04 · Stay connected",
+		title: (
+			<>
+				You're not building <span className="highlight">alone</span>
+			</>
+		),
+		lead: "Get help, share what you make, and dig into the details whenever you need them.",
+	},
+];
+
+const FEATURES: Record<string, Feature[]> = {
+	welcome: [
+		{
+			icon: Boxes,
+			title: "Design in nodes.",
+			body: "Wire logic together on a visual canvas — no boilerplate.",
+			tint: "text-primary",
+		},
+		{
+			icon: Cloud,
+			title: "Run anywhere.",
+			body: "Execute on your machine or deploy to the cloud in one click.",
+			tint: "text-[color:var(--tertiary)]",
+		},
+		{
+			icon: Package,
+			title: "Extend with packages.",
+			body: "Add community apps and WASM nodes as you grow.",
+			tint: "text-primary",
+		},
+	],
+	flowpilot: [
+		{
+			icon: Sparkles,
+			title: "Just describe it.",
+			body: '"Build an app that summarizes my PDFs" — it starts building.',
+			tint: "text-primary",
+		},
+		{
+			icon: Search,
+			title: "Finds the right nodes.",
+			body: "It pulls in packages and connects them for you.",
+			tint: "text-[color:var(--tertiary)]",
+		},
+	],
+	explore: [
+		{
+			icon: LayoutGrid,
+			title: "Browse & install.",
+			body: "Ready-made apps you can run right away.",
+			tint: "text-primary",
+		},
+		{
+			icon: GitFork,
+			title: "Fork & remix.",
+			body: "Open any app, change what you need, publish your own.",
+			tint: "text-[color:var(--tertiary)]",
+		},
+	],
+};
+
+function FeatureRow({ feature }: { feature: Feature }) {
+	const Icon = feature.icon;
+	return (
+		<li className="flex items-start gap-3">
+			<span
+				className={`mt-0.5 flex size-8 flex-none items-center justify-center rounded-lg bg-muted ${feature.tint}`}
+			>
+				<Icon className="size-4" />
+			</span>
+			<div className="text-sm leading-snug">
+				<b className="font-semibold">{feature.title}</b>{" "}
+				<span className="text-muted-foreground">{feature.body}</span>
+			</div>
+		</li>
+	);
+}
+
+const COMMUNITY_LINKS = [
+	{
+		href: DISCORD_URL,
+		label: "Join our Discord",
+		hint: "Ask questions, share builds, meet the community",
+		icon: <DiscordIcon className="size-5" />,
+		bg: "bg-[#5865F2] text-white",
+	},
+	{
+		href: DOCS_URL,
+		label: "Read the docs",
+		hint: "Quickstart, guides & the full node reference",
+		icon: <BookOpen className="size-5" />,
+		bg: "bg-primary text-white",
+	},
+	{
+		href: GITHUB_URL,
+		label: "Star us on GitHub",
+		hint: "Open source — explore the code & report issues",
+		icon: <GitHubLogoIcon className="size-5" />,
+		bg: "bg-foreground text-background",
+	},
+];
+
+// Floating pin-coloured accent dots for the welcome stage (echo the node-editor data-type colours).
+interface Dot {
+	top?: string;
+	left?: string;
+	right?: string;
+	bottom?: string;
+	color: string;
+	delay: string;
+}
+const WELCOME_DOTS: Dot[] = [
+	{ top: "22%", left: "24%", color: "#00D3F2", delay: "0s" },
+	{ top: "30%", right: "22%", color: "#FB64B6", delay: ".4s" },
+	{ bottom: "26%", left: "30%", color: "#05DF72", delay: ".8s" },
+	{ bottom: "30%", right: "28%", color: "#EEBD30", delay: ".2s" },
+];
+
+const FAN_CARDS = [
+	{
+		from: "#00D3F2",
+		to: "#9810FA",
+		rot: "-11deg",
+		x: "-46px",
+		z: 1,
+		rating: "4.8 · Fork",
+	},
+	{
+		from: "#05DF72",
+		to: "#EEBD30",
+		rot: "11deg",
+		x: "46px",
+		z: 1,
+		rating: "4.9 · Use",
+	},
+	{
+		from: "#FB562D",
+		to: "#F19730",
+		rot: "0deg",
+		x: "0px",
+		z: 3,
+		rating: "4.9 · Use",
+	},
+];
+
+function StageMotif({ stepId }: { stepId: string }) {
+	if (stepId === "flowpilot") {
+		return (
+			<div className="relative flex items-center justify-center">
+				<div className="absolute size-52 rounded-full bg-[#7c5cf0]/25 blur-3xl" />
+				<BubbleOrb size={132} />
+			</div>
+		);
+	}
+	if (stepId === "explore") {
+		return (
+			<div className="relative h-40 w-56">
+				{FAN_CARDS.map((c) => (
+					<div
+						key={c.rot + c.x}
+						className="absolute left-1/2 top-1/2 h-36 w-28 overflow-hidden rounded-2xl border border-white/15 shadow-2xl"
+						style={{
+							background: "#0e1016",
+							transform: `translate(-50%,-50%) translateX(${c.x}) rotate(${c.rot}) ${c.z === 3 ? "scale(1.05)" : ""}`,
+							zIndex: c.z,
+						}}
+					>
+						<div
+							className="h-16 w-full"
+							style={{
+								background: `linear-gradient(140deg, ${c.from}, ${c.to})`,
+							}}
+						/>
+						<div className="flex flex-col gap-1.5 p-2.5">
+							<span
+								className="-mt-5 size-6 rounded-md border-2"
+								style={{
+									borderColor: "#0e1016",
+									background: `linear-gradient(140deg, ${c.from}, ${c.to})`,
+								}}
+							/>
+							<span className="h-1.5 rounded bg-white/15" />
+							<span className="h-1.5 w-3/5 rounded bg-white/15" />
+							<span className="font-mono text-[8px] text-white/60">
+								★ {c.rating}
+							</span>
+						</div>
+					</div>
+				))}
+			</div>
+		);
+	}
+	if (stepId === "community") {
+		return (
+			<div className="flex gap-4">
+				{[
+					{
+						bg: "#5865F2",
+						node: <DiscordIcon className="size-8 text-white" />,
+					},
+					{
+						bg: "linear-gradient(150deg,#FB562D,#F19730)",
+						node: <BookOpen className="size-8 text-white" />,
+					},
+					{
+						bg: "linear-gradient(150deg,#fafafa,#e4e4e7)",
+						node: <GitHubLogoIcon className="size-8 text-[#0d1117]" />,
+					},
+				].map((t, i) => (
+					<span
+						key={t.bg}
+						className="fl-onb-bob grid size-[70px] place-items-center rounded-2xl border border-white/15 shadow-xl"
+						style={{ background: t.bg, animationDelay: `${i * 0.5}s` }}
+					>
+						{t.node}
+					</span>
+				))}
+			</div>
+		);
+	}
+	// welcome
+	return (
+		<div className="relative flex flex-col items-center">
+			<div className="absolute inset-0 -z-10">
+				{WELCOME_DOTS.map((d) => (
+					<span
+						key={d.color}
+						className="fl-onb-bob absolute size-2.5 rounded-full"
+						style={{
+							top: d.top,
+							left: d.left,
+							right: d.right,
+							bottom: d.bottom,
+							background: d.color,
+							boxShadow: `0 0 12px 2px ${d.color}`,
+							animationDelay: d.delay,
+						}}
+					/>
+				))}
+			</div>
+			<img
+				src="/app-logo.webp"
+				alt="Flow-Like"
+				className="size-24 drop-shadow-[0_8px_30px_rgba(0,0,0,0.5)]"
+			/>
+			<span className="mt-4 font-mono text-[11px] uppercase tracking-[0.24em] text-white/70">
+				visual · local · anywhere
+			</span>
 		</div>
 	);
 }
 
 export function TutorialDialog() {
 	const [showTutorial, setShowTutorial] = useState(false);
-	const [currentStep, setCurrentStep] = useState<WelcomeStep>("welcome");
-	const [supportsBackdrop, setSupportsBackdrop] = useState<boolean>(true);
-	const containerRef = useRef<HTMLDivElement | null>(null);
-	const confettiCanvasRef = useRef<HTMLCanvasElement | null>(null);
-	const touchStartXRef = useRef<number | null>(null);
-	const lastPointerMoveTs = useRef<number>(0);
-	const reducedMotion = usePrefersReducedMotion();
+	const [step, setStep] = useState(0);
+	const [supportsBackdrop, setSupportsBackdrop] = useState(true);
+	const reduced = usePrefersReducedMotion();
+	const total = STEPS.length;
+	const active = STEPS[step];
 
 	useEffect(() => {
-		const hasFinishedTutorial = localStorage.getItem("tutorial-finished");
-		setShowTutorial(hasFinishedTutorial !== "true");
+		try {
+			setShowTutorial(localStorage.getItem("tutorial-finished-new") !== "true");
+		} catch {
+			setShowTutorial(true);
+		}
 	}, []);
 
-	// Lock background scroll while tutorial is shown
+	// Lock background scroll while the tour is shown.
 	useEffect(() => {
-		if (showTutorial) {
-			const prev = document.body.style.overflow;
-			document.body.style.overflow = "hidden";
-			return () => {
-				document.body.style.overflow = prev;
-			};
-		}
+		if (!showTutorial) return;
+		const prev = document.body.style.overflow;
+		document.body.style.overflow = "hidden";
+		return () => {
+			document.body.style.overflow = prev;
+		};
 	}, [showTutorial]);
 
-	// Detect backdrop-filter support and provide a Linux WebKit fallback.
+	// Detect backdrop-filter support with a Linux/WebKit hard fallback.
 	useEffect(() => {
 		try {
 			const ua = navigator.userAgent.toLowerCase();
 			const isLinux = ua.includes("linux");
 			const hasBackdrop =
-				(CSS &&
-					(CSS as any).supports &&
-					(CSS as any).supports("backdrop-filter", "blur(4px)")) ||
-				(CSS &&
-					(CSS as any).supports &&
-					(CSS as any).supports("-webkit-backdrop-filter", "blur(4px)"));
-			// Some Linux WebKit builds lie about supports; prefer hard fallback on Linux + WebKit.
+				typeof CSS !== "undefined" &&
+				(CSS.supports("backdrop-filter", "blur(4px)") ||
+					CSS.supports("-webkit-backdrop-filter", "blur(4px)"));
 			const isWebKit =
 				/applewebkit\//.test(ua) && !/chrome\//.test(ua)
 					? true
 					: /webkit/.test(ua);
-			const forceFallback = isLinux && isWebKit;
-			setSupportsBackdrop(Boolean(hasBackdrop) && !forceFallback);
+			setSupportsBackdrop(hasBackdrop && !(isLinux && isWebKit));
 		} catch {
 			setSupportsBackdrop(false);
 		}
 	}, []);
 
-	// Keyboard navigation and quick-exit
+	const finish = useCallback(() => {
+		try {
+			localStorage.setItem("tutorial-finished-new", "true");
+		} catch {
+			// storage may be unavailable (private mode / sandboxed iframe)
+		}
+		setShowTutorial(false);
+	}, []);
+
+	const goTo = useCallback(
+		(n: number) => setStep(Math.max(0, Math.min(total - 1, n))),
+		[total],
+	);
+
+	const next = useCallback(() => {
+		setStep((s) => {
+			if (s < total - 1) return s + 1;
+			finish();
+			return s;
+		});
+	}, [finish, total]);
+
+	const prev = useCallback(() => goTo(step - 1), [goTo, step]);
+
 	useEffect(() => {
 		if (!showTutorial) return;
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				handleSkip(true);
-			} else if (e.key === "ArrowRight") {
-				handleNext();
-			} else if (e.key === "ArrowLeft") {
-				handlePrevious();
-			}
+			if (e.key === "Escape") finish();
+			else if (e.key === "ArrowRight") next();
+			else if (e.key === "ArrowLeft") prev();
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [showTutorial, currentStep]);
+	}, [showTutorial, finish, next, prev]);
 
-	const handleSkip = (celebrate = false) => {
-		localStorage.setItem("tutorial-finished", "true");
-		if (celebrate && !reducedMotion) {
-			setTimeout(() => setShowTutorial(false), 500);
-		} else {
-			setShowTutorial(false);
-		}
-	};
-
-	const handleNext = () => {
-		const currentIndex = STEPS.indexOf(currentStep);
-		if (currentIndex < STEPS.length - 1) {
-			setCurrentStep(STEPS[currentIndex + 1]);
-		} else {
-			handleSkip(true);
-		}
-	};
-
-	const handlePrevious = () => {
-		const currentIndex = STEPS.indexOf(currentStep);
-		if (currentIndex > 0) {
-			setCurrentStep(STEPS[currentIndex - 1]);
-		}
-	};
-
-	const getBackgroundGradient = (variant: WelcomeStep) => {
-		switch (variant) {
-			case "discord":
-				return "bg-linear-to-br from-[#5865F2]/50 via-[#7289DA]/12 to-[#5865F2]/36";
-			case "github":
-				return "bg-linear-to-br from-foreground/20 via-foreground/10 to-foreground/8";
-			case "docs":
-				return "bg-linear-to-br from-primary/20 via-blue-500/10 to-primary/15";
-			default:
-				return "bg-linear-to-br from-primary/18 via-purple-500/8 to-secondary/12";
-		}
-	};
-
-	const AnimatedBackground = ({
-		children,
-		variant = "welcome",
-	}: AnimatedBackgroundProps) => (
-		<div className="relative min-h-screen flex items-center justify-center p-2 sm:p-6 bg-background/90 backdrop-blur-sm">
-			<div className={`absolute inset-0 ${getBackgroundGradient(variant)}`} />
-			{/* Enhanced cosmic spectacle */}
-			<UniverseBackground variant={variant} />
-			{/* Soft pulses toned down to let the universe shine */}
-			<div
-				className="absolute inset-0 bg-linear-to-tr from-accent/10 via-transparent to-primary/10 animate-pulse opacity-30 sm:opacity-80"
-				style={{ animationDuration: "10s" }}
-			/>
-			<div
-				className="absolute inset-0 bg-linear-to-bl from-secondary/8 via-transparent to-accent/8 animate-pulse opacity-30 sm:opacity-80"
-				style={{ animationDuration: "14s", animationDelay: "5s" }}
-			/>
-
-			{/* Confetti overlay */}
-			<canvas
-				ref={confettiCanvasRef}
-				className="absolute inset-0 w-full h-full pointer-events-none z-[11]"
-			/>
-
-			<div className="relative z-10 w-full h-full flex items-stretch justify-center">
-				{children}
-			</div>
-		</div>
+	const fade = useMemo(
+		() =>
+			reduced
+				? { initial: false, animate: {}, exit: {}, transition: { duration: 0 } }
+				: {
+						initial: { opacity: 0, x: 16 },
+						animate: { opacity: 1, x: 0 },
+						exit: { opacity: 0, x: -16 },
+						transition: { duration: 0.32, ease: "easeOut" },
+					},
+		[reduced],
 	);
-
-	const stepData = {
-		welcome: {
-			title: "Welcome to Flow Like",
-			description:
-				"Your comprehensive solution for modern software development",
-		},
-		docs: {
-			title: "Documentation & Guides",
-			description: "Everything you need to master Flow Like effectively",
-		},
-		discord: {
-			title: "Join Our Community",
-			description: "Connect with developers, get help, and share feedback",
-		},
-		github: {
-			title: "Open Source Project",
-			description: "Explore, contribute, and customize Flow Like",
-		},
-	};
-
-	const FeatureItem = ({
-		icon: Icon,
-		text,
-		color = "primary",
-	}: {
-		icon: React.ComponentType<{ className?: string }>;
-		text: string;
-		color?: string;
-	}) => (
-		<div
-			className={
-				supportsBackdrop
-					? "flex items-center gap-3 p-3 rounded-xl bg-background/30 backdrop-blur-md border border-border/40 shadow-lg"
-					: "flex items-center gap-3 p-3 rounded-xl bg-card border border-border/60 shadow-md"
-			}
-		>
-			<Icon className={`w-5 h-5 text-${color}`} />
-			<span className="text-sm font-medium">{text}</span>
-		</div>
-	);
-
-	const BulletPoint = ({
-		text,
-		color = "primary",
-	}: { text: string; color?: string }) => (
-		<div className="flex items-center gap-2 text-sm">
-			<div className={`w-2 h-2 bg-${color} rounded-full`} />
-			<span>{text}</span>
-		</div>
-	);
-
-	const WelcomeStep = () => (
-		<div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 h-full p-4 sm:p-8">
-			<div className="flex flex-col justify-center">
-				<div className="relative mb-6">
-					<img
-						src="/app-logo.webp"
-						alt="Flow Like Logo"
-						className="w-24 h-24 sm:w-28 sm:h-28 mx-auto"
-					/>
-				</div>
-				<h2 className="text-3xl sm:text-4xl font-bold text-center mb-4">
-					<span className="text-primary">Flow</span> Like
-				</h2>
-				<div className="w-20 h-0.5 bg-primary mx-auto" />
-			</div>
-
-			<div className="flex flex-col justify-center space-y-4 sm:space-y-6">
-				<div className="space-y-3">
-					<FeatureItem icon={Rocket} text="Scalable Development" />
-					<FeatureItem icon={Zap} text="Lightning Fast Performance" />
-					<FeatureItem icon={Heart} text="Developer Friendly" />
-				</div>
-			</div>
-		</div>
-	);
-
-	const DocsStep = () => (
-		<div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 h-full p-4 sm:p-8">
-			<div className="flex flex-col justify-center items-center">
-				<div
-					className={
-						supportsBackdrop
-							? "w-14 h-14 sm:w-28 sm:h-28 rounded-md sm:rounded-xl bg-primary/20 backdrop-blur-md flex items-center justify-center mb-6 border border-primary/30 shadow-lg"
-							: "w-14 h-14 sm:w-28 sm:h-28 rounded-md sm:rounded-xl bg-primary/15 flex items-center justify-center mb-6 border border-primary/30 shadow-lg"
-					}
-				>
-					<Book className="w-7 h-7 sm:w-14 sm:h-14 text-primary" />
-				</div>
-			</div>
-
-			<div className="flex flex-col justify-center items-center sm:items-start pb-4 sm:pb-0 space-y-4 sm:space-y-6">
-				<div className="space-y-3">
-					<BulletPoint text="Quick Start Guide" />
-					<BulletPoint text="API Reference" />
-					<BulletPoint text="Best Practices" />
-					<BulletPoint text="Advanced Features" />
-				</div>
-				<Button
-					className={
-						supportsBackdrop
-							? "gap-2 w-fit bg-primary/90 backdrop-blur-xs hover:bg-primary"
-							: "gap-2 w-fit bg-primary hover:bg-primary/90"
-					}
-					onClick={() => window.open("https://docs.flow-like.com", "_blank")}
-				>
-					<Book className="w-4 h-4" />
-					Open Documentation
-				</Button>
-			</div>
-		</div>
-	);
-
-	const DiscordStep = () => (
-		<div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 h-full p-4 sm:p-8">
-			<div className="flex flex-col justify-center items-center">
-				<div
-					className={
-						supportsBackdrop
-							? "w-14 h-14 sm:w-28 sm:h-28 rounded-md sm:rounded-xl bg-[#5865F2]/20 backdrop-blur-md flex items-center justify-center mb-6 border border-[#5865F2]/30 shadow-lg"
-							: "w-14 h-14 sm:w-28 sm:h-28 rounded-md sm:rounded-xl bg-[#5865F2]/15 flex items-center justify-center mb-6 border border-[#5865F2]/30 shadow-lg"
-					}
-				>
-					<MessageCircle className="w-7 h-7 sm:w-14 sm:h-14 text-[#5865F2]" />
-				</div>
-			</div>
-
-			<div className="flex flex-col justify-center space-y-4 sm:space-y-6 items-center sm:items-start pb-4 sm:pb-0">
-				<div className="space-y-3">
-					<BulletPoint text="Get Help & Support" color="[#5865F2]" />
-					<BulletPoint text="Share Your Projects" color="[#5865F2]" />
-					<BulletPoint text="Feature Discussions" color="[#5865F2]" />
-					<BulletPoint text="Connect with Developers" color="[#5865F2]" />
-				</div>
-				<Button
-					className={
-						supportsBackdrop
-							? "gap-2 w-fit bg-[#5865F2]/90 backdrop-blur-xs hover:bg-[#5865F2] text-white"
-							: "gap-2 w-fit bg-[#5865F2] hover:bg-[#5865F2]/90 text-white"
-					}
-					onClick={() => window.open("https://discord.gg/mdBA9kMjFJ", "_blank")}
-				>
-					<MessageCircle className="w-4 h-4" />
-					Join Discord
-				</Button>
-			</div>
-		</div>
-	);
-
-	const GithubStep = () => (
-		<div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 h-full p-4 sm:p-8">
-			<div className="flex flex-col justify-center items-center">
-				<div
-					className={
-						supportsBackdrop
-							? "w-14 h-14 sm:w-28 sm:h-28 rounded-md sm:rounded-xl bg-foreground/20 backdrop-blur-md flex items-center justify-center mb-6 border border-foreground/30 shadow-lg"
-							: "w-14 h-14 sm:w-28 sm:h-28 rounded-md sm:rounded-xl bg-foreground/15 flex items-center justify-center mb-6 border border-foreground/30 shadow-lg"
-					}
-				>
-					<GitHubLogoIcon className="w-7 h-7 sm:w-14 sm:h-14 text-foreground" />
-				</div>
-			</div>
-
-			<div className="flex flex-col justify-center space-y-4 sm:space-y-6 items-center sm:items-start pb-4 sm:pb-0">
-				<div className="space-y-3">
-					<BulletPoint text="Explore Source Code" color="foreground" />
-					<BulletPoint text="Report Issues" color="foreground" />
-					<BulletPoint text="Submit Pull Requests" color="foreground" />
-					<BulletPoint text="Star the Repository" color="foreground" />
-				</div>
-				<Button
-					variant="outline"
-					className={
-						supportsBackdrop
-							? "gap-2 w-fit border-foreground/40 hover:bg-foreground/10 bg-background/30 backdrop-blur-xs"
-							: "gap-2 w-fit border-foreground/40 hover:bg-foreground/10 bg-card"
-					}
-					onClick={() =>
-						window.open("https://github.com/Rheosoph/flow-like", "_blank")
-					}
-				>
-					<GitHubLogoIcon className="w-4 h-4" />
-					View Repository
-				</Button>
-			</div>
-		</div>
-	);
-
-	const stepComponents = {
-		welcome: WelcomeStep,
-		docs: DocsStep,
-		discord: DiscordStep,
-		github: GithubStep,
-	};
-
-	const CurrentStepComponent = stepComponents[currentStep];
 
 	if (!showTutorial) return null;
 
 	return (
 		<div
-			className="fixed inset-0 z-50"
+			className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-6"
+			// biome-ignore lint/a11y/useSemanticElements: custom-composited overlay; a native <dialog> cannot host the WebGL stage + framer-motion layout
 			role="dialog"
 			aria-modal="true"
-			aria-label="Welcome tour"
+			aria-label="Getting started with Flow-Like"
 		>
-			<AnimatedBackground variant={currentStep}>
-				{/* Container: mobile centered card, desktop card */}
-				<div
-					className={`w-full max-w-[420px] mx-2 sm:mx-0 sm:w-[750px] sm:max-w-[90vw] h-auto max-h-[85dvh] sm:h-auto ${
-						supportsBackdrop
-							? "bg-background/25 backdrop-blur-2xl border"
-							: "bg-card border"
-					}
-						border-border/40 rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl overflow-hidden flex flex-col`}
-					ref={containerRef}
-					onTouchStart={(e) => {
-						touchStartXRef.current = e.touches[0]?.clientX ?? null;
+			<style>{`
+@keyframes fl-onb-drift{0%{transform:translate3d(-3%,-2%,0) scale(1.05)}100%{transform:translate3d(4%,3%,0) scale(1.12)}}
+@keyframes fl-onb-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+.fl-onb-bob{animation:fl-onb-bob 5s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){.fl-onb-bob{animation:none}}
+`}</style>
+
+			{/* Scrim */}
+			<button
+				type="button"
+				tabIndex={-1}
+				aria-label="Close getting started"
+				onClick={finish}
+				className={`absolute inset-0 ${supportsBackdrop ? "bg-background/80 backdrop-blur-md" : "bg-background/92"}`}
+			/>
+
+			{/* Panel */}
+			<div className="relative flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-2xl sm:h-[640px] sm:max-h-[88dvh] sm:w-full sm:max-w-[1000px] sm:grid sm:grid-cols-[minmax(0,0.82fr)_1fr] sm:rounded-2xl sm:border">
+				{/* ── LEFT: branded stage (committed warm-dark in both themes) ── */}
+				<aside
+					className="relative flex h-40 shrink-0 items-center justify-center overflow-hidden text-white sm:h-auto"
+					style={{
+						background:
+							"radial-gradient(120% 90% at 20% 15%, #2a1410, #160a12 55%, #0a0810 100%)",
 					}}
-					onTouchEnd={(e) => {
-						if (touchStartXRef.current == null) return;
-						const endX = e.changedTouches[0]?.clientX ?? touchStartXRef.current;
-						const delta = endX - touchStartXRef.current;
-						touchStartXRef.current = null;
-						if (Math.abs(delta) > 48) {
-							if (delta < 0) handleNext();
-							else handlePrevious();
-						}
-					}}
-					style={{}}
+					aria-hidden="true"
 				>
 					<div
-						className={
-							supportsBackdrop
-								? "p-4 sm:p-8 border-b border-border/30 bg-background/15 backdrop-blur-xl"
-								: "p-4 sm:p-8 border-b border-border/30 bg-card"
-						}
-					>
-						<div className="relative">
-							{/* Animated border gleam */}
-							<div className="pointer-events-none absolute inset-[-1px] rounded-2xl sm:rounded-3xl overflow-hidden">
-								<div className="absolute -inset-[1px] opacity-60">
-									<div className="absolute inset-0 bg-[conic-gradient(var(--tw-gradient-stops))] from-primary via-accent to-secondary blur-[10px]" />
-								</div>
-							</div>
-							<div className="text-center px-6 sm:px-8">
-								<h1 className="text-2xl sm:text-3xl font-bold">
-									{stepData[currentStep].title}
-								</h1>
-								<p className="text-muted-foreground mt-2 text-base sm:text-lg">
-									{stepData[currentStep].description}
-								</p>
-							</div>
-						</div>
+						className="pointer-events-none absolute -inset-[30%] opacity-90 blur-md"
+						style={{
+							background:
+								"radial-gradient(38% 42% at 26% 28%, rgba(251,86,45,.85), transparent 60%),radial-gradient(40% 44% at 74% 40%, rgba(241,151,48,.6), transparent 60%),radial-gradient(46% 46% at 55% 88%, rgba(124,92,240,.55), transparent 62%),radial-gradient(34% 34% at 84% 78%, rgba(238,189,48,.4), transparent 60%)",
+							animation: reduced
+								? undefined
+								: "fl-onb-drift 14s ease-in-out infinite alternate",
+						}}
+					/>
+					<div className="absolute left-6 top-5 z-10 flex items-center gap-2.5">
+						<img src="/app-logo.webp" alt="" className="size-6 rounded-md" />
+						<b className="text-sm font-bold tracking-tight drop-shadow">
+							Flow-Like
+						</b>
 					</div>
 
-					{/* Body */}
-					<div
-						className={
-							supportsBackdrop
-								? "flex-1 min-h-0 overflow-y-auto bg-background/10 backdrop-blur-lg sm:h-[450px]"
-								: "flex-1 min-h-0 overflow-y-auto bg-card sm:h-[450px]"
-						}
-					>
-						{/* Step transition wrapper */}
-						<div
-							key={currentStep}
-							className={
-								reducedMotion
-									? ""
-									: "transition-all duration-500 ease-out transform"
-							}
-						>
-							<CurrentStepComponent />
-						</div>
-					</div>
-
-					{/* Footer */}
-					<div
-						className={
-							supportsBackdrop
-								? "p-4 sm:p-8 bg-background/15 backdrop-blur-xl border-t border-border/30"
-								: "p-4 sm:p-8 bg-card border-t border-border/30"
-						}
-						style={{ paddingBottom: "max(var(--fl-safe-bottom), 0px)" }}
-					>
-						{/* Dots are enough; progress bar removed per feedback */}
-
-						<div className="flex justify-center gap-3 mb-4 sm:mb-8">
-							{STEPS.map((step) => (
-								<div
-									key={step}
-									className={`w-3 h-3 rounded-full transition-all duration-300 ${
-										step === currentStep
-											? "bg-primary scale-125 shadow-lg"
-											: "bg-muted-foreground/40"
-									}`}
-								/>
-							))}
-						</div>
-
-						{/* Mobile controls */}
-						<div className="sm:hidden flex flex-col gap-3">
-							<Button
-								onClick={handleNext}
-								className={
-									supportsBackdrop
-										? "w-full bg-primary/90 backdrop-blur-xs hover:bg-primary rounded-xl shadow-lg hover:shadow-xl transition-shadow"
-										: "w-full bg-primary hover:bg-primary/90 rounded-xl shadow-lg hover:shadow-xl transition-shadow"
-								}
+					<div className="relative z-[2] flex items-center justify-center px-6">
+						<AnimatePresence mode="wait">
+							<motion.div
+								key={active.id}
+								initial={reduced ? false : { opacity: 0, scale: 0.94 }}
+								animate={{ opacity: 1, scale: 1 }}
+								exit={reduced ? {} : { opacity: 0, scale: 0.96 }}
+								transition={{ duration: 0.4, ease: "easeOut" }}
+								className="flex items-center justify-center"
 							>
-								{currentStep === "github" ? "Get Started" : "Next"}
-							</Button>
-							<div className="flex items-center justify-between pb-2">
-								{currentStep !== "welcome" ? (
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={handlePrevious}
-										className={
-											supportsBackdrop
-												? "hover:bg-background/40 backdrop-blur-xs rounded-xl"
-												: "hover:bg-muted rounded-xl"
-										}
-									>
-										Previous
-									</Button>
-								) : (
-									<div />
-								)}
-								<Button
-									variant="ghost"
-									size="sm"
-									onClick={() => handleSkip(true)}
-									className={
-										supportsBackdrop
-											? "hover:bg-background/40 backdrop-blur-xs rounded-xl"
-											: "hover:bg-muted rounded-xl"
-									}
-								>
-									Skip Tour
-								</Button>
-							</div>
-						</div>
+								<StageMotif stepId={active.id} />
+							</motion.div>
+						</AnimatePresence>
+					</div>
 
-						{/* Desktop controls */}
-						<div className="hidden sm:flex items-center justify-between pb-4">
-							<div>
-								{currentStep !== "welcome" && (
-									<Button
-										variant="outline"
-										onClick={handlePrevious}
-										className={
-											supportsBackdrop
-												? "bg-background/40 backdrop-blur-md border-border/50 hover:bg-background/60 rounded-xl"
-												: "bg-muted/60 border-border/50 hover:bg-muted rounded-xl"
-										}
-									>
-										Previous
-									</Button>
+					<span className="absolute bottom-5 left-6 z-10 hidden font-mono text-[11px] uppercase tracking-[0.14em] text-white/70 sm:block">
+						Step 0{step + 1} — {active.name}
+					</span>
+				</aside>
+
+				{/* ── RIGHT: stepper content ── */}
+				<div className="relative flex min-h-0 flex-1 flex-col p-6 sm:p-8">
+					<button
+						type="button"
+						onClick={finish}
+						aria-label="Close"
+						className="absolute right-4 top-4 grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+					>
+						<X className="size-4" />
+					</button>
+
+					{/* Progress track */}
+					<nav className="mb-6 flex items-center pr-10" aria-label="Progress">
+						{STEPS.map((s, i) => (
+							<div
+								key={s.id}
+								className={`flex items-center ${i === total - 1 ? "" : "flex-1"}`}
+							>
+								<button
+									type="button"
+									onClick={() => goTo(i)}
+									aria-label={`Step ${i + 1}: ${s.name}`}
+									aria-current={i === step ? "step" : undefined}
+									className={`grid size-7 flex-none place-items-center rounded-full border font-mono text-[11px] font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
+										i <= step
+											? "border-transparent bg-primary text-primary-foreground shadow"
+											: "border-border bg-muted text-muted-foreground"
+									} ${i === step ? "scale-110" : ""}`}
+								>
+									{i + 1}
+								</button>
+								{i !== total - 1 && (
+									<span className="mx-1.5 h-0.5 flex-1 overflow-hidden rounded-full bg-border">
+										<span
+											className="block h-full bg-primary transition-[width] duration-300"
+											style={{ width: i < step ? "100%" : "0%" }}
+										/>
+									</span>
 								)}
 							</div>
-							<div className="flex gap-4">
-								<Button
-									variant="ghost"
-									onClick={() => handleSkip(true)}
-									className={
-										supportsBackdrop
-											? "hover:bg-background/40 backdrop-blur-xs rounded-xl"
-											: "hover:bg-muted rounded-xl"
-									}
-								>
-									Skip Tour
-								</Button>
-								<Button
-									onClick={handleNext}
-									className={
-										supportsBackdrop
-											? "bg-primary/90 backdrop-blur-xs hover:bg-primary rounded-xl shadow-lg hover:shadow-xl transition-shadow"
-											: "bg-primary hover:bg-primary/90 rounded-xl shadow-lg hover:shadow-xl transition-shadow"
-									}
-								>
-									{currentStep === "github" ? "Get Started" : "Next"}
-								</Button>
-							</div>
-						</div>
+						))}
+					</nav>
+
+					{/* Panes */}
+					<div className="relative min-h-0 flex-1 overflow-y-auto">
+						<AnimatePresence mode="wait">
+							<motion.section
+								key={active.id}
+								{...fade}
+								className="flex flex-col"
+							>
+								<span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
+									{active.eyebrow}
+								</span>
+								<h2 className="mt-3 text-balance text-2xl font-extrabold leading-tight tracking-tight sm:text-[2rem]">
+									{active.title}
+								</h2>
+								<p className="mt-3.5 max-w-[46ch] text-[15px] leading-relaxed text-muted-foreground">
+									{active.lead}
+								</p>
+
+								{FEATURES[active.id] && (
+									<ul className="mt-5 flex flex-col gap-3">
+										{FEATURES[active.id].map((f) => (
+											<FeatureRow key={f.title} feature={f} />
+										))}
+									</ul>
+								)}
+
+								{active.id === "flowpilot" && (
+									<div className="mt-4 flex items-center gap-3 rounded-xl border border-border bg-muted/50 p-3">
+										<BubbleOrb size={40} bloom={1.5} />
+										<p className="text-[13px] leading-snug text-muted-foreground">
+											<b className="text-foreground">
+												Look to the bottom-right corner.
+											</b>{" "}
+											The shimmering bubble is FlowPilot — click it anytime to
+											start a chat.
+										</p>
+									</div>
+								)}
+
+								{active.id === "community" && (
+									<div className="mt-5 flex flex-col gap-2.5">
+										{COMMUNITY_LINKS.map((l) => (
+											<a
+												key={l.href}
+												href={l.href}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+											>
+												<span
+													className={`grid size-10 flex-none place-items-center rounded-lg ${l.bg}`}
+												>
+													{l.icon}
+												</span>
+												<span className="flex flex-col leading-tight">
+													<b className="text-sm font-bold">{l.label}</b>
+													<small className="text-xs text-muted-foreground">
+														{l.hint}
+													</small>
+												</span>
+												<ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+											</a>
+										))}
+									</div>
+								)}
+							</motion.section>
+						</AnimatePresence>
+					</div>
+
+					{/* Nav */}
+					<div className="mt-5 flex items-center gap-3 border-t border-border/70 pt-4">
+						<Button
+							variant="outline"
+							onClick={prev}
+							disabled={step === 0}
+							className="rounded-xl"
+						>
+							<ArrowLeft className="size-4" />
+							Back
+						</Button>
+						<Button
+							variant="ghost"
+							onClick={finish}
+							className="rounded-xl text-muted-foreground"
+						>
+							Skip intro
+						</Button>
+						<Button onClick={next} className="ml-auto rounded-xl">
+							{step === total - 1 ? "Start building" : "Next"}
+							<ArrowRight className="size-4" />
+						</Button>
 					</div>
 				</div>
-			</AnimatedBackground>
+			</div>
 		</div>
 	);
 }

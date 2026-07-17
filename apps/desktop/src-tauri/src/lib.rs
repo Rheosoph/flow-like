@@ -237,6 +237,12 @@ pub fn run() {
                 std::backtrace::Backtrace::force_capture()
             ),
         );
+        // The debug devtools plugin installs a dynamic tracing layer. If that layer itself panics
+        // during initialization/event dispatch, re-entering `tracing` from the panic hook can
+        // trigger a second panic and abort the process before the original report is preserved.
+        // Debug builds already wrote the panic/backtrace directly to stderr above; retain tracing
+        // and Sentry integration for release builds where the subscriber is stable.
+        #[cfg(not(debug_assertions))]
         if let Some(location) = info.location() {
             tracing::error!(
                 target: "panic",
@@ -502,6 +508,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            let storage_cleanup_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                flow_like_types::tokio::time::sleep(Duration::from_secs(2)).await;
+                if let Err(error) = functions::storage_management::run_configured_log_cleanup(
+                    &storage_cleanup_handle,
+                )
+                .await
+                {
+                    tracing::warn!(error = %error, "Automatic local log cleanup failed");
+                }
+            });
+
             // Start the WasmEngine epoch ticker inside the async runtime
             if let Some(wasm_state) = app.try_state::<state::TauriWasmEngineState>() {
                 let engine = wasm_state.0.clone();
@@ -842,6 +860,10 @@ pub fn run() {
             functions::system::get_system_info,
             functions::system::list_apps_for_file,
             functions::system::open_file_with_app,
+            functions::storage_management::get_local_storage_overview,
+            functions::storage_management::set_log_retention_policy,
+            functions::storage_management::run_log_cleanup,
+            functions::storage_management::delete_local_storage_items,
             #[cfg(desktop)]
             tray::tray_update_state,
             #[cfg(not(desktop))]
@@ -893,6 +915,7 @@ pub fn run() {
             functions::app::tables::db_table_names,
             functions::app::tables::db_table_names_user,
             functions::app::tables::db_schema,
+            functions::app::tables::db_create_table,
             functions::app::tables::db_list,
             functions::app::tables::db_count,
             functions::app::tables::build_index,
@@ -975,6 +998,9 @@ pub fn run() {
             functions::flow::template::get_template_meta,
             functions::flow::template::push_template_meta,
             functions::ai::copilot::copilot_chat,
+            functions::ai::copilot::cancel_copilot_chat,
+            functions::ai::copilot::flowpilot_flow_ir_commit_disposition,
+            functions::ai::copilot::flowpilot_apply_flow_ir_commit,
             functions::ai::copilot::global_chat,
             functions::ai::copilot::global_chat_resume,
             functions::ai::copilot::global_chat_memory_status,
@@ -1084,7 +1110,12 @@ pub fn run() {
 
     #[cfg(debug_assertions)]
     {
-        builder = builder.plugin(tauri_plugin_devtools::init());
+        // `tauri_plugin_devtools` dynamically mutates tracing-subscriber filters. We have observed
+        // a native SIGABRT in that initialization path on macOS. Keep it available for explicit
+        // diagnostics, but do not make every development launch depend on the unstable layer.
+        if std::env::var_os("FLOW_LIKE_ENABLE_DEVTOOLS_PLUGIN").is_some() {
+            builder = builder.plugin(tauri_plugin_devtools::init());
+        }
     }
 
     let context: tauri::Context<_> = std::thread::spawn(|| tauri::generate_context!())

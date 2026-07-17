@@ -3,7 +3,8 @@ import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
-import { ensureProtectedAppRouteAuth } from "../../lib/api";
+import { ensureProtectedAppRouteAuth, requestSilentRenew } from "../../lib/api";
+import { apiResponseError } from "../../lib/api-error";
 
 function constructUrl(profile: IProfile, path: string): string {
 	return getApiUrl(profile, path);
@@ -146,9 +147,10 @@ export class TauriApiState implements IApiState {
 
 			if (!response.ok) {
 				if (response.status === 401 && this.auth) {
-					this.auth.startSilentRenew();
+					requestSilentRenew(this.auth, "after 401");
 				}
-				throw new Error(`Error fetching data: ${response.statusText}`);
+				const errorText = await response.text();
+				throw apiResponseError(response, errorText, path);
 			}
 
 			return (await response.json()) as T;
@@ -163,7 +165,8 @@ export class TauriApiState implements IApiState {
 					throw new Error(`Network unavailable: ${path}`);
 				}
 			}
-			throw new Error(`Error fetching data: ${error}`);
+			if (error instanceof Error) throw error;
+			throw new Error(`Error fetching data: ${String(error)}`);
 		}
 	}
 
@@ -237,7 +240,11 @@ export class TauriApiState implements IApiState {
 		});
 
 		if (!response.ok) {
-			throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
+			if (response.status === 401 && this.auth) {
+				requestSilentRenew(this.auth, "after 401");
+			}
+			const errorText = await response.text();
+			throw apiResponseError(response, errorText, url);
 		}
 
 		if (!response.body) {
