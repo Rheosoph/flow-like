@@ -1260,9 +1260,7 @@ fn resolve_copilot_app_id(
         .map(str::trim)
         .filter(|app_id| !app_id.is_empty())
     {
-        if let Some(existing) = resolved
-            && existing != candidate
-        {
+        if resolved.is_some_and(|existing| existing != candidate) {
             return Err("Conflicting app IDs in copilot request context".to_string());
         }
         resolved = Some(candidate);

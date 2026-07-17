@@ -125,7 +125,7 @@ export function ChatWelcome({
 		const searchLower = searchTerm.toLowerCase();
 
 		// For exact substring matches, use the original highlighting
-		if (textLower.includes(searchLower)) {
+		if (searchLower && textLower.includes(searchLower)) {
 			const result: React.ReactNode[] = [];
 			let cursor = 0;
 			let matchStart = textLower.indexOf(searchLower, cursor);

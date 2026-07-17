@@ -26,7 +26,7 @@ import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 
 interface ChatAppearanceProps {
-	appId: string;
+	appId?: string;
 	eventId: string;
 	config?: Partial<IEventPayloadChat>;
 	children: ReactNode;
@@ -83,7 +83,8 @@ export function ChatAppearance({
 	]);
 
 	const resolvedBackgroundImage = storageBackedBackground
-		? presignedBackground?.appId === appId &&
+		? presignedBackground &&
+			presignedBackground.appId === appId &&
 			presignedBackground.source === configuredBackgroundImage
 			? presignedBackground.url
 			: undefined
