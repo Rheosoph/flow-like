@@ -99,7 +99,10 @@ export function A2UITextField({
 				context: { value: newValue },
 			});
 		}
-		void triggerAction(component.actions, { value: newValue });
+	};
+	const handleCommit = () => {
+		setIsUserTyping(false);
+		void triggerAction(component.actions, { value: localValue });
 	};
 
 	const InputComponent = multiline ? Textarea : Input;
@@ -127,6 +130,12 @@ export function A2UITextField({
 				maxLength={maxLength}
 				className={cn(error && "border-destructive")}
 				onChange={(e) => handleChange(e.target.value)}
+				onBlur={handleCommit}
+				onKeyDown={(event) => {
+					if (!multiline && event.key === "Enter") {
+						event.currentTarget.blur();
+					}
+				}}
 			/>
 			{helperText && (
 				<p

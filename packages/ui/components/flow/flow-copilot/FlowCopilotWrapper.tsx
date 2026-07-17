@@ -22,6 +22,7 @@ function FlowCopilotWrapperImpl({
 	onAcceptSuggestion,
 	onExecuteCommands,
 	onApplyFlowScript,
+	onApplyFlowIrCommit,
 	onFocusNode,
 	onSelectNodes,
 	runContext,
@@ -56,6 +57,7 @@ function FlowCopilotWrapperImpl({
 			onAcceptSuggestion={onAcceptSuggestion}
 			onExecuteCommands={onExecuteCommands}
 			onApplyFlowScript={onApplyFlowScript}
+			onApplyFlowIrCommit={onApplyFlowIrCommit}
 			onFocusNode={onFocusNode}
 			onSelectNodes={onSelectNodes}
 			runContext={stableRunContext}

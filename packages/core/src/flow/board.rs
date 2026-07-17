@@ -951,7 +951,7 @@ impl Board {
         Ok(())
     }
 
-    /// PAGE FUNCTIONS
+    // PAGE FUNCTIONS
 
     fn pages_dir(&self) -> Path {
         self.board_dir.child(format!("_{}", self.id))
@@ -1226,7 +1226,7 @@ impl Board {
         Ok(elements)
     }
 
-    /// TEMPLATE FUNCTIONS
+    // TEMPLATE FUNCTIONS
 
     pub async fn save_as_template(
         &self,
@@ -1591,5 +1591,84 @@ mod tests {
             super::Board::from_proto(flow_like_types::proto::Board::decode(&buf[..]).unwrap());
 
         assert_eq!(board.id, deser_board.id);
+    }
+
+    #[tokio::test]
+    async fn undo_against_diverged_board_errors_and_restores_undone_tail() {
+        use crate::flow::{
+            board::{
+                Comment, CommentType,
+                commands::{
+                    GenericCommand, comments::upsert_comment::UpsertCommentCommand,
+                    pins::connect_pins::ConnectPinsCommand,
+                },
+            },
+            node::Node,
+            variable::VariableType,
+        };
+        use std::time::SystemTime;
+
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = super::Board::new(None, base_dir, state.clone());
+
+        let mut from_node = Node::new("test_from", "From", "", "test");
+        let from_pin = from_node
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut to_node = Node::new("test_to", "To", "", "test");
+        let to_pin = to_node
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let from_id = from_node.id.clone();
+        let to_id = to_node.id.clone();
+        board.nodes.insert(from_id.clone(), from_node);
+        board.nodes.insert(to_id.clone(), to_node);
+
+        let comment = Comment {
+            id: "comment-1".to_string(),
+            author: None,
+            content: "recorded after the connect".to_string(),
+            comment_type: CommentType::Text,
+            timestamp: SystemTime::now(),
+            coordinates: (0.0, 0.0, 0.0),
+            width: None,
+            height: None,
+            layer: None,
+            color: None,
+            z_index: None,
+            hash: None,
+            is_locked: None,
+        };
+
+        let commands = vec![
+            GenericCommand::ConnectPin(ConnectPinsCommand::new(
+                from_id.clone(),
+                to_id.clone(),
+                from_pin.clone(),
+                to_pin.clone(),
+            )),
+            GenericCommand::UpsertComment(UpsertCommentCommand::new(comment)),
+        ];
+
+        let executed = board
+            .execute_commands(commands, state.clone())
+            .await
+            .unwrap();
+        assert!(board.comments.contains_key("comment-1"));
+
+        // Divergence: the board was rewritten underneath the recorded history —
+        // the connection's source node no longer exists.
+        board.nodes.remove(&from_id);
+
+        let result = board.undo(executed, state.clone()).await;
+
+        assert!(result.is_err(), "undo against a diverged board must fail");
+        assert!(
+            board.comments.contains_key("comment-1"),
+            "commands undone before the failure must be re-applied so the board is not left partially rolled back"
+        );
     }
 }

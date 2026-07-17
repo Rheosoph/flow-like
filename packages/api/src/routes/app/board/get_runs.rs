@@ -88,8 +88,7 @@ async fn hydrate_node_summaries(
 
     let mut by_run: HashMap<String, StoredLogMeta> = HashMap::new();
     for batch in batches {
-        let stored: Vec<StoredLogMeta> =
-            serde_arrow::from_record_batch(&batch).unwrap_or_default();
+        let stored: Vec<StoredLogMeta> = serde_arrow::from_record_batch(&batch).unwrap_or_default();
         for summary in stored {
             by_run.insert(summary.run_id.clone(), summary);
         }

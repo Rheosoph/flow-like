@@ -1,4 +1,8 @@
 import {
+	type FlowIrCommitDisposition,
+	type FlowIrCommitDispositionResult,
+	type FlowIrCommitToken,
+	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
 	type IBoardState,
@@ -25,13 +29,16 @@ import {
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import type {
 	ChatImage,
 	CopilotScope,
+	CopilotToolContext,
 	UIActionContext,
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
 } from "@flow-like/flow-like-ui/lib/schema/copilot";
+import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
@@ -45,6 +52,7 @@ import {
 	apiPut,
 	getApiBaseUrl,
 } from "./api-utils";
+import { executionElementsFromResponse } from "./execution-elements";
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -109,11 +117,21 @@ function handleProgressEvent(event: IIntercomEvent): void {
 }
 
 export class WebBoardState implements IBoardState {
+	private readonly copilotAbortControllers = new Map<string, AbortController>();
+	private readonly appIdByBoardId = new Map<string, string>();
+
 	constructor(private readonly backend: WebBackendRef) {}
 
 	async getBoards(appId: string): Promise<IBoard[]> {
 		try {
-			return await apiGet<IBoard[]>(`apps/${appId}/board`, this.backend.auth);
+			const boards = await apiGet<IBoard[]>(
+				`apps/${appId}/board`,
+				this.backend.auth,
+			);
+			for (const board of boards) {
+				this.appIdByBoardId.set(board.id, appId);
+			}
+			return boards;
 		} catch {
 			return [];
 		}
@@ -138,6 +156,7 @@ export class WebBoardState implements IBoardState {
 			`apps/${appId}/board/${boardId}${params}`,
 			this.backend.auth,
 		);
+		this.appIdByBoardId.set(boardId, appId);
 
 		// Presign media comments (Image/Video)
 		await this.presignMediaComments(appId, boardId, board);
@@ -293,7 +312,11 @@ export class WebBoardState implements IBoardState {
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined> {
 		// Check OAuth tokens before execution
-		const board = await this.getBoard(appId, boardId);
+		const board = await this.getBoard(
+			appId,
+			boardId,
+			normalizeBoardVersion(payload.version),
+		);
 		const hub = await getHubConfig(this.backend.profile);
 		const oauthService = getOAuthService(
 			getOAuthApiBaseUrl(this.backend.profile?.hub),
@@ -408,6 +431,7 @@ export class WebBoardState implements IBoardState {
 				headers,
 				body: JSON.stringify({
 					node_id: payload.id,
+					version: payload.version,
 					payload: payload.payload,
 					stream_state: streamState ?? true,
 					token: this.backend.auth?.user?.access_token,
@@ -678,6 +702,56 @@ export class WebBoardState implements IBoardState {
 		);
 	}
 
+	async flowIrCommitDisposition(
+		token: FlowIrCommitToken,
+		disposition: FlowIrCommitDisposition,
+	): Promise<FlowIrCommitDispositionResult> {
+		const appId = this.appIdByBoardId.get(token.board_id);
+		if (!appId) {
+			throw new Error(
+				"The app owning this compiled workflow review is unavailable",
+			);
+		}
+		return apiPost<FlowIrCommitDispositionResult>(
+			`apps/${appId}/board/${token.board_id}/flow-ir-commit/disposition`,
+			{ token, disposition },
+			this.backend.auth,
+		);
+	}
+
+	async applyFlowIrCommit(
+		appId: string,
+		token: FlowIrCommitToken,
+	): Promise<IApplyFlowIrCommitResponse> {
+		this.appIdByBoardId.set(token.board_id, appId);
+		if (token.requires_destructive_approval === true) {
+			const approved =
+				typeof window !== "undefined" &&
+				window.confirm(
+					"This FlowScript review removes or replaces existing workflow items. Delete them and apply the exact compiled review?",
+				);
+			if (!approved) {
+				return {
+					status: "error",
+					code: "IR_COMMIT_DESTRUCTIVE_APPROVAL_DENIED",
+					message:
+						"Destructive workflow approval was cancelled. Nothing was applied and the review remains pending.",
+					commands: [],
+					board_commands: [],
+					diagnostics: [],
+				};
+			}
+		}
+		return apiPost<IApplyFlowIrCommitResponse>(
+			`apps/${appId}/board/${token.board_id}/flow-ir-commit/apply`,
+			{
+				token,
+				approve_destructive: token.requires_destructive_approval === true,
+			},
+			this.backend.auth,
+		);
+	}
+
 	async getFlowScript(
 		appId: string,
 		boardId: string,
@@ -699,16 +773,21 @@ export class WebBoardState implements IBoardState {
 		boardId: string,
 		pageId: string,
 		wildcard?: boolean,
+		version?: [number, number, number],
 	): Promise<Record<string, unknown>> {
 		const params = new URLSearchParams();
 		params.set("page_id", pageId);
 		if (wildcard !== undefined) params.set("wildcard", String(wildcard));
+		if (version) params.set("version", version.join("_"));
 
 		try {
-			return await apiGet<Record<string, unknown>>(
+			const response = await apiGet<{
+				elements: Record<string, unknown>;
+			}>(
 				`apps/${appId}/board/${boardId}/elements?${params}`,
 				this.backend.auth,
 			);
+			return executionElementsFromResponse(response);
 		} catch {
 			return {};
 		}
@@ -726,10 +805,23 @@ export class WebBoardState implements IBoardState {
 		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
+		reasoningEffort?: string,
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		_nested?: boolean,
+		_readOnly?: boolean,
+		toolContext?: CopilotToolContext,
+		requestId?: string,
+		rawUserPrompt?: string,
 	): Promise<UnifiedCopilotResponse> {
+		const contextAppId =
+			toolContext?.appId ?? actionContext?.app_id ?? runContext?.app_id;
+		const contextBoardId =
+			toolContext?.boardId ?? board?.id ?? runContext?.board_id;
+		if (contextAppId && contextBoardId) {
+			this.appIdByBoardId.set(contextBoardId, contextAppId);
+		}
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
 
@@ -745,118 +837,147 @@ export class WebBoardState implements IBoardState {
 		}
 
 		const wantsStream = Boolean(onToken);
-		const response = await fetch(url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify({
-				scope,
-				board,
-				selected_node_ids: selectedNodeIds,
-				current_surface: currentSurface,
-				selected_component_ids: selectedComponentIds,
-				user_prompt: userPrompt,
-				history,
-				request_images: requestImages,
-				model_id: modelId,
-				token,
-				run_context: runContext,
-				action_context: actionContext,
-				stream: wantsStream,
-			}),
-		});
-
-		if (!response.ok) {
-			throw new Error(`Copilot chat failed: ${response.status}`);
+		const abortController = new AbortController();
+		if (requestId) {
+			this.copilotAbortControllers.get(requestId)?.abort();
+			this.copilotAbortControllers.set(requestId, abortController);
 		}
+		try {
+			const response = await fetch(url, {
+				method: "POST",
+				headers,
+				signal: abortController.signal,
+				body: JSON.stringify({
+					scope,
+					board,
+					selected_node_ids: selectedNodeIds,
+					current_surface: currentSurface,
+					selected_component_ids: selectedComponentIds,
+					user_prompt: userPrompt,
+					raw_user_prompt: rawUserPrompt,
+					conversation_id: toolContext?.conversationId,
+					source_user_prompt: toolContext?.sourceUserPrompt,
+					history,
+					request_images: requestImages,
+					model_id: modelId,
+					reasoning_effort: reasoningEffort,
+					token,
+					run_context: runContext,
+					action_context: actionContext,
+					app_id: contextAppId,
+					stream: wantsStream,
+				}),
+			});
 
-		if (
-			onToken &&
-			response.body &&
-			response.headers.get("content-type")?.includes("text/event-stream")
-		) {
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			let result: UnifiedCopilotResponse | undefined;
-			let streamError: Error | undefined;
-
-			const handleEvent = (rawEvent: string) => {
-				if (!rawEvent.trim()) return;
-
-				let eventName = "message";
-				const dataLines: string[] = [];
-
-				for (const line of rawEvent.split(/\r?\n/)) {
-					if (line.startsWith(":")) continue;
-					if (line.startsWith("event:")) {
-						eventName = line.slice("event:".length).trim();
-					} else if (line.startsWith("data:")) {
-						dataLines.push(line.slice("data:".length).replace(/^\s/, ""));
-					}
-				}
-
-				const data = dataLines.join("\n");
-				if (!data) return;
-
-				if (eventName === "token" || eventName === "message") {
-					onToken(data);
-					return;
-				}
-
-				if (eventName === "final") {
-					try {
-						result = JSON.parse(data) as UnifiedCopilotResponse;
-					} catch {
-						streamError = new Error("Failed to parse final Copilot response");
-					}
-					return;
-				}
-
-				if (eventName === "error") {
-					let message = "Copilot chat failed";
-					try {
-						const parsed = JSON.parse(data) as { error?: string };
-						message = parsed.error ?? message;
-					} catch {
-						message = data;
-					}
-					streamError = new Error(message);
-				}
-			};
-
-			const consumeBufferedEvents = () => {
-				let separatorIndex = buffer.search(/\r?\n\r?\n/);
-				while (separatorIndex !== -1) {
-					const rawEvent = buffer.slice(0, separatorIndex);
-					const separatorLength =
-						buffer.slice(separatorIndex, separatorIndex + 4) === "\r\n\r\n"
-							? 4
-							: 2;
-					buffer = buffer.slice(separatorIndex + separatorLength);
-					handleEvent(rawEvent);
-					if (streamError) throw streamError;
-					separatorIndex = buffer.search(/\r?\n\r?\n/);
-				}
-			};
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder.decode(value, { stream: true });
-				consumeBufferedEvents();
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw apiResponseError(response, errorText, "ai/copilot/chat");
 			}
 
-			buffer += decoder.decode();
-			if (buffer.trim()) handleEvent(buffer);
-			if (streamError) throw streamError;
-			if (!result)
-				throw new Error("Copilot stream ended without a final event");
+			if (
+				onToken &&
+				response.body &&
+				response.headers.get("content-type")?.includes("text/event-stream")
+			) {
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				let result: UnifiedCopilotResponse | undefined;
+				let streamError: Error | undefined;
 
-			return result;
+				const handleEvent = (rawEvent: string) => {
+					if (!rawEvent.trim()) return;
+
+					let eventName = "message";
+					const dataLines: string[] = [];
+
+					for (const line of rawEvent.split(/\r?\n/)) {
+						if (line.startsWith(":")) continue;
+						if (line.startsWith("event:")) {
+							eventName = line.slice("event:".length).trim();
+						} else if (line.startsWith("data:")) {
+							dataLines.push(line.slice("data:".length).replace(/^\s/, ""));
+						}
+					}
+
+					const data = dataLines.join("\n");
+					if (!data) return;
+
+					if (eventName === "token" || eventName === "message") {
+						onToken(data);
+						return;
+					}
+
+					if (eventName === "final") {
+						try {
+							result = JSON.parse(data) as UnifiedCopilotResponse;
+						} catch {
+							streamError = new Error("Failed to parse final Copilot response");
+						}
+						return;
+					}
+
+					if (eventName === "error") {
+						let message = "Copilot chat failed";
+						try {
+							const parsed = JSON.parse(data) as { error?: string };
+							message = parsed.error ?? message;
+						} catch {
+							message = data;
+						}
+						streamError = new Error(message);
+					}
+				};
+
+				const consumeBufferedEvents = () => {
+					let separatorIndex = buffer.search(/\r?\n\r?\n/);
+					while (separatorIndex !== -1) {
+						const rawEvent = buffer.slice(0, separatorIndex);
+						const separatorLength =
+							buffer.slice(separatorIndex, separatorIndex + 4) === "\r\n\r\n"
+								? 4
+								: 2;
+						buffer = buffer.slice(separatorIndex + separatorLength);
+						handleEvent(rawEvent);
+						if (streamError) throw streamError;
+						separatorIndex = buffer.search(/\r?\n\r?\n/);
+					}
+				};
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+					consumeBufferedEvents();
+				}
+
+				buffer += decoder.decode();
+				if (buffer.trim()) handleEvent(buffer);
+				if (streamError) throw streamError;
+				if (!result)
+					throw new Error("Copilot stream ended without a final event");
+
+				return result;
+			}
+
+			return response.json();
+		} finally {
+			if (
+				requestId &&
+				this.copilotAbortControllers.get(requestId) === abortController
+			) {
+				this.copilotAbortControllers.delete(requestId);
+			}
 		}
+	}
 
-		return response.json();
+	async cancelCopilotChat(requestId: string): Promise<void> {
+		const controller = this.copilotAbortControllers.get(requestId);
+		controller?.abort();
+		if (this.copilotAbortControllers.get(requestId) === controller) {
+			this.copilotAbortControllers.delete(requestId);
+		}
 	}
 
 	async prerunBoard(

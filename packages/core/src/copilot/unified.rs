@@ -10,7 +10,8 @@ use flow_like_types::Result;
 use crate::a2ui::SurfaceComponent;
 use crate::a2ui::copilot::A2UICopilot;
 use crate::flow::board::Board;
-use crate::flow::copilot::{CatalogProvider, Copilot, RunContext};
+use crate::flow::copilot::platform::PlatformToolBridge;
+use crate::flow::copilot::{CatalogProvider, Copilot, FlowIrDraftStore, RunContext};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -30,12 +31,53 @@ struct CombinedScopePlan {
     rationale: String,
 }
 
+/// A board-primary combined run must not strand its typed claim when the UI-secondary run fails.
+/// The token is transferred back into the merged response only after every requested scope has
+/// completed successfully.
+struct CombinedScopeFlowIrClaim {
+    store: Arc<FlowIrDraftStore>,
+    token: Option<FlowIrCommitToken>,
+}
+
+impl CombinedScopeFlowIrClaim {
+    fn new(store: Arc<FlowIrDraftStore>, token: FlowIrCommitToken) -> Self {
+        Self {
+            store,
+            token: Some(token),
+        }
+    }
+
+    fn transfer(mut self) -> FlowIrCommitToken {
+        self.token
+            .take()
+            .expect("combined-scope typed claim transfers at most once")
+    }
+}
+
+impl Drop for CombinedScopeFlowIrClaim {
+    fn drop(&mut self) {
+        let Some(token) = self.token.take() else {
+            return;
+        };
+        self.store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        );
+    }
+}
+
 /// The unified copilot that delegates to appropriate implementations
 pub struct UnifiedCopilot {
     state: Arc<FlowLikeState>,
     catalog_provider: Option<Arc<dyn CatalogProvider>>,
     profile: Option<Arc<Profile>>,
     current_template_id: Option<String>,
+    runtime_bridge: Option<Arc<dyn PlatformToolBridge>>,
+    flow_ir_drafts: Arc<FlowIrDraftStore>,
+    typed_flow_ir_lifecycle: bool,
+    request_identity_prompt: Option<String>,
 }
 
 impl UnifiedCopilot {
@@ -51,7 +93,38 @@ impl UnifiedCopilot {
             catalog_provider,
             profile,
             current_template_id,
+            runtime_bridge: None,
+            flow_ir_drafts: Arc::new(FlowIrDraftStore::new()),
+            typed_flow_ir_lifecycle: false,
+            request_identity_prompt: None,
         })
+    }
+
+    /// Bind retained-draft and acceptance-contract identity to a host-derived request identity
+    /// (e.g. conversation id + immutable source prompt) instead of the raw prompt text alone.
+    /// When unset, identity falls back to `raw_user_prompt`/`user_prompt` so existing callers
+    /// keep their behavior; `raw_user_prompt` continues to drive routing and edit classification
+    /// either way.
+    pub fn with_request_identity_prompt(mut self, prompt: Option<String>) -> Self {
+        self.request_identity_prompt = prompt.filter(|prompt| !prompt.trim().is_empty());
+        self
+    }
+
+    /// Attach the host runtime bridge used by board-scoped profile/Bits models to execute
+    /// persisted Events/nodes and query their logs. Server callers may omit it when no interactive
+    /// execution host is available.
+    pub fn with_runtime_bridge(mut self, bridge: Arc<dyn PlatformToolBridge>) -> Self {
+        self.runtime_bridge = Some(bridge);
+        self
+    }
+
+    /// Reuse a host-owned, board-scoped legacy draft store across chat invocations. Attaching the
+    /// store does not advertise or enable the typed model-facing lifecycle: FlowScript remains the
+    /// workflow authoring surface. The retained store only lets hosts resolve any outstanding
+    /// review tokens created by older sessions.
+    pub fn with_flow_ir_draft_store(mut self, store: Arc<FlowIrDraftStore>) -> Self {
+        self.flow_ir_drafts = store;
+        self
     }
 
     /// Main entry point - unified chat that can handle board, UI, or both
@@ -76,6 +149,51 @@ impl UnifiedCopilot {
     where
         F: Fn(String) + Send + Sync + 'static + Clone,
     {
+        self.chat_with_raw_user_prompt(
+            scope,
+            board,
+            selected_node_ids,
+            current_surface,
+            selected_component_ids,
+            user_prompt,
+            None,
+            current_images,
+            history,
+            model_id,
+            token,
+            context,
+            on_token,
+        )
+        .await
+    }
+
+    /// Unified chat with an immutable copy of the user-authored request. Hosts may put execution
+    /// context or mode guidance in `user_prompt`; routing, mutation classification, and typed-flow
+    /// acceptance binding use `raw_user_prompt` exclusively when it is present.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn chat_with_raw_user_prompt<F>(
+        &self,
+        scope: CopilotScope,
+        board: Option<&Board>,
+        selected_node_ids: &[String],
+        current_surface: Option<&Vec<SurfaceComponent>>,
+        selected_component_ids: &[String],
+        user_prompt: String,
+        raw_user_prompt: Option<String>,
+        current_images: Option<Vec<ChatImage>>,
+        history: Vec<UnifiedChatMessage>,
+        model_id: Option<String>,
+        token: Option<String>,
+        context: Option<UnifiedContext>,
+        on_token: Option<F>,
+    ) -> Result<UnifiedCopilotResponse>
+    where
+        F: Fn(String) + Send + Sync + 'static + Clone,
+    {
+        let raw_user_prompt = raw_user_prompt
+            .filter(|prompt| !prompt.trim().is_empty())
+            .unwrap_or_else(|| user_prompt.clone());
+
         // Determine effective scope based on available data
         let effective_scope = self.determine_effective_scope(scope, board, current_surface);
 
@@ -96,6 +214,7 @@ impl UnifiedCopilot {
                     })?,
                     selected_node_ids,
                     user_prompt,
+                    raw_user_prompt,
                     current_images,
                     history,
                     model_id,
@@ -127,6 +246,7 @@ impl UnifiedCopilot {
                     current_surface,
                     selected_component_ids,
                     user_prompt,
+                    raw_user_prompt,
                     current_images,
                     history,
                     model_id,
@@ -173,6 +293,7 @@ impl UnifiedCopilot {
         board: &Board,
         selected_node_ids: &[String],
         user_prompt: String,
+        raw_user_prompt: String,
         current_images: Option<Vec<ChatImage>>,
         history: Vec<UnifiedChatMessage>,
         model_id: Option<String>,
@@ -188,13 +309,20 @@ impl UnifiedCopilot {
             .as_ref()
             .ok_or_else(|| flow_like_types::anyhow!("Catalog provider required for Board mode"))?;
 
-        let copilot = Copilot::new(
+        let mut copilot = Copilot::new(
             self.state.clone(),
             catalog_provider.clone(),
             self.profile.clone(),
             self.current_template_id.clone(),
         )
         .await?;
+        if let Some(bridge) = &self.runtime_bridge {
+            copilot = copilot.with_runtime_bridge(bridge.clone());
+        }
+        copilot = copilot.with_flow_ir_draft_store(self.flow_ir_drafts.clone());
+        copilot = copilot.with_typed_flow_ir_enabled(self.typed_flow_ir_lifecycle);
+        copilot = copilot.with_raw_user_prompt(Some(raw_user_prompt));
+        copilot = copilot.with_request_identity_prompt(self.request_identity_prompt.clone());
 
         // Convert history to flow ChatMessage format
         let board_history = history
@@ -238,6 +366,7 @@ impl UnifiedCopilot {
             canvas_settings: None,
             root_component_id: None,
             flowscript_workspace: response.flowscript_workspace,
+            flow_ir_commit: response.flow_ir_commit,
         })
     }
 
@@ -310,6 +439,7 @@ impl UnifiedCopilot {
             canvas_settings: response.canvas_settings,
             root_component_id: response.root_component_id,
             flowscript_workspace: None,
+            flow_ir_commit: None,
         })
     }
 
@@ -321,6 +451,7 @@ impl UnifiedCopilot {
         current_surface: Option<&Vec<SurfaceComponent>>,
         selected_component_ids: &[String],
         user_prompt: String,
+        raw_user_prompt: String,
         current_images: Option<Vec<ChatImage>>,
         history: Vec<UnifiedChatMessage>,
         model_id: Option<String>,
@@ -331,7 +462,7 @@ impl UnifiedCopilot {
     where
         F: Fn(String) + Send + Sync + 'static + Clone,
     {
-        let plan = self.plan_combined_scope(&user_prompt, board, current_surface);
+        let plan = self.plan_combined_scope(&raw_user_prompt, board, current_surface);
 
         if let Some(ref callback) = on_token {
             let event = UnifiedStreamEvent::Thinking(plan.rationale.clone());
@@ -351,6 +482,7 @@ impl UnifiedCopilot {
                     board,
                     selected_node_ids,
                     user_prompt,
+                    raw_user_prompt,
                     current_images,
                     history,
                     model_id,
@@ -376,7 +508,7 @@ impl UnifiedCopilot {
             }
             CombinedScopeTarget::Both => {
                 let primary_is_board = plan.primary_scope == CopilotScope::Board;
-                let primary_response = if primary_is_board {
+                let mut primary_response = if primary_is_board {
                     let board = board.ok_or_else(|| {
                         flow_like_types::anyhow!("Board is required for combined workflow requests")
                     })?;
@@ -385,6 +517,7 @@ impl UnifiedCopilot {
                         board,
                         selected_node_ids,
                         user_prompt.clone(),
+                        raw_user_prompt.clone(),
                         current_images.clone(),
                         history.clone(),
                         model_id.clone(),
@@ -408,6 +541,11 @@ impl UnifiedCopilot {
                     .await?
                 };
 
+                let primary_claim = primary_response
+                    .flow_ir_commit
+                    .take()
+                    .map(|token| CombinedScopeFlowIrClaim::new(self.flow_ir_drafts.clone(), token));
+
                 let secondary_response = if primary_is_board {
                     self.delegate_to_frontend(
                         current_surface,
@@ -430,6 +568,7 @@ impl UnifiedCopilot {
                         board,
                         selected_node_ids,
                         user_prompt,
+                        raw_user_prompt,
                         current_images,
                         history,
                         model_id,
@@ -439,6 +578,10 @@ impl UnifiedCopilot {
                     )
                     .await?
                 };
+
+                if let Some(claim) = primary_claim {
+                    primary_response.flow_ir_commit = Some(claim.transfer());
+                }
 
                 Ok(Self::merge_combined_responses(
                     primary_response,
@@ -454,7 +597,21 @@ impl UnifiedCopilot {
         board: Option<&Board>,
         current_surface: Option<&Vec<SurfaceComponent>>,
     ) -> CombinedScopePlan {
-        if board.is_none() || self.catalog_provider.is_none() {
+        Self::plan_combined_scope_with_availability(
+            user_prompt,
+            board.is_some(),
+            self.catalog_provider.is_some(),
+            current_surface.is_some(),
+        )
+    }
+
+    fn plan_combined_scope_with_availability(
+        user_prompt: &str,
+        board_available: bool,
+        catalog_available: bool,
+        current_surface_available: bool,
+    ) -> CombinedScopePlan {
+        if !board_available || !catalog_available {
             return CombinedScopePlan {
                 target: CombinedScopeTarget::Frontend,
                 primary_scope: CopilotScope::Frontend,
@@ -546,7 +703,7 @@ impl UnifiedCopilot {
             };
         }
 
-        if ui_score > board_score && current_surface.is_some() {
+        if ui_score > board_score && current_surface_available {
             return CombinedScopePlan {
                 target: CombinedScopeTarget::Frontend,
                 primary_scope: CopilotScope::Frontend,
@@ -612,6 +769,7 @@ impl UnifiedCopilot {
         let flowscript_workspace = primary
             .flowscript_workspace
             .or(secondary.flowscript_workspace);
+        let flow_ir_commit = primary.flow_ir_commit.or(secondary.flow_ir_commit);
 
         UnifiedCopilotResponse {
             message: message_parts.join("\n\n"),
@@ -622,6 +780,7 @@ impl UnifiedCopilot {
             canvas_settings: secondary.canvas_settings.or(primary.canvas_settings),
             root_component_id: secondary.root_component_id.or(primary.root_component_id),
             flowscript_workspace,
+            flow_ir_commit,
         }
     }
 
@@ -631,5 +790,209 @@ impl UnifiedCopilot {
             CopilotScope::Frontend => "UI",
             CopilotScope::Both => "FlowPilot",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::{
+        board::{Board, ExecutionMode, ExecutionStage},
+        copilot::{
+            BeginFlowIrDraftArgs, CommitFlowIrDraftArgs, FlowCapabilityPlanRequest,
+            FlowCapabilityRequirement, FlowIrArg, FlowIrDraftMode, FlowIrLiteral, FlowIrModule,
+            FlowIrProgram, FlowIrStep, FlowIrValue, FlowModuleEstimate, FlowModuleKind,
+            NodeMetadata, PinMetadata,
+        },
+        execution::LogLevel,
+    };
+    use flow_like_storage::Path;
+    use std::{collections::HashMap, time::SystemTime};
+
+    fn claim_test_board() -> Board {
+        Board {
+            id: "combined-claim-board".to_string(),
+            name: "Board".to_string(),
+            description: String::new(),
+            nodes: HashMap::new(),
+            variables: HashMap::new(),
+            comments: HashMap::new(),
+            viewport: (0.0, 0.0, 1.0),
+            version: (0, 0, 1),
+            stage: ExecutionStage::Dev,
+            log_level: LogLevel::Info,
+            execution_mode: ExecutionMode::Hybrid,
+            refs: HashMap::new(),
+            layers: HashMap::new(),
+            page_ids: Vec::new(),
+            hash: None,
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            parent: None,
+            board_dir: Path::from("/test"),
+            logic_nodes: HashMap::new(),
+            app_state: None,
+        }
+    }
+
+    fn claim_test_pin(name: &str, data_type: &str) -> PinMetadata {
+        PinMetadata {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: String::new(),
+            data_type: data_type.to_string(),
+            value_type: "Normal".to_string(),
+            default_value: None,
+            schema: None,
+            is_generic: false,
+            valid_values: None,
+            enforce_schema: false,
+        }
+    }
+
+    fn claim_test_catalog() -> Vec<NodeMetadata> {
+        vec![
+            NodeMetadata {
+                name: "events_simple".to_string(),
+                friendly_name: "events_simple".to_string(),
+                description: String::new(),
+                inputs: Vec::new(),
+                outputs: vec![claim_test_pin("exec_out", "Execution")],
+                category: None,
+                required_inputs: Vec::new(),
+                companion_nodes: Vec::new(),
+                capability_tags: Vec::new(),
+            },
+            NodeMetadata {
+                name: "string_format".to_string(),
+                friendly_name: "string_format".to_string(),
+                description: String::new(),
+                inputs: vec![claim_test_pin("format_string", "String")],
+                outputs: vec![claim_test_pin("string", "String")],
+                category: None,
+                required_inputs: Vec::new(),
+                companion_nodes: Vec::new(),
+                capability_tags: Vec::new(),
+            },
+        ]
+    }
+
+    fn claim_test_commit() -> (
+        Arc<FlowIrDraftStore>,
+        Board,
+        Vec<NodeMetadata>,
+        CommitFlowIrDraftArgs,
+        FlowIrCommitToken,
+    ) {
+        let store = Arc::new(FlowIrDraftStore::new());
+        let board = claim_test_board();
+        let catalog = claim_test_catalog();
+        store.begin(
+            &board,
+            &catalog,
+            BeginFlowIrDraftArgs {
+                draft_id: "combined-primary".to_string(),
+                replace_existing: false,
+                expected_modules: vec!["eventsSimple".to_string()],
+                capability_plan: FlowCapabilityPlanRequest {
+                    requirements: vec![FlowCapabilityRequirement {
+                        id: "format".to_string(),
+                        intent: "format a message".to_string(),
+                        required: true,
+                        exact_node_type: Some("string_format".to_string()),
+                        inputs: Vec::new(),
+                        outputs: Vec::new(),
+                    }],
+                    modules: vec![FlowModuleEstimate {
+                        name: "eventsSimple".to_string(),
+                        kind: FlowModuleKind::Event,
+                        estimated_nodes: 1,
+                    }],
+                },
+                mode: FlowIrDraftMode::Additive,
+                program: FlowIrProgram {
+                    modules: vec![FlowIrModule::Event {
+                        name: "eventsSimple".to_string(),
+                        node_type: "events_simple".to_string(),
+                        params: Vec::new(),
+                        steps: vec![FlowIrStep::Node {
+                            id: "message".to_string(),
+                            node_type: "string_format".to_string(),
+                            args: vec![FlowIrArg {
+                                pin: "format_string".to_string(),
+                                occurrence: 0,
+                                value: FlowIrValue::Literal {
+                                    value: FlowIrLiteral::String("hello".to_string()),
+                                },
+                            }],
+                            continue_from: None,
+                            exec_arms: Vec::new(),
+                            anchor: None,
+                        }],
+                        anchor: None,
+                    }],
+                    ..Default::default()
+                },
+            },
+        );
+        let args = CommitFlowIrDraftArgs {
+            draft_id: "combined-primary".to_string(),
+            expected_revision: 0,
+            allow_deletions: false,
+            remove_node_ids: Vec::new(),
+            remove_variable_ids: Vec::new(),
+            remove_layer_ids: Vec::new(),
+            remove_comment_ids: Vec::new(),
+            use_best_candidate: false,
+        };
+        let queued = store.commit(&board, &catalog, args.clone());
+        assert_eq!(queued.status, "queued", "{queued:#?}");
+        let token = store
+            .latest_pending_commit_token(&board.id)
+            .expect("queued combined-scope claim");
+        (store, board, catalog, args, token)
+    }
+
+    #[test]
+    fn ui_only_raw_request_stays_frontend_despite_unified_workflow_wrapper() {
+        let raw = "Create a settings page with a form and two buttons";
+        let wrapper = "UNIFIED MODE: generate workflow nodes and UI components. Create a settings page with a form and two buttons";
+
+        let raw_plan = UnifiedCopilot::plan_combined_scope_with_availability(raw, true, true, true);
+        let contaminated_plan =
+            UnifiedCopilot::plan_combined_scope_with_availability(wrapper, true, true, true);
+
+        assert_eq!(raw_plan.target, CombinedScopeTarget::Frontend);
+        assert_eq!(contaminated_plan.target, CombinedScopeTarget::Both);
+    }
+
+    #[test]
+    fn secondary_scope_error_releases_primary_typed_claim_but_success_transfers_it() {
+        let (store, board, catalog, args, token) = claim_test_commit();
+        {
+            let _secondary_error_guard =
+                CombinedScopeFlowIrClaim::new(store.clone(), token.clone());
+        }
+        assert!(!store.pending_commit_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        ));
+
+        let retried = store.commit(&board, &catalog, args);
+        assert_eq!(retried.status, "queued", "{retried:#?}");
+        let retried_token = store
+            .latest_pending_commit_token(&board.id)
+            .expect("retried combined-scope claim");
+        let transferred =
+            CombinedScopeFlowIrClaim::new(store.clone(), retried_token.clone()).transfer();
+        assert_eq!(transferred, retried_token);
+        assert!(store.pending_commit_matches(
+            &retried_token.draft_id,
+            retried_token.revision,
+            &retried_token.base_fingerprint,
+            &retried_token.claim_id,
+        ));
     }
 }

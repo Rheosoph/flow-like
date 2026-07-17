@@ -280,7 +280,8 @@ export interface AbsoluteComponent extends ComponentBase {
 
 export interface BoxComponent extends ComponentBase {
 	type: "box";
-	as?: BoundValue; // "div" | "section" | "header" | "footer" | "main" | "aside" | "nav" | "article" | "figure" | "figcaption" | "span"
+	/** Resolves to one of the allowlisted semantic elements; invalid values render as div. */
+	as?: BoundValue;
 }
 
 export interface CenterComponent extends ComponentBase {

@@ -682,9 +682,15 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 	},
 	boundingBoxOverlay: {
 		src: str("https://placehold.co/800x600"),
+		alt: str("Image with bounding boxes"),
 		boxes: { literalJson: "[]" },
-		editable: bool(false),
 		showLabels: bool(true),
+		showConfidence: bool(true),
+		strokeWidth: num(2),
+		fontSize: num(12),
+		fit: str("contain"),
+		normalized: bool(false),
+		interactive: bool(true),
 	},
 	imageLabeler: {
 		src: str("https://placehold.co/800x600"),

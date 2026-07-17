@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { IIndexType } from "@flow-like/flow-like-ui";
 import type {
 	IAddColumnPayload,
+	ICreateTableResult,
+	IDatabaseSchemaField,
 	IDatabaseState,
 	IIndexConfig,
 	IQueryTablePayload,
@@ -24,6 +26,39 @@ function appendScope(url: string, userScoped?: boolean): string {
 
 export class DatabaseState implements IDatabaseState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	async createTable(
+		appId: string,
+		tableName: string,
+		fields: IDatabaseSchemaField[],
+		ifNotExists = true,
+		userScoped?: boolean,
+	): Promise<ICreateTableResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return await fetcher(
+				this.backend.profile!,
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}`,
+					userScoped,
+				),
+				{
+					method: "POST",
+					body: JSON.stringify({ fields, if_not_exists: ifNotExists }),
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke<ICreateTableResult>("db_create_table", {
+			appId,
+			tableName,
+			fields,
+			ifNotExists,
+			userScoped: userScoped ?? false,
+		});
+	}
 
 	private indexTypeToString(indexType: IIndexType): string {
 		const map: Record<IIndexType, string> = {

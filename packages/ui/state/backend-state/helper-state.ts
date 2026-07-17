@@ -18,6 +18,9 @@ export interface ITemporaryUploadedFile {
 	sizeLimitBytes?: number;
 }
 
+/** Where the workflow consuming a temporary upload will execute. */
+export type ITemporaryUploadExecutionTarget = "local" | "remote";
+
 export interface IHelperState {
 	getPathMeta(folderPath: string): Promise<IFileMetadata[]>;
 	openFileOrFolderMenu(
@@ -31,15 +34,23 @@ export interface IHelperState {
 	 * @param file The file to convert.
 	 * @param offline Whether to use offline storage (optional).
 	 * @param appId Optional app id for app-scoped temporary uploads.
+	 * @param executionTarget Where the workflow consuming the upload will run.
 	 */
-	fileToUrl(file: File, offline?: boolean, appId?: string): Promise<string>;
+	fileToUrl(
+		file: File,
+		offline?: boolean,
+		appId?: string,
+		executionTarget?: ITemporaryUploadExecutionTarget,
+	): Promise<string>;
 
 	/**
 	 * Uploads a file to temporary storage and returns the URL plus optional FlowPath metadata.
+	 * Desktop callers can use executionTarget to keep local runs on a local asset path.
 	 */
 	fileToTemporaryFile?(
 		file: File,
 		offline?: boolean,
 		appId?: string,
+		executionTarget?: ITemporaryUploadExecutionTarget,
 	): Promise<ITemporaryUploadedFile>;
 }

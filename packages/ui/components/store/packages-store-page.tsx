@@ -43,6 +43,7 @@ import {
 } from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
 import { ExploreHubHeader } from "./explore-hub-header";
+import { getPackageOverviewHref } from "./package-navigation";
 
 type SortOption =
 	| "relevance"
@@ -293,7 +294,11 @@ export function PackageDetailWrapper({
 		router.replace(url.pathname + url.search, { scroll: false });
 	}, [purchaseStatus, router]);
 
-	const handleBack = useCallback(() => router.back(), [router]);
+	const handleBack = useCallback(() => {
+		router.replace(getPackageOverviewHref(searchParams), {
+			scroll: false,
+		});
+	}, [router, searchParams]);
 	const compileStatus = getPackageStatus?.(packageId);
 
 	return (

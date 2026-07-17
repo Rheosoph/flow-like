@@ -100,6 +100,8 @@ impl NodeLogic for CreateLocalDatabaseNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let table: String = context.evaluate_pin("name").await?;
+        let table = table.trim().to_string();
+        LanceDBVectorStore::validate_table_name(&table)?;
         let user_scoped: bool = context.evaluate_pin("user_scoped").await.unwrap_or(false);
         let batch_size: i64 = context.evaluate_pin("batch_size").await.unwrap_or(1000);
         let batch_size = batch_size.max(0) as usize;

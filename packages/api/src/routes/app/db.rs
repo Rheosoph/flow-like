@@ -11,6 +11,7 @@ use crate::{
 pub mod add_column;
 pub mod alter_column;
 pub mod build_index;
+pub mod create_table;
 pub mod db_add;
 pub mod db_count;
 pub mod db_delete;
@@ -113,7 +114,8 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/{table}",
-            put(db_add::add_to_table)
+            post(create_table::create_table)
+                .put(db_add::add_to_table)
                 .delete(db_delete::delete_from_table)
                 .get(db_list::list_items),
         )

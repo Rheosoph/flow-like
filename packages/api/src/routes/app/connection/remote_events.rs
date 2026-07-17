@@ -19,7 +19,8 @@ use utoipa::ToSchema;
 
 /// Event types another app can invoke through a connection. Cron/webhook/
 /// sink events fire from their own triggers and are not remotely callable.
-pub const REMOTE_CALLABLE_EVENT_TYPES: &[&str] = &["simple_chat", "rest", "mcp", "generic", "webhook"];
+pub const REMOTE_CALLABLE_EVENT_TYPES: &[&str] =
+    &["simple_chat", "rest", "mcp", "generic", "webhook"];
 
 /// A connected app can call chat events (role-gated, no public surface) and
 /// REST/MCP events explicitly marked `INTERNAL`. Public REST/MCP events live

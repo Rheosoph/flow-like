@@ -56,6 +56,7 @@ import type {
 	IOAuthTokenStoreWithPending,
 	IStoredOAuthToken,
 } from "@flow-like/flow-like-ui/lib/oauth/types";
+import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IHub } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
 import {
 	convertJsonToUint8Array,
@@ -791,18 +792,14 @@ function EventConfiguration({
 	const board = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
-		[
-			appId,
-			formData.board_id,
-			event.board_version as [number, number, number] | undefined,
-		],
-		!!event.board_id && !isPageTargetEvent,
+		[appId, formData.board_id, normalizeBoardVersion(formData.board_version)],
+		!!formData.board_id && !isPageTargetEvent,
 	);
 	const versions = useInvoke(
 		backend.boardState.getBoardVersions,
 		backend.boardState,
 		[appId, formData.board_id],
-		(formData.board_id ?? "") !== "" && isEditing && !isPageTargetEvent,
+		(formData.board_id ?? "") !== "" && isEditing,
 	);
 
 	// Check if app is offline
@@ -1600,6 +1597,18 @@ function EventConfiguration({
 											{event.default_page_id}
 										</p>
 									</div>
+									<div>
+										<Label>Flow Version</Label>
+										<button
+											type="button"
+											className="mt-1 block w-full rounded px-2 py-1 -mx-2 text-left text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
+											onClick={enterEdit}
+										>
+											{event.board_version
+												? `v${event.board_version.join(".")}`
+												: "Latest"}
+										</button>
+									</div>
 								</CardContent>
 							)}
 							{!isEditing && !event.default_page_id && (
@@ -1689,6 +1698,7 @@ function EventConfiguration({
 												if (page?.boardId) {
 													handleInputChange("board_id", page.boardId);
 												}
+												handleInputChange("board_version", undefined);
 											}}
 										>
 											<SelectTrigger>
@@ -1698,6 +1708,37 @@ function EventConfiguration({
 												{(pages.data ?? []).map((p: PageListItem) => (
 													<SelectItem key={p.pageId} value={p.pageId}>
 														{p.name}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+									</div>
+									<div className="space-y-2">
+										<Label>Flow Version</Label>
+										<Select
+											value={formData.board_version?.join(".") ?? "latest"}
+											onValueChange={(value) =>
+												handleInputChange(
+													"board_version",
+													value === "latest"
+														? undefined
+														: normalizeBoardVersion(
+																value.split(".").map(Number),
+															),
+												)
+											}
+										>
+											<SelectTrigger>
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value="latest">Latest</SelectItem>
+												{versions.data?.map((version) => (
+													<SelectItem
+														key={version.join(".")}
+														value={version.join(".")}
+													>
+														v{version.join(".")}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -1737,21 +1778,24 @@ function EventConfiguration({
 										<div className="space-y-2">
 											<Label htmlFor="board">Flow Version</Label>
 											<Select
-												value={formData.board_version?.join(".") ?? ""}
+												value={formData.board_version?.join(".") ?? "latest"}
 												onValueChange={(value) => {
 													handleInputChange(
 														"board_version",
-														value === "" || value === "none"
+														value === "latest"
 															? undefined
-															: value.split(".").map(Number),
+															: normalizeBoardVersion(
+																	value.split(".").map(Number),
+																),
 													);
 													handleInputChange("node_id", undefined);
 												}}
 											>
 												<SelectTrigger>
-													<SelectValue placeholder="Latest" />
+													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
+													<SelectItem value="latest">Latest</SelectItem>
 													{versions.data?.map((board) => (
 														<SelectItem
 															key={board.join(".")}
@@ -1760,9 +1804,6 @@ function EventConfiguration({
 															v{board.join(".")}
 														</SelectItem>
 													))}
-													<SelectItem key={""} value={"none"}>
-														Latest
-													</SelectItem>
 												</SelectContent>
 											</Select>
 										</div>

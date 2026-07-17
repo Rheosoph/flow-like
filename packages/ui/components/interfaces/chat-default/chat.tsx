@@ -42,6 +42,18 @@ function getMessageTextContent(message: IMessage): string {
 	return textContent?.text ?? "";
 }
 
+function sameStringArray(
+	left: readonly string[] | undefined,
+	right: readonly string[],
+): boolean {
+	return (
+		left === right ||
+		(left !== undefined &&
+			left.length === right.length &&
+			left.every((value, index) => value === right[index]))
+	);
+}
+
 export interface IChatProps {
 	messages: IMessage[];
 	onSendMessage: ISendMessageFunction;
@@ -235,18 +247,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				.reverse()
 				.find((msg) => msg.inner.role === "user");
 
+			let nextActiveTools: string[];
 			if (lastUserMessage) {
 				const availableTools = config?.tools ?? [];
 				const lastActiveTools = lastUserMessage.tools ?? [];
-				const newActiveTools = lastActiveTools.filter((tool) =>
+				nextActiveTools = lastActiveTools.filter((tool) =>
 					availableTools.includes(tool),
 				);
-
-				setDefaultActiveTools(newActiveTools);
-				return;
+			} else {
+				nextActiveTools = config?.default_tools ?? [];
 			}
 
-			setDefaultActiveTools(config?.default_tools ?? []);
+			// `config` is often assembled by a parent render. Avoid setting a freshly-created but
+			// semantically identical array on every pass, which otherwise causes an update-depth
+			// loop when `config.tools`/`default_tools` are inline arrays.
+			setDefaultActiveTools((current) =>
+				sameStringArray(current, nextActiveTools) ? current : nextActiveTools,
+			);
 		}, [messages, config?.tools, config?.default_tools]);
 
 		// Initial scroll to bottom when messages first load

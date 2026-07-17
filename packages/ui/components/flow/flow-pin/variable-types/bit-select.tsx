@@ -52,7 +52,7 @@ export function BitVariable({
 			if (!isOpen) return;
 
 			refreshSnapshot((version) => version + 1);
-			const loadPromise = selectorDataRef?.current.loadBits();
+			const loadPromise = selectorDataRef?.current.loadBits(true);
 			loadPromise?.finally(() => refreshSnapshot((version) => version + 1));
 		},
 		[selectorDataRef],
