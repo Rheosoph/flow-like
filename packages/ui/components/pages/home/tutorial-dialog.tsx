@@ -57,12 +57,17 @@ function DiscordIcon({ className }: { className?: string }) {
 }
 
 // Reusable soap-film bubble — the exact FlowPilot shader (bubble-shader.ts), drawn as a free-floating
-// round film (u_morph 0, full radius). Canvas is oversized + unclipped so the bloom fades to true
-// transparency instead of a hard square edge, matching the launcher.
-function BubbleOrb({ size = 120 }: { size?: number }) {
+// round film (u_morph 0, full radius). The canvas is oversized (`bloom`×) and unclipped so the halo
+// fades to true transparency instead of a hard square edge, matching the launcher. `size` is the
+// layout box; a lower `bloom` keeps the halo tight so it stays inside a compact container (e.g. the
+// inline callout) instead of bleeding onto neighbouring text.
+function BubbleOrb({
+	size = 120,
+	bloom = 2.11,
+}: { size?: number; bloom?: number }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const [failed, setFailed] = useState(false);
-	const canvasPx = Math.round(size * 2.11);
+	const canvasPx = Math.round(size * bloom);
 	const offset = (canvasPx - size) / 2;
 
 	useEffect(() => {
@@ -211,7 +216,7 @@ function BubbleOrb({ size = 120 }: { size?: number }) {
 		return (
 			<span
 				aria-hidden="true"
-				className="block rounded-full bg-linear-to-br from-primary/40 via-purple-500/30 to-purple-600/20 ring-1 ring-primary/40"
+				className="block flex-none rounded-full bg-linear-to-br from-primary/40 via-purple-500/30 to-purple-600/20 ring-1 ring-primary/40"
 				style={{ width: size, height: size }}
 			/>
 		);
@@ -219,7 +224,7 @@ function BubbleOrb({ size = 120 }: { size?: number }) {
 
 	return (
 		<span
-			className="relative block"
+			className="relative block flex-none"
 			aria-hidden="true"
 			style={{ width: size, height: size }}
 		>
@@ -391,14 +396,14 @@ const COMMUNITY_LINKS = [
 		label: "Join our Discord",
 		hint: "Ask questions, share builds, meet the community",
 		icon: <DiscordIcon className="size-5" />,
-		bg: "bg-[#5865F2]",
+		bg: "bg-[#5865F2] text-white",
 	},
 	{
 		href: DOCS_URL,
 		label: "Read the docs",
 		hint: "Quickstart, guides & the full node reference",
 		icon: <BookOpen className="size-5" />,
-		bg: "bg-primary",
+		bg: "bg-primary text-white",
 	},
 	{
 		href: GITHUB_URL,
@@ -512,8 +517,8 @@ function StageMotif({ stepId }: { stepId: string }) {
 						node: <BookOpen className="size-8 text-white" />,
 					},
 					{
-						bg: "#24292f",
-						node: <GitHubLogoIcon className="size-8 text-white" />,
+						bg: "linear-gradient(150deg,#fafafa,#e4e4e7)",
+						node: <GitHubLogoIcon className="size-8 text-[#0d1117]" />,
 					},
 				].map((t, i) => (
 					<span
@@ -568,7 +573,7 @@ export function TutorialDialog() {
 	const active = STEPS[step];
 
 	useEffect(() => {
-		setShowTutorial(localStorage.getItem("tutorial-finished") !== "true");
+		setShowTutorial(localStorage.getItem("tutorial-finished-new") !== "true");
 	}, []);
 
 	// Lock background scroll while the tour is shown.
@@ -601,7 +606,7 @@ export function TutorialDialog() {
 	}, []);
 
 	const finish = useCallback(() => {
-		localStorage.setItem("tutorial-finished", "true");
+		localStorage.setItem("tutorial-finished-new", "true");
 		setShowTutorial(false);
 	}, []);
 
@@ -670,7 +675,7 @@ export function TutorialDialog() {
 			/>
 
 			{/* Panel */}
-			<div className="relative flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-2xl sm:h-auto sm:max-h-[88dvh] sm:w-full sm:max-w-[1000px] sm:grid sm:grid-cols-[minmax(0,0.82fr)_1fr] sm:rounded-2xl sm:border">
+			<div className="relative flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-2xl sm:h-[640px] sm:max-h-[88dvh] sm:w-full sm:max-w-[1000px] sm:grid sm:grid-cols-[minmax(0,0.82fr)_1fr] sm:rounded-2xl sm:border">
 				{/* ── LEFT: branded stage (committed warm-dark in both themes) ── */}
 				<aside
 					className="relative flex h-40 shrink-0 items-center justify-center overflow-hidden text-white sm:h-auto"
@@ -788,7 +793,7 @@ export function TutorialDialog() {
 
 								{active.id === "flowpilot" && (
 									<div className="mt-4 flex items-center gap-3 rounded-xl border border-border bg-muted/50 p-3">
-										<BubbleOrb size={40} />
+										<BubbleOrb size={40} bloom={1.5} />
 										<p className="text-[13px] leading-snug text-muted-foreground">
 											<b className="text-foreground">
 												Look to the bottom-right corner.
@@ -810,7 +815,7 @@ export function TutorialDialog() {
 												className="group flex items-center gap-3.5 rounded-xl border border-border bg-card p-3.5 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
 											>
 												<span
-													className={`grid size-10 flex-none place-items-center rounded-lg text-white ${l.bg}`}
+													className={`grid size-10 flex-none place-items-center rounded-lg ${l.bg}`}
 												>
 													{l.icon}
 												</span>
