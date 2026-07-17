@@ -17,9 +17,10 @@ use flow_like::flow::board::commands::GenericCommand;
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    BoardCommand, CatalogProvider, EmitCommandsArgs, FlowScriptCandidateRegression,
-    FlowScriptPendingDelivery, FlowScriptRepairTracker, GlobalOpenBoardContext, GraphContext,
-    NodeMetadata, PinMetadata, PlatformContextInput, RunContext, build_platform_context,
+    AttachmentManifestEntry, BoardCommand, CatalogProvider, EmitCommandsArgs,
+    FlowScriptCandidateRegression, FlowScriptPendingDelivery, FlowScriptRepairTracker,
+    GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata, PlatformContextInput,
+    RunContext, build_platform_context,
     emit_validation_requires_flowscript, enrich_node_metadata, flowscript_workspace_envelope,
     global_assistant_system_prompt, profile_flowscript_candidate,
     render_flowscript_modular_partial_result, run_platform_chat, score_catalog_metadata,
@@ -646,58 +647,58 @@ pub async fn flowpilot_apply_flow_ir_commit(
         );
     }
 
-    if !store.acknowledge_applied_commit(
+    let acknowledged = store.acknowledge_applied_commit(
         &board,
         &token.draft_id,
         token.revision,
         &token.base_fingerprint,
         &token.claim_id,
-    ) {
-        let rollback_error = board
-            .undo(apply_result.commands.clone(), flow_like_state.clone())
-            .await
-            .err()
-            .map(|error| error.to_string());
-        *board = original_board;
-        let restore_error = board
-            .save(Some(project_store))
-            .await
-            .err()
-            .map(|error| error.to_string());
-        let mut diagnostics = vec![
-            "The exact compiled workflow claim could not be acknowledged after command execution."
-                .to_string(),
-        ];
-        if let Some(error) = rollback_error {
-            diagnostics.push(format!("Command rollback reported: {error}"));
-        }
-        if let Some(error) = restore_error {
-            diagnostics.push(format!(
-                "Restoring the persisted board snapshot reported: {error}"
-            ));
-        }
-        return ApplyFlowIrCommitResult::apply_error(
-            "IR_COMMIT_ACK_FAILED",
-            "The compiled workflow batch was rolled back because its exact claim could not be acknowledged.",
-            apply_result.board_commands,
-            diagnostics,
+    );
+    // The exact claim/base/batch was validated under this continuous board lock before execution,
+    // so a failed acknowledgement only means the claim BOOKKEEPING was resolved concurrently (a
+    // dismissal issued after a lost response channel, TTL cleanup, or a duplicate disposition).
+    // The applied and persisted board is correct and must not be rolled back — destroying it here
+    // previously forced full rebuild cycles of an identical batch. Best-effort release keeps the
+    // store from redelivering the already-applied review.
+    let mut diagnostics = apply_result.diagnostics;
+    let mut code = None;
+    if !acknowledged {
+        let released = store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
         );
+        code = Some("IR_COMMIT_ACK_RACED".to_string());
+        diagnostics.push(flow_ir_ack_race_diagnostic(released));
     }
-
     let result = ApplyFlowIrCommitResult {
         status: "applied".to_string(),
-        code: None,
+        code,
         message: format!(
             "Applied and persisted {} exact compiled workflow board command(s).",
             apply_result.commands.len()
         ),
         commands: apply_result.commands,
         board_commands: apply_result.board_commands,
-        diagnostics: apply_result.diagnostics,
+        diagnostics,
         final_board_node_count: Some(board_total_node_count(&board)),
     };
     retain_flow_ir_applied_receipt(&app_id, &token, &result);
     result
+}
+
+/// Human-readable trace for an apply whose claim acknowledgement raced a concurrent disposition.
+/// The applied, persisted board is kept either way; this only records how the retained-store
+/// bookkeeping was resolved.
+fn flow_ir_ack_race_diagnostic(released: bool) -> String {
+    if released {
+        "The exact claim was resolved concurrently while this apply was executing; the leftover pending review was released after the batch was applied and persisted."
+            .to_string()
+    } else {
+        "The exact claim was resolved concurrently while this apply was executing (for example a dismissal after a lost response channel); the applied and persisted board was kept."
+            .to_string()
+    }
 }
 
 fn typed_commit_destructive_review_items(
@@ -1542,6 +1543,7 @@ async fn build_global_agent_context(
     app_handle: &AppHandle,
     user_context: Option<&str>,
     open_board: Option<&GlobalOpenBoardContext>,
+    attachments: &[AttachmentManifestEntry],
 ) -> String {
     let active = TauriSettingsState::current_profile(app_handle)
         .await
@@ -1574,6 +1576,7 @@ async fn build_global_agent_context(
             .map(|(name, id)| (name.as_str(), id.as_str())),
         switchable_profiles: &switchable,
         open_board,
+        attachments,
     })
 }
 
@@ -1837,6 +1840,9 @@ pub async fn global_chat(
     user_context: Option<String>,
     embedding_model_id: Option<String>,
     attachment_urls: Option<Vec<String>>,
+    // Every attachment on the current message (name/type/size), including non-image files the model
+    // cannot read itself — surfaced so it can hand the relevant ones to apps it calls.
+    attachments_manifest: Option<Vec<AttachmentManifestEntry>>,
     board_context: Option<GlobalOpenBoardContext>,
     // Frontend-generated id (the assistant message id) under which this run is registered so a
     // reloaded webview can re-attach via `global_chat_resume`. `None` disables resumability.
@@ -1845,9 +1851,14 @@ pub async fn global_chat(
 ) -> Result<UnifiedCopilotResponse, String> {
     let model_selection = FlowPilotModelSelection::parse(model_id);
     let history = history.unwrap_or_default();
-    let context =
-        build_global_agent_context(&app_handle, user_context.as_deref(), board_context.as_ref())
-            .await;
+    let attachments_manifest = attachments_manifest.unwrap_or_default();
+    let context = build_global_agent_context(
+        &app_handle,
+        user_context.as_deref(),
+        board_context.as_ref(),
+        &attachments_manifest,
+    )
+    .await;
 
     // Attachments arrive as URLs (local tmp files / presigned uploads, like the simple chat) and
     // are resolved to base64 images here, right before the model call.
@@ -2388,6 +2399,8 @@ async fn external_code_agent_chat_internal(
     } else {
         None
     };
+    // Started after the same-board gate so serialized queue time does not consume the budget.
+    let nested_wall_clock_deadline = nested.then(|| Instant::now() + NESTED_RUN_WALL_CLOCK_BUDGET);
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
         scope,
@@ -2463,6 +2476,13 @@ async fn external_code_agent_chat_internal(
     let mut prompt =
         build_external_agent_prompt(&surface.system_content, &user_prompt, workflow_edit_request);
     let agent_result = loop {
+        if nested_wall_clock_exhausted(nested_wall_clock_deadline) {
+            run_summary.mark_budget_incomplete();
+            break Err(nested_wall_clock_incomplete_error(
+                final_workflow_snapshot.as_ref(),
+                continuation,
+            ));
+        }
         run_summary.record_phase();
         let phase_start_tool_calls = mcp_total_tool_calls(&tool_activity);
         // A fresh MCP server per provider phase is deliberate. It makes the phase URL an epoch:
@@ -2499,13 +2519,27 @@ async fn external_code_agent_chat_internal(
             &format!("Using {} via {}", backend.label(), mcp_url),
             parent_request_id.as_deref(),
         );
+        // A nested run's wall-clock deadline cancels only this invocation's child token: the CLI
+        // process is killed through the existing forceful-cancellation machinery, while the run
+        // itself stays alive to report a graceful, terminal incomplete result below.
+        let invocation_cancellation = run_cancellation.child_token();
+        let wall_clock_watchdog = nested_wall_clock_deadline.map(|deadline| {
+            let cancel_invocation = invocation_cancellation.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                cancel_invocation.cancel();
+            })
+        });
         let run_result = run_external_agent_invocation(
             invocation,
             channel.clone(),
             parent_request_id.clone(),
-            run_cancellation.clone(),
+            invocation_cancellation,
         )
         .await;
+        if let Some(watchdog) = wall_clock_watchdog {
+            watchdog.abort();
+        }
 
         let phase_outcome = match mcp_bridge.finish_phase().await {
             Ok(outcome) => outcome,
@@ -2517,6 +2551,18 @@ async fn external_code_agent_chat_internal(
             .as_ref()
             .is_some_and(|state| state.queued);
         let run_failure = external_agent_run_failure(&run_result).map(str::to_string);
+        // A phase that managed to queue its batch before the deadline still returns normally; an
+        // externally cancelled run keeps its own terminal reporting.
+        if nested_wall_clock_exhausted(nested_wall_clock_deadline)
+            && !queued
+            && !run_cancellation.is_cancelled()
+        {
+            run_summary.mark_budget_incomplete();
+            break Err(nested_wall_clock_incomplete_error(
+                final_workflow_snapshot.as_ref(),
+                continuation,
+            ));
+        }
         if !workflow_edit_request || queued || run_cancellation.is_cancelled() {
             break run_result;
         }
@@ -4623,7 +4669,11 @@ fn take_side_effect_delivery(
 
 fn abandon_side_effect_commands(store: &Arc<StdMutex<SideEffectCommandQueue>>) {
     match store.lock() {
-        Ok(mut queue) => queue.abandon(),
+        // The response/delivery channel for this run is gone, but a checked+committed batch stays
+        // pending in the retained draft store so the next same-request run redelivers its exact
+        // Apply/Dismiss token instead of burning a full rebuild cycle on identical commands.
+        Ok(mut queue) => queue.abandon_preserving_retained_review(),
+        // A poisoned queue cannot vouch for its claim state; fail closed and reopen the revision.
         Err(poisoned) => poisoned.into_inner().abandon(),
     }
 }
@@ -4735,6 +4785,89 @@ impl Drop for McpToolCancellationGuard {
     }
 }
 
+/// Delegation tools whose MCP call blocks the outer agent on a nested FlowPilot run.
+fn is_delegated_agent_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "flowpilot_board" | "flowpilot_widget")
+}
+
+#[derive(Clone, Debug)]
+struct DelegatedRunToolProgress {
+    tool_name: String,
+    total_tool_calls: u64,
+    budget_summary: Option<String>,
+}
+
+/// Most recent tool progress reported by any FlowPilot MCP run in this process. While the outer
+/// agent waits on flowpilot_board/flowpilot_widget its only signal is the progress heartbeat, so
+/// this single bounded slot gives those heartbeats substance (last tool used plus loop budget
+/// counts) without cross-run plumbing. Diagnostic prose only — never used for control flow.
+static LATEST_DELEGATED_RUN_TOOL_PROGRESS: LazyLock<
+    StdMutex<Option<(Instant, DelegatedRunToolProgress)>>,
+> = LazyLock::new(|| StdMutex::new(None));
+
+/// A stale entry (e.g. from an earlier finished run) must not narrate a hung wait as progress.
+const DELEGATED_RUN_PROGRESS_FRESHNESS: Duration = Duration::from_secs(3 * 60);
+
+fn record_delegated_run_tool_progress(
+    tool_name: &str,
+    total_tool_calls: u64,
+    workflow_state: Option<&Arc<StdMutex<WorkflowToolLoopState>>>,
+) {
+    // The delegation tools themselves are what the outer agent is waiting ON; recording them
+    // would overwrite the nested run's substance with the wait itself.
+    if is_delegated_agent_tool(tool_name) {
+        return;
+    }
+    let budget_summary = workflow_state
+        .and_then(|state| state.lock().ok())
+        .map(|state| {
+            let snapshot = state.snapshot();
+            format!(
+                "checks {}/{MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS}, source operations {}/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}, commit attempts {}/{MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS}",
+                snapshot.edit_attempts,
+                snapshot.flowscript_operation_attempts,
+                snapshot.flowscript_commit_attempts,
+            )
+        });
+    if let Ok(mut latest) = LATEST_DELEGATED_RUN_TOOL_PROGRESS.lock() {
+        *latest = Some((
+            Instant::now(),
+            DelegatedRunToolProgress {
+                tool_name: tool_name.to_string(),
+                total_tool_calls,
+                budget_summary,
+            },
+        ));
+    }
+}
+
+/// Compose one heartbeat line for a delegation tool: the base "still running" text plus the
+/// freshest nested-run tool/budget progress, so waiting turns are not blind.
+fn delegated_run_heartbeat_message(base: &str) -> String {
+    let progress = LATEST_DELEGATED_RUN_TOOL_PROGRESS
+        .lock()
+        .ok()
+        .and_then(|latest| {
+            latest.as_ref().and_then(|(recorded_at, progress)| {
+                (recorded_at.elapsed() <= DELEGATED_RUN_PROGRESS_FRESHNESS)
+                    .then(|| progress.clone())
+            })
+        });
+    let Some(progress) = progress else {
+        return base.to_string();
+    };
+    match progress.budget_summary.as_deref() {
+        Some(budgets) => format!(
+            "{base}; the delegated run last used {} (tool call {}; {budgets})",
+            progress.tool_name, progress.total_tool_calls
+        ),
+        None => format!(
+            "{base}; the delegated run last used {} (tool call {})",
+            progress.tool_name, progress.total_tool_calls
+        ),
+    }
+}
+
 /// Keeps a long-running frontend-backed MCP call observable to clients with an idle watchdog.
 /// MCP progress is opt-in: the server may only emit it when the caller supplied a progress token
 /// in the request metadata. The task is tied to both the request cancellation token and this RAII
@@ -4755,6 +4888,7 @@ impl McpProgressHeartbeat {
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
         let message = format!("FlowPilot {tool_name} is still running");
+        let delegated_tool = is_delegated_agent_tool(tool_name);
         let task = tokio::spawn(async move {
             let mut ticker = tokio::time::interval_at(
                 tokio::time::Instant::now() + MCP_TOOL_PROGRESS_HEARTBEAT_INTERVAL,
@@ -4770,10 +4904,17 @@ impl McpProgressHeartbeat {
                     _ = request_cancellation.cancelled() => break,
                     _ = ticker.tick() => {
                         progress += 1.0;
+                        // Recomputed per tick: a delegation wait should narrate the nested run's
+                        // latest tool/budget movement, not repeat a blind static line.
+                        let tick_message = if delegated_tool {
+                            delegated_run_heartbeat_message(&message)
+                        } else {
+                            message.clone()
+                        };
                         let notification = mcp_progress_heartbeat_notification(
                             progress_token.clone(),
                             progress,
-                            &message,
+                            &tick_message,
                         );
                         let result = tokio::select! {
                             biased;
@@ -4810,6 +4951,11 @@ fn mcp_progress_heartbeat_notification(
     rmcp::model::ProgressNotificationParam::new(progress_token, progress).with_message(message)
 }
 
+/// Wall-clock budget for one NESTED delegated FlowPilot run (flowpilot_board/flowpilot_widget).
+/// It must stay well below the outer 30-minute bridge dispatch bound so budget exhaustion reaches
+/// the waiting agent as a terminal, actionable incomplete result (retained draft coordinates plus
+/// diagnostics) instead of an opaque outer-channel timeout after a burned turn.
+const NESTED_RUN_WALL_CLOCK_BUDGET: Duration = Duration::from_secs(12 * 60);
 const MAX_EXTERNAL_WORKFLOW_CONTINUATIONS: u8 = 2;
 const MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS: u8 = 12;
 const MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS: u8 = 3;
@@ -8428,6 +8574,12 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
                     );
                 }
 
+                record_delegated_run_tool_progress(
+                    &recorded_tool_name,
+                    mcp_total_tool_calls(&tool_activity),
+                    workflow_state.as_ref(),
+                );
+
                 if is_recoverable_platform_mutation(&recorded_tool_name)
                     && !flowpilot_tool_result_is_error(&result)
                     && let Ok(mut activity) = tool_activity.lock()
@@ -9184,6 +9336,25 @@ Original user request:
 }
 
 const MAX_TERMINAL_REPORT_DIAGNOSTICS: usize = 20;
+
+fn nested_wall_clock_exhausted(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+/// Terminal report for a nested run stopped at its wall-clock budget. It reuses the shared
+/// incomplete-error path so the waiting outer agent receives the retained draft id/revision and
+/// every retained diagnostic, plus an honest statement that the budget — not the work — ended
+/// the run.
+fn nested_wall_clock_incomplete_error(
+    snapshot: Option<&WorkflowToolLoopSnapshot>,
+    provider_continuations: u8,
+) -> String {
+    format!(
+        "NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED: this nested FlowPilot run reached its {}-minute wall-clock budget and was stopped gracefully; this result is terminal for this run. {}",
+        NESTED_RUN_WALL_CLOCK_BUDGET.as_secs() / 60,
+        external_workflow_incomplete_error(snapshot, provider_continuations)
+    )
+}
 
 fn external_workflow_incomplete_error(
     snapshot: Option<&WorkflowToolLoopSnapshot>,
@@ -14273,7 +14444,7 @@ mod tests {
         assert!(prompt.contains("submit the full board through\n`write_flowscript` before"));
         assert!(prompt.contains("One such result proves the capability mismatch"));
         assert!(prompt.contains(
-            "Record\nany remaining requested schemas as pending and finish/apply the board"
+            "Record any remaining requested schemas as pending and finish/apply the board"
         ));
     }
 
@@ -16610,6 +16781,103 @@ eventsSimple() {
         assert!(error.contains("FS_UNKNOWN_INPUT_PIN"));
         assert!(error.contains("draft_id=mail-agent, revision=16"));
         assert!(error.contains("same user request"));
+    }
+
+    #[test]
+    fn nested_wall_clock_budget_terminates_gracefully_through_the_incomplete_path() {
+        assert!(!nested_wall_clock_exhausted(None));
+        assert!(!nested_wall_clock_exhausted(Some(
+            Instant::now() + Duration::from_secs(60)
+        )));
+        assert!(nested_wall_clock_exhausted(Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("test instant supports subtraction")
+        )));
+
+        let snapshot = WorkflowToolLoopSnapshot {
+            last_status: Some("validation_errors".to_string()),
+            last_errors: vec!["missing pin".to_string()],
+            edit_attempts: 3,
+            flowscript_draft_id: Some("uptime-monitor".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(11),
+            ..Default::default()
+        };
+        let error = nested_wall_clock_incomplete_error(Some(&snapshot), 1);
+        assert!(error.contains("NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED"));
+        assert!(error.contains("wall-clock budget"));
+        assert!(error.contains("stopped gracefully"));
+        assert!(error.contains("terminal for this run"));
+        // The shared incomplete path keeps the retained draft coordinates and diagnostics so the
+        // outer agent can resume the exact candidate instead of rebuilding.
+        assert!(error.contains("draft_id=uptime-monitor, revision=11"));
+        assert!(error.contains("missing pin"));
+        assert!(error.contains("checks 3/12"));
+    }
+
+    #[test]
+    fn nested_wall_clock_budget_stays_below_the_outer_bridge_dispatch_bound() {
+        use flow_like::flow::copilot::tool_spec::find_global_tool_spec;
+        // flowpilot_board is the long-build delegation whose 30-minute bridge bound previously
+        // outlived a hung nested run for a whole outer turn. flowpilot_widget's own 10-minute
+        // bridge bound is tighter than this budget, and its frontend deadline path already
+        // cancels the nested run explicitly at that bound.
+        let spec = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
+        assert!(
+            NESTED_RUN_WALL_CLOCK_BUDGET < Duration::from_secs(spec.timeout_secs),
+            "the nested wall-clock budget must expire before the outer flowpilot_board bridge deadline so the waiting agent receives a terminal result instead of a channel loss"
+        );
+    }
+
+    #[test]
+    fn delegated_heartbeats_carry_nested_tool_and_budget_progress() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState {
+            edit_attempts: 3,
+            flowscript_operation_attempts: 9,
+            flowscript_commit_attempts: 1,
+            ..Default::default()
+        }));
+        record_delegated_run_tool_progress("patch_flowscript", 23, Some(&state));
+
+        let base = "FlowPilot flowpilot_board is still running";
+        let message = delegated_run_heartbeat_message(base);
+        assert!(message.starts_with(base));
+        assert!(message.contains("patch_flowscript"));
+        assert!(message.contains("tool call 23"));
+        assert!(message.contains(&format!("checks 3/{MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS}")));
+        assert!(message.contains(&format!(
+            "source operations 9/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}"
+        )));
+        assert!(message.contains(&format!(
+            "commit attempts 1/{MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS}"
+        )));
+
+        // The delegation tools themselves are the wait, not the nested progress.
+        record_delegated_run_tool_progress("flowpilot_board", 99, None);
+        let unchanged = delegated_run_heartbeat_message(base);
+        assert!(unchanged.contains("patch_flowscript"));
+        assert!(!unchanged.contains("tool call 99"));
+
+        // Stale progress must not narrate a hung wait as movement.
+        if let Ok(mut latest) = LATEST_DELEGATED_RUN_TOOL_PROGRESS.lock()
+            && let Some((recorded_at, _)) = latest.as_mut()
+        {
+            *recorded_at = Instant::now()
+                .checked_sub(DELEGATED_RUN_PROGRESS_FRESHNESS + Duration::from_secs(1))
+                .expect("test instant supports freshness subtraction");
+        }
+        assert_eq!(delegated_run_heartbeat_message(base), base);
+    }
+
+    #[test]
+    fn ack_race_diagnostic_states_the_persisted_board_was_kept() {
+        let released = flow_ir_ack_race_diagnostic(true);
+        assert!(released.contains("applied and persisted"));
+        assert!(released.contains("released"));
+        let kept = flow_ir_ack_race_diagnostic(false);
+        assert!(kept.contains("applied and persisted board was kept"));
+        assert!(kept.contains("lost response channel"));
     }
 
     #[test]

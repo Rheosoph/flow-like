@@ -22,7 +22,7 @@ mod types;
 mod validation;
 
 pub use assistant::{
-    GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
+    AttachmentManifestEntry, GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
     global_assistant_system_prompt, open_board_section, run_platform_chat,
 };
 pub use context::{

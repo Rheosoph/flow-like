@@ -93,6 +93,13 @@ pub(crate) fn lint_flowscript_executability(
         check_function_exec_tails(&graph),
         "unterminated function body",
     );
+    let (unfed_new, unfed_existing) = check_unfed_function_returns(&graph);
+    push_capped(&mut report.blocking, unfed_new, "unfed function return");
+    push_capped(
+        &mut report.review_notes,
+        unfed_existing,
+        "unfed function return",
+    );
     report
 }
 
@@ -849,6 +856,17 @@ fn project_graph(
                     None => builder.graph.nodes[index].opaque = true,
                 }
             }
+            BoardCommand::RenameNode {
+                node_id,
+                friendly_name,
+                ..
+            } => {
+                let Some(index) = builder.resolve_node_key(node_id) else {
+                    return None;
+                };
+                builder.graph.nodes[index].display = friendly_name.clone();
+                builder.register_alias(friendly_name, index);
+            }
             BoardCommand::RemoveNode { node_id, .. }
             | BoardCommand::RemoveLayer {
                 layer_id: node_id, ..
@@ -1132,6 +1150,53 @@ fn check_function_exec_tails(graph: &ProjectedGraph) -> Vec<FlowScriptDiagnostic
         }
     }
     findings
+}
+
+/// A function layer's declared non-exec boundary return pin with neither an incoming edge from
+/// the body nor a stored value returns nothing to callers — the exact silently-broken shape of a
+/// function whose `return` statement was never wired. BLOCKING for layers created by this batch;
+/// a review note for pre-existing layers so a repair loop keeps seeing the defect without being
+/// unable to commit unrelated work.
+fn check_unfed_function_returns(
+    graph: &ProjectedGraph,
+) -> (Vec<FlowScriptDiagnostic>, Vec<FlowScriptDiagnostic>) {
+    let mut new_findings = Vec::new();
+    let mut existing_findings = Vec::new();
+    for (index, node) in graph.nodes.iter().enumerate() {
+        if !node.is_function_layer || node.removed || node.opaque {
+            continue;
+        }
+        // Any unknown-pin edge touching this layer means we cannot see its boundary soundly.
+        let touched_unknown = graph.edges.iter().any(|(from, to)| {
+            (from.node == index && from.pin.is_none()) || (to.node == index && to.pin.is_none())
+        });
+        if touched_unknown {
+            continue;
+        }
+        for (ordinal, pin) in node.pins.iter().enumerate() {
+            if pin.exec || pin.input || graph.input_is_satisfied(index, ordinal) {
+                continue;
+            }
+            let pin_name = to_camel_case(&pin.name);
+            let finding = executability_diagnostic(
+                FlowScriptDiagnosticCode::FsFunctionReturnMismatch,
+                format!(
+                    "Executability{}: declared return pin `{pin_name}` of function `{}` has no incoming connection from the body, so callers receive nothing for it.",
+                    if node.is_new { "" } else { " note" },
+                    node.display
+                ),
+                Some(node.display.clone()),
+                Some(pin_name),
+                "Add a `return` statement (or wire a body output) feeding this declared return pin, or remove the unused return from the function signature.",
+            );
+            if node.is_new {
+                new_findings.push(finding);
+            } else {
+                existing_findings.push(finding);
+            }
+        }
+    }
+    (new_findings, existing_findings)
 }
 
 fn push_capped(
@@ -1736,6 +1801,156 @@ mod tests {
         commands.push(connect("$1", "exec_out", "$0", "exec_out"));
         let terminated = lint_flowscript_executability(&empty_board(), &catalog(), &commands);
         assert_clean(&terminated);
+    }
+
+    fn placeholder_pin(name: &str, pin_type: &str, data_type: &str) -> PlaceholderPinDef {
+        PlaceholderPinDef {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: None,
+            pin_type: pin_type.to_string(),
+            data_type: data_type.to_string(),
+            value_type: None,
+            schema: None,
+            enforce_schema: false,
+        }
+    }
+
+    fn create_function_layer_with_return(ref_id: &str, name: &str) -> BoardCommand {
+        BoardCommand::CreateLayer {
+            name: name.to_string(),
+            ref_id: Some(ref_id.to_string()),
+            layer_type: Some("Function".to_string()),
+            node_ids: Vec::new(),
+            pins: Some(vec![
+                placeholder_pin("exec_in", "Input", "Execution"),
+                placeholder_pin("exec_out", "Output", "Execution"),
+                placeholder_pin("owner_sub", "Output", "String"),
+            ]),
+            position: None,
+            color: None,
+            target_layer: None,
+            summary: None,
+        }
+    }
+
+    #[test]
+    fn new_function_layer_with_unfed_return_pin_blocks() {
+        let mut commands = vec![
+            create_function_layer_with_return("$0", "getOwnerIdentity"),
+            add_node("http_fetch", "$1"),
+            update_pin("$1", "url", json!("https://example.com")),
+            connect("$0", "exec_in", "$1", "exec_in"),
+            connect("$1", "exec_out", "$0", "exec_out"),
+        ];
+        let report = lint_flowscript_executability(&empty_board(), &catalog(), &commands);
+        assert_eq!(report.blocking.len(), 1, "{:#?}", report.blocking);
+        let finding = &report.blocking[0];
+        assert_eq!(
+            finding.code,
+            FlowScriptDiagnosticCode::FsFunctionReturnMismatch
+        );
+        assert!(
+            finding.message.contains("`ownerSub`") && finding.message.contains("getOwnerIdentity"),
+            "{}",
+            finding.message
+        );
+        assert!(report.review_notes.is_empty(), "{:#?}", report.review_notes);
+
+        commands.push(connect("$1", "body", "$0", "owner_sub"));
+        let fed = lint_flowscript_executability(&empty_board(), &catalog(), &commands);
+        assert_clean(&fed);
+    }
+
+    /// Base board mirroring the applied uptime-monitor defect: a pre-existing Function layer
+    /// whose declared return pin has no incoming edge. Returns the board and the body node id.
+    fn board_with_unfed_return_layer(feed_return: bool) -> Board {
+        let mut board = empty_board();
+        let mut layer = crate::flow::board::Layer::new(
+            "layer-owner".to_string(),
+            "getOwnerIdentity".to_string(),
+            LayerType::Function,
+        );
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        template.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        template.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        let return_pin_id = template
+            .add_output_pin("owner_sub", "owner_sub", "", VariableType::String)
+            .id
+            .clone();
+        for pin in template.pins.into_values() {
+            layer.pins.insert(pin.id.clone(), pin);
+        }
+
+        let mut body = Node::new("http_fetch", "Fetch", "", "web");
+        body.id = "body-fetch".to_string();
+        body.layer = Some(layer.id.clone());
+        body.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        body.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        let body_out = body
+            .add_output_pin("body", "Body", "", VariableType::String)
+            .id
+            .clone();
+        if feed_return {
+            body.pins
+                .get_mut(&body_out)
+                .expect("body output pin")
+                .connected_to
+                .insert(return_pin_id.clone());
+            layer
+                .pins
+                .get_mut(&return_pin_id)
+                .expect("layer return pin")
+                .depends_on
+                .insert(body_out);
+        }
+        board.nodes.insert(body.id.clone(), body);
+        board.layers.insert(layer.id.clone(), layer);
+        board
+    }
+
+    #[test]
+    fn pre_existing_unfed_return_pin_surfaces_a_review_note() {
+        let board = board_with_unfed_return_layer(false);
+        let commands = vec![
+            add_node("events_simple", "$0"),
+            add_node("log_info", "$1"),
+            update_pin("$1", "message", json!("hello")),
+            connect("$0", "exec_out", "$1", "exec_in"),
+        ];
+        let report = lint_flowscript_executability(&board, &catalog(), &commands);
+        assert!(report.blocking.is_empty(), "{:#?}", report.blocking);
+        let note = report
+            .review_notes
+            .iter()
+            .find(|note| note.code == FlowScriptDiagnosticCode::FsFunctionReturnMismatch)
+            .unwrap_or_else(|| panic!("missing unfed-return note: {:#?}", report.review_notes));
+        assert!(
+            note.message.contains("`ownerSub`") && note.message.contains("getOwnerIdentity"),
+            "{}",
+            note.message
+        );
+    }
+
+    #[test]
+    fn pre_existing_fed_return_pin_is_silent() {
+        let board = board_with_unfed_return_layer(true);
+        let commands = vec![
+            add_node("events_simple", "$0"),
+            add_node("log_info", "$1"),
+            update_pin("$1", "message", json!("hello")),
+            connect("$0", "exec_out", "$1", "exec_in"),
+        ];
+        let report = lint_flowscript_executability(&board, &catalog(), &commands);
+        assert!(report.blocking.is_empty(), "{:#?}", report.blocking);
+        assert!(
+            !report
+                .review_notes
+                .iter()
+                .any(|note| { note.code == FlowScriptDiagnosticCode::FsFunctionReturnMismatch }),
+            "{:#?}",
+            report.review_notes
+        );
     }
 
     #[test]

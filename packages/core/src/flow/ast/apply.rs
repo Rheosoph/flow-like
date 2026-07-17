@@ -657,6 +657,17 @@ impl FlowScriptApplyPlanner {
                     self.staged_nodes.insert(node_id.clone(), node.clone());
                     generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
                 }
+                BoardCommand::RenameNode {
+                    node_id,
+                    friendly_name,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    node.friendly_name = friendly_name.clone();
+                    self.staged_nodes.insert(node_id.clone(), node.clone());
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
                 _ => {}
             }
         }
@@ -735,7 +746,8 @@ impl FlowScriptApplyPlanner {
                 | BoardCommand::AddPlaceholder { .. }
                 | BoardCommand::CreateVariable { .. }
                 | BoardCommand::UpdateVariable { .. }
-                | BoardCommand::UpdateNodePin { .. } => {}
+                | BoardCommand::UpdateNodePin { .. }
+                | BoardCommand::RenameNode { .. } => {}
                 BoardCommand::RemoveNode { node_id, .. } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
                     let node = self.resolve_node(board, &node_id)?.clone();

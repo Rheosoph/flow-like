@@ -52,7 +52,13 @@ import {
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
-import type { CanvasSettings, SurfaceComponent } from "../a2ui/types";
+import { foldA2UIServerMessage } from "../a2ui/fold-surfaces";
+import type {
+	A2UIServerMessage,
+	CanvasSettings,
+	Surface,
+	SurfaceComponent,
+} from "../a2ui/types";
 import {
 	BoardEditRecoveryStore,
 	CreatedArtifactJournal,
@@ -2720,16 +2726,31 @@ Completion contract: build complete helper logic first and add the Event entry l
 							}
 						} catch (error) {
 							if (flowIrCommit) {
-								const tokenToDismiss = flowIrCommit;
-								const dismissed = await dismissFlowIrCommitWithRetry(
-									backend.boardState,
-									tokenToDismiss,
-								);
-								if (!dismissed) {
-									void dismissFlowIrCommitWithRetry(
+								if (isRequestExpired(request)) {
+									// Bridge deadline / lost response channel: the exact checked
+									// batch stays PENDING on the host so the next run for the same
+									// request redelivers its Apply/Dismiss token instead of
+									// rebuilding the identical batch. Dismissing here previously
+									// destroyed that retained work and forced full rebuild cycles.
+									flowPilotDebugLog(
+										"[global-tool-bridge] flowpilot_board: keeping retained compiled review for redelivery after request expiry",
+										{
+											draftId: flowIrCommit.draft_id,
+											revision: flowIrCommit.revision,
+										},
+									);
+								} else {
+									const tokenToDismiss = flowIrCommit;
+									const dismissed = await dismissFlowIrCommitWithRetry(
 										backend.boardState,
 										tokenToDismiss,
 									);
+									if (!dismissed) {
+										void dismissFlowIrCommitWithRetry(
+											backend.boardState,
+											tokenToDismiss,
+										);
+									}
 								}
 							}
 							flushSubRun();
@@ -3508,9 +3529,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 								: `App '${appId}' has no chat event.`,
 						};
 
-					// Forward the current turn's user attachments into the app chat, so "check this
-					// file with app X" reaches the app agent instead of silently dropping the files.
-					const forwardedAttachments = (() => {
+					// Hand the user's attached files to the app chat. The assistant selects which files
+					// via `forward_files` (exact names from the FILES ATTACHED THIS TURN manifest):
+					// omitted → forward all (safe default so a needed file is never silently dropped);
+					// an explicit list forwards only the named files; [] forwards none.
+					const currentTurnFiles = (() => {
 						const msgs = useGlobalChatStore.getState().messages;
 						for (let i = msgs.length - 1; i >= 0; i--) {
 							if (msgs[i]?.inner.role === IRole.User)
@@ -3518,6 +3541,35 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 						return [];
 					})();
+					const requestedFileNames = Array.isArray(args.forward_files)
+						? (args.forward_files as unknown[])
+								.filter((value): value is string => typeof value === "string")
+								.map((value) => value.trim().toLowerCase())
+								.filter((value) => value.length > 0)
+						: undefined;
+					const attachmentLabels = (file: IAttachment): string[] => {
+						const raw =
+							typeof file === "string"
+								? [file]
+								: [file.url, file.name].filter((value): value is string =>
+										Boolean(value),
+									);
+						const withBasenames = raw.flatMap((value) => {
+							const basename = value.split("?")[0]?.split("/").pop();
+							return basename && basename !== value
+								? [value, basename]
+								: [value];
+						});
+						return withBasenames.map((value) => value.toLowerCase());
+					};
+					const forwardedAttachments =
+						requestedFileNames === undefined
+							? currentTurnFiles
+							: currentTurnFiles.filter((file) =>
+									attachmentLabels(file).some((label) =>
+										requestedFileNames.includes(label),
+									),
+								);
 
 					// Invoke the app's chat event through the SAME pipeline the simple chat uses
 					// (executeEvent + processChatEvents), so it runs with full app-chat behavior.
@@ -3547,6 +3599,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 					};
 					let intermediate = Response.default();
 					const attachments = new Map<string, IAttachment>();
+					// Capture any a2ui UI the app chat pushes (event_type "a2ui"). The app builds this
+					// UI for the user, not the model — processChatEvents ignores it, so we fold the
+					// pushes into surfaces here and render them as an inline card after the run. The
+					// component tree is NEVER returned to the assistant (it only gets text/attachments).
+					let pushedSurfaces = new Map<string, Surface>();
 
 					// Surface the app chat's own plan steps as nested "↳" sub-steps in the
 					// global chat, the same way flowpilot_board/flowpilot_widget fold their
@@ -3591,6 +3648,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 								});
 								intermediate = result.intermediateResponse;
 								syncSubSteps();
+								for (const event of batch) {
+									if (event?.event_type === "a2ui" && event.payload) {
+										pushedSurfaces = foldA2UIServerMessage(
+											pushedSurfaces,
+											event.payload as A2UIServerMessage,
+										);
+									}
+								}
 								// Surface app-chat dialogs (single/multiple choice, form) inline so the
 								// user can answer — respond_to_interaction unblocks the app workflow
 								// while this call_app_chat tool call is still awaiting its result.
@@ -3604,6 +3669,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 					} catch (error) {
 						failProgressSteps();
 						throw error;
+					}
+
+					// Push the app's UI through to the user as an inline card (display only). Best-effort
+					// app name for the header; the surface tree stays entirely on the UI side.
+					if (pushedSurfaces.size > 0) {
+						const appName = await backend.appState
+							.getAppMeta(appId)
+							.then((meta) => meta?.name)
+							.catch(() => undefined);
+						useGlobalChatStore.getState().addInlineAppSurface({
+							appId,
+							name: appName || chatEvent.name || appId,
+							surfaces: Array.from(pushedSurfaces.values()),
+						});
 					}
 
 					const text =
@@ -3631,11 +3710,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 							.addSubUsageStats(responseMessage.usage_stats);
 					}
 
+					const forwardedFileNames = forwardedAttachments.map((file) =>
+						typeof file === "string" ? file : (file.name ?? file.url),
+					);
 					referenceApp(appId);
 					return {
 						status: "ok",
 						app_id: appId,
 						response: text || "(the app chat returned no text)",
+						forwarded_files:
+							forwardedFileNames.length > 0 ? forwardedFileNames : undefined,
 						attachments:
 							attachmentSummaries.length > 0 ? attachmentSummaries : undefined,
 					};

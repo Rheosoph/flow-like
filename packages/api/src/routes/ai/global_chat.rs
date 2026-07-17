@@ -52,8 +52,8 @@ use flow_like::flow::copilot::tool_spec::{
     resolve_tool_approval,
 };
 use flow_like::flow::copilot::{
-    ChatMessage, GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
-    run_platform_chat,
+    AttachmentManifestEntry, ChatMessage, GlobalOpenBoardContext, PlatformContextInput,
+    build_platform_context, run_platform_chat,
 };
 use flow_like::profile::Profile;
 use flow_like_types::tokio::{
@@ -275,6 +275,10 @@ pub struct GlobalChatRequest {
     /// `/tmp` first and sends the download URLs here instead of inlining base64.
     #[serde(default)]
     pub attachment_urls: Option<Vec<String>>,
+    /// Every attachment on the current message (name/type/size), including non-image files the model
+    /// cannot read itself — surfaced in the context so it can hand the relevant ones to apps it calls.
+    #[serde(default)]
+    pub attachments_manifest: Option<Vec<AttachmentManifestEntry>>,
     /// The Bits model id to use. Omit to let the profile pick its best model.
     #[serde(default)]
     pub model_id: Option<String>,
@@ -630,11 +634,13 @@ pub async fn global_chat(
         _ => None,
     };
 
+    let attachments_manifest = payload.attachments_manifest.clone().unwrap_or_default();
     let context = build_platform_context(PlatformContextInput {
         user_context: payload.user_context.as_deref(),
         active_profile: Some((profile.name.as_str(), profile.id.as_str())),
         switchable_profiles: &[],
         open_board: payload.board_context.as_ref(),
+        attachments: &attachments_manifest,
     });
 
     // Merge inline base64 images with any signed-URL attachments fetched server-side.

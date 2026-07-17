@@ -52,6 +52,10 @@ use flow_like_types::sync::Mutex as AsyncMutex;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+/// Read-only page/widget inspection walks every page of the app in the frontend; on large
+/// generated boards (hundreds of nodes, dozens of pages) that legitimately exceeds the default
+/// 120-second bridge bound and a lost response stalls the whole agent audit.
+const UI_INSPECT_TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 const FLOW_IR_DRAFT_STORE_TTL: Duration = Duration::from_secs(45 * 60);
 const FLOW_IR_PENDING_REVIEW_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const MAX_PERSISTED_FLOW_IR_DRAFT_STORES: usize = 64;
@@ -201,6 +205,18 @@ impl SideEffectCommandQueue {
     pub(super) fn abandon(&mut self) {
         self.commands.clear();
         self.commit_claim = None;
+    }
+
+    /// Host teardown after a lost response/delivery channel (cancellation, provider error, or a
+    /// disconnected frontend) must not destroy a fully checked and committed batch. The queued
+    /// command copy is discarded, but the exact retained revision stays PENDING in the draft store
+    /// so the next run for the same immutable request redelivers its Apply/Dismiss token instead of
+    /// forcing a full model rebuild of the identical batch.
+    pub(super) fn abandon_preserving_retained_review(&mut self) {
+        if let Some(claim) = self.commit_claim.take() {
+            let _redeliverable_token = claim.acknowledge();
+        }
+        self.commands.clear();
     }
 }
 
@@ -1070,11 +1086,12 @@ Operations:
         }));
 
     let handler: ToolHandler = Arc::new(move |_name, args| {
-        frontend_tool_result(
+        frontend_tool_result_with_timeout(
             &bridge,
             "ui_inspect",
             args.clone(),
             FrontendToolApproval::none(),
+            UI_INSPECT_TOOL_TIMEOUT,
         )
     });
 
@@ -4440,6 +4457,128 @@ mod tests {
             },
         );
         (store, board, catalog)
+    }
+
+    #[test]
+    fn teardown_abandon_preserves_the_committed_claim_for_next_request_redelivery() {
+        let draft_id = "delivery-channel-lost";
+        let (store, board, catalog) = committed_store(draft_id);
+        let committed = store.commit(&board, &catalog, commit_args(draft_id));
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let token = commit_token(&board, draft_id, &committed);
+        let commands = store
+            .pending_commands_if_current(
+                &board,
+                &token.draft_id,
+                token.revision,
+                &token.base_fingerprint,
+                &token.claim_id,
+            )
+            .expect("queued commit retains its exact command batch");
+
+        let mut queue = SideEffectCommandQueue::default();
+        assert!(queue.extend_retained_commit(
+            commands.clone(),
+            store.clone(),
+            token.clone(),
+            None,
+            None,
+        ));
+
+        // Lost response/delivery channel: the run tears down without draining the queue. The
+        // exact checked batch must stay PENDING so the next same-request run redelivers its
+        // Apply/Dismiss token instead of forcing a full model rebuild.
+        queue.abandon_preserving_retained_review();
+        assert!(store.pending_commit_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        ));
+        assert!(
+            store
+                .pending_commands_if_current(
+                    &board,
+                    &token.draft_id,
+                    token.revision,
+                    &token.base_fingerprint,
+                    &token.claim_id,
+                )
+                .is_some(),
+            "the preserved review is redeliverable against the unchanged board"
+        );
+        let (drained_commands, drained_token) = queue.take_delivery();
+        assert!(drained_commands.is_empty());
+        assert!(drained_token.is_none());
+
+        // The fail-closed abandon still reopens the revision (poisoned queue / malformed batch).
+        let mut releasing_queue = SideEffectCommandQueue::default();
+        assert!(releasing_queue.extend_retained_commit(
+            commands,
+            store.clone(),
+            token.clone(),
+            None,
+            None,
+        ));
+        releasing_queue.abandon();
+        assert!(!store.pending_commit_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        ));
+    }
+
+    #[test]
+    fn concurrent_release_makes_the_applied_ack_race_observable() {
+        // Regression shape behind the "rolled back because its exact claim could not be
+        // acknowledged" loop: Apply validated and executed the exact batch under the board lock,
+        // a concurrent disposition (dismissal after a lost response channel) released the claim,
+        // and the trailing acknowledgement failed. The desktop host must treat that as a
+        // bookkeeping race on already-persisted work, never as grounds to roll the board back.
+        let draft_id = "ack-race";
+        let (store, board, catalog) = committed_store(draft_id);
+        let committed = store.commit(&board, &catalog, commit_args(draft_id));
+        assert_eq!(committed.status, "queued", "{committed:#?}");
+        let token = commit_token(&board, draft_id, &committed);
+        assert!(
+            store
+                .pending_commands_if_current(
+                    &board,
+                    &token.draft_id,
+                    token.revision,
+                    &token.base_fingerprint,
+                    &token.claim_id,
+                )
+                .is_some()
+        );
+
+        assert!(store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        ));
+
+        let mut advanced_board = board.clone();
+        let applied_variable = Variable::new(
+            "appliedAckRaceBatch",
+            VariableType::String,
+            ValueType::Normal,
+        );
+        advanced_board
+            .variables
+            .insert(applied_variable.id.clone(), applied_variable);
+        assert!(
+            !store.acknowledge_applied_commit(
+                &advanced_board,
+                &token.draft_id,
+                token.revision,
+                &token.base_fingerprint,
+                &token.claim_id,
+            ),
+            "the raced acknowledgement fails, and only the claim bookkeeping may react to it"
+        );
     }
 
     #[test]

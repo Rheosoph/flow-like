@@ -749,11 +749,7 @@ impl FrontendToolBridge {
                 finish_bridge_result(
                     &self.app_handle,
                     &trace,
-                    json!({
-                        "status": status,
-                        "tool": tool_name,
-                        "message": message
-                    }),
+                    lost_frontend_response_result(&tool_name, status, message, &trace),
                     outcome,
                     "frontend_response",
                     removed,
@@ -784,6 +780,46 @@ impl FrontendToolBridge {
             }
         }
     }
+}
+
+/// Actionable next step for a model whose tool call lost its frontend response. A bare
+/// timeout/disconnect reads as an unknown outcome and stalls the agent for whole turns; the hint
+/// states whether the work may still be running and how to verify or resume without duplicating a
+/// mutation.
+fn lost_response_recovery_hint(tool_name: &str) -> &'static str {
+    match tool_name {
+        "execute_node" | "execute_event" | "call_app_event" | "call_app_chat" => {
+            "The execution may have started and may still complete after this deadline; treat the outcome as unknown, not failed. Do NOT re-execute immediately. Verify persisted effects first (query_execution_logs for a new run on this board, database/storage state), then retry only if nothing ran."
+        }
+        "flowpilot_board" | "flowpilot_widget" => {
+            "The delegated run was interrupted at the deadline. Retained draft/revision state survives on the host; retry the same request (same conversation and original user request) and the host will resume or redeliver the exact pending review instead of rebuilding."
+        }
+        "ui_inspect" | "query_execution_logs" | "list_apps" | "describe_app_interface" => {
+            "This tool is read-only and made no changes; it is safe to call it again, optionally with a narrower operation to return faster."
+        }
+        _ => {
+            "The frontend handler's outcome is unknown. Re-inspect the affected state before repeating any mutating call."
+        }
+    }
+}
+
+/// Structured terminal payload for a lost frontend response (deadline or channel loss). The model
+/// treats an unstructured channel loss as an unknown outcome and stalls, so this names the tool,
+/// how long it ran, that the outcome is unknown, and the concrete recovery step.
+fn lost_frontend_response_result(
+    tool_name: &str,
+    status: &str,
+    message: &str,
+    trace: &FrontendToolTrace,
+) -> Value {
+    json!({
+        "status": status,
+        "tool": tool_name,
+        "message": message,
+        "outcome_known": false,
+        "waited_ms": duration_ms(trace.started.elapsed()),
+        "recovery": lost_response_recovery_hint(tool_name),
+    })
 }
 
 fn apply_tool_context(arguments: &mut Value, context: Option<&FrontendToolContext>) {
@@ -1465,6 +1501,68 @@ mod tests {
         assert!(pending_response_sender(&request_id).is_some());
         assert!(remove_pending_response(&request_id).is_some());
         assert!(receiver.recv().unwrap().approved);
+    }
+
+    #[test]
+    fn lost_frontend_response_returns_a_structured_unknown_outcome_result() {
+        let trace = FrontendToolTrace::new(
+            "request-42".to_string(),
+            "execute_node".to_string(),
+            GLOBAL_FRONTEND_TOOL_EVENT.to_string(),
+            &json!({ "board_id": "board", "node_id": "node" }),
+            &FrontendToolApproval::none(),
+            None,
+            Duration::from_secs(600),
+        );
+
+        let result = lost_frontend_response_result(
+            "execute_node",
+            "error",
+            "The FlowPilot frontend response channel disconnected.",
+            &trace,
+        );
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("error"));
+        assert_eq!(
+            result.get("tool").and_then(Value::as_str),
+            Some("execute_node")
+        );
+        assert_eq!(
+            result.get("outcome_known").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(result.get("waited_ms").and_then(Value::as_u64).is_some());
+        let recovery = result
+            .get("recovery")
+            .and_then(Value::as_str)
+            .expect("recovery hint");
+        assert!(recovery.contains("Do NOT re-execute"));
+        assert!(recovery.contains("query_execution_logs"));
+    }
+
+    #[test]
+    fn lost_response_recovery_hints_match_tool_semantics() {
+        for execution_tool in [
+            "execute_node",
+            "execute_event",
+            "call_app_event",
+            "call_app_chat",
+        ] {
+            let hint = lost_response_recovery_hint(execution_tool);
+            assert!(hint.contains("unknown, not failed"), "{execution_tool}");
+            assert!(hint.contains("Do NOT re-execute"), "{execution_tool}");
+        }
+        for read_only_tool in ["ui_inspect", "query_execution_logs", "list_apps"] {
+            assert!(
+                lost_response_recovery_hint(read_only_tool).contains("read-only"),
+                "{read_only_tool}"
+            );
+        }
+        for delegated_tool in ["flowpilot_board", "flowpilot_widget"] {
+            let hint = lost_response_recovery_hint(delegated_tool);
+            assert!(hint.contains("Retained draft"), "{delegated_tool}");
+            assert!(hint.contains("redeliver"), "{delegated_tool}");
+        }
+        assert!(lost_response_recovery_hint("database_tool").contains("Re-inspect"));
     }
 
     #[test]

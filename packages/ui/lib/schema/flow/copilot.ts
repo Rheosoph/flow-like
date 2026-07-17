@@ -105,6 +105,12 @@ export type BoardCommand =
 			summary?: string;
 	  }
 	| {
+			command_type: "RenameNode";
+			node_id: string;
+			friendly_name: string;
+			summary?: string;
+	  }
+	| {
 			command_type: "SetNodeFunctionRefs";
 			node_id: string;
 			/** Referenced targets as ref tokens (`$N` ref-ids, node/layer anchors, or names). */

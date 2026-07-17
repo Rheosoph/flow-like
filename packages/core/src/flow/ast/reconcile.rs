@@ -3962,6 +3962,18 @@ impl<'a> StructuralPlanner<'a> {
                         ));
                         return None;
                     }
+                    if let Some(event_name) = event
+                        .event_name
+                        .as_deref()
+                        .filter(|name| !name.trim().is_empty())
+                        && !pin_name_matches(&node.friendly_name, event_name)
+                    {
+                        self.update_commands.push(BoardCommand::RenameNode {
+                            node_id: anchor.clone(),
+                            friendly_name: event_name.to_string(),
+                            summary: Some(format!("Rename event to {event_name}")),
+                        });
+                    }
                     Some(NodeEntity::Existing(anchor.clone()))
                 });
                 if entry.is_none() {
@@ -3977,6 +3989,7 @@ impl<'a> StructuralPlanner<'a> {
             None => self.add_entry_node(
                 &event.name,
                 &event.node_type,
+                event.event_name.as_deref(),
                 target_layer.clone(),
                 &event.params,
             ),
@@ -4870,7 +4883,9 @@ impl<'a> StructuralPlanner<'a> {
                     ));
                     continue;
                 };
-                let Some(output_pin) = self.resolve_source_output_pin(&source) else {
+                let Some(output_pin) =
+                    self.resolve_source_output_pin_for_input(&source, &return_param)
+                else {
                     self.result.diagnostics.push(format!(
                         "could not choose output pin for return value {} (`{rendered}`) in function `{function_name}`; read a named output (e.g. `call().pinName`) so the value has one exact source",
                         index + 1
@@ -4884,7 +4899,11 @@ impl<'a> StructuralPlanner<'a> {
                     &return_param,
                     &return_param.name,
                     "Connect FlowScript function return".to_string(),
-                    &format!("return value {} for `{}`", index + 1, return_param.name),
+                    &format!(
+                        "return value {} (`{rendered}`) for `{}` in function `{function_name}`",
+                        index + 1,
+                        return_param.name
+                    ),
                     false,
                 );
             }
@@ -5092,14 +5111,17 @@ impl<'a> StructuralPlanner<'a> {
     /// Resolve an event block's entry node. A non-empty `node_type` is an exact catalog identity
     /// supplied by the typed AST and is therefore authoritative; `display` remains the authored
     /// handler alias. Text-parsed FlowScript has no `node_type`, so that legacy surface continues
-    /// to resolve by display and then fall back to a Generic/Simple event.
+    /// to resolve by display and then fall back to a Generic/Simple event. A given `event_name`
+    /// (`eventsSimple dashboardLoad() { }`) always becomes the entry node's friendly name.
     fn add_entry_node(
         &mut self,
         display: &str,
         node_type: &str,
+        event_name: Option<&str>,
         target_layer: Option<String>,
         params: &[Param],
     ) -> Option<NodeEntity> {
+        let event_name = event_name.filter(|name| !name.trim().is_empty());
         if !node_type.trim().is_empty() {
             let meta = match self.catalog.resolve_type(node_type) {
                 Ok(meta) => meta,
@@ -5116,7 +5138,9 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 return None;
             }
-            let friendly_name = (display != to_camel_case(&meta.name)).then(|| display.to_string());
+            let friendly_name = event_name
+                .map(str::to_string)
+                .or_else(|| (display != to_camel_case(&meta.name)).then(|| display.to_string()));
             return Some(self.queue_event_entry_node(meta, target_layer, params, friendly_name));
         }
 
@@ -5129,7 +5153,12 @@ impl<'a> StructuralPlanner<'a> {
                     ));
                     return None;
                 }
-                Some(self.queue_event_entry_node(meta, target_layer, params, None))
+                Some(self.queue_event_entry_node(
+                    meta,
+                    target_layer,
+                    params,
+                    event_name.map(str::to_string),
+                ))
             }
             Err(err) => {
                 let fallbacks = if params.is_empty() {
@@ -5151,7 +5180,7 @@ impl<'a> StructuralPlanner<'a> {
                             meta,
                             target_layer,
                             params,
-                            Some(display.to_string()),
+                            Some(event_name.unwrap_or(display).to_string()),
                         ));
                     }
                 }
@@ -8175,9 +8204,24 @@ impl<'a> StructuralPlanner<'a> {
                         .map(|pin| pin.name.clone()),
                 }
             }
-            NodeEntity::Existing(_) | NodeEntity::Layer { .. } => {
-                self.resolve_source_output_pin(source)
-            }
+            NodeEntity::Existing(id) => self.resolve_source_output_pin(source).or_else(|| {
+                // Multi-output live node without a default alias: the consuming pin's type can
+                // still disambiguate (e.g. `return user` into a `bool` return pin selects the one
+                // Boolean output).
+                let node = find_board_node(self.existing, id)?;
+                let meta = node_to_metadata(node);
+                let compatible: Vec<&PinMetadata> = meta
+                    .outputs
+                    .iter()
+                    .filter(|pin| pin.data_type != "Execution")
+                    .filter(|pin| metadata_pins_are_compatible(input, pin, &self.existing.refs))
+                    .collect();
+                match compatible.as_slice() {
+                    [pin] => Some(pin.name.clone()),
+                    _ => None,
+                }
+            }),
+            NodeEntity::Layer { .. } => self.resolve_source_output_pin(source),
         }
     }
 
@@ -11493,6 +11537,7 @@ simpleEvent() {   //@n:event
                 // a catalog lookup key on the typed path.
                 name: "eventsSimple".to_string(),
                 node_type: "events_generic".to_string(),
+                event_name: None,
                 params: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt::Call {
@@ -11570,6 +11615,7 @@ simpleEvent() {   //@n:event
             events: vec![EventBlock {
                 name: "start".to_string(),
                 node_type: "log".to_string(),
+                event_name: None,
                 params: Vec::new(),
                 body: Block {
                     stmts: vec![Stmt::Call {
@@ -13798,6 +13844,157 @@ function second(): (result: int) {
     }
 
     #[test]
+    fn named_event_creates_entry_with_friendly_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple dashboardLoad() {
+    log({ text: "hello" })
+}
+"#,
+            &member_chain_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { node_type, friendly_name: Some(friendly_name), .. }
+                    if node_type == "events_simple" && friendly_name == "dashboardLoad"
+            )),
+            "named event must create the typed entry with its given name: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unnamed_event_keeps_catalog_default_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    log({ text: "hello" })
+}
+"#,
+            &member_chain_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { node_type, friendly_name: None, .. }
+                    if node_type == "events_simple"
+            )),
+            "unnamed event must keep the catalog default name: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn anchored_event_rename_emits_single_rename_command() {
+        let board = board_with_log("hello");
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple dashboardLoad() {   //@n:event
+    log({ text: "hello" })   //@n:log
+}
+"#,
+            &member_chain_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            result.commands.len(),
+            1,
+            "a name-only change must be exactly one command: {:?}",
+            result.commands
+        );
+        assert!(matches!(
+            &result.commands[0],
+            BoardCommand::RenameNode { node_id, friendly_name, .. }
+                if node_id == "event" && friendly_name == "dashboardLoad"
+        ));
+    }
+
+    #[test]
+    fn anchored_event_matching_name_is_a_noop() {
+        let board = board_with_log("hello");
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple start() {   //@n:event
+    log({ text: "hello" })   //@n:log
+}
+"#,
+            &member_chain_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "an unchanged given name must not emit commands: {:?}",
+            result.commands
+        );
+    }
+
+    /// Applying a named event, lowering the board, and re-reconciling must preserve the name and
+    /// be a no-op — the full authoring round-trip for `eventsSimple dashboardLoad() { }`.
+    #[tokio::test]
+    async fn applied_named_event_roundtrip_preserves_name() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        log.add_input_pin("text", "Text", "", VariableType::String);
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let catalog_nodes = vec![event, log];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            r#"eventsSimple dashboardLoad() {
+    log({ text: "hello" })
+}
+"#,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("named event script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        let entry = board
+            .nodes
+            .values()
+            .find(|node| node.name == "events_simple")
+            .expect("entry node exists");
+        assert_eq!(entry.friendly_name, "dashboardLoad");
+
+        let text = anchored_text(&board);
+        assert!(
+            text.contains("dashboardLoad() {"),
+            "lowered output must preserve the given event name:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.is_empty(),
+            "re-reconciling the lowered named event must be a no-op:\n{text}\n{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
     fn function_return_diagnostics_name_the_function_and_expression() {
         let result = reconcile_text_with_catalog(
             &empty_board(),
@@ -13829,6 +14026,338 @@ function brokenTwo(): (tag: string) {
             }),
             "{:?}",
             result.diagnostics
+        );
+    }
+
+    fn multi_output_return_catalog() -> Vec<NodeMetadata> {
+        let mut user_context = pin_meta("user_context", "Struct", PinType::Output);
+        user_context.friendly_name = "User Context".to_string();
+        user_context.schema = Some(
+            r#"{"type":"object","properties":{"sub":{"type":"string"}},"additionalProperties":false}"#
+                .to_string(),
+        );
+        user_context.enforce_schema = true;
+        vec![
+            catalog_meta(
+                "utils_user_get_executing_user",
+                "Get Executing User",
+                Vec::new(),
+                vec![
+                    user_context,
+                    pin_meta("has_user", "Boolean", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "val_to_string",
+                "To String",
+                vec![
+                    pin_meta("value", "Generic", PinType::Input),
+                    pin_meta("pretty", "Boolean", PinType::Input),
+                ],
+                vec![pin_meta("string", "String", PinType::Output)],
+            ),
+            catalog_meta(
+                "utils_hash_sha256",
+                "SHA256 Hash",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("input", "String", PinType::Input),
+                ],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    pin_meta("hash", "String", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "struct_get",
+                "Get Field",
+                vec![
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                ],
+                vec![pin_meta("value", "Generic", PinType::Output)],
+            ),
+        ]
+    }
+
+    const MULTI_OUTPUT_RETURN_SOURCE: &str = r#"function getOwnerIdentity(): (ownerSub: string, ownerKey: string, hasUser: bool) {
+    const user = utilsUserGetExecutingUser()
+    const asText = valToString({ value: user.userContext.sub, pretty: false })
+    const hashed = utilsHashSha256({ input: asText.string })
+    return hashed.hash, asText.string, user.hasUser
+}
+"#;
+
+    /// The uptime-monitor regression: a function whose return values come from a multi-output
+    /// catalog node through member-access chains must wire every declared boundary return pin.
+    #[test]
+    fn multi_output_member_chain_returns_wire_every_boundary_pin() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            MULTI_OUTPUT_RETURN_SOURCE,
+            &multi_output_return_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let layer_ref = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::CreateLayer {
+                    name,
+                    ref_id: Some(ref_id),
+                    ..
+                } if name == "getOwnerIdentity" => Some(ref_id.clone()),
+                _ => None,
+            })
+            .expect("missing getOwnerIdentity layer");
+        for return_pin in ["ownerSub", "ownerKey", "hasUser"] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins { to_node, to_pin, .. }
+                        if to_node == &layer_ref && to_pin == return_pin
+                )),
+                "missing boundary return connection for `{return_pin}`: {:?}",
+                result.commands
+            );
+        }
+    }
+
+    fn multi_output_return_catalog_nodes() -> Vec<Node> {
+        let mut user = Node::new(
+            "utils_user_get_executing_user",
+            "Get Executing User",
+            "",
+            "utils",
+        );
+        let context_pin =
+            user.add_output_pin("user_context", "User Context", "", VariableType::Struct);
+        context_pin.schema = Some(
+            r#"{"type":"object","properties":{"sub":{"type":"string"}},"additionalProperties":false}"#
+                .to_string(),
+        );
+        context_pin.options = Some(PinOptions::new().set_enforce_schema(true).build());
+        user.add_output_pin("has_user", "Has User", "", VariableType::Boolean);
+
+        let mut to_string = Node::new("val_to_string", "To String", "", "utils");
+        to_string.add_input_pin("value", "Value", "", VariableType::Generic);
+        to_string.add_input_pin("pretty", "Pretty", "", VariableType::Boolean);
+        to_string.add_output_pin("string", "String", "", VariableType::String);
+
+        let mut sha256 = Node::new("utils_hash_sha256", "SHA256 Hash", "", "utils");
+        sha256.add_input_pin("exec_in", "Execute", "", VariableType::Execution);
+        sha256.add_input_pin("input", "Input", "", VariableType::String);
+        sha256.add_output_pin("exec_out", "Done", "", VariableType::Execution);
+        sha256.add_output_pin("hash", "Hash", "", VariableType::String);
+
+        let mut struct_get = Node::new("struct_get", "Get Field", "", "structs");
+        struct_get.add_input_pin("struct", "Struct", "", VariableType::Struct);
+        struct_get.add_input_pin("field", "Field", "", VariableType::String);
+        struct_get.add_output_pin("value", "Value", "", VariableType::Generic);
+
+        vec![user, to_string, sha256, struct_get]
+    }
+
+    /// Applying the multi-output-return function, lowering the board, and re-reconciling the
+    /// lowered text must be a no-op: no duplicated member-access chains, no lost return wiring.
+    #[tokio::test]
+    async fn applied_multi_output_return_roundtrip_is_idempotent() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let catalog_nodes = multi_output_return_catalog_nodes();
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            MULTI_OUTPUT_RETURN_SOURCE,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("multi-output return script applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        let layer = board
+            .layers
+            .values()
+            .find(|layer| layer.name == "getOwnerIdentity")
+            .expect("function layer exists");
+        for return_pin in ["ownerSub", "ownerKey", "hasUser"] {
+            let boundary = layer
+                .pins
+                .values()
+                .find(|pin| pin.name == *return_pin)
+                .unwrap_or_else(|| panic!("missing boundary pin {return_pin}"));
+            assert!(
+                !boundary.depends_on.is_empty(),
+                "boundary return pin `{return_pin}` must have an incoming edge"
+            );
+        }
+
+        let text = anchored_text(&board);
+        assert!(
+            text.contains("return "),
+            "lowered board must keep the return statement:\n{text}"
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+        assert!(
+            result.diagnostics.is_empty(),
+            "roundtrip diagnostics:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "re-reconciling the board's own lowered script must be a no-op:\n{text}\n{:?}",
+            result.commands
+        );
+    }
+
+    /// A bare reference to a multi-output node in return position has no explicit output pin;
+    /// the declared return pin's type must disambiguate (here: the one Boolean output).
+    #[test]
+    fn declared_return_pin_type_disambiguates_multi_output_source() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function currentUserFlag(): (hasUser: bool) {
+    const user = utilsUserGetExecutingUser()
+    return user
+}
+"#,
+            &multi_output_return_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_pin, .. }
+                    if from_pin == "has_user" && to_pin == "hasUser"
+            )),
+            "return pin type must select the one Boolean output: {:?}",
+            result.commands
+        );
+    }
+
+    /// The repair-loop shape: the function already exists on the board (anchored body, unfed
+    /// boundary pin) and the model adds `return probe` referencing the anchored binding of a live
+    /// multi-output node. The declared return pin's type must disambiguate the output.
+    #[tokio::test]
+    async fn declared_return_pin_type_disambiguates_existing_multi_output_source() {
+        use crate::state::{FlowLikeConfig, FlowLikeState};
+        use crate::utils::http::HTTPClient;
+        use std::sync::Arc;
+
+        let mut probe = Node::new("http_probe", "HTTP Probe", "", "web");
+        probe.add_input_pin("exec_in", "Execute", "", VariableType::Execution);
+        probe.add_output_pin("exec_out", "Done", "", VariableType::Execution);
+        probe.add_output_pin("response", "Response", "", VariableType::Struct);
+        probe.add_output_pin("ok", "Ok", "", VariableType::Boolean);
+        let catalog_nodes = vec![probe];
+
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let applied = super::super::apply_flowscript_to_board(
+            &mut board,
+            r#"function probeFlag(): (succeeded: bool) {
+    const probe = httpProbe()
+}
+"#,
+            &catalog_nodes,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("function without return applies");
+        assert!(applied.diagnostics.is_empty(), "{:?}", applied.diagnostics);
+
+        // The model binds the anchored call and returns the binding — the anchor keeps the
+        // statement resolving to the LIVE node, so the return source is an Existing entity.
+        let text = anchored_text(&board);
+        assert!(text.contains("    httpProbe()   //@n:"), "{text}");
+        let rebound = text.replace(
+            "    httpProbe()   //@n:",
+            "    const probe = httpProbe()   //@n:",
+        );
+        let insert_at = rebound.rfind("\n}").expect("function closing brace");
+        let with_return = format!(
+            "{}\n    return probe{}",
+            &rebound[..insert_at],
+            &rebound[insert_at..]
+        );
+
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        let result = reconcile_text_with_catalog(&board, &with_return, &catalog);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let layer_id = board
+            .layers
+            .values()
+            .find(|layer| layer.name == "probeFlag")
+            .map(|layer| layer.id.clone())
+            .expect("function layer exists");
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_pin, to_node, to_pin, .. }
+                    if from_pin == "ok" && to_node == &layer_id && to_pin == "succeeded"
+            )),
+            "the bool return pin must select the live node's Boolean output: {:?}",
+            result.commands
+        );
+    }
+
+    /// A return value whose source output pin stays ambiguous (two same-typed outputs) must be a
+    /// diagnostic that names the function and the expression — never a silently unfed return pin.
+    #[test]
+    fn ambiguous_multi_output_return_is_diagnosed_with_function_and_value() {
+        let catalog = vec![catalog_meta(
+            "make_pair",
+            "Make Pair",
+            Vec::new(),
+            vec![
+                pin_meta("first", "String", PinType::Output),
+                pin_meta("second", "String", PinType::Output),
+            ],
+        )];
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"function pickOne(): (chosen: string) {
+    const pair = makePair()
+    return pair
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("could not choose output pin")
+                    && diagnostic.contains("`pickOne`")
+                    && diagnostic.contains("`pair`")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { to_pin, .. } if to_pin == "chosen"
+            )),
+            "an ambiguous return must not guess a connection: {:?}",
+            result.commands
         );
     }
 

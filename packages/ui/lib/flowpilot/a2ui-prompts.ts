@@ -124,6 +124,14 @@ Always respond with valid JSON matching the Surface structure:
 }
 \`\`\`
 
+## Actions
+
+Interactive components trigger backend events via \`actions: [{ "name": "eventName", "context": {...} }]\`.
+An action only INVOKES the named event — the board handler reads live input values itself
+(Get Element Value / Get File Input Files on the element refs). Use \`context\` for static
+identity data only (which form, which row id); never try to forward what the user typed or
+selected through the action payload.
+
 ## Best Practices
 
 1. Use semantic IDs: "header", "main-content", "submit-button"

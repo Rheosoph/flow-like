@@ -2,6 +2,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { create } from "zustand";
 import type {
 	CanvasSettings,
+	Surface,
 	SurfaceComponent,
 } from "../../components/a2ui/types";
 import type { FlowScriptWorkspaceCandidate } from "../../components/flowpilot/flowscript-workspace-candidates";
@@ -84,6 +85,15 @@ export interface InlineAppPage {
 	eventId?: string;
 	/** Display name of the app / page for the card header. */
 	name: string;
+}
+
+export interface InlineAppSurface {
+	id: string;
+	appId: string;
+	/** Display name of the app / chat that pushed the UI, for the card header. */
+	name: string;
+	/** Surfaces the app pushed during a headless `call_app_chat` run, captured for display only. */
+	surfaces: Surface[];
 }
 
 export interface GlobalChatDraft {
@@ -173,6 +183,8 @@ interface GlobalChatState {
 	inlineAppChats: InlineAppChat[];
 	/** App UI pages the agent embedded inline in the global chat view (artifact-like). */
 	inlineAppPages: InlineAppPage[];
+	/** UI an app pushed while the agent called its chat headlessly (call_app_chat), shown as cards. */
+	inlineAppSurfaces: InlineAppSurface[];
 	/**
 	 * Apps referenced by tools during the current in-flight response. The chat body attaches them
 	 * to that assistant message (message.app_refs) so the chips render inline with it.
@@ -243,6 +255,8 @@ interface GlobalChatState {
 	removeInlineAppChat: (id: string) => void;
 	addInlineAppPage: (page: Omit<InlineAppPage, "id">) => void;
 	removeInlineAppPage: (id: string) => void;
+	addInlineAppSurface: (surface: Omit<InlineAppSurface, "id">) => void;
+	removeInlineAppSurface: (id: string) => void;
 	addPendingAppRef: (appId: string) => void;
 	clearPendingAppRefs: () => void;
 	/** Replace the nested run's steps and refresh the streaming bubble so they render immediately. */
@@ -302,6 +316,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	embeddingModelId: "",
 	inlineAppChats: [],
 	inlineAppPages: [],
+	inlineAppSurfaces: [],
 	pendingAppRefs: [],
 	subPlanSteps: [],
 	activeInteractions: [],
@@ -380,6 +395,22 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	removeInlineAppPage: (id) =>
 		set((state) => ({
 			inlineAppPages: state.inlineAppPages.filter((page) => page.id !== id),
+		})),
+	addInlineAppSurface: (surface) =>
+		set((state) => {
+			if (surface.surfaces.length === 0) return state;
+			return {
+				inlineAppSurfaces: [
+					...state.inlineAppSurfaces,
+					{ ...surface, id: createId() },
+				],
+			};
+		}),
+	removeInlineAppSurface: (id) =>
+		set((state) => ({
+			inlineAppSurfaces: state.inlineAppSurfaces.filter(
+				(surface) => surface.id !== id,
+			),
 		})),
 	addPendingAppRef: (appId) =>
 		set((state) =>
@@ -573,6 +604,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			streamingMessage: null,
 			inlineAppChats: [],
 			inlineAppPages: [],
+			inlineAppSurfaces: [],
 			pendingAppRefs: [],
 			subPlanSteps: [],
 			activeInteractions: [],
@@ -590,6 +622,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			streamingMessage: null,
 			inlineAppChats: [],
 			inlineAppPages: [],
+			inlineAppSurfaces: [],
 			pendingAppRefs: [],
 			subPlanSteps: [],
 			activeInteractions: [],

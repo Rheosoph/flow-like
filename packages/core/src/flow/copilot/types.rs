@@ -325,6 +325,14 @@ pub enum BoardCommand {
         #[serde(default)]
         summary: Option<String>,
     },
+    /// Rename an existing node's friendly (display) name without touching its behavior. Used by
+    /// FlowScript named events (`eventsSimple dashboardLoad() { }`) when only the name changed.
+    RenameNode {
+        node_id: String,
+        friendly_name: String,
+        #[serde(default)]
+        summary: Option<String>,
+    },
     /// Set a node's function references (e.g. an agent's registered tool functions). `fn_refs`
     /// carries the referenced targets as ref tokens (`$N` ref-ids, board node/layer anchors, or
     /// names) which the applier resolves to concrete node ids.

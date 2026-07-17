@@ -415,17 +415,10 @@ function TextEditorStatic({
 
 	// The value is memoized to avoid re-creating the editor on every render.
 	const value = useMemo(() => {
-		// For large content, truncate to prevent performance issues
-		const MAX_LENGTH = 50000; // ~50KB
-		const contentToRender =
-			initialContent.length > MAX_LENGTH
-				? `${initialContent.slice(0, MAX_LENGTH)}\\n\\n... (content truncated for performance)`
-				: initialContent;
-
 		const tempEditor = createSlateEditor({ plugins });
 		return safeDeserialize(
 			tempEditor,
-			contentToRender,
+			initialContent,
 			isMarkdown ?? false,
 			remarkPlugins,
 		);

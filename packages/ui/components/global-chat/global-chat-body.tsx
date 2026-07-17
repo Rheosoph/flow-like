@@ -96,6 +96,7 @@ import { submitInteractionResponse } from "../interfaces/chat-default/respond-in
 import { GlobalChatHistory } from "./global-chat-history";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
+import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
 import { PendingComponentsCard } from "./pending-components-card";
 
@@ -173,6 +174,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const removeInlineAppChat = useGlobalChatStore((s) => s.removeInlineAppChat);
 	const inlineAppPages = useGlobalChatStore((s) => s.inlineAppPages);
 	const removeInlineAppPage = useGlobalChatStore((s) => s.removeInlineAppPage);
+	const inlineAppSurfaces = useGlobalChatStore((s) => s.inlineAppSurfaces);
+	const removeInlineAppSurface = useGlobalChatStore(
+		(s) => s.removeInlineAppSurface,
+	);
 	const toolPrompt = useGlobalChatStore((s) => s.toolPrompt);
 	const activeInteractions = useGlobalChatStore((s) => s.activeInteractions);
 	const setInteractionResponded = useGlobalChatStore(
@@ -391,27 +396,41 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			const state = useGlobalChatStore.getState();
 			if (state.isStreaming) return;
 
-			// Same attachment handling as the simple chat: files become local tmp files (Tauri) or
-			// presigned tmp uploads — only URLs travel through IPC and land in IndexedDB, no blobs.
-			const imageFiles = (filesAttached ?? []).filter((file) =>
-				file.type.startsWith("image/"),
-			);
-			const skipped = (filesAttached?.length ?? 0) - imageFiles.length;
-			if (skipped > 0) {
-				toast.warning(
-					"Only image attachments are supported in the global chat right now.",
-				);
-			}
+			// Any file type is accepted: files become local tmp files (Tauri) or presigned tmp
+			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. FlowPilot
+			// itself only reads images (vision); every attachment is also listed in a manifest so
+			// it can hand the relevant files to apps it calls (call_app_chat `forward_files`).
+			const allFiles = filesAttached ?? [];
 			let attachments: Awaited<ReturnType<typeof fileToAttachment>> = [];
-			if (imageFiles.length > 0) {
+			if (allFiles.length > 0) {
 				try {
-					attachments = await fileToAttachment(imageFiles, backend, true);
+					attachments = await fileToAttachment(allFiles, backend, true);
 				} catch (error) {
 					toast.error(
 						`Failed to prepare attachments: ${error instanceof Error ? error.message : String(error)}`,
 					);
 				}
 			}
+			// Only image attachments feed the vision model; other files travel as a name/type
+			// manifest the assistant reasons over when deciding which files to forward downstream.
+			const imageAttachmentUrls = attachments
+				.map((attachment) =>
+					typeof attachment === "string"
+						? { url: attachment, type: undefined as string | undefined }
+						: { url: attachment.url, type: attachment.type },
+				)
+				.filter((attachment) => (attachment.type ?? "").startsWith("image/"))
+				.map((attachment) => attachment.url);
+			const attachmentManifest = attachments.map((attachment) =>
+				typeof attachment === "string"
+					? { url: attachment }
+					: {
+							name: attachment.name,
+							type: attachment.type,
+							size: attachment.size,
+							url: attachment.url,
+						},
+			);
 			if (!trimmed && attachments.length === 0) return;
 			setStreaming(true);
 			useGlobalChatStore.getState().clearPendingAppRefs();
@@ -481,7 +500,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				responseMessage,
 				inputPreview: {
 					prompt: trimmed,
-					attachments: imageFiles.map((file) => ({
+					attachments: allFiles.map((file) => ({
 						name: file.name,
 						type: file.type,
 						size: file.size,
@@ -495,13 +514,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							scope: "Frontend",
 							userPrompt: trimmed,
 							attachmentUrls:
-								attachments.length > 0
-									? attachments.map((attachment) =>
-											typeof attachment === "string"
-												? attachment
-												: attachment.url,
-										)
+								imageAttachmentUrls.length > 0
+									? imageAttachmentUrls
 									: undefined,
+							attachmentsManifest:
+								attachmentManifest.length > 0 ? attachmentManifest : undefined,
 							history: historyPayload,
 							modelId: effectiveModelId,
 							reasoningEffort: state.reasoningEffort || undefined,
@@ -533,14 +550,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								embedding_model_id: state.embeddingModelId || undefined,
 								user_context: userContext ?? undefined,
 								board_context: boardContext,
-								// Signed tmp-upload URLs (from fileToAttachment); the server fetches them.
+								// Signed tmp-upload URLs (from fileToAttachment) for image vision only; the
+								// server fetches them.
 								attachment_urls:
-									attachments.length > 0
-										? attachments.map((attachment) =>
-												typeof attachment === "string"
-													? attachment
-													: attachment.url,
-											)
+									imageAttachmentUrls.length > 0
+										? imageAttachmentUrls
+										: undefined,
+								// Every attachment (name/type/size) so the assistant knows what files it
+								// can hand to apps it calls, even non-image files it cannot itself read.
+								attachments_manifest:
+									attachmentManifest.length > 0
+										? attachmentManifest
 										: undefined,
 							},
 						}),
@@ -756,6 +776,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		messages.length === 0 &&
 		inlineAppChats.length === 0 &&
 		inlineAppPages.length === 0 &&
+		inlineAppSurfaces.length === 0 &&
 		!isStreaming &&
 		// A queued draft is about to send — don't flash the empty state under it.
 		!pendingDraft;
@@ -979,6 +1000,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 			{(inlineAppChats.length > 0 ||
 				inlineAppPages.length > 0 ||
+				inlineAppSurfaces.length > 0 ||
 				pendingComponents !== null) && (
 				<div className="shrink-0 max-h-[60vh] overflow-y-auto pt-2">
 					<PendingComponentsCard />
@@ -987,6 +1009,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							key={page.id}
 							page={page}
 							onClose={removeInlineAppPage}
+							compact={compact}
+						/>
+					))}
+					{inlineAppSurfaces.map((surface) => (
+						<InlineAppSurfaceCard
+							key={surface.id}
+							surface={surface}
+							onClose={removeInlineAppSurface}
 							compact={compact}
 						/>
 					))}

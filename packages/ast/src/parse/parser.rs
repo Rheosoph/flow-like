@@ -383,6 +383,13 @@ impl Parser<'_> {
 
     fn event_block(&mut self) -> Result<EventBlock, ParseError> {
         let name = self.ident()?;
+        // Optional given name (`eventsSimple dashboardLoad() { }`): the first identifier selects
+        // the event type, the second names this specific entry.
+        let event_name = if matches!(self.cur(), Tok::Ident(_)) {
+            Some(self.ident()?)
+        } else {
+            None
+        };
         self.expect(&Tok::LParen)?;
         let params = self.params(&Tok::RParen)?;
         self.expect(&Tok::RParen)?;
@@ -392,6 +399,7 @@ impl Parser<'_> {
         Ok(EventBlock {
             name,
             node_type: String::new(),
+            event_name,
             params,
             body,
             anchor,
@@ -677,33 +685,31 @@ impl Parser<'_> {
         if !matches!(self.cur(), Tok::Ident(_)) {
             return false;
         }
-        if !matches!(
+        // A named handler (`eventsSimple dashboardLoad(...)`) carries a second identifier before
+        // the parameter list; nothing else places two bare identifiers back to back.
+        let lparen = if matches!(
             self.toks.get(self.pos + 1).map(|t| &t.tok),
-            Some(Tok::LParen)
+            Some(Tok::Ident(_))
         ) {
+            self.pos + 2
+        } else {
+            self.pos + 1
+        };
+        if !matches!(self.toks.get(lparen).map(|t| &t.tok), Some(Tok::LParen)) {
             return false;
         }
         // Empty params `name()` — a handler unless the following block is a branch-arm map.
-        if matches!(
-            self.toks.get(self.pos + 2).map(|t| &t.tok),
-            Some(Tok::RParen)
-        ) {
-            if !matches!(
-                self.toks.get(self.pos + 3).map(|t| &t.tok),
-                Some(Tok::LBrace)
-            ) {
+        if matches!(self.toks.get(lparen + 1).map(|t| &t.tok), Some(Tok::RParen)) {
+            if !matches!(self.toks.get(lparen + 2).map(|t| &t.tok), Some(Tok::LBrace)) {
                 return false;
             }
-            return !self.brace_opens_branch_arms(self.pos + 3);
+            return !self.brace_opens_branch_arms(lparen + 2);
         }
         // Typed params `name(ident : …` — never produced by an object-arg call.
         matches!(
-            self.toks.get(self.pos + 2).map(|t| &t.tok),
+            self.toks.get(lparen + 1).map(|t| &t.tok),
             Some(Tok::Ident(_))
-        ) && matches!(
-            self.toks.get(self.pos + 3).map(|t| &t.tok),
-            Some(Tok::Colon)
-        )
+        ) && matches!(self.toks.get(lparen + 2).map(|t| &t.tok), Some(Tok::Colon))
     }
 
     /// True if the block opened at `brace_pos` (a `{`) begins a branch-arm map (`label: { … }`),

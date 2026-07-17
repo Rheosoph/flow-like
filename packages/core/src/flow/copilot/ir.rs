@@ -1376,6 +1376,7 @@ pub fn compile_flow_ir(program: &FlowIrProgram, catalog: &[NodeMetadata]) -> Flo
                 }
                 ast.events.push(EventBlock {
                     name: name.clone(),
+                    event_name: None,
                     // Reconciliation treats a typed Event node_type as an authoritative catalog
                     // identity. Canonicalize an accepted camel/display spelling here just as node
                     // calls already do, so compile-time resolution and materialization cannot

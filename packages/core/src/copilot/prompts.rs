@@ -233,6 +233,18 @@ Choose the entry by the data the workflow receives:
   Use the chat response/chunk/stat nodes to reply. The outer assistant exposes it as simple/advanced
   chat or a compatible chat transport.
 
+NAME every entry after its purpose — one NAMED event per purpose, never a pile of anonymous
+`eventsSimple()` blocks. The explicit form is `<eventType> <name>(...)`, e.g.
+`eventsSimple dashboardLoad() { ... }` for the page/dashboard load,
+`eventsSimple checkTargetsCron() { ... }` for each cron schedule, and
+`eventsGeneric addTarget(...) { ... }` for each user action; the second identifier becomes the
+entry node's display name, and changing only that name on an anchored entry is a safe name-only
+edit. A bare purpose-named block (`dashboardLoad() { ... }`, `checkTargetsCron() { ... }`) also
+works: payload-free lowers to a named Simple Event, typed parameters lower to a named Generic
+entry. That name is what the user sees when the Event is registered/scheduled, so leaving entries
+as generic "Simple Event"/"Generic Event" is a defect. Distinct purposes get distinct entries: do
+not funnel a page load, a cron check, and a user action through one shared event.
+
 Your responsibility in a board-edit run ends after the compatible entry node and its executable
 logic were successfully queued. You do not have to configure the app-level Event inside FlowScript.
 If the requested app needs several triggers/interfaces, keep every requested entry; the outer
@@ -283,12 +295,16 @@ When a requested table does not exist, use `database_tool` operation `create_tab
 `fields: [{name, type, nullable?, vector_size?}]`. It creates the schema without fake seed rows;
 `if_not_exists` defaults to true. Use `type: "vector"` plus `vector_size` for float32 embeddings.
 If `create_table` returns `status: "partial"` with
-`code: "explicit_schema_create_not_deployed"`, the connected API is older than the frontend.
-Keep the explicit schema pending, continue the complete board/FlowScript build immediately, and
-report the setup mismatch at the end. Never replace or postpone the workflow with a database smoke
-test merely to make table creation pass. One such result proves the capability mismatch for the
-current session: do not retry the HTTP capability probe or wait for deployment in this run. Record
-any remaining requested schemas as pending and finish/apply the board.
+`code: "explicit_schema_create_not_deployed"` (often surfacing as HTTP 405 on a local runtime),
+explicit schema creation is simply not deployed there. The portable bootstrap is LAZY: LanceDB
+tables are created on first write, so have the WORKFLOW upsert one COMPLETE first row — every
+column present with a correctly typed value, including a zero-filled vector for vector columns —
+via `upsertLocalDb`/`batchUpsertLocalDb`; the table and its schema then exist for every later
+query. Design new-table workflows around that lazy first-write bootstrap by default so a missing
+schema endpoint costs zero extra steps. Never replace or postpone the workflow with a database
+smoke test merely to make table creation pass. One such result proves the capability mismatch for
+the current session: do not retry the HTTP capability probe or wait for deployment in this run.
+Record any remaining requested schemas as pending and finish/apply the board.
 
 Recommended patterns:
 - Persistent table / record store: `openLocalDb` -> `insertLocalDb` / `batchInsertLocalDb` for
@@ -375,9 +391,37 @@ Common a2ui calls (confirm exact signatures with `get_declarations`):
   pushes a DataFusion result straight into a table element (or pass `csv` text). For incremental
   edits use `a2uiUpdateTable` (set/append/replace rows). DataFusion's `.table` output is built
   exactly for these table/chart pins, so prefer it over hand-iterating rows when filling a grid.
-- Reactive data bindings: `a2uiDataUpdate({ surfaceId, path, value })` updates a bound data path.
+- Data-path updates: `a2uiDataUpdate({ surfaceId, path, value })` is a LAST RESORT for a custom
+  `$.data.*` binding that no element setter covers — prefer the element-level setters above (see
+  the a2ui page rules).
 - Screen control: end a render path with `a2uiShowScreen()`; route with `a2uiNavigateTo({ route })`;
   read URL params with `a2uiGetQueryParams({ paramName }).value`.
+
+### Interaction events PULL their own inputs
+A page/widget action only INVOKES its handler — the dashboard never pushes element values into it.
+NEVER declare a Generic Event with payload parameters (`payload`, `actionId`, `targetId`, `url`,
+…) expecting the page to fill them from its inputs. Instead the handler body FETCHES the state it
+needs from the page: `a2uiGetElementValue({ elementRef }).value` for inputs/selects,
+`a2uiGetFileInputFiles` for uploads, `a2uiGetElement({ elementRef }).element` for anything else.
+Compact correct shape — action invokes a named entry, the body reads the element, validates,
+persists, then refreshes via an element setter:
+```ts
+addTarget() {
+    const raw = a2uiGetElementValue({ elementRef: "<page_id>/target-url-input" })
+    const targetUrl = valToString({ value: raw.value })
+    if (targetUrl != "") {
+        const db = openLocalDb({ name: "targets", userScoped: false, batchSize: 1000 })
+        const id = cuid()
+        let row = structMake()
+        row = structSet({ structIn: row, field: "id", value: id.cuid })
+        row = structSet({ structIn: row, field: "url", value: targetUrl })
+        upsertLocalDb({ database: db, value: row, idRow: "id" })
+        a2uiSetElementValue({ elementRef: "<page_id>/target-url-input", value: "" })
+        refreshTargetsTable()
+    }
+}
+```
+(`refreshTargetsTable` is a helper function that re-queries and calls `a2uiWriteCsvToTable`.)
 
 Keep dashboards clean with functions/layers: put each page's onLoad logic in its own
 `function pageLoad() { … }` (it becomes a Function layer), and factor repeated work — querying a
@@ -385,19 +429,32 @@ table, filling a container with widget instances — into small helper functions
 event block. See the dashboard examples below.
 "#;
 
-/// A2UI page contract: how board logic pushes values into a live UI page. Prevents the recurring
-/// mistake of using page/global state (a scratch store) to drive on-screen `$.data.*` bindings.
+/// A2UI page contract: how board logic pushes values into a live UI page. Prevents two recurring
+/// mistakes: using page/global state (a scratch store) to drive the screen, and using the generic
+/// `a2uiDataUpdate` data-path node where an element-level setter exists.
 pub const A2UI_STATE_GUIDANCE: &str = r#"
-## A2UI PAGES: UPDATING WHAT A WIDGET SHOWS
+## A2UI PAGES: UPDATING WHAT AN ELEMENT SHOWS
 When a board drives an a2ui page (page-load or action event handlers writing to a UI surface),
-pick the write node by WHERE the value must appear. These are NOT interchangeable:
+write to the ELEMENT with its element-level setter. That is the correct pattern essentially
+always:
 
-- To change something visible on screen — any value a widget binds to via `$.data.<path>` — use
-  **Data Update** (`a2uiDataUpdate`). Its `path` is that binding path WITHOUT the `$.` prefix and
-  with `/` separators: a widget bound to `$.data.temperature` is fed by
-  `a2uiDataUpdate({{ path: "data/temperature", value }})`. `surfaceId` defaults to `"main"`; set it
-  to the surface the widget lives on. This streams a data-model update that re-renders bound widgets
-  immediately. This is the ONLY node that updates the live UI.
+- Text/labels/status: `a2uiSetElementText` (Set Element Text), `a2uiSetMarkdownContent`,
+  `a2uiSetBadgeContent`, `a2uiSetProgress`.
+- Input values: `a2uiSetElementValue` (Set Element Value), `a2uiSetSelectValue`,
+  `a2uiSetSliderValue`.
+- Tables: `a2uiWriteCsvToTable` (Push CSV to Table) for full data, `a2uiUpdateTable` for
+  incremental row edits.
+- Charts: `a2uiPushCsvToChart` (Push Data to Chart).
+Target them with the `ui_inspect` element ref (`"<page_id>/<element_id>"`) directly or via
+`a2uiGetElement({ elementRef }).element`.
+
+- **Data Update** (`a2uiDataUpdate`) is a LAST RESORT, not a dashboard-update mechanism. Use it
+  ONLY for a pure `$.data.<path>` binding on a custom component prop that no element-level setter
+  covers. If a setter above matches the element (text, markdown, badge, progress, value, select,
+  slider, table, chart), use that setter instead — never `a2uiDataUpdate`. When it is genuinely
+  required, its `path` is the binding path WITHOUT the `$.` prefix and with `/` separators
+  (`$.data.temperature` -> `path: "data/temperature"`), and `surfaceId` is the surface the widget
+  lives on (defaults to `"main"`).
 - **Set Page State** (`a2uiSetPageState`) does NOT touch `$.data.*` bindings and will NOT update the
   screen. Page state is a separate per-page key/value store that widgets never read; its value only
   travels back to the board on the NEXT event, where **Get Page State** (`a2uiGetPageState`) reads
@@ -406,9 +463,10 @@ pick the write node by WHERE the value must appear. These are NOT interchangeabl
 - **Set/Get Global State** behave like page state but shared across pages — same rule, not for
   display.
 
-Rule of thumb: value must be visible now -> `a2uiDataUpdate`. Value must survive to a later
-event/handler -> page/global state. When unsure, call `get_declarations` for "data update" and
-"page state" and read the signatures before writing.
+Rule of thumb: value must be visible now -> the element-level setter for that element type. Value
+must survive to a later event/handler -> page/global state. `a2uiDataUpdate` only when no setter
+exists for the bound prop. When unsure, call `get_declarations` for the setter names above and
+read the signatures before writing.
 "#;
 
 /// Board size/organization contract shared by board prompts. Mirrored by a reconcile-time
@@ -1908,7 +1966,85 @@ mod tests {
         assert!(prompt.contains("submit the full board through\n`write_flowscript` before"));
         assert!(prompt.contains("One such result proves the capability mismatch"));
         assert!(prompt.contains(
-            "Record\nany remaining requested schemas as pending and finish/apply the board"
+            "Record any remaining requested schemas as pending and finish/apply the board"
         ));
+    }
+
+    #[test]
+    fn database_guidance_teaches_lazy_first_write_table_bootstrap() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+            board_sdk_system_prompt(),
+        ];
+        for prompt in prompts {
+            assert!(prompt.contains("explicit_schema_create_not_deployed"));
+            assert!(prompt.contains("HTTP 405 on a local runtime"));
+            assert!(prompt.contains("The portable bootstrap is LAZY"));
+            assert!(prompt.contains("upsert one COMPLETE first row"));
+            assert!(prompt.contains("zero-filled vector for vector columns"));
+            assert!(prompt.contains("lazy first-write bootstrap by default"));
+        }
+    }
+
+    #[test]
+    fn dashboard_updates_prefer_element_setters_over_data_update() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+            board_sdk_system_prompt(),
+        ];
+        for prompt in prompts {
+            assert!(prompt.contains("## A2UI PAGES: UPDATING WHAT AN ELEMENT SHOWS"));
+            assert!(prompt.contains("write to the ELEMENT with its element-level setter"));
+            for setter in [
+                "a2uiSetElementText",
+                "a2uiSetElementValue",
+                "a2uiWriteCsvToTable",
+                "a2uiPushCsvToChart",
+            ] {
+                assert!(prompt.contains(setter), "missing element setter: {setter}");
+            }
+            assert!(prompt.contains("`a2uiDataUpdate`) is a LAST RESORT"));
+            assert!(prompt.contains("no element-level setter\n  covers"));
+            assert!(!prompt.contains("This is the ONLY node that updates the live UI"));
+            assert!(!prompt.contains("visible now -> `a2uiDataUpdate`"));
+        }
+    }
+
+    #[test]
+    fn dashboard_guidance_makes_interaction_events_pull_their_inputs() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+            board_sdk_system_prompt(),
+        ];
+        for prompt in prompts {
+            assert!(prompt.contains("### Interaction events PULL their own inputs"));
+            assert!(prompt.contains("NEVER declare a Generic Event with payload parameters"));
+            assert!(prompt.contains("a2uiGetElementValue({ elementRef }).value"));
+            assert!(prompt.contains("a2uiGetFileInputFiles"));
+            assert!(prompt.contains("addTarget() {"));
+            assert!(prompt.contains("refreshTargetsTable()"));
+        }
+    }
+
+    #[test]
+    fn event_entry_guidance_requires_named_purpose_events() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            board_sdk_system_prompt(),
+        ];
+        for prompt in prompts {
+            assert!(prompt.contains("one NAMED event per purpose"));
+            assert!(prompt.contains("eventsSimple dashboardLoad() { ... }"));
+            assert!(prompt.contains("checkTargetsCron() { ... }"));
+            assert!(prompt.contains("\"Simple Event\"/\"Generic Event\" is a defect"));
+            assert!(prompt.contains("Distinct purposes get distinct entries"));
+        }
     }
 }

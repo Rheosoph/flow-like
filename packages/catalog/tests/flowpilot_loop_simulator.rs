@@ -427,6 +427,96 @@ async fn golden_path() {
     assert_noop_roundtrip(&board, "golden_path");
 }
 
+/// The uptime-monitor regression shape: a function whose declared return
+/// values come from a multi-output catalog node (`utils_user_get_executing_user`)
+/// through member-access chains. The write must check valid, the queued batch
+/// must feed every declared boundary return pin, and the applied board must
+/// lower back to a no-op — protecting multi-value return wiring end to end.
+const MULTI_OUTPUT_RETURN_SCRIPT: &str = r#"function getOwnerIdentity(): (ownerSub: string, ownerKey: string, hasUser: bool) {
+    const user = utilsUserGetExecutingUser()
+    const asText = valToString({ value: user.userContext.sub, pretty: false })
+    const hashed = utilsHashSha256({ input: asText.string })
+    return hashed.hash, asText.string, user.hasUser
+}
+
+eventsSimple() {
+    const identity = getOwnerIdentity()
+    if (identity.hasUser) {
+        logInfo({ message: identity.ownerKey })
+    } else {
+        logInfo({ message: "no user" })
+    }
+}
+"#;
+
+#[tokio::test]
+async fn multi_output_return_golden_path() {
+    let fixture = &*FIXTURE;
+    let store = FlowIrDraftStore::new();
+    let mut agent = ScriptedAgent::new(
+        &store,
+        empty_board("sim-multi-return"),
+        &fixture.metadata,
+        "multi-return-draft",
+    );
+    agent.bind("Resolve the executing user's identity and log their owner key.");
+    agent.run(vec![
+        Step::Write {
+            source: MULTI_OUTPUT_RETURN_SCRIPT.to_string(),
+        },
+        Step::ExpectStatus {
+            status: "draft_started",
+            code: None,
+        },
+        Step::Check,
+        Step::ExpectStatus {
+            status: "valid",
+            code: None,
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "queued",
+            code: None,
+        },
+    ]);
+    let queued = agent.last();
+    assert!(
+        queued.diagnostics.is_empty(),
+        "queued response must carry no blocking diagnostics: {queued:#?}"
+    );
+    let commands: Vec<BoardCommand> = queued.commands.clone();
+
+    let state = catalog_state().await;
+    let mut board = agent.board.clone();
+    let applied = apply_board_commands_to_board(&mut board, commands, &fixture.nodes, state, None)
+        .await
+        .expect("queued multi-output-return batch applies");
+    assert!(
+        applied.diagnostics.is_empty(),
+        "apply diagnostics: {:#?}",
+        applied.diagnostics
+    );
+
+    let layer = board
+        .layers
+        .values()
+        .find(|layer| layer.name == "getOwnerIdentity")
+        .expect("function layer exists on the applied board");
+    for return_pin in ["ownerSub", "ownerKey", "hasUser"] {
+        let boundary = layer
+            .pins
+            .values()
+            .find(|pin| pin.name == *return_pin)
+            .unwrap_or_else(|| panic!("missing boundary return pin {return_pin}"));
+        assert!(
+            !boundary.depends_on.is_empty(),
+            "declared return pin `{return_pin}` must be fed by the body"
+        );
+    }
+
+    assert_noop_roundtrip(&board, "multi_output_return_golden_path");
+}
+
 /// A source with an unknown node name yields actionable structured
 /// diagnostics; one unique text patch repairs it in place, after which the
 /// same draft checks valid and commits.

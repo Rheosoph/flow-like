@@ -37,6 +37,22 @@ pub struct GlobalOpenBoardContext {
     pub node_count: Option<usize>,
 }
 
+/// One file the user attached to the current message. FlowPilot can read images itself (they also
+/// go to the vision model); every attachment — image or not — is listed so the assistant knows
+/// which files it may hand to an app it calls (`call_app_chat` `forward_files`) even when it cannot
+/// open the file itself. Mirrors the frontend `IAttachment` metadata.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AttachmentManifestEntry {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, rename = "type")]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 /// Inputs for [`build_platform_context`]. Each host gathers these from its own environment (Tauri
 /// settings on desktop, the authenticated request on the server) and hands them over as plain data,
 /// keeping the rendered wording — which the model relies on for routing — in one place.
@@ -50,6 +66,8 @@ pub struct PlatformContextInput<'a> {
     pub switchable_profiles: &'a [String],
     /// The board the user currently has open, if any.
     pub open_board: Option<&'a GlobalOpenBoardContext>,
+    /// Files attached to the current user message, if any.
+    pub attachments: &'a [AttachmentManifestEntry],
 }
 
 /// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend so the
@@ -67,6 +85,11 @@ Rules:
 - When the user wants to SEE or USE an app's content/results in the conversation ("show me", "embed", "display here"), call `open_app_page` (for events marked kind "page" in `list_apps`) or `open_app_chat` (kind "chat") — these embed the app INLINE in the chat. `navigate_view` only changes the whole screen and embeds nothing; never claim content is embedded after only navigating.
 - Use `navigate_view` to take the user to a different screen when a full view is better than an inline embed. Only use the documented routes — never invent paths.
 - Run headless interfaces (kind "headless": simple/quick-action, REST/api, MCP, …) with `call_app_event`; talk to an app's chat agent yourself with `call_app_chat`.
+- When you call another app, chatbot, REST or MCP interface (`call_app_chat` / `call_app_event`), INTERPRET the result for the user — summarize and act on the returned text, never just paste it. Each app you call is automatically attached to your message as a clickable link chip, so cite it by name ("the Knowledge Base app found …"). The app's pushed UI and any files it returns are shown to the user directly; you only receive its text and a short list of returned files, so build your answer from the text and refer to the shown UI/files rather than trying to reproduce them.
+- Independent app calls run in PARALLEL. When a request needs several apps (e.g. ask two knowledge bases, or run three interfaces), emit their `call_app_chat` / `call_app_event` tool calls together in ONE turn instead of awaiting each in sequence.
+- Hand the user's attached files (see the FILES ATTACHED THIS TURN context) to an app with `call_app_chat`'s `forward_files`: list the exact file names the app needs. Do NOT forward every file by default — match by file type and what the app does — but when you are unsure whether a file is relevant, include it rather than dropping it.
+- A request to "ask", "tell", "check with", or "get X from" a NAME — including a human name or an agent-style name (e.g. "ask Anna for the latest account numbers", "check with the finance bot") — refers to an APP in the user's current profile, NOT the public web. Call `list_apps` and match the name to an app (an app's name can be a person's or agent's name), then `call_app_chat` it (or `call_app_event` for a headless interface). Do NOT `internet_search` for such a request unless the user explicitly asked to search the web. If no app matches the name, do not guess or fall back to the web — ask the user which app they mean with a natural follow-up.
+- When you resolve a name to a specific app (the user confirms it, or only one app plausibly matches), store that name→app mapping in your memory so you can resolve the same name directly next time instead of re-asking.
 - Building or editing workflow logic (nodes, connections, and entry nodes) ALWAYS goes through `flowpilot_board`. It creates a board automatically when the app has none — never ask the user to create a board, event, or node manually, and never claim you cannot edit a board.
 - Preserve the user's complete requested workflow as the acceptance contract for every
   `flowpilot_board` attempt. Never decompose a failed full build into successive reduced calls such
@@ -180,6 +203,59 @@ pub fn open_board_section(board: &GlobalOpenBoardContext) -> String {
     lines.join("\n")
 }
 
+/// Human-readable byte size for the attachment manifest (e.g. `2.1 MB`). Kept compact so the
+/// context section stays cheap.
+fn format_attachment_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GB {
+        format!("{:.1} GB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.1} MB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.1} KB", bytes_f / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Render the attachment section injected into the assistant context. Lists every file on the
+/// current message with its name and type so the assistant can decide which ones to forward to an
+/// app it calls. Kept next to the wording the model relies on when it fills `forward_files`.
+pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec![
+        "## FILES ATTACHED THIS TURN".to_string(),
+        "The user attached these files to THIS message. You can read image files directly; other files you cannot open yourself. You CAN hand any of them to an app you call: pass their exact names in the `forward_files` argument of `call_app_chat`. Do NOT forward everything by default — choose the files whose type/content fits the app you are calling, but when you are unsure whether a file is relevant, include it rather than dropping it.".to_string(),
+    ];
+    for entry in entries {
+        let name = entry
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("(unnamed file)");
+        let mime = entry
+            .mime_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let size = entry.size.map(format_attachment_size);
+        let meta = match (mime, size) {
+            (Some(mime), Some(size)) => format!(" ({mime}, {size})"),
+            (Some(mime), None) => format!(" ({mime})"),
+            (None, Some(size)) => format!(" ({size})"),
+            (None, None) => String::new(),
+        };
+        lines.push(format!("- {name}{meta}"));
+    }
+    lines.join("\n")
+}
+
 /// Collect the self-awareness context for the global assistant: the signed-in user, the active
 /// profile, the names of the user's other profiles, and — when a board is open — that board's
 /// identity. Injected into the system prompt so the assistant knows where it is operating and which
@@ -227,6 +303,10 @@ pub fn build_platform_context(input: PlatformContextInput) -> String {
         if !section.is_empty() {
             sections.push(section);
         }
+    }
+    let attachments = attachments_section(input.attachments);
+    if !attachments.is_empty() {
+        sections.push(attachments);
     }
     sections.join("\n\n")
 }

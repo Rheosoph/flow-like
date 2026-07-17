@@ -335,6 +335,39 @@ fn roundtrip_function_with_return() {
 }
 
 #[test]
+fn roundtrip_named_event() {
+    let text = "eventsSimple dashboardLoad() {\n    logInfo({ message: \"hi\" })\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("named event parses");
+    assert_eq!(ast.events[0].name, "eventsSimple");
+    assert_eq!(ast.events[0].event_name.as_deref(), Some("dashboardLoad"));
+}
+
+#[test]
+fn roundtrip_named_event_with_params() {
+    let text = "eventsGeneric addTargetAction(actionId: string) {\n    logInfo({ message: actionId })\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+    let ast = parse(text).expect("named generic event parses");
+    assert_eq!(ast.events[0].name, "eventsGeneric");
+    assert_eq!(ast.events[0].event_name.as_deref(), Some("addTargetAction"));
+    assert_eq!(ast.events[0].params.len(), 1);
+}
+
+#[test]
+fn unnamed_event_keeps_no_event_name() {
+    let ast = parse("eventsSimple() {\n    logInfo({ message: \"hi\" })\n}\n")
+        .expect("unnamed event parses");
+    assert_eq!(ast.events[0].name, "eventsSimple");
+    assert_eq!(ast.events[0].event_name, None);
+}
+
+#[test]
+fn roundtrip_named_nested_handler() {
+    let text = "eventsSimple() {\n    eventsSimple cronPass() {\n        logInfo({ message: \"tick\" })\n    }\n}\n";
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
 fn rejects_unknown_decorator() {
     let err: ParseError = parse("@bogus\nconst x: string = \"\"\n").unwrap_err();
     assert!(err.message.contains("bogus"));

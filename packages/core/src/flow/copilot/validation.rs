@@ -111,6 +111,7 @@ pub fn validate_model_facing_emit_commands_scope(args: &EmitCommandsArgs) -> Emi
                     BoardCommand::ConnectPins { .. } => "ConnectPins",
                     BoardCommand::DisconnectPins { .. } => "DisconnectPins",
                     BoardCommand::UpdateNodePin { .. } => "UpdateNodePin",
+                    BoardCommand::RenameNode { .. } => "RenameNode",
                     BoardCommand::SetNodeFunctionRefs { .. } => "SetNodeFunctionRefs",
                     BoardCommand::MoveNode { .. } => "MoveNode(target_layer)",
                     BoardCommand::CreateVariable { .. } => "CreateVariable",
@@ -668,6 +669,30 @@ pub async fn validate_emit_commands(
 
                 explicit_values.insert((entity.key.clone(), canonical_pin_ref(pin_id, pin)));
                 entities_to_check.insert(entity.key.clone());
+            }
+            BoardCommand::RenameNode {
+                node_id,
+                friendly_name,
+                ..
+            } => {
+                if !entities.contains_key(node_id) {
+                    errors.push(issue(
+                        "error",
+                        "unknown-node",
+                        Some(index),
+                        format!("Cannot rename unknown node '{}'", node_id),
+                    ));
+                } else if friendly_name.trim().is_empty() {
+                    errors.push(issue(
+                        "error",
+                        "empty-friendly-name",
+                        Some(index),
+                        format!(
+                            "RenameNode '{}' requires a non-empty friendly_name",
+                            node_id
+                        ),
+                    ));
+                }
             }
             BoardCommand::MoveNode {
                 node_id,

@@ -636,12 +636,13 @@ impl<'a> Lowering<'a> {
     }
 
     /// Render the boundary return wiring as a trailing `return` statement when every (non-exec)
-    /// return pin is fed by a `variable_get`, so the statement survives the lower→reconcile
+    /// return pin has one resolvable data source, so the statement survives the lower→reconcile
     /// round-trip instead of being re-added (and re-materialized) by the model on every turn.
     /// A variable materialized for a literal return (`{fn}_{pin}` name, stored default, no other
     /// consumers) renders as its literal and its id is returned for local-decl suppression; any
-    /// other variable renders as a bare reference. Anything else keeps the status quo (no
-    /// statement).
+    /// other variable renders as a bare reference; every other producer renders through the same
+    /// expression resolution the body uses (`hashed.hash`, `user.hasUser`, member chains).
+    /// Anything unresolvable keeps the status quo (no statement).
     fn lower_function_return(
         &mut self,
         layer: &'a Layer,
@@ -669,7 +670,11 @@ impl<'a> Lowering<'a> {
                 return (None, HashSet::new());
             };
             if owner.name != VARIABLE_GET {
-                return (None, HashSet::new());
+                match self.resolve_source(source_pin_id) {
+                    Some(expr) => values.push(expr),
+                    None => return (None, HashSet::new()),
+                }
+                continue;
             }
             let Some(variable_id) = self.pin_literal_string(owner, "var_ref") else {
                 return (None, HashSet::new());
@@ -780,6 +785,7 @@ impl<'a> Lowering<'a> {
             events.push(EventBlock {
                 name: event_name(entry),
                 node_type: entry.name.clone(),
+                event_name: None,
                 params,
                 body,
                 anchor: Some(entry.id.clone()),
@@ -875,6 +881,7 @@ impl<'a> Lowering<'a> {
                 block.stmts.push(Stmt::Handler(EventBlock {
                     name: event_name(entry),
                     node_type: entry.name.clone(),
+                    event_name: None,
                     params,
                     body,
                     anchor: Some(entry.id.clone()),

@@ -545,6 +545,12 @@ user explicitly asked for a partial prototype. Never overlap mutations. A timeou
 drop is an unknown outcome, not proof that the board is empty; inspect the same board after the
 request is terminal, then retry the full scope with diagnostics if necessary.
 
+When the user's request includes both UI and behavior, building AND applying the workflow board is
+MANDATORY before the turn ends — a page without its board is not a deliverable. Never spend the
+remaining turn narrating that a board call is "still running": wait for its terminal result, and
+when that result is a failure or timeout, continue the pipeline in the same turn with the retained
+draft and its diagnostics instead of only reporting status.
+
 The delegated board specialist owns the FlowScript draft and its edit/validate/repair loop. The
 platform caller must not turn a validation problem into a new implementation request such as a
 "minimal diagnostic", empty Event, one-node log/notify test, or ask_user choice to downgrade the
@@ -651,14 +657,31 @@ possible."#,
 
 Use this to interact with an app's own chat agent on the user's behalf (e.g. ask a knowledge-base app
 a question). Running the app's chat is side-effecting, so it asks for approval unless the user selected
-"don't ask again this session". Returns the app chat's text response."#,
+"don't ask again this session".
+
+Returns the app chat's TEXT response — interpret it and answer the user in your own words, don't just
+paste it. The app is automatically shown to the user as a linked chip on your message, so you can refer
+to it by name (e.g. "According to the Knowledge Base app, …"). Any UI the app pushes and any files it
+produces are shown to the user directly; you receive only the text and a short list of returned files.
+
+Independent calls run in parallel: to consult several apps for one request, emit their `call_app_chat`
+tool calls together in one turn instead of waiting for each.
+
+Hand over the user's attached files with `forward_files` (see the FILES ATTACHED THIS TURN context):
+pass the exact names of the files this specific app needs. Choose by file type and what the app does —
+don't blindly forward everything — but when unsure whether a file is relevant, include it."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "app_id": { "type": "string", "description": "Id of the app whose chat event to call (from list_apps)." },
                         "event_id": { "type": "string", "description": "Id of the specific chat event to call (from list_apps). Optional; defaults to the app's first chat event." },
-                        "message": { "type": "string", "description": "Message to send to the app's chat." }
+                        "message": { "type": "string", "description": "Message to send to the app's chat." },
+                        "forward_files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Exact names (from the FILES ATTACHED THIS TURN context) of the user's attached files to hand to this app. Omit to forward all attached files; pass an empty array to forward none. Pick the files whose type/content fit this app; when unsure, include the file."
+                        }
                     },
                     "required": ["app_id", "message"]
                 })
@@ -902,6 +925,15 @@ mod tests {
                 .contains("retained draft_id and its\nexpected_revision")
         );
         assert!(spec.description.contains("never \"start a new draft\""));
+        assert!(
+            spec.description
+                .contains("applying the workflow board is\nMANDATORY before the turn ends")
+        );
+        assert!(spec.description.contains("still running"));
+        assert!(
+            spec.description
+                .contains("continue the pipeline in the same turn with the retained\ndraft")
+        );
         assert_eq!(spec.timeout_secs, 1800);
 
         let schema = (spec.schema)();

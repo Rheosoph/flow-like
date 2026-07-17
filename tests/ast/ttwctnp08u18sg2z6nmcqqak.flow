@@ -164,6 +164,7 @@ const smallModel: Bit = {"id":"","type":"Other","meta":{},"authors":[],"reposito
 
 function constructPrompt(prompt: string): (out: string) {
     const now2 = utilsDatetimeNow()
+    return stringFormat({ formatString: "{prompt}\n\nCurrent Time: {time}", prompt: prompt, time: utilsDatetimeFormat({ date: now2.date, format: "rfc3339" }) })
 }
 
 chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {

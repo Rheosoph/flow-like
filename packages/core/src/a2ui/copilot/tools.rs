@@ -107,7 +107,13 @@ Properties:
 - icon: BoundValue (string) - Lucide icon name (e.g., "send", "plus", "trash")
 - iconPosition: BoundValue - "left" | "right" (default: "left")
 - tooltip: BoundValue (string) - Tooltip text on hover
-- actions: [{ "name": "<page/widget action>", "context": {} }] - actions[0] fires on click (inside the component object)
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - actions[0] fires on click (inside the component object)
+
+Action wiring (same contract for every interactive component):
+- "workflow_event" invokes ONE named board event; context carries routing ids ONLY (nodeId, optional boardId/appId)
+- NEVER copy element/dashboard values into the context - the event body reads current element state itself at runtime (Get Element -> Get Element Value / Get File Input Files)
+- Other built-in names: "navigate_page" (context.route, optional context.queryParams) and "external_link" (context.url)
+- A board can set or re-point this later with Set Element Action (a2uiSetElementAction)
 
 Example:
 {
@@ -118,7 +124,7 @@ Example:
     "variant": { "literalString": "default" },
     "icon": { "literalString": "send" },
     "iconPosition": { "literalString": "left" },
-    "actions": [{ "name": "form_submit", "context": {} }]
+    "actions": [{ "name": "workflow_event", "context": { "nodeId": "evt-submit-form" } }]
   }
 }"#
         .to_string(),
@@ -231,7 +237,7 @@ Properties:
 - disabled: BoundValue (boolean)
 - error: BoundValue (string, error message)
 - label: BoundValue string
-- Bind value with { "path": "$.form.email" } to persist edits; optional actions: [{ "name": "...", "context": {} }] fire on change with { value }
+- Bind value with { "path": "$.form.email" } to persist edits. Optional on-change actions use the button's workflow_event contract; the event reads the current value with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -256,7 +262,7 @@ Properties:
 - disabled: BoundValue (boolean)
 - multiple: BoundValue (boolean)
 - searchable: BoundValue (boolean)
-- Bind value with a path to persist the selection; optional actions: [{ "name": "...", "context": {} }] fire on change with { value }
+- Bind value with a path to persist the selection. Optional on-change actions use the button's workflow_event contract; the event reads the current selection with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -372,7 +378,7 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto agenda on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: [{ "name": "<workflow event action>", "context": {} }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
 
 Example:
 {
@@ -407,7 +413,7 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto compact on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: [{ "name": "<workflow event action>", "context": {} }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
 
 Example:
 {
@@ -428,7 +434,7 @@ Properties:
 - label: BoundValue (string)
 - disabled: BoundValue (boolean)
 - indeterminate: BoundValue (boolean)
-- Bind checked with a path to persist toggles; optional actions: [{ "name": "...", "context": {} }] fire on change with { checked }
+- Bind checked with a path to persist toggles. Optional on-change actions use the button's workflow_event contract; the event reads the current state with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -447,7 +453,7 @@ Properties:
 - checked: BoundValue (boolean)
 - label: BoundValue (string)
 - disabled: BoundValue (boolean)
-- Bind checked with a path to persist toggles; optional actions: [{ "name": "...", "context": {} }] fire on change with { checked }
+- Bind checked with a path to persist toggles. Optional on-change actions use the button's workflow_event contract; the event reads the current state with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -492,7 +498,7 @@ Properties:
 - closeOnOverlay / closeOnEscape / showCloseButton / centered: BoundValue (boolean)
 - size: BoundValue - "sm" | "md" | "lg" | "xl" | "full"
 - children: { explicitList: [...] }
-- Optional actions: [{ "name": "...", "context": {} }] fire with { open: false } when the modal closes
+- Optional actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] fire when the modal closes
 
 Example:
 {
@@ -847,6 +853,91 @@ mod tests {
             assert!(
                 tab.get("label").map(|l| l.is_object()) == Some(true),
                 "tab labels are BoundValues"
+            );
+        }
+    }
+
+    #[test]
+    fn action_examples_use_the_workflow_event_contract() {
+        // ActionHandler.tsx only wires "workflow_event" (context.nodeId),
+        // "navigate_page" (context.route) and "external_link" (context.url) to
+        // real behavior; any other name falls through to a no-op userAction.
+        // The event body must fetch element state itself (Get Element Value /
+        // Get File Input Files), so a workflow_event context carries routing
+        // ids only — never element values or payloads.
+        const BUILTIN_ACTIONS: &[&str] = &["workflow_event", "navigate_page", "external_link"];
+        const WORKFLOW_EVENT_CONTEXT_KEYS: &[&str] = &["nodeId", "boardId", "appId"];
+        for component_type in DETAILED_PAGE_TYPES {
+            let page = get_component_schema(component_type);
+            if page.contains("actions:") {
+                assert!(
+                    page.contains("workflow_event"),
+                    "{component_type} page documents actions without the workflow_event contract"
+                );
+            }
+            let example = example_json(&page);
+            let Some(actions) = example["component"]["actions"].as_array() else {
+                continue;
+            };
+            for action in actions {
+                let name = action["name"].as_str().unwrap_or_default();
+                assert!(
+                    BUILTIN_ACTIONS.contains(&name),
+                    "{component_type}: example action '{name}' is not a built-in action name"
+                );
+                if name == "workflow_event" {
+                    let context = action["context"].as_object().unwrap_or_else(|| {
+                        panic!("{component_type}: workflow_event needs a context object")
+                    });
+                    assert!(
+                        context.get("nodeId").and_then(|v| v.as_str()).is_some(),
+                        "{component_type}: workflow_event context must carry nodeId"
+                    );
+                    for key in context.keys() {
+                        assert!(
+                            WORKFLOW_EVENT_CONTEXT_KEYS.contains(&key.as_str()),
+                            "{component_type}: workflow_event context key '{key}' pushes payload data — events fetch element state themselves"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_points_display_updates_at_element_setters_not_data_update() {
+        // The product contract: workflow-driven display changes go through
+        // element-level setters; Data Update is a last resort for `$.data.*`
+        // bindings. Every doc mention of a2uiDataUpdate must carry that warning.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        for alias in [
+            "a2uiSetElementText",
+            "a2uiSetElementValue",
+            "a2uiWriteCsvToTable",
+            "a2uiUpdateTable",
+            "a2uiPushCsvToChart",
+            "a2uiGetElement",
+            "a2uiGetElementValue",
+            "a2uiGetFileInputFiles",
+            "a2uiSetElementAction",
+        ] {
+            assert!(
+                docs.contains(alias),
+                "component docs must reference the element-level node {alias}"
+            );
+        }
+        let mentions = docs
+            .lines()
+            .filter(|line| line.contains("a2uiDataUpdate"))
+            .collect::<Vec<_>>();
+        assert!(
+            !mentions.is_empty(),
+            "docs must warn about a2uiDataUpdate explicitly"
+        );
+        for line in mentions {
+            assert!(
+                line.contains("never") || line.contains("not "),
+                "a2uiDataUpdate may only appear in a discouraging context, found: {line}"
             );
         }
     }
