@@ -552,7 +552,6 @@ pub async fn prerun_ontology_action(
     let board = state
         .master_board(&sub, &app_id, &action.board_id, &state, version)
         .await?;
-    let board = board.lock().await;
     let payload = compute_payload(&board);
     Ok(Json(OntologyActionPrerunResponse {
         oauth_requirements: payload.oauth_requirements,
