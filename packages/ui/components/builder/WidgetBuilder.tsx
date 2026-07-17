@@ -573,6 +573,7 @@ function WidgetBuilderContent({
 							>
 								{copilotOpen && !externalAssistant ? (
 									<A2UICopilot
+										appId={actionContext?.appId}
 										currentComponents={currentComponents}
 										selectedComponentIds={selectedIds}
 										onComponentsGenerated={handleComponentsGenerated}
@@ -594,6 +595,7 @@ function WidgetBuilderContent({
 					<Sheet open={copilotOpen} onOpenChange={setCopilotOpen}>
 						<SheetContent side="right" className="w-full sm:max-w-md p-0">
 							<A2UICopilot
+								appId={actionContext?.appId}
 								currentComponents={currentComponents}
 								selectedComponentIds={selectedIds}
 								onComponentsGenerated={handleComponentsGenerated}

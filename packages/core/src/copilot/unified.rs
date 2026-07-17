@@ -11,6 +11,7 @@ use crate::a2ui::SurfaceComponent;
 use crate::a2ui::copilot::A2UICopilot;
 use crate::flow::board::Board;
 use crate::flow::copilot::{CatalogProvider, Copilot, RunContext};
+use crate::models::llm::ModelUsageContext;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -36,6 +37,7 @@ pub struct UnifiedCopilot {
     catalog_provider: Option<Arc<dyn CatalogProvider>>,
     profile: Option<Arc<Profile>>,
     current_template_id: Option<String>,
+    usage_context: Option<ModelUsageContext>,
 }
 
 impl UnifiedCopilot {
@@ -45,12 +47,14 @@ impl UnifiedCopilot {
         catalog_provider: Option<Arc<dyn CatalogProvider>>,
         profile: Option<Arc<Profile>>,
         current_template_id: Option<String>,
+        usage_context: Option<ModelUsageContext>,
     ) -> Result<Self> {
         Ok(Self {
             state,
             catalog_provider,
             profile,
             current_template_id,
+            usage_context,
         })
     }
 
@@ -193,6 +197,7 @@ impl UnifiedCopilot {
             catalog_provider.clone(),
             self.profile.clone(),
             self.current_template_id.clone(),
+            self.usage_context.clone(),
         )
         .await?;
 
@@ -257,7 +262,12 @@ impl UnifiedCopilot {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
-        let copilot = A2UICopilot::new(self.state.clone(), self.profile.clone()).await?;
+        let copilot = A2UICopilot::new(
+            self.state.clone(),
+            self.profile.clone(),
+            self.usage_context.clone(),
+        )
+        .await?;
 
         // Convert history
         let ui_history = history

@@ -203,6 +203,8 @@ export interface IBoardState {
 		 * and returned instead of being coerced into producing (and failing to produce) an edit.
 		 */
 		readOnly?: boolean,
+		/** App owning this copilot surface; omitted for global/user-only chat. */
+		appId?: string,
 	): Promise<UnifiedCopilotResponse>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for a board */

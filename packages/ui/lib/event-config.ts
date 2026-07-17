@@ -16,6 +16,7 @@ import {
 	UserMailConfig,
 } from "../index";
 import { DEFAULT_CHAT_AI_DISCLOSURE } from "./chat-appearance";
+import { DEFAULT_CHAT_THEME_CSS } from "./chat-theme-presets";
 
 /** Whether an event renders the built-in chat interface. */
 export function isChatEventType(eventType: string): boolean {
@@ -38,8 +39,7 @@ export const EVENT_CONFIG: IEventMapping = {
 				allow_voice_input: false,
 				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,
 				background_image: "",
-				color_scheme: "system",
-				custom_css: "",
+				custom_css: DEFAULT_CHAT_THEME_CSS,
 				voice: {
 					mode: "disabled",
 					invoke: "manual",

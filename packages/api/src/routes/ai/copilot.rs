@@ -18,6 +18,7 @@ use flow_like::flow::copilot::{
 use flow_like::flow::node::NodeLogic;
 use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
+use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
 use serde::Deserialize;
@@ -32,6 +33,11 @@ pub fn routes() -> Router<AppState> {
 pub struct CopilotChatRequest {
     /// The scope of operation: "Board", "Frontend", or "Both"
     pub scope: CopilotScope,
+
+    /// Server-backed app to attribute hosted-model usage to. The caller must
+    /// have execution permission for this app. Omit for global/user-only chat.
+    #[serde(default)]
+    pub app_id: Option<String>,
 
     /// Board context (optional for Frontend scope)
     #[serde(default)]
@@ -143,6 +149,32 @@ fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError
     }
 
     Ok(())
+}
+
+fn resolve_copilot_app_id(
+    explicit_app_id: Option<&str>,
+    run_context_app_id: Option<&str>,
+    action_context_app_id: Option<&str>,
+) -> Result<Option<String>, ApiError> {
+    let mut resolved: Option<&str> = None;
+
+    for candidate in [explicit_app_id, run_context_app_id, action_context_app_id]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|app_id| !app_id.is_empty())
+    {
+        if let Some(existing) = resolved
+            && existing != candidate
+        {
+            return Err(ApiError::bad_request(
+                "Conflicting app IDs in copilot request context",
+            ));
+        }
+        resolved = Some(candidate);
+    }
+
+    Ok(resolved.map(str::to_string))
 }
 
 fn validate_images(images: &[ChatImage], context: &str) -> Result<(), ApiError> {
@@ -363,6 +395,7 @@ async fn build_unified_copilot(
     state: &AppState,
     scope: CopilotScope,
     profile: Option<Arc<Profile>>,
+    usage_context: Option<ModelUsageContext>,
 ) -> Result<flow_like::copilot::UnifiedCopilot, ApiError> {
     let flow_like_state = master_flow_like_state(state).await?;
 
@@ -373,10 +406,15 @@ async fn build_unified_copilot(
         })),
     };
 
-    let copilot =
-        flow_like::copilot::UnifiedCopilot::new(flow_like_state, catalog_provider, profile, None)
-            .await
-            .map_err(|e| ApiError::internal(format!("Failed to init copilot: {e}")))?;
+    let copilot = flow_like::copilot::UnifiedCopilot::new(
+        flow_like_state,
+        catalog_provider,
+        profile,
+        None,
+        usage_context,
+    )
+    .await
+    .map_err(|e| ApiError::internal(format!("Failed to init copilot: {e}")))?;
     Ok(copilot)
 }
 
@@ -397,6 +435,31 @@ pub async fn copilot_chat(
         payload.scope
     );
 
+    let attribution_app_id = resolve_copilot_app_id(
+        payload.app_id.as_deref(),
+        payload
+            .run_context
+            .as_ref()
+            .map(|context| context.app_id.as_str()),
+        payload
+            .action_context
+            .as_ref()
+            .map(|context| context.app_id.as_str()),
+    )?;
+    let usage_context = match attribution_app_id.as_deref() {
+        Some(app_id) => {
+            user.execution_app_permission(app_id, &state).await?;
+            Some(ModelUsageContext {
+                app_id: Some(app_id.to_string()),
+                run_id: payload
+                    .run_context
+                    .as_ref()
+                    .map(|context| context.run_id.clone()),
+            })
+        }
+        None => None,
+    };
+
     let token = user_access_token(&user);
 
     let context = if payload.run_context.is_some() || payload.action_context.is_some() {
@@ -414,7 +477,7 @@ pub async fn copilot_chat(
     // token, the model call loops through this server's metered `/chat/completions`, so tier
     // enforcement + usage tracking apply. Falls back to `None` only when the user has no profile.
     let profile = super::global_chat::load_user_profile_opt(&state, &sub, None).await?;
-    let copilot = build_unified_copilot(&state, payload.scope, profile).await?;
+    let copilot = build_unified_copilot(&state, payload.scope, profile, usage_context).await?;
 
     if !payload.stream {
         let response = copilot
@@ -511,4 +574,22 @@ pub async fn copilot_chat(
             .interval(Duration::from_secs(1)),
     );
     Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_copilot_app_id;
+
+    #[test]
+    fn resolves_matching_copilot_app_contexts() {
+        assert_eq!(
+            resolve_copilot_app_id(Some(" app-1 "), Some("app-1"), None).unwrap(),
+            Some("app-1".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_copilot_app_contexts() {
+        assert!(resolve_copilot_app_id(Some("app-1"), Some("app-2"), None).is_err());
+    }
 }

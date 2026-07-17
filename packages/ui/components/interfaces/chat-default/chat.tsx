@@ -579,9 +579,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					{/* ChatBox */}
 					<div
 						className="mx-auto w-full space-y-2 px-3"
+						data-fl-chat-composer-dock
 						style={{
-							backgroundColor:
-								"var(--fl-chat-composer-background, var(--background))",
 							maxWidth: "var(--fl-chat-content-width, 64rem)",
 							paddingBottom:
 								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",

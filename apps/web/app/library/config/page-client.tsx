@@ -1217,6 +1217,7 @@ export default function LibraryConfigPage() {
 									}}
 								>
 									<TextEditor
+										appId={id ?? undefined}
 										editable={canEdit}
 										isMarkdown
 										initialContent={

@@ -111,11 +111,13 @@ const FullscreenEditDialog = ({
 	onOpenChange,
 	content,
 	onSave,
+	appId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	content: string;
 	onSave: (content: string) => void;
+	appId?: string;
 }) => {
 	const [editedContent, setEditedContent] = useState(content);
 
@@ -181,6 +183,7 @@ const FullscreenEditDialog = ({
 			<div className="flex-1 p-6 ">
 				<div className="relative h-full border border-border rounded-lg">
 					<TextEditor
+						appId={appId}
 						initialContent={content}
 						onChange={setEditedContent}
 						isMarkdown={true}
@@ -866,6 +869,7 @@ export const MessageComponent = memo(
 					</Dialog>
 				)}
 				<FullscreenEditDialog
+					appId={appId}
 					open={showEditDialog}
 					onOpenChange={setShowEditDialog}
 					content={messageContent.text}

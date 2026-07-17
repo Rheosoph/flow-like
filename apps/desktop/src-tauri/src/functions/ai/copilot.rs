@@ -2,6 +2,7 @@ use crate::state::{TauriFlowLikeState, TauriSettingsState};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flow_like::a2ui::SurfaceComponent;
+use flow_like::app::{App, AppVisibility};
 use flow_like::copilot::{
     ChatImage, CopilotScope, UIActionContext, UnifiedChatMessage, UnifiedContext, UnifiedCopilot,
     UnifiedCopilotResponse,
@@ -17,6 +18,7 @@ use flow_like::flow::copilot::{
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
 use flow_like::flow::variable::VariableType;
+use flow_like::models::llm::ModelUsageContext;
 use flow_like_catalog::get_catalog;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -400,6 +402,30 @@ fn build_copilot_attachments(images: &[ChatImage]) -> Result<Vec<UserMessageAtta
         .collect())
 }
 
+fn resolve_copilot_app_id(
+    explicit_app_id: Option<&str>,
+    run_context_app_id: Option<&str>,
+    action_context_app_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    let mut resolved: Option<&str> = None;
+
+    for candidate in [explicit_app_id, run_context_app_id, action_context_app_id]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|app_id| !app_id.is_empty())
+    {
+        if let Some(existing) = resolved
+            && existing != candidate
+        {
+            return Err("Conflicting app IDs in copilot request context".to_string());
+        }
+        resolved = Some(candidate);
+    }
+
+    Ok(resolved.map(str::to_string))
+}
+
 /// Unified copilot chat command that handles both board and UI generation
 #[tauri::command]
 pub async fn copilot_chat(
@@ -427,6 +453,8 @@ pub async fn copilot_chat(
     nested: Option<bool>,
     // Read-only sub-run (flowpilot_board explain): answer questions about the board without editing.
     read_only: Option<bool>,
+    // App scope for hosted-model usage attribution. Omit for genuine global chat.
+    app_id: Option<String>,
     // Streaming channel
     channel: Channel<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
@@ -504,13 +532,39 @@ pub async fn copilot_chat(
         .ok()
         .map(|p| Arc::new(p.hub_profile));
 
+    let attribution_app_id = resolve_copilot_app_id(
+        app_id.as_deref(),
+        run_context.as_ref().map(|context| context.app_id.as_str()),
+        action_context
+            .as_ref()
+            .map(|context| context.app_id.as_str()),
+    )?;
+    let usage_context = match attribution_app_id.as_deref() {
+        Some(app_id) => {
+            let app = App::load(app_id.to_string(), state_clone.clone())
+                .await
+                .map_err(|error| {
+                    format!("Failed to resolve app for copilot usage attribution: {error}")
+                })?;
+            Some(ModelUsageContext {
+                app_id: if matches!(app.visibility, AppVisibility::Offline) {
+                    None
+                } else {
+                    Some(app_id.to_string())
+                },
+                run_id: run_context.as_ref().map(|context| context.run_id.clone()),
+            })
+        }
+        None => None,
+    };
+
     // Only create catalog provider if we might need it (Board or Both scope)
     let catalog_provider: Option<Arc<dyn CatalogProvider>> = match scope {
         CopilotScope::Frontend => None,
         _ => Some(Arc::new(DesktopCatalogProvider::new(catalog_nodes))),
     };
 
-    let copilot = UnifiedCopilot::new(state_clone, catalog_provider, profile, None)
+    let copilot = UnifiedCopilot::new(state_clone, catalog_provider, profile, None, usage_context)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -5528,6 +5582,19 @@ pub async fn copilot_sdk_create_agent_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_matching_copilot_app_contexts() {
+        assert_eq!(
+            resolve_copilot_app_id(Some(" app-1 "), Some("app-1"), None).unwrap(),
+            Some("app-1".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_copilot_app_contexts() {
+        assert!(resolve_copilot_app_id(Some("app-1"), None, Some("app-2")).is_err());
+    }
 
     fn build_test_client() -> Option<Client> {
         let cli_path = find_copilot_cli_path();

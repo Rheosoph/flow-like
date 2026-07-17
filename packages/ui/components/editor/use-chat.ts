@@ -7,10 +7,13 @@ import { faker } from "@faker-js/faker";
 import { usePluginOption } from "platejs/react";
 
 import { useBackend } from "../../state/backend-state";
+import { AIUsageAppContext } from "./ai-usage-context";
+import { streamEditorChat } from "./ai-transport";
 import { aiChatPlugin } from "./plugins/ai-kit";
 
 export const useChat = () => {
 	const backend = useBackend();
+	const appId = React.useContext(AIUsageAppContext);
 	const options = usePluginOption(aiChatPlugin, "chatOptions");
 
 	// remove when you implement the route /api/ai/command
@@ -34,7 +37,11 @@ export const useChat = () => {
 			abortControllerRef.current = new AbortController();
 
 			const messages = JSON.parse(init?.body as string).messages;
-			const chunkStream = await backend.aiState.streamChatComplete(messages);
+			const chunkStream = await streamEditorChat(
+				backend.aiState,
+				messages,
+				appId,
+			);
 
 			const encoder = new TextEncoder();
 			let hasFinished = false;

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_CHAT_THEME_CSS } from "@flow-like/flow-like-ui";
 import { EVENT_CONFIG } from "./event-config";
 
 describe("daemon event config", () => {
@@ -37,13 +38,12 @@ describe("chat event config", () => {
 	});
 
 	test("includes safe appearance and AI disclosure defaults", () => {
-		expect(EVENT_CONFIG.events_chat.configs.simple_chat).toMatchObject({
+		const chatConfig = EVENT_CONFIG.events_chat.configs.simple_chat;
+		expect(chatConfig).toMatchObject({
 			background_image: "",
-			color_scheme: "system",
-			custom_css: "",
+			custom_css: DEFAULT_CHAT_THEME_CSS,
 		});
-		expect(
-			EVENT_CONFIG.events_chat.configs.simple_chat.ai_disclosure,
-		).toContain("AI");
+		expect(chatConfig).not.toHaveProperty("color_scheme");
+		expect(chatConfig.ai_disclosure).toContain("AI");
 	});
 });

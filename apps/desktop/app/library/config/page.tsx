@@ -1219,6 +1219,7 @@ export default function DashboardPage() {
 									}}
 								>
 									<TextEditor
+										appId={id ?? undefined}
 										editable={canEdit}
 										isMarkdown
 										initialContent={

@@ -23,7 +23,7 @@ describe("chat appearance helpers", () => {
 
 	test("builds a quoted background image with the overlay token", () => {
 		expect(createChatBackgroundImage(" https://example.com/a b.png ")).toBe(
-			'linear-gradient(var(--fl-chat-background-overlay), var(--fl-chat-background-overlay)), url("https://example.com/a b.png")',
+			'linear-gradient(to bottom, var(--fl-chat-background-overlay) 0%, var(--fl-chat-background-overlay) 48%, var(--fl-chat-background-overlay-strong, var(--fl-chat-background-overlay)) 100%), url("https://example.com/a b.png")',
 		);
 		expect(createChatBackgroundImage("")).toBeUndefined();
 		expect(

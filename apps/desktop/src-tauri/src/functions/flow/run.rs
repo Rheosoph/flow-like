@@ -1,4 +1,4 @@
-use flow_like::app::App;
+use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::{
@@ -48,7 +48,20 @@ struct ExecutionOverrides {
     run_sub_override: Option<String>,
 }
 
-async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {
+fn should_report_run_to_backend(visibility: &AppVisibility) -> bool {
+    !matches!(visibility, AppVisibility::Offline)
+}
+
+async fn report_run_to_backend(
+    app_handle: &AppHandle,
+    token: &str,
+    meta: &LogMeta,
+    visibility: &AppVisibility,
+) {
+    if !should_report_run_to_backend(visibility) {
+        return;
+    }
+
     let hub_url = match TauriSettingsState::current_profile(app_handle).await {
         Ok(profile) => profile.hub_profile.hub.clone(),
         Err(_) => return,
@@ -225,6 +238,7 @@ async fn execute_internal(
 
     let app_handle_for_report = app_handle.clone();
     let token_for_report = token.clone();
+    let app_visibility_for_report = app.visibility.clone();
 
     let buffered_sender = Arc::new(BufferedInterComHandler::new(
         Arc::new(move |event| {
@@ -281,6 +295,10 @@ async fn execute_internal(
         oauth_tokens.unwrap_or_default().into_iter().collect(),
     )
     .await?;
+
+    internal_run
+        .set_usage_attribution_from_visibility(&app.visibility)
+        .await;
 
     if let Some(run_sub_override) = overrides.run_sub_override {
         internal_run.set_execution_sub(run_sub_override).await;
@@ -426,8 +444,9 @@ async fn execute_internal(
         let app_handle = app_handle_for_report.clone();
         let token = token.clone();
         let meta = meta.clone();
+        let visibility = app_visibility_for_report.clone();
         tokio::spawn(async move {
-            report_run_to_backend(&app_handle, &token, &meta).await;
+            report_run_to_backend(&app_handle, &token, &meta, &visibility).await;
         });
     }
 
@@ -751,4 +770,26 @@ pub async fn query_run(
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let logs = state.query_run(&log_meta, &query, limit, offset).await?;
     Ok(logs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_apps_are_not_reported_to_the_backend() {
+        assert!(!should_report_run_to_backend(&AppVisibility::Offline));
+    }
+
+    #[test]
+    fn server_backed_apps_are_reported_to_the_backend() {
+        for visibility in [
+            AppVisibility::Public,
+            AppVisibility::PublicRequestAccess,
+            AppVisibility::Private,
+            AppVisibility::Prototype,
+        ] {
+            assert!(should_report_run_to_backend(&visibility));
+        }
+    }
 }

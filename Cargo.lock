@@ -8604,6 +8604,7 @@ dependencies = [
 name = "flow-like-wasm"
 version = "0.1.0"
 dependencies = [
+ "ahash 0.8.12",
  "anyhow",
  "async-trait",
  "base64 0.22.1",

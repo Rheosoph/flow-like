@@ -20,7 +20,7 @@ flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true
-flow-like-wasm.workspace = true
+flow-like-wasm = { workspace = true, features = ["model"] }
 
 blake3.workspace = true
 moka.workspace = true

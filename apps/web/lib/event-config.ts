@@ -3,6 +3,7 @@ import {
 	ChatInterface,
 	CronJobConfig,
 	DEFAULT_CHAT_AI_DISCLOSURE,
+	DEFAULT_CHAT_THEME_CSS,
 	DaemonConfig,
 	DeeplinkConfig,
 	DiscordConfig,
@@ -33,8 +34,7 @@ export const EVENT_CONFIG: IEventMapping = {
 				allow_voice_input: false,
 				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,
 				background_image: "",
-				color_scheme: "system",
-				custom_css: "",
+				custom_css: DEFAULT_CHAT_THEME_CSS,
 				voice: {
 					mode: "disabled",
 					invoke: "manual",

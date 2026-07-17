@@ -729,6 +729,9 @@ export class WebBoardState implements IBoardState {
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		nested?: boolean,
+		readOnly?: boolean,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
@@ -750,6 +753,7 @@ export class WebBoardState implements IBoardState {
 			headers,
 			body: JSON.stringify({
 				scope,
+				app_id: appId,
 				board,
 				selected_node_ids: selectedNodeIds,
 				current_surface: currentSurface,
@@ -761,6 +765,8 @@ export class WebBoardState implements IBoardState {
 				token,
 				run_context: runContext,
 				action_context: actionContext,
+				nested,
+				read_only: readOnly,
 				stream: wantsStream,
 			}),
 		});

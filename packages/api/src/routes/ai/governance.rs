@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use flow_like::copilot::governance::{GovernanceCopilot, GovernanceSuggestion};
+use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
 
@@ -45,6 +46,7 @@ pub async fn run_governance_agent(
     model_id: Option<String>,
     profile: Option<Profile>,
     token: Option<String>,
+    usage_context: Option<ModelUsageContext>,
 ) -> Result<(GovernanceSuggestion, Signals, String), ApiError> {
     let app = state.master_app(sub, app_id, state).await?;
 
@@ -80,7 +82,7 @@ pub async fn run_governance_agent(
         Some(profile) => Some(Arc::new(profile)),
         None => crate::routes::ai::global_chat::load_user_profile_opt(state, sub, None).await?,
     };
-    let copilot = GovernanceCopilot::new(flow_like_state, profile);
+    let copilot = GovernanceCopilot::new(flow_like_state, profile, usage_context);
 
     let suggestion = copilot
         .assist(&depictions, &context_json, model_id, token)

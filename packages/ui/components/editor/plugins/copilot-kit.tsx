@@ -6,6 +6,7 @@ import { serializeMd, stripMarkdown } from "@platejs/markdown";
 import type { TElement } from "platejs";
 import { IRole } from "../../../lib";
 import { useBackendStore } from "../../../state/backend-state";
+import { completeEditorChat } from "../ai-transport";
 import { GhostText } from "../ui/ghost-text";
 import { MarkdownKit } from "./markdown-kit";
 
@@ -21,7 +22,7 @@ const SYSTEM_PROMPT = `You are an advanced AI writing assistant, similar to VSCo
   - CRITICAL: Avoid starting a new block. Do not use block formatting like >, #, 1., 2., -, etc. The suggestion should continue in the same block as the context.
   - If no context is provided or you can't generate a continuation, return "0" without explanation.`;
 
-export const CopilotKit = [
+export const createCopilotKit = (appId?: string) => [
 	...MarkdownKit,
 	// @ts-ignore
 	CopilotPlugin.configure(({ api }) => ({
@@ -43,16 +44,20 @@ export const CopilotKit = [
 					if (!backend) {
 						throw new Error("Backend not initialized");
 					}
-					const response = await backend.aiState.chatComplete([
-						{
-							role: IRole.System,
-							content: body.system,
-						},
-						{
-							role: IRole.User,
-							content: body.prompt,
-						},
-					]);
+					const response = await completeEditorChat(
+						backend.aiState,
+						[
+							{
+								role: IRole.System,
+								content: body.system,
+							},
+							{
+								role: IRole.User,
+								content: body.prompt,
+							},
+						],
+						appId,
+					);
 
 					console.dir(response);
 					const text = response.choices[0]?.message?.content || "0";
@@ -107,3 +112,5 @@ export const CopilotKit = [
 		},
 	})),
 ];
+
+export const CopilotKit = createCopilotKit();

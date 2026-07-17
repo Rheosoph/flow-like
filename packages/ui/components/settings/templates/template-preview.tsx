@@ -608,6 +608,7 @@ export function TemplatePreview({
 
 					<div className="relative">
 						<TextEditor
+							appId={appId}
 							onChange={(content) => {
 								updateEditState({ long_description: content });
 							}}

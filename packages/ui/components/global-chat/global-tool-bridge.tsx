@@ -1251,6 +1251,7 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 							undefined /* actionContext */,
 							true /* nested: isolate from the pending parent session */,
 							readOnly /* explain mode: answer, don't edit */,
+							appId,
 						);
 						console.debug(
 							"[global-tool-bridge] flowpilot_board: nested copilot_chat finished",
@@ -1504,11 +1505,12 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 						widgetSurface?.appId ||
 						argString(args, "app_id") ||
 						argString(args, "appId");
-					if (createMode && !appId)
+					if (!appId)
 						return {
 							status: "error",
-							message:
-								"No widget/page builder is open. To create a NEW page pass app_id (from list_apps/create_app); otherwise ask the user to open a builder first.",
+							message: createMode
+								? "No widget/page builder is open. To create a NEW page pass app_id (from list_apps/create_app); otherwise ask the user to open a builder first."
+								: "The open widget/page builder has no app scope. Reopen it from an app before using FlowPilot.",
 						};
 
 					// Run the widget copilot as a sub-agent, using the global chat's selected model.
@@ -1582,6 +1584,8 @@ Execute the change NOW in this run: draft the complete FlowScript workspace for 
 							undefined /* runContext */,
 							undefined /* actionContext */,
 							true /* nested: isolate from the pending parent session */,
+							undefined /* readOnly */,
+							appId,
 						);
 					} catch (error) {
 						failProgressSteps();

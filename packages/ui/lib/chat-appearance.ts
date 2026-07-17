@@ -45,5 +45,5 @@ export function createChatBackgroundImage(value: unknown): string | undefined {
 	}
 
 	const url = JSON.stringify(trimmed);
-	return `linear-gradient(var(--fl-chat-background-overlay), var(--fl-chat-background-overlay)), url(${url})`;
+	return `linear-gradient(to bottom, var(--fl-chat-background-overlay) 0%, var(--fl-chat-background-overlay) 48%, var(--fl-chat-background-overlay-strong, var(--fl-chat-background-overlay)) 100%), url(${url})`;
 }

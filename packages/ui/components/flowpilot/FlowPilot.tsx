@@ -2703,6 +2703,9 @@ ${userMsg}`;
 					undefined,
 					backendRunContext,
 					undefined, // actionContext - can be added later
+					undefined, // nested
+					undefined, // readOnly
+					activeAppId,
 				);
 
 				flushMessageContent();
@@ -2848,6 +2851,7 @@ ${userMsg}`;
 			runContext,
 			currentComponents,
 			selectedComponentIds,
+			activeAppId,
 			onComponentsGenerated,
 			backendContext.boardState,
 			captureScreenshot,

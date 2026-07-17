@@ -190,6 +190,8 @@ export class EmptyBoardState implements IBoardState {
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
 		nested?: boolean,
+		readOnly?: boolean,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		throw new Error("Method not implemented.");
 	}
