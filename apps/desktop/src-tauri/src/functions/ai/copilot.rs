@@ -20,9 +20,8 @@ use flow_like::flow::copilot::{
     AttachmentManifestEntry, BoardCommand, CatalogProvider, EmitCommandsArgs,
     FlowScriptCandidateRegression, FlowScriptPendingDelivery, FlowScriptRepairTracker,
     GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata, PlatformContextInput,
-    RunContext, build_platform_context,
-    emit_validation_requires_flowscript, enrich_node_metadata, flowscript_workspace_envelope,
-    global_assistant_system_prompt, profile_flowscript_candidate,
+    RunContext, build_platform_context, emit_validation_requires_flowscript, enrich_node_metadata,
+    flowscript_workspace_envelope, global_assistant_system_prompt, profile_flowscript_candidate,
     render_flowscript_modular_partial_result, run_platform_chat, score_catalog_metadata,
     validate_model_facing_emit_commands_scope,
 };
