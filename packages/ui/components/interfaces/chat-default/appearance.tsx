@@ -68,7 +68,7 @@ export function ChatAppearance({
 			setPresignedBackground({
 				appId,
 				source: configuredBackgroundImage,
-				url,
+				url: url && !isStoragePrefix(url) ? url : undefined,
 			});
 		});
 
