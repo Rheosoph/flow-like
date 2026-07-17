@@ -54,22 +54,29 @@ pub async fn get_catalog(
             );
             match ontologies {
                 Ok(ontologies) => {
-                    match ontologies
+                    // One undecodable overlay must not drop every other
+                    // ontology's binding nodes from the palette.
+                    let ontologies = ontologies
                         .into_iter()
-                        .map(graph_overlay_from_def)
-                        .collect::<flow_like_types::Result<Vec<_>>>()
-                    {
-                        Ok(ontologies) => {
-                            let bindings =
-                                flow_like_catalog::ontology_binding_nodes(&ontologies, &filtered);
-                            filtered.extend(bindings);
-                        }
-                        Err(error) => tracing::warn!(
-                            app_id,
-                            %error,
-                            "Could not decode Data Studio bindings; returning the base catalog"
-                        ),
-                    }
+                        .filter_map(|def| {
+                            let overlay_id = def.id.clone();
+                            match graph_overlay_from_def(def) {
+                                Ok(overlay) => Some(overlay),
+                                Err(error) => {
+                                    tracing::warn!(
+                                        app_id,
+                                        overlay_id,
+                                        %error,
+                                        "Skipping undecodable ontology in Data Studio bindings"
+                                    );
+                                    None
+                                }
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let bindings =
+                        flow_like_catalog::ontology_binding_nodes(&ontologies, &filtered);
+                    filtered.extend(bindings);
                 }
                 Err(error) => tracing::warn!(
                     app_id,
@@ -79,23 +86,27 @@ pub async fn get_catalog(
             }
             match imports {
                 Ok(imports) => {
-                    match imports
+                    let imports = imports
                         .into_iter()
-                        .map(remote_ontology_import_from_def)
-                        .collect::<flow_like_types::Result<Vec<_>>>()
-                    {
-                        Ok(imports) => {
-                            let bindings = flow_like_catalog::remote_ontology_binding_nodes(
-                                &imports, &filtered,
-                            );
-                            filtered.extend(bindings);
-                        }
-                        Err(error) => tracing::warn!(
-                            app_id,
-                            %error,
-                            "Could not decode remote Data Studio bindings; returning local bindings"
-                        ),
-                    }
+                        .filter_map(|def| {
+                            let import_id = def.id.clone();
+                            match remote_ontology_import_from_def(def) {
+                                Ok(import) => Some(import),
+                                Err(error) => {
+                                    tracing::warn!(
+                                        app_id,
+                                        import_id,
+                                        %error,
+                                        "Skipping undecodable remote ontology import"
+                                    );
+                                    None
+                                }
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let bindings =
+                        flow_like_catalog::remote_ontology_binding_nodes(&imports, &filtered);
+                    filtered.extend(bindings);
                 }
                 Err(error) => tracing::warn!(
                     app_id,

@@ -4,12 +4,26 @@ import {
 	Badge,
 	Button,
 	Card,
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
 	IIndexType,
 	Input,
+	Label,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+	Switch,
 	Tabs,
 	TabsContent,
 	TabsList,
 	TabsTrigger,
+	Textarea,
 	cn,
 	useBackend,
 	useInvalidateInvoke,
@@ -26,16 +40,25 @@ import {
 	type DataStudioTableInfo,
 	OntologySetupDialog,
 } from "@flow-like/flow-like-ui/components/settings/data-studio/ontology-setup-dialog";
-import { GraphViewer } from "@flow-like/flow-like-ui/components/ui/graph";
+import {
+	GraphViewer,
+	getNodeRawId,
+} from "@flow-like/flow-like-ui/components/ui/graph";
 import LanceDBExplorer from "@flow-like/flow-like-ui/components/ui/lance-viewer";
 import type {
 	CreateOverlayPayload,
 	GraphOverlay,
+	GraphPathsResult,
+	InvokeOntologyActionPayload,
 	LabelStyle,
+	OntologyActionDefinition,
+	OntologyActionRun,
 	SubgraphNode,
 	SubgraphResult,
 } from "@flow-like/flow-like-ui/state/backend-state/graph-state";
+import { createId } from "@paralleldrive/cuid2";
 import {
+	AlertTriangle,
 	ArrowDownAZ,
 	ArrowLeftIcon,
 	ArrowUpAZ,
@@ -44,7 +67,9 @@ import {
 	Globe,
 	Layers3,
 	LayoutDashboard,
+	Loader2,
 	Network,
+	Play,
 	Plus,
 	RefreshCw,
 	Search,
@@ -60,7 +85,7 @@ import {
 	useSearchParams,
 } from "next/navigation";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export interface ExploreDataPageProps {
@@ -695,6 +720,32 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		...(appConnections.data?.outgoing ?? []),
 	];
 
+	const failedQueries: { name: string; onRetry: () => void }[] = [];
+	if (tables.error) {
+		failedQueries.push({
+			name: "project tables",
+			onRetry: () => {
+				tables.refetch();
+			},
+		});
+	}
+	if (userTables.error) {
+		failedQueries.push({
+			name: "user tables",
+			onRetry: () => {
+				userTables.refetch();
+			},
+		});
+	}
+	if (ontologies.error) {
+		failedQueries.push({
+			name: "ontologies",
+			onRetry: () => {
+				ontologies.refetch();
+			},
+		});
+	}
+
 	return (
 		<div className="flex flex-col h-full">
 			<div className="p-6 pb-0">
@@ -719,6 +770,9 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						</Button>
 					</div>
 				</header>
+				{failedQueries.length > 0 && (
+					<PartialFailureAlert failures={failedQueries} />
+				)}
 			</div>
 			<Tabs
 				value={activeView}
@@ -772,6 +826,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				</TabsContent>
 				<TabsContent value="model" className="flex-1 overflow-y-auto p-6">
 					<OntologyModelPanel
+						appId={appId}
 						ontologies={ontologyData}
 						onCreateOntology={() => setSetupOpen(true)}
 						onOpenOntology={navigateToOntology}
@@ -781,6 +836,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					<OntologyActionsPanel
 						ontologies={ontologyData}
 						boards={boards.data ?? []}
+						appId={appId}
 						onCreateOntology={() => setSetupOpen(true)}
 						onNeedBoards={() => setActionBoardsRequested(true)}
 						onSaveActions={saveActions}
@@ -840,6 +896,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			<OntologySetupDialog
 				open={setupOpen}
 				onOpenChange={setSetupOpen}
+				appId={appId}
 				tables={processedTables as DataStudioTableInfo[]}
 				loadSchema={(table) =>
 					backend.dbState.getSchema(appId, table.name, table.userScoped)
@@ -1140,10 +1197,43 @@ function mergeSubgraphData(
 	};
 }
 
+function applyStyleToOverlay(
+	overlay: GraphOverlay,
+	label: string,
+	type: "node" | "edge",
+	style: LabelStyle,
+): GraphOverlay {
+	if (type === "node") {
+		return {
+			...overlay,
+			nodes: overlay.nodes.map((node) =>
+				node.label === label ? { ...node, style } : node,
+			),
+		};
+	}
+	return {
+		...overlay,
+		edges: overlay.edges.map((edge) =>
+			edge.label === label ? { ...edge, style } : edge,
+		),
+	};
+}
+
+function isConflictError(err: unknown): boolean {
+	const message = extractErrorMessage(err).toLowerCase();
+	return (
+		message.includes("409") ||
+		message.includes("conflict") ||
+		message.includes("updated_at") ||
+		message.includes("stale")
+	);
+}
+
 const GRAPH_MAX_NODE_LIMIT = 10_000;
-const GRAPH_NODE_EXPANSION_LIMIT = GRAPH_MAX_NODE_LIMIT;
+const GRAPH_NODE_EXPANSION_LIMIT = 500;
 const GRAPH_SEARCH_MATCH_LIMIT = 12;
 const GRAPH_VIEW_LIMIT_MAX = GRAPH_MAX_NODE_LIMIT;
+const GRAPH_MAX_EXPANSION_DEPTH = 2;
 
 const OverlayView: React.FC<{
 	appId: string;
@@ -1159,6 +1249,28 @@ const OverlayView: React.FC<{
 	const [cypherLoading, setCypherLoading] = useState(false);
 	const [cypherError, setCypherError] = useState<string | null>(null);
 	const [nodeLimit, setNodeLimit] = useState(200);
+	const [actionTarget, setActionTarget] = useState<{
+		action: OntologyActionDefinition;
+		node: SubgraphNode;
+	} | null>(null);
+
+	const overlayRef = useRef<GraphOverlay | null>(null);
+	const styleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+		new Map(),
+	);
+	const styleRevertRef = useRef<Map<string, LabelStyle>>(new Map());
+
+	useEffect(() => {
+		overlayRef.current = overlay;
+	}, [overlay]);
+
+	useEffect(() => {
+		const timers = styleTimersRef.current;
+		return () => {
+			for (const timer of timers.values()) clearTimeout(timer);
+			timers.clear();
+		};
+	}, []);
 
 	const loadInitialData = useCallback(
 		async (currentOverlay: GraphOverlay, limitOverride?: number) => {
@@ -1238,6 +1350,7 @@ const OverlayView: React.FC<{
 			label: string,
 			rawId?: unknown,
 			seedNode?: SubgraphNode,
+			depth?: number,
 		) => {
 			if (!overlay) return;
 
@@ -1259,10 +1372,14 @@ const OverlayView: React.FC<{
 				const resolvedId =
 					rawId ??
 					(nodeId.startsWith(prefix) ? nodeId.slice(prefix.length) : nodeId);
+				const resolvedDepth = Math.min(
+					Math.max(1, depth ?? 1),
+					GRAPH_MAX_EXPANSION_DEPTH,
+				);
 				const result = await backend.graphState.neighbors(appId, overlayId, {
 					label,
 					node_id: resolvedId,
-					depth: 1,
+					depth: resolvedDepth,
 					direction: "both",
 					limit: GRAPH_NODE_EXPANSION_LIMIT,
 				});
@@ -1297,35 +1414,197 @@ const OverlayView: React.FC<{
 		[overlay, loadInitialData],
 	);
 
-	const handleStyleChange = useCallback(
-		async (label: string, type: "node" | "edge", style: LabelStyle) => {
-			if (!overlay) return;
-			const updatedOverlay = { ...overlay };
-			if (type === "node") {
-				updatedOverlay.nodes = overlay.nodes.map((node) =>
-					node.label === label ? { ...node, style } : node,
+	const persistStyle = useCallback(
+		async (label: string, type: "node" | "edge") => {
+			const current = overlayRef.current;
+			if (!current) return;
+			const revertKey = `${type}:${label}`;
+			try {
+				const saved = await backend.graphState.updateOverlay(appId, overlayId, {
+					expected_updated_at: current.updated_at,
+					nodes: current.nodes,
+					edges: current.edges,
+				});
+				styleRevertRef.current.delete(revertKey);
+				overlayRef.current = saved;
+				setOverlay(saved);
+				setData((prev) =>
+					prev ? enrichSubgraphWithStyles(prev, saved) : prev,
 				);
-			} else {
-				updatedOverlay.edges = overlay.edges.map((edge) =>
-					edge.label === label ? { ...edge, style } : edge,
-				);
+			} catch (err) {
+				const previousStyle = styleRevertRef.current.get(revertKey);
+				styleRevertRef.current.delete(revertKey);
+				const base = overlayRef.current;
+				if (previousStyle && base) {
+					const reverted = applyStyleToOverlay(
+						base,
+						label,
+						type,
+						previousStyle,
+					);
+					overlayRef.current = reverted;
+					setOverlay(reverted);
+					setData((prev) =>
+						prev ? enrichSubgraphWithStyles(prev, reverted) : prev,
+					);
+				}
+				toast.error(`Failed to save style: ${extractErrorMessage(err)}`);
+				if (isConflictError(err)) {
+					try {
+						const fresh = await backend.graphState.getOverlay(appId, overlayId);
+						overlayRef.current = fresh;
+						setOverlay(fresh);
+						setData((prev) =>
+							prev ? enrichSubgraphWithStyles(prev, fresh) : prev,
+						);
+					} catch {
+						// The refetch is best-effort; the revert already restored a usable state.
+					}
+				}
 			}
+		},
+		[backend.graphState, appId, overlayId],
+	);
+
+	const handleStyleChange = useCallback(
+		(label: string, type: "node" | "edge", style: LabelStyle) => {
+			const current = overlayRef.current;
+			if (!current) return;
+			const revertKey = `${type}:${label}`;
+
+			if (!styleRevertRef.current.has(revertKey)) {
+				const previousStyle =
+					type === "node"
+						? current.nodes.find((node) => node.label === label)?.style
+						: current.edges.find((edge) => edge.label === label)?.style;
+				if (previousStyle) styleRevertRef.current.set(revertKey, previousStyle);
+			}
+
+			const updatedOverlay = applyStyleToOverlay(current, label, type, style);
+			overlayRef.current = updatedOverlay;
 			setOverlay(updatedOverlay);
 			setData((prev) =>
 				prev ? enrichSubgraphWithStyles(prev, updatedOverlay) : prev,
 			);
+
+			const existingTimer = styleTimersRef.current.get(revertKey);
+			if (existingTimer) clearTimeout(existingTimer);
+			const timer = setTimeout(() => {
+				styleTimersRef.current.delete(revertKey);
+				void persistStyle(label, type);
+			}, 500);
+			styleTimersRef.current.set(revertKey, timer);
+		},
+		[persistStyle],
+	);
+
+	const handleFindPaths = useCallback(
+		async (from: SubgraphNode, to: SubgraphNode): Promise<GraphPathsResult> => {
+			const current = overlayRef.current;
+			if (!current) {
+				throw new Error("The overlay is still loading.");
+			}
 			try {
-				const saved = await backend.graphState.updateOverlay(appId, overlayId, {
-					expected_updated_at: overlay.updated_at,
-					nodes: updatedOverlay.nodes,
-					edges: updatedOverlay.edges,
+				const result = await backend.graphState.paths(appId, overlayId, {
+					from_label: from.label,
+					from_id: getNodeRawId(from, current),
+					to_label: to.label,
+					to_id: getNodeRawId(to, current),
+					max_depth: 4,
 				});
-				setOverlay(saved);
-			} catch {
-				return;
+				if (result.nodes.length > 0 || result.edges.length > 0) {
+					setData((prev) =>
+						mergeSubgraphData(
+							prev,
+							enrichSubgraphWithStyles(
+								{
+									nodes: result.nodes,
+									edges: result.edges,
+									truncated: result.truncated,
+								},
+								current,
+							),
+						),
+					);
+				}
+				return result;
+			} catch (err) {
+				toast.error(`Path search failed: ${extractErrorMessage(err)}`);
+				throw err;
 			}
 		},
-		[backend.graphState, appId, overlayId, overlay],
+		[backend.graphState, appId, overlayId],
+	);
+
+	const handleRunAction = useCallback(
+		(action: OntologyActionDefinition, node: SubgraphNode) => {
+			setActionTarget({ action, node });
+		},
+		[],
+	);
+
+	const invokeNodeAction = useCallback(
+		async (
+			action: OntologyActionDefinition,
+			node: SubgraphNode,
+			parameters: Record<string, unknown>,
+			onStatus?: (run: OntologyActionRun) => void,
+		): Promise<OntologyActionRun> => {
+			const current = overlayRef.current;
+			if (!current) throw new Error("The overlay is still loading.");
+			const mapping = current.nodes.find(
+				(candidate) => candidate.label === node.label,
+			);
+			const objectType =
+				mapping?.id ?? mapping?.api_name ?? mapping?.label ?? node.label;
+
+			let payload: InvokeOntologyActionPayload = {
+				object_refs: [
+					{ object_type: objectType, id: getNodeRawId(node, current) },
+				],
+				parameters,
+				idempotency_key: createId(),
+			};
+
+			const isOffline = await backend.isOffline(appId);
+			if (!isOffline && backend.eventState.checkOAuthRequirements) {
+				const prerun = await backend.graphState.prerunOntologyAction(
+					appId,
+					overlayId,
+					action.id,
+				);
+				const oauth = await backend.eventState.checkOAuthRequirements(
+					appId,
+					prerun.oauth_requirements,
+				);
+				if (oauth.missingProviders.length > 0) {
+					window.dispatchEvent(
+						new CustomEvent("flow:oauth-required", {
+							detail: {
+								missingProviders: oauth.missingProviders,
+								appId,
+								boardId: action.board_id ?? "",
+								nodeId: action.start_node_id ?? "",
+								payload,
+							},
+						}),
+					);
+					throw new Error(
+						"OAuth authorization is required. Complete authorization, then confirm the action again.",
+					);
+				}
+				payload = { ...payload, oauth_tokens: oauth.tokens };
+			}
+
+			return backend.graphState.invokeOntologyAction(
+				appId,
+				overlayId,
+				action.id,
+				payload,
+				onStatus,
+			);
+		},
+		[appId, backend, backend.eventState, backend.graphState, overlayId],
 	);
 
 	if (error) {
@@ -1397,8 +1676,401 @@ const OverlayView: React.FC<{
 					onStyleChange={handleStyleChange}
 					onLimitChange={handleLimitChange}
 					limit={nodeLimit}
+					onFindPaths={handleFindPaths}
+					onRunAction={handleRunAction}
 				/>
 			</div>
+			<GraphActionDialog
+				target={actionTarget}
+				overlay={overlay}
+				onClose={() => setActionTarget(null)}
+				onInvoke={invokeNodeAction}
+			/>
+		</div>
+	);
+};
+
+interface ActionSchemaProperty {
+	type?: string | string[];
+	title?: string;
+	description?: string;
+	default?: unknown;
+	enum?: unknown[];
+}
+
+interface ActionParameterSchema {
+	properties?: Record<string, ActionSchemaProperty>;
+	required?: string[];
+}
+
+const SUCCESSFUL_ACTION_STATUSES = new Set([
+	"complete",
+	"completed",
+	"success",
+	"succeeded",
+	"applied",
+]);
+
+function actionSucceeded(status: string): boolean {
+	return SUCCESSFUL_ACTION_STATUSES.has(status.trim().toLowerCase());
+}
+
+function humanizeParameter(value: string): string {
+	return value
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.replace(/[_-]+/g, " ")
+		.replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function toActionParameterSchema(
+	schema?: Record<string, unknown>,
+): ActionParameterSchema | undefined {
+	if (!schema || typeof schema !== "object") return undefined;
+	return schema as ActionParameterSchema;
+}
+
+function parameterType(property: ActionSchemaProperty): string {
+	if (Array.isArray(property.type)) {
+		return property.type.find((type) => type !== "null") ?? "string";
+	}
+	return property.type ?? "string";
+}
+
+function initialActionParameters(
+	schema?: Record<string, unknown>,
+): Record<string, unknown> {
+	const definition = toActionParameterSchema(schema);
+	const properties = definition?.properties ?? {};
+	const required = new Set(definition?.required ?? []);
+	return Object.fromEntries(
+		Object.entries(properties).flatMap(([name, property]) => {
+			if (property.default !== undefined) return [[name, property.default]];
+			if (required.has(name) && parameterType(property) === "boolean") {
+				return [[name, false]];
+			}
+			return [];
+		}),
+	);
+}
+
+const GraphActionDialog: React.FC<{
+	target: {
+		action: OntologyActionDefinition;
+		node: SubgraphNode;
+	} | null;
+	overlay: GraphOverlay | null;
+	onClose: () => void;
+	onInvoke: (
+		action: OntologyActionDefinition,
+		node: SubgraphNode,
+		parameters: Record<string, unknown>,
+		onStatus?: (run: OntologyActionRun) => void,
+	) => Promise<OntologyActionRun>;
+}> = ({ target, overlay, onClose, onInvoke }) => {
+	const action = target?.action ?? null;
+	const node = target?.node ?? null;
+	const [parameters, setParameters] = useState<Record<string, unknown>>({});
+	const [submitting, setSubmitting] = useState(false);
+	const [run, setRun] = useState<OntologyActionRun | null>(null);
+	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		setParameters(initialActionParameters(action?.parameter_schema));
+		setRun(null);
+		setError(null);
+		setSubmitting(false);
+	}, [action]);
+
+	const definition = toActionParameterSchema(action?.parameter_schema);
+	const properties = definition?.properties ?? {};
+	const required = new Set(definition?.required ?? []);
+	const missingRequired = [...required].some((name) => {
+		const value = parameters[name];
+		return value === undefined || value === "" || value === null;
+	});
+
+	const mapping = overlay?.nodes.find(
+		(candidate) => candidate.label === node?.label,
+	);
+	const titleProperty =
+		overlay?.object_views?.find((view) =>
+			mapping
+				? view.object_type === mapping.id ||
+					view.object_type === mapping.api_name ||
+					view.object_type === mapping.label
+				: false,
+		)?.title_property ??
+		mapping?.display_column ??
+		mapping?.id_column;
+	const targetTitle =
+		(titleProperty && node?.props?.[titleProperty]) ??
+		node?.caption ??
+		node?.id;
+
+	const succeeded = Boolean(run && actionSucceeded(run.status));
+
+	const handleUpdate = useCallback((name: string, value: unknown) => {
+		setParameters((current) => ({ ...current, [name]: value }));
+	}, []);
+
+	const handleInvoke = useCallback(async () => {
+		if (!action || !node) return;
+		setSubmitting(true);
+		setRun(null);
+		setError(null);
+		try {
+			const result = await onInvoke(action, node, parameters, (nextRun) =>
+				setRun(nextRun),
+			);
+			setRun(result);
+			if (!actionSucceeded(result.status)) {
+				setError(
+					result.error_message ??
+						`The action ended with status ${result.status.toLowerCase()}.`,
+				);
+			}
+		} catch (invokeError) {
+			setError(extractErrorMessage(invokeError));
+		} finally {
+			setSubmitting(false);
+		}
+	}, [action, node, onInvoke, parameters]);
+
+	return (
+		<Dialog
+			open={Boolean(target)}
+			onOpenChange={(open) => {
+				if (!open && !submitting) onClose();
+			}}
+		>
+			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+				<DialogHeader>
+					<DialogTitle className="flex items-center gap-2">
+						<Workflow className="h-4 w-4 text-primary" />
+						{action?.name ?? "Apply action"}
+					</DialogTitle>
+					<DialogDescription>
+						{action?.description ??
+							"Run this governed operation through its saved workflow binding."}
+					</DialogDescription>
+				</DialogHeader>
+				<div className="space-y-4 py-1" aria-busy={submitting}>
+					<div className="rounded-lg border bg-muted/30 p-3">
+						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Target {node?.label ?? "object"}
+						</p>
+						<p className="mt-1 font-medium">
+							{String(targetTitle ?? "Object")}
+						</p>
+						<p className="mt-0.5 font-mono text-[10px] text-muted-foreground break-all">
+							{node?.id}
+						</p>
+					</div>
+					{Object.keys(properties).length > 0 && (
+						<div className="space-y-3 rounded-lg border p-3">
+							<Label>Parameters</Label>
+							{Object.entries(properties).map(([name, property]) => {
+								const type = parameterType(property);
+								const fieldId = `graph-action-${name}`;
+								const fieldLabel = property.title ?? humanizeParameter(name);
+								const isRequired = required.has(name);
+
+								if (property.enum?.length) {
+									return (
+										<div key={name} className="grid gap-1.5">
+											<Label htmlFor={fieldId}>
+												{fieldLabel}
+												{isRequired ? " *" : ""}
+											</Label>
+											<Select
+												disabled={submitting}
+												value={
+													parameters[name] === undefined
+														? undefined
+														: String(parameters[name])
+												}
+												onValueChange={(value) =>
+													handleUpdate(
+														name,
+														property.enum?.find(
+															(option) => String(option) === value,
+														) ?? value,
+													)
+												}
+											>
+												<SelectTrigger id={fieldId}>
+													<SelectValue
+														placeholder={`Choose ${fieldLabel.toLowerCase()}`}
+													/>
+												</SelectTrigger>
+												<SelectContent>
+													{property.enum.map((option) => (
+														<SelectItem
+															key={String(option)}
+															value={String(option)}
+														>
+															{String(option)}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										</div>
+									);
+								}
+
+								if (type === "boolean") {
+									return (
+										<div
+											key={name}
+											className="flex items-center justify-between gap-4 rounded-md bg-muted/30 p-2.5"
+										>
+											<Label htmlFor={fieldId}>{fieldLabel}</Label>
+											<Switch
+												id={fieldId}
+												disabled={submitting}
+												checked={Boolean(parameters[name])}
+												onCheckedChange={(checked) =>
+													handleUpdate(name, checked)
+												}
+											/>
+										</div>
+									);
+								}
+
+								if (type === "array" || type === "object") {
+									return (
+										<div key={name} className="grid gap-1.5">
+											<Label htmlFor={fieldId}>
+												{fieldLabel}
+												{isRequired ? " *" : ""}
+											</Label>
+											<Textarea
+												id={fieldId}
+												disabled={submitting}
+												className="min-h-24 font-mono text-xs"
+												defaultValue={JSON.stringify(
+													parameters[name] ?? (type === "array" ? [] : {}),
+													null,
+													2,
+												)}
+												onChange={(event) => {
+													try {
+														handleUpdate(name, JSON.parse(event.target.value));
+													} catch {
+														// Keep the last valid value until the JSON parses.
+													}
+												}}
+											/>
+										</div>
+									);
+								}
+
+								return (
+									<div key={name} className="grid gap-1.5">
+										<Label htmlFor={fieldId}>
+											{fieldLabel}
+											{isRequired ? " *" : ""}
+										</Label>
+										<Input
+											id={fieldId}
+											disabled={submitting}
+											type={
+												type === "integer" || type === "number"
+													? "number"
+													: "text"
+											}
+											value={String(parameters[name] ?? "")}
+											onChange={(event) => {
+												const value = event.target.value;
+												handleUpdate(
+													name,
+													type === "integer"
+														? value === ""
+															? ""
+															: Number.parseInt(value, 10)
+														: type === "number"
+															? value === ""
+																? ""
+																: Number.parseFloat(value)
+															: value,
+												);
+											}}
+											placeholder={property.description}
+										/>
+									</div>
+								);
+							})}
+						</div>
+					)}
+					<div aria-live="polite">
+						{run && succeeded && (
+							<div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+								Action applied
+								{run.run_id && (
+									<span className="ml-1 font-mono text-[10px] text-muted-foreground">
+										Run {run.run_id}
+									</span>
+								)}
+							</div>
+						)}
+						{error && (
+							<div
+								role="alert"
+								className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+							>
+								{error}
+							</div>
+						)}
+					</div>
+				</div>
+				<DialogFooter>
+					<Button variant="ghost" onClick={onClose} disabled={submitting}>
+						{run && succeeded ? "Done" : "Cancel"}
+					</Button>
+					{!succeeded && (
+						<Button
+							onClick={handleInvoke}
+							disabled={submitting || missingRequired || !action || !node}
+						>
+							{submitting ? (
+								<Loader2 className="h-4 w-4 animate-spin" />
+							) : (
+								<Play className="h-4 w-4" />
+							)}
+							Confirm {action?.name ?? "action"}
+						</Button>
+					)}
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+};
+
+const PartialFailureAlert: React.FC<{
+	failures: { name: string; onRetry: () => void }[];
+}> = ({ failures }) => {
+	const names = failures.map((failure) => failure.name).join(", ");
+	const retryAll = useCallback(() => {
+		for (const failure of failures) failure.onRetry();
+	}, [failures]);
+	return (
+		<div
+			role="alert"
+			className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm"
+		>
+			<div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+				<AlertTriangle className="h-4 w-4 shrink-0" />
+				<span>Failed to load {names}. Some data may be missing.</span>
+			</div>
+			<Button
+				variant="outline"
+				size="sm"
+				onClick={retryAll}
+				className="shrink-0"
+			>
+				<RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+				Retry
+			</Button>
 		</div>
 	);
 };

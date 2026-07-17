@@ -218,6 +218,20 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 									],
 								},
 								{
+									label: "Ontology & Knowledge Graph",
+									collapsed: true,
+									items: [
+										{
+											label: "Overview",
+											slug: "topics/ontology/overview",
+										},
+										{
+											label: "Shared & Remote Ontologies",
+											slug: "topics/ontology/remote",
+										},
+									],
+								},
+								{
 									label: "Internal Tools",
 									collapsed: true,
 									items: [

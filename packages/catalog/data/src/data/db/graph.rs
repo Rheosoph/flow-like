@@ -8,6 +8,7 @@ use flow_like_catalog_core::NodeGraphConnection;
 use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
 
+pub mod analytics;
 pub mod cypher;
 pub mod drop_overlay;
 pub mod list_overlays;
@@ -15,6 +16,7 @@ pub mod neighbors;
 pub mod ontology_action;
 pub mod ontology_query;
 pub mod ontology_remote_query;
+pub mod paths;
 pub mod schema;
 pub mod sql;
 pub mod subgraph;
@@ -438,29 +440,32 @@ impl NodeLogic for CreateGraphOverlayNode {
                     prominent_properties: view.prominent_properties,
                 })
                 .collect(),
-            actions: overlay
-                .actions
-                .into_iter()
-                .map(|action| lancegraph::OntologyActionDef {
-                    id: action.id,
-                    name: action.name,
-                    description: action.description,
-                    object_type: action.object_type,
-                    board_id: action.board_id,
-                    board_version: action.board_version,
-                    start_node_id: action.start_node_id,
-                    event_id: action.event_id,
-                    enabled: action.enabled,
-                    allow_bulk: action.allow_bulk,
-                    parameter_schema: action.parameter_schema,
-                })
-                .collect(),
-            exposed: overlay.exposed,
+            // Governed capabilities (executable actions, cross-project
+            // exposure) can only be granted through Data Studio, where event
+            // materialization, contract hashing, and permissions are enforced.
+            // A board write path must never mint them.
+            actions: Vec::new(),
+            exposed: false,
             bindings_enabled: overlay.bindings_enabled,
             default_limit: overlay.default_limit,
             created_at: now.clone(),
             updated_at: now,
         };
+
+        let validation = lancegraph::validate_overlay_definition(&connection, &def).await?;
+        if !validation.ok {
+            let mut issues = validation.issues;
+            for mapping in &validation.mappings {
+                for issue in &mapping.issues {
+                    issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
+                }
+            }
+            context
+                .set_pin_value("error_message", json!(issues.join("; ")))
+                .await?;
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
 
         match lancegraph::save_overlay(&connection, &def).await {
             Ok(()) => {

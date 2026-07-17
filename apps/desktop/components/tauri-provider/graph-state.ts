@@ -1,7 +1,9 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
+	GraphAnalyticsResult,
 	GraphOverlay,
+	GraphPathsResult,
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
@@ -10,6 +12,7 @@ import type {
 	OntologyActionPrerun,
 	OntologyActionRun,
 	OntologyActionStreamEvent,
+	PathsPayload,
 	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
@@ -76,7 +79,10 @@ export class GraphState implements IGraphState {
 		appId: string,
 	): Promise<RemoteOntologyImport[]> {
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) return [];
+		if (isOffline) {
+			return invoke("graph_list_imports", { appId });
+		}
+		if (!this.backend.profile || !this.backend.auth) return [];
 		return fetcher<RemoteOntologyImport[]>(
 			this.backend.profile,
 			`apps/${appId}/graph/imports`,
@@ -355,6 +361,7 @@ export class GraphState implements IGraphState {
 		appId: string,
 		overlayId: string,
 		userScoped?: boolean,
+		draft?: GraphOverlay,
 	): Promise<ValidationResult> {
 		const isOffline = await this.backend.isOffline(appId);
 
@@ -362,7 +369,9 @@ export class GraphState implements IGraphState {
 			return fetcher<ValidationResult>(
 				this.requireProfile(),
 				`apps/${appId}/graph/${overlayId}/validate${scopeQuery(userScoped)}`,
-				{ method: "POST" },
+				draft
+					? { method: "POST", body: JSON.stringify(draft) }
+					: { method: "POST" },
 				this.backend.auth,
 			);
 		}
@@ -371,6 +380,7 @@ export class GraphState implements IGraphState {
 			appId,
 			overlayId,
 			userScoped: userScoped ?? false,
+			draft,
 		});
 	}
 
@@ -470,6 +480,60 @@ export class GraphState implements IGraphState {
 			appId,
 			overlayId,
 			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async paths(
+		appId: string,
+		overlayId: string,
+		payload: PathsPayload,
+		userScoped?: boolean,
+	): Promise<GraphPathsResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<GraphPathsResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/paths${scopeQuery(userScoped)}`,
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_paths", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async analytics(
+		appId: string,
+		overlayId: string,
+		limit?: number,
+		userScoped?: boolean,
+	): Promise<GraphAnalyticsResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			const params = new URLSearchParams();
+			if (userScoped) params.set("scope", "user");
+			if (limit !== undefined) params.set("limit", String(limit));
+			const qs = params.toString();
+			return fetcher<GraphAnalyticsResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/analytics${qs ? `?${qs}` : ""}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_analytics", {
+			appId,
+			overlayId,
+			limit,
 			userScoped: userScoped ?? false,
 		});
 	}

@@ -743,12 +743,15 @@ impl Board {
         None
     }
 
-    pub async fn create_version(
-        &mut self,
-        version_type: VersionType,
+    /// Writes an immutable snapshot of the current board (and its pages) at the
+    /// given version without changing the working `version` or touching the
+    /// floating "latest" board. Used to publish the exact version a governed
+    /// ontology action pins, so it can be validated and invoked reproducibly.
+    pub async fn snapshot_at_version(
+        &self,
+        version: (u32, u32, u32),
         store: Option<Arc<dyn ObjectStore>>,
-    ) -> flow_like_types::Result<(u32, u32, u32)> {
-        let version = self.version;
+    ) -> flow_like_types::Result<()> {
         let store = self.get_store(store).await?;
 
         let board_version_path = self
@@ -766,6 +769,20 @@ impl Board {
             let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
             compress_to_file(store.clone(), dst_path, &page_proto).await?;
         }
+
+        Ok(())
+    }
+
+    pub async fn create_version(
+        &mut self,
+        version_type: VersionType,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<(u32, u32, u32)> {
+        let version = self.version;
+        let store = self.get_store(store).await?;
+
+        self.snapshot_at_version(version, Some(store.clone()))
+            .await?;
 
         let new_version = match version_type {
             VersionType::Major => (version.0 + 1, 0, 0),

@@ -127,6 +127,16 @@ impl NodeLogic for QueryOntologyObjectsNode {
                 return Ok(());
             }
         };
+        if !ontology.bindings_enabled {
+            context
+                .set_pin_value(
+                    "error_message",
+                    json!("Object bindings are disabled for this ontology"),
+                )
+                .await?;
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
         let objects = match lancegraph::sample_overlay(
             &connection,
             &ontology,

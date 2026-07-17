@@ -1,7 +1,9 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
+	GraphAnalyticsResult,
 	GraphOverlay,
+	GraphPathsResult,
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
@@ -10,6 +12,7 @@ import type {
 	OntologyActionPrerun,
 	OntologyActionRun,
 	OntologyActionStreamEvent,
+	PathsPayload,
 	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
@@ -206,10 +209,11 @@ export class WebGraphState implements IGraphState {
 		appId: string,
 		overlayId: string,
 		userScoped?: boolean,
+		draft?: GraphOverlay,
 	): Promise<ValidationResult> {
 		return apiPost<ValidationResult>(
 			`apps/${appId}/graph/${overlayId}/validate${scopeQuery(userScoped)}`,
-			undefined,
+			draft,
 			this.backend.auth,
 		);
 	}
@@ -262,6 +266,35 @@ export class WebGraphState implements IGraphState {
 		return apiPost<SubgraphResult>(
 			`apps/${appId}/graph/${overlayId}/subgraph${scopeQuery(userScoped)}`,
 			payload,
+			this.backend.auth,
+		);
+	}
+
+	async paths(
+		appId: string,
+		overlayId: string,
+		payload: PathsPayload,
+		userScoped?: boolean,
+	): Promise<GraphPathsResult> {
+		return apiPost<GraphPathsResult>(
+			`apps/${appId}/graph/${overlayId}/paths${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async analytics(
+		appId: string,
+		overlayId: string,
+		limit?: number,
+		userScoped?: boolean,
+	): Promise<GraphAnalyticsResult> {
+		const params = new URLSearchParams();
+		if (userScoped) params.set("scope", "user");
+		if (limit !== undefined) params.set("limit", String(limit));
+		const qs = params.toString();
+		return apiGet<GraphAnalyticsResult>(
+			`apps/${appId}/graph/${overlayId}/analytics${qs ? `?${qs}` : ""}`,
 			this.backend.auth,
 		);
 	}

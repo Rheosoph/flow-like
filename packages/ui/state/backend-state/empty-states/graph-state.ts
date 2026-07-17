@@ -1,7 +1,9 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
+	GraphAnalyticsResult,
 	GraphOverlay,
+	GraphPathsResult,
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
@@ -9,6 +11,7 @@ import type {
 	NeighborsPayload,
 	OntologyActionPrerun,
 	OntologyActionRun,
+	PathsPayload,
 	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
@@ -97,6 +100,20 @@ export class EmptyGraphState implements IGraphState {
 		_overlayId: string,
 		_payload: SubgraphPayload,
 	): Promise<SubgraphResult> {
+		throw new Error("Method not implemented.");
+	}
+	paths(
+		_appId: string,
+		_overlayId: string,
+		_payload: PathsPayload,
+	): Promise<GraphPathsResult> {
+		throw new Error("Method not implemented.");
+	}
+	analytics(
+		_appId: string,
+		_overlayId: string,
+		_limit?: number,
+	): Promise<GraphAnalyticsResult> {
 		throw new Error("Method not implemented.");
 	}
 	searchNodes(

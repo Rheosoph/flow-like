@@ -99,7 +99,8 @@ export interface SubgraphNode {
 	label: string;
 	caption?: string;
 	props: Record<string, unknown>;
-	style: LabelStyle;
+	/** Not sent by the server — resolved client-side from the overlay. */
+	style?: LabelStyle;
 }
 
 export interface SubgraphEdge {
@@ -108,13 +109,58 @@ export interface SubgraphEdge {
 	target: string;
 	label: string;
 	props: Record<string, unknown>;
-	style: LabelStyle;
+	/** Not sent by the server — resolved client-side from the overlay. */
+	style?: LabelStyle;
 }
 
 export interface SubgraphResult {
 	nodes: SubgraphNode[];
 	edges: SubgraphEdge[];
 	truncated: boolean;
+	warnings?: string[];
+}
+
+export interface GraphPath {
+	node_ids: string[];
+	edge_ids: string[];
+	length: number;
+}
+
+export interface GraphPathsResult {
+	found: boolean;
+	paths: GraphPath[];
+	nodes: SubgraphNode[];
+	edges: SubgraphEdge[];
+	truncated: boolean;
+	warnings?: string[];
+}
+
+export interface GraphLabelCount {
+	label: string;
+	nodes: number;
+}
+
+export interface GraphNodeMetric {
+	id: string;
+	label: string;
+	caption?: string;
+	degree_in: number;
+	degree_out: number;
+	pagerank: number;
+	component: number;
+}
+
+export interface GraphAnalyticsResult {
+	node_count: number;
+	edge_count: number;
+	truncated: boolean;
+	label_counts: GraphLabelCount[];
+	component_count: number;
+	largest_components: number[];
+	isolated_node_count: number;
+	top_by_degree: GraphNodeMetric[];
+	top_by_pagerank: GraphNodeMetric[];
+	warnings?: string[];
 }
 
 export interface GraphLabelInfo {
@@ -134,9 +180,17 @@ export interface GraphSchema {
 	edge_labels: GraphLabelInfo[];
 }
 
+export interface MappingValidation {
+	kind: "node" | "edge";
+	label: string;
+	ok: boolean;
+	issues: string[];
+}
+
 export interface ValidationResult {
 	ok: boolean;
 	issues: string[];
+	mappings?: MappingValidation[];
 }
 
 // ─── Payloads ───
@@ -193,6 +247,15 @@ export interface SubgraphPayload {
 
 export interface GraphSearchPayload {
 	query: string;
+	limit?: number;
+}
+
+export interface PathsPayload {
+	from_label: string;
+	from_id: unknown;
+	to_label: string;
+	to_id: unknown;
+	max_depth?: number;
 	limit?: number;
 }
 
@@ -320,6 +383,7 @@ export interface IGraphState {
 		appId: string,
 		overlayId: string,
 		userScoped?: boolean,
+		draft?: GraphOverlay,
 	): Promise<ValidationResult>;
 	cypher(
 		appId: string,
@@ -345,6 +409,18 @@ export interface IGraphState {
 		payload: SubgraphPayload,
 		userScoped?: boolean,
 	): Promise<SubgraphResult>;
+	paths(
+		appId: string,
+		overlayId: string,
+		payload: PathsPayload,
+		userScoped?: boolean,
+	): Promise<GraphPathsResult>;
+	analytics(
+		appId: string,
+		overlayId: string,
+		limit?: number,
+		userScoped?: boolean,
+	): Promise<GraphAnalyticsResult>;
 	searchNodes(
 		appId: string,
 		overlayId: string,

@@ -33,6 +33,63 @@ pub struct SubgraphResult {
     pub nodes: Vec<SubgraphNode>,
     pub edges: Vec<SubgraphEdge>,
     pub truncated: bool,
+    /// Non-fatal problems encountered while assembling the result, e.g. an
+    /// edge mapping whose table failed to load. An empty list means the
+    /// result is complete up to `truncated`.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphPath {
+    pub node_ids: Vec<String>,
+    pub edge_ids: Vec<String>,
+    pub length: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphPathsResult {
+    pub found: bool,
+    pub paths: Vec<GraphPath>,
+    /// Union of all path nodes/edges, hydrated for direct rendering.
+    pub nodes: Vec<SubgraphNode>,
+    pub edges: Vec<SubgraphEdge>,
+    pub truncated: bool,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelCount {
+    pub label: String,
+    pub nodes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeMetric {
+    pub id: String,
+    pub label: String,
+    pub caption: Option<String>,
+    pub degree_in: usize,
+    pub degree_out: usize,
+    pub pagerank: f64,
+    pub component: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphAnalyticsResult {
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub truncated: bool,
+    pub label_counts: Vec<LabelCount>,
+    pub component_count: usize,
+    /// Sizes of the largest weakly connected components, descending.
+    pub largest_components: Vec<usize>,
+    pub isolated_node_count: usize,
+    pub top_by_degree: Vec<NodeMetric>,
+    pub top_by_pagerank: Vec<NodeMetric>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,4 +139,17 @@ pub trait GraphStore: Send + Sync {
     async fn schema(&self) -> Result<GraphSchemaResult>;
 
     async fn sample(&self, label: &str, n: usize) -> Result<Vec<Value>>;
+
+    /// Shortest paths between two objects, discovered via bounded traversal.
+    async fn shortest_paths(
+        &self,
+        from: (String, Value),
+        to: (String, Value),
+        max_depth: usize,
+        limit: Option<usize>,
+    ) -> Result<GraphPathsResult>;
+
+    /// Structural metrics (degree, PageRank, connected components) over a
+    /// bounded snapshot of the overlay graph.
+    async fn analytics(&self, limit: Option<usize>) -> Result<GraphAnalyticsResult>;
 }

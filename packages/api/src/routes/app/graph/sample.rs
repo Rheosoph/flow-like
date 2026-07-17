@@ -1,7 +1,6 @@
 use crate::{
     ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::resolve_connection,
-    state::AppState,
+    permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -74,8 +73,8 @@ pub async fn sample_nodes(
 
     let scope = params.scope_params();
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;
+    let (connection, overlay) =
+        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
     let results =
         lancegraph::sample_overlay(&connection, &overlay, &params.label, params.n.min(500)).await?;
 

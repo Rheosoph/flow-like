@@ -8,6 +8,7 @@ use axum::{
     extract::{Path, State},
     response::Response,
 };
+use flow_like::app::App;
 use flow_like::flow::event::{Event, EventExecutionMode, EventExposure};
 use flow_like_storage::databases::graph::lancegraph::{self, OntologyActionDef};
 use flow_like_types::{Value, create_id, json::json};
@@ -133,6 +134,61 @@ fn action_event(
         exposure: EventExposure::Internal,
         correlation_mappings: None,
     })
+}
+
+/// Ensures the exact board version a governed action pins exists as an
+/// immutable snapshot. The Data Studio editor pins the board's working
+/// version, which is not published until now; without a snapshot the managed
+/// event's `validate_event_references` fails when it tries to load the version.
+async fn ensure_action_board_published(
+    app: &App,
+    action: &mut OntologyActionDef,
+) -> Result<(), ApiError> {
+    if action.board_id.trim().is_empty() {
+        // action_event surfaces the missing-implementation error with context.
+        return Ok(());
+    }
+    let board = app
+        .open_board(action.board_id.clone(), Some(false), None)
+        .await
+        .map_err(|_| {
+            ApiError::bad_request(format!(
+                "The action's implementation board '{}' could not be opened",
+                action.board_id
+            ))
+        })?;
+    let (current, existing) = {
+        let guard = board.lock().await;
+        let current = guard.version;
+        let existing = guard.get_versions(None).await.unwrap_or_default();
+        (current, existing)
+    };
+    let pinned = match action.board_version {
+        Some([maj, min, pat]) => (maj, min, pat),
+        None => {
+            action.board_version = Some([current.0, current.1, current.2]);
+            current
+        }
+    };
+    if !existing.contains(&pinned) {
+        if pinned != current {
+            return Err(ApiError::bad_request(format!(
+                "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
+                pinned.0, pinned.1, pinned.2
+            )));
+        }
+        board
+            .lock()
+            .await
+            .snapshot_at_version(pinned, None)
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "Could not publish the action's board version: {error}"
+                ))
+            })?;
+    }
+    Ok(())
 }
 
 fn managed_event_matches(event: &Event, ontology_id: &str, action_id: &str) -> bool {
@@ -299,6 +355,7 @@ pub(crate) async fn materialize_action_events(
                     .is_some_and(|event| managed_event_matches(event, ontology_id, &action.id))
             })
             .unwrap_or_else(create_id);
+        ensure_action_board_published(&app, action).await?;
         let mut event = action_event(ontology_id, ontology_exposed, objects, action, event_id)?;
         let event = event.upsert(&app, None, true).await?;
         if !app.events.contains(&event.id) {

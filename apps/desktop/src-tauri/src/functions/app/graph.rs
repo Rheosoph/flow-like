@@ -275,6 +275,39 @@ async fn materialize_action_events(
             action,
             object,
         )?;
+        // Publish the pinned board version as an immutable snapshot so the
+        // managed event's reference validation and later invocation can load
+        // it (mirror of the API materialization path).
+        {
+            let board = app
+                .open_board(action.board_id.clone(), Some(false), None)
+                .await
+                .map_err(|_| {
+                    flow_like_types::anyhow!(
+                        "The action's implementation board '{}' could not be opened",
+                        action.board_id
+                    )
+                })?;
+            let (current, existing) = {
+                let guard = board.lock().await;
+                (
+                    guard.version,
+                    guard.get_versions(None).await.unwrap_or_default(),
+                )
+            };
+            let pinned = (board_version[0], board_version[1], board_version[2]);
+            if !existing.contains(&pinned) {
+                if pinned != current {
+                    return Err(flow_like_types::anyhow!(
+                        "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
+                        pinned.0,
+                        pinned.1,
+                        pinned.2
+                    ));
+                }
+                board.lock().await.snapshot_at_version(pinned, None).await?;
+            }
+        }
         let mut event = Event {
             id: event_id,
             name: action.name.clone(),
@@ -417,6 +450,16 @@ pub async fn graph_list_overlays(
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
     let overlays = lancegraph::list_overlays(&conn).await?;
     Ok(overlays)
+}
+
+#[tauri::command(async)]
+pub async fn graph_list_imports(
+    app_handle: AppHandle,
+    app_id: String,
+) -> Result<Vec<lancegraph::RemoteOntologyImportDef>, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, false).await?;
+    let imports = lancegraph::list_ontology_imports(&conn).await?;
+    Ok(imports)
 }
 
 #[derive(Debug, Deserialize)]
@@ -923,14 +966,15 @@ pub async fn graph_validate_overlay(
     app_id: String,
     overlay_id: String,
     user_scoped: Option<bool>,
+    draft: Option<lancegraph::GraphOverlayDef>,
 ) -> Result<serde_json::Value, TauriFunctionError> {
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
-    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
-    let store = LanceGraphStore::new(conn, overlay, None).await;
-    match store {
-        Ok(_) => Ok(serde_json::json!({"ok": true, "issues": []})),
-        Err(e) => Ok(serde_json::json!({"ok": false, "issues": [e.to_string()]})),
-    }
+    let overlay = match draft {
+        Some(draft) => draft,
+        None => lancegraph::load_overlay(&conn, &overlay_id).await?,
+    };
+    let report = lancegraph::validate_overlay_definition(&conn, &overlay).await?;
+    serde_json::to_value(report).map_err(|e| e.into())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1114,5 +1158,58 @@ pub async fn graph_sample(
         n.unwrap_or(DEFAULT_GRAPH_SAMPLE_SIZE).min(500),
     )
     .await?;
+    serde_json::to_value(result).map_err(|e| e.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathsPayload {
+    #[serde(alias = "from_label")]
+    pub from_label: String,
+    #[serde(alias = "from_id")]
+    pub from_id: serde_json::Value,
+    #[serde(alias = "to_label")]
+    pub to_label: String,
+    #[serde(alias = "to_id")]
+    pub to_id: serde_json::Value,
+    #[serde(alias = "max_depth")]
+    pub max_depth: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[tauri::command(async)]
+pub async fn graph_paths(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    payload: PathsPayload,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let store = LanceGraphStore::new(conn, overlay, None).await?;
+    let result = store
+        .shortest_paths(
+            (payload.from_label, payload.from_id),
+            (payload.to_label, payload.to_id),
+            payload.max_depth.unwrap_or(4),
+            payload.limit,
+        )
+        .await?;
+    serde_json::to_value(result).map_err(|e| e.into())
+}
+
+#[tauri::command(async)]
+pub async fn graph_analytics(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    limit: Option<usize>,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let store = LanceGraphStore::new(conn, overlay, None).await?;
+    let result = store.analytics(limit).await?;
     serde_json::to_value(result).map_err(|e| e.into())
 }

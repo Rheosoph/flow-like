@@ -1,14 +1,17 @@
 "use client";
 
-import { Search, X } from "lucide-react";
+import { AlertTriangle, Route, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	GraphOverlay,
+	GraphPathsResult,
 	LabelStyle,
+	OntologyActionDefinition,
 	SubgraphEdge,
 	SubgraphNode,
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
+import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { GraphCanvas } from "./graph-canvas";
 import { GraphEdgeInspector } from "./graph-edge-inspector";
 import { GraphLegend, type LegendEntry } from "./graph-legend";
@@ -44,7 +47,10 @@ function getEffectiveNodeIdColumn(
 	return overlay.nodes.find((node) => node.label === label)?.id_column;
 }
 
-function getNodeRawId(node: SubgraphNode, overlay: GraphOverlay): unknown {
+export function getNodeRawId(
+	node: SubgraphNode,
+	overlay: GraphOverlay,
+): unknown {
 	const idColumn = getEffectiveNodeIdColumn(overlay, node.label);
 	if (idColumn) {
 		const rawId = node.props[idColumn];
@@ -85,6 +91,7 @@ export interface GraphViewerProps {
 		label: string,
 		rawId?: unknown,
 		seedNode?: SubgraphNode,
+		depth?: number,
 	) => void;
 	onSearchNodes?: (query: string) => Promise<SubgraphNode[]>;
 	onStyleChange?: (
@@ -94,6 +101,18 @@ export interface GraphViewerProps {
 	) => void;
 	onLimitChange?: (limit: number) => void;
 	limit?: number;
+	onFindPaths?: (
+		from: SubgraphNode,
+		to: SubgraphNode,
+	) => Promise<GraphPathsResult>;
+	onRunAction?: (action: OntologyActionDefinition, node: SubgraphNode) => void;
+}
+
+interface PathOutcome {
+	found: boolean;
+	hops: number;
+	alternatives: number;
+	error?: string;
 }
 
 export function GraphViewer({
@@ -110,6 +129,8 @@ export function GraphViewer({
 	onStyleChange,
 	onLimitChange,
 	limit,
+	onFindPaths,
+	onRunAction,
 }: GraphViewerProps) {
 	const [selectedNode, setSelectedNode] = useState<SubgraphNode | null>(null);
 	const [selectedEdge, setSelectedEdge] = useState<SubgraphEdge | null>(null);
@@ -132,6 +153,18 @@ export function GraphViewer({
 	);
 	const latestRemoteSearchRequestRef = useRef(0);
 	const autoExpandedSearchQueryRef = useRef<string | null>(null);
+
+	const [pathSource, setPathSource] = useState<SubgraphNode | null>(null);
+	const [pathHighlight, setPathHighlight] = useState<Set<string> | null>(null);
+	const [pathOutcome, setPathOutcome] = useState<PathOutcome | null>(null);
+	const [pathFinding, setPathFinding] = useState(false);
+	const [dismissedWarningsKey, setDismissedWarningsKey] = useState<
+		string | null
+	>(null);
+
+	const warnings = data?.warnings ?? [];
+	const warningsKey = warnings.join(" ");
+	const warningsDismissed = dismissedWarningsKey === warningsKey;
 
 	const nodeCount = data?.nodes.length ?? 0;
 	const edgeCount = data?.edges.length ?? 0;
@@ -339,19 +372,72 @@ export function GraphViewer({
 		unloadedRemoteSearchMatches,
 	]);
 
+	const runPath = useCallback(
+		async (target: SubgraphNode) => {
+			if (!pathSource || !onFindPaths || target.id === pathSource.id) return;
+			const source = pathSource;
+			setPathFinding(true);
+			setPathOutcome(null);
+			try {
+				const result = await onFindPaths(source, target);
+				const ids = new Set<string>();
+				for (const path of result.paths) {
+					for (const id of path.node_ids) ids.add(id);
+				}
+				ids.add(source.id);
+				ids.add(target.id);
+				const shortest = result.paths.reduce(
+					(min, path) => Math.min(min, path.length),
+					Number.POSITIVE_INFINITY,
+				);
+				setPathHighlight(result.found && ids.size > 0 ? ids : null);
+				setPathOutcome({
+					found: result.found,
+					hops: Number.isFinite(shortest) ? shortest : 0,
+					alternatives: Math.max(0, result.paths.length - 1),
+				});
+			} catch (error) {
+				setPathHighlight(null);
+				setPathOutcome({
+					found: false,
+					hops: 0,
+					alternatives: 0,
+					error: getSearchErrorMessage(error),
+				});
+			} finally {
+				setPathFinding(false);
+				setPathSource(null);
+			}
+		},
+		[onFindPaths, pathSource],
+	);
+
+	const handleArmPath = useCallback((node: SubgraphNode) => {
+		setPathSource(node);
+		setPathHighlight(null);
+		setPathOutcome(null);
+	}, []);
+
+	const exitPathMode = useCallback(() => {
+		setPathSource(null);
+		setPathHighlight(null);
+		setPathOutcome(null);
+		setPathFinding(false);
+	}, []);
+
 	const handleNodeClick = useCallback(
 		(nodeId: string) => {
 			const node = data?.nodes.find((n) => n.id === nodeId);
-			if (node) {
-				setSelectedNode((prev) => (prev?.id === node.id ? null : node));
-				if (onExpandNode) {
-					onExpandNode(node.id, node.label, getNodeRawId(node, overlay));
-				}
+			if (!node) return;
+			if (pathSource && node.id !== pathSource.id) {
+				void runPath(node);
+				return;
 			}
+			setSelectedNode((prev) => (prev?.id === node.id ? null : node));
 			setSelectedEdge(null);
 			setSelectedEdgeKey(null);
 		},
-		[data, onExpandNode, overlay],
+		[data, pathSource, runPath],
 	);
 
 	const handleEdgeClick = useCallback(
@@ -396,12 +482,9 @@ export function GraphViewer({
 				setSelectedNode(node);
 				setSelectedEdge(null);
 				setSelectedEdgeKey(null);
-				if (onExpandNode) {
-					onExpandNode(node.id, node.label, getNodeRawId(node, overlay));
-				}
 			}
 		},
-		[data, onExpandNode, overlay],
+		[data],
 	);
 
 	const handleToggleVisibility = useCallback(
@@ -581,16 +664,57 @@ export function GraphViewer({
 						</button>
 					)}
 
-					{truncated && (
-						<span className="text-xs text-amber-500 ml-auto whitespace-nowrap">
-							Result truncated
-						</span>
-					)}
-					{loading && (
-						<span className="text-xs text-muted-foreground ml-auto animate-pulse whitespace-nowrap">
-							Loading...
-						</span>
-					)}
+					<div className="ml-auto flex items-center gap-2">
+						{warnings.length > 0 && !warningsDismissed && (
+							<Popover>
+								<PopoverTrigger asChild>
+									<button
+										type="button"
+										className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap hover:bg-amber-500/20 transition-colors"
+									>
+										<AlertTriangle className="h-3.5 w-3.5" />
+										{warnings.length} data warning
+										{warnings.length !== 1 ? "s" : ""}
+									</button>
+								</PopoverTrigger>
+								<PopoverContent align="end" className="w-80 p-0">
+									<div className="flex items-center justify-between border-b px-3 py-2">
+										<span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+											Data warnings
+										</span>
+										<button
+											type="button"
+											className="text-muted-foreground hover:text-foreground"
+											onClick={() => setDismissedWarningsKey(warningsKey)}
+											title="Dismiss warnings"
+										>
+											<X className="h-3.5 w-3.5" />
+										</button>
+									</div>
+									<ul className="max-h-64 overflow-y-auto p-2 space-y-1">
+										{warnings.map((warning) => (
+											<li
+												key={warning}
+												className="rounded bg-amber-500/5 px-2 py-1.5 text-xs text-muted-foreground"
+											>
+												{warning}
+											</li>
+										))}
+									</ul>
+								</PopoverContent>
+							</Popover>
+						)}
+						{truncated && (
+							<span className="text-xs text-amber-500 whitespace-nowrap">
+								Result truncated
+							</span>
+						)}
+						{loading && (
+							<span className="text-xs text-muted-foreground animate-pulse whitespace-nowrap">
+								Loading...
+							</span>
+						)}
+					</div>
 				</div>
 
 				{/* Query panel (collapsible) */}
@@ -613,7 +737,8 @@ export function GraphViewer({
 						selectedNodeId={selectedNode?.id}
 						selectedEdgeKey={selectedEdgeKey}
 						highlightedNodeIds={
-							searchHighlight.size > 0 ? searchHighlight : undefined
+							pathHighlight ??
+							(searchHighlight.size > 0 ? searchHighlight : undefined)
 						}
 						hiddenLabels={hiddenLabels.size > 0 ? hiddenLabels : undefined}
 						onNodeClick={handleNodeClick}
@@ -622,6 +747,72 @@ export function GraphViewer({
 						onStageClick={handleStageClick}
 						className="absolute inset-0"
 					/>
+
+					{/* Path-finding banner + result chip */}
+					{(pathSource || pathOutcome || pathFinding) && (
+						<div className="absolute left-1/2 top-3 z-20 -translate-x-1/2">
+							{pathSource ? (
+								<div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
+									<Route className="h-3.5 w-3.5 text-primary" />
+									<span className="whitespace-nowrap">
+										Finding path from{" "}
+										<span className="font-medium">
+											{pathSource.caption ?? pathSource.id}
+										</span>{" "}
+										— select a target node
+									</span>
+									<button
+										type="button"
+										className="text-muted-foreground hover:text-foreground"
+										onClick={exitPathMode}
+										title="Cancel path finding"
+									>
+										<X className="h-3.5 w-3.5" />
+									</button>
+								</div>
+							) : pathFinding ? (
+								<div className="flex items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">
+									<Route className="h-3.5 w-3.5 animate-pulse text-primary" />
+									<span className="whitespace-nowrap">Finding path…</span>
+								</div>
+							) : pathOutcome ? (
+								<div
+									className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm ${
+										pathOutcome.error
+											? "border-destructive/40 bg-destructive/10 text-destructive"
+											: pathOutcome.found
+												? "border-primary/40 bg-primary/10 text-foreground"
+												: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+									}`}
+								>
+									<Route className="h-3.5 w-3.5" />
+									<span className="whitespace-nowrap">
+										{pathOutcome.error
+											? pathOutcome.error
+											: pathOutcome.found
+												? `Connected — ${pathOutcome.hops} hop${
+														pathOutcome.hops !== 1 ? "s" : ""
+													}${
+														pathOutcome.alternatives > 0
+															? ` (${pathOutcome.alternatives} alternative route${
+																	pathOutcome.alternatives !== 1 ? "s" : ""
+																})`
+															: ""
+													}`
+												: "No connection within 4 hops"}
+									</span>
+									<button
+										type="button"
+										className="hover:opacity-70"
+										onClick={exitPathMode}
+										title="Clear path"
+									>
+										<X className="h-3.5 w-3.5" />
+									</button>
+								</div>
+							) : null}
+						</div>
+					)}
 
 					{/* Floating legend */}
 					<div className="absolute bottom-3 left-3 z-10">
@@ -638,19 +829,24 @@ export function GraphViewer({
 			{selectedNode && (
 				<GraphNodeInspector
 					node={selectedNode}
+					overlay={overlay}
 					connections={nodeConnections}
 					onClose={() => setSelectedNode(null)}
 					onConnectionClick={handleConnectionClick}
 					onExpand={
 						onExpandNode
-							? () =>
+							? (depth: number) =>
 									onExpandNode(
 										selectedNode.id,
 										selectedNode.label,
 										getNodeRawId(selectedNode, overlay),
+										undefined,
+										depth,
 									)
 							: undefined
 					}
+					onFindPath={onFindPaths ? handleArmPath : undefined}
+					onRunAction={onRunAction}
 				/>
 			)}
 

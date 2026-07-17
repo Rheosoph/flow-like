@@ -1,6 +1,11 @@
+mod expansion;
+mod validation;
+
+pub use validation::{MappingValidation, ValidationReport, validate_overlay_definition};
+
 use super::{
-    GraphLabelInfo, GraphPropertyInfo, GraphSchemaResult, GraphStore, SubgraphEdge, SubgraphNode,
-    SubgraphResult, TraversalDirection,
+    GraphAnalyticsResult, GraphLabelInfo, GraphPathsResult, GraphPropertyInfo, GraphSchemaResult,
+    GraphStore, SubgraphEdge, SubgraphNode, SubgraphResult, TraversalDirection,
 };
 use crate::arrow_utils::record_batch_to_value;
 use datafusion::prelude::SessionContext;
@@ -11,12 +16,27 @@ use lancedb::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::datafusion::BaseTableAdapter;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 const MAX_QUERY_DEPTH: usize = 5;
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_CONCURRENT_QUERIES: usize = 4;
-const MAX_QUERY_LIMIT: usize = 1_000_000;
+/// Hard ceiling on rows serialized per query. High enough for the largest
+/// explorer view (10k), low enough that a single request cannot materialize
+/// millions of rows into JSON.
+const MAX_QUERY_LIMIT: usize = 50_000;
+const DEFAULT_ANALYTICS_EDGE_LIMIT: usize = 50_000;
+
+/// Query permits are process-wide: stores are constructed per request, so a
+/// per-instance semaphore would never observe concurrent load. First
+/// initialization wins; later stores share the same pool.
+static GLOBAL_QUERY_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn global_query_semaphore(max_concurrent: usize) -> Arc<tokio::sync::Semaphore> {
+    GLOBAL_QUERY_SEMAPHORE
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(max_concurrent.max(1))))
+        .clone()
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OverlayRow {
@@ -278,7 +298,7 @@ impl LanceGraphStore {
         safety: Option<CypherSafetyConfig>,
     ) -> Result<Self> {
         let safety = safety.unwrap_or_default();
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(safety.max_concurrent));
+        let semaphore = global_query_semaphore(safety.max_concurrent);
 
         let graph_config = build_graph_config(&connection, &overlay).await?;
 
@@ -316,7 +336,14 @@ impl LanceGraphStore {
             .await
             .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
 
-        let limited_query = append_limit_clause(query, limit);
+        let parsed =
+            CypherQuery::new(query).map_err(|e| anyhow!("Failed to parse Cypher query: {}", e))?;
+        preflight_cypher(parsed.ast(), &self.safety)?;
+        let limited_query = if parsed.ast().limit.is_some() {
+            query.trim().to_string()
+        } else {
+            append_limit_clause(query, limit)
+        };
         let cypher = CypherQuery::new(&limited_query)
             .map_err(|e| anyhow!("Failed to parse Cypher query: {}", e))?
             .with_config(self.graph_config.clone())
@@ -367,10 +394,17 @@ impl GraphStore for LanceGraphStore {
             .await
             .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
 
+        validate_readonly_sql(query)?;
+        let timeout = std::time::Duration::from_millis(self.safety.timeout_ms);
         let ctx = self.build_query_context(true).await?;
 
-        let df = ctx.sql(query).await?;
-        let batches = df.collect().await?;
+        let df = tokio::time::timeout(timeout, ctx.sql(query))
+            .await
+            .map_err(|_| anyhow!("SQL planning timed out after {}ms", self.safety.timeout_ms))??
+            .limit(0, Some(limit))?;
+        let batches = tokio::time::timeout(timeout, df.collect())
+            .await
+            .map_err(|_| anyhow!("SQL query timed out after {}ms", self.safety.timeout_ms))??;
 
         let mut results = Vec::new();
         for batch in &batches {
@@ -389,81 +423,23 @@ impl GraphStore for LanceGraphStore {
         &self,
         label: &str,
         id: Value,
-        _depth: usize,
+        depth: usize,
         direction: TraversalDirection,
         limit: Option<usize>,
     ) -> Result<SubgraphResult> {
         let limit = self.enforce_limit(limit);
-        let id_col = self.find_id_column_for_label(label)?;
-
-        let mut all_nodes = Vec::new();
-        let mut all_edges = Vec::new();
-
-        // (query, n_label, m_label, n_is_source)
-        // n is always the seed variable, m is the neighbor
-        for edge in &self.overlay.edges {
-            let mut query_infos: Vec<(String, &str, &str, bool)> = Vec::new();
-
-            let is_src = edge.src_label == label;
-            let is_dst = edge.dst_label == label;
-
-            if matches!(
-                direction,
-                TraversalDirection::Outgoing | TraversalDirection::Both
-            ) && is_src
-            {
-                query_infos.push((
-                    format!(
-                        "MATCH (n:{src})-[r:{rel}]->(m:{dst}) WHERE n.{id_col} = $seed_id RETURN n, m",
-                        src = edge.src_label, rel = edge.label, dst = edge.dst_label,
-                    ),
-                    &edge.src_label,
-                    &edge.dst_label,
-                    true,
-                ));
-            }
-            if matches!(
-                direction,
-                TraversalDirection::Incoming | TraversalDirection::Both
-            ) && is_dst
-            {
-                query_infos.push((
-                    format!(
-                        "MATCH (m:{src})-[r:{rel}]->(n:{dst}) WHERE n.{id_col} = $seed_id RETURN n, m",
-                        src = edge.src_label, rel = edge.label, dst = edge.dst_label,
-                    ),
-                    &edge.dst_label,
-                    &edge.src_label,
-                    false,
-                ));
-            }
-
-            for (query, n_label, m_label, n_is_source) in query_infos {
-                let mut params = HashMap::new();
-                params.insert("seed_id".to_string(), id.clone());
-
-                match self.execute_cypher_with_safety(&query, params, limit).await {
-                    Ok(batch) => {
-                        let rows = record_batch_to_value(&batch)?;
-                        let sub = self.parse_flat_rows(
-                            &rows,
-                            n_label,
-                            m_label,
-                            &edge.label,
-                            n_is_source,
-                            limit,
-                        )?;
-                        all_nodes.extend(sub.nodes);
-                        all_edges.extend(sub.edges);
-                    }
-                    Err(e) => {
-                        eprintln!("neighbors query failed for edge '{}': {}", edge.label, e);
-                    }
-                }
-            }
-        }
-
-        Ok(dedupe_and_limit_subgraph(all_nodes, all_edges, limit))
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
+        self.expand_subgraph(
+            vec![(label.to_string(), id)],
+            depth.max(1),
+            direction,
+            limit,
+        )
+        .await
     }
 
     async fn subgraph(
@@ -472,25 +448,19 @@ impl GraphStore for LanceGraphStore {
         depth: usize,
         limit: Option<usize>,
     ) -> Result<SubgraphResult> {
-        let depth = depth.min(self.safety.max_depth);
         let limit = self.enforce_limit(limit);
 
         if seeds.is_empty() {
             return self.full_subgraph(limit).await;
         }
 
-        let mut all_nodes = Vec::new();
-        let mut all_edges = Vec::new();
-
-        for (label, id) in seeds {
-            let result = self
-                .neighbors(&label, id, depth, TraversalDirection::Both, Some(limit))
-                .await?;
-            all_nodes.extend(result.nodes);
-            all_edges.extend(result.edges);
-        }
-
-        Ok(dedupe_and_limit_subgraph(all_nodes, all_edges, limit))
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
+        self.expand_subgraph(seeds, depth.max(1), TraversalDirection::Both, limit)
+            .await
     }
 
     async fn search_nodes(&self, query: &str, limit: Option<usize>) -> Result<Vec<SubgraphNode>> {
@@ -510,6 +480,7 @@ impl GraphStore for LanceGraphStore {
         let pattern = sql_string_literal(&format!("%{}%", trimmed_query));
         let normalized_query = trimmed_query.to_lowercase();
         let per_label_limit = limit.min(25);
+        let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
 
         let mut matches = Vec::new();
         let mut seen_node_ids = HashSet::new();
@@ -519,6 +490,34 @@ impl GraphStore for LanceGraphStore {
             if searchable_columns.is_empty() {
                 continue;
             }
+
+            let id_col = self.find_id_column_for_label(&node.label)?;
+            let excluded = HashSet::from([id_col.clone()]);
+            let always_include = node
+                .display_column
+                .clone()
+                .filter(|column| *column != id_col)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let prop_names = resolve_property_names(
+                &self.connection,
+                &node.table,
+                &node.property_columns,
+                &mut schema_cache,
+                &excluded,
+                &always_include,
+            )
+            .await?;
+            let mut projected = vec![id_col.clone()];
+            projected.extend(prop_names);
+            projected.extend(searchable_columns.iter().cloned());
+            let mut seen_columns = HashSet::new();
+            projected.retain(|column| seen_columns.insert(column.clone()));
+            let projection = projected
+                .iter()
+                .map(|column| quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", ");
 
             let where_clause = searchable_columns
                 .iter()
@@ -530,7 +529,8 @@ impl GraphStore for LanceGraphStore {
                 .join(" OR ");
 
             let sql = format!(
-                "SELECT * FROM {} WHERE {} LIMIT {}",
+                "SELECT {} FROM {} WHERE {} LIMIT {}",
+                projection,
                 quote_identifier(&node.table),
                 where_clause,
                 per_label_limit,
@@ -625,40 +625,33 @@ impl GraphStore for LanceGraphStore {
     }
 
     async fn sample(&self, label: &str, n: usize) -> Result<Vec<Value>> {
-        let table_name = if let Some(nd) = self.overlay.nodes.iter().find(|nd| nd.label == label) {
-            &nd.table
-        } else if let Some(edge_def) = self.overlay.edges.iter().find(|ed| ed.label == label) {
-            &edge_def.table
-        } else {
-            return Err(anyhow!("Label '{}' not found in overlay", label));
-        };
+        sample_overlay(&self.connection, &self.overlay, label, n).await
+    }
 
-        let table = self
-            .connection
-            .open_table(table_name)
-            .execute()
+    async fn shortest_paths(
+        &self,
+        from: (String, Value),
+        to: (String, Value),
+        max_depth: usize,
+        limit: Option<usize>,
+    ) -> Result<GraphPathsResult> {
+        let limit = self.enforce_limit(limit);
+        let _permit = self
+            .semaphore
+            .acquire()
             .await
-            .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
+            .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
+        self.shortest_paths_impl(from, to, max_depth, limit).await
+    }
 
-        let result = table
-            .query()
-            .limit(n)
-            .execute()
+    async fn analytics(&self, limit: Option<usize>) -> Result<GraphAnalyticsResult> {
+        let _permit = self
+            .semaphore
+            .acquire()
             .await
-            .map_err(|e| anyhow!("Failed to query table '{}': {}", table_name, e))?;
-
-        let batches = result
-            .try_collect::<Vec<_>>()
+            .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
+        self.analytics_impl(limit.unwrap_or(DEFAULT_ANALYTICS_EDGE_LIMIT))
             .await
-            .map_err(|e| anyhow!("Failed to collect from '{}': {}", table_name, e))?;
-
-        let mut results = Vec::new();
-        for batch in &batches {
-            let vals = record_batch_to_value(batch)?;
-            results.extend(vals);
-        }
-        results.truncate(n);
-        Ok(results)
     }
 }
 
@@ -716,6 +709,14 @@ impl LanceGraphStore {
             && seen_columns.insert(display_column.clone())
         {
             columns.push(display_column);
+        }
+
+        for property in &node.property_columns {
+            let is_text =
+                property.data_type.contains("Utf8") || property.data_type.contains("String");
+            if is_text && seen_columns.insert(property.name.clone()) {
+                columns.push(property.name.clone());
+            }
         }
 
         Ok(columns)
@@ -863,17 +864,26 @@ impl LanceGraphStore {
         let mut all_nodes = Vec::new();
         let mut all_edges = Vec::new();
         let mut connected_labels = HashSet::new();
+        let mut warnings = Vec::new();
 
         for edge in &self.overlay.edges {
             let query = format!(
-                "MATCH (n:{src})-[r:{rel}]->(m:{dst}) RETURN n, m",
+                "MATCH (n:{src})-[r:{rel}]->(m:{dst}) RETURN n, r, m",
                 src = edge.src_label,
                 rel = edge.label,
                 dst = edge.dst_label,
             );
-            let batch = self
+            let batch = match self
                 .execute_cypher_with_safety(&query, HashMap::new(), limit)
-                .await?;
+                .await
+            {
+                Ok(batch) => batch,
+                Err(error) => {
+                    tracing::warn!(%error, edge = %edge.label, "Full subgraph edge query failed");
+                    warnings.push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
             let rows = record_batch_to_value(&batch)?;
             let sub = self.parse_flat_rows(
                 &rows,
@@ -902,7 +912,9 @@ impl LanceGraphStore {
             all_nodes.extend(self.load_nodes_for_label(&node.label, remaining).await?);
         }
 
-        Ok(dedupe_and_limit_subgraph(all_nodes, all_edges, limit))
+        Ok(dedupe_and_limit_subgraph(
+            all_nodes, all_edges, limit, warnings,
+        ))
     }
 
     /// Parse flat rows from lance-graph cypher results.
@@ -993,6 +1005,7 @@ impl LanceGraphStore {
             nodes,
             edges,
             truncated,
+            warnings: Vec::new(),
         })
     }
 }
@@ -1008,18 +1021,82 @@ fn value_to_id_string(val: Option<&Value>) -> String {
 
 fn append_limit_clause(query: &str, limit: usize) -> String {
     let trimmed = query.trim();
-    if has_limit_clause(trimmed) {
-        return trimmed.to_string();
-    }
-
     let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
     format!("{trimmed} LIMIT {limit}")
 }
 
-fn has_limit_clause(query: &str) -> bool {
-    query
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .any(|token| token.eq_ignore_ascii_case("limit"))
+/// Rejects queries the engine cannot bound: variable-length path segments with
+/// no upper bound or an upper bound beyond the configured depth cap. The
+/// wallclock timeout is advisory only (DataFusion compute is not cancel-safe),
+/// so unbounded traversals must never reach execution.
+fn preflight_cypher(
+    ast: &lance_graph::ast::CypherQuery,
+    safety: &CypherSafetyConfig,
+) -> Result<()> {
+    use lance_graph::ast::{GraphPattern, ReadingClause};
+
+    let clauses = ast
+        .reading_clauses
+        .iter()
+        .chain(ast.post_with_reading_clauses.iter());
+    for clause in clauses {
+        let ReadingClause::Match(match_clause) = clause else {
+            continue;
+        };
+        for pattern in &match_clause.patterns {
+            let GraphPattern::Path(path) = pattern else {
+                continue;
+            };
+            for segment in &path.segments {
+                let Some(length) = &segment.relationship.length else {
+                    continue;
+                };
+                match length.max {
+                    None => {
+                        return Err(anyhow!(
+                            "Unbounded variable-length paths ([*]) are not allowed; specify an upper bound of at most {}",
+                            safety.max_depth
+                        ));
+                    }
+                    Some(max) if max as usize > safety.max_depth => {
+                        return Err(anyhow!(
+                            "Variable-length path bound {} exceeds the maximum allowed depth of {}",
+                            max,
+                            safety.max_depth
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Allows exactly one read-only statement through the SQL surface. DataFusion
+/// would otherwise happily execute DDL (CREATE EXTERNAL TABLE) or COPY, which
+/// reach the server filesystem.
+fn validate_readonly_sql(query: &str) -> Result<()> {
+    use datafusion::sql::parser::{DFParser, Statement as DFStatement};
+
+    let statements =
+        DFParser::parse_sql(query).map_err(|e| anyhow!("Failed to parse SQL query: {}", e))?;
+    if statements.len() != 1 {
+        return Err(anyhow!("Exactly one SQL statement is allowed per query"));
+    }
+    match statements.front() {
+        Some(DFStatement::Statement(inner))
+            if matches!(
+                inner.as_ref(),
+                datafusion::sql::sqlparser::ast::Statement::Query(_)
+            ) =>
+        {
+            Ok(())
+        }
+        _ => Err(anyhow!(
+            "Only read-only SELECT queries are allowed on the graph SQL surface"
+        )),
+    }
 }
 
 fn quote_identifier(identifier: &str) -> String {
@@ -1068,6 +1145,7 @@ fn dedupe_and_limit_subgraph(
     mut all_nodes: Vec<SubgraphNode>,
     mut all_edges: Vec<SubgraphEdge>,
     limit: usize,
+    warnings: Vec<String>,
 ) -> SubgraphResult {
     let mut seen_node_ids = HashSet::new();
     all_nodes.retain(|node| seen_node_ids.insert(node.id.clone()));
@@ -1075,14 +1153,23 @@ fn dedupe_and_limit_subgraph(
     let mut seen_edge_ids = HashSet::new();
     all_edges.retain(|edge| seen_edge_ids.insert(edge.id.clone()));
 
-    let truncated = all_nodes.len() >= limit || all_edges.len() >= limit.saturating_mul(3);
+    let truncated = all_nodes.len() > limit || all_edges.len() > limit.saturating_mul(3);
     all_nodes.truncate(limit);
     all_edges.truncate(limit.saturating_mul(3));
+
+    let kept_node_ids = all_nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<HashSet<_>>();
+    all_edges.retain(|edge| {
+        kept_node_ids.contains(edge.source.as_str()) && kept_node_ids.contains(edge.target.as_str())
+    });
 
     SubgraphResult {
         nodes: all_nodes,
         edges: all_edges,
         truncated,
+        warnings,
     }
 }
 
@@ -1265,9 +1352,20 @@ pub async fn list_overlays(connection: &Connection) -> Result<Vec<GraphOverlayDe
         let rows = record_batch_to_value(batch)?;
         for row in rows {
             if let Some(def_json) = row.get("definition_json").and_then(|v| v.as_str()) {
-                let overlay: GraphOverlayDef = serde_json::from_str(def_json)
-                    .map_err(|e| anyhow!("Failed to parse overlay definition: {}", e))?;
-                overlays.push(overlay);
+                match serde_json::from_str::<GraphOverlayDef>(def_json) {
+                    Ok(overlay) => overlays.push(overlay),
+                    Err(error) => {
+                        let overlay_id = row
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("<unknown>");
+                        tracing::warn!(
+                            %error,
+                            overlay_id,
+                            "Skipping graph overlay with unparseable definition"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1316,37 +1414,53 @@ pub async fn load_overlay(connection: &Connection, overlay_id: &str) -> Result<G
     Err(anyhow!("Overlay '{}' not found", overlay_id))
 }
 
+/// Resolves an object type by any of its identities — stable id, API name, or
+/// display label — matching how actions and remote queries resolve types.
+pub fn resolve_object_mapping<'a>(
+    overlay: &'a GraphOverlayDef,
+    object_type: &str,
+) -> Option<&'a NodeMappingDef> {
+    overlay.nodes.iter().find(|node| {
+        node.id.as_deref() == Some(object_type)
+            || node.api_name.as_deref() == Some(object_type)
+            || node.label == object_type
+    })
+}
+
 pub async fn sample_overlay(
     connection: &Connection,
     overlay: &GraphOverlayDef,
     label: &str,
     limit: usize,
 ) -> Result<Vec<Value>> {
-    let (table_name, columns) =
-        if let Some(node) = overlay.nodes.iter().find(|node| node.label == label) {
-            let mut columns = vec![node.id_column.clone()];
-            if let Some(display_column) = &node.display_column {
-                columns.push(display_column.clone());
-            }
-            columns.extend(
-                node.property_columns
-                    .iter()
-                    .map(|property| property.name.clone()),
-            );
-            (node.table.as_str(), columns)
-        } else if let Some(edge) = overlay.edges.iter().find(|edge| edge.label == label) {
-            let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
-            columns.extend(edge.src_node_column.clone());
-            columns.extend(edge.dst_node_column.clone());
-            columns.extend(
-                edge.property_columns
-                    .iter()
-                    .map(|property| property.name.clone()),
-            );
-            (edge.table.as_str(), columns)
-        } else {
-            return Err(anyhow!("Label '{}' not found in overlay", label));
-        };
+    let (table_name, columns) = if let Some(node) = resolve_object_mapping(overlay, label) {
+        let mut columns = vec![node.id_column.clone()];
+        if let Some(display_column) = &node.display_column {
+            columns.push(display_column.clone());
+        }
+        columns.extend(
+            node.property_columns
+                .iter()
+                .map(|property| property.name.clone()),
+        );
+        (node.table.as_str(), columns)
+    } else if let Some(edge) = overlay.edges.iter().find(|edge| {
+        edge.id.as_deref() == Some(label)
+            || edge.api_name.as_deref() == Some(label)
+            || edge.label == label
+    }) {
+        let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
+        columns.extend(edge.src_node_column.clone());
+        columns.extend(edge.dst_node_column.clone());
+        columns.extend(
+            edge.property_columns
+                .iter()
+                .map(|property| property.name.clone()),
+        );
+        (edge.table.as_str(), columns)
+    } else {
+        return Err(anyhow!("Label '{}' not found in overlay", label));
+    };
     let mut seen = HashSet::new();
     let columns = columns
         .into_iter()
@@ -1442,20 +1556,12 @@ pub async fn load_overlay_objects(
         ));
     }
 
-    let mapping = overlay
-        .nodes
-        .iter()
-        .find(|mapping| {
-            mapping.id.as_deref() == Some(object_type)
-                || mapping.api_name.as_deref() == Some(object_type)
-                || mapping.label == object_type
-        })
-        .ok_or_else(|| {
-            anyhow!(
-                "Object type '{}' was not found in the ontology",
-                object_type
-            )
-        })?;
+    let mapping = resolve_object_mapping(overlay, object_type).ok_or_else(|| {
+        anyhow!(
+            "Object type '{}' was not found in the ontology",
+            object_type
+        )
+    })?;
 
     let mut seen = HashSet::with_capacity(ids.len());
     let mut literals = Vec::with_capacity(ids.len());
@@ -1495,11 +1601,16 @@ pub async fn load_overlay_objects(
     let mut seen_columns = HashSet::new();
     columns.retain(|column| seen_columns.insert(column.clone()));
 
+    // Do not clamp to ids.len(): if the identity column has duplicate rows, a
+    // tight limit can return only some ids' duplicates and report the rest as
+    // missing. The IN predicate already bounds the scan to the requested ids;
+    // a generous cap guards against a pathological table without truncating a
+    // healthy one.
     let batches = table
         .query()
         .only_if(&predicate)
         .select(lancedb::query::Select::Columns(columns))
-        .limit(ids.len())
+        .limit(ids.len().saturating_mul(64).max(1_000))
         .execute()
         .await
         .map_err(|error| anyhow!("Failed to load ontology objects: {}", error))?
@@ -1727,10 +1838,20 @@ pub async fn list_ontology_imports(
     for batch in &batches {
         for row in record_batch_to_value(batch)? {
             if let Some(definition) = row.get("definition_json").and_then(|value| value.as_str()) {
-                imports.push(
-                    serde_json::from_str(definition)
-                        .map_err(|e| anyhow!("Failed to parse ontology import: {}", e))?,
-                );
+                match serde_json::from_str(definition) {
+                    Ok(import) => imports.push(import),
+                    Err(error) => {
+                        let import_id = row
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("<unknown>");
+                        tracing::warn!(
+                            %error,
+                            import_id,
+                            "Skipping ontology import with unparseable definition"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1883,4 +2004,94 @@ pub async fn delete_ontology_import(connection: &Connection, import_id: &str) ->
         .await
         .map_err(|e| anyhow!("Failed to delete ontology import: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn safety() -> CypherSafetyConfig {
+        CypherSafetyConfig::default()
+    }
+
+    fn parse(query: &str) -> CypherQuery {
+        CypherQuery::new(query).expect("query should parse")
+    }
+
+    #[test]
+    fn preflight_rejects_unbounded_variable_length_paths() {
+        let query = parse("MATCH (a:Person)-[r:KNOWS*]->(b:Person) RETURN a, b");
+        assert!(preflight_cypher(query.ast(), &safety()).is_err());
+    }
+
+    #[test]
+    fn preflight_rejects_overdeep_bounds() {
+        let query = parse("MATCH (a:Person)-[r:KNOWS*1..99]->(b:Person) RETURN a, b");
+        assert!(preflight_cypher(query.ast(), &safety()).is_err());
+    }
+
+    #[test]
+    fn preflight_accepts_bounded_paths_and_plain_matches() {
+        let bounded = parse("MATCH (a:Person)-[r:KNOWS*1..3]->(b:Person) RETURN a, b");
+        assert!(preflight_cypher(bounded.ast(), &safety()).is_ok());
+        let plain = parse("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, b LIMIT 10");
+        assert!(preflight_cypher(plain.ast(), &safety()).is_ok());
+    }
+
+    #[test]
+    fn readonly_sql_accepts_selects_only() {
+        assert!(validate_readonly_sql("SELECT * FROM people LIMIT 5").is_ok());
+        assert!(validate_readonly_sql("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
+        assert!(validate_readonly_sql("DROP TABLE people").is_err());
+        assert!(validate_readonly_sql("COPY people TO '/tmp/out.csv'").is_err());
+        assert!(
+            validate_readonly_sql("CREATE EXTERNAL TABLE t STORED AS CSV LOCATION '/etc/passwd'")
+                .is_err()
+        );
+        assert!(validate_readonly_sql("SELECT 1; SELECT 2").is_err());
+        assert!(validate_readonly_sql("INSERT INTO people VALUES (1)").is_err());
+    }
+
+    #[test]
+    fn dedupe_drops_edges_with_truncated_endpoints() {
+        let nodes = (0..3)
+            .map(|index| SubgraphNode {
+                id: format!("Person:{index}"),
+                label: "Person".to_string(),
+                caption: None,
+                props: Value::Null,
+            })
+            .collect::<Vec<_>>();
+        let edges = vec![
+            SubgraphEdge {
+                id: "Person:0-KNOWS->Person:1".to_string(),
+                source: "Person:0".to_string(),
+                target: "Person:1".to_string(),
+                label: "KNOWS".to_string(),
+                props: Value::Null,
+            },
+            SubgraphEdge {
+                id: "Person:0-KNOWS->Person:2".to_string(),
+                source: "Person:0".to_string(),
+                target: "Person:2".to_string(),
+                label: "KNOWS".to_string(),
+                props: Value::Null,
+            },
+        ];
+        let result = dedupe_and_limit_subgraph(nodes, edges, 2, Vec::new());
+        assert_eq!(result.nodes.len(), 2);
+        assert!(result.truncated);
+        assert_eq!(
+            result.edges.len(),
+            1,
+            "edge to the truncated node must be dropped"
+        );
+        assert_eq!(result.edges[0].target, "Person:1");
+    }
+
+    #[test]
+    fn preflight_checks_post_with_clauses() {
+        let query = parse("MATCH (a:Person) WITH a MATCH (a)-[r:KNOWS*]->(b:Person) RETURN a, b");
+        assert!(preflight_cypher(query.ast(), &safety()).is_err());
+    }
 }

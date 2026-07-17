@@ -14,18 +14,24 @@ import {
 	GitBranch,
 	Layers3,
 	Loader2,
+	MoreVertical,
 	Network,
+	Pencil,
 	Play,
 	Plus,
 	RefreshCw,
 	Search,
 	Share2,
 	ShieldCheck,
+	Trash2,
 	Workflow,
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useInvalidateInvoke } from "../../../hooks/use-invoke";
 import type { IBoard } from "../../../lib/schema/flow/board";
+import { IVersionType } from "../../../lib/schema/flow/version-type";
+import { useBackend } from "../../../state/backend-state";
 import type {
 	GraphOverlay,
 	InvokeOntologyActionPayload,
@@ -57,6 +63,13 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../../ui/dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "../../ui/dropdown-menu";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { ScrollArea } from "../../ui/scroll-area";
@@ -213,6 +226,16 @@ export function DataStudioOverview({
 										<ChevronRight className="h-4 w-4 text-muted-foreground" />
 									</button>
 								))}
+								{ontologies.length > 5 && (
+									<Button
+										variant="ghost"
+										size="sm"
+										className="w-full justify-center text-muted-foreground"
+										onClick={() => onNavigate("model")}
+									>
+										View all ({ontologies.length})
+									</Button>
+								)}
 							</div>
 						)}
 					</CardContent>
@@ -619,6 +642,12 @@ function ObjectViewSheet({
 }>) {
 	const [selectedAction, setSelectedAction] =
 		useState<OntologyActionDefinition | null>(null);
+	const [showAllProperties, setShowAllProperties] = useState(false);
+	const [lastRow, setLastRow] = useState(row);
+	if (row !== lastRow) {
+		setLastRow(row);
+		setShowAllProperties(false);
+	}
 	const view = ontology?.object_views?.find(
 		(item) =>
 			item.object_type ===
@@ -653,6 +682,20 @@ function ObjectViewSheet({
 						},
 					),
 		) ?? [];
+	const prominentKeys = row ? prominent.filter((key) => key in row) : [];
+	const prominentSet = new Set(prominentKeys);
+	const prominentEntries = prominentKeys.map(
+		(key) => [key, row?.[key]] as [string, unknown],
+	);
+	const restEntries = row
+		? Object.entries(row).filter(([key]) => !prominentSet.has(key))
+		: [];
+	const canToggleProperties =
+		prominentEntries.length > 0 && restEntries.length > 0;
+	const visibleEntries =
+		showAllProperties || prominentEntries.length === 0
+			? [...prominentEntries, ...restEntries]
+			: prominentEntries;
 	return (
 		<Sheet open={Boolean(row)} onOpenChange={(open) => !open && onClose()}>
 			<SheetContent className="w-full overflow-y-auto sm:max-w-xl">
@@ -711,7 +754,7 @@ function ObjectViewSheet({
 						)}
 						<Separator />
 						<div className="space-y-1">
-							{Object.entries(row).map(([property, value]) => (
+							{visibleEntries.map(([property, value]) => (
 								<div
 									key={property}
 									className="grid grid-cols-[minmax(120px,0.8fr)_minmax(0,1.4fr)] gap-4 border-b py-2.5"
@@ -726,6 +769,18 @@ function ObjectViewSheet({
 									</p>
 								</div>
 							))}
+							{canToggleProperties && (
+								<Button
+									variant="ghost"
+									size="sm"
+									className="mt-1 w-full justify-center text-muted-foreground"
+									onClick={() => setShowAllProperties((current) => !current)}
+								>
+									{showAllProperties
+										? "Show fewer properties"
+										: `Show all (${prominentEntries.length + restEntries.length})`}
+								</Button>
+							)}
 						</div>
 						<div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
 							<div className="flex items-center gap-1.5 font-medium text-foreground">
@@ -1274,12 +1329,212 @@ function OntologyActionDialog({
 	);
 }
 
+function OntologyLifecycleMenu({
+	appId,
+	ontology,
+}: Readonly<{ appId: string; ontology: GraphOverlay }>) {
+	const backend = useBackend();
+	const invalidate = useInvalidateInvoke();
+	const [renameOpen, setRenameOpen] = useState(false);
+	const [deleteOpen, setDeleteOpen] = useState(false);
+	const [nameDraft, setNameDraft] = useState(ontology.name);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const refreshOverlays = useCallback(async () => {
+		await invalidate(backend.graphState.listOverlays, [appId]);
+		await invalidate(backend.boardState.getCatalog, [appId]);
+	}, [appId, backend.boardState, backend.graphState, invalidate]);
+
+	const rename = useCallback(async () => {
+		const nextName = nameDraft.trim();
+		if (!nextName) return;
+		if (nextName === ontology.name) {
+			setRenameOpen(false);
+			return;
+		}
+		setBusy(true);
+		setError(null);
+		try {
+			await backend.graphState.updateOverlay(appId, ontology.id, {
+				name: nextName,
+				expected_updated_at: ontology.updated_at,
+			});
+			await refreshOverlays();
+			setRenameOpen(false);
+		} catch (renameError) {
+			setError(
+				renameError instanceof Error
+					? renameError.message
+					: "Could not rename the ontology.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}, [appId, backend.graphState, nameDraft, ontology, refreshOverlays]);
+
+	const remove = useCallback(async () => {
+		setBusy(true);
+		setError(null);
+		try {
+			await backend.graphState.deleteOverlay(appId, ontology.id);
+			await refreshOverlays();
+			setDeleteOpen(false);
+		} catch (deleteError) {
+			setError(
+				deleteError instanceof Error
+					? deleteError.message
+					: "Could not delete the ontology.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}, [appId, backend.graphState, ontology.id, refreshOverlays]);
+
+	return (
+		<>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon"
+						className="h-7 w-7"
+						aria-label={`Manage ${ontology.name}`}
+					>
+						<MoreVertical className="h-4 w-4" />
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					<DropdownMenuItem
+						onSelect={(event) => {
+							event.preventDefault();
+							setNameDraft(ontology.name);
+							setError(null);
+							setRenameOpen(true);
+						}}
+					>
+						<Pencil className="h-4 w-4" /> Rename
+					</DropdownMenuItem>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem
+						className="text-destructive focus:text-destructive"
+						onSelect={(event) => {
+							event.preventDefault();
+							setError(null);
+							setDeleteOpen(true);
+						}}
+					>
+						<Trash2 className="h-4 w-4" /> Delete
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+
+			<Dialog
+				open={renameOpen}
+				onOpenChange={(open) => {
+					if (busy) return;
+					if (!open) setError(null);
+					setRenameOpen(open);
+				}}
+			>
+				<DialogContent className="sm:max-w-md">
+					<DialogHeader>
+						<DialogTitle>Rename ontology</DialogTitle>
+						<DialogDescription>
+							Update the display name of this semantic layer.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="grid gap-1.5 py-1">
+						<Label htmlFor={`rename-ontology-${ontology.id}`}>Name</Label>
+						<Input
+							id={`rename-ontology-${ontology.id}`}
+							value={nameDraft}
+							disabled={busy}
+							onChange={(event) => setNameDraft(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									void rename();
+								}
+							}}
+						/>
+						{error && (
+							<p role="alert" className="text-sm text-destructive">
+								{error}
+							</p>
+						)}
+					</div>
+					<DialogFooter>
+						<Button
+							variant="ghost"
+							disabled={busy}
+							onClick={() => setRenameOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							onClick={() => void rename()}
+							disabled={busy || !nameDraft.trim()}
+						>
+							{busy && <Loader2 className="h-4 w-4 animate-spin" />}
+							Save name
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			<AlertDialog
+				open={deleteOpen}
+				onOpenChange={(open) => {
+					if (busy) return;
+					if (!open) setError(null);
+					setDeleteOpen(open);
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete {ontology.name}?</AlertDialogTitle>
+						<AlertDialogDescription>
+							This removes the semantic layer, its object views, and action
+							bindings. Your underlying data tables are not deleted — only this
+							ontology definition.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					{error && (
+						<p role="alert" className="text-sm text-destructive">
+							{error}
+						</p>
+					)}
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={busy}>Keep ontology</AlertDialogCancel>
+						<AlertDialogAction
+							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+							disabled={busy}
+							onClick={(event) => {
+								event.preventDefault();
+								void remove();
+							}}
+						>
+							{busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+							Delete ontology
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</>
+	);
+}
+
 export function OntologyModelPanel({
 	ontologies,
+	appId,
 	onCreateOntology,
 	onOpenOntology,
 }: Readonly<
-	StudioPanelBaseProps & { onOpenOntology: (ontologyId: string) => void }
+	StudioPanelBaseProps & {
+		appId?: string;
+		onOpenOntology: (ontologyId: string) => void;
+	}
 >) {
 	const [selectedId, setSelectedId] = useState(ontologies[0]?.id ?? "");
 	const selected =
@@ -1310,31 +1565,36 @@ export function OntologyModelPanel({
 					</Button>
 				</div>
 				{ontologies.map((ontology) => (
-					<button
-						type="button"
+					<div
 						key={ontology.id}
-						onClick={() => setSelectedId(ontology.id)}
-						className={`w-full rounded-xl border p-4 text-left transition-colors ${ontology.id === selected?.id ? "border-primary bg-primary/5" : "hover:bg-muted/40"}`}
+						className={`relative rounded-xl border transition-colors ${ontology.id === selected?.id ? "border-primary bg-primary/5" : "hover:bg-muted/40"}`}
 					>
-						<div className="flex items-start justify-between gap-2">
-							<div className="min-w-0">
-								<p className="truncate font-medium">{ontology.name}</p>
-								<p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-									{ontology.description ?? "No description yet"}
-								</p>
+						<button
+							type="button"
+							onClick={() => setSelectedId(ontology.id)}
+							className="w-full p-4 pr-24 text-left"
+						>
+							<p className="truncate font-medium">{ontology.name}</p>
+							<p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+								{ontology.description ?? "No description yet"}
+							</p>
+							<div className="mt-3 flex gap-2 text-xs text-muted-foreground">
+								<span>{ontology.nodes.length} objects</span>
+								<span>·</span>
+								<span>{ontology.edges.length} links</span>
 							</div>
+						</button>
+						<div className="absolute right-3 top-3 flex items-center gap-1">
 							{ontology.exposed ? (
 								<Badge variant="secondary">Shared</Badge>
 							) : (
 								<Badge variant="outline">Private</Badge>
 							)}
+							{appId && (
+								<OntologyLifecycleMenu appId={appId} ontology={ontology} />
+							)}
 						</div>
-						<div className="mt-3 flex gap-2 text-xs text-muted-foreground">
-							<span>{ontology.nodes.length} objects</span>
-							<span>·</span>
-							<span>{ontology.edges.length} links</span>
-						</div>
-					</button>
+					</div>
 				))}
 			</div>
 			{selected && (
@@ -1455,15 +1715,23 @@ export function OntologyModelPanel({
 	);
 }
 
+const CURRENT_DRAFT_VERSION = "current";
+
+function versionKey(version: readonly number[]): string {
+	return `${version[0] ?? 0}.${version[1] ?? 0}.${version[2] ?? 0}`;
+}
+
 export function OntologyActionsPanel({
 	ontologies,
 	boards,
+	appId,
 	onCreateOntology,
 	onNeedBoards,
 	onSaveActions,
 }: Readonly<
 	StudioPanelBaseProps & {
 		boards: IBoard[];
+		appId?: string;
 		onNeedBoards: () => void;
 		onSaveActions: (
 			ontologyId: string,
@@ -1471,6 +1739,7 @@ export function OntologyActionsPanel({
 		) => Promise<void>;
 	}
 >) {
+	const backend = useBackend();
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [ontologyId, setOntologyId] = useState(ontologies[0]?.id ?? "");
 	const [name, setName] = useState("");
@@ -1478,6 +1747,15 @@ export function OntologyActionsPanel({
 	const [objectType, setObjectType] = useState("");
 	const [boardId, setBoardId] = useState("");
 	const [startNodeId, setStartNodeId] = useState("");
+	// null selects the board's working draft (published on save); a tuple pins
+	// an existing immutable board version.
+	const [selectedVersion, setSelectedVersion] = useState<
+		[number, number, number] | null
+	>(null);
+	const [publishedVersions, setPublishedVersions] = useState<
+		[number, number, number][]
+	>([]);
+	const [publishingVersion, setPublishingVersion] = useState(false);
 	const [editingActionId, setEditingActionId] = useState<string | null>(null);
 	const [actionEnabled, setActionEnabled] = useState(true);
 	const [allowBulk, setAllowBulk] = useState(false);
@@ -1512,12 +1790,41 @@ export function OntologyActionsPanel({
 	const allActions = ontologies.flatMap((item) =>
 		(item.actions ?? []).map((action) => ({ action, ontology: item })),
 	);
+	// Load the board's published (immutable) versions so the user can pin one.
+	useEffect(() => {
+		if (!appId || !boardId) {
+			setPublishedVersions([]);
+			return;
+		}
+		let cancelled = false;
+		backend.boardState
+			.getBoardVersions(appId, boardId)
+			.then((versions) => {
+				if (cancelled) return;
+				const sorted = [...versions].sort((a, b) => {
+					for (let index = 0; index < 3; index += 1) {
+						if ((b[index] ?? 0) !== (a[index] ?? 0))
+							return (b[index] ?? 0) - (a[index] ?? 0);
+					}
+					return 0;
+				});
+				setPublishedVersions(sorted);
+			})
+			.catch(() => {
+				if (!cancelled) setPublishedVersions([]);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [appId, boardId, backend.boardState]);
+
 	const resetActionEditor = useCallback(() => {
 		setEditingActionId(null);
 		setName("");
 		setDescription("");
 		setBoardId("");
 		setStartNodeId("");
+		setSelectedVersion(null);
 		setActionEnabled(true);
 		setAllowBulk(false);
 	}, []);
@@ -1533,6 +1840,7 @@ export function OntologyActionsPanel({
 				setDescription(action.description ?? "");
 				setBoardId(action.board_id);
 				setStartNodeId(action.start_node_id ?? "");
+				setSelectedVersion(action.board_version ?? null);
 				setActionEnabled(action.enabled);
 				setAllowBulk(action.allow_bulk);
 			} else {
@@ -1547,6 +1855,47 @@ export function OntologyActionsPanel({
 		},
 		[onNeedBoards, ontologies, resetActionEditor],
 	);
+
+	const publishDraftVersion = useCallback(async () => {
+		if (!appId || !boardId) return;
+		setPublishingVersion(true);
+		setSaveError(null);
+		try {
+			await backend.boardState.createBoardVersion(
+				appId,
+				boardId,
+				IVersionType.Patch,
+			);
+			const versions = await backend.boardState.getBoardVersions(
+				appId,
+				boardId,
+			);
+			const sorted = [...versions].sort((a, b) => {
+				for (let index = 0; index < 3; index += 1) {
+					if ((b[index] ?? 0) !== (a[index] ?? 0))
+						return (b[index] ?? 0) - (a[index] ?? 0);
+				}
+				return 0;
+			});
+			setPublishedVersions(sorted);
+			if (sorted[0]) setSelectedVersion(sorted[0]);
+		} catch (error) {
+			setSaveError(
+				error instanceof Error
+					? error.message
+					: "The board version could not be published.",
+			);
+		} finally {
+			setPublishingVersion(false);
+		}
+	}, [appId, boardId, backend.boardState]);
+
+	const boardsRequestedRef = useRef(false);
+	useEffect(() => {
+		if (boardsRequestedRef.current) return;
+		boardsRequestedRef.current = true;
+		onNeedBoards();
+	}, [onNeedBoards]);
 
 	useEffect(() => {
 		if (!ontology) return;
@@ -1564,10 +1913,12 @@ export function OntologyActionsPanel({
 			const previous = (ontology.actions ?? []).find(
 				(action) => action.id === editingActionId,
 			);
-			const version = board?.version;
-			const boardVersion =
-				Array.isArray(version) && version.length === 3
-					? ([Number(version[0]), Number(version[1]), Number(version[2])] as [
+			// A pinned published version is used verbatim; otherwise the board's
+			// working draft is pinned and published server-side on save.
+			const draft = board?.version;
+			const draftVersion =
+				Array.isArray(draft) && draft.length === 3
+					? ([Number(draft[0]), Number(draft[1]), Number(draft[2])] as [
 							number,
 							number,
 							number,
@@ -1575,6 +1926,7 @@ export function OntologyActionsPanel({
 					: previous?.board_id === boardId
 						? previous.board_version
 						: undefined;
+			const boardVersion = selectedVersion ?? draftVersion;
 			const nextAction: OntologyActionDefinition = {
 				...previous,
 				id: editingActionId ?? createId(),
@@ -1613,6 +1965,7 @@ export function OntologyActionsPanel({
 	}, [
 		board?.version,
 		boardId,
+		selectedVersion,
 		actionEnabled,
 		allowBulk,
 		description,
@@ -1816,7 +2169,7 @@ export function OntologyActionsPanel({
 					setDialogOpen(open);
 				}}
 			>
-				<DialogContent className="max-w-xl">
+				<DialogContent className="max-h-[85vh] overflow-y-auto max-w-xl">
 					<DialogHeader>
 						<DialogTitle>
 							{editingActionId
@@ -1890,6 +2243,7 @@ export function OntologyActionsPanel({
 									onValueChange={(value) => {
 										setBoardId(value);
 										setStartNodeId("");
+										setSelectedVersion(null);
 									}}
 								>
 									<SelectTrigger>
@@ -1923,6 +2277,71 @@ export function OntologyActionsPanel({
 									</SelectContent>
 								</Select>
 							</div>
+						</div>
+						<div className="grid gap-1.5">
+							<div className="flex items-center justify-between">
+								<Label>Board version</Label>
+								{boardId && appId && (
+									<button
+										type="button"
+										className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+										disabled={publishingVersion}
+										onClick={() => void publishDraftVersion()}
+									>
+										{publishingVersion ? (
+											<span className="flex items-center gap-1">
+												<Loader2 className="h-3 w-3 animate-spin" />
+												Publishing…
+											</span>
+										) : (
+											"Publish current as new version"
+										)}
+									</button>
+								)}
+							</div>
+							<Select
+								value={
+									selectedVersion
+										? versionKey(selectedVersion)
+										: CURRENT_DRAFT_VERSION
+								}
+								onValueChange={(value) => {
+									if (value === CURRENT_DRAFT_VERSION) {
+										setSelectedVersion(null);
+										return;
+									}
+									const parts = value.split(".").map(Number);
+									setSelectedVersion([
+										parts[0] ?? 0,
+										parts[1] ?? 0,
+										parts[2] ?? 0,
+									]);
+								}}
+								disabled={!boardId}
+							>
+								<SelectTrigger>
+									<SelectValue placeholder="Select version" />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={CURRENT_DRAFT_VERSION}>
+										{board?.version
+											? `Current draft (v${versionKey(board.version)})`
+											: "Current draft"}
+									</SelectItem>
+									{publishedVersions.map((version) => (
+										<SelectItem
+											key={versionKey(version)}
+											value={versionKey(version)}
+										>
+											v{versionKey(version)}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<p className="text-[11px] text-muted-foreground">
+								Pin a published version for a reproducible action, or keep the
+								current draft — it is published automatically when you save.
+							</p>
 						</div>
 						<div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
 							<div className="flex items-center gap-1.5 font-medium text-foreground">
@@ -2504,7 +2923,7 @@ export function OntologySharingPanel({
 																			</p>
 																			<p className="text-[10px] text-muted-foreground">
 																				{contract.nodes.length} object types ·
-																				object bindings only
+																				bindings only
 																			</p>
 																		</div>
 																		<Badge
@@ -2513,9 +2932,9 @@ export function OntologySharingPanel({
 																			}
 																		>
 																			{installedOntologiesLoading
-																				? "Checking installation"
+																				? "Checking"
 																				: installedOntologiesError
-																					? "Status unavailable"
+																					? "Unavailable"
 																					: updateAvailable
 																						? "Update available"
 																						: installed
@@ -2523,7 +2942,7 @@ export function OntologySharingPanel({
 																							: "Remote"}
 																		</Badge>
 																	</div>
-																	<div className="flex items-center justify-end gap-2">
+																	<div className="flex flex-wrap items-center justify-end gap-2">
 																		{installed && (
 																			<RemoteOntologyUninstallButton
 																				ontologyName={contract.name}
@@ -2562,9 +2981,7 @@ export function OntologySharingPanel({
 																			{updating && (
 																				<Loader2 className="h-3.5 w-3.5 animate-spin" />
 																			)}
-																			{installed
-																				? "Refresh object bindings"
-																				: "Install object bindings"}
+																			{installed ? "Refresh" : "Install"}
 																		</Button>
 																	</div>
 																</div>

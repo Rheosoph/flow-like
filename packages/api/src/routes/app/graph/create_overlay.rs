@@ -210,6 +210,34 @@ pub async fn create_overlay(
         updated_at: now.clone(),
     };
 
+    let report = lancegraph::validate_overlay_definition(&connection, &def)
+        .await
+        .map_err(|error| ApiError::internal(format!("Overlay validation failed: {error}")))?;
+    if !report.ok {
+        let mut issues = report.issues;
+        for mapping in &report.mappings {
+            for issue in &mapping.issues {
+                issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
+            }
+        }
+        if let Some(sub) = action_owner_sub.as_ref()
+            && let Err(cleanup_error) = super::actions::remove_action_events(
+                &state,
+                sub,
+                &app_id,
+                &overlay_id,
+                &def.actions,
+            )
+            .await
+        {
+            tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+        }
+        return Err(ApiError::bad_request(format!(
+            "The overlay definition is invalid: {}",
+            issues.join("; ")
+        )));
+    }
+
     if let Err(error) = lancegraph::save_overlay(&connection, &def).await {
         if let Some(sub) = action_owner_sub
             && let Err(cleanup_error) = super::actions::remove_action_events(

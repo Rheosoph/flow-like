@@ -217,6 +217,22 @@ pub async fn update_overlay(
         })
     })?;
 
+    let report = lancegraph::validate_overlay_definition(&connection, &def)
+        .await
+        .map_err(|error| ApiError::internal(format!("Overlay validation failed: {error}")))?;
+    if !report.ok {
+        let mut issues = report.issues;
+        for mapping in &report.mappings {
+            for issue in &mapping.issues {
+                issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
+            }
+        }
+        return Err(ApiError::bad_request(format!(
+            "The overlay definition is invalid: {}",
+            issues.join("; ")
+        )));
+    }
+
     if governed_contract_changed && !def.actions.is_empty() {
         let sub = permission.sub()?;
         let mut reconciled_actions = def.actions.clone();
