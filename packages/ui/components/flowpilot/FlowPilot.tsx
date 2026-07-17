@@ -2743,6 +2743,7 @@ function FlowPilotImpl({
 							: undefined,
 						nativeRequestId,
 						currentInput,
+						activeAppId,
 					);
 					responseBelongsToActiveRequest =
 						activeCopilotRequestIdRef.current === nativeRequestId;
@@ -3079,6 +3080,7 @@ function FlowPilotImpl({
 			runContext,
 			currentComponents,
 			selectedComponentIds,
+			activeAppId,
 			onComponentsGenerated,
 			backendContext.boardState,
 			captureScreenshot,

@@ -814,9 +814,10 @@ export class WebBoardState implements IBoardState {
 		toolContext?: CopilotToolContext,
 		requestId?: string,
 		rawUserPrompt?: string,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		const contextAppId =
-			toolContext?.appId ?? actionContext?.app_id ?? runContext?.app_id;
+			appId ?? toolContext?.appId ?? actionContext?.app_id ?? runContext?.app_id;
 		const contextBoardId =
 			toolContext?.boardId ?? board?.id ?? runContext?.board_id;
 		if (contextAppId && contextBoardId) {

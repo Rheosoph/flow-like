@@ -1295,6 +1295,7 @@ pub async fn developer_run_node(
             instance.host_state_mut().model_context = Some(ModelContext {
                 app_state: flow_like_state.clone(),
                 token: registry_auth_token.clone(),
+                cache: None,
             });
         }
 

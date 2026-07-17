@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
 import { useInvoke } from "../../hooks";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
+import { formatEventTypeLabel } from "../../lib/event-type-label";
 import { checkOAuthTokens } from "../../lib/oauth/helpers";
 import type { IOAuthTokenStoreWithPending } from "../../lib/oauth/types";
 import type { IStoredOAuthToken } from "../../lib/oauth/types";
@@ -718,9 +719,7 @@ export function EventForm({
 										<SelectContent>
 											{visibleTypes.map((type) => (
 												<SelectItem key={type} value={type}>
-													{type
-														.replace(/_/g, " ")
-														.replace(/\b\w/g, (c) => c.toUpperCase())}
+													{formatEventTypeLabel(type)}
 												</SelectItem>
 											))}
 										</SelectContent>

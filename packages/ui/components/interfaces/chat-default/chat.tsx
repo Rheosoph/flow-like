@@ -12,9 +12,10 @@ import {
 	useState,
 } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
-import type { IEventPayloadChat } from "../../../lib";
+import { type IEventPayloadChat, resolveChatColorScheme } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { VoiceMode } from "./VoiceMode";
+import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
@@ -74,6 +75,8 @@ export interface IChatProps {
 	boardId?: string;
 	/** Chat event id — forwarded to embedded widget surfaces. */
 	eventId?: string;
+	/** The event Chat UI keeps its AI transparency disclosure below the composer. */
+	showAiDisclosure?: boolean;
 }
 
 export interface IChatRef {
@@ -101,6 +104,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			appId,
 			boardId,
 			eventId,
+			showAiDisclosure = false,
 		},
 		ref,
 	) => {
@@ -123,6 +127,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 		const voiceEnabled = isVoiceEnabled(voiceConfig);
+		const configuredColorScheme = resolveChatColorScheme(config.color_scheme);
+		const chatTheme =
+			configuredColorScheme === "system"
+				? resolvedTheme
+				: configuredColorScheme;
 
 		const latestAudioUrl = useMemo(() => {
 			let assistant: IMessage | null = null;
@@ -453,24 +462,31 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		return (
 			<main
-				className="flex flex-col flex-1 min-h-0 w-full items-center bg-background overflow-hidden"
+				className="fl-chat-surface flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden bg-transparent"
+				data-fl-chat-surface
 				style={{
+					backgroundColor:
+						"var(--fl-chat-surface-background, var(--background))",
 					WebkitOverflowScrolling: "touch",
 					touchAction: "manipulation",
 				}}
 			>
-				<div className="flex-1 min-h-0 flex flex-col bg-background w-full overflow-hidden">
+				<div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
 					{/* Messages Container */}
 					<div
 						ref={scrollContainerRef}
 						onScroll={handleScroll}
 						className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
+						data-fl-chat-messages
 						style={{ WebkitOverflowScrolling: "touch" }}
 					>
 						{chatItems.map((item) => (
 							<div
-								className="w-full max-w-5xl px-1 sm:px-4"
+								className="w-full px-1 sm:px-4"
 								key={`msg-${item.data.id}`}
+								style={{
+									maxWidth: "var(--fl-chat-content-width, 64rem)",
+								}}
 							>
 								<MessageComponent
 									message={item.data as IMessage}
@@ -487,8 +503,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									m.inner.role === "user" &&
 									getMessageTextContent(m) === sendingContent,
 							) && (
-								<div className="w-full max-w-5xl px-4 flex flex-col items-end space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
-									<div className="bg-muted dark:bg-muted/30 text-foreground px-4 py-2 rounded-xl rounded-tr-sm max-w-3xl shadow-sm">
+								<div
+									className="flex w-full animate-in flex-col items-end space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+									style={{
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
+									}}
+								>
+									<div
+										className="max-w-3xl px-4 py-2 shadow-sm"
+										data-fl-chat-message="user"
+										style={{
+											backgroundColor:
+												"var(--fl-chat-user-message-background, var(--muted))",
+											borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+											color:
+												"var(--fl-chat-user-message-foreground, var(--foreground))",
+										}}
+									>
 										<p className="whitespace-pre-wrap text-sm">
 											{sendingContent}
 										</p>
@@ -496,7 +527,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									<div className="flex items-center gap-2 pr-1">
 										<PuffLoader
 											size={16}
-											color={resolvedTheme === "dark" ? "white" : "black"}
+											color={chatTheme === "dark" ? "white" : "black"}
 										/>
 										<span className="text-xs text-muted-foreground">
 											Processing...
@@ -506,8 +537,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 							)}
 						{currentMessage && (
 							<div
-								className="w-full max-w-5xl px-4"
+								className="w-full px-4"
 								key={`msg-${currentMessage.id}`}
+								style={{
+									maxWidth: "var(--fl-chat-content-width, 64rem)",
+								}}
 							>
 								<MessageComponent
 									loading
@@ -521,8 +555,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						{interactionItems.map((item) =>
 							item.type === "interaction-group" ? (
 								<div
-									className="w-full max-w-5xl px-4 flex flex-col items-start"
+									className="flex w-full flex-col items-start px-4"
 									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
+									style={{
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
+									}}
 								>
 									<InteractionGroup
 										interactions={item.data as IInteractionRequest[]}
@@ -531,8 +568,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								</div>
 							) : (
 								<div
-									className="w-full max-w-5xl px-4 flex flex-col items-start"
+									className="flex w-full flex-col items-start px-4"
 									key={`int-${(item.data as IInteractionRequest).id}`}
+									style={{
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
+									}}
 								>
 									<Interaction
 										interaction={item.data as IInteractionRequest}
@@ -545,15 +585,20 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					</div>
 
 					{inlinePrompt && (
-						<div className="w-full max-w-5xl mx-auto px-2 pt-1 shrink-0">
+						<div
+							className="mx-auto w-full shrink-0 px-2 pt-1"
+							style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
+						>
 							{inlinePrompt}
 						</div>
 					)}
 
 					{/* ChatBox */}
 					<div
-						className="bg-background px-3 max-w-5xl w-full mx-auto"
+						className="mx-auto w-full space-y-2 px-3"
+						data-fl-chat-composer-dock
 						style={{
+							maxWidth: "var(--fl-chat-content-width, 64rem)",
 							paddingBottom:
 								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 						}}
@@ -579,6 +624,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										: undefined
 								}
 							/>
+						)}
+						{showAiDisclosure && (
+							<ChatAiDisclosure text={config.ai_disclosure} />
 						)}
 					</div>
 				</div>

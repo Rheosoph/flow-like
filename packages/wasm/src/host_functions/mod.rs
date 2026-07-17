@@ -190,15 +190,42 @@ impl StorageContext {
 }
 
 /// Model context for WASM modules — provides model access including auth tokens.
+#[derive(Clone)]
 pub struct ModelContext {
     pub app_state: Arc<flow_like::state::FlowLikeState>,
     pub token: Option<String>,
+    pub cache: Option<
+        Arc<
+            flow_like_types::sync::RwLock<
+                ahash::AHashMap<String, Arc<dyn flow_like_types::Cacheable>>,
+            >,
+        >,
+    >,
 }
 
 impl std::fmt::Debug for ModelContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ModelContext").finish()
     }
+}
+
+#[cfg(feature = "model")]
+pub(crate) async fn resolve_cached_text_embedding_model(
+    context: &ModelContext,
+    model_json: &str,
+) -> Option<Arc<dyn flow_like_model_provider::embedding::EmbeddingModelLogic>> {
+    #[derive(serde::Deserialize)]
+    struct CachedEmbeddingHandle {
+        cache_key: String,
+    }
+
+    let handle: CachedEmbeddingHandle = serde_json::from_str(model_json).ok()?;
+    let cache = context.cache.as_ref()?;
+    let cached = cache.read().await.get(&handle.cache_key).cloned()?;
+    let cached = cached
+        .as_any()
+        .downcast_ref::<flow_like_catalog_llm::embedding::CachedEmbeddingModelObject>()?;
+    cached.text_model.clone()
 }
 
 /// Host state accessible from host functions
@@ -232,6 +259,9 @@ pub struct HostState {
     pub storage_context: Option<StorageContext>,
     /// Model context for server-side model access
     pub model_context: Option<ModelContext>,
+    /// Usage attribution forwarded to hosted model APIs. Offline app runs keep
+    /// the app ID unset while retaining their run ID.
+    pub model_usage_context: Option<flow_like::models::llm::ModelUsageContext>,
     /// Active WebSocket connections (session_id -> connection)
     pub ws_connections: Arc<tokio::sync::Mutex<HashMap<String, WsConnection>>>,
     /// In-flight chunked writes (write_id -> buffer)
@@ -292,6 +322,7 @@ impl HostState {
             stream_events: RwLock::new(Vec::new()),
             storage_context: None,
             model_context: None,
+            model_usage_context: None,
             ws_connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             pending_writes: RwLock::new(HashMap::new()),
         }

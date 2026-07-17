@@ -2354,6 +2354,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								},
 								nestedRunRequestId,
 								rawSpecialistPrompt,
+								appId,
 							);
 							flushSubRun();
 							flowPilotDebugLog(
@@ -3069,8 +3070,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 					if (!appId)
 						return {
 							status: "error",
-							message:
-								"No app context is available. To create a NEW page pass app_id (from list_apps/create_app); otherwise ask the user to open an app builder first.",
+							message: createMode
+								? "No widget/page builder is open. To create a NEW page pass app_id (from list_apps/create_app); otherwise ask the user to open a builder first."
+								: "The open widget/page builder has no app scope. Reopen it from an app before using FlowPilot.",
 						};
 					const targetAppId = appId;
 					let boardId =
@@ -3266,6 +3268,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							},
 							nestedRunRequestId,
 							rawSpecialistPrompt,
+							appId,
 						);
 						flushSubRun();
 					} catch (error) {

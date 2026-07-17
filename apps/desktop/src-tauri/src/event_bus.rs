@@ -150,6 +150,10 @@ impl EventBusEvent {
         )
         .await?;
 
+        internal_run
+            .set_usage_attribution_from_visibility(&app.visibility)
+            .await;
+
         internal_run.set_execution_environment(local_execution_environment());
 
         let run_id = internal_run.run.lock().await.id.clone();

@@ -2,8 +2,15 @@
 
 import { useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { DEFAULT_CHAT_AI_DISCLOSURE } from "../../../lib/chat-appearance";
+import {
+	CHAT_THEME_PRESETS,
+	CUSTOM_CHAT_THEME_VALUE,
+	resolveChatThemePreset,
+} from "../../../lib/chat-theme-presets";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
+import { AssetPicker } from "../../builder/AssetPicker";
 import {
 	Checkbox,
 	Input,
@@ -15,8 +22,33 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Switch,
+	Textarea,
 } from "../../ui";
+import { MonacoCodeEditor } from "../../ui/monaco-code-editor";
 import type { IConfigInterfaceProps } from "../interfaces";
+
+function ThemeSwatch({
+	preview,
+}: Readonly<{
+	preview?: { readonly background: string; readonly accent: string };
+}>) {
+	return (
+		<span
+			aria-hidden="true"
+			className="relative size-6 shrink-0 overflow-hidden rounded-md border border-border/70 shadow-sm"
+			style={{
+				background:
+					preview?.background ??
+					"repeating-linear-gradient(135deg, transparent 0 4px, currentColor 4px 5px)",
+			}}
+		>
+			<span
+				className="absolute right-0.5 bottom-0.5 size-2 rounded-full border border-white/70 shadow-sm"
+				style={{ backgroundColor: preview?.accent ?? "currentColor" }}
+			/>
+		</span>
+	);
+}
 
 export function SimpleChatConfig({
 	isEditing,
@@ -72,6 +104,10 @@ export function SimpleChatConfig({
 	};
 	const voiceMode: string =
 		voice.mode ?? ((config as any)?.allow_voice_input ? "record" : "disabled");
+	const selectedThemeValue = resolveChatThemePreset(config?.custom_css);
+	const selectedTheme = CHAT_THEME_PRESETS.find(
+		(theme) => theme.value === selectedThemeValue,
+	);
 
 	const renderVoiceSelect = (
 		id: string,
@@ -95,6 +131,150 @@ export function SimpleChatConfig({
 
 	return (
 		<div className="w-full space-y-6">
+			<section className="space-y-5 rounded-lg border border-border p-4">
+				<div className="space-y-1">
+					<h3 className="font-medium">Appearance</h3>
+					<p className="text-sm text-muted-foreground">
+						Brand the chat without changing the rest of your app.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="chat_theme_preset">Theme</Label>
+					<Select
+						disabled={!isEditing}
+						value={selectedThemeValue}
+						onValueChange={(value) => {
+							const preset = CHAT_THEME_PRESETS.find(
+								(theme) => theme.value === value,
+							);
+							if (!preset) return;
+							setValue("custom_css", preset.css, ["color_scheme"]);
+						}}
+					>
+						<SelectTrigger id="chat_theme_preset" className="h-11 w-full">
+							<SelectValue aria-label={selectedTheme?.label ?? "Custom"}>
+								<span className="flex min-w-0 items-center gap-2.5">
+									<ThemeSwatch preview={selectedTheme?.preview} />
+									<span className="truncate font-medium">
+										{selectedTheme?.label ?? "Custom"}
+									</span>
+								</span>
+							</SelectValue>
+						</SelectTrigger>
+						<SelectContent className="max-w-[min(32rem,calc(100vw-2rem))]">
+							{CHAT_THEME_PRESETS.map((theme) => (
+								<SelectItem
+									key={theme.value}
+									value={theme.value}
+									className="py-2"
+								>
+									<span className="flex min-w-0 items-center gap-3">
+										<ThemeSwatch preview={theme.preview} />
+										<span className="min-w-0">
+											<span className="flex items-center gap-2">
+												<span className="font-medium">{theme.label}</span>
+												<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+													{theme.badge}
+												</span>
+											</span>
+											<span className="block truncate text-xs text-muted-foreground">
+												{theme.description}
+											</span>
+										</span>
+									</span>
+								</SelectItem>
+							))}
+							<SelectItem
+								value={CUSTOM_CHAT_THEME_VALUE}
+								disabled
+								className="py-2"
+							>
+								<span className="flex min-w-0 items-center gap-3">
+									<ThemeSwatch />
+									<span className="min-w-0">
+										<span className="font-medium">Custom</span>
+										<span className="block truncate text-xs text-muted-foreground">
+											Shown automatically after you edit a preset.
+										</span>
+									</span>
+								</span>
+							</SelectItem>
+						</SelectContent>
+					</Select>
+					<p className="text-sm text-muted-foreground">
+						{selectedTheme?.description ??
+							"This CSS no longer matches a preset."}{" "}
+						Presets follow the app mode and copy their full source into the
+						editor below.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label>Background Image</Label>
+					<AssetPicker
+						accept="image"
+						appId={appId}
+						disabled={!isEditing}
+						placeholder="Select from storage or enter an image URL..."
+						value={config?.background_image ?? ""}
+						onChange={(value) => setValue("background_image", value)}
+					/>
+					<p className="text-sm text-muted-foreground">
+						Choose an image from this app&apos;s storage or paste an external
+						URL. Storage images are securely resolved whenever the chat opens.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label htmlFor="chat_ai_disclosure">AI Disclosure</Label>
+					<Textarea
+						disabled={!isEditing}
+						id="chat_ai_disclosure"
+						placeholder={DEFAULT_CHAT_AI_DISCLOSURE}
+						value={config?.ai_disclosure ?? ""}
+						onChange={(event) => setValue("ai_disclosure", event.target.value)}
+					/>
+					<p className="text-sm text-muted-foreground">
+						Always shown below the composer so people know an AI is on the other
+						side. Leaving this empty uses the friendly default.
+					</p>
+				</div>
+
+				<div className="space-y-2">
+					<Label>Custom CSS</Label>
+					<p className="text-sm text-muted-foreground">
+						CSS is sanitized and scoped to this chat. Use{" "}
+						<code className="rounded bg-muted px-1 py-0.5">:root</code> to
+						override theme tokens such as{" "}
+						<code className="rounded bg-muted px-1 py-0.5">--primary</code>,{" "}
+						<code className="rounded bg-muted px-1 py-0.5">--background</code>,
+						and the new{" "}
+						<code className="rounded bg-muted px-1 py-0.5">--fl-chat-*</code>{" "}
+						tokens. Editing any character switches the theme to Custom.
+					</p>
+					<MonacoCodeEditor
+						allowFullscreen
+						autoFocus={false}
+						disabled={!isEditing}
+						height="220px"
+						language="css"
+						value={config?.custom_css ?? ""}
+						onChange={(value) =>
+							setValue("custom_css", value, ["color_scheme"])
+						}
+					/>
+					<p className="text-xs text-muted-foreground">
+						Chat tokens: --fl-chat-content-width, --fl-chat-message-radius,
+						--fl-chat-surface-background, --fl-chat-composer-background,
+						--fl-chat-user-message-background, --fl-chat-ai-message-background,
+						and --fl-chat-disclosure-background. Image overlays:
+						--fl-chat-background-overlay and
+						--fl-chat-background-overlay-strong.
+					</p>
+				</div>
+			</section>
+
 			<div className="space-y-3">
 				<Label>Navigate To</Label>
 				{isEditing ? (

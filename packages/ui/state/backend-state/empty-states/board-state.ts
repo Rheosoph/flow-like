@@ -196,6 +196,7 @@ export class EmptyBoardState implements IBoardState {
 		toolContext?: import("../../../lib/schema/copilot").CopilotToolContext,
 		_requestId?: string,
 		_rawUserPrompt?: string,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		throw new Error("Method not implemented.");
 	}

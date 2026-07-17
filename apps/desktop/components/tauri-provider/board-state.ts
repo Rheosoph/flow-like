@@ -2142,6 +2142,7 @@ export class BoardState implements IBoardState {
 		toolContext?: CopilotToolContext,
 		requestId?: string,
 		rawUserPrompt?: string,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		flowPilotDebugLog(
 			"[copilot_chat] Calling with scope:",
@@ -2179,6 +2180,7 @@ export class BoardState implements IBoardState {
 			toolContext,
 			requestId,
 			rawUserPrompt,
+			appId,
 		});
 	}
 

@@ -11,6 +11,7 @@ import {
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
+	formatEventTypeLabel,
 } from "@flow-like/flow-like-ui";
 import { IEventExecutionMode } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type {
@@ -194,7 +195,7 @@ export function EventTypeConfiguration({
 				<SelectContent>
 					{availableEventTypes?.map((type) => (
 						<SelectItem key={type} value={type}>
-							{type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+							{formatEventTypeLabel(type)}
 						</SelectItem>
 					))}
 				</SelectContent>

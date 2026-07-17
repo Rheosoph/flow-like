@@ -115,6 +115,7 @@ use serde_json::json;
 use crate::app::App;
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters, Metadata};
 use crate::flow::board::Board;
+use crate::models::llm::ModelUsageContext;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -141,6 +142,7 @@ pub struct Copilot {
     templates: Vec<TemplateInfo>,
     /// Current template ID if editing a template (prioritized in search)
     current_template_id: Option<String>,
+    usage_context: Option<ModelUsageContext>,
     /// Host bridge for runtime verification. Desktop supplies this so profile/Bits models have the
     /// same execute_event/execute_node/query_execution_logs surface as SDK/MCP providers.
     runtime_bridge: Option<Arc<dyn platform::PlatformToolBridge>>,
@@ -230,6 +232,7 @@ impl Copilot {
         catalog_provider: Arc<dyn CatalogProvider>,
         profile: Option<Arc<Profile>>,
         current_template_id: Option<String>,
+        usage_context: Option<ModelUsageContext>,
     ) -> Result<Self> {
         let templates = if let Some(ref profile) = profile {
             Self::load_templates_from_profile(&state, profile)
@@ -245,6 +248,7 @@ impl Copilot {
             profile,
             templates,
             current_template_id,
+            usage_context,
             runtime_bridge: None,
             flow_ir_drafts: Arc::new(ir_tools::FlowIrDraftStore::new()),
             typed_flow_ir_enabled: false,
@@ -2159,7 +2163,7 @@ impl Copilot {
         let model = model_factory
             .lock()
             .await
-            .build(&bit, self.state.clone(), token, None)
+            .build(&bit, self.state.clone(), token, self.usage_context.clone())
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
         let provider = model.provider().await?;

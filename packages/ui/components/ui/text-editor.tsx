@@ -7,6 +7,7 @@ import {
 	type KeyboardEvent,
 	type MouseEvent,
 	memo,
+	useContext,
 	useEffect,
 	useMemo,
 	useRef,
@@ -17,7 +18,8 @@ import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { BaseEditorKit } from "../editor/editor-base-kit";
-import { EditorKit } from "../editor/editor-kit";
+import { createEditorKit } from "../editor/editor-kit";
+import { AIUsageAppContext } from "../editor/ai-usage-context";
 import {
 	type MentionItem,
 	MentionItemsProvider,
@@ -284,6 +286,8 @@ function TextEditorInner({
 	isMarkdown?: boolean;
 	onFocusNode?: (nodeId: string) => void;
 }>) {
+	const appId = useContext(AIUsageAppContext);
+	const editorPlugins = useMemo(() => createEditorKit(appId), [appId]);
 	const remarkPlugins = useMemo(
 		() => [
 			[remarkMath, { singleDollarTextMath: false }],
@@ -313,11 +317,11 @@ function TextEditorInner({
 	const editor = usePlateEditor(
 		{
 			id: "rendered-editor",
-			plugins: EditorKit,
+			plugins: editorPlugins,
 			value: (self) =>
 				safeDeserialize(self, editorSeed, isMarkdown ?? false, remarkPlugins),
 		},
-		[editorSeed, isMarkdown, remarkPlugins],
+		[editorSeed, isMarkdown, remarkPlugins, editorPlugins],
 	);
 
 	return (
@@ -475,6 +479,8 @@ function TextEditorStatic({
 }
 
 type TextEditorProps = {
+	/** App owning this editable content; used for hosted-model usage attribution. */
+	appId?: string;
 	initialContent: string;
 	onChange?: (content: string) => void;
 	isMarkdown?: boolean;
@@ -486,6 +492,7 @@ type TextEditorProps = {
 };
 
 export const TextEditor = memo(function TextEditor({
+	appId,
 	initialContent,
 	onChange,
 	isMarkdown,
@@ -496,18 +503,21 @@ export const TextEditor = memo(function TextEditor({
 	mentionItems,
 }: Readonly<TextEditorProps>) {
 	const items = mentionItems ?? EMPTY_MENTION_ITEMS;
+	const inheritedAppId = useContext(AIUsageAppContext);
 	if (editable && onChange) {
 		return (
-			<MentionItemsProvider value={items}>
-				<TextEditorInner
-					initialContent={initialContent}
-					onChange={(content: string) => {
-						onChange(content);
-					}}
-					isMarkdown={isMarkdown}
-					onFocusNode={onFocusNode}
-				/>
-			</MentionItemsProvider>
+			<AIUsageAppContext.Provider value={appId ?? inheritedAppId}>
+				<MentionItemsProvider value={items}>
+					<TextEditorInner
+						initialContent={initialContent}
+						onChange={(content: string) => {
+							onChange(content);
+						}}
+						isMarkdown={isMarkdown}
+						onFocusNode={onFocusNode}
+					/>
+				</MentionItemsProvider>
+			</AIUsageAppContext.Provider>
 		);
 	}
 	return (

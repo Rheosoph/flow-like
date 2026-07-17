@@ -1,4 +1,7 @@
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import {
+	EVENT_CONFIG,
+	isChatEventType,
+} from "@flow-like/flow-like-ui/lib/event-config";
 import { describe, expect, test } from "vitest";
 
 describe("daemon event config", () => {
@@ -30,6 +33,16 @@ describe("daemon event config", () => {
 	});
 });
 
+describe("chat event config", () => {
+	test("offers only the built-in Chat UI as a chat interface", () => {
+		expect(EVENT_CONFIG.events_chat.eventTypes).toContain("simple_chat");
+		expect(EVENT_CONFIG.events_chat.eventTypes).not.toContain("advanced_chat");
+		expect(isChatEventType("simple_chat")).toBe(true);
+		expect(isChatEventType("advanced_chat")).toBe(false);
+		expect(isChatEventType("chat_stream")).toBe(false);
+	});
+});
+
 describe("workflow Event entry compatibility", () => {
 	test("keeps Simple, Generic, and Chat entry setup separate", () => {
 		expect(EVENT_CONFIG.events_simple.defaultEventType).toBe("quick_action");
@@ -42,12 +55,7 @@ describe("workflow Event entry compatibility", () => {
 		);
 		expect(EVENT_CONFIG.events_chat.defaultEventType).toBe("simple_chat");
 		expect(EVENT_CONFIG.events_chat.eventTypes).toEqual(
-			expect.arrayContaining([
-				"simple_chat",
-				"advanced_chat",
-				"discord",
-				"telegram",
-			]),
+			expect.arrayContaining(["simple_chat", "discord", "telegram"]),
 		);
 		expect(EVENT_CONFIG.events_generic.eventTypes).not.toContain("cron");
 		expect(EVENT_CONFIG.events_chat.eventTypes).not.toContain("cron");

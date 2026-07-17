@@ -223,6 +223,8 @@ export interface IBoardState {
 		requestId?: string,
 		/** Immutable user-authored request, excluding host mode/run-context wrappers. */
 		rawUserPrompt?: string,
+		/** App owning this copilot surface; omitted for global/user-only chat. */
+		appId?: string,
 	): Promise<UnifiedCopilotResponse>;
 
 	/** Best-effort cooperative cancellation; desktop providers may terminate their child process. */

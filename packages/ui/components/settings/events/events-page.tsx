@@ -43,6 +43,7 @@ import {
 	Textarea,
 	VariableConfigCard,
 	VariableTypeIndicator,
+	formatEventTypeLabel,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
@@ -3055,7 +3056,7 @@ function EventsTable({
 							<div className="flex items-center gap-2">
 								<span className="font-medium truncate">{event.name}</span>
 								<span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground shrink-0">
-									{event.event_type}
+									{formatEventTypeLabel(event.event_type)}
 								</span>
 								{requiresSink && (
 									<span
@@ -3435,7 +3436,7 @@ function EventsTable({
 												</TableCell>
 												<TableCell>
 													<div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-secondary text-secondary-foreground">
-														{event.event_type}
+														{formatEventTypeLabel(event.event_type)}
 													</div>
 												</TableCell>
 												<TableCell>
