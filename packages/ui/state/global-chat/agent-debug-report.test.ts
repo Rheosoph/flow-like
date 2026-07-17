@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
 	agentDebugReportAsMarkdown,
+	agentDebugRunSummaries,
 	createAgentDebugReport,
 	debugEventFromCopilotStream,
 	finalizeAgentDebugReport,
 	markAgentDebugReportInterrupted,
 	recordAgentDebugEvent,
+	runSummaryDiagnosticTrends,
 } from "./agent-debug-report";
 import type { IMessage } from "./global-chat-db";
 import {
@@ -132,6 +134,163 @@ describe("compaction retention order", () => {
 				event.error?.includes("FS_TYPE_MISMATCH terminal diagnostic"),
 			),
 		).toBe(true);
+	});
+});
+
+function runSummaryStreamEvent(
+	overrides: Record<string, unknown>,
+	nowMs: number,
+	sequence: number,
+) {
+	const event = debugEventFromCopilotStream(
+		{
+			type: "tool_end",
+			data: {
+				kind: "run_summary",
+				outcome: "committed",
+				provider: "codex",
+				model: "gpt-5",
+				duration_ms: 1234,
+				phases: 2,
+				budget: {
+					checks: { used: 5, limit: 12 },
+					source_ops: { used: 9, limit: 24 },
+					commits: { used: 2, limit: 3 },
+					stalled: { used: 1, limit: 3 },
+					continuations: { used: 1, limit: 2 },
+				},
+				diagnostics_by_code: { FS_TYPE_MISMATCH: 12 },
+				retained_draft: { id: "draft-1", revision: 7 },
+				review_notes: 3,
+				applied_commands: 6,
+				...overrides,
+			},
+		},
+		{
+			scope: "nested",
+			requestId: "board-run",
+			parentRequestId: "parent-run",
+			nowMs,
+			sequence,
+		},
+	);
+	if (!event) throw new Error("Expected a run_summary debug event.");
+	return event;
+}
+
+describe("run summaries", () => {
+	test("a run summary survives event-count and byte compaction pressure", () => {
+		let report = createAgentDebugReport("summary-pressure", {
+			startedAtMs: 1_000,
+		});
+		report = recordAgentDebugEvent(report, runSummaryStreamEvent({}, 1_050, 1));
+		for (let index = 0; index < 30; index += 1) {
+			report = recordAgentDebugEvent(
+				report,
+				workspaceArtifact(
+					`function candidate${index}() {\n${"f".repeat(24 * 1024)}\n}`,
+					"validation_errors",
+					1_100 + index,
+					index + 2,
+				),
+			);
+		}
+		for (let index = 0; index < 260; index += 1) {
+			report = recordAgentDebugEvent(report, {
+				id: `terminal-${index}`,
+				kind: "tool",
+				stage: "tool_end",
+				status: "error",
+				name: "check_flowscript",
+				timestamp_ms: 2_000 + index,
+				ended_at_ms: 2_000 + index,
+				error: `FS_TYPE_MISMATCH terminal diagnostic ${index}`,
+				arguments_preview: "p".repeat(8 * 1024),
+				result_preview: "q".repeat(8 * 1024),
+				reasoning: "r".repeat(8 * 1024),
+			});
+		}
+
+		const bytes = new TextEncoder().encode(JSON.stringify(report)).byteLength;
+		expect(bytes).toBeLessThanOrEqual(512 * 1024);
+		expect(report.truncation?.events_dropped ?? 0).toBeGreaterThan(0);
+		const summaries = agentDebugRunSummaries(report);
+		expect(summaries).toHaveLength(1);
+		expect(summaries[0]?.outcome).toBe("committed");
+		expect(summaries[0]?.diagnostics_by_code?.FS_TYPE_MISMATCH).toBe(12);
+		expect(summaries[0]?.budget?.checks).toEqual({ used: 5, limit: 12 });
+		expect(summaries[0]?.retained_draft).toEqual({
+			id: "draft-1",
+			revision: 7,
+		});
+	});
+
+	test("run summaries render as a compact table at the top of the markdown export", () => {
+		let report = createAgentDebugReport("summary-markdown", {
+			startedAtMs: 1_000,
+		});
+		report = recordAgentDebugEvent(report, runSummaryStreamEvent({}, 1_500, 1));
+		report = finalizeAgentDebugReport(report, {
+			outcome: "ok",
+			terminalStage: "completed",
+			endedAtMs: 3_000,
+		});
+
+		const markdown = agentDebugReportAsMarkdown(report);
+		expect(markdown).toContain("## Run summaries");
+		expect(markdown).toContain(
+			"| 1 | **committed** | codex / gpt-5 | 1234 ms | 2 | 5/12 | 9/24 | 2/3 | 1/3 | 1/2 | 12 | `draft-1@7` | 3 | 6 |",
+		);
+		expect(markdown.indexOf("## Run summaries")).toBeLessThan(
+			markdown.indexOf("## Timeline"),
+		);
+		// A single run renders no trend section.
+		expect(markdown).not.toContain("### Diagnostic trend");
+	});
+
+	test("multiple run summaries aggregate a per-code diagnostic trend", () => {
+		let report = createAgentDebugReport("summary-trend", {
+			startedAtMs: 1_000,
+		});
+		report = recordAgentDebugEvent(
+			report,
+			runSummaryStreamEvent(
+				{
+					outcome: "incomplete",
+					diagnostics_by_code: { FS_TYPE_MISMATCH: 12 },
+				},
+				1_100,
+				1,
+			),
+		);
+		report = recordAgentDebugEvent(
+			report,
+			runSummaryStreamEvent(
+				{
+					outcome: "incomplete",
+					diagnostics_by_code: {
+						FS_TYPE_MISMATCH: 3,
+						FS_UNKNOWN_DECLARATION: 1,
+					},
+				},
+				1_200,
+				2,
+			),
+		);
+		report = recordAgentDebugEvent(
+			report,
+			runSummaryStreamEvent({ diagnostics_by_code: {} }, 1_300, 3),
+		);
+
+		const summaries = agentDebugRunSummaries(report);
+		expect(summaries).toHaveLength(3);
+		expect(runSummaryDiagnosticTrends(summaries)).toEqual([
+			"FS_TYPE_MISMATCH: 12 -> 3 -> 0 across runs",
+			"FS_UNKNOWN_DECLARATION: 0 -> 1 -> 0 across runs",
+		]);
+		const markdown = agentDebugReportAsMarkdown(report);
+		expect(markdown).toContain("### Diagnostic trend");
+		expect(markdown).toContain("FS_TYPE_MISMATCH: 12 -> 3 -> 0 across runs");
 	});
 });
 

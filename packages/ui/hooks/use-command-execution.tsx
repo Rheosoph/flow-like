@@ -2,6 +2,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 import { useCallback, useRef } from "react";
 import { getErrorMessage } from "../lib/error-message";
+import { boardFingerprint } from "../lib/flow-history-stacks";
 import { toastError, toastWarning } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
@@ -23,6 +24,7 @@ interface UseCommandExecutionProps {
 	version: [number, number, number] | undefined;
 	pushCommand: (command: any, append?: boolean) => Promise<void>;
 	pushCommands: (commands: any[]) => Promise<void>;
+	stampHistory: (stamp?: string) => Promise<void>;
 }
 
 function totalBoardNodeCount(board: IBoard): number {
@@ -40,6 +42,7 @@ export function useCommandExecution({
 	version,
 	pushCommand,
 	pushCommands,
+	stampHistory,
 }: UseCommandExecutionProps) {
 	const awarenessRef = useRef<any | undefined>(undefined);
 
@@ -67,7 +70,8 @@ export function useCommandExecution({
 				);
 				console.log("[executeCommand] Success:", command.command_type, result);
 				await pushCommand(result, append);
-				await board.refetch();
+				const refreshed = await board.refetch();
+				await stampHistory(boardFingerprint(refreshed.data));
 
 				if (awarenessRef.current) {
 					awarenessRef.current.setLocalStateField("boardUpdate", Date.now());
@@ -83,7 +87,7 @@ export function useCommandExecution({
 				throw error;
 			}
 		},
-		[board.refetch, appId, boardId, pushCommand, version],
+		[board.refetch, appId, boardId, pushCommand, stampHistory, version],
 	);
 
 	const executeCommands = useCallback(
@@ -112,7 +116,8 @@ export function useCommandExecution({
 				);
 				await pushCommands(result);
 				if (options.refetch !== false) {
-					await board.refetch();
+					const refreshed = await board.refetch();
+					await stampHistory(boardFingerprint(refreshed.data));
 				}
 
 				if (awarenessRef.current) {
@@ -129,7 +134,7 @@ export function useCommandExecution({
 				throw error;
 			}
 		},
-		[board.refetch, appId, boardId, pushCommands, version],
+		[board.refetch, appId, boardId, pushCommands, stampHistory, version],
 	);
 
 	const applyFlowScript = useCallback(
@@ -167,6 +172,7 @@ export function useCommandExecution({
 					await pushCommands(result.commands);
 					if (options.refetch !== false) {
 						const refreshed = await board.refetch();
+						await stampHistory(boardFingerprint(refreshed.data));
 						if (refreshed.data) {
 							finalBoardNodeCount = totalBoardNodeCount(refreshed.data);
 						}
@@ -209,7 +215,7 @@ export function useCommandExecution({
 				throw error;
 			}
 		},
-		[board.refetch, appId, boardId, pushCommands, version],
+		[board.refetch, appId, boardId, pushCommands, stampHistory, version],
 	);
 
 	const applyFlowIrCommit = useCallback(
@@ -239,6 +245,19 @@ export function useCommandExecution({
 						? [getErrorMessage(followup.reason, "Unknown renderer error")]
 						: [],
 				);
+				const [pushResult, refetchResult] = followups;
+				if (
+					pushResult.status === "fulfilled" &&
+					refetchResult.status === "fulfilled"
+				) {
+					try {
+						await stampHistory(boardFingerprint(refetchResult.value.data));
+					} catch (error) {
+						followupErrors.push(
+							getErrorMessage(error, "Unknown renderer error"),
+						);
+					}
+				}
 				if (followupErrors.length > 0) {
 					const warning = `The workflow was applied, but local history or refresh bookkeeping needs recovery: ${followupErrors.join("; ")}`;
 					console.error(
@@ -254,7 +273,7 @@ export function useCommandExecution({
 			}
 			return result;
 		},
-		[appId, board.refetch, pushCommands, version],
+		[appId, board.refetch, pushCommands, stampHistory, version],
 	);
 
 	return {

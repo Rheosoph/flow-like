@@ -372,6 +372,7 @@ export function FlowBoard({
 		rollbackUndo,
 		rollbackRedo,
 		clearHistory,
+		stampHistory,
 	} = useUndoRedo(appId, boardId);
 	const router = useRouter();
 	const backend = useBackend();
@@ -829,6 +830,7 @@ export function FlowBoard({
 		version,
 		pushCommand,
 		pushCommands,
+		stampHistory,
 	});
 
 	// Realtime collaboration
@@ -2081,6 +2083,7 @@ export function FlowBoard({
 		redo,
 		rollbackUndo,
 		rollbackRedo,
+		stampHistory,
 	});
 
 	useEffect(() => {

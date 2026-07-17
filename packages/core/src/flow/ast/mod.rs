@@ -168,14 +168,18 @@ mod generate_flowscript {
     /// be a no-op — no commands, no diagnostics. This exercises the full lower→parse→reconcile
     /// pipeline on real boards, including functions/layers, loops, and streaming handlers.
     ///
-    /// Known remaining gaps (2026-07-05, run manually with `--ignored` while closing them):
-    /// - anchored Assign / variable_set paths re-emit ConnectPins for edges that already exist
-    ///   (needs the same already-wired guard `plan_call_arguments` has),
-    /// - `variable.field` sugar (Field on a variable ref) re-creates variable_get + struct_get
-    ///   chains instead of reusing the existing readers,
-    /// - event-level `return` (return_result sugar) reports "only supported inside functions",
-    /// - multi-pin array args (`tools: [...]`, `fnRefs: [...]`) don't map to repeated pins.
-    #[ignore = "documents remaining lower→reconcile roundtrip gaps; the destructive classes are fixed"]
+    /// Known remaining gap (2026-07-16, run manually with `--ignored` while closing it). The
+    /// 2026-07-05 list (anchored Assign ConnectPins re-emission, variable.field reader reuse,
+    /// event-level `return`, conflicting board-derived declarations, boundary/variable schema
+    /// projection drift, duplicate multi-exec arm labels, composite-literal pin writes, node
+    /// budget on pre-existing overfull layers) is fixed with targeted regression tests. What is
+    /// left is one lowering-expressiveness class:
+    /// - boards with DUPLICATED tool-handler subgraphs / cross-handler reads render a bare local
+    ///   name (e.g. the current handler's `url` param) for an edge that actually originates from
+    ///   a DIFFERENT same-named entry or sibling subtree, so reconcile re-wires the consumer to
+    ///   the local producer (ConnectPins churn) and expression calls inside those subtrees can
+    ///   still hit "matched conflicting catalog declarations".
+    #[ignore = "documents the remaining lower→reconcile roundtrip gap: cross-handler/duplicated-subgraph name collapse"]
     #[tokio::test]
     async fn anchored_roundtrip_is_noop() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -249,6 +253,512 @@ mod generate_flowscript {
             failures.is_empty(),
             "anchored FlowScript roundtrip is not a no-op:\n  {}",
             failures.join("\n  ")
+        );
+    }
+}
+
+/// Property tests over the full FlowScript pipeline: generated programs are applied to an empty
+/// board through `apply_flowscript_to_board`, the resulting board is lowered back to anchored
+/// text, and re-reconciling that text against the board must be a perfect no-op (idempotency).
+/// Random single-token mutations of the lowered text must never panic parse/reconcile and must
+/// never yield destructive commands that escape both the diagnostics gate and the deletion gate.
+#[cfg(test)]
+mod roundtrip_properties {
+    use super::*;
+    use crate::flow::copilot::{NodeMetadata, node_to_metadata};
+    use crate::flow::node::Node;
+    use crate::flow::variable::VariableType;
+    use crate::state::{FlowLikeConfig, FlowLikeState};
+    use crate::utils::http::HTTPClient;
+    use proptest::prelude::*;
+    use proptest::test_runner::{Config as PropConfig, RngAlgorithm, TestRng, TestRunner};
+    use std::fmt::Write as _;
+    use std::sync::Arc;
+
+    fn empty_board() -> crate::flow::board::Board {
+        use crate::flow::board::{Board, ExecutionMode, ExecutionStage};
+        use crate::flow::execution::LogLevel;
+        use std::collections::HashMap;
+        use std::time::SystemTime;
+        Board {
+            id: "board".to_string(),
+            name: "Board".to_string(),
+            description: String::new(),
+            nodes: HashMap::new(),
+            variables: HashMap::new(),
+            comments: HashMap::new(),
+            viewport: (0.0, 0.0, 1.0),
+            version: (0, 0, 1),
+            stage: ExecutionStage::Dev,
+            log_level: LogLevel::Info,
+            execution_mode: ExecutionMode::Hybrid,
+            refs: HashMap::new(),
+            layers: HashMap::new(),
+            page_ids: Vec::new(),
+            hash: None,
+            created_at: SystemTime::now(),
+            updated_at: SystemTime::now(),
+            parent: None,
+            board_dir: flow_like_storage::Path::from("/test"),
+            logic_nodes: HashMap::new(),
+            app_state: None,
+        }
+    }
+
+    /// Tiny fixed vocabulary of catalog-shaped nodes mirroring the real catalog contracts the
+    /// reconciler depends on (events, logging, a pure string helper, variable accessors, branch).
+    fn vocabulary_nodes() -> Vec<Node> {
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        let mut generic_event = Node::new("events_generic", "Generic Event", "", "events");
+        generic_event.set_start(true);
+        generic_event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        let mut ret = Node::new(
+            "events_generic_return_result",
+            "Return Result",
+            "",
+            "events",
+        );
+        ret.set_event_callback(true);
+        ret.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        ret.add_input_pin("response", "Response", "", VariableType::Generic);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        log.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+
+        let mut trim = Node::new("string_trim", "String Trim", "", "strings");
+        trim.add_input_pin("string", "String", "", VariableType::String);
+        trim.add_output_pin("trimmed", "Trimmed", "", VariableType::String);
+
+        let mut variable_get = Node::new("variable_get", "Get Variable", "", "variables");
+        variable_get.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_get.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+
+        let mut variable_set = Node::new("variable_set", "Set Variable", "", "variables");
+        variable_set.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        variable_set.add_input_pin("var_ref", "Variable", "", VariableType::String);
+        variable_set.add_input_pin("value_in", "Value", "", VariableType::Generic);
+        variable_set.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        variable_set.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        branch.add_input_pin("condition", "Condition", "", VariableType::Boolean);
+        branch.add_output_pin("true", "True", "", VariableType::Execution);
+        branch.add_output_pin("false", "False", "", VariableType::Execution);
+
+        vec![
+            event,
+            generic_event,
+            ret,
+            log,
+            trim,
+            variable_get,
+            variable_set,
+            branch,
+        ]
+    }
+
+    #[derive(Debug, Clone)]
+    enum PExpr {
+        Lit(String),
+        Trim(String),
+        Local(usize),
+    }
+
+    #[derive(Debug, Clone)]
+    enum PStmt {
+        Log(PExpr),
+        Assign(usize, String),
+        If {
+            condition: bool,
+            then: Vec<PStmt>,
+            otherwise: Vec<PStmt>,
+        },
+    }
+
+    #[derive(Debug, Clone)]
+    struct PFn {
+        name: String,
+        locals: usize,
+        stmts: Vec<PStmt>,
+        ret: PExpr,
+    }
+
+    #[derive(Debug, Clone)]
+    struct PProgram {
+        event_name: String,
+        event_locals: usize,
+        event_stmts: Vec<PStmt>,
+        functions: Vec<PFn>,
+    }
+
+    fn lit_strategy() -> impl Strategy<Value = String> {
+        prop::sample::select(vec![
+            "alpha".to_string(),
+            "beta".to_string(),
+            "gamma delta".to_string(),
+            "x1".to_string(),
+            String::new(),
+        ])
+    }
+
+    fn expr_strategy(locals: usize) -> BoxedStrategy<PExpr> {
+        let mut options = vec![
+            lit_strategy().prop_map(PExpr::Lit).boxed(),
+            lit_strategy().prop_map(PExpr::Trim).boxed(),
+        ];
+        if locals > 0 {
+            options.push((0..locals).prop_map(PExpr::Local).boxed());
+        }
+        proptest::strategy::Union::new(options).boxed()
+    }
+
+    fn simple_stmt_strategy(locals: usize) -> BoxedStrategy<PStmt> {
+        let mut options = vec![expr_strategy(locals).prop_map(PStmt::Log).boxed()];
+        if locals > 0 {
+            options.push(
+                ((0..locals), lit_strategy())
+                    .prop_map(|(local, value)| PStmt::Assign(local, value))
+                    .boxed(),
+            );
+        }
+        proptest::strategy::Union::new(options).boxed()
+    }
+
+    fn stmt_strategy(locals: usize) -> BoxedStrategy<PStmt> {
+        let leaf = simple_stmt_strategy(locals);
+        let arm = prop::collection::vec(simple_stmt_strategy(locals), 0..=2);
+        let branch =
+            (any::<bool>(), arm.clone(), arm).prop_map(|(condition, then, otherwise)| PStmt::If {
+                condition,
+                then,
+                otherwise,
+            });
+        proptest::strategy::Union::new(vec![leaf, branch.boxed()]).boxed()
+    }
+
+    fn body_strategy() -> impl Strategy<Value = (usize, Vec<PStmt>)> {
+        (0usize..=2).prop_flat_map(|locals| {
+            prop::collection::vec(stmt_strategy(locals), 0..=3)
+                .prop_map(move |stmts| (locals, stmts))
+        })
+    }
+
+    fn function_strategy(index: usize) -> impl Strategy<Value = PFn> {
+        (body_strategy(), lit_strategy(), any::<u8>()).prop_map(
+            move |((locals, stmts), lit, pick)| {
+                let ret = match pick % 3 {
+                    0 => PExpr::Lit(lit),
+                    1 => PExpr::Trim(lit),
+                    _ if locals > 0 => PExpr::Local(pick as usize % locals),
+                    _ => PExpr::Lit(lit),
+                };
+                PFn {
+                    name: format!("helper{index}"),
+                    locals,
+                    stmts,
+                    ret,
+                }
+            },
+        )
+    }
+
+    fn program_strategy() -> impl Strategy<Value = PProgram> {
+        (
+            prop::sample::select(vec![
+                "onTick".to_string(),
+                "onMessage".to_string(),
+                "onSubmit".to_string(),
+            ]),
+            body_strategy(),
+            prop::collection::vec(any::<u8>(), 0..=2),
+        )
+            .prop_flat_map(|(event_name, (event_locals, event_stmts), fn_seeds)| {
+                let functions: Vec<BoxedStrategy<PFn>> = fn_seeds
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| function_strategy(index).boxed())
+                    .collect();
+                (
+                    Just(event_name),
+                    Just(event_locals),
+                    Just(event_stmts),
+                    functions,
+                )
+                    .prop_map(
+                        |(event_name, event_locals, event_stmts, functions)| PProgram {
+                            event_name,
+                            event_locals,
+                            event_stmts,
+                            functions,
+                        },
+                    )
+            })
+    }
+
+    fn render_expr(expr: &PExpr) -> String {
+        match expr {
+            PExpr::Lit(value) => format!("{value:?}"),
+            PExpr::Trim(value) => format!("stringTrim({{ string: {value:?} }})"),
+            PExpr::Local(index) => format!("l{index}"),
+        }
+    }
+
+    fn render_stmt(stmt: &PStmt, indent: usize, out: &mut String) {
+        let pad = "    ".repeat(indent);
+        match stmt {
+            PStmt::Log(expr) => {
+                let _ = writeln!(out, "{pad}log({{ message: {} }})", render_expr(expr));
+            }
+            PStmt::Assign(local, value) => {
+                let _ = writeln!(out, "{pad}l{local} = {value:?}");
+            }
+            PStmt::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                let _ = writeln!(out, "{pad}if ({condition}) {{");
+                for stmt in then {
+                    render_stmt(stmt, indent + 1, out);
+                }
+                if otherwise.is_empty() {
+                    let _ = writeln!(out, "{pad}}}");
+                } else {
+                    let _ = writeln!(out, "{pad}}} else {{");
+                    for stmt in otherwise {
+                        render_stmt(stmt, indent + 1, out);
+                    }
+                    let _ = writeln!(out, "{pad}}}");
+                }
+            }
+        }
+    }
+
+    fn render_body(locals: usize, stmts: &[PStmt], indent: usize, out: &mut String) {
+        let pad = "    ".repeat(indent);
+        let _ = writeln!(out, "{pad}log({{ message: \"entered\" }})");
+        for local in 0..locals {
+            let _ = writeln!(out, "{pad}let l{local} = \"seed{local}\"");
+        }
+        for stmt in stmts {
+            render_stmt(stmt, indent, out);
+        }
+    }
+
+    fn render_program(program: &PProgram) -> String {
+        let mut out = String::new();
+        let _ = writeln!(out, "{}() {{", program.event_name);
+        render_body(program.event_locals, &program.event_stmts, 1, &mut out);
+        let _ = writeln!(out, "}}");
+        for function in &program.functions {
+            let _ = writeln!(out, "\nfunction {}(): (result: string) {{", function.name);
+            render_body(function.locals, &function.stmts, 1, &mut out);
+            let _ = writeln!(out, "    return {}", render_expr(&function.ret));
+            let _ = writeln!(out, "}}");
+        }
+        out
+    }
+
+    /// Apply `program` to an empty board; panics (failing the property) on apply diagnostics —
+    /// every generated program is valid by construction.
+    fn apply_program(program: &PProgram) -> (crate::flow::board::Board, Vec<NodeMetadata>, String) {
+        let catalog_nodes = vocabulary_nodes();
+        let source = render_program(program);
+        let mut board = empty_board();
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let runtime = flow_like_types::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let applied = runtime
+            .block_on(apply_flowscript_to_board(
+                &mut board,
+                &source,
+                &catalog_nodes,
+                state,
+                None,
+                false,
+            ))
+            .unwrap_or_else(|error| panic!("apply failed for program:\n{source}\n{error}"));
+        assert!(
+            applied.diagnostics.is_empty(),
+            "generated program must apply cleanly:\n{source}\ndiagnostics: {:?}",
+            applied.diagnostics
+        );
+        let catalog: Vec<NodeMetadata> = catalog_nodes.iter().map(node_to_metadata).collect();
+        (board, catalog, source)
+    }
+
+    fn assert_roundtrip_idempotent(program: &PProgram) {
+        let (board, catalog, source) = apply_program(program);
+
+        let anchored = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..RenderOptions::default()
+            },
+        );
+        assert!(
+            anchored.contains("log(") && anchored.contains("//@n:"),
+            "the applied board must lower back to real anchored statements:\n{anchored}"
+        );
+        let reparsed = parse(&anchored)
+            .unwrap_or_else(|error| panic!("lowered text must parse:\n{anchored}\n{error:?}"));
+        let result = reconcile_with_catalog(&board, &reparsed, &catalog);
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "re-reconcile must not diagnose.\nprogram:\n{source}\nlowered:\n{anchored}\ndiagnostics: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "re-reconcile must be a no-op.\nprogram:\n{source}\nlowered:\n{anchored}\ncommands: {:?}",
+            result.commands
+        );
+    }
+
+    /// One deterministic single-token mutation of `text` (delete / duplicate / replace / break a
+    /// token), chosen by `token_pick`/`kind`.
+    fn mutate_single_token(text: &str, token_pick: usize, kind: u8) -> Option<String> {
+        let tokens: Vec<(usize, &str)> = text
+            .split_whitespace()
+            .map(|token| {
+                let offset = token.as_ptr() as usize - text.as_ptr() as usize;
+                (offset, token)
+            })
+            .collect();
+        if tokens.is_empty() {
+            return None;
+        }
+        let (offset, token) = tokens[token_pick % tokens.len()];
+        let (before, rest) = text.split_at(offset);
+        let after = &rest[token.len()..];
+        let mutated = match kind % 4 {
+            0 => format!("{before}{after}"),
+            1 => format!("{before}{token} {token}{after}"),
+            2 => format!("{before}qqq{after}"),
+            _ => format!("{before}]{after}"),
+        };
+        (mutated != text).then_some(mutated)
+    }
+
+    fn assert_mutation_never_destroys_silently(program: &PProgram, token_pick: usize, kind: u8) {
+        let (board, catalog, _) = apply_program(program);
+        let anchored = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..RenderOptions::default()
+            },
+        );
+        let Some(mutated) = mutate_single_token(&anchored, token_pick, kind) else {
+            return;
+        };
+
+        // Parse must never panic; a parse error is a legitimate outcome.
+        let _ = parse(&mutated);
+
+        // Reconcile must never panic, and destructive commands must never escape BOTH gates:
+        // either diagnostics block the apply, or the deletion gate enumerates every removal.
+        let result = reconcile_text_with_catalog(&board, &mutated, &catalog);
+        let removals = result
+            .commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    crate::flow::copilot::BoardCommand::RemoveNode { .. }
+                        | crate::flow::copilot::BoardCommand::RemoveVariable { .. }
+                        | crate::flow::copilot::BoardCommand::RemoveLayer { .. }
+                        | crate::flow::copilot::BoardCommand::RemoveComment { .. }
+                )
+            })
+            .count();
+        let gated = destructive_flowscript_command_summaries(&result.commands).len();
+        assert_eq!(
+            removals, gated,
+            "every removal must be visible to the deletion gate.\nmutated:\n{mutated}\ncommands: {:?}",
+            result.commands
+        );
+        assert!(
+            removals == 0 || !result.diagnostics.is_empty() || gated > 0,
+            "destructive commands must be accompanied by a blocking signal.\nmutated:\n{mutated}\ncommands: {:?}",
+            result.commands
+        );
+    }
+
+    fn run_property<S, F>(cases: u32, strategy: S, check: F)
+    where
+        S: Strategy,
+        F: Fn(&S::Value),
+    {
+        let config = PropConfig {
+            cases,
+            failure_persistence: None,
+            ..PropConfig::default()
+        };
+        // Fixed seed: CI runs are reproducible; the high-iteration variant widens coverage.
+        let rng = TestRng::deterministic_rng(RngAlgorithm::ChaCha);
+        let mut runner = TestRunner::new_with_rng(config, rng);
+        runner
+            .run(&strategy, |value| {
+                check(&value);
+                Ok(())
+            })
+            .unwrap_or_else(|error| panic!("property failed: {error}"));
+    }
+
+    #[test]
+    fn generated_programs_roundtrip_idempotently() {
+        run_property(64, program_strategy(), assert_roundtrip_idempotent);
+    }
+
+    #[test]
+    #[ignore = "high-iteration variant of the roundtrip property; run manually"]
+    fn generated_programs_roundtrip_idempotently_high_iteration() {
+        run_property(512, program_strategy(), assert_roundtrip_idempotent);
+    }
+
+    #[test]
+    fn single_token_mutations_never_panic_or_destroy_silently() {
+        run_property(
+            64,
+            (
+                program_strategy(),
+                any::<prop::sample::Index>(),
+                any::<u8>(),
+            ),
+            |(program, index, kind)| {
+                assert_mutation_never_destroys_silently(program, index.index(usize::MAX - 1), *kind)
+            },
+        );
+    }
+
+    #[test]
+    #[ignore = "high-iteration variant of the mutation property; run manually"]
+    fn single_token_mutations_never_panic_or_destroy_silently_high_iteration() {
+        run_property(
+            512,
+            (
+                program_strategy(),
+                any::<prop::sample::Index>(),
+                any::<u8>(),
+            ),
+            |(program, index, kind)| {
+                assert_mutation_never_destroys_silently(program, index.index(usize::MAX - 1), *kind)
+            },
         );
     }
 }

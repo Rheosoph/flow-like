@@ -35,7 +35,10 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, LazyLock, Mutex as StdMutex},
+    sync::{
+        Arc, LazyLock, Mutex as StdMutex,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
     time::{Duration, Instant},
 };
 use tauri::{
@@ -1451,6 +1454,15 @@ pub async fn copilot_chat(
         cancellation: run_cancellation.clone(),
     });
 
+    let mut run_summary = WorkflowRunSummaryEmitter::new(
+        channel.clone(),
+        stream_parent_request_id.clone(),
+        "bits",
+        model_selection.model_id.as_deref().unwrap_or("default"),
+        run_cancellation.clone(),
+    );
+    run_summary.record_phase();
+
     let copilot_init = UnifiedCopilot::new(state_clone, catalog_provider, profile, None);
     let mut copilot = tokio::select! {
         result = copilot_init => result.map_err(|error| error.to_string())?,
@@ -1502,12 +1514,23 @@ pub async fn copilot_chat(
         context,
         on_token,
     );
-    tokio::select! {
+    let chat_result = tokio::select! {
         result = chat => result.map_err(|error| error.to_string()),
         _ = run_cancellation.cancelled() => {
             Err("FlowPilot Bits run was cancelled".to_string())
         }
+    };
+    if let Ok(response) = &chat_result {
+        run_summary.set_applied_commands(response.commands.len());
+        run_summary.set_outcome(
+            if response.commands.is_empty() && response.flow_ir_commit.is_none() {
+                "completed"
+            } else {
+                "committed"
+            },
+        );
     }
+    chat_result
 }
 
 /// Collects self-awareness context for the global assistant: the signed-in user (supplied by the
@@ -2424,6 +2447,14 @@ async fn external_code_agent_chat_internal(
         ))
     });
     let tool_activity = Arc::new(StdMutex::new(McpToolActivityState::default()));
+    let mut run_summary = WorkflowRunSummaryEmitter::new(
+        channel.clone(),
+        parent_request_id.clone(),
+        backend.cli_name(),
+        model_id,
+        run_cancellation.clone(),
+    );
+    run_summary.attach_workflow_state(workflow_state.clone());
     let mut final_workflow_snapshot = None;
     let mut last_successful_mutation = None;
     let mut continuation = 0u8;
@@ -2432,6 +2463,7 @@ async fn external_code_agent_chat_internal(
     let mut prompt =
         build_external_agent_prompt(&surface.system_content, &user_prompt, workflow_edit_request);
     let agent_result = loop {
+        run_summary.record_phase();
         let phase_start_tool_calls = mcp_total_tool_calls(&tool_activity);
         // A fresh MCP server per provider phase is deliberate. It makes the phase URL an epoch:
         // delayed requests from a killed CLI cannot register as work owned by the next repair.
@@ -2504,6 +2536,7 @@ async fn external_code_agent_chat_internal(
         if exhausted_budget.is_some() && exhausted_budget == previous_exhausted_budget {
             // The previous continuation already received a fresh bounded slice for this exact
             // budget and burned it again. Another phase would arrive equally dead; stop honestly.
+            run_summary.mark_budget_incomplete();
             break Err(external_workflow_incomplete_error(
                 final_workflow_snapshot.as_ref(),
                 continuation,
@@ -2522,12 +2555,14 @@ async fn external_code_agent_chat_internal(
             zero_activity_restarts = zero_activity_restarts.saturating_add(1);
         } else {
             if continuation >= MAX_EXTERNAL_WORKFLOW_CONTINUATIONS {
+                run_summary.mark_budget_incomplete();
                 break Err(external_workflow_incomplete_error(
                     final_workflow_snapshot.as_ref(),
                     continuation,
                 ));
             }
             continuation = continuation.saturating_add(1);
+            run_summary.record_continuation();
             if let Some(workflow_state) = workflow_state.as_ref()
                 && let Ok(mut state) = workflow_state.lock()
             {
@@ -2608,6 +2643,7 @@ async fn external_code_agent_chat_internal(
         }),
         parent_request_id.as_deref(),
     );
+    run_summary.resolve_outcome(error_note.is_some(), workflow_edit_request);
 
     let has_retained_candidate = final_workflow_snapshot
         .as_ref()
@@ -2716,6 +2752,7 @@ async fn external_code_agent_chat_internal(
         });
 
     let (commands, flow_ir_commit) = take_side_effect_delivery(&surface.side_effect_commands);
+    run_summary.set_applied_commands(commands.len());
     Ok(UnifiedCopilotResponse {
         message,
         commands,
@@ -2792,6 +2829,16 @@ async fn copilot_sdk_chat_internal(
             WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref()),
         ))
     });
+    let mut run_summary = WorkflowRunSummaryEmitter::new(
+        channel.clone(),
+        parent_request_id.clone(),
+        "github-copilot",
+        model_id,
+        run_cancellation.clone(),
+    );
+    run_summary.set_continuation_limit(u32::from(MAX_WORKFLOW_IDLE_CONTINUATIONS));
+    run_summary.attach_workflow_state(workflow_state.clone());
+    run_summary.record_phase();
 
     let mut tools = build_flowpilot_sdk_tools(
         app_handle,
@@ -3557,6 +3604,8 @@ async fn copilot_sdk_chat_internal(
                             }
                         }
                         workflow_idle_continuations = workflow_idle_continuations.saturating_add(1);
+                        run_summary.record_continuation();
+                        run_summary.record_phase();
                         full_response.clear();
                         let prompt = workflow_edit_continuation_prompt(
                             &raw_user_prompt,
@@ -3835,6 +3884,9 @@ async fn copilot_sdk_chat_internal(
         Some(note) => format!("{final_message}\n\n> Note: the run ended early ({note})."),
         None => final_message,
     };
+
+    run_summary.set_applied_commands(extracted_commands.len());
+    run_summary.resolve_outcome(session_error_note.is_some(), workflow_edit_request);
 
     // Preserve the best failed candidate for another repair turn, but pair source and status in one
     // envelope. The frontend applies only explicit `queued`; validation candidates remain visible
@@ -4828,6 +4880,7 @@ struct WorkflowToolLoopSnapshot {
     /// bounded slice first.
     exhausted_budget: Option<String>,
     last_structured_diagnostics: Vec<serde_json::Value>,
+    last_review_notes: usize,
     modular_fallback: Option<FlowScriptCandidateRegression>,
     retained_full_source: Option<String>,
     flowscript_draft_id: Option<String>,
@@ -4877,6 +4930,7 @@ struct WorkflowToolLoopState {
     last_status: Option<String>,
     last_errors: Vec<String>,
     last_structured_diagnostics: Vec<serde_json::Value>,
+    last_review_notes: usize,
     flowscript_draft_id: Option<String>,
     flowscript_draft_retained: bool,
     flowscript_revision: Option<u64>,
@@ -5020,6 +5074,7 @@ impl WorkflowToolLoopState {
             flowscript_commit_attempts: self.flowscript_commit_attempts,
             exhausted_budget: self.exhausted_budget(),
             last_structured_diagnostics: self.last_structured_diagnostics.clone(),
+            last_review_notes: self.last_review_notes,
             modular_fallback: self
                 .queued
                 .then(|| self.pending_modular_fallback.clone())
@@ -5183,6 +5238,234 @@ impl WorkflowToolLoopState {
             self.stalled_edit_attempts = self.stalled_edit_attempts.saturating_add(1);
         }
         self.declarations_since_edit = 0;
+    }
+}
+
+const RUN_SUMMARY_EVENT_KIND: &str = "run_summary";
+
+fn workflow_run_summary_budget_entry(used: u64, limit: u64) -> serde_json::Value {
+    serde_json::json!({ "used": used, "limit": limit })
+}
+
+/// Build the single structured per-run summary payload from state the workflow loop already
+/// tracks. The frame rides the existing `tool_end` stream tag (without a `tool_call_id`, which the
+/// process-step views ignore) so every provider path reuses one pipe, and the debug report pins it
+/// at maximum retention.
+fn workflow_run_summary_payload(
+    outcome: &str,
+    provider: &str,
+    model: &str,
+    duration_ms: u64,
+    phases: u32,
+    continuations_used: u32,
+    continuations_limit: u32,
+    snapshot: Option<&WorkflowToolLoopSnapshot>,
+    applied_commands: usize,
+) -> serde_json::Value {
+    let mut diagnostics_by_code = std::collections::BTreeMap::<String, u64>::new();
+    for entry in snapshot
+        .map(|snapshot| snapshot.last_structured_diagnostics.as_slice())
+        .unwrap_or_default()
+    {
+        let Some(code) = entry.get("code").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let occurrences = entry
+            .get("occurrences")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|count| *count > 0)
+            .unwrap_or(1);
+        let total = diagnostics_by_code.entry(code.to_string()).or_default();
+        *total = total.saturating_add(occurrences);
+    }
+    let retained_draft = snapshot
+        .and_then(|snapshot| {
+            if snapshot.flowscript_draft_retained {
+                snapshot
+                    .flowscript_draft_id
+                    .as_deref()
+                    .map(|id| (id, snapshot.flowscript_revision))
+            } else if snapshot.typed_draft_retained {
+                snapshot
+                    .typed_draft_id
+                    .as_deref()
+                    .map(|id| (id, snapshot.typed_revision))
+            } else {
+                None
+            }
+        })
+        .map(|(id, revision)| serde_json::json!({ "id": id, "revision": revision }))
+        .unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "kind": RUN_SUMMARY_EVENT_KIND,
+        "tool": RUN_SUMMARY_EVENT_KIND,
+        "status": if matches!(outcome, "provider_failure" | "incomplete") { "error" } else { "done" },
+        "outcome": outcome,
+        "provider": provider,
+        "model": model,
+        "duration_ms": duration_ms,
+        "phases": phases,
+        "budget": {
+            "checks": workflow_run_summary_budget_entry(
+                snapshot.map_or(0, |snapshot| u64::from(snapshot.edit_attempts)),
+                u64::from(MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS),
+            ),
+            "source_ops": workflow_run_summary_budget_entry(
+                snapshot.map_or(0, |snapshot| u64::from(snapshot.flowscript_operation_attempts)),
+                u64::from(MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS),
+            ),
+            "commits": workflow_run_summary_budget_entry(
+                snapshot.map_or(0, |snapshot| u64::from(snapshot.flowscript_commit_attempts)),
+                u64::from(MAX_EXTERNAL_FLOWSCRIPT_COMMIT_ATTEMPTS),
+            ),
+            "stalled": workflow_run_summary_budget_entry(
+                snapshot.map_or(0, |snapshot| u64::from(snapshot.stalled_edit_attempts)),
+                u64::from(MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS),
+            ),
+            "continuations": workflow_run_summary_budget_entry(
+                u64::from(continuations_used),
+                u64::from(continuations_limit),
+            ),
+        },
+        "diagnostics_by_code": diagnostics_by_code,
+        "retained_draft": retained_draft,
+        "review_notes": snapshot.map_or(0, |snapshot| snapshot.last_review_notes),
+        "applied_commands": applied_commands,
+    })
+}
+
+/// Emits exactly one `run_summary` frame when a FlowPilot run reaches any terminal path. The
+/// emission is Drop-based so early error returns, cancellations, and provider failures cannot
+/// skip it; success paths set the resolved outcome and applied-command count before the emitter
+/// goes out of scope.
+struct WorkflowRunSummaryEmitter {
+    channel: Channel<String>,
+    parent_request_id: Option<String>,
+    provider: String,
+    model: String,
+    started: Instant,
+    cancellation: CancellationToken,
+    workflow_state: Option<Arc<StdMutex<WorkflowToolLoopState>>>,
+    phases: u32,
+    continuations_used: u32,
+    continuations_limit: u32,
+    budget_incomplete: bool,
+    outcome: Option<&'static str>,
+    applied_commands: usize,
+}
+
+impl WorkflowRunSummaryEmitter {
+    fn new(
+        channel: Channel<String>,
+        parent_request_id: Option<String>,
+        provider: &str,
+        model: &str,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            channel,
+            parent_request_id,
+            provider: provider.to_string(),
+            model: model.to_string(),
+            started: Instant::now(),
+            cancellation,
+            workflow_state: None,
+            phases: 0,
+            continuations_used: 0,
+            continuations_limit: u32::from(MAX_EXTERNAL_WORKFLOW_CONTINUATIONS),
+            budget_incomplete: false,
+            outcome: None,
+            applied_commands: 0,
+        }
+    }
+
+    fn attach_workflow_state(&mut self, state: Option<Arc<StdMutex<WorkflowToolLoopState>>>) {
+        self.workflow_state = state;
+    }
+
+    fn set_continuation_limit(&mut self, limit: u32) {
+        self.continuations_limit = limit;
+    }
+
+    fn record_phase(&mut self) {
+        self.phases = self.phases.saturating_add(1);
+    }
+
+    fn record_continuation(&mut self) {
+        self.continuations_used = self.continuations_used.saturating_add(1);
+    }
+
+    fn mark_budget_incomplete(&mut self) {
+        self.budget_incomplete = true;
+    }
+
+    fn set_applied_commands(&mut self, applied_commands: usize) {
+        self.applied_commands = applied_commands;
+    }
+
+    fn set_outcome(&mut self, outcome: &'static str) {
+        self.outcome = Some(outcome);
+    }
+
+    fn snapshot(&self) -> Option<WorkflowToolLoopSnapshot> {
+        self.workflow_state
+            .as_ref()
+            .and_then(|state| state.lock().ok().map(|state| state.snapshot()))
+    }
+
+    /// Classify the terminal outcome from state the run already tracks. Queued work outranks a
+    /// trailing provider error (the mutation was handed off); an edit request that ends cleanly
+    /// without queueing anything is honestly incomplete, not completed.
+    fn resolve_outcome(&mut self, run_error: bool, workflow_edit_request: bool) {
+        let queued = self.snapshot().is_some_and(|snapshot| snapshot.queued);
+        self.outcome = Some(if self.cancellation.is_cancelled() {
+            "cancelled"
+        } else if queued {
+            "committed"
+        } else if self.budget_incomplete {
+            "incomplete"
+        } else if run_error {
+            "provider_failure"
+        } else if workflow_edit_request && self.workflow_state.is_some() {
+            "incomplete"
+        } else {
+            "completed"
+        });
+    }
+}
+
+impl Drop for WorkflowRunSummaryEmitter {
+    fn drop(&mut self) {
+        let snapshot = self.snapshot();
+        let outcome = self.outcome.unwrap_or_else(|| {
+            // Unset outcome means the run left through an early error return (or panic unwind).
+            if self.cancellation.is_cancelled() {
+                "cancelled"
+            } else if snapshot.as_ref().is_some_and(|snapshot| snapshot.queued) {
+                "committed"
+            } else if self.budget_incomplete {
+                "incomplete"
+            } else {
+                "provider_failure"
+            }
+        });
+        let payload = workflow_run_summary_payload(
+            outcome,
+            &self.provider,
+            &self.model,
+            u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            self.phases.max(1),
+            self.continuations_used,
+            self.continuations_limit,
+            snapshot.as_ref(),
+            self.applied_commands,
+        );
+        send_correlated_stream_json_event(
+            &self.channel,
+            "tool_end",
+            &payload,
+            self.parent_request_id.as_deref(),
+        );
     }
 }
 
@@ -6831,6 +7114,15 @@ fn workflow_result_repair_declarations(parsed: Option<&serde_json::Value>) -> Ve
     declarations
 }
 
+/// Count of reviewer-facing notes carried by a lifecycle tool result. `None` when the result did
+/// not include the field, so an unrelated follow-up result does not erase the last known count.
+fn workflow_result_review_notes(parsed: Option<&serde_json::Value>) -> Option<usize> {
+    parsed?
+        .get("review_notes")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+}
+
 fn typed_ir_missing_modules(parsed: Option<&serde_json::Value>) -> Vec<String> {
     let mut modules = parsed
         .and_then(|value| value.get("missing_modules"))
@@ -7546,6 +7838,9 @@ fn workflow_tool_record(
         }
         let mut diagnostics = workflow_result_diagnostics(parsed.as_ref());
         state.last_structured_diagnostics = workflow_result_structured_diagnostics(parsed.as_ref());
+        if let Some(review_notes) = workflow_result_review_notes(parsed.as_ref()) {
+            state.last_review_notes = review_notes;
+        }
         let requires_repair = parsed.as_ref().is_none_or(|value| {
             !workflow_result_clears_repair(value)
                 && workflow_result_requires_repair(value, &diagnostics)
@@ -7659,6 +7954,9 @@ fn workflow_tool_record(
             }
         }
         let missing_modules = typed_ir_missing_modules(parsed.as_ref());
+        if let Some(review_notes) = workflow_result_review_notes(parsed.as_ref()) {
+            state.last_review_notes = review_notes;
+        }
         if !preserve_retained_draft_context {
             state.typed_missing_modules = missing_modules.clone();
             state.last_errors = diagnostics.clone();
@@ -7711,6 +8009,9 @@ fn workflow_tool_record(
         .map(str::to_string);
     let parsed_errors = workflow_result_diagnostics(parsed.as_ref());
     state.last_structured_diagnostics = workflow_result_structured_diagnostics(parsed.as_ref());
+    if let Some(review_notes) = workflow_result_review_notes(parsed.as_ref()) {
+        state.last_review_notes = review_notes;
+    }
 
     if tool_name == "commit_flow_ir_draft" {
         let current_draft_id = state.typed_draft_id.clone();
@@ -10355,6 +10656,8 @@ static COPILOT_CLIENT: Lazy<Mutex<Option<Arc<Client>>>> = Lazy::new(|| Mutex::ne
 static COPILOT_START_GATE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
 
 /// Options the main Copilot client was started with, reused to start nested pool clients.
+/// Cleared on backend stop so a checkout that begins entirely after a stop fails fast instead of
+/// spawning a pooled CLI process from stale configuration.
 static COPILOT_START_OPTIONS: Lazy<Mutex<Option<FlowPilotBackendStartOptions>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -10429,6 +10732,10 @@ struct NestedCopilotPool {
     /// Every live pooled process, idle or checked out. Quarantine removes an entry so the owning
     /// lease drops the process instead of returning it to `idle`; backend stop drains everything.
     registered: StdMutex<Vec<Arc<Client>>>,
+    /// Bumped by every `drain` (under the `registered` lock). A client whose startup began before
+    /// a drain must not register into the drained pool, or backend stop would leave a live CLI
+    /// process behind that the stop path never saw. Lock order is always `registered` → `idle`.
+    drain_epoch: AtomicU64,
 }
 
 impl NestedCopilotPool {
@@ -10437,6 +10744,7 @@ impl NestedCopilotPool {
             slots: Arc::new(Semaphore::new(size)),
             idle: StdMutex::new(Vec::new()),
             registered: StdMutex::new(Vec::new()),
+            drain_epoch: AtomicU64::new(0),
         }
     }
 
@@ -10447,23 +10755,33 @@ impl NestedCopilotPool {
             .pop()
     }
 
-    fn register(&self, client: Arc<Client>) {
-        self.registered
+    fn epoch(&self) -> u64 {
+        self.drain_epoch.load(AtomicOrdering::SeqCst)
+    }
+
+    /// Register a freshly started client, but only if no drain happened since `observed_epoch`
+    /// was captured. Returns whether the client joined the pool; a rejected client must be
+    /// stopped by the caller because no pool teardown path will ever see it.
+    fn register_started(&self, client: Arc<Client>, observed_epoch: u64) -> bool {
+        let mut registered = self
+            .registered
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(client);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.drain_epoch.load(AtomicOrdering::SeqCst) != observed_epoch {
+            return false;
+        }
+        registered.push(client);
+        true
     }
 
     fn deregister(&self, client: &Arc<Client>) -> bool {
-        let removed = {
-            let mut registered = self
-                .registered
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let before = registered.len();
-            registered.retain(|entry| !Arc::ptr_eq(entry, client));
-            registered.len() != before
-        };
+        let mut registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = registered.len();
+        registered.retain(|entry| !Arc::ptr_eq(entry, client));
+        let removed = registered.len() != before;
         self.idle
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -10480,7 +10798,13 @@ impl NestedCopilotPool {
     }
 
     fn return_to_idle(&self, client: Arc<Client>) {
-        if self.is_registered(&client) {
+        // Hold the `registered` lock across the membership check AND the idle push: a concurrent
+        // drain would otherwise interleave between them and leave a stopped client in `idle`.
+        let registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if registered.iter().any(|entry| Arc::ptr_eq(entry, &client)) {
             self.idle
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -10489,15 +10813,16 @@ impl NestedCopilotPool {
     }
 
     fn drain(&self) -> Vec<Arc<Client>> {
+        let mut registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.drain_epoch.fetch_add(1, AtomicOrdering::SeqCst);
         self.idle
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        self.registered
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain(..)
-            .collect()
+        registered.drain(..).collect()
     }
 }
 
@@ -10508,6 +10833,7 @@ static NESTED_COPILOT_POOL: Lazy<NestedCopilotPool> =
 /// the idle pool unless it was quarantined/deregistered first; the pool slot frees either way so
 /// a replacement process can start lazily on the next checkout.
 struct NestedCopilotClientLease {
+    pool: &'static NestedCopilotPool,
     client: Arc<Client>,
     _slot: tokio::sync::OwnedSemaphorePermit,
 }
@@ -10521,50 +10847,73 @@ impl NestedCopilotClientLease {
     /// await session cleanup: leaking one process is safe, re-pooling a client whose previous
     /// session may still be pending is not.
     fn deregister(&self) {
-        NESTED_COPILOT_POOL.deregister(&self.client);
+        self.pool.deregister(&self.client);
     }
 }
 
 impl Drop for NestedCopilotClientLease {
     fn drop(&mut self) {
-        NESTED_COPILOT_POOL.return_to_idle(self.client.clone());
+        self.pool.return_to_idle(self.client.clone());
     }
 }
 
-async fn checkout_nested_copilot_client(
+async fn checkout_nested_copilot_client_from<F, Fut>(
+    pool: &'static NestedCopilotPool,
     cancellation: CancellationToken,
-) -> Result<NestedCopilotClientLease, String> {
+    start_client: F,
+) -> Result<NestedCopilotClientLease, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Arc<Client>, String>>,
+{
     let slot = tokio::select! {
-        permit = NESTED_COPILOT_POOL.slots.clone().acquire_owned() => {
+        permit = pool.slots.clone().acquire_owned() => {
             permit.map_err(|_| "The nested Copilot process pool was closed".to_string())?
         }
         _ = cancellation.cancelled() => {
             return Err("FlowPilot Copilot run was cancelled before it started".to_string());
         }
     };
-    if let Some(client) = NESTED_COPILOT_POOL.take_idle() {
+    if let Some(client) = pool.take_idle() {
         return Ok(NestedCopilotClientLease {
+            pool,
             client,
             _slot: slot,
         });
     }
-    let options =
-        COPILOT_START_OPTIONS
-            .lock()
-            .await
-            .clone()
-            .unwrap_or(FlowPilotBackendStartOptions {
-                use_stdio: true,
-                cli_url: None,
-                app_handle: None,
-            });
-    flowpilot_debug_log!("[copilot_sdk_chat] starting dedicated CLI process for a nested run");
-    let client = Arc::new(build_and_start_copilot_client(&options).await?);
-    NESTED_COPILOT_POOL.register(client.clone());
+    let observed_epoch = pool.epoch();
+    let client = start_client().await?;
+    if !pool.register_started(client.clone(), observed_epoch) {
+        let _ = tokio::time::timeout(SDK_CHAT_ABORT_TIMEOUT, client.force_stop()).await;
+        return Err(
+            "The nested Copilot process pool was drained while a replacement client was starting"
+                .to_string(),
+        );
+    }
     Ok(NestedCopilotClientLease {
+        pool,
         client,
         _slot: slot,
     })
+}
+
+async fn nested_copilot_start_options() -> Result<FlowPilotBackendStartOptions, String> {
+    COPILOT_START_OPTIONS
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "Copilot client not started".to_string())
+}
+
+async fn checkout_nested_copilot_client(
+    cancellation: CancellationToken,
+) -> Result<NestedCopilotClientLease, String> {
+    checkout_nested_copilot_client_from(&NESTED_COPILOT_POOL, cancellation, || async {
+        let options = nested_copilot_start_options().await?;
+        flowpilot_debug_log!("[copilot_sdk_chat] starting dedicated CLI process for a nested run");
+        Ok(Arc::new(build_and_start_copilot_client(&options).await?))
+    })
+    .await
 }
 
 async fn quarantine_nested_copilot_client(client: &Arc<Client>) {
@@ -12285,6 +12634,9 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
             let mut guard = COPILOT_CLIENT.lock().await;
             guard.take()
         };
+        // Clear before draining: a checkout that reads options after this point fails fast, and
+        // one that read them earlier is rejected by the pool's drain epoch when it registers.
+        COPILOT_START_OPTIONS.lock().await.take();
         let nested_clients = NESTED_COPILOT_POOL.drain();
 
         let mut errors: Vec<String> = Vec::new();
@@ -13371,7 +13723,10 @@ mod tests {
         // Seed idle clients so checkout never spawns a real CLI process in tests.
         for _ in 0..NESTED_COPILOT_POOL_SIZE {
             let client = unstarted_client();
-            NESTED_COPILOT_POOL.register(client.clone());
+            assert!(
+                NESTED_COPILOT_POOL.register_started(client.clone(), NESTED_COPILOT_POOL.epoch()),
+                "seeding an undrained pool must register"
+            );
             NESTED_COPILOT_POOL.return_to_idle(client);
         }
 
@@ -13455,6 +13810,394 @@ mod tests {
                 .all(|client| !Arc::ptr_eq(client, &quarantined)),
             "the quarantined client must not reappear in the drained pool"
         );
+    }
+
+    fn unstarted_pool_client() -> Arc<Client> {
+        Arc::new(Client::builder().build().expect("unstarted pool client"))
+    }
+
+    fn leaked_test_pool(size: usize) -> &'static NestedCopilotPool {
+        Box::leak(Box::new(NestedCopilotPool::new(size)))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn nested_gate_stress_serializes_same_board_and_overlaps_across_boards() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const BOARDS: usize = 4;
+        const TASKS_PER_BOARD: usize = 8;
+        const KEY_PREFIX: &str = "board:stress-gate-";
+
+        let per_board_in_flight: Arc<Vec<AtomicUsize>> =
+            Arc::new((0..BOARDS).map(|_| AtomicUsize::new(0)).collect());
+        let global_in_flight = Arc::new(AtomicUsize::new(0));
+        let max_global_in_flight = Arc::new(AtomicUsize::new(0));
+        // One run per board rendezvouses INSIDE its critical section. Per-board gates make this
+        // trivially deadlock-free; a global gate would deadlock here and trip the timeout.
+        let cross_board_rendezvous = Arc::new(tokio::sync::Barrier::new(BOARDS));
+
+        let mut handles = Vec::new();
+        for board in 0..BOARDS {
+            for task in 0..TASKS_PER_BOARD {
+                let per_board_in_flight = per_board_in_flight.clone();
+                let global_in_flight = global_in_flight.clone();
+                let max_global_in_flight = max_global_in_flight.clone();
+                let cross_board_rendezvous = cross_board_rendezvous.clone();
+                handles.push(tokio::spawn(async move {
+                    let gate = nested_copilot_run_gate(&format!("{KEY_PREFIX}{board}"));
+                    let permit = acquire_nested_copilot_run_permit(gate, CancellationToken::new())
+                        .await
+                        .expect("stress gate permit");
+                    let overlapping = per_board_in_flight[board].fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(
+                        overlapping, 0,
+                        "two nested runs overlapped on board {board}"
+                    );
+                    let concurrent = global_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_global_in_flight.fetch_max(concurrent, Ordering::SeqCst);
+                    if task == 0 {
+                        cross_board_rendezvous.wait().await;
+                    }
+                    tokio::time::sleep(Duration::from_millis(((board + task) % 3) as u64)).await;
+                    global_in_flight.fetch_sub(1, Ordering::SeqCst);
+                    per_board_in_flight[board].fetch_sub(1, Ordering::SeqCst);
+                    drop(permit);
+                }));
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for handle in handles {
+                handle.await.expect("gate stress task");
+            }
+        })
+        .await
+        .expect("per-board gates must never deadlock");
+
+        assert!(
+            max_global_in_flight.load(Ordering::SeqCst) >= BOARDS,
+            "runs on different boards must overlap; the rendezvous held {BOARDS} boards' gates at once"
+        );
+
+        // The map must not leak finished stress gates: any lookup prunes ownerless entries.
+        let _probe = nested_copilot_run_gate("board:stress-probe");
+        let gates = NESTED_COPILOT_RUN_GATES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            gates.keys().all(|key| !key.starts_with(KEY_PREFIX)),
+            "finished stress gates must be pruned from the gate map"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn nested_gate_stress_cancelled_waiters_release_and_survivors_proceed() {
+        const KEY: &str = "board:stress-gate-cancel";
+        let gate = nested_copilot_run_gate(KEY);
+        let owner = gate
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("initial stress owner");
+
+        let mut cancelled = Vec::new();
+        let mut survivors = Vec::new();
+        for index in 0..6 {
+            let token = CancellationToken::new();
+            let waiter_gate = gate.clone();
+            let waiter_token = token.clone();
+            // Survivors drop their permits inside the task: the semaphore queue order is not the
+            // spawn order, so holding permits in unawaited JoinHandles would self-deadlock.
+            let handle = tokio::spawn(async move {
+                acquire_nested_copilot_run_permit(waiter_gate, waiter_token)
+                    .await
+                    .map(drop)
+            });
+            if index % 2 == 0 {
+                cancelled.push((token, handle));
+            } else {
+                survivors.push(handle);
+            }
+        }
+
+        // Cancelling queued waiters while the owner still holds the gate must fail them promptly
+        // without consuming the permit.
+        for (token, handle) in cancelled {
+            token.cancel();
+            let error = tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("cancelled gate waiter must return promptly")
+                .expect("cancelled waiter task")
+                .expect_err("cancelled waiter must not acquire");
+            assert!(error.contains("cancelled"));
+        }
+
+        drop(owner);
+        // Every surviving waiter must acquire in turn once earlier permits are released.
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for handle in survivors {
+                handle
+                    .await
+                    .expect("surviving waiter task")
+                    .expect("surviving waiter must acquire after cancellations");
+            }
+        })
+        .await
+        .expect("cancelled waiters must not strand surviving waiters");
+
+        drop(gate);
+        let _probe = nested_copilot_run_gate("board:stress-probe");
+        assert!(
+            !NESTED_COPILOT_RUN_GATES
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(KEY),
+            "a fully drained gate must be pruned"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn nested_pool_stress_never_double_leases_and_replaces_quarantined_clients() {
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const POOL_SIZE: usize = 3;
+        const TASKS: usize = 24;
+        let pool = leaked_test_pool(POOL_SIZE);
+        let spawned = Arc::new(AtomicUsize::new(0));
+        let quarantined = Arc::new(AtomicUsize::new(0));
+        let leased: Arc<StdMutex<HashSet<usize>>> = Arc::new(StdMutex::new(HashSet::new()));
+
+        let mut handles = Vec::new();
+        for task in 0..TASKS {
+            let spawned = spawned.clone();
+            let quarantined = quarantined.clone();
+            let leased = leased.clone();
+            handles.push(tokio::spawn(async move {
+                let spawn_counter = spawned.clone();
+                let lease = checkout_nested_copilot_client_from(
+                    pool,
+                    CancellationToken::new(),
+                    move || async move {
+                        spawn_counter.fetch_add(1, Ordering::SeqCst);
+                        Ok(unstarted_pool_client())
+                    },
+                )
+                .await
+                .expect("stress checkout");
+                let key = Arc::as_ptr(&lease.client) as usize;
+                assert!(
+                    leased.lock().expect("lease tracker").insert(key),
+                    "one pooled client was leased to two concurrent runs"
+                );
+                tokio::time::sleep(Duration::from_millis((task % 3) as u64)).await;
+                if task % 5 == 0 {
+                    // Quarantine without force_stop: these clients were never started.
+                    assert!(
+                        pool.deregister(&lease.client),
+                        "a quarantine target must still be registered"
+                    );
+                    quarantined.fetch_add(1, Ordering::SeqCst);
+                }
+                assert!(leased.lock().expect("lease tracker").remove(&key));
+                drop(lease);
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for handle in handles {
+                handle.await.expect("pool stress task");
+            }
+        })
+        .await
+        .expect("more waiters than pool slots must drain without deadlock");
+
+        assert_eq!(
+            pool.slots.available_permits(),
+            POOL_SIZE,
+            "every pool slot must be released after its lease drops"
+        );
+        let survivors = pool.drain();
+        assert!(
+            survivors.len() <= POOL_SIZE,
+            "the pool must never hold more live clients than slots"
+        );
+        assert_eq!(
+            spawned.load(Ordering::SeqCst),
+            survivors.len() + quarantined.load(Ordering::SeqCst),
+            "every spawned replacement must end up pooled or quarantined, never lost or duplicated"
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_pool_cancelled_waiters_release_their_queue_positions() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let pool = leaked_test_pool(1);
+        let seeded = unstarted_pool_client();
+        assert!(pool.register_started(seeded.clone(), pool.epoch()));
+        pool.return_to_idle(seeded.clone());
+
+        let spawned = Arc::new(AtomicUsize::new(0));
+        let factory = |spawned: Arc<AtomicUsize>| {
+            move || async move {
+                spawned.fetch_add(1, Ordering::SeqCst);
+                Ok(unstarted_pool_client())
+            }
+        };
+
+        let lease = checkout_nested_copilot_client_from(
+            pool,
+            CancellationToken::new(),
+            factory(spawned.clone()),
+        )
+        .await
+        .expect("initial checkout");
+
+        let mut cancelled = Vec::new();
+        let mut survivors = Vec::new();
+        for index in 0..4 {
+            let token = CancellationToken::new();
+            let waiter_token = token.clone();
+            let waiter_factory = factory(spawned.clone());
+            let expected_client = seeded.clone();
+            // Survivors drop their leases inside the task: the slot queue order is not the spawn
+            // order, so holding leases in unawaited JoinHandles would self-deadlock the pool.
+            let handle = tokio::spawn(async move {
+                let lease =
+                    checkout_nested_copilot_client_from(pool, waiter_token, waiter_factory).await?;
+                assert!(
+                    Arc::ptr_eq(&lease.client, &expected_client),
+                    "a freed idle client must be reused before any new process spawns"
+                );
+                drop(lease);
+                Ok::<(), String>(())
+            });
+            if index % 2 == 0 {
+                cancelled.push((token, handle));
+            } else {
+                survivors.push(handle);
+            }
+        }
+
+        // With the single slot still leased, cancelled waiters must fail promptly and must not
+        // consume the slot.
+        for (token, handle) in cancelled {
+            token.cancel();
+            let error = tokio::time::timeout(Duration::from_secs(2), handle)
+                .await
+                .expect("cancelled pool waiter must return promptly")
+                .expect("cancelled waiter task")
+                .expect_err("cancelled waiter must not receive a lease");
+            assert!(error.contains("cancelled"));
+        }
+
+        drop(lease);
+        tokio::time::timeout(Duration::from_secs(8), async {
+            for handle in survivors {
+                handle
+                    .await
+                    .expect("surviving waiter task")
+                    .expect("surviving waiter must check out after cancellations");
+            }
+        })
+        .await
+        .expect("cancelled waiters must not strand surviving checkouts");
+
+        assert_eq!(
+            spawned.load(Ordering::SeqCst),
+            0,
+            "the idle client is always returned before the slot frees, so no waiter may spawn"
+        );
+        assert_eq!(pool.slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn nested_pool_drain_during_client_start_rejects_the_stale_client() {
+        let pool = leaked_test_pool(1);
+        let result = checkout_nested_copilot_client_from(
+            pool,
+            CancellationToken::new(),
+            move || async move {
+                // A backend stop lands while the replacement CLI process is still starting.
+                assert!(pool.drain().is_empty());
+                Ok(unstarted_pool_client())
+            },
+        )
+        .await;
+        let error = match result {
+            Ok(_) => panic!("a client started across a drain must not join the pool"),
+            Err(error) => error,
+        };
+        assert!(error.contains("drained"), "unexpected error: {error}");
+        assert!(
+            pool.drain().is_empty(),
+            "the stale client must not be registered into the drained pool"
+        );
+        assert_eq!(
+            pool.slots.available_permits(),
+            1,
+            "the rejected checkout must release its slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_checkout_fails_fast_after_backend_stop_clears_start_options() {
+        {
+            let mut opts = COPILOT_START_OPTIONS.lock().await;
+            *opts = Some(FlowPilotBackendStartOptions {
+                use_stdio: true,
+                cli_url: None,
+                app_handle: None,
+            });
+        }
+        assert!(nested_copilot_start_options().await.is_ok());
+
+        // Backend stop clears the stored options alongside draining the nested pool.
+        COPILOT_START_OPTIONS.lock().await.take();
+
+        let pool = leaked_test_pool(1);
+        let result =
+            checkout_nested_copilot_client_from(pool, CancellationToken::new(), || async {
+                nested_copilot_start_options().await?;
+                Err::<Arc<Client>, String>(
+                    "a post-stop checkout must not reach client startup".to_string(),
+                )
+            })
+            .await;
+        let error = match result {
+            Ok(_) => panic!("checkout after backend stop must fail fast"),
+            Err(error) => error,
+        };
+        assert!(error.contains("not started"), "unexpected error: {error}");
+        assert_eq!(
+            pool.slots.available_permits(),
+            1,
+            "the failed checkout must release its slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_pool_drained_lease_is_not_returned_to_idle() {
+        let pool = leaked_test_pool(1);
+        let seeded = unstarted_pool_client();
+        assert!(pool.register_started(seeded.clone(), pool.epoch()));
+        pool.return_to_idle(seeded.clone());
+
+        let lease = checkout_nested_copilot_client_from(pool, CancellationToken::new(), || async {
+            Err::<Arc<Client>, String>("factory must not run for an idle checkout".to_string())
+        })
+        .await
+        .expect("seeded checkout");
+
+        let stopped = pool.drain();
+        assert_eq!(stopped.len(), 1);
+        assert!(Arc::ptr_eq(&stopped[0], &seeded));
+
+        drop(lease);
+        assert!(
+            pool.take_idle().is_none(),
+            "a lease drained mid-run was force-stopped by the backend stop path and must not rejoin idle"
+        );
+        assert_eq!(pool.slots.available_permits(), 1);
     }
 
     #[test]
@@ -15926,6 +16669,125 @@ eventsSimple() {
 
         let healthy = WorkflowToolLoopState::default();
         assert_eq!(healthy.snapshot().exhausted_budget, None);
+    }
+
+    #[test]
+    fn run_summary_payload_is_built_from_a_populated_snapshot() {
+        let state = WorkflowToolLoopState {
+            queued: true,
+            edit_attempts: 5,
+            flowscript_operation_attempts: 9,
+            stalled_edit_attempts: 1,
+            flowscript_commit_attempts: 2,
+            flowscript_draft_id: Some("draft-1".to_string()),
+            flowscript_draft_retained: true,
+            flowscript_revision: Some(7),
+            last_flowscript: Some("events {}".to_string()),
+            last_review_notes: 3,
+            last_structured_diagnostics: vec![
+                serde_json::json!({ "code": "FS_TYPE_MISMATCH", "occurrences": 2 }),
+                serde_json::json!({ "code": "FS_TYPE_MISMATCH" }),
+                serde_json::json!({ "code": "FS_UNKNOWN_DECLARATION" }),
+                serde_json::json!({ "message": "entry without a code is skipped" }),
+            ],
+            ..Default::default()
+        };
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.last_review_notes, 3);
+
+        let payload = workflow_run_summary_payload(
+            "committed",
+            "codex",
+            "gpt-5",
+            1_234,
+            2,
+            1,
+            u32::from(MAX_EXTERNAL_WORKFLOW_CONTINUATIONS),
+            Some(&snapshot),
+            6,
+        );
+        assert_eq!(payload["kind"], "run_summary");
+        assert_eq!(payload["status"], "done");
+        assert_eq!(payload["outcome"], "committed");
+        assert_eq!(payload["provider"], "codex");
+        assert_eq!(payload["model"], "gpt-5");
+        assert_eq!(payload["duration_ms"], 1_234);
+        assert_eq!(payload["phases"], 2);
+        assert_eq!(payload["budget"]["checks"]["used"], 5);
+        assert_eq!(
+            payload["budget"]["checks"]["limit"],
+            u64::from(MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS)
+        );
+        assert_eq!(payload["budget"]["source_ops"]["used"], 9);
+        assert_eq!(
+            payload["budget"]["source_ops"]["limit"],
+            u64::from(MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS)
+        );
+        assert_eq!(payload["budget"]["commits"]["used"], 2);
+        assert_eq!(payload["budget"]["stalled"]["used"], 1);
+        assert_eq!(payload["budget"]["continuations"]["used"], 1);
+        assert_eq!(
+            payload["budget"]["continuations"]["limit"],
+            u64::from(MAX_EXTERNAL_WORKFLOW_CONTINUATIONS)
+        );
+        assert_eq!(payload["diagnostics_by_code"]["FS_TYPE_MISMATCH"], 3);
+        assert_eq!(payload["diagnostics_by_code"]["FS_UNKNOWN_DECLARATION"], 1);
+        assert_eq!(
+            payload["diagnostics_by_code"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(2)
+        );
+        assert_eq!(payload["retained_draft"]["id"], "draft-1");
+        assert_eq!(payload["retained_draft"]["revision"], 7);
+        assert_eq!(payload["review_notes"], 3);
+        assert_eq!(payload["applied_commands"], 6);
+        // The frame must stay invisible to the process-step UIs, which key on tool_call_id.
+        assert!(payload.get("tool_call_id").is_none());
+
+        let bare =
+            workflow_run_summary_payload("provider_failure", "bits", "o4", 10, 1, 0, 2, None, 0);
+        assert_eq!(bare["status"], "error");
+        assert!(bare["retained_draft"].is_null());
+        assert_eq!(bare["budget"]["checks"]["used"], 0);
+        assert_eq!(bare["review_notes"], 0);
+        assert_eq!(
+            bare["diagnostics_by_code"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn run_summary_review_notes_follow_the_latest_lifecycle_result() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        workflow_tool_record(
+            &state,
+            "commit_flowscript",
+            &serde_json::json!({ "draft_id": "draft-1" }),
+            &serde_json::json!({
+                "status": "queued",
+                "review_notes": [
+                    { "code": "REVIEW_SECRET_PLACEHOLDER", "message": "fill the secret" },
+                    { "code": "REVIEW_DESTRUCTIVE", "message": "removes two nodes" },
+                ],
+            })
+            .to_string(),
+        );
+        let snapshot = state.lock().expect("state lock").snapshot();
+        assert_eq!(snapshot.last_review_notes, 2);
+        assert!(snapshot.queued);
+
+        // A follow-up result without the field keeps the last known count.
+        workflow_tool_record(
+            &state,
+            "check_flowscript",
+            &serde_json::json!({}),
+            &serde_json::json!({ "status": "valid" }).to_string(),
+        );
+        let snapshot = state.lock().expect("state lock").snapshot();
+        assert_eq!(snapshot.last_review_notes, 2);
     }
 
     #[test]

@@ -55,6 +55,7 @@ import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-c
 import type { CanvasSettings, SurfaceComponent } from "../a2ui/types";
 import {
 	BoardEditRecoveryStore,
+	CreatedArtifactJournal,
 	FrontendRequestExecutionFence,
 	type FrontendRequestExecutionLease,
 	assessFlowScriptReadback,
@@ -847,6 +848,9 @@ export function GlobalToolBridge() {
 	// Failed repair candidates are board-scoped (not message-scoped), so a retry in a new turn can
 	// continue the closest source after a provider deadline or lost MCP response.
 	const boardRecoveryRef = useRef(new BoardEditRecoveryStore());
+	// Crash-durable record of artifacts created per conversation. A retried creating tool (after a
+	// crash, reload, or lost tool response) is answered with the recorded ids instead of a duplicate.
+	const createdArtifactJournalRef = useRef(new CreatedArtifactJournal());
 	const boardRecoveryScopeByRequestRef = useRef<Map<string, string>>(new Map());
 	const requestOwnershipIsActive = useCallback(
 		(requestId: string) =>
@@ -1427,6 +1431,39 @@ export function GlobalToolBridge() {
 								'create_app requires a `name`. Derive a short name from the request (e.g. "Weather App") and call create_app once with it — do not call it again with empty arguments.',
 						};
 					const description = argString(args, "description");
+					const idempotencyKey =
+						argString(args, "idempotency_key") ||
+						argString(args, "idempotencyKey");
+					const creationConversationId = conversationScopeId(request);
+					const creationIdentity = creationConversationId
+						? {
+								conversationId: creationConversationId,
+								toolName: "create_app",
+								instruction: `${name}\n${description}`,
+								...(idempotencyKey ? { idempotencyKey } : {}),
+							}
+						: undefined;
+					const journaled = creationIdentity
+						? createdArtifactJournalRef.current.find(creationIdentity)
+						: undefined;
+					if (journaled?.artifacts.appId) {
+						const existingAppId = journaled.artifacts.appId;
+						const ownerMessageId = ownerMessageIdForRequest(request);
+						if (ownerMessageId) {
+							createdAppTargetsByOwnerRef.current.set(
+								ownerMessageId,
+								existingAppId,
+							);
+						}
+						referenceApp(existingAppId);
+						return {
+							status: "ok",
+							app_id: existingAppId,
+							name,
+							already_created: true,
+							note: "An app for this exact request was already created earlier in this conversation; its app_id is returned instead of creating a duplicate. Continue building on this app_id. Only if the user truly wants a second, separate app, call create_app again with a distinct `idempotency_key`.",
+						};
+					}
 					const meta: IMetadata = {
 						name,
 						description,
@@ -1475,6 +1512,13 @@ export function GlobalToolBridge() {
 						}
 					}
 					referenceApp(app.id);
+					if (creationIdentity) {
+						createdArtifactJournalRef.current.record(
+							creationIdentity,
+							{ appId: app.id },
+							request.requestId,
+						);
+					}
 					return { status: "ok", app_id: app.id, name, online };
 				}
 				case "upsert_event": {
@@ -1913,17 +1957,22 @@ export function GlobalToolBridge() {
 						);
 					}
 					// Explain/readback waits too, otherwise it can observe the pre-commit board while
-					// a mutation run for the same app still owns the authoritative snapshot.
+					// a mutation run for the same board still owns the authoritative snapshot.
+					const boardEditAcquireOptions = () => ({
+						deadlineAtMs: requestDeadline(request),
+						signal:
+							requestExecutionLeasesRef.current.get(request)?.controller.signal,
+						onInvalidated: () => markRequestExpired(request.requestId),
+					});
+					// A known board target locks only that board so runs on different boards of the
+					// same app can overlap. Without a target the app-scoped key serializes board
+					// creation/selection; the board-scoped lock is acquired below once resolved.
+					const lockScopedToBoard = Boolean(boardId);
 					const releaseBoardEdit = await boardEditCoordinator.acquire(
 						boardEditLockKey(appId, boardId),
-						{
-							deadlineAtMs: requestDeadline(request),
-							signal:
-								requestExecutionLeasesRef.current.get(request)?.controller
-									.signal,
-							onInvalidated: () => markRequestExpired(request.requestId),
-						},
+						boardEditAcquireOptions(),
 					);
+					let releaseBoardScopedEdit: (() => void) | undefined;
 					let pendingDraftingWorkspace:
 						| FlowScriptWorkspaceCandidate
 						| undefined;
@@ -1944,7 +1993,30 @@ export function GlobalToolBridge() {
 						// to the user.
 						if (!boardId) {
 							assertRequestActive(request, "board creation");
-							boardId = createId();
+							const boardConversationId = conversationScopeId(request);
+							const boardIdempotencyKey =
+								argString(args, "idempotency_key") ||
+								argString(args, "idempotencyKey");
+							const boardCreationIdentity = boardConversationId
+								? {
+										conversationId: boardConversationId,
+										toolName: "flowpilot_board",
+										scope: appId,
+										instruction,
+										...(boardIdempotencyKey
+											? { idempotencyKey: boardIdempotencyKey }
+											: {}),
+									}
+								: undefined;
+							// Reuse the board this conversation already created for the same request
+							// (e.g. a crash/reload retry whose listing has not propagated) instead of
+							// minting a duplicate; upsert on the recorded id is idempotent.
+							boardId =
+								(boardCreationIdentity
+									? createdArtifactJournalRef.current.find(
+											boardCreationIdentity,
+										)?.artifacts.boardId
+									: undefined) ?? createId();
 							await backend.boardState.upsertBoard(
 								appId,
 								boardId,
@@ -1954,6 +2026,23 @@ export function GlobalToolBridge() {
 								IExecutionStage.Dev,
 							);
 							createdBoard = true;
+							if (boardCreationIdentity) {
+								createdArtifactJournalRef.current.record(
+									boardCreationIdentity,
+									{ appId, boardId },
+									request.requestId,
+								);
+							}
+						}
+						// A create-mode run held only the app-scoped creation lock. Now that it has a
+						// concrete board, also take that board's lock (always app key first, board key
+						// second) so it cannot overlap a run that targeted the same board explicitly.
+						if (!lockScopedToBoard && boardId) {
+							releaseBoardScopedEdit = await boardEditCoordinator.acquire(
+								boardEditLockKey(appId, boardId),
+								boardEditAcquireOptions(),
+							);
+							assertRequestActive(request, "board-scoped serialization");
 						}
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
 						boardRecoveryScopeByRequestRef.current.set(
@@ -2937,6 +3026,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						draftingWorkspaceTimer = undefined;
 						pendingDraftingWorkspace = undefined;
 						boardRecoveryScopeByRequestRef.current.delete(request.requestId);
+						releaseBoardScopedEdit?.();
 						releaseBoardEdit?.();
 					}
 				}
@@ -2965,6 +3055,43 @@ Completion contract: build complete helper logic first and add the Event entry l
 					let boardId =
 						argString(args, "board_id") || argString(args, "boardId");
 					let createdBoard = false;
+					const widgetIdempotencyKey =
+						argString(args, "idempotency_key") ||
+						argString(args, "idempotencyKey");
+					const widgetConversationId = conversationScopeId(request);
+					const widgetCreationIdentity =
+						createMode && widgetConversationId
+							? {
+									conversationId: widgetConversationId,
+									toolName: "flowpilot_widget",
+									scope: targetAppId,
+									instruction,
+									...(widgetIdempotencyKey
+										? { idempotencyKey: widgetIdempotencyKey }
+										: {}),
+								}
+							: undefined;
+					if (widgetCreationIdentity) {
+						const journaledPage = createdArtifactJournalRef.current.find(
+							widgetCreationIdentity,
+						);
+						if (journaledPage?.artifacts.pageId) {
+							referenceApp(targetAppId);
+							return {
+								status: "ok",
+								already_created: true,
+								app_id: targetAppId,
+								...(journaledPage.artifacts.boardId
+									? { board_id: journaledPage.artifacts.boardId }
+									: {}),
+								page: { id: journaledPage.artifacts.pageId },
+								widgets: (journaledPage.artifacts.widgetIds ?? []).map(
+									(id) => ({ id }),
+								),
+								note: "A page for this exact request was already created earlier in this conversation; its ids are returned instead of creating a duplicate. Wire or edit that page instead. Only if the user truly wants a second, separate page, call flowpilot_widget again with a distinct `idempotency_key`.",
+							};
+						}
+					}
 					if (createMode && !boardId) {
 						const boards = await backend.boardState.getBoards(targetAppId);
 						boardId = boards?.[0]?.id ?? "";
@@ -3275,6 +3402,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 
 						referenceApp(targetAppId);
+						if (widgetCreationIdentity) {
+							createdArtifactJournalRef.current.record(
+								widgetCreationIdentity,
+								{
+									appId: targetAppId,
+									boardId,
+									pageId,
+									...(createdWidgets.length > 0
+										? { widgetIds: createdWidgets.map((widget) => widget.id) }
+										: {}),
+								},
+								request.requestId,
+							);
+						}
 						// Defer the navigation: router.push mid-stream tears down the run. The bridge
 						// navigates once the agent turn ends.
 						useGlobalChatStore

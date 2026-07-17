@@ -2,11 +2,14 @@ import {
 	BoardEditCoordinator,
 	type BoardEditRecoveryStorage,
 	BoardEditRecoveryStore,
+	CreatedArtifactJournal,
+	type CreatedArtifactRequestIdentity,
 	FrontendRequestExecutionFence,
 	assessFlowScriptReadback,
 	boardEditInterruptionResult,
 	boardEditLockKey,
 	boardEditRecoveryKey,
+	creationRequestFingerprint,
 	flowScriptSnapshotChanged,
 	hasActiveFrontendRequestOwnership,
 	isCreatedAppBuildTargetMismatch,
@@ -258,11 +261,38 @@ describe("board edit guard", () => {
 		releaseSecond();
 	});
 
-	test("serializes an unresolved board target with explicit boards in the same app", async () => {
+	test("computes one stable lock key per target", () => {
+		expect(boardEditLockKey("app-1", "board-1")).toBe(
+			boardEditLockKey("app-1", "board-1"),
+		);
+		expect(boardEditLockKey("app-1", "board-1")).not.toBe(
+			boardEditLockKey("app-1", "board-2"),
+		);
+		expect(boardEditLockKey("app-1", "board-1")).not.toBe(
+			boardEditLockKey("app-1"),
+		);
+		// An unknown target ("" or undefined) always falls back to the app-scoped key.
+		expect(boardEditLockKey("app-1", "")).toBe(boardEditLockKey("app-1"));
+		expect(boardEditLockKey("app-1", undefined)).toBe(
+			boardEditLockKey("app-1"),
+		);
+	});
+
+	test("edits on different boards of the same app overlap", async () => {
 		const coordinator = new BoardEditCoordinator();
 		const releaseFirst = await coordinator.acquire(
 			boardEditLockKey("app-1", "board-1"),
 		);
+		const releaseSecond = await coordinator.acquire(
+			boardEditLockKey("app-1", "board-2"),
+		);
+		releaseSecond();
+		releaseFirst();
+	});
+
+	test("create-mode runs without a board target serialize per app", async () => {
+		const coordinator = new BoardEditCoordinator();
+		const releaseFirst = await coordinator.acquire(boardEditLockKey("app-1"));
 		let secondAcquired = false;
 		const second = coordinator
 			.acquire(boardEditLockKey("app-1", undefined))
@@ -274,7 +304,36 @@ describe("board edit guard", () => {
 		expect(secondAcquired).toBe(false);
 		releaseFirst();
 		const releaseSecond = await second;
+		expect(secondAcquired).toBe(true);
 		releaseSecond();
+	});
+
+	test("an unresolved run that resolves to an explicit board's target serializes with it", async () => {
+		// Mirrors the bridge protocol: a create-mode run holds the app-scoped key, resolves its
+		// concrete board, then must also acquire that board's key before touching the board.
+		const coordinator = new BoardEditCoordinator();
+		const releaseExplicit = await coordinator.acquire(
+			boardEditLockKey("app-1", "board-1"),
+		);
+
+		const releaseAppScoped = await coordinator.acquire(
+			boardEditLockKey("app-1"),
+		);
+		let boardScopedAcquired = false;
+		const boardScoped = coordinator
+			.acquire(boardEditLockKey("app-1", "board-1"))
+			.then((release) => {
+				boardScopedAcquired = true;
+				return release;
+			});
+		await Promise.resolve();
+		expect(boardScopedAcquired).toBe(false);
+
+		releaseExplicit();
+		const releaseBoardScoped = await boardScoped;
+		expect(boardScopedAcquired).toBe(true);
+		releaseBoardScoped();
+		releaseAppScoped();
 	});
 
 	test("does not serialize unrelated apps", async () => {
@@ -807,5 +866,247 @@ eventsSimple() {
 		});
 		expect(result.retained_flowscript).toContain("pollInbox");
 		expect(result.next_action).toContain("Repair it in place");
+	});
+});
+
+describe("created artifact journal", () => {
+	const DAY_MS = 24 * 60 * 60_000;
+
+	const identity = (overrides: Partial<CreatedArtifactRequestIdentity> = {}) =>
+		({
+			conversationId: "conversation-1",
+			toolName: "create_app",
+			instruction: "Weather App\nShows the forecast",
+			...overrides,
+		}) satisfies CreatedArtifactRequestIdentity;
+
+	test("normalizes instruction phrasing into one creation fingerprint", () => {
+		expect(
+			creationRequestFingerprint({ instruction: "  Weather   App \n now " }),
+		).toBe(creationRequestFingerprint({ instruction: "weather app now" }));
+		expect(
+			creationRequestFingerprint({
+				scope: "app-a",
+				instruction: "build page",
+			}),
+		).not.toBe(
+			creationRequestFingerprint({ scope: "app-b", instruction: "build page" }),
+		);
+		expect(creationRequestFingerprint({ instruction: "   " })).toBeUndefined();
+		expect(
+			creationRequestFingerprint({
+				instruction: "anything",
+				idempotencyKey: "key-1",
+			}),
+		).toBe("key:key-1");
+	});
+
+	test("records a creation and answers the equivalent retried request", () => {
+		const journal = new CreatedArtifactJournal(
+			DAY_MS,
+			8,
+			() => 1_000,
+			new MemoryRecoveryStorage(),
+		);
+		expect(
+			journal.record(identity(), { appId: "app-123" }, "request-1"),
+		).toBeDefined();
+
+		const hit = journal.find(
+			identity({ instruction: "  weather APP \n shows the forecast  " }),
+		);
+		expect(hit?.artifacts.appId).toBe("app-123");
+		expect(hit?.toolCallId).toBe("request-1");
+
+		expect(
+			journal.find(identity({ conversationId: "conversation-2" })),
+		).toBeUndefined();
+		expect(
+			journal.find(identity({ toolName: "flowpilot_widget" })),
+		).toBeUndefined();
+		expect(
+			journal.find(identity({ instruction: "Todo App\nTracks tasks" })),
+		).toBeUndefined();
+	});
+
+	test("prefers an explicit idempotency key over the instruction hash", () => {
+		const journal = new CreatedArtifactJournal(
+			DAY_MS,
+			8,
+			() => 1_000,
+			new MemoryRecoveryStorage(),
+		);
+		journal.record(identity({ idempotencyKey: "stable-key" }), {
+			appId: "app-key",
+		});
+
+		expect(
+			journal.find(
+				identity({
+					instruction: "completely different phrasing",
+					idempotencyKey: "stable-key",
+				}),
+			)?.artifacts.appId,
+		).toBe("app-key");
+		// A distinct key forces a genuinely separate creation even for the same instruction.
+		expect(
+			journal.find(identity({ idempotencyKey: "another-key" })),
+		).toBeUndefined();
+		// Without the key the instruction hash is a different fingerprint.
+		expect(journal.find(identity())).toBeUndefined();
+	});
+
+	test("expires entries after the journal ttl", () => {
+		let now = 0;
+		const journal = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => now,
+			new MemoryRecoveryStorage(),
+		);
+		journal.record(identity(), { appId: "app-123" });
+
+		now = 7 * DAY_MS - 1;
+		expect(journal.find(identity())?.artifacts.appId).toBe("app-123");
+		now = 7 * DAY_MS;
+		expect(journal.find(identity())).toBeUndefined();
+		expect(journal.size).toBe(0);
+	});
+
+	test("caps the journal and evicts the oldest entries first", () => {
+		let now = 0;
+		const journal = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			2,
+			() => now,
+			new MemoryRecoveryStorage(),
+		);
+		journal.record(identity({ instruction: "first app" }), { appId: "app-1" });
+		now += 1;
+		journal.record(identity({ instruction: "second app" }), {
+			appId: "app-2",
+		});
+		now += 1;
+		journal.record(identity({ instruction: "third app" }), { appId: "app-3" });
+
+		expect(journal.size).toBe(2);
+		expect(
+			journal.find(identity({ instruction: "first app" })),
+		).toBeUndefined();
+		expect(
+			journal.find(identity({ instruction: "second app" }))?.artifacts.appId,
+		).toBe("app-2");
+		expect(
+			journal.find(identity({ instruction: "third app" }))?.artifacts.appId,
+		).toBe("app-3");
+	});
+
+	test("survives a renderer restart through persisted storage", () => {
+		const storage = new MemoryRecoveryStorage();
+		let now = 1_000;
+		const journal = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => now,
+			storage,
+		);
+		journal.record(identity(), { appId: "app-123", boardId: "board-456" });
+		journal.record(
+			identity({ toolName: "flowpilot_widget", scope: "app-123" }),
+			{
+				appId: "app-123",
+				pageId: "page-1",
+				widgetIds: ["widget-1", "widget-2"],
+			},
+		);
+
+		const restarted = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => now,
+			storage,
+		);
+		expect(restarted.find(identity())?.artifacts).toEqual({
+			appId: "app-123",
+			boardId: "board-456",
+		});
+		expect(
+			restarted.find(
+				identity({ toolName: "flowpilot_widget", scope: "app-123" }),
+			)?.artifacts.widgetIds,
+		).toEqual(["widget-1", "widget-2"]);
+
+		// Entries past the ttl are dropped on hydrate instead of being revived.
+		now = 1_000 + 7 * DAY_MS;
+		const expired = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => now,
+			storage,
+		);
+		expect(expired.size).toBe(0);
+	});
+
+	test("ignores corrupt or unsafe persisted journal payloads", () => {
+		const storage = new MemoryRecoveryStorage();
+		storage.setItem("flowpilot.created-artifact-journal.v1", "{not json");
+		const corrupt = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => 1_000,
+			storage,
+		);
+		expect(corrupt.size).toBe(0);
+		expect(storage.getItem("flowpilot.created-artifact-journal.v1")).toBeNull();
+
+		storage.setItem(
+			"flowpilot.created-artifact-journal.v1",
+			JSON.stringify({
+				version: 1,
+				entries: [
+					{
+						conversationId: "conversation-1",
+						toolName: "create_app",
+						requestFingerprint: "hash:abc",
+						artifacts: { appId: "javascript:alert(1)//" },
+						createdAtMs: 500,
+					},
+				],
+			}),
+		);
+		const unsafe = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => 1_000,
+			storage,
+		);
+		expect(unsafe.size).toBe(0);
+	});
+
+	test("duplicate-create short-circuit flow returns the recorded ids", () => {
+		// Mirrors the bridge flow: consult before creating, record after success.
+		const journal = new CreatedArtifactJournal(
+			7 * DAY_MS,
+			8,
+			() => 1_000,
+			new MemoryRecoveryStorage(),
+		);
+		const request = identity({
+			toolName: "flowpilot_board",
+			scope: "app-123",
+			instruction: "Build the intake workflow",
+		});
+
+		const createBoard = () => {
+			const existing = journal.find(request)?.artifacts.boardId;
+			if (existing) return { boardId: existing, created: false };
+			const boardId = "board-1";
+			journal.record(request, { appId: "app-123", boardId });
+			return { boardId, created: true };
+		};
+
+		expect(createBoard()).toEqual({ boardId: "board-1", created: true });
+		// The crash-retry of the same conversation + instruction reuses the recorded board.
+		expect(createBoard()).toEqual({ boardId: "board-1", created: false });
 	});
 });

@@ -59,6 +59,9 @@ utoipa = { version = "5", optional = true }
 any-tts = { version = "0.1.2", default-features = false, optional = true }
 any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", rev = "e043cec6935003ad746454d7df5a1d932f6c8ac5", default-features = false, optional = true }
 
+[dev-dependencies]
+proptest = "1"
+
 [features]
 tauri = ["flow-like-storage/tauri"]
 local-ml = ["flow-like-model-provider/local-ml"]

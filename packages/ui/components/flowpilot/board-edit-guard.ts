@@ -416,11 +416,15 @@ export async function retryCreatedAppReadiness<T>(
 	}
 }
 
+/**
+ * Board-scoped when the target board is known, so runs on DIFFERENT boards of the same app can
+ * overlap. A call without a board id falls back to the app-scoped key, which serializes board
+ * creation/selection per app; once such a run resolves its concrete board it must additionally
+ * acquire that board's key (app key first, board key second — never the reverse) so it cannot
+ * overlap a run that targeted the same board explicitly.
+ */
 export function boardEditLockKey(appId: string, boardId?: string) {
-	// App-wide serialization is intentionally conservative: a request without a board id can
-	// create/select a board while another request already targets that board explicitly.
-	void boardId;
-	return appId;
+	return boardId ? `${appId}\u0000board:${boardId}` : appId;
 }
 
 /**
@@ -698,6 +702,289 @@ export class BoardEditRecoveryStore {
 		const removedDurable = this.durableEntries.delete(key);
 		const changed = removedMemory || removedDurable;
 		if (changed) this.persist();
+	}
+}
+
+export interface CreatedArtifactRecord {
+	appId?: string;
+	boardId?: string;
+	pageId?: string;
+	widgetIds?: string[];
+}
+
+export interface CreatedArtifactJournalEntry {
+	conversationId: string;
+	toolName: string;
+	/** `key:<idempotencyKey>` when the caller supplied one, otherwise `hash:<instruction hash>`. */
+	requestFingerprint: string;
+	artifacts: CreatedArtifactRecord;
+	/** The frontend tool request that performed the creation, for diagnostics. */
+	toolCallId?: string;
+	createdAtMs: number;
+}
+
+export interface CreatedArtifactRequestIdentity {
+	conversationId: string;
+	toolName: string;
+	/** Extra creation scope (e.g. the target app id) so equal instructions on different targets never collide. */
+	scope?: string;
+	instruction?: string;
+	/** Explicit caller-chosen key; when present it overrides the instruction hash entirely. */
+	idempotencyKey?: string;
+}
+
+/** Whitespace/case-insensitive identity for "the same creation request asked again". */
+export function normalizeCreationInstruction(instruction: string): string {
+	return instruction.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function fnv1a64Hex(value: string): string {
+	let hash = 0xcbf29ce484222325n;
+	const prime = 0x100000001b3n;
+	const mask = 0xffffffffffffffffn;
+	for (let index = 0; index < value.length; index += 1) {
+		hash ^= BigInt(value.charCodeAt(index));
+		hash = (hash * prime) & mask;
+	}
+	return hash.toString(16).padStart(16, "0");
+}
+
+/**
+ * Deterministic identity of one creating request. An explicit idempotency key wins over the
+ * normalized-instruction hash so a caller can force a genuinely separate artifact (new key) or
+ * make retries exactly idempotent (stable key) regardless of instruction phrasing.
+ */
+export function creationRequestFingerprint(
+	identity: Pick<
+		CreatedArtifactRequestIdentity,
+		"scope" | "instruction" | "idempotencyKey"
+	>,
+): string | undefined {
+	const idempotencyKey = identity.idempotencyKey?.trim();
+	if (idempotencyKey) {
+		if (idempotencyKey.length > 256) return undefined;
+		return `key:${idempotencyKey}`;
+	}
+	const instruction = normalizeCreationInstruction(identity.instruction ?? "");
+	if (!instruction) return undefined;
+	const scope = identity.scope?.trim() ?? "";
+	return `hash:${fnv1a64Hex(`${scope}\u0000${instruction}`)}`;
+}
+
+interface PersistedCreatedArtifactJournal {
+	version: 1;
+	entries: CreatedArtifactJournalEntry[];
+}
+
+const CREATED_ARTIFACT_JOURNAL_STORAGE_KEY =
+	"flowpilot.created-artifact-journal.v1";
+const CREATED_ARTIFACT_JOURNAL_TTL_MS = 7 * 24 * 60 * 60_000;
+const CREATED_ARTIFACT_JOURNAL_MAX_ENTRIES = 256;
+
+const SAFE_ARTIFACT_ID = /^[a-z0-9_-]{1,64}$/i;
+
+function safeArtifactId(value: unknown): string | undefined {
+	return typeof value === "string" && SAFE_ARTIFACT_ID.test(value)
+		? value
+		: undefined;
+}
+
+function sanitizedArtifactRecord(
+	value: unknown,
+): CreatedArtifactRecord | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const raw = value as CreatedArtifactRecord;
+	const record: CreatedArtifactRecord = {
+		...(safeArtifactId(raw.appId) ? { appId: raw.appId } : {}),
+		...(safeArtifactId(raw.boardId) ? { boardId: raw.boardId } : {}),
+		...(safeArtifactId(raw.pageId) ? { pageId: raw.pageId } : {}),
+	};
+	if (Array.isArray(raw.widgetIds)) {
+		const widgetIds = raw.widgetIds
+			.filter((id): id is string => Boolean(safeArtifactId(id)))
+			.slice(0, 64);
+		if (widgetIds.length > 0) record.widgetIds = widgetIds;
+	}
+	return Object.keys(record).length > 0 ? record : undefined;
+}
+
+/**
+ * Crash-durable journal of artifacts this browser created on behalf of a conversation.
+ *
+ * The orchestrator's knowledge of "I already created app X for this request" normally lives only
+ * in its context window and this process's memory. After a crash/reload, a retried creating tool
+ * would mint a duplicate app/board/page. The journal persists (same local-storage pattern as
+ * `BoardEditRecoveryStore`) so an equivalent creating request in the same conversation can be
+ * answered with the existing artifact ids instead of a second creation.
+ */
+export class CreatedArtifactJournal {
+	private readonly entries = new Map<string, CreatedArtifactJournalEntry>();
+	private readonly storage: BoardEditRecoveryStorage | null;
+
+	constructor(
+		private readonly ttlMs = CREATED_ARTIFACT_JOURNAL_TTL_MS,
+		private readonly maxEntries = CREATED_ARTIFACT_JOURNAL_MAX_ENTRIES,
+		private readonly now: () => number = Date.now,
+		storage: BoardEditRecoveryStorage | null = browserBoardEditRecoveryStorage(),
+		private readonly storageKey = CREATED_ARTIFACT_JOURNAL_STORAGE_KEY,
+	) {
+		this.storage = storage;
+		this.hydrate();
+	}
+
+	private entryKey(
+		conversationId: string,
+		toolName: string,
+		requestFingerprint: string,
+	) {
+		return `${conversationId}\u0000${toolName}\u0000${requestFingerprint}`;
+	}
+
+	private hydrate() {
+		if (!this.storage) return;
+		try {
+			const raw = this.storage.getItem(this.storageKey);
+			if (!raw) return;
+			const parsed = JSON.parse(
+				raw,
+			) as Partial<PersistedCreatedArtifactJournal>;
+			if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+				this.storage.removeItem(this.storageKey);
+				return;
+			}
+			const now = this.now();
+			for (const entry of parsed.entries.slice(-this.maxEntries)) {
+				if (
+					!entry ||
+					typeof entry.conversationId !== "string" ||
+					!entry.conversationId ||
+					entry.conversationId.length > 256 ||
+					typeof entry.toolName !== "string" ||
+					!entry.toolName ||
+					entry.toolName.length > 128 ||
+					typeof entry.requestFingerprint !== "string" ||
+					!entry.requestFingerprint ||
+					entry.requestFingerprint.length > 512 ||
+					typeof entry.createdAtMs !== "number" ||
+					!Number.isFinite(entry.createdAtMs) ||
+					now - entry.createdAtMs >= this.ttlMs
+				) {
+					continue;
+				}
+				const artifacts = sanitizedArtifactRecord(entry.artifacts);
+				if (!artifacts) continue;
+				const key = this.entryKey(
+					entry.conversationId,
+					entry.toolName,
+					entry.requestFingerprint,
+				);
+				const existing = this.entries.get(key);
+				if (existing && existing.createdAtMs > entry.createdAtMs) continue;
+				this.entries.set(key, {
+					conversationId: entry.conversationId,
+					toolName: entry.toolName,
+					requestFingerprint: entry.requestFingerprint,
+					artifacts,
+					...(typeof entry.toolCallId === "string" &&
+					entry.toolCallId.length > 0 &&
+					entry.toolCallId.length <= 256
+						? { toolCallId: entry.toolCallId }
+						: {}),
+					createdAtMs: entry.createdAtMs,
+				});
+			}
+		} catch {
+			// A corrupt/blocked journal must never prevent tool execution.
+			try {
+				this.storage.removeItem(this.storageKey);
+			} catch {
+				// Storage itself may be unavailable (privacy mode/quota/security error).
+			}
+		}
+	}
+
+	private removeExpired() {
+		const now = this.now();
+		for (const [key, entry] of this.entries) {
+			if (now - entry.createdAtMs >= this.ttlMs) this.entries.delete(key);
+		}
+	}
+
+	private persist() {
+		if (!this.storage) return;
+		try {
+			const entries = [...this.entries.values()];
+			if (entries.length === 0) {
+				this.storage.removeItem(this.storageKey);
+				return;
+			}
+			this.storage.setItem(
+				this.storageKey,
+				JSON.stringify({ version: 1, entries }),
+			);
+		} catch {
+			// Journal persistence is best-effort; in-memory entries remain authoritative.
+		}
+	}
+
+	record(
+		identity: CreatedArtifactRequestIdentity,
+		artifacts: CreatedArtifactRecord,
+		toolCallId?: string,
+	): CreatedArtifactJournalEntry | undefined {
+		const conversationId = identity.conversationId.trim();
+		const requestFingerprint = creationRequestFingerprint(identity);
+		const sanitized = sanitizedArtifactRecord(artifacts);
+		if (!conversationId || !requestFingerprint || !sanitized) return undefined;
+		this.removeExpired();
+		const entry: CreatedArtifactJournalEntry = {
+			conversationId,
+			toolName: identity.toolName,
+			requestFingerprint,
+			artifacts: sanitized,
+			...(toolCallId ? { toolCallId } : {}),
+			createdAtMs: this.now(),
+		};
+		const key = this.entryKey(
+			conversationId,
+			identity.toolName,
+			requestFingerprint,
+		);
+		// Refresh insertion order so bounded eviction removes the oldest journal entry first.
+		this.entries.delete(key);
+		this.entries.set(key, entry);
+		while (this.entries.size > this.maxEntries) {
+			const oldest = this.entries.keys().next().value;
+			if (typeof oldest !== "string") break;
+			this.entries.delete(oldest);
+		}
+		this.persist();
+		return entry;
+	}
+
+	find(
+		identity: CreatedArtifactRequestIdentity,
+	): CreatedArtifactJournalEntry | undefined {
+		const conversationId = identity.conversationId.trim();
+		const requestFingerprint = creationRequestFingerprint(identity);
+		if (!conversationId || !requestFingerprint) return undefined;
+		const key = this.entryKey(
+			conversationId,
+			identity.toolName,
+			requestFingerprint,
+		);
+		const entry = this.entries.get(key);
+		if (!entry) return undefined;
+		if (this.now() - entry.createdAtMs >= this.ttlMs) {
+			this.entries.delete(key);
+			this.persist();
+			return undefined;
+		}
+		return entry;
+	}
+
+	get size(): number {
+		return this.entries.size;
 	}
 }
 

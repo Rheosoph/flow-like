@@ -9,6 +9,11 @@
 
 import { getRegisteredTypes } from "../a2ui/ComponentRegistry";
 import {
+	type A2UIComponentType,
+	COMPONENT_BASE_PROPS,
+	COMPONENT_PROPS,
+} from "../a2ui/component-prop-manifest";
+import {
 	isSemanticBoxTag,
 	normalizeSemanticBoxTag,
 } from "../a2ui/semantic-box-tags";
@@ -22,484 +27,42 @@ import type {
 // Known props per component type
 // ---------------------------------------------------------------------------
 
+/** Props accepted beyond the types.ts interfaces (runtime-only wiring the
+ *  renderer supports, e.g. the inline widget definition consumed by
+ *  A2UIWidgetInstance). */
+const RUNTIME_ONLY_PROPS: Partial<
+	Record<A2UIComponentType, readonly string[]>
+> = {
+	widgetInstance: ["inlineWidgetDef"],
+};
+
 /** Which props a given component type accepts (excluding the shared base:
- *  `type`, `id`, `style`, `children`, `actions`). */
-const KNOWN_PROPS: Record<string, Set<string>> = {
-	// Layout
-	row: new Set(["gap", "align", "justify", "wrap", "reverse"]),
-	column: new Set(["gap", "align", "justify", "reverse", "wrap"]),
-	stack: new Set(["align", "width", "height"]),
-	grid: new Set(["columns", "rows", "gap", "columnGap", "rowGap", "autoFlow"]),
-	scrollArea: new Set(["direction"]),
-	aspectRatio: new Set(["ratio"]),
-	overlay: new Set(["baseComponentId", "overlays"]),
-	absolute: new Set(["width", "height"]),
-	box: new Set(["as", "semanticRole"]),
-	center: new Set(["inline"]),
-	spacer: new Set(["size", "flex", "direction", "flexible"]),
-	widgetInstance: new Set([
-		"widgetId",
-		"widgetInputs",
-		"bindOutputs",
-		"instanceId",
-		"appId",
-		"inlineWidgetDef",
-		"exposedPropValues",
-		"actionBindings",
-		"styleOverride",
+ *  `type`, `id`, `style`, `children`, `actions`, `hidden`). Derived from the
+ *  compile-time-checked manifest so it cannot drift from a2ui/types.ts. */
+export const KNOWN_PROPS: Record<
+	string,
+	ReadonlySet<string>
+> = Object.fromEntries(
+	(
+		Object.entries(COMPONENT_PROPS) as [A2UIComponentType, readonly string[]][]
+	).map(([type, props]) => [
+		type,
+		new Set([...props, ...(RUNTIME_ONLY_PROPS[type] ?? [])]),
 	]),
+);
 
-	// Display
-	text: new Set([
-		"content",
-		"variant",
-		"size",
-		"weight",
-		"color",
-		"align",
-		"truncate",
-		"maxLines",
-	]),
-	image: new Set([
-		"src",
-		"alt",
-		"fit",
-		"fallback",
-		"fallbackSrc",
-		"loading",
-		"aspectRatio",
-		"width",
-		"height",
-	]),
-	icon: new Set(["name", "size", "color", "strokeWidth"]),
-	video: new Set([
-		"src",
-		"poster",
-		"autoplay",
-		"autoPlay",
-		"loop",
-		"muted",
-		"controls",
-		"width",
-		"height",
-	]),
-	lottie: new Set(["src", "autoplay", "loop", "speed", "width", "height"]),
-	markdown: new Set(["content", "allowHtml"]),
-	divider: new Set(["orientation", "thickness", "color"]),
-	badge: new Set(["content", "text", "variant", "color"]),
-	avatar: new Set(["src", "fallback", "size"]),
-	userProfile: new Set([
-		"value",
-		"variant",
-		"avatarSize",
-		"showHover",
-		"showEmail",
-		"showDescription",
-		"showUserId",
-		"showProfileLink",
-		"fallbackLabel",
-		"muted",
-	]),
-	progress: new Set(["value", "max", "showLabel", "variant", "color"]),
-	spinner: new Set(["size", "color"]),
-	skeleton: new Set(["width", "height", "rounded", "variant"]),
-	iframe: new Set([
-		"src",
-		"srcdoc",
-		"width",
-		"height",
-		"sandbox",
-		"allow",
-		"title",
-		"referrerPolicy",
-		"border",
-		"loading",
-	]),
-	table: new Set([
-		"columns",
-		"data",
-		"caption",
-		"striped",
-		"bordered",
-		"hoverable",
-		"compact",
-		"stickyHeader",
-		"sortable",
-		"searchable",
-		"paginated",
-		"pageSize",
-		"selectable",
-		"onRowClick",
-		"showPagination",
-	]),
-	tableRow: new Set(["cells", "selected", "disabled"]),
-	tableCell: new Set(["content", "isHeader", "colSpan", "rowSpan", "align"]),
-	plotlyChart: new Set([
-		"chartType",
-		"data",
-		"title",
-		"layout",
-		"config",
-		"height",
-		"width",
-	]),
-	nivoChart: new Set([
-		"chartType",
-		"data",
-		"height",
-		"width",
-		"colors",
-		"colorScheme",
-		"showLegend",
-		"legendPosition",
-		"margin",
-		"axisBottom",
-		"axisLeft",
-		"animate",
-		"motionConfig",
-		"style",
-	]),
-	filePreview: new Set([
-		"src",
-		"url",
-		"filename",
-		"mimeType",
-		"fileType",
-		"width",
-		"height",
-		"fit",
-		"showControls",
-		"fallbackText",
-	]),
-	diffView: new Set([
-		"original",
-		"modified",
-		"mode",
-		"kind",
-		"language",
-		"markdownMode",
-		"showLineNumbers",
-		"wordWrap",
-		"wordLevel",
-		"collapseUnchanged",
-		"contextLines",
-		"showStats",
-		"originalLabel",
-		"modifiedLabel",
-		"ignoreWhitespace",
-		"ignoreCase",
-		"trimTrailingWhitespace",
-		"swapSides",
-	]),
-	boundingBoxOverlay: new Set([
-		"src",
-		"boxes",
-		"showLabels",
-		"showConfidence",
-		"normalized",
-		"width",
-		"height",
-	]),
-	geoMap: new Set([
-		"center",
-		"zoom",
-		"markers",
-		"style",
-		"width",
-		"height",
-		"mapStyle",
-		"interactive",
-	]),
-
-	// Interactive
-	button: new Set([
-		"label",
-		"variant",
-		"size",
-		"disabled",
-		"loading",
-		"icon",
-		"iconPosition",
-		"tooltip",
-	]),
-	textField: new Set([
-		"value",
-		"placeholder",
-		"label",
-		"helperText",
-		"error",
-		"disabled",
-		"inputType",
-		"type",
-		"multiline",
-		"rows",
-		"maxLength",
-		"required",
-	]),
-	select: new Set([
-		"value",
-		"options",
-		"placeholder",
-		"label",
-		"disabled",
-		"multiple",
-		"searchable",
-	]),
-	slider: new Set([
-		"value",
-		"min",
-		"max",
-		"step",
-		"disabled",
-		"showValue",
-		"label",
-	]),
-	checkbox: new Set(["checked", "label", "disabled", "indeterminate"]),
-	switch: new Set(["checked", "label", "disabled"]),
-	radioGroup: new Set(["value", "options", "disabled", "orientation", "label"]),
-	dateTimeInput: new Set(["value", "mode", "min", "max", "disabled", "label"]),
-	fileInput: new Set([
-		"value",
-		"label",
-		"helperText",
-		"accept",
-		"multiple",
-		"maxSize",
-		"maxFiles",
-		"disabled",
-		"error",
-	]),
-	imageInput: new Set([
-		"value",
-		"label",
-		"helperText",
-		"accept",
-		"multiple",
-		"maxSize",
-		"maxFiles",
-		"disabled",
-		"error",
-		"aspectRatio",
-		"showPreview",
-	]),
-	voiceInput: new Set([
-		"value",
-		"label",
-		"helperText",
-		"maxDuration",
-		"autoStop",
-		"silenceThreshold",
-		"silenceDuration",
-		"disabled",
-		"error",
-		"visualizer",
-	]),
-	imageLabeler: new Set([
-		"src",
-		"labels",
-		"boxes",
-		"disabled",
-		"width",
-		"height",
-	]),
-	imageHotspot: new Set(["src", "hotspots", "markerStyle", "width", "height"]),
-	link: new Set([
-		"href",
-		"label",
-		"text",
-		"route",
-		"queryParams",
-		"external",
-		"target",
-		"variant",
-		"underline",
-		"disabled",
-		"openInNewTab",
-	]),
-
-	// Container
-	card: new Set([
-		"title",
-		"description",
-		"footer",
-		"hoverable",
-		"clickable",
-		"variant",
-		"padding",
-		"headerImage",
-		"headerIcon",
-	]),
-	modal: new Set([
-		"open",
-		"title",
-		"description",
-		"closeOnOverlay",
-		"closeOnEscape",
-		"showCloseButton",
-		"size",
-		"centered",
-	]),
-	tabs: new Set(["value", "tabs", "orientation", "variant", "defaultValue"]),
-	accordion: new Set([
-		"items",
-		"multiple",
-		"defaultExpanded",
-		"collapsible",
-		"type",
-	]),
-	drawer: new Set([
-		"open",
-		"side",
-		"title",
-		"size",
-		"overlay",
-		"closable",
-		"description",
-	]),
-	tooltip: new Set(["content", "side", "delayMs", "maxWidth"]),
-	popover: new Set([
-		"open",
-		"contentComponentId",
-		"side",
-		"trigger",
-		"closeOnClickOutside",
-		"content",
-	]),
-
-	// Game
-	canvas2d: new Set(["width", "height", "backgroundColor", "pixelPerfect"]),
-	sprite: new Set([
-		"src",
-		"x",
-		"y",
-		"width",
-		"height",
-		"rotation",
-		"scale",
-		"opacity",
-		"flipX",
-		"flipY",
-		"zIndex",
-	]),
-	shape: new Set([
-		"shapeType",
-		"x",
-		"y",
-		"width",
-		"height",
-		"radius",
-		"points",
-		"fill",
-		"stroke",
-		"strokeWidth",
-	]),
-	scene3d: new Set([
-		"width",
-		"height",
-		"cameraType",
-		"cameraPosition",
-		"backgroundColor",
-		"controlMode",
-		"fixedView",
-		"autoRotateSpeed",
-		"enableControls",
-		"enableZoom",
-		"enablePan",
-		"fov",
-		"near",
-		"far",
-		"target",
-		"ambientLight",
-		"directionalLight",
-		"showGrid",
-		"showAxes",
-	]),
-	model3d: new Set([
-		"src",
-		"position",
-		"rotation",
-		"scale",
-		"castShadow",
-		"receiveShadow",
-		"animation",
-		"autoRotate",
-		"rotateSpeed",
-		"viewerHeight",
-		"backgroundColor",
-		"cameraDistance",
-		"fov",
-		"cameraAngle",
-		"cameraPosition",
-		"cameraTarget",
-		"enableControls",
-		"enableZoom",
-		"enablePan",
-		"autoRotateCamera",
-		"cameraRotateSpeed",
-		"ambientLight",
-		"directionalLight",
-		"fillLight",
-		"rimLight",
-		"lightColor",
-		"lightingPreset",
-		"showGround",
-		"groundColor",
-		"enableReflections",
-		"environment",
-		"environmentSource",
-		"useHdrBackground",
-		"polyhavenHdri",
-		"polyhavenResolution",
-	]),
-	dialogue: new Set([
-		"text",
-		"speakerName",
-		"typewriter",
-		"speed",
-		"portrait",
-		"children",
-	]),
-	characterPortrait: new Set([
-		"image",
-		"expression",
-		"position",
-		"width",
-		"height",
-		"flip",
-	]),
-	choiceMenu: new Set(["choices", "title", "layout", "columns"]),
-	inventoryGrid: new Set([
-		"items",
-		"columns",
-		"rows",
-		"cellSize",
-		"showTooltips",
-	]),
-	healthBar: new Set([
-		"value",
-		"maxValue",
-		"label",
-		"fillColor",
-		"variant",
-		"showLabel",
-		"size",
-		"animated",
-	]),
-	miniMap: new Set([
-		"mapImage",
-		"width",
-		"height",
-		"markers",
-		"playerX",
-		"playerY",
-		"viewportWidth",
-		"viewportHeight",
-		"zoom",
-	]),
+/** Props that are plain values in types.ts (NOT BoundValue-wrapped) and must
+ *  never be coerced — the renderers read them verbatim. */
+const PLAIN_PROPS: Partial<Record<A2UIComponentType, ReadonlySet<string>>> = {
+	overlay: new Set(["baseComponentId"]),
+	popover: new Set(["contentComponentId"]),
+	tabs: new Set(["listStyle", "triggerStyle", "contentStyle"]),
+	link: new Set(["external", "target", "variant", "underline"]),
+	plotlyChart: new Set(["series", "xAxis", "yAxis"]),
 };
 
 /** Shared base props all component types have. */
-const BASE_PROPS = new Set(["type", "id", "style", "children", "actions"]);
+export const BASE_PROPS = new Set<string>(["type", ...COMPONENT_BASE_PROPS]);
 
 /** Required props that MUST exist (non-optional in the TS interface). */
 const REQUIRED_PROPS: Record<string, string[]> = {
@@ -533,6 +96,8 @@ const REQUIRED_PROPS: Record<string, string[]> = {
 	model3d: ["src"],
 	aspectRatio: ["ratio"],
 	boundingBoxOverlay: ["src"],
+	calendar: ["events"],
+	gantt: ["tasks"],
 };
 
 /** Default BoundValue to inject when a required prop is missing. */
@@ -781,10 +346,18 @@ export function validateComponents(
 
 		// Copy known props, coercing bare values to BoundValue
 		for (const [key, value] of Object.entries(rawComponent)) {
-			if (key === "type") continue;
-			if (BASE_PROPS.has(key)) continue; // handled separately
+			if (key === "type" || key === "id" || key === "children") continue; // handled separately
+			if (BASE_PROPS.has(key)) {
+				// Base props (style, actions, hidden) pass through verbatim.
+				cleaned[key] = value;
+				continue;
+			}
 
 			if (knownForType.has(key)) {
+				if (PLAIN_PROPS[type as A2UIComponentType]?.has(key)) {
+					cleaned[key] = value;
+					continue;
+				}
 				// Widget-instance props are raw wiring data (ids, the inline widget definition,
 				// per-instance param/action values) — NOT BoundValue-wrapped component props, so
 				// keep them verbatim instead of coercing.

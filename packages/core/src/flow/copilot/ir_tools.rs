@@ -71,7 +71,7 @@ const FLOWSCRIPT_CATALOG_FINGERPRINT_DOMAIN: &[u8] =
 /// A deliberately small, host-derived guardrail for explicit multi-part requests. The model can
 /// choose catalog declarations, module boundaries, and implementation details, but it cannot make
 /// one of these independently stated requirements disappear from its own required capability plan.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct RequestAcceptanceCriterion {
     summary: String,
     actions: Vec<String>,
@@ -82,7 +82,7 @@ struct RequestAcceptanceCriterion {
     forbidden: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct RequestAcceptanceContract {
     criteria: Vec<RequestAcceptanceCriterion>,
     /// Host-derived prohibitions the machine could not enforce: recipient/timing-scoped bans that
@@ -94,11 +94,11 @@ struct RequestAcceptanceContract {
     /// A structural host predicate for human-in-the-loop approval requests. Unlike the generic
     /// catalog criteria above, this proves branch placement, reviewer identity, and correlation
     /// values from the reachable typed IR instead of trusting model-authored capability prose.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     approval_loop: Option<RequestApprovalLoopContract>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct RequestApprovalLoopContract {
     /// Exact addresses copied from reviewer/approval context in the immutable raw request.
     /// An empty list still requires one stable literal reviewer address in both review sends.
@@ -109,7 +109,7 @@ struct RequestApprovalLoopContract {
     channel: RequestApprovalChannel,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum RequestApprovalChannel {
     EmailReply,
@@ -119,7 +119,7 @@ enum RequestApprovalChannel {
 /// Domain-separated digest of the immutable, host-supplied raw request. Model-authored tool JSON
 /// can neither choose nor rewrite this value. Whitespace-only transport differences normalize to
 /// the same identity; all other request text remains significant.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FlowIrRequestIdentity(String);
 
@@ -325,7 +325,7 @@ impl EvaluatedFlowScriptSource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RetainedFlowScriptCandidate {
     source: String,
     profile: FlowScriptCandidateProfile,
@@ -563,6 +563,46 @@ impl FlowScriptDraftRecovery {
             message: "No editable FlowScript source draft is retained for this board.".to_string(),
         }
     }
+}
+
+/// Serializable crash-durability snapshot of the retained code-first source drafts.
+///
+/// Secret hygiene: FlowScript sources may embed `@secret` consts and other request-derived values,
+/// so a persisted snapshot is exactly as sensitive as the board document itself. Boards already
+/// persist locally with their variables under the app's project data root; hosts must store this
+/// snapshot with that same protection level (same local data root, never a shared temp/cache
+/// directory and never a location that syncs off-device).
+///
+/// Pending/committed delivery claims are process-scoped and intentionally excluded: after a crash
+/// their Apply/Dismiss tokens can no longer be proven against this process, so drafts round-trip
+/// as editable source state only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlowIrRetainedDraftSnapshot {
+    #[serde(default)]
+    source_drafts: Vec<RetainedSourceDraftSnapshot>,
+}
+
+impl FlowIrRetainedDraftSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.source_drafts.is_empty()
+    }
+
+    pub fn source_draft_count(&self) -> usize {
+        self.source_drafts.len()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RetainedSourceDraftSnapshot {
+    draft_id: String,
+    board_id: String,
+    revision: u64,
+    base_fingerprint: String,
+    request_identity: FlowIrRequestIdentity,
+    contract: RequestAcceptanceContract,
+    mode: FlowIrDraftMode,
+    source: String,
+    best_candidate: RetainedFlowScriptCandidate,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4200,6 +4240,112 @@ impl FlowIrDraftStore {
             (None, None) => None,
         }
     }
+
+    /// Export every retained code-first source draft for host-side crash durability. See
+    /// [`FlowIrRetainedDraftSnapshot`] for the secret-hygiene storage contract and why pending
+    /// delivery claims are excluded.
+    pub fn export_retained_snapshot(&self) -> FlowIrRetainedDraftSnapshot {
+        let Ok(drafts) = self.source_drafts.lock() else {
+            return FlowIrRetainedDraftSnapshot::default();
+        };
+        let mut source_drafts = drafts
+            .iter()
+            .map(|(draft_id, draft)| RetainedSourceDraftSnapshot {
+                draft_id: draft_id.clone(),
+                board_id: draft.board_id.clone(),
+                revision: draft.revision,
+                base_fingerprint: draft.base_fingerprint.clone(),
+                request_identity: draft.request_identity.clone(),
+                contract: draft.request_acceptance_contract.clone(),
+                mode: draft.mode,
+                source: draft.source.clone(),
+                best_candidate: draft.best_candidate.clone(),
+            })
+            .collect::<Vec<_>>();
+        source_drafts.sort_by(|a, b| a.draft_id.cmp(&b.draft_id));
+        FlowIrRetainedDraftSnapshot { source_drafts }
+    }
+
+    /// Restore source drafts exported by [`Self::export_retained_snapshot`]. Restoration is
+    /// fail-safe: an entry is skipped instead of revived when it belongs to another board, when
+    /// the live board's fingerprint no longer matches its exported base, when its draft id is
+    /// already claimed, or when it would exceed the retained-store limits. A restored draft
+    /// carries an empty evaluation with a blank catalog fingerprint, so the next check re-parses
+    /// and re-reconciles against the live board and catalog instead of trusting persisted state.
+    /// Returns the number of drafts actually restored.
+    pub fn import_retained_snapshot(
+        &self,
+        board: &Board,
+        snapshot: FlowIrRetainedDraftSnapshot,
+    ) -> usize {
+        let current_fingerprint = board_fingerprint(board);
+        // Lock order across the shared store is always typed -> source.
+        let Ok(typed_drafts) = self.drafts.lock() else {
+            return 0;
+        };
+        let Ok(mut drafts) = self.source_drafts.lock() else {
+            return 0;
+        };
+        let mut occupied_bytes = drafts
+            .values()
+            .map(stored_flowscript_draft_size)
+            .fold(0usize, usize::saturating_add);
+        let mut restored = 0usize;
+        for entry in snapshot.source_drafts {
+            let draft_id = entry.draft_id.trim().to_string();
+            if draft_id.is_empty()
+                || draft_id.len() > MAX_FLOW_IR_DRAFT_ID_BYTES
+                || entry.source.is_empty()
+                || entry.source.len() > MAX_FLOWSCRIPT_SOURCE_BYTES
+                || entry.best_candidate.source.len() > MAX_FLOWSCRIPT_SOURCE_BYTES
+            {
+                continue;
+            }
+            if entry.board_id != board.id || entry.base_fingerprint != current_fingerprint {
+                continue;
+            }
+            if typed_drafts.contains_key(&draft_id) || drafts.contains_key(&draft_id) {
+                continue;
+            }
+            if drafts.len() >= MAX_FLOWSCRIPT_DRAFTS_PER_STORE {
+                break;
+            }
+            let state_sequence = self.next_access_sequence();
+            let stored = StoredFlowScriptDraft {
+                access_sequence: state_sequence,
+                state_sequence,
+                revision: entry.revision,
+                board_id: entry.board_id,
+                base_fingerprint: entry.base_fingerprint,
+                request_acceptance_contract: entry.contract,
+                request_identity: entry.request_identity,
+                mode: entry.mode,
+                source: entry.source,
+                evaluation: EvaluatedFlowScriptSource {
+                    diagnostics: Vec::new(),
+                    review_notes: Vec::new(),
+                    commands: Vec::new(),
+                    corrections: Vec::new(),
+                },
+                evaluation_catalog_fingerprint: String::new(),
+                best_candidate: entry.best_candidate,
+                checked: None,
+                salvage: None,
+                committed_revision: None,
+                pending_revision: None,
+                pending_claim_id: None,
+                pending_commands: None,
+            };
+            let stored_bytes = stored_flowscript_draft_size(&stored);
+            if occupied_bytes.saturating_add(stored_bytes) > MAX_FLOWSCRIPT_DRAFT_STORE_BYTES {
+                continue;
+            }
+            occupied_bytes = occupied_bytes.saturating_add(stored_bytes);
+            drafts.insert(draft_id, stored);
+            restored += 1;
+        }
+        restored
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4422,11 +4568,23 @@ fn evaluate_flowscript_source(
     // Only explicit prohibitions remain fail-closed. Incomplete-scope and approval-shape findings
     // come from a prose-derived heuristic with known false positives on correct scripts; they are
     // demoted to review notes so a converging repair loop can still commit.
-    let (blocking, review_notes): (Vec<_>, Vec<_>) =
+    let (blocking, mut review_notes): (Vec<_>, Vec<_>) =
         acceptance_diagnostics.into_iter().partition(|diagnostic| {
             diagnostic.code == FlowScriptDiagnosticCode::FsRequestAcceptanceForbidden
         });
     diagnostics.extend(blocking);
+    // Static executability lint over the projected result of this exact command batch. It only
+    // runs on an otherwise-clean evaluation so its findings are never stacked on top of syntax,
+    // catalog, or acceptance errors that already block this revision.
+    if diagnostics.is_empty() && !reconcile.commands.is_empty() {
+        let executability = super::executability::lint_flowscript_executability(
+            board,
+            catalog,
+            &reconcile.commands,
+        );
+        diagnostics.extend(executability.blocking);
+        review_notes.extend(executability.review_notes);
+    }
     EvaluatedFlowScriptSource {
         diagnostics,
         review_notes,
@@ -14183,5 +14341,150 @@ eventsSimple() {
             },
         );
         assert_eq!(allowed.revision, Some(1));
+    }
+
+    #[test]
+    fn retained_snapshot_roundtrip_restores_editable_source_draft() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        let prompt = "log hello for every simple event";
+        let binding = store.bind_request_acceptance_contract(&board.id, prompt);
+        let source = valid_flowscript("hello");
+        let written = store.write_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "durable".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: source.clone(),
+                allow_scope_reduction: false,
+            },
+            &binding,
+        );
+        assert_eq!(written.status, "draft_started", "{written:#?}");
+
+        let exported = store.export_retained_snapshot();
+        assert_eq!(exported.source_draft_count(), 1);
+        let encoded = serde_json::to_string(&exported).expect("snapshot serializes");
+        let decoded: FlowIrRetainedDraftSnapshot =
+            serde_json::from_str(&encoded).expect("snapshot deserializes");
+
+        let restored_store = FlowIrDraftStore::new();
+        assert_eq!(restored_store.import_retained_snapshot(&board, decoded), 1);
+        {
+            let drafts = restored_store.source_drafts.lock().unwrap();
+            let restored = drafts.get("durable").expect("restored draft");
+            assert_eq!(restored.source, source);
+            assert_eq!(restored.revision, 0);
+            assert_eq!(restored.base_fingerprint, board_fingerprint(&board));
+            assert_eq!(
+                restored.request_identity,
+                FlowIrRequestIdentity::from_raw_request(prompt)
+            );
+            assert!(restored.checked.is_none());
+            assert!(restored.pending_revision.is_none());
+            assert!(restored.evaluation_catalog_fingerprint.is_empty());
+        }
+
+        // A fresh binding for the same immutable request resumes the restored draft, and the
+        // blank catalog fingerprint forces an honest re-evaluation before commit.
+        let resumed_binding = restored_store.bind_request_acceptance_contract(&board.id, prompt);
+        let checked = restored_store.check_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            CheckFlowScriptArgs {
+                draft_id: "durable".to_string(),
+                expected_revision: 0,
+            },
+            &resumed_binding,
+        );
+        assert_eq!(checked.status, "valid", "{checked:#?}");
+
+        // A differently bound request must not inherit the restored draft.
+        let foreign_binding = restored_store
+            .bind_request_acceptance_contract(&board.id, "delete all boards immediately");
+        let denied = restored_store.check_flowscript_with_acceptance_binding(
+            &board,
+            &flowscript_catalog(),
+            CheckFlowScriptArgs {
+                draft_id: "durable".to_string(),
+                expected_revision: 0,
+            },
+            &foreign_binding,
+        );
+        assert_ne!(denied.status, "valid", "{denied:#?}");
+    }
+
+    #[test]
+    fn retained_snapshot_import_skips_stale_board_fingerprint() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        store.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "stale".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("hello"),
+                allow_scope_reduction: false,
+            },
+        );
+        let snapshot = store.export_retained_snapshot();
+        assert_eq!(snapshot.source_draft_count(), 1);
+
+        let mut advanced = board.clone();
+        let mut variable = Variable::new("revisionMarker", VariableType::String, ValueType::Normal);
+        variable.id = "revision-marker".to_string();
+        advanced.variables.insert(variable.id.clone(), variable);
+        let restored_store = FlowIrDraftStore::new();
+        assert_eq!(
+            restored_store.import_retained_snapshot(&advanced, snapshot.clone()),
+            0
+        );
+        assert!(restored_store.source_drafts.lock().unwrap().is_empty());
+
+        let mut foreign_board = board.clone();
+        foreign_board.id = "other-board".to_string();
+        assert_eq!(
+            restored_store.import_retained_snapshot(&foreign_board, snapshot),
+            0
+        );
+    }
+
+    #[test]
+    fn retained_snapshot_import_never_replaces_live_drafts() {
+        let store = FlowIrDraftStore::new();
+        let board = empty_board();
+        store.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "occupied".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: valid_flowscript("persisted"),
+                allow_scope_reduction: false,
+            },
+        );
+        let snapshot = store.export_retained_snapshot();
+
+        let target = FlowIrDraftStore::new();
+        let live_source = valid_flowscript("live");
+        target.write_flowscript(
+            &board,
+            &flowscript_catalog(),
+            WriteFlowScriptArgs {
+                draft_id: "occupied".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: live_source.clone(),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(target.import_retained_snapshot(&board, snapshot), 0);
+        let drafts = target.source_drafts.lock().unwrap();
+        assert_eq!(drafts.get("occupied").unwrap().source, live_source);
     }
 }

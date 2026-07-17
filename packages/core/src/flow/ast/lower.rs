@@ -43,7 +43,7 @@ const EVENT_RETURN_RESULT: &str = "events_generic_return_result";
 const EVENT_RESPONSE_PIN: &str = "response";
 
 /// Dynamic-pin prefixes used by the schema struct nodes.
-const MAKE_STRUCT_PREFIX: &str = "__make_struct_field__";
+pub(crate) const MAKE_STRUCT_PREFIX: &str = "__make_struct_field__";
 pub(crate) const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
 
 /// Loop node types and their FlowScript keyword. Each loops its `exec_out` exec output as the
@@ -909,7 +909,7 @@ impl<'a> Lowering<'a> {
                     None => Block::default(),
                 };
                 arms.push(BranchArm {
-                    label: pin.name.clone(),
+                    label: arm_label(entry, pin),
                     body,
                 });
             }
@@ -974,7 +974,7 @@ impl<'a> Lowering<'a> {
                         None => Block::default(),
                     };
                     arms.push(BranchArm {
-                        label: pin.name.clone(),
+                        label: arm_label(node, pin),
                         body,
                     });
                 }
@@ -1004,7 +1004,7 @@ impl<'a> Lowering<'a> {
                         None => Block::default(),
                     };
                     arms.push(BranchArm {
-                        label: pin.name.clone(),
+                        label: arm_label(node, pin),
                         body,
                     });
                 }
@@ -1809,6 +1809,26 @@ fn exec_output_pins(node: &Node) -> Vec<&Pin> {
         .collect();
     pins.sort_by_key(|p| p.index);
     pins
+}
+
+/// Branch arm label for one exec output pin. Same-named siblings (repeatable exec pins such as
+/// `control_par_execution`'s `exec_out`) get the stable positional selector board commands use
+/// (`name[#N]`, occurrence among ALL same-named exec outputs sorted by index/id) so each arm
+/// addresses exactly one pin on the reverse path; the first occurrence keeps the plain name.
+fn arm_label(node: &Node, pin: &Pin) -> String {
+    let mut same_named: Vec<&Pin> = node
+        .pins
+        .values()
+        .filter(|p| p.pin_type == PinType::Output && is_exec(p) && p.name == pin.name)
+        .collect();
+    if same_named.len() <= 1 {
+        return pin.name.clone();
+    }
+    same_named.sort_by_key(|p| (p.index, p.id.clone()));
+    match same_named.iter().position(|p| p.id == pin.id) {
+        Some(0) | None => pin.name.clone(),
+        Some(occurrence) => super::pin_occurrence_ref(&pin.name, occurrence),
+    }
 }
 
 fn binding_base_name(node: &Node) -> String {

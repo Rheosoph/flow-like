@@ -6,6 +6,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -33,11 +34,12 @@ use flow_like::flow::copilot::{
     BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoardCommand, BoundBeginFlowIrDraftTool,
     CatalogProvider, CheckFlowScriptArgs, CheckFlowScriptTool, CommitFlowIrDraftArgs,
     CommitFlowIrDraftTool, CommitFlowScriptArgs, CommitFlowScriptTool, EmitCommandsArgs,
-    FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore, GetCurrentFlowScriptTool,
-    GetDeclarationsArgs, GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool,
-    GraphContext, ListBoardNodesTool, ModelFacingEmitCommandsTool, NodeMetadata,
-    PatchFlowScriptArgs, PatchFlowScriptTool, PlanFlowIrTool, UpdateFlowIrDraftArgs,
-    UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
+    FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore,
+    FlowIrRetainedDraftSnapshot, GetCurrentFlowScriptTool, GetDeclarationsArgs,
+    GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool, GraphContext,
+    ListBoardNodesTool, ModelFacingEmitCommandsTool, NodeMetadata, PatchFlowScriptArgs,
+    PatchFlowScriptTool, PlanFlowIrTool, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool,
+    UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
     ValidateFlowIrDraftTool, ValidationIssue, WriteFlowScriptArgs, WriteFlowScriptTool,
     board_has_no_nodes, build_list_board_nodes_output, build_node_details_output,
     build_unconfigured_nodes_output, emit_validation_requires_flowscript,
@@ -330,6 +332,9 @@ fn touch_persisted_flow_ir_draft_store(
         return Err(FlowIrDraftStoreAccessError::Capacity);
     }
     let store = fallback;
+    if let Some(board) = observed_board {
+        hydrate_flow_ir_draft_store_from_disk(board_key, board, &store);
+    }
     stores.insert(
         board_key.to_string(),
         CachedFlowIrDraftStore {
@@ -396,7 +401,146 @@ pub(super) fn retained_flow_ir_draft_store(board_key: &str) -> Option<Arc<FlowIr
     prune_expired_flow_ir_draft_stores(&mut stores, now);
     let cached = stores.get_mut(board_key.trim())?;
     cached.last_accessed = now;
-    Some(cached.store.clone())
+    let store = cached.store.clone();
+    drop(stores);
+    // Apply/Dismiss mutate this store right after resolving it; the debounced snapshot below runs
+    // after those dispositions and therefore captures the post-disposition draft state.
+    schedule_flow_ir_draft_snapshot(board_key, &store);
+    Some(store)
+}
+
+const FLOW_IR_DRAFT_SNAPSHOT_DEBOUNCE: Duration = Duration::from_millis(500);
+
+static FLOW_IR_DRAFT_SNAPSHOT_GENERATIONS: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Root for on-disk retained-draft snapshots.
+///
+/// Secret hygiene: draft FlowScript sources can carry `@secret` consts and other request-derived
+/// values, so snapshots require exactly the protection level of the boards themselves. Boards
+/// already persist locally — variables included — under the settings project root, which defaults
+/// to `{data_dir}/flow-like/projects`; snapshots mirror that root instead of a shared temp or
+/// cache directory and never a location that syncs off-device. `FLOW_LIKE_FLOWPILOT_DRAFT_DIR`
+/// overrides the root for tests.
+fn flow_ir_draft_snapshot_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("FLOW_LIKE_FLOWPILOT_DRAFT_DIR") {
+        let dir = PathBuf::from(dir);
+        return (!dir.as_os_str().is_empty()).then_some(dir);
+    }
+    #[cfg(test)]
+    {
+        // Unit tests exercise the retained tool handlers directly; keep their snapshots out of
+        // the user's real data dir and isolated per test process.
+        static TEST_SNAPSHOT_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+            std::env::temp_dir().join(format!(
+                "flow-like-test-flowpilot-drafts-{}",
+                std::process::id()
+            ))
+        });
+        Some(TEST_SNAPSHOT_DIR.clone())
+    }
+    #[cfg(not(test))]
+    Some(
+        dirs_next::data_dir()?
+            .join("flow-like")
+            .join("projects")
+            .join(".flowpilot-drafts"),
+    )
+}
+
+fn flow_ir_draft_snapshot_path(board_key: &str) -> Option<PathBuf> {
+    let board_key = board_key.trim();
+    if board_key.is_empty() {
+        return None;
+    }
+    let sanitized = board_key
+        .chars()
+        .take(64)
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    // FNV-1a over the untruncated key keeps sanitized/truncated board keys collision-free.
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in board_key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    Some(flow_ir_draft_snapshot_dir()?.join(format!("{sanitized}-{hash:016x}.drafts.json")))
+}
+
+/// Debounced crash-durability write for a board's retained drafts. Every draft-mutating tool call
+/// schedules one; only the newest generation writes, so a burst of tool calls produces one file.
+fn schedule_flow_ir_draft_snapshot(board_key: &str, store: &Arc<FlowIrDraftStore>) {
+    let board_key = board_key.trim().to_string();
+    let Some(path) = flow_ir_draft_snapshot_path(&board_key) else {
+        return;
+    };
+    let Ok(mut generations) = FLOW_IR_DRAFT_SNAPSHOT_GENERATIONS.lock() else {
+        return;
+    };
+    let generation = generations
+        .entry(board_key.clone())
+        .and_modify(|generation| *generation = generation.wrapping_add(1))
+        .or_insert(1);
+    let generation = *generation;
+    drop(generations);
+    let store = store.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(FLOW_IR_DRAFT_SNAPSHOT_DEBOUNCE);
+        let is_current = FLOW_IR_DRAFT_SNAPSHOT_GENERATIONS
+            .lock()
+            .is_ok_and(|generations| generations.get(&board_key) == Some(&generation));
+        if is_current {
+            persist_flow_ir_draft_snapshot(&path, &store);
+        }
+    });
+}
+
+/// Atomic-rename snapshot write. An empty snapshot removes the file so applied or dismissed
+/// drafts do not linger on disk after their session resolves.
+fn persist_flow_ir_draft_snapshot(path: &Path, store: &FlowIrDraftStore) {
+    let snapshot = store.export_retained_snapshot();
+    if snapshot.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    let Ok(encoded) = serde_json::to_vec(&snapshot) else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let temp = path.with_extension("json.tmp");
+    if std::fs::write(&temp, encoded).is_ok() {
+        let _ = std::fs::rename(&temp, path);
+    }
+}
+
+/// Restore crash-durable drafts into a freshly created board store. The core import is fail-safe:
+/// entries whose board fingerprint no longer matches the live board are skipped, never revived.
+fn hydrate_flow_ir_draft_store_from_disk(board_key: &str, board: &Board, store: &FlowIrDraftStore) {
+    let Some(path) = flow_ir_draft_snapshot_path(board_key) else {
+        return;
+    };
+    hydrate_flow_ir_draft_store_from_path(&path, board, store);
+}
+
+fn hydrate_flow_ir_draft_store_from_path(path: &Path, board: &Board, store: &FlowIrDraftStore) {
+    let Ok(encoded) = std::fs::read(path) else {
+        return;
+    };
+    let Ok(snapshot) = serde_json::from_slice::<FlowIrRetainedDraftSnapshot>(&encoded) else {
+        return;
+    };
+    store.import_retained_snapshot(board, snapshot);
 }
 
 /// Hold the registry-backed board lock for the entire operation so fingerprint validation and
@@ -1332,6 +1476,7 @@ fn create_write_flowscript_tool(
                 &acceptance_binding,
             )
         });
+        schedule_flow_ir_draft_snapshot(&board_key, &store);
         ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
     });
     (tool, handler)
@@ -1376,6 +1521,7 @@ fn create_patch_flowscript_tool(
                 &acceptance_binding,
             )
         });
+        schedule_flow_ir_draft_snapshot(&board_key, &store);
         ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
     });
     (tool, handler)
@@ -1420,6 +1566,7 @@ fn create_check_flowscript_tool(
                 &acceptance_binding,
             )
         });
+        schedule_flow_ir_draft_snapshot(&board_key, &store);
         ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
     });
     (tool, handler)
@@ -1464,7 +1611,7 @@ fn create_commit_flowscript_tool(
         }
         let catalog = block_on_tool(provider.get_all_metadata());
 
-        with_current_board(&board, live_board.as_ref(), |board| {
+        let tool_result = with_current_board(&board, live_board.as_ref(), |board| {
             // Keep the registry-backed board guard across fingerprint validation and host queue
             // installation. The client never supplies a command batch: only commands retained by
             // check_flowscript for this exact revision cross the Apply/Dismiss boundary.
@@ -1600,7 +1747,9 @@ fn create_commit_flowscript_tool(
             // FlowScriptDraftResponse skips its host-only commands field, preventing a second,
             // client-trusted copy of the batch from escaping through the model tool result.
             ToolResultObject::text(serde_json::to_string_pretty(&result).unwrap_or_default())
-        })
+        });
+        schedule_flow_ir_draft_snapshot(&board_key, &store);
+        tool_result
     });
     (tool, handler)
 }
@@ -2657,9 +2806,9 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         "scrollArea" => Some(&["direction"]),
         "aspectRatio" => Some(&["ratio"]),
         "absolute" => Some(&["width", "height"]),
-        "box" => Some(&["as", "semanticRole"]),
+        "box" => Some(&["as"]),
         "center" => Some(&["inline"]),
-        "spacer" => Some(&["size", "flex", "direction", "flexible"]),
+        "spacer" => Some(&["size", "flex"]),
         "overlay" => Some(&["baseComponentId", "overlays"]),
         // Mirrors WidgetInstanceComponent in packages/ui/components/a2ui/types.ts plus the
         // inline-definition form the prompts document (A2UIWidgetInstance.tsx).
@@ -2675,20 +2824,10 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         "text" => Some(&[
             "content", "variant", "size", "weight", "color", "align", "truncate", "maxLines",
         ]),
-        "image" => Some(&[
-            "src",
-            "alt",
-            "fit",
-            "fallback",
-            "fallbackSrc",
-            "loading",
-            "aspectRatio",
-            "width",
-            "height",
-        ]),
+        "image" => Some(&["src", "alt", "fit", "fallback", "loading", "aspectRatio"]),
         "icon" => Some(&["name", "size", "color", "strokeWidth"]),
         "video" => Some(&[
-            "src", "poster", "autoplay", "autoPlay", "loop", "muted", "controls", "width", "height",
+            "src", "poster", "autoplay", "loop", "muted", "controls", "width", "height",
         ]),
         "lottie" => Some(&["src", "autoplay", "loop", "speed", "width", "height"]),
         "markdown" => Some(&["content", "allowHtml"]),
@@ -2713,11 +2852,23 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "swapSides",
         ]),
         "divider" => Some(&["orientation", "thickness", "color"]),
-        "badge" => Some(&["content", "text", "variant", "color"]),
+        "badge" => Some(&["content", "variant", "color"]),
         "avatar" => Some(&["src", "fallback", "size"]),
+        "userProfile" => Some(&[
+            "value",
+            "variant",
+            "avatarSize",
+            "showHover",
+            "showEmail",
+            "showDescription",
+            "showUserId",
+            "showProfileLink",
+            "fallbackLabel",
+            "muted",
+        ]),
         "progress" => Some(&["value", "max", "showLabel", "variant", "color"]),
         "spinner" => Some(&["size", "color"]),
-        "skeleton" => Some(&["width", "height", "rounded", "variant"]),
+        "skeleton" => Some(&["width", "height", "rounded"]),
         "iframe" => Some(&[
             "src",
             "srcdoc",
@@ -2744,32 +2895,53 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "paginated",
             "pageSize",
             "selectable",
-            "showPagination",
+            "onRowClick",
         ]),
+        "tableRow" => Some(&["cells", "selected", "disabled"]),
+        "tableCell" => Some(&["content", "isHeader", "colSpan", "rowSpan", "align"]),
         "plotlyChart" => Some(&[
             "chartType",
-            "data",
             "title",
+            "series",
+            "xAxis",
+            "yAxis",
+            "data",
             "layout",
             "config",
-            "height",
             "width",
+            "height",
+            "responsive",
+            "showLegend",
+            "legendPosition",
         ]),
         "nivoChart" => Some(&[
             "chartType",
+            "title",
             "data",
             "height",
-            "width",
             "colors",
-            "colorScheme",
+            "animate",
             "showLegend",
             "legendPosition",
+            "indexBy",
+            "keys",
             "margin",
             "axisBottom",
             "axisLeft",
-            "animate",
-            "motionConfig",
-            "style",
+            "axisTop",
+            "axisRight",
+            "config",
+            "barStyle",
+            "lineStyle",
+            "pieStyle",
+            "radarStyle",
+            "heatmapStyle",
+            "scatterStyle",
+            "funnelStyle",
+            "treemapStyle",
+            "sankeyStyle",
+            "calendarStyle",
+            "chordStyle",
         ]),
         "filePreview" => Some(&[
             "src",
@@ -2777,20 +2949,26 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "filename",
             "mimeType",
             "fileType",
-            "width",
-            "height",
-            "fit",
             "showControls",
+            "fit",
             "fallbackText",
+            "height",
+            "showDownload",
+            "loading",
+            "variant",
+            "autoPlay",
         ]),
         "boundingBoxOverlay" => Some(&[
             "src",
+            "alt",
             "boxes",
             "showLabels",
             "showConfidence",
+            "strokeWidth",
+            "fontSize",
+            "fit",
             "normalized",
-            "width",
-            "height",
+            "interactive",
         ]),
         "button" => Some(&[
             "label",
@@ -2802,6 +2980,43 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "iconPosition",
             "tooltip",
         ]),
+        "feedback" => Some(&[
+            "mode",
+            "size",
+            "title",
+            "description",
+            "positiveLabel",
+            "negativeLabel",
+            "positiveRating",
+            "negativeRating",
+            "showComment",
+            "commentMode",
+            "commentLabel",
+            "commentPlaceholder",
+            "commentTitle",
+            "commentDescription",
+            "commentSubmitLabel",
+            "commentCancelLabel",
+            "feedbackId",
+            "includeState",
+            "pageContextMode",
+            "pageContextQueryParamAllowlist",
+            "pageContextQueryParamDenylist",
+            "includePageHash",
+            "successMessage",
+            "disabled",
+        ]),
+        "appLink" => Some(&[
+            "target",
+            "label",
+            "variant",
+            "size",
+            "icon",
+            "iconPosition",
+            "appId",
+            "eventId",
+            "disabled",
+        ]),
         "textField" => Some(&[
             "value",
             "placeholder",
@@ -2810,7 +3025,6 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "error",
             "disabled",
             "inputType",
-            "type",
             "multiline",
             "rows",
             "maxLength",
@@ -2862,12 +3076,64 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "aspectRatio",
             "showPreview",
         ]),
-        "imageLabeler" => Some(&["src", "labels", "boxes", "disabled", "width", "height"]),
-        "imageHotspot" => Some(&["src", "hotspots", "markerStyle", "width", "height"]),
+        "voiceInput" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "maxDuration",
+            "autoStop",
+            "silenceThreshold",
+            "silenceDuration",
+            "disabled",
+            "error",
+            "visualizer",
+            "variant",
+            "size",
+            "mode",
+            "invoke",
+            "color",
+            "recordingColor",
+            "resultMode",
+            "src",
+            "url",
+        ]),
+        "imageLabeler" => Some(&[
+            "src",
+            "alt",
+            "boxes",
+            "labels",
+            "disabled",
+            "showLabels",
+            "minBoxSize",
+        ]),
+        "imageHotspot" => Some(&[
+            "src",
+            "alt",
+            "hotspots",
+            "showMarkers",
+            "markerStyle",
+            "fit",
+            "normalized",
+            "showTooltips",
+        ]),
+        "geoMap" => Some(&[
+            "viewport",
+            "markers",
+            "routes",
+            "showControls",
+            "showZoom",
+            "showCompass",
+            "showLocate",
+            "showFullscreen",
+            "interactive",
+            "controlPosition",
+            "clusterMarkers",
+            "clusterRadius",
+            "clusterMaxZoom",
+        ]),
         "link" => Some(&[
             "href",
             "label",
-            "text",
             "route",
             "queryParams",
             "external",
@@ -2875,7 +3141,6 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "variant",
             "underline",
             "disabled",
-            "openInNewTab",
         ]),
         "card" => Some(&[
             "title",
@@ -2898,23 +3163,17 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "size",
             "centered",
         ]),
-        "tabs" => Some(&["value", "tabs", "orientation", "variant", "defaultValue"]),
-        "accordion" => Some(&[
-            "items",
-            "multiple",
-            "defaultExpanded",
-            "collapsible",
-            "type",
+        "tabs" => Some(&[
+            "value",
+            "tabs",
+            "orientation",
+            "variant",
+            "listStyle",
+            "triggerStyle",
+            "contentStyle",
         ]),
-        "drawer" => Some(&[
-            "open",
-            "side",
-            "title",
-            "size",
-            "overlay",
-            "closable",
-            "description",
-        ]),
+        "accordion" => Some(&["items", "multiple", "defaultExpanded", "collapsible"]),
+        "drawer" => Some(&["open", "side", "title", "size", "overlay", "closable"]),
         "tooltip" => Some(&["content", "side", "delayMs", "maxWidth"]),
         "popover" => Some(&[
             "open",
@@ -2922,7 +3181,6 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "side",
             "trigger",
             "closeOnClickOutside",
-            "content",
         ]),
         "canvas2d" => Some(&["width", "height", "backgroundColor", "pixelPerfect"]),
         "sprite" => Some(&[
@@ -2998,22 +3256,29 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "useHdrBackground",
             "polyhavenHdri",
             "polyhavenResolution",
+            "hdriUrl",
+            "groundSize",
+            "groundOffsetY",
+            "groundFollowCamera",
         ]),
-        "dialogue" => Some(&["text", "speakerName", "typewriter", "speed", "portrait"]),
-        "characterPortrait" => {
-            Some(&["image", "expression", "position", "width", "height", "flip"])
-        }
-        "choiceMenu" => Some(&["choices", "title", "layout", "columns"]),
-        "inventoryGrid" => Some(&["items", "columns", "rows", "cellSize", "showTooltips"]),
+        "dialogue" => Some(&[
+            "text",
+            "speakerName",
+            "speakerPortraitId",
+            "typewriter",
+            "typewriterSpeed",
+        ]),
+        "characterPortrait" => Some(&["image", "expression", "position", "size", "dimmed"]),
+        "choiceMenu" => Some(&["choices", "title", "layout"]),
+        "inventoryGrid" => Some(&["items", "columns", "rows", "cellSize"]),
         "healthBar" => Some(&[
             "value",
             "maxValue",
             "label",
+            "showValue",
             "fillColor",
+            "backgroundColor",
             "variant",
-            "showLabel",
-            "size",
-            "animated",
         ]),
         "miniMap" => Some(&[
             "mapImage",
@@ -3022,14 +3287,14 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "markers",
             "playerX",
             "playerY",
-            "viewportWidth",
-            "viewportHeight",
-            "zoom",
+            "playerRotation",
         ]),
         "calendar" => Some(&[
             "events",
             "view",
             "date",
+            "title",
+            "density",
             "editable",
             "selectable",
             "firstDayOfWeek",
@@ -3039,6 +3304,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "showWeekends",
             "showNowIndicator",
             "showAllDay",
+            "showViewSwitcher",
             "locale",
             "height",
             "responsive",
@@ -3047,12 +3313,18 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
         "gantt" => Some(&[
             "tasks",
             "view",
+            "title",
+            "density",
             "editable",
             "draggable",
             "resizable",
             "showDependencies",
             "showProgress",
             "showToday",
+            "showViewSwitcher",
+            "showTaskList",
+            "taskListWidth",
+            "shadeWeekends",
             "rowHeight",
             "columns",
             "height",
@@ -3074,6 +3346,7 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "markdown" => &["content"],
         "diffView" => &["original", "modified"],
         "badge" => &["content"],
+        "userProfile" => &["value"],
         "progress" => &["value"],
         "button" => &["label"],
         "textField" => &["value"],
@@ -3101,7 +3374,7 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
     }
 }
 
-const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions"];
+const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions", "hidden"];
 const MAX_UI_COMPONENTS: usize = 120;
 const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
@@ -3254,10 +3527,19 @@ fn validate_ui_components(
             }
         }
 
+        // Props that are plain values in a2ui/types.ts (not BoundValue-wrapped).
+        let plain_props: &[&str] = match comp_type {
+            "overlay" => &["baseComponentId"],
+            "popover" => &["contentComponentId"],
+            "widgetInstance" => &["instanceId", "widgetId", "appId"],
+            "link" => &["external", "target", "variant", "underline"],
+            _ => &[],
+        };
+
         if let Some(obj) = component.as_object() {
             for (key, value) in obj {
                 let k = key.as_str();
-                if BASE_PROPS.contains(&k) {
+                if BASE_PROPS.contains(&k) || plain_props.contains(&k) {
                     continue;
                 }
                 if matches!(
@@ -4711,5 +4993,169 @@ mod tests {
         assert!(commands.is_empty());
         assert!(token.is_none());
         assert_eq!(store.commit(&board, &catalog, args).status, "queued");
+    }
+
+    #[test]
+    fn draft_snapshot_persist_and_hydrate_roundtrip() {
+        let board = empty_board("snapshot-board");
+        let catalog = typed_catalog();
+        let store = FlowIrDraftStore::new();
+        let written = store.write_flowscript(
+            &board,
+            &catalog,
+            WriteFlowScriptArgs {
+                draft_id: "durable".to_string(),
+                replace_existing: false,
+                mode: FlowIrDraftMode::Additive,
+                source: "eventsSimple() {\n    logInfo({ message: \"hello\" })\n}\n".to_string(),
+                allow_scope_reduction: false,
+            },
+        );
+        assert_eq!(written.status, "draft_started", "{written:#?}");
+
+        let dir = std::env::temp_dir().join(format!(
+            "flow-like-draft-snapshot-roundtrip-{}",
+            std::process::id()
+        ));
+        let path = dir.join("snapshot-board.drafts.json");
+        persist_flow_ir_draft_snapshot(&path, &store);
+        assert!(path.exists());
+
+        let restored = FlowIrDraftStore::new();
+        hydrate_flow_ir_draft_store_from_path(&path, &board, &restored);
+        assert!(restored.has_editable_draft_for_board(&board.id));
+
+        // A board that moved past the snapshot's base fingerprint must not revive stale drafts.
+        let mut advanced = board.clone();
+        let mut variable = Variable::new("marker", VariableType::String, ValueType::Normal);
+        variable.id = "marker".to_string();
+        advanced.variables.insert(variable.id.clone(), variable);
+        let stale = FlowIrDraftStore::new();
+        hydrate_flow_ir_draft_store_from_path(&path, &advanced, &stale);
+        assert!(!stale.has_editable_draft_for_board(&board.id));
+
+        // Persisting an empty store removes the snapshot instead of leaving a stale file.
+        persist_flow_ir_draft_snapshot(&path, &FlowIrDraftStore::new());
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Component types with a detailed schema page in
+    /// `flow_like::a2ui::copilot::get_component_schema` (advertised by the
+    /// get_component_schema tool description).
+    const SCHEMA_PAGE_TYPES: &[&str] = &[
+        "column",
+        "row",
+        "grid",
+        "text",
+        "button",
+        "feedback",
+        "appLink",
+        "card",
+        "userProfile",
+        "textField",
+        "select",
+        "image",
+        "icon",
+        "diffView",
+        "calendar",
+        "gantt",
+        "checkbox",
+        "switch",
+        "tabs",
+        "modal",
+    ];
+
+    /// Every component type advertised in the a2ui docs (the quick-reference
+    /// catalog embedded in the system prompt plus the detailed schema pages).
+    fn documented_component_types() -> Vec<String> {
+        let mut types = Vec::new();
+        for line in flow_like::a2ui::copilot::COMPONENT_CATALOG.lines() {
+            if let Some(rest) = line.trim().strip_prefix("- `")
+                && let Some(end) = rest.find('`')
+            {
+                types.push(rest[..end].to_string());
+            }
+        }
+        assert!(
+            types.len() > 30,
+            "catalog parse looks broken: {} types",
+            types.len()
+        );
+        for schema_type in SCHEMA_PAGE_TYPES {
+            if !types.iter().any(|t| t == schema_type) {
+                types.push(schema_type.to_string());
+            }
+        }
+        types
+    }
+
+    fn representative_prop_value(prop: &str) -> Value {
+        match prop {
+            "width" | "height" | "x" | "y" | "ratio" | "maxValue" => json!({"literalNumber": 100}),
+            "checked" | "open" => json!({"literalBool": false}),
+            "options" => json!({"literalOptions": [{"value": "a", "label": "A"}]}),
+            "events" | "tasks" => json!({"literalJson": "[]"}),
+            "shapeType" => json!({"literalString": "rectangle"}),
+            _ => json!({"literalString": "x"}),
+        }
+    }
+
+    #[test]
+    fn emit_ui_accepts_every_documented_component_type() {
+        for comp_type in documented_component_types() {
+            let props = known_props_for_type(&comp_type);
+            assert!(
+                props.is_some(),
+                "documented component type '{comp_type}' is rejected by known_props_for_type — validator drifted from the docs"
+            );
+
+            let mut component = serde_json::Map::new();
+            component.insert("type".to_string(), json!(comp_type));
+            component.insert("hidden".to_string(), json!({"literalBool": false}));
+            for required in required_props_for_type(&comp_type) {
+                component.insert(required.to_string(), representative_prop_value(required));
+            }
+
+            let components = json!([{ "id": "root", "component": Value::Object(component) }]);
+            let (_, errors) = validate_ui_components("root", &json!({}), &components);
+            assert!(
+                errors.is_empty(),
+                "documented component type '{comp_type}' fails emit_ui validation: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn emit_ui_accepts_all_known_props_for_documented_types() {
+        for comp_type in documented_component_types() {
+            let Some(props) = known_props_for_type(&comp_type) else {
+                continue;
+            };
+            let mut component = serde_json::Map::new();
+            component.insert("type".to_string(), json!(comp_type));
+            for prop in props {
+                component.insert(prop.to_string(), representative_prop_value(prop));
+            }
+            // Plain-typed reference props must point at a real component.
+            component.remove("baseComponentId");
+            component.remove("contentComponentId");
+            for required in required_props_for_type(&comp_type) {
+                component
+                    .entry(required.to_string())
+                    .or_insert_with(|| representative_prop_value(required));
+            }
+
+            let components = json!([{ "id": "root", "component": Value::Object(component) }]);
+            let (_, errors) = validate_ui_components("root", &json!({}), &components);
+            let unknown_prop_errors: Vec<&String> = errors
+                .iter()
+                .filter(|error| error.contains("unknown prop"))
+                .collect();
+            assert!(
+                unknown_prop_errors.is_empty(),
+                "'{comp_type}' rejects props it declares as known: {unknown_prop_errors:?}"
+            );
+        }
     }
 }

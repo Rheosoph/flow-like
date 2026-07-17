@@ -45,6 +45,35 @@ export type AgentDebugEventKind =
 	| "bridge"
 	| "nested";
 
+export const AGENT_RUN_SUMMARY_STAGE = "run_summary" as const;
+
+/** Structured per-run summary emitted once by the host when a FlowPilot run reaches any terminal path. */
+export interface IAgentRunSummary {
+	outcome?: string;
+	provider?: string;
+	model?: string;
+	duration_ms?: number;
+	phases?: number;
+	budget?: Record<string, { used?: number; limit?: number }>;
+	diagnostics_by_code?: Record<string, number>;
+	retained_draft?: { id?: string; revision?: number } | null;
+	review_notes?: number;
+	applied_commands?: number;
+}
+
+const RUN_SUMMARY_FIELDS = [
+	"outcome",
+	"provider",
+	"model",
+	"duration_ms",
+	"phases",
+	"budget",
+	"diagnostics_by_code",
+	"retained_draft",
+	"review_notes",
+	"applied_commands",
+] as const;
+
 export interface IAgentDebugEvent {
 	id: string;
 	kind: AgentDebugEventKind;
@@ -538,8 +567,15 @@ function isNestedRunEvidence(event: IAgentDebugEvent) {
 	);
 }
 
+function isRunSummaryEvent(event: IAgentDebugEvent) {
+	return event.stage === AGENT_RUN_SUMMARY_STAGE;
+}
+
 /** Higher values contain more useful evidence when the report has to shed history. */
 function retentionPriority(event: IAgentDebugEvent) {
+	// One tiny structured summary replaces forensic archaeology across the whole run; it is never
+	// compacted or dropped under pressure.
+	if (isRunSummaryEvent(event)) return 6;
 	if (isNestedRunEvidence(event)) return 5;
 	if (event.stage === "artifact" || event.kind === "approval") return 4;
 	if (
@@ -676,7 +712,7 @@ function compactReportToLimit(report: IAgentDebugReport) {
 	// newest boundary if an unexpectedly large provider envelope still exceeds it.
 	while (reportSize(next) > MAX_REPORT_BYTES && next.events.length > 1) {
 		const removableIndex = next.events.findIndex(
-			(event) => !isNestedRunEvidence(event),
+			(event) => !isNestedRunEvidence(event) && !isRunSummaryEvent(event),
 		);
 		const index = removableIndex >= 0 ? removableIndex : 0;
 		next = replaceEventsForPressure(
@@ -1869,6 +1905,46 @@ export function debugEventFromCopilotStream(
 	});
 	if (artifact) return artifact;
 
+	// The host emits exactly one structured run summary per terminal run over the tool_end pipe
+	// (without a tool_call_id so process-step UIs ignore it). Keep it as a dedicated stage so
+	// compaction can pin it and the markdown export can render it as the report headline.
+	if (event.type === "tool_end" && record.kind === AGENT_RUN_SUMMARY_STAGE) {
+		const summary: Record<string, unknown> = {};
+		for (const field of RUN_SUMMARY_FIELDS) {
+			if (record[field] !== undefined) summary[field] = record[field];
+		}
+		const outcome =
+			cleanSummary(record.outcome, MAX_GENERATION_DIAGNOSTIC_KEY_CHARS) ??
+			"unknown";
+		const providerModel = [
+			cleanSummary(record.provider, MAX_GENERATION_DIAGNOSTIC_KEY_CHARS),
+			cleanSummary(record.model, MAX_GENERATION_DIAGNOSTIC_KEY_CHARS),
+		]
+			.filter(Boolean)
+			.join(" / ");
+		return markEventPreviewsNormalized({
+			...common,
+			id: `${prefix}:run_summary:${now}:${options.sequence ?? 0}`,
+			kind: options.scope === "nested" ? "nested" : "lifecycle",
+			stage: AGENT_RUN_SUMMARY_STAGE,
+			status:
+				outcome === "cancelled"
+					? "partial"
+					: ["committed", "completed"].includes(outcome)
+						? "done"
+						: "error",
+			terminal_status: outcome,
+			name: AGENT_RUN_SUMMARY_STAGE,
+			result_summary: `${outcome}${providerModel ? ` · ${providerModel}` : ""}${
+				typeof record.duration_ms === "number"
+					? ` · ${record.duration_ms} ms`
+					: ""
+			}`,
+			result_preview: agentDebugPreview(summary),
+			ended_at_ms: now,
+		});
+	}
+
 	if (event.type === "plan_step") {
 		const id = rawId || `plan-${now}`;
 		return markEventPreviewsNormalized({
@@ -2035,6 +2111,104 @@ export function createAgentDebugStreamRecorder(options: {
 	};
 }
 
+/** Chronological structured run summaries recorded in a report (unparseable previews are skipped). */
+export function agentDebugRunSummaries(
+	report: IAgentDebugReport,
+): IAgentRunSummary[] {
+	return report.events
+		.filter(isRunSummaryEvent)
+		.sort((left, right) => left.timestamp_ms - right.timestamp_ms)
+		.flatMap((event) => {
+			if (typeof event.result_preview !== "string") return [];
+			try {
+				const parsed = JSON.parse(event.result_preview);
+				return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+					? [parsed as IAgentRunSummary]
+					: [];
+			} catch {
+				return [];
+			}
+		});
+}
+
+function runSummaryDiagnosticCounts(summary: IAgentRunSummary) {
+	const counts = new Map<string, number>();
+	for (const [code, count] of Object.entries(
+		summary.diagnostics_by_code ?? {},
+	)) {
+		if (typeof count !== "number" || !Number.isFinite(count)) continue;
+		counts.set(code, Math.max(0, count));
+	}
+	return counts;
+}
+
+/**
+ * Per-code diagnostic trend across multiple run summaries, e.g. `FS_X: 12 -> 3 -> 0 across runs`.
+ * A code absent from a run counts as 0 so convergence to zero is visible. Empty below two runs.
+ */
+export function runSummaryDiagnosticTrends(
+	summaries: IAgentRunSummary[],
+): string[] {
+	if (summaries.length < 2) return [];
+	const perRun = summaries.map(runSummaryDiagnosticCounts);
+	const codes = [...new Set(perRun.flatMap((counts) => [...counts.keys()]))];
+	codes.sort();
+	return codes.map((code) => {
+		const counts = perRun.map((runCounts) => runCounts.get(code) ?? 0);
+		return `${code}: ${counts.join(" -> ")} across runs`;
+	});
+}
+
+function runSummaryTableLines(summaries: IAgentRunSummary[]) {
+	if (summaries.length === 0) return [];
+	const budgetCell = (summary: IAgentRunSummary, key: string) => {
+		const entry = summary.budget?.[key];
+		if (!entry || (entry.used === undefined && entry.limit === undefined)) {
+			return "–";
+		}
+		return `${entry.used ?? 0}/${entry.limit ?? "?"}`;
+	};
+	const lines = [
+		"",
+		"## Run summaries",
+		"",
+		"| # | Outcome | Provider / model | Duration | Phases | Checks | Source ops | Commits | Stalled | Continuations | Diagnostics | Retained draft | Review notes | Applied commands |",
+		"| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+	];
+	summaries.forEach((summary, index) => {
+		const diagnostics = [
+			...runSummaryDiagnosticCounts(summary).values(),
+		].reduce((total, count) => total + count, 0);
+		const draft = summary.retained_draft;
+		const draftCell =
+			draft && typeof draft === "object" && draft.id
+				? `\`${draft.id}@${draft.revision ?? "?"}\``
+				: "none";
+		lines.push(
+			`| ${index + 1} | **${summary.outcome ?? "unknown"}** | ${
+				[summary.provider, summary.model].filter(Boolean).join(" / ") ||
+				"unknown"
+			} | ${summary.duration_ms ?? "?"} ms | ${summary.phases ?? "?"} | ${budgetCell(
+				summary,
+				"checks",
+			)} | ${budgetCell(summary, "source_ops")} | ${budgetCell(summary, "commits")} | ${budgetCell(
+				summary,
+				"stalled",
+			)} | ${budgetCell(summary, "continuations")} | ${diagnostics} | ${draftCell} | ${
+				summary.review_notes ?? 0
+			} | ${summary.applied_commands ?? 0} |`,
+		);
+	});
+	const trends = runSummaryDiagnosticTrends(summaries);
+	if (trends.length > 0) {
+		lines.push("", "### Diagnostic trend", "");
+		for (const trend of trends) {
+			lines.push(`- ${trend}`);
+		}
+	}
+	return lines;
+}
+
 export function agentDebugReportAsMarkdown(report: IAgentDebugReport) {
 	const lines = [
 		"# FlowPilot debug report",
@@ -2055,6 +2229,7 @@ export function agentDebugReportAsMarkdown(report: IAgentDebugReport) {
 			`- Generation evaluation: ${report.generation_evaluation.attempts.length} attempt(s) · plan ${report.generation_evaluation.plan_outcome} · ${report.generation_evaluation.status}`,
 		);
 	}
+	lines.push(...runSummaryTableLines(agentDebugRunSummaries(report)));
 	lines.push("", "## Timeline", "");
 	// Tool and nested-run records are updated in place when their terminal frame arrives. Their
 	// array position therefore reflects the start frame while timestamp_ms reflects the latest

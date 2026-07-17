@@ -2312,7 +2312,7 @@ fn starts_with_call_expr(source: &str) -> bool {
 /// The score intentionally ignores comments and raw byte length. A verbose plan must not outrank
 /// executable workflow structure, while helper functions, variables, Event roots and catalog call
 /// sites are useful evidence that a candidate still represents the user's full application.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowScriptCandidateProfile {
     pub call_sites: usize,
     pub meaningful_statements: usize,

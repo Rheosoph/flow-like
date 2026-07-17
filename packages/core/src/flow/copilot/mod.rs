@@ -7,6 +7,7 @@ pub mod assistant;
 mod context;
 mod declarations;
 pub mod evaluation;
+mod executability;
 pub mod ir;
 pub mod ir_tools;
 pub mod memory;
@@ -46,11 +47,12 @@ pub use ir_tools::{
     CommitFlowIrDraftArgs, CommitFlowIrDraftTool, CommitFlowScriptArgs, FlowIrAcceptanceBinding,
     FlowIrCommitResult, FlowIrDraftMode, FlowIrDraftRecovery, FlowIrDraftRecoveryStatus,
     FlowIrDraftRequestMismatch, FlowIrDraftResponse, FlowIrDraftStore, FlowIrEditableDraftContext,
-    FlowIrRequestIdentity, FlowIrToolError, FlowScriptDraftRecovery, FlowScriptDraftResponse,
-    FlowScriptEditableDraftContext, FlowScriptPendingDelivery, PatchFlowScriptArgs, PlanFlowIrTool,
-    UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool,
-    ValidateFlowIrDraftArgs, ValidateFlowIrDraftTool, WriteFlowScriptArgs,
-    render_typed_ir_parse_error, typed_ir_schema_hint,
+    FlowIrRequestIdentity, FlowIrRetainedDraftSnapshot, FlowIrToolError, FlowScriptDraftRecovery,
+    FlowScriptDraftResponse, FlowScriptEditableDraftContext, FlowScriptPendingDelivery,
+    PatchFlowScriptArgs, PlanFlowIrTool, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool,
+    UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
+    ValidateFlowIrDraftTool, WriteFlowScriptArgs, render_typed_ir_parse_error,
+    typed_ir_schema_hint,
 };
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
