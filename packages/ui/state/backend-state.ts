@@ -32,6 +32,7 @@ import {
 	EmptyEventState,
 	EmptyGraphState,
 	EmptyHelperState,
+	EmptyQueryState,
 	EmptyRoleState,
 	EmptyRouteState,
 	EmptyStorageState,
@@ -49,6 +50,7 @@ import type {
 	ITemporaryUploadedFile,
 } from "./backend-state/helper-state";
 import type { IPageState } from "./backend-state/page-state";
+import type { IQueryState } from "./backend-state/query-state";
 import type { IRegistryState } from "./backend-state/registry-state";
 import type { IRoleState } from "./backend-state/role-state";
 import type { IAppRouteState } from "./backend-state/route-state";
@@ -170,6 +172,7 @@ export type {
 } from "./backend-state/types";
 export * from "./backend-state/db-state";
 export * from "./backend-state/graph-state";
+export * from "./backend-state/query-state";
 export type {
 	IPushTargetStatus,
 	IRegisterPushTargetRequest,
@@ -201,6 +204,7 @@ export interface IBackendState {
 	aiState: IAIState;
 	dbState: IDatabaseState;
 	graphState: IGraphState;
+	queryState: IQueryState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	routeState: IAppRouteState;
@@ -247,6 +251,7 @@ const serverBackend: IBackendState = {
 	aiState: new EmptyAIState(),
 	dbState: new EmptyDatabaseState(),
 	graphState: new EmptyGraphState(),
+	queryState: new EmptyQueryState(),
 	widgetState: new Proxy(
 		{},
 		{

@@ -93,6 +93,9 @@ export interface GraphViewerProps {
 		seedNode?: SubgraphNode,
 		depth?: number,
 	) => void;
+	onExpandChildren?: (nodeId: string, label: string, rawId?: unknown) => void;
+	onCollapseChildren?: (nodeId: string) => void;
+	expandedChildParents?: Set<string>;
 	onSearchNodes?: (query: string) => Promise<SubgraphNode[]>;
 	onStyleChange?: (
 		label: string,
@@ -125,6 +128,9 @@ export function GraphViewer({
 	cypherLoading,
 	cypherError,
 	onExpandNode,
+	onExpandChildren,
+	onCollapseChildren,
+	expandedChildParents,
 	onSearchNodes,
 	onStyleChange,
 	onLimitChange,
@@ -424,6 +430,14 @@ export function GraphViewer({
 		setPathOutcome(null);
 		setPathFinding(false);
 	}, []);
+
+	const hasContainmentChildren = useCallback(
+		(node: SubgraphNode) =>
+			overlay.edges.some(
+				(edge) => edge.containment && edge.src_label === node.label,
+			),
+		[overlay],
+	);
 
 	const handleNodeClick = useCallback(
 		(nodeId: string) => {
@@ -843,6 +857,23 @@ export function GraphViewer({
 										undefined,
 										depth,
 									)
+							: undefined
+					}
+					hasChildren={hasContainmentChildren(selectedNode)}
+					childrenExpanded={expandedChildParents?.has(selectedNode.id) ?? false}
+					onExpandChildren={
+						onExpandChildren
+							? () =>
+									onExpandChildren(
+										selectedNode.id,
+										selectedNode.label,
+										getNodeRawId(selectedNode, overlay),
+									)
+							: undefined
+					}
+					onCollapseChildren={
+						onCollapseChildren
+							? () => onCollapseChildren(selectedNode.id)
 							: undefined
 					}
 					onFindPath={onFindPaths ? handleArmPath : undefined}

@@ -603,10 +603,15 @@ pub async fn copilot_chat(
         payload.raw_user_prompt.as_deref(),
         &payload.user_prompt,
     );
-    let copilot =
-        build_unified_copilot(&state, payload.scope, profile, usage_context, flow_ir_draft_store)
-            .await?
-            .with_request_identity_prompt(Some(request_identity_prompt));
+    let copilot = build_unified_copilot(
+        &state,
+        payload.scope,
+        profile,
+        usage_context,
+        flow_ir_draft_store,
+    )
+    .await?
+    .with_request_identity_prompt(Some(request_identity_prompt));
 
     if !payload.stream {
         let response = copilot

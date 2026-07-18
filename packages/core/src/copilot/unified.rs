@@ -260,6 +260,11 @@ impl UnifiedCopilot {
                 )
                 .await
             }
+            // Data Studio is a tool-driven data agent handled by the platform tool loop
+            // (desktop `copilot_chat`), not by the specialized board/UI copilots.
+            CopilotScope::DataStudio => Err(flow_like_types::anyhow!(
+                "Data Studio scope is served by the platform tool loop, not the UnifiedCopilot"
+            )),
         }
     }
 
@@ -288,6 +293,7 @@ impl UnifiedCopilot {
                     CopilotScope::Board
                 }
             }
+            CopilotScope::DataStudio => CopilotScope::DataStudio,
         }
     }
 
@@ -799,6 +805,7 @@ impl UnifiedCopilot {
             CopilotScope::Board => "Workflow",
             CopilotScope::Frontend => "UI",
             CopilotScope::Both => "FlowPilot",
+            CopilotScope::DataStudio => "Data Studio",
         }
     }
 }

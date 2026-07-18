@@ -32,7 +32,7 @@ const DEFAULT_ANALYTICS_EDGE_LIMIT: usize = 50_000;
 /// initialization wins; later stores share the same pool.
 static GLOBAL_QUERY_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
-fn global_query_semaphore(max_concurrent: usize) -> Arc<tokio::sync::Semaphore> {
+pub(crate) fn global_query_semaphore(max_concurrent: usize) -> Arc<tokio::sync::Semaphore> {
     GLOBAL_QUERY_SEMAPHORE
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(max_concurrent.max(1))))
         .clone()
@@ -114,6 +114,12 @@ pub struct OntologyActionDef {
     pub allow_bulk: bool,
     #[serde(default)]
     pub parameter_schema: Option<serde_json::Value>,
+    /// Per-action exposure to connected projects. Absent (legacy) or `true`
+    /// keeps the current whole-ontology behavior; `false` hides the action from
+    /// remote contracts and rejects connected-app invocation while still
+    /// allowing local execution.
+    #[serde(default = "default_true")]
+    pub exposed: bool,
 }
 
 fn default_true() -> bool {
@@ -184,6 +190,7 @@ pub fn ontology_action_contract_hash(
             "enabled": action.enabled,
             "allow_bulk": action.allow_bulk,
             "parameter_schema": action.parameter_schema,
+            "exposed": action.exposed,
         },
         "object": {
             "id": object.id,
@@ -261,6 +268,15 @@ pub struct EdgeMappingDef {
     pub src_node_column: Option<String>,
     #[serde(default)]
     pub dst_node_column: Option<String>,
+    /// Marks a hierarchy/drill-down spine edge (src_label = parent, dst_label = child).
+    #[serde(default)]
+    pub containment: bool,
+    /// Child objects live in another local overlay (its id).
+    #[serde(default)]
+    pub dst_ontology: Option<String>,
+    /// Child objects live in an installed remote ontology (its import id).
+    #[serde(default)]
+    pub dst_binding_id: Option<String>,
     pub property_columns: Vec<PropertyColumnDef>,
     pub style: serde_json::Value,
 }
@@ -317,6 +333,77 @@ impl LanceGraphStore {
 
     pub fn connection(&self) -> &Connection {
         &self.connection
+    }
+
+    /// Upsert node rows into the underlying table of a node label, merging on the label's id
+    /// column. Rows must carry the id column value; existing ids are updated, new ids inserted.
+    /// Returns the number of rows written. Shared by the write API and the graph write nodes.
+    pub async fn upsert_nodes(&self, label: &str, rows: Vec<Value>) -> Result<usize> {
+        let node_def = self
+            .overlay
+            .nodes
+            .iter()
+            .find(|node| node.label == label)
+            .ok_or_else(|| anyhow!("Node label '{}' not found in overlay", label))?;
+        let table_name = node_def.table.clone();
+        let id_column = node_def.id_column.clone();
+        self.merge_upsert(&table_name, &[id_column.as_str()], rows)
+            .await
+    }
+
+    /// Upsert edge rows into the underlying table of an edge label, merging on the label's
+    /// (source, target) columns so re-adding an existing pair updates it instead of duplicating.
+    /// Returns the number of rows written.
+    pub async fn upsert_edges(&self, label: &str, rows: Vec<Value>) -> Result<usize> {
+        let edge_def = self
+            .overlay
+            .edges
+            .iter()
+            .find(|edge| edge.label == label)
+            .ok_or_else(|| anyhow!("Edge label '{}' not found in overlay", label))?;
+        let table_name = edge_def.table.clone();
+        let src_column = edge_def.src_column.clone();
+        let dst_column = edge_def.dst_column.clone();
+        self.merge_upsert(
+            &table_name,
+            &[src_column.as_str(), dst_column.as_str()],
+            rows,
+        )
+        .await
+    }
+
+    async fn merge_upsert(
+        &self,
+        table_name: &str,
+        keys: &[&str],
+        rows: Vec<Value>,
+    ) -> Result<usize> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let count = rows.len();
+        let table = self
+            .connection
+            .open_table(table_name)
+            .execute()
+            .await
+            .map_err(|error| anyhow!("Failed to open table '{}': {}", table_name, error))?;
+
+        let batch = crate::arrow_utils::value_to_record_batch(rows)?;
+        let schema = batch.schema();
+        let reader: Box<dyn crate::arrow::record_batch::RecordBatchReader + Send> = Box::new(
+            crate::arrow::record_batch::RecordBatchIterator::new(vec![Ok(batch)], schema),
+        );
+
+        let mut merger = table.merge_insert(keys);
+        merger
+            .when_matched_update_all(None)
+            .when_not_matched_insert_all();
+        merger
+            .execute(reader)
+            .await
+            .map_err(|error| anyhow!("Failed to upsert into '{}': {}", table_name, error))?;
+        Ok(count)
     }
 
     fn enforce_limit(&self, limit: Option<usize>) -> usize {
@@ -460,6 +547,22 @@ impl GraphStore for LanceGraphStore {
             .await
             .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
         self.expand_subgraph(seeds, depth.max(1), TraversalDirection::Both, limit)
+            .await
+    }
+
+    async fn overlay_children(
+        &self,
+        parent_label: &str,
+        parent_id: Value,
+        limit: Option<usize>,
+    ) -> Result<SubgraphResult> {
+        let limit = self.enforce_limit(limit);
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
+        self.overlay_children_impl(parent_label, parent_id, limit)
             .await
     }
 
@@ -657,29 +760,8 @@ impl GraphStore for LanceGraphStore {
 
 impl LanceGraphStore {
     fn find_id_column_for_label(&self, label: &str) -> Result<String> {
-        for node in &self.overlay.nodes {
-            if node.label == label {
-                // Respect edge-level overrides (src_node_column / dst_node_column)
-                // to stay consistent with what build_graph_config passes to lance-graph.
-                for edge in &self.overlay.edges {
-                    if edge.src_label == label
-                        && let Some(ref col) = edge.src_node_column
-                    {
-                        return Ok(col.clone());
-                    }
-                    if edge.dst_label == label
-                        && let Some(ref col) = edge.dst_node_column
-                    {
-                        return Ok(col.clone());
-                    }
-                }
-                return Ok(node.id_column.clone());
-            }
-        }
-        Err(anyhow!(
-            "Label '{}' not found in overlay node mappings",
-            label
-        ))
+        effective_node_id_column(&self.overlay, label)
+            .ok_or_else(|| anyhow!("Label '{}' not found in overlay node mappings", label))
     }
 
     fn find_display_column_for_label(&self, label: &str) -> Option<String> {
@@ -731,23 +813,7 @@ impl LanceGraphStore {
             return Ok(adapter.clone());
         }
 
-        let table = self
-            .connection
-            .open_table(table_name)
-            .execute()
-            .await
-            .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
-
-        let adapter = BaseTableAdapter::try_new(table.base_table().clone())
-            .await
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to create DataFusion adapter for '{}': {}",
-                    table_name,
-                    e
-                )
-            })?;
-        let adapter = Arc::new(adapter);
+        let adapter = open_table_adapter(&self.connection, table_name).await?;
         cache.insert(table_name.to_string(), adapter.clone());
         Ok(adapter)
     }
@@ -1076,7 +1142,32 @@ fn preflight_cypher(
 /// Allows exactly one read-only statement through the SQL surface. DataFusion
 /// would otherwise happily execute DDL (CREATE EXTERNAL TABLE) or COPY, which
 /// reach the server filesystem.
-fn validate_readonly_sql(query: &str) -> Result<()> {
+/// Opens a LanceDB table and wraps it in a DataFusion table provider. Shared by
+/// the graph query contexts and the Data Studio query workbench so there is one
+/// adapter-construction path.
+pub(crate) async fn open_table_adapter(
+    connection: &Connection,
+    table_name: &str,
+) -> Result<Arc<BaseTableAdapter>> {
+    let table = connection
+        .open_table(table_name)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("Failed to open table '{}': {}", table_name, e))?;
+
+    let adapter = BaseTableAdapter::try_new(table.base_table().clone())
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "Failed to create DataFusion adapter for '{}': {}",
+                table_name,
+                e
+            )
+        })?;
+    Ok(Arc::new(adapter))
+}
+
+pub(crate) fn validate_readonly_sql(query: &str) -> Result<()> {
     use datafusion::sql::parser::{DFParser, Statement as DFStatement};
 
     let statements =
@@ -1099,8 +1190,18 @@ fn validate_readonly_sql(query: &str) -> Result<()> {
     }
 }
 
+/// Quotes an identifier for a DataFusion `ctx.sql()` string, where `"col"` is a
+/// delimited identifier.
 fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+/// Quotes an identifier for a LanceDB `only_if` filter. LanceDB's filter parser
+/// reads a double-quoted `"col"` as a string LITERAL (so `quote_identifier`
+/// there silently matches nothing); backticks delimit the column and stay safe
+/// for names with spaces or reserved words.
+pub(crate) fn filter_identifier(identifier: &str) -> String {
+    format!("`{}`", identifier.replace('`', "``"))
 }
 
 fn sql_string_literal(value: &str) -> String {
@@ -1414,6 +1515,29 @@ pub async fn load_overlay(connection: &Connection, overlay_id: &str) -> Result<G
     Err(anyhow!("Overlay '{}' not found", overlay_id))
 }
 
+/// Resolves the column that identifies a node label across the graph.
+///
+/// Edge-level `src_node_column`/`dst_node_column` overrides win over the node's
+/// own `id_column`, mirroring `build_graph_config` and `rows_to_nodes`. Identity
+/// lookups must resolve the column the same way, or an id a client derived from a
+/// rendered node will not match the column the query filters on.
+pub fn effective_node_id_column(overlay: &GraphOverlayDef, label: &str) -> Option<String> {
+    let node = overlay.nodes.iter().find(|node| node.label == label)?;
+    for edge in &overlay.edges {
+        if edge.src_label == label
+            && let Some(column) = &edge.src_node_column
+        {
+            return Some(column.clone());
+        }
+        if edge.dst_label == label
+            && let Some(column) = &edge.dst_node_column
+        {
+            return Some(column.clone());
+        }
+    }
+    Some(node.id_column.clone())
+}
+
 /// Resolves an object type by any of its identities — stable id, API name, or
 /// display label — matching how actions and remote queries resolve types.
 pub fn resolve_object_mapping<'a>(
@@ -1562,6 +1686,11 @@ pub async fn load_overlay_objects(
             object_type
         )
     })?;
+    // The graph identifies nodes by the effective id column (which honors
+    // edge-level `src_node_column`/`dst_node_column` overrides), so the id the
+    // client sends is a value of that column, not necessarily `mapping.id_column`.
+    let id_column = effective_node_id_column(overlay, &mapping.label)
+        .unwrap_or_else(|| mapping.id_column.clone());
 
     let mut seen = HashSet::with_capacity(ids.len());
     let mut literals = Vec::with_capacity(ids.len());
@@ -1585,10 +1714,10 @@ pub async fn load_overlay_objects(
         .map_err(|error| anyhow!("Failed to open table '{}': {}", mapping.table, error))?;
     let predicate = format!(
         "{} IN ({})",
-        quote_identifier(&mapping.id_column),
+        filter_identifier(&id_column),
         literals.join(", ")
     );
-    let mut columns = vec![mapping.id_column.clone()];
+    let mut columns = vec![id_column.clone(), mapping.id_column.clone()];
     if let Some(display_column) = &mapping.display_column {
         columns.push(display_column.clone());
     }
@@ -1623,6 +1752,7 @@ pub async fn load_overlay_objects(
         .iter()
         .map(|property| property.name.as_str())
         .collect::<HashSet<_>>();
+    allowed_columns.insert(id_column.as_str());
     allowed_columns.insert(mapping.id_column.as_str());
     if let Some(display_column) = mapping.display_column.as_deref() {
         allowed_columns.insert(display_column);
@@ -1634,7 +1764,7 @@ pub async fn load_overlay_objects(
             let Some(row_object) = row.as_object_mut() else {
                 continue;
             };
-            let key = value_to_id_string(row_object.get(&mapping.id_column));
+            let key = value_to_id_string(row_object.get(&id_column));
             if !key.is_empty() {
                 row_object.retain(|column, _| allowed_columns.contains(column.as_str()));
                 rows_by_id.insert(key, row);
@@ -2053,6 +2183,38 @@ mod tests {
     }
 
     #[test]
+    fn contract_hash_binds_per_action_exposure() {
+        let object = NodeMappingDef {
+            id: Some("shipment".to_string()),
+            api_name: Some("shipment".to_string()),
+            label: "Shipment".to_string(),
+            table: "shipments".to_string(),
+            id_column: "id".to_string(),
+            display_column: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        };
+        let mut action = OntologyActionDef {
+            id: "approve".to_string(),
+            name: "Approve".to_string(),
+            description: None,
+            object_type: "shipment".to_string(),
+            board_id: "board".to_string(),
+            board_version: Some([1, 0, 0]),
+            start_node_id: Some("start".to_string()),
+            event_id: None,
+            enabled: true,
+            allow_bulk: false,
+            parameter_schema: None,
+            exposed: true,
+        };
+        let exposed_hash = ontology_action_contract_hash("ont", true, &action, &object).unwrap();
+        action.exposed = false;
+        let hidden_hash = ontology_action_contract_hash("ont", true, &action, &object).unwrap();
+        assert_ne!(exposed_hash, hidden_hash);
+    }
+
+    #[test]
     fn dedupe_drops_edges_with_truncated_endpoints() {
         let nodes = (0..3)
             .map(|index| SubgraphNode {
@@ -2093,5 +2255,206 @@ mod tests {
     fn preflight_checks_post_with_clauses() {
         let query = parse("MATCH (a:Person) WITH a MATCH (a)-[r:KNOWS*]->(b:Person) RETURN a, b");
         assert!(preflight_cypher(query.ast(), &safety()).is_err());
+    }
+
+    fn node_mapping(label: &str, table: &str, id_column: &str) -> NodeMappingDef {
+        NodeMappingDef {
+            id: Some(label.to_lowercase()),
+            api_name: Some(label.to_lowercase()),
+            label: label.to_string(),
+            table: table.to_string(),
+            id_column: id_column.to_string(),
+            display_column: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        }
+    }
+
+    fn overlay_with(nodes: Vec<NodeMappingDef>, edges: Vec<EdgeMappingDef>) -> GraphOverlayDef {
+        GraphOverlayDef {
+            id: "ont".to_string(),
+            name: "Ontology".to_string(),
+            description: None,
+            nodes,
+            edges,
+            object_views: Vec::new(),
+            actions: Vec::new(),
+            exposed: false,
+            bindings_enabled: false,
+            default_limit: 200,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn effective_id_column_falls_back_to_node_id_column() {
+        let overlay = overlay_with(vec![node_mapping("Name", "names", "name")], Vec::new());
+        assert_eq!(
+            effective_node_id_column(&overlay, "Name").as_deref(),
+            Some("name")
+        );
+        assert_eq!(effective_node_id_column(&overlay, "Missing"), None);
+    }
+
+    // Guards the ontology-action "Object not found" regression: the graph
+    // identifies a node by the edge-level `dst_node_column` override, so a
+    // client sends that column's value. Object lookups must resolve the same
+    // column instead of the node's own `id_column`, or the id never matches.
+    #[test]
+    fn effective_id_column_honors_edge_override() {
+        let edge = EdgeMappingDef {
+            id: None,
+            api_name: None,
+            label: "REFERS".to_string(),
+            table: "refs".to_string(),
+            src_column: "src".to_string(),
+            dst_column: "dst".to_string(),
+            src_label: "Source".to_string(),
+            dst_label: "Name".to_string(),
+            src_node_column: None,
+            dst_node_column: Some("id".to_string()),
+            containment: false,
+            dst_ontology: None,
+            dst_binding_id: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        };
+        let overlay = overlay_with(
+            vec![
+                node_mapping("Source", "sources", "id"),
+                node_mapping("Name", "names", "name"),
+            ],
+            vec![edge],
+        );
+        assert_eq!(
+            effective_node_id_column(&overlay, "Name").as_deref(),
+            Some("id"),
+            "edge dst_node_column override must win over the node id_column"
+        );
+    }
+
+    // Faithful reproduction of the reported "Object '<id>' was not found" bug:
+    // a plain node table with a string `id` column, looked up by that id.
+    #[tokio::test]
+    async fn load_overlay_objects_finds_row_by_string_id() -> Result<()> {
+        use arrow::array::{Int64Array, RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("int", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "nppvjlghzrlto3iefrk9bx36",
+                    "someotherobjectidentifier",
+                ])),
+                Arc::new(StringArray::from(vec![Some("Omari Yost"), Some("Ada Lin")])),
+                Arc::new(Int64Array::from(vec![0, 1])),
+            ],
+        )?;
+        connection
+            .create_table("names", vec![batch])
+            .execute()
+            .await?;
+
+        let overlay = overlay_with(
+            vec![NodeMappingDef {
+                id: Some("Name".to_string()),
+                api_name: Some("Name".to_string()),
+                label: "Name".to_string(),
+                table: "names".to_string(),
+                id_column: "id".to_string(),
+                display_column: Some("name".to_string()),
+                property_columns: vec![PropertyColumnDef {
+                    name: "int".to_string(),
+                    data_type: "Int64".to_string(),
+                    nullable: true,
+                }],
+                style: Value::Null,
+            }],
+            Vec::new(),
+        );
+
+        let result = load_overlay_objects(
+            &connection,
+            &overlay,
+            "Name",
+            &[Value::String("nppvjlghzrlto3iefrk9bx36".to_string())],
+        )
+        .await;
+
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let objects = result?;
+        assert_eq!(objects.len(), 1, "expected exactly one object");
+        assert_eq!(
+            objects[0].get("id").and_then(Value::as_str),
+            Some("nppvjlghzrlto3iefrk9bx36")
+        );
+        Ok(())
+    }
+
+    // LanceDB's `only_if` filter parser reads a double-quoted `"col"` as a
+    // string LITERAL, so `quote_identifier` there silently matches nothing;
+    // backticks delimit the column. This pins that dialect distinction.
+    #[tokio::test]
+    async fn only_if_identifier_quoting_matches_lance_dialect() -> Result<()> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec!["nppvjlghzrlto3iefrk9bx36"]))],
+        )?;
+        connection
+            .create_table("names", vec![batch])
+            .execute()
+            .await?;
+        let table = connection.open_table("names").execute().await?;
+
+        async fn count(table: &lancedb::table::Table, predicate: &str) -> usize {
+            table
+                .query()
+                .only_if(predicate)
+                .execute()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .iter()
+                .map(arrow::record_batch::RecordBatch::num_rows)
+                .sum()
+        }
+
+        let id = "nppvjlghzrlto3iefrk9bx36";
+        assert_eq!(
+            count(&table, &format!("\"id\" IN ('{id}')")).await,
+            0,
+            "double-quoted identifier is a string literal to LanceDB — matches nothing"
+        );
+        assert_eq!(
+            count(&table, &format!("{} IN ('{id}')", filter_identifier("id"))).await,
+            1,
+            "filter_identifier must produce a real column reference"
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
     }
 }

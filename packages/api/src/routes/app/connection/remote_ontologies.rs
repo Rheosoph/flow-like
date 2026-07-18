@@ -14,7 +14,7 @@ use axum::{
 use flow_like_storage::databases::graph::lancegraph;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-async fn ensure_remote_ontology_access(
+pub(crate) async fn ensure_remote_ontology_access(
     state: &AppState,
     app_id: &str,
     target_app_id: &str,
@@ -50,6 +50,10 @@ async fn ensure_remote_ontology_access(
 pub(crate) fn sanitize_remote_contract(
     mut ontology: lancegraph::GraphOverlayDef,
 ) -> lancegraph::GraphOverlayDef {
+    // Non-exposed actions are never advertised to connected projects. Producer
+    // invoke enforcement rejects them regardless, but withholding them keeps
+    // them out of consumer discovery and generated bindings entirely.
+    ontology.actions.retain(|action| action.exposed);
     // Remote consumers receive action semantics, never private implementation
     // coordinates. Governed action execution resolves these opaque IDs in the
     // target project.
@@ -58,6 +62,15 @@ pub(crate) fn sanitize_remote_contract(
         action.board_version = None;
         action.start_node_id = None;
         action.event_id = None;
+    }
+    // Containment may point at a producer-internal overlay (`dst_ontology`) or
+    // an installed import (`dst_binding_id`) — both are private coordinates, and
+    // a linked target could even live in a non-exposed overlay. Consumers keep
+    // the hierarchy flag but never the target, so a remote subtree only ever
+    // resolves within this exposed contract.
+    for edge in &mut ontology.edges {
+        edge.dst_ontology = None;
+        edge.dst_binding_id = None;
     }
     ontology
 }
@@ -235,4 +248,109 @@ pub async fn uninstall_remote_ontology(
     let import_id = ontology_import_id(&target_app_id, &ontology_id);
     lancegraph::delete_ontology_import(&local_database, &import_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_remote_contract;
+    use flow_like_storage::databases::graph::lancegraph::{
+        EdgeMappingDef, GraphOverlayDef, OntologyActionDef,
+    };
+
+    fn action(id: &str, exposed: bool) -> OntologyActionDef {
+        OntologyActionDef {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            object_type: "shipment".to_string(),
+            board_id: "board".to_string(),
+            board_version: Some([1, 0, 0]),
+            start_node_id: Some("start".to_string()),
+            event_id: Some("event".to_string()),
+            enabled: true,
+            allow_bulk: false,
+            parameter_schema: None,
+            exposed,
+        }
+    }
+
+    #[test]
+    fn sanitize_drops_non_exposed_actions_and_strips_coordinates() {
+        let overlay = GraphOverlayDef {
+            id: "ont".to_string(),
+            name: "Ont".to_string(),
+            description: None,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            object_views: Vec::new(),
+            actions: vec![action("public", true), action("private", false)],
+            exposed: true,
+            bindings_enabled: false,
+            default_limit: 100,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+
+        let sanitized = sanitize_remote_contract(overlay);
+
+        assert_eq!(sanitized.actions.len(), 1);
+        assert_eq!(sanitized.actions[0].id, "public");
+        assert!(sanitized.actions[0].board_id.is_empty());
+        assert!(sanitized.actions[0].board_version.is_none());
+        assert!(sanitized.actions[0].start_node_id.is_none());
+        assert!(sanitized.actions[0].event_id.is_none());
+    }
+
+    fn containment_edge(
+        dst_ontology: Option<&str>,
+        dst_binding_id: Option<&str>,
+    ) -> EdgeMappingDef {
+        EdgeMappingDef {
+            id: Some("edge".to_string()),
+            api_name: Some("edge".to_string()),
+            label: "has_child".to_string(),
+            table: "edges".to_string(),
+            src_column: "parent_id".to_string(),
+            dst_column: "child_id".to_string(),
+            src_label: "Parent".to_string(),
+            dst_label: "Child".to_string(),
+            src_node_column: None,
+            dst_node_column: None,
+            containment: true,
+            dst_ontology: dst_ontology.map(str::to_string),
+            dst_binding_id: dst_binding_id.map(str::to_string),
+            property_columns: Vec::new(),
+            style: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn sanitize_strips_edge_link_targets_but_keeps_containment() {
+        let overlay = GraphOverlayDef {
+            id: "ont".to_string(),
+            name: "Ont".to_string(),
+            description: None,
+            nodes: Vec::new(),
+            edges: vec![containment_edge(
+                Some("internal_overlay"),
+                Some("app::internal"),
+            )],
+            object_views: Vec::new(),
+            actions: Vec::new(),
+            exposed: true,
+            bindings_enabled: false,
+            default_limit: 100,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        };
+
+        let sanitized = sanitize_remote_contract(overlay);
+
+        assert_eq!(sanitized.edges.len(), 1);
+        // The hierarchy flag stays so consumers can still drill down within the
+        // contract, but the producer-internal target coordinates are removed.
+        assert!(sanitized.edges[0].containment);
+        assert!(sanitized.edges[0].dst_ontology.is_none());
+        assert!(sanitized.edges[0].dst_binding_id.is_none());
+    }
 }

@@ -134,6 +134,18 @@ pub trait GraphStore: Send + Sync {
         limit: Option<usize>,
     ) -> Result<SubgraphResult>;
 
+    /// Single containment hop from a parent object to its children, following
+    /// only edges flagged `containment` (`src_label` = parent). Children mapped
+    /// by a sibling local overlay (`dst_ontology`) are resolved from that
+    /// overlay's tables; remote children (`dst_binding_id`) are surfaced as a
+    /// warning rather than resolved here.
+    async fn overlay_children(
+        &self,
+        parent_label: &str,
+        parent_id: Value,
+        limit: Option<usize>,
+    ) -> Result<SubgraphResult>;
+
     async fn search_nodes(&self, query: &str, limit: Option<usize>) -> Result<Vec<SubgraphNode>>;
 
     async fn schema(&self) -> Result<GraphSchemaResult>;

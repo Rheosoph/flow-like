@@ -25,6 +25,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 pub mod fork;
 pub mod graph;
+pub mod saved_queries;
 pub mod sharing;
 pub mod tables;
 

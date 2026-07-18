@@ -153,6 +153,35 @@ fn action_object<'a>(
     })
 }
 
+/// Reads the authoritative parameter schema from the pinned board version's
+/// start node. Loading the pinned snapshot (rather than the working board)
+/// guarantees the schema matches the exact implementation that executes, even
+/// when the action pins an older published version (mirror of the API path).
+async fn derive_action_parameter_schema(
+    app: &App,
+    action: &lancegraph::OntologyActionDef,
+    pinned: (u32, u32, u32),
+) -> flow_like_types::Result<Option<flow_like_types::Value>> {
+    let Some(start_node_id) = action
+        .start_node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let board = app
+        .open_board(action.board_id.clone(), Some(false), Some(pinned))
+        .await
+        .map_err(|error| {
+            flow_like_types::anyhow!(
+                "Could not load the action's pinned board version to derive its parameter schema: {error}"
+            )
+        })?;
+    let schema = board.lock().await.action_parameter_schema(start_node_id);
+    Ok(schema)
+}
+
 fn validate_action_object_types(
     actions: &[lancegraph::OntologyActionDef],
     objects: &[NodeMappingDef],
@@ -262,22 +291,10 @@ async fn materialize_action_events(
             })
             .unwrap_or_else(create_id);
         let now = std::time::SystemTime::now();
-        let object = action_object(objects, action).ok_or_else(|| {
-            flow_like_types::anyhow!(
-                "Ontology action '{}' references unknown object type '{}'",
-                action.id,
-                action.object_type
-            )
-        })?;
-        let contract_hash = lancegraph::ontology_action_contract_hash(
-            ontology_id,
-            ontology_exposed,
-            action,
-            object,
-        )?;
         // Publish the pinned board version as an immutable snapshot so the
         // managed event's reference validation and later invocation can load
         // it (mirror of the API materialization path).
+        let pinned = (board_version[0], board_version[1], board_version[2]);
         {
             let board = app
                 .open_board(action.board_id.clone(), Some(false), None)
@@ -295,19 +312,41 @@ async fn materialize_action_events(
                     guard.get_versions(None).await.unwrap_or_default(),
                 )
             };
-            let pinned = (board_version[0], board_version[1], board_version[2]);
-            if !existing.contains(&pinned) {
-                if pinned != current {
-                    return Err(flow_like_types::anyhow!(
-                        "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
-                        pinned.0,
-                        pinned.1,
-                        pinned.2
-                    ));
-                }
+            if pinned == current {
+                // Pinning the working draft: always re-snapshot so the pinned
+                // version reflects the latest edits. `snapshot_at_version` does
+                // not bump the board version, so a prior save can leave a stale
+                // snapshot at this number that is missing nodes added since —
+                // the managed event's reference validation then fails with
+                // "node not found in board" (mirror of the API path).
                 board.lock().await.snapshot_at_version(pinned, None).await?;
+            } else if !existing.contains(&pinned) {
+                return Err(flow_like_types::anyhow!(
+                    "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
+                    pinned.0,
+                    pinned.1,
+                    pinned.2
+                ));
             }
         }
+        // Derive the authoritative parameter schema from the pinned board's
+        // start node, overwriting any client-supplied schema before hashing so
+        // the contract can never advertise a shape the board does not honor
+        // (mirror of the API materialization path).
+        action.parameter_schema = derive_action_parameter_schema(&app, action, pinned).await?;
+        let object = action_object(objects, action).ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Ontology action '{}' references unknown object type '{}'",
+                action.id,
+                action.object_type
+            )
+        })?;
+        let contract_hash = lancegraph::ontology_action_contract_hash(
+            ontology_id,
+            ontology_exposed,
+            action,
+            object,
+        )?;
         let mut event = Event {
             id: event_id,
             name: action.name.clone(),
@@ -1012,6 +1051,43 @@ pub async fn graph_cypher(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpsertGraphElementsPayload {
+    pub label: String,
+    pub rows: Vec<serde_json::Value>,
+}
+
+#[tauri::command(async)]
+pub async fn graph_upsert_nodes(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    payload: UpsertGraphElementsPayload,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let store = LanceGraphStore::new(conn, overlay, None).await?;
+    let upserted = store.upsert_nodes(&payload.label, payload.rows).await?;
+    Ok(serde_json::json!({ "upserted": upserted }))
+}
+
+#[tauri::command(async)]
+pub async fn graph_upsert_edges(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    payload: UpsertGraphElementsPayload,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let store = LanceGraphStore::new(conn, overlay, None).await?;
+    let upserted = store.upsert_edges(&payload.label, payload.rows).await?;
+    Ok(serde_json::json!({ "upserted": upserted }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubgraphPayload {
     pub seeds: Vec<SubgraphSeed>,
     pub depth: Option<usize>,
@@ -1109,6 +1185,32 @@ pub async fn graph_neighbors(
             direction,
             payload.limit,
         )
+        .await?;
+    serde_json::to_value(result).map_err(|e| e.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayChildrenPayload {
+    pub label: String,
+    #[serde(alias = "node_id")]
+    pub node_id: serde_json::Value,
+    pub limit: Option<usize>,
+}
+
+#[tauri::command(async)]
+pub async fn graph_overlay_children(
+    app_handle: AppHandle,
+    app_id: String,
+    overlay_id: String,
+    payload: OverlayChildrenPayload,
+    user_scoped: Option<bool>,
+) -> Result<serde_json::Value, TauriFunctionError> {
+    let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
+    let overlay = lancegraph::load_overlay(&conn, &overlay_id).await?;
+    let store = LanceGraphStore::new(conn, overlay, None).await?;
+    let result = store
+        .overlay_children(&payload.label, payload.node_id, payload.limit)
         .await?;
     serde_json::to_value(result).map_err(|e| e.into())
 }

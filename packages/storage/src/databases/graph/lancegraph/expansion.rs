@@ -5,8 +5,8 @@
 //! the mapped Lance tables, and petgraph for path reconstruction and metrics.
 
 use super::{
-    LanceGraphStore, quote_identifier, resolve_property_names, value_sql_literal,
-    value_to_id_string,
+    GraphOverlayDef, LanceGraphStore, filter_identifier, load_overlay, resolve_object_mapping,
+    resolve_property_names, value_sql_literal, value_to_id_string,
 };
 use crate::arrow_utils::record_batch_to_value;
 use crate::databases::graph::{
@@ -72,7 +72,7 @@ impl LanceGraphStore {
             .collect::<Result<Vec<_>>>()?;
         let predicate = format!(
             "{} IN ({})",
-            quote_identifier(filter_column),
+            filter_identifier(filter_column),
             literals.join(", ")
         );
         let batches = table
@@ -391,7 +391,7 @@ impl LanceGraphStore {
                     .map(value_sql_literal)
                     .collect::<Result<Vec<_>>>()?;
                 let predicate =
-                    format!("{} IN ({})", quote_identifier(&id_col), literals.join(", "));
+                    format!("{} IN ({})", filter_identifier(&id_col), literals.join(", "));
                 let batches = table
                     .query()
                     .only_if(predicate)
@@ -452,6 +452,396 @@ impl LanceGraphStore {
             truncated,
             warnings: collected_warnings,
         })
+    }
+
+    /// Single containment hop from a parent object to its children.
+    ///
+    /// Follows only edges flagged `containment` whose `src_label` matches the
+    /// parent type. Same-overlay children ride the shared [`Self::hydrate_expansion`]
+    /// path; children mapped by a sibling local overlay (`dst_ontology`) are
+    /// loaded from that overlay's tables. Remote children (`dst_binding_id`) are
+    /// not resolved here — a warning points to the remote children node.
+    pub(super) async fn overlay_children_impl(
+        &self,
+        parent_label: &str,
+        parent_id: Value,
+        node_limit: usize,
+    ) -> Result<SubgraphResult> {
+        if !self
+            .overlay
+            .nodes
+            .iter()
+            .any(|node| node.label == parent_label)
+        {
+            return Err(anyhow!(
+                "Label '{}' not found in overlay node mappings",
+                parent_label
+            ));
+        }
+
+        let node_limit = node_limit.max(1);
+        let edge_limit = node_limit.saturating_mul(3);
+        let parent_full = format!("{}:{}", parent_label, value_to_id_string(Some(&parent_id)));
+
+        let mut table_cache: HashMap<String, lancedb::Table> = HashMap::new();
+        let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
+
+        let mut state = ExpansionState {
+            nodes: HashMap::new(),
+            edges: Vec::new(),
+            seen_edge_ids: HashSet::new(),
+            warnings: Vec::new(),
+            truncated: false,
+        };
+        // Seed the parent so it hydrates and its child edges survive the
+        // dangling-edge prune in hydrate_expansion.
+        state.nodes.insert(
+            parent_full.clone(),
+            Discovered {
+                label: parent_label.to_string(),
+                raw_id: parent_id.clone(),
+            },
+        );
+
+        // Children mapped by a sibling overlay, grouped by (overlay, child label,
+        // optional id-column override). Hydrated separately from self.overlay.
+        let mut external: HashMap<
+            (String, String, Option<String>),
+            Vec<(String, Value, SubgraphEdge)>,
+        > = HashMap::new();
+        let mut emitted = 0usize;
+
+        for edge in &self.overlay.edges {
+            if state.truncated {
+                break;
+            }
+            if !edge.containment || edge.src_label != parent_label {
+                continue;
+            }
+            if edge.dst_binding_id.is_some() {
+                state.warnings.push(format!(
+                    "Containment edge '{}' targets a remote ontology; expand it with the remote children node",
+                    edge.label
+                ));
+                continue;
+            }
+            let cross_overlay = edge
+                .dst_ontology
+                .as_deref()
+                .filter(|id| *id != self.overlay.id.as_str());
+            // Same-overlay children need a resolvable node mapping.
+            if cross_overlay.is_none()
+                && !self
+                    .overlay
+                    .nodes
+                    .iter()
+                    .any(|node| node.label == edge.dst_label)
+            {
+                continue;
+            }
+
+            let table = match self.open_table_cached(&edge.table, &mut table_cache).await {
+                Ok(table) => table,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
+            let prop_names = match resolve_property_names(
+                &self.connection,
+                &edge.table,
+                &edge.property_columns,
+                &mut schema_cache,
+                &excluded,
+                &[],
+            )
+            .await
+            {
+                Ok(names) => names,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
+            columns.extend(prop_names.iter().cloned());
+            let mut seen_columns = HashSet::new();
+            columns.retain(|column| seen_columns.insert(column.clone()));
+
+            let remaining = edge_limit.saturating_sub(emitted);
+            if remaining == 0 {
+                state.truncated = true;
+                break;
+            }
+            let rows = match self
+                .edge_rows_for_ids(
+                    &table,
+                    &edge.src_column,
+                    &columns,
+                    std::slice::from_ref(&parent_id),
+                    remaining,
+                )
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+
+            for row in rows {
+                let Value::Object(map) = row else { continue };
+                let dst_raw = map.get(&edge.dst_column).cloned();
+                let dst_key = value_to_id_string(dst_raw.as_ref());
+                if dst_key.is_empty() {
+                    continue;
+                }
+                let Some(dst_raw) = dst_raw else { continue };
+                let dst_full = format!("{}:{}", edge.dst_label, dst_key);
+                let edge_id = format!("{}-{}->{}", parent_full, edge.label, dst_full);
+                if !state.seen_edge_ids.insert(edge_id.clone()) {
+                    continue;
+                }
+                if emitted >= edge_limit {
+                    state.truncated = true;
+                    break;
+                }
+                let mut props = serde_json::Map::new();
+                for name in &prop_names {
+                    if let Some(value) = map.get(name) {
+                        props.insert(name.clone(), value.clone());
+                    }
+                }
+                let subgraph_edge = SubgraphEdge {
+                    id: edge_id,
+                    source: parent_full.clone(),
+                    target: dst_full.clone(),
+                    label: edge.label.clone(),
+                    props: Value::Object(props),
+                };
+                match cross_overlay {
+                    None => {
+                        if !state.nodes.contains_key(&dst_full) && state.nodes.len() >= node_limit {
+                            state.truncated = true;
+                            continue;
+                        }
+                        state.nodes.entry(dst_full).or_insert_with(|| Discovered {
+                            label: edge.dst_label.clone(),
+                            raw_id: dst_raw,
+                        });
+                        state.edges.push(subgraph_edge);
+                        emitted += 1;
+                    }
+                    Some(overlay_id) => {
+                        external
+                            .entry((
+                                overlay_id.to_string(),
+                                edge.dst_label.clone(),
+                                edge.dst_node_column.clone(),
+                            ))
+                            .or_default()
+                            .push((dst_full, dst_raw, subgraph_edge));
+                        emitted += 1;
+                    }
+                }
+            }
+        }
+
+        let mut result = self
+            .hydrate_expansion(state, &mut table_cache, &mut schema_cache)
+            .await?;
+
+        if !external.is_empty() {
+            if result.nodes.iter().any(|node| node.id == parent_full) {
+                let (nodes, edges, mut warnings) = self
+                    .hydrate_external_children(external, &mut table_cache, &mut schema_cache)
+                    .await;
+                result.nodes.extend(nodes);
+                result.edges.extend(edges);
+                result.warnings.append(&mut warnings);
+            } else {
+                result.warnings.push(
+                    "Parent object was not found; linked children were not loaded".to_string(),
+                );
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Loads containment children that a sibling local overlay maps, keyed by
+    /// `(overlay id, child label, id-column override)`. Mirrors the per-label
+    /// load in [`Self::hydrate_expansion`] but resolves the mapping through the
+    /// sibling overlay rather than `self.overlay`.
+    async fn hydrate_external_children(
+        &self,
+        external: HashMap<(String, String, Option<String>), Vec<(String, Value, SubgraphEdge)>>,
+        table_cache: &mut HashMap<String, lancedb::Table>,
+        schema_cache: &mut HashMap<String, Vec<String>>,
+    ) -> (Vec<SubgraphNode>, Vec<SubgraphEdge>, Vec<String>) {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        let mut warnings = Vec::new();
+        let mut overlay_cache: HashMap<String, Option<GraphOverlayDef>> = HashMap::new();
+
+        for ((overlay_id, label, id_override), entries) in external {
+            let overlay = match overlay_cache.get(&overlay_id) {
+                Some(cached) => cached.clone(),
+                None => {
+                    let loaded = load_overlay(&self.connection, &overlay_id).await.ok();
+                    overlay_cache.insert(overlay_id.clone(), loaded.clone());
+                    loaded
+                }
+            };
+            let Some(overlay) = overlay else {
+                warnings.push(format!(
+                    "Linked ontology '{}' could not be loaded",
+                    overlay_id
+                ));
+                continue;
+            };
+            let Some(mapping) = resolve_object_mapping(&overlay, &label) else {
+                warnings.push(format!(
+                    "Object type '{}' is not part of linked ontology '{}'",
+                    label, overlay_id
+                ));
+                continue;
+            };
+            let id_col = id_override.unwrap_or_else(|| mapping.id_column.clone());
+            let display_col = mapping.display_column.clone();
+            let table = match self.open_table_cached(&mapping.table, table_cache).await {
+                Ok(table) => table,
+                Err(error) => {
+                    warnings.push(format!("Node mapping '{}': {}", label, error));
+                    continue;
+                }
+            };
+            let excluded = HashSet::from([id_col.clone()]);
+            let always_include = display_col
+                .clone()
+                .filter(|column| *column != id_col)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let prop_names = match resolve_property_names(
+                &self.connection,
+                &mapping.table,
+                &mapping.property_columns,
+                schema_cache,
+                &excluded,
+                &always_include,
+            )
+            .await
+            {
+                Ok(names) => names,
+                Err(error) => {
+                    warnings.push(format!("Node mapping '{}': {}", label, error));
+                    continue;
+                }
+            };
+            let mut columns = vec![id_col.clone()];
+            columns.extend(prop_names.iter().cloned());
+            let mut seen_columns = HashSet::new();
+            columns.retain(|column| seen_columns.insert(column.clone()));
+
+            let mut edges_by_raw: HashMap<String, Vec<SubgraphEdge>> = HashMap::new();
+            let mut full_by_raw: HashMap<String, String> = HashMap::new();
+            let mut raw_by_key: HashMap<String, Value> = HashMap::new();
+            for (full_id, raw_id, edge) in entries {
+                let raw_key = value_to_id_string(Some(&raw_id));
+                edges_by_raw.entry(raw_key.clone()).or_default().push(edge);
+                full_by_raw.insert(raw_key.clone(), full_id);
+                raw_by_key.insert(raw_key, raw_id);
+            }
+            let raw_ids = raw_by_key.values().cloned().collect::<Vec<_>>();
+            let literals = match raw_ids
+                .iter()
+                .map(value_sql_literal)
+                .collect::<Result<Vec<_>>>()
+            {
+                Ok(literals) => literals,
+                Err(error) => {
+                    warnings.push(format!("Node mapping '{}': {}", label, error));
+                    continue;
+                }
+            };
+            if literals.is_empty() {
+                continue;
+            }
+            let predicate = format!("{} IN ({})", filter_identifier(&id_col), literals.join(", "));
+            let batches = match table
+                .query()
+                .only_if(predicate)
+                .select(lancedb::query::Select::Columns(columns.clone()))
+                .limit(raw_ids.len())
+                .execute()
+                .await
+            {
+                Ok(stream) => match stream.try_collect::<Vec<_>>().await {
+                    Ok(batches) => batches,
+                    Err(error) => {
+                        warnings.push(format!("Failed to load '{}': {}", label, error));
+                        continue;
+                    }
+                },
+                Err(error) => {
+                    warnings.push(format!("Failed to load '{}': {}", label, error));
+                    continue;
+                }
+            };
+
+            let mut hydrated = HashSet::new();
+            for batch in &batches {
+                let rows = match record_batch_to_value(batch) {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        warnings.push(format!("Failed to decode '{}': {}", label, error));
+                        continue;
+                    }
+                };
+                for row in rows {
+                    let Value::Object(map) = row else { continue };
+                    let raw_key = value_to_id_string(map.get(&id_col));
+                    let Some(full_id) = full_by_raw.get(&raw_key) else {
+                        continue;
+                    };
+                    if !hydrated.insert(full_id.clone()) {
+                        continue;
+                    }
+                    let caption = display_col
+                        .as_ref()
+                        .and_then(|column| map.get(column))
+                        .and_then(|value| value.as_str())
+                        .map(String::from)
+                        .or_else(|| Some(raw_key.clone()));
+                    nodes.push(SubgraphNode {
+                        id: full_id.clone(),
+                        label: label.clone(),
+                        caption,
+                        props: Value::Object(map),
+                    });
+                    if let Some(child_edges) = edges_by_raw.get(&raw_key) {
+                        edges.extend(child_edges.iter().cloned());
+                    }
+                }
+            }
+            let missing = full_by_raw.len().saturating_sub(hydrated.len());
+            if missing > 0 {
+                warnings.push(format!(
+                    "{missing} linked '{}' object(s) were not found; connected edges were dropped",
+                    label
+                ));
+            }
+        }
+
+        (nodes, edges, warnings)
     }
 
     pub(super) async fn shortest_paths_impl(
@@ -789,7 +1179,7 @@ impl LanceGraphStore {
             if literals.is_empty() {
                 continue;
             }
-            let predicate = format!("{} IN ({})", quote_identifier(&id_col), literals.join(", "));
+            let predicate = format!("{} IN ({})", filter_identifier(&id_col), literals.join(", "));
             let result = table
                 .query()
                 .only_if(predicate)

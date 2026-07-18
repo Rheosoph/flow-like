@@ -14,10 +14,12 @@ use flow_like_storage::lancedb::Connection;
 
 pub mod actions;
 pub mod analytics;
+pub mod children;
 pub mod create_overlay;
 pub mod cypher;
 pub mod delete_overlay;
 pub mod get_overlay;
+pub mod import_read;
 pub mod list_imports;
 pub mod list_overlays;
 pub mod neighbors;
@@ -28,6 +30,8 @@ pub mod search;
 pub mod sql;
 pub mod subgraph;
 pub mod update_overlay;
+pub mod upsert_edges;
+pub mod upsert_nodes;
 pub mod validate;
 
 /// Resolves the scoped connection and loads the overlay, mapping a missing
@@ -56,6 +60,14 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/imports", get(list_imports::list_imports))
         .route(
+            "/imports/{import_id}/sample",
+            get(import_read::sample_import),
+        )
+        .route(
+            "/imports/{import_id}/query",
+            post(import_read::query_import),
+        )
+        .route(
             "/",
             get(list_overlays::list_overlays).post(create_overlay::create_overlay),
         )
@@ -70,11 +82,14 @@ pub fn routes() -> Router<AppState> {
         .route("/{overlay_id}/cypher", post(cypher::run_cypher))
         .route("/{overlay_id}/sql", post(sql::run_sql))
         .route("/{overlay_id}/neighbors", post(neighbors::neighbors))
+        .route("/{overlay_id}/children", post(children::children))
         .route("/{overlay_id}/subgraph", post(subgraph::subgraph))
         .route("/{overlay_id}/paths", post(paths::find_paths))
         .route("/{overlay_id}/analytics", get(analytics::graph_analytics))
         .route("/{overlay_id}/search", post(search::search_nodes))
         .route("/{overlay_id}/sample", get(sample::sample_nodes))
+        .route("/{overlay_id}/nodes", post(upsert_nodes::upsert_nodes))
+        .route("/{overlay_id}/edges", post(upsert_edges::upsert_edges))
         .route(
             "/{overlay_id}/actions/{action_id}/invoke",
             post(actions::invoke_ontology_action),

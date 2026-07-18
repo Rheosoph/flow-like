@@ -135,6 +135,8 @@ impl NodeLogic for OntologyActionRequestNode {
             .evaluate_pin("parameters")
             .await
             .unwrap_or_else(|_| json!({}));
+        // Generated bindings may expand a flat schema into one pin per property.
+        let parameters = super::merge_parameter_pins(context, parameters).await;
         let execution = context
             .execution_cache
             .clone()

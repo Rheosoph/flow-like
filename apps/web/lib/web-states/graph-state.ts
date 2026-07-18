@@ -1,6 +1,7 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
+	ExecuteSqlResult,
 	GraphAnalyticsResult,
 	GraphOverlay,
 	GraphPathsResult,
@@ -13,6 +14,7 @@ import type {
 	OntologyActionRun,
 	OntologyActionStreamEvent,
 	PathsPayload,
+	RemoteImportQueryPayload,
 	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
@@ -326,6 +328,32 @@ export class WebGraphState implements IGraphState {
 		const qs = params.toString();
 		return apiGet<unknown[]>(
 			`apps/${appId}/graph/${overlayId}/sample${qs ? `?${qs}` : ""}`,
+			this.backend.auth,
+		);
+	}
+
+	async sampleRemoteImport(
+		appId: string,
+		importId: string,
+		label: string,
+		n?: number,
+	): Promise<unknown[]> {
+		const params = new URLSearchParams({ label });
+		if (n !== undefined) params.set("n", String(n));
+		return apiGet<unknown[]>(
+			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/sample?${params.toString()}`,
+			this.backend.auth,
+		);
+	}
+
+	async queryRemoteImport(
+		appId: string,
+		importId: string,
+		payload: RemoteImportQueryPayload,
+	): Promise<ExecuteSqlResult> {
+		return apiPost<ExecuteSqlResult>(
+			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/query`,
+			payload,
 			this.backend.auth,
 		);
 	}

@@ -25,6 +25,7 @@ import {
 	TabsTrigger,
 	Textarea,
 	cn,
+	useAssistantSurface,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
@@ -40,6 +41,8 @@ import {
 	type DataStudioTableInfo,
 	OntologySetupDialog,
 } from "@flow-like/flow-like-ui/components/settings/data-studio/ontology-setup-dialog";
+import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data-studio/query-workbench";
+import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
 import {
 	GraphViewer,
 	getNodeRawId,
@@ -47,6 +50,7 @@ import {
 import LanceDBExplorer from "@flow-like/flow-like-ui/components/ui/lance-viewer";
 import type {
 	CreateOverlayPayload,
+	EdgeLabelMapping,
 	GraphOverlay,
 	GraphPathsResult,
 	InvokeOntologyActionPayload,
@@ -63,6 +67,7 @@ import {
 	ArrowLeftIcon,
 	ArrowUpAZ,
 	Box,
+	Cloud,
 	Database,
 	Globe,
 	Layers3,
@@ -74,6 +79,7 @@ import {
 	RefreshCw,
 	Search,
 	Share2,
+	SquareTerminal,
 	User,
 	Workflow,
 	X,
@@ -125,6 +131,20 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 	}, [tableParam]);
 
 	const userScoped = searchParams?.get("scope") === "user";
+
+	// Publish the open Data Studio page so the global assistant defaults data questions to this
+	// app/overlay (via data_studio_agent) without asking which project. Cleared on unmount.
+	const setDataStudioSurface = useAssistantSurface(
+		(state) => state.setDataStudioSurface,
+	);
+	useEffect(() => {
+		setDataStudioSurface({
+			appId,
+			overlayId: overlayParam ?? undefined,
+			selectedTable: table || undefined,
+		});
+		return () => setDataStudioSurface(null);
+	}, [appId, overlayParam, table, setDataStudioSurface]);
 
 	if (overlayParam) {
 		return (
@@ -421,6 +441,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		"actions",
 		"sharing",
 		"sources",
+		"queries",
 	] as const;
 	const requestedView = searchParams.get("view");
 	const activeView = validViews.includes(
@@ -448,22 +469,26 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		[appId],
 		activeView === "actions" && actionBoardsRequested,
 	);
+	// Remote/installed ontologies are a first-class data source: they show up as
+	// objects, sources, and a query surface — not just in the sharing/model tabs.
+	const remoteDataNeeded = activeView !== "actions";
 	const appConnections = useInvoke(
 		backend.teamState.getAppConnections,
 		backend.teamState,
 		[appId],
-		activeView === "sharing",
+		remoteDataNeeded,
 	);
 	const installedOntologies = useInvoke(
 		backend.graphState.listRemoteOntologyImports,
 		backend.graphState,
 		[appId],
-		activeView === "sharing",
+		remoteDataNeeded,
 	);
 
 	const [query, setQuery] = useState<string>("");
 	const [sortAsc, setSortAsc] = useState<boolean>(true);
 	const [setupOpen, setSetupOpen] = useState(false);
+	const [designerOpen, setDesignerOpen] = useState(false);
 	const processedTables = useMemo(() => {
 		const projectTables = (tables.data ?? []).map((name): Table => ({ name }));
 		const userScopedTables = (userTables.data ?? []).map(
@@ -508,7 +533,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		userTables.refetch();
 		ontologies.refetch();
 		if (activeView === "actions") boards.refetch();
-		if (activeView === "sharing") {
+		if (remoteDataNeeded) {
 			appConnections.refetch();
 			installedOntologies.refetch();
 		}
@@ -520,7 +545,18 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		appConnections.refetch,
 		installedOntologies.refetch,
 		activeView,
+		remoteDataNeeded,
 	]);
+
+	const openRemoteSource = useCallback(
+		(importId: string) => {
+			const params = new URLSearchParams(searchParams?.toString() ?? "");
+			params.set("view", "objects");
+			params.set("source", importId);
+			router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+		},
+		[router, pathname, searchParams],
+	);
 
 	const navigateToOntology = useCallback(
 		(ontologyId: string) => {
@@ -570,6 +606,22 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		[appId, backend.graphState, backend.boardState, invalidate, ontologies],
 	);
 
+	const saveEdges = useCallback(
+		async (ontologyId: string, edges: EdgeLabelMapping[]) => {
+			const ontology = ontologies.data?.find(
+				(candidate) => candidate.id === ontologyId,
+			);
+			await backend.graphState.updateOverlay(appId, ontologyId, {
+				expected_updated_at: ontology?.updated_at,
+				edges,
+			});
+			await ontologies.refetch();
+			await invalidate(backend.boardState.getCatalog, [appId]);
+			toast.success("Ontology model saved");
+		},
+		[appId, backend.graphState, backend.boardState, invalidate, ontologies],
+	);
+
 	const updateSharing = useCallback(
 		async (
 			ontologyId: string,
@@ -591,6 +643,12 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const sampleObjects = useCallback(
 		(ontologyId: string, objectType: string, limit: number) =>
 			backend.graphState.sample(appId, ontologyId, objectType, limit),
+		[appId, backend.graphState],
+	);
+
+	const sampleRemoteObjects = useCallback(
+		(importId: string, objectType: string, limit: number) =>
+			backend.graphState.sampleRemoteImport(appId, importId, objectType, limit),
 		[appId, backend.graphState],
 	);
 
@@ -719,6 +777,18 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		...(appConnections.data?.incoming ?? []),
 		...(appConnections.data?.outgoing ?? []),
 	];
+	const installedData = installedOntologies.data ?? [];
+	// Only imports with live bindings are usable as data sources; disabled ones
+	// stay visible for management in the sharing/model tabs.
+	const usableImports = installedData.filter(
+		(imported) => imported.bindings_enabled,
+	);
+	const resolveSourceName = (targetAppId: string) =>
+		connections.find(
+			(connection) =>
+				connection.target_app_id === targetAppId ||
+				connection.source_app_id === targetAppId,
+		)?.app_name ?? targetAppId;
 
 	const failedQueries: { name: string; onRetry: () => void }[] = [];
 	if (tables.error) {
@@ -805,12 +875,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							<Database className="mr-1.5 h-3.5 w-3.5" />
 							Sources
 						</TabsTrigger>
+						<TabsTrigger value="queries">
+							<SquareTerminal className="mr-1.5 h-3.5 w-3.5" />
+							Queries
+						</TabsTrigger>
 					</TabsList>
 				</div>
 				<TabsContent value="overview" className="flex-1 overflow-y-auto p-6">
 					<DataStudioOverview
 						ontologies={ontologyData}
 						tableCount={processedTables.length}
+						remoteCount={installedData.length}
 						onCreateOntology={() => setSetupOpen(true)}
 						onOpenOntology={navigateToOntology}
 						onNavigate={setActiveView}
@@ -819,17 +894,23 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				<TabsContent value="objects" className="min-h-0 flex-1 p-6">
 					<ObjectExplorerPanel
 						ontologies={ontologyData}
+						remoteImports={usableImports}
+						initialSourceValue={searchParams.get("source") ?? undefined}
 						onCreateOntology={() => setSetupOpen(true)}
 						onSample={sampleObjects}
+						onSampleRemote={sampleRemoteObjects}
 						onInvokeAction={invokeOntologyAction}
+						resolveSourceName={resolveSourceName}
 					/>
 				</TabsContent>
 				<TabsContent value="model" className="flex-1 overflow-y-auto p-6">
 					<OntologyModelPanel
 						appId={appId}
 						ontologies={ontologyData}
+						installedOntologies={installedOntologies.data ?? []}
 						onCreateOntology={() => setSetupOpen(true)}
 						onOpenOntology={navigateToOntology}
+						onSaveEdges={saveEdges}
 					/>
 				</TabsContent>
 				<TabsContent value="actions" className="flex-1 overflow-y-auto p-6">
@@ -868,18 +949,23 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 								Open a source to inspect rows, schema, and indexes.
 							</p>
 						</div>
-						<Button
-							variant="ghost"
-							size="icon"
-							onClick={toggleSort}
-							title={`Sort ${sortAsc ? "descending" : "ascending"}`}
-						>
-							{sortAsc ? (
-								<ArrowUpAZ className="h-4 w-4" />
-							) : (
-								<ArrowDownAZ className="h-4 w-4" />
-							)}
-						</Button>
+						<div className="flex items-center gap-2">
+							<Button
+								variant="ghost"
+								size="icon"
+								onClick={toggleSort}
+								title={`Sort ${sortAsc ? "descending" : "ascending"}`}
+							>
+								{sortAsc ? (
+									<ArrowUpAZ className="h-4 w-4" />
+								) : (
+									<ArrowDownAZ className="h-4 w-4" />
+								)}
+							</Button>
+							<Button size="sm" onClick={() => setDesignerOpen(true)}>
+								<Plus className="h-4 w-4" /> New table
+							</Button>
+						</div>
 					</div>
 					<SearchInput
 						value={query}
@@ -890,6 +976,42 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 						tables={filteredAndSortedTables}
 						onSelectTable={navigateToTable}
 						searchQuery={query}
+						onCreate={() => setDesignerOpen(true)}
+					/>
+					{usableImports.length > 0 && (
+						<div className="space-y-4 pt-4">
+							<div>
+								<h2 className="flex items-center gap-2 font-semibold">
+									<Cloud className="h-4 w-4" /> Remote objects
+								</h2>
+								<p className="text-sm text-muted-foreground">
+									Installed from connected projects. Read-only previews resolve
+									live against the source.
+								</p>
+							</div>
+							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+								{usableImports.map((imported) => (
+									<RemoteSourceCard
+										key={imported.id}
+										name={imported.contract.name}
+										sourceName={resolveSourceName(imported.target_app_id)}
+										objectCount={imported.contract.nodes.length}
+										onOpen={() => openRemoteSource(imported.id)}
+									/>
+								))}
+							</div>
+						</div>
+					)}
+				</TabsContent>
+				<TabsContent value="queries" className="min-h-0 flex-1 p-0">
+					<QueryWorkbench
+						appId={appId}
+						ontologies={ontologyData}
+						remoteImports={usableImports}
+						resolveSourceName={resolveSourceName}
+						projectTables={tables.data ?? []}
+						userTables={userTables.data ?? []}
+						userScoped={searchParams.get("scope") === "user"}
 					/>
 				</TabsContent>
 			</Tabs>
@@ -902,6 +1024,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					backend.dbState.getSchema(appId, table.name, table.userScoped)
 				}
 				onCreate={createOntology}
+			/>
+			<TableDesignerDialog
+				open={designerOpen}
+				onOpenChange={setDesignerOpen}
+				appId={appId}
+				existingTables={processedTables.map((table) => table.name)}
+				onCreated={(name, userScoped) => {
+					tables.refetch();
+					userTables.refetch();
+					navigateToTable(name, userScoped);
+				}}
 			/>
 		</div>
 	);
@@ -944,12 +1077,14 @@ interface TableGridProps {
 	tables: Table[];
 	onSelectTable: (tableName: string, userScoped?: boolean) => void;
 	searchQuery: string;
+	onCreate: () => void;
 }
 
 const TableGrid: React.FC<TableGridProps> = ({
 	tables,
 	onSelectTable,
 	searchQuery,
+	onCreate,
 }) => {
 	if (!tables.length && searchQuery) {
 		return (
@@ -960,6 +1095,24 @@ const TableGrid: React.FC<TableGridProps> = ({
 					No tables match &quot;
 					<span className="font-medium">{searchQuery}</span>&quot;.
 				</p>
+			</div>
+		);
+	}
+
+	if (!tables.length) {
+		return (
+			<div className="flex flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 p-10 text-center">
+				<div className="mb-4 rounded-2xl bg-primary/10 p-3 text-primary">
+					<Database className="h-6 w-6" />
+				</div>
+				<h3 className="font-semibold">No tables yet</h3>
+				<p className="mt-1 max-w-sm text-sm text-muted-foreground">
+					Create a native table to store structured data, then explore rows,
+					schema, and indexes.
+				</p>
+				<Button className="mt-5" onClick={onCreate}>
+					<Plus className="h-4 w-4" /> New table
+				</Button>
 			</div>
 		);
 	}
@@ -1037,6 +1190,65 @@ const TableCard: React.FC<TableCardProps> = ({ table, onSelect }) => {
 					<div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
 						<span>Schema and counts load on demand</span>
 						<span className="font-medium text-foreground">Open table →</span>
+					</div>
+				</div>
+			</button>
+		</Card>
+	);
+};
+
+interface RemoteSourceCardProps {
+	name: string;
+	sourceName: string;
+	objectCount: number;
+	onOpen: () => void;
+}
+
+const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
+	name,
+	sourceName,
+	objectCount,
+	onOpen,
+}) => {
+	return (
+		<Card className="group cursor-pointer overflow-hidden border transition-all duration-200 hover:bg-accent/50 hover:shadow-lg">
+			<button
+				type="button"
+				onClick={onOpen}
+				className="h-full w-full p-0 text-left"
+				title={`Preview remote objects: ${name}`}
+			>
+				<div className="space-y-5 p-5">
+					<div className="flex items-start justify-between gap-3">
+						<div className="flex min-w-0 items-center gap-3">
+							<div className="shrink-0 rounded-xl bg-sky-500/10 p-2.5 transition-colors group-hover:bg-sky-500/20">
+								<Cloud className="h-5 w-5 text-sky-500" />
+							</div>
+							<div className="min-w-0">
+								<h3 className="truncate text-sm font-semibold leading-tight">
+									{name}
+								</h3>
+								<p className="truncate text-xs text-muted-foreground">
+									from {sourceName}
+								</p>
+							</div>
+						</div>
+						<Badge
+							variant="outline"
+							className="shrink-0 gap-1 border-sky-500/20 bg-sky-500/10 text-[10px] text-sky-500"
+						>
+							<Cloud className="h-3 w-3" />
+							Remote
+						</Badge>
+					</div>
+
+					<div className="flex items-center justify-between border-t pt-3 text-xs text-muted-foreground">
+						<span>
+							{objectCount} object{objectCount === 1 ? "" : "s"}
+						</span>
+						<span className="font-medium text-foreground">
+							Preview objects →
+						</span>
 					</div>
 				</div>
 			</button>
@@ -1197,6 +1409,34 @@ function mergeSubgraphData(
 	};
 }
 
+function collectSubtree(
+	parentNodeId: string,
+	childMap: Map<string, Set<string>>,
+	acc: Set<string>,
+): void {
+	const children = childMap.get(parentNodeId);
+	if (!children) return;
+	for (const childId of children) {
+		if (acc.has(childId)) continue;
+		acc.add(childId);
+		collectSubtree(childId, childMap, acc);
+	}
+}
+
+function removeSubtree(
+	current: SubgraphResult | null,
+	removed: Set<string>,
+): SubgraphResult | null {
+	if (!current || removed.size === 0) return current;
+	return {
+		...current,
+		nodes: current.nodes.filter((node) => !removed.has(node.id)),
+		edges: current.edges.filter(
+			(edge) => !removed.has(edge.source) && !removed.has(edge.target),
+		),
+	};
+}
+
 function applyStyleToOverlay(
 	overlay: GraphOverlay,
 	label: string,
@@ -1253,7 +1493,11 @@ const OverlayView: React.FC<{
 		action: OntologyActionDefinition;
 		node: SubgraphNode;
 	} | null>(null);
+	const [expandedChildren, setExpandedChildren] = useState<
+		Map<string, Set<string>>
+	>(new Map());
 
+	const dataRef = useRef<SubgraphResult | null>(null);
 	const overlayRef = useRef<GraphOverlay | null>(null);
 	const styleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
 		new Map(),
@@ -1263,6 +1507,15 @@ const OverlayView: React.FC<{
 	useEffect(() => {
 		overlayRef.current = overlay;
 	}, [overlay]);
+
+	useEffect(() => {
+		dataRef.current = data;
+	}, [data]);
+
+	const expandedChildParents = useMemo(
+		() => new Set(expandedChildren.keys()),
+		[expandedChildren],
+	);
 
 	useEffect(() => {
 		const timers = styleTimersRef.current;
@@ -1392,6 +1645,70 @@ const OverlayView: React.FC<{
 			}
 		},
 		[backend.graphState, appId, overlayId, overlay],
+	);
+
+	const handleExpandChildren = useCallback(
+		async (nodeId: string, label: string, rawId?: unknown) => {
+			if (!overlay) return;
+			setLoading(true);
+			try {
+				const prefix = `${label}:`;
+				const resolvedId =
+					rawId ??
+					(nodeId.startsWith(prefix) ? nodeId.slice(prefix.length) : nodeId);
+				const result = await backend.graphState.children(appId, overlayId, {
+					label,
+					node_id: resolvedId,
+					limit: GRAPH_NODE_EXPANSION_LIMIT,
+				});
+
+				const existingIds = new Set(
+					(dataRef.current?.nodes ?? []).map((node) => node.id),
+				);
+				const insertedChildIds = new Set<string>();
+				for (const edge of result.edges) {
+					if (edge.source === nodeId && !existingIds.has(edge.target)) {
+						insertedChildIds.add(edge.target);
+					}
+				}
+
+				const enriched = enrichSubgraphWithStyles(result, overlay);
+				setData((prev) => mergeSubgraphData(prev, enriched));
+
+				if (insertedChildIds.size > 0) {
+					setExpandedChildren((prev) => {
+						const next = new Map(prev);
+						const merged = new Set(next.get(nodeId) ?? []);
+						for (const id of insertedChildIds) merged.add(id);
+						next.set(nodeId, merged);
+						return next;
+					});
+				}
+			} catch (err) {
+				toast.error(`Failed to expand children: ${extractErrorMessage(err)}`);
+			} finally {
+				setLoading(false);
+			}
+		},
+		[backend.graphState, appId, overlayId, overlay],
+	);
+
+	const handleCollapseChildren = useCallback(
+		(parentNodeId: string) => {
+			if (!expandedChildren.has(parentNodeId)) return;
+			const removed = new Set<string>();
+			collectSubtree(parentNodeId, expandedChildren, removed);
+			if (removed.size > 0) {
+				setData((prev) => removeSubtree(prev, removed));
+			}
+			setExpandedChildren((prev) => {
+				const next = new Map(prev);
+				next.delete(parentNodeId);
+				for (const id of removed) next.delete(id);
+				return next;
+			});
+		},
+		[expandedChildren],
 	);
 
 	const handleSearchNodes = useCallback(
@@ -1672,6 +1989,9 @@ const OverlayView: React.FC<{
 					cypherLoading={cypherLoading}
 					cypherError={cypherError}
 					onExpandNode={handleExpandNode}
+					onExpandChildren={handleExpandChildren}
+					onCollapseChildren={handleCollapseChildren}
+					expandedChildParents={expandedChildParents}
 					onSearchNodes={handleSearchNodes}
 					onStyleChange={handleStyleChange}
 					onLimitChange={handleLimitChange}

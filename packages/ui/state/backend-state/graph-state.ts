@@ -1,3 +1,5 @@
+import type { ExecuteSqlResult } from "./query-state";
+
 // ─── Graph overlay types (mirrors Rust catalog-core types) ───
 
 export interface NodeSize {
@@ -44,6 +46,12 @@ export interface EdgeLabelMapping {
 	dst_label: string;
 	src_node_column?: string;
 	dst_node_column?: string;
+	/** Marks a hierarchy/drill-down spine edge (src_label = parent, dst_label = child). */
+	containment?: boolean;
+	/** Child objects live in another local overlay (its id). */
+	dst_ontology?: string;
+	/** Child objects live in an installed remote ontology (its import id). */
+	dst_binding_id?: string;
 	property_columns: PropertyColumn[];
 	style: LabelStyle;
 }
@@ -92,6 +100,8 @@ export interface OntologyActionDefinition {
 	enabled: boolean;
 	allow_bulk: boolean;
 	parameter_schema?: Record<string, unknown>;
+	/** Per-action exposure to connected projects (default exposed). */
+	exposed?: boolean;
 }
 
 export interface SubgraphNode {
@@ -231,11 +241,28 @@ export interface SqlPayload {
 	limit?: number;
 }
 
+export interface UpsertGraphElementsPayload {
+	/** Node or edge label to write into; must exist in the overlay schema. */
+	label: string;
+	/** Rows to upsert. Node rows carry the id column; edge rows the source + target id columns. */
+	rows: Record<string, unknown>[];
+}
+
+export interface UpsertGraphElementsResult {
+	upserted: number;
+}
+
 export interface NeighborsPayload {
 	label: string;
 	node_id: unknown;
 	depth?: number;
 	direction?: "outgoing" | "incoming" | "both";
+	limit?: number;
+}
+
+export interface OverlayChildrenPayload {
+	label: string;
+	node_id: unknown;
 	limit?: number;
 }
 
@@ -262,6 +289,12 @@ export interface PathsPayload {
 export interface OntologyObjectRef {
 	object_type: string;
 	id: unknown;
+}
+
+export interface RemoteImportQueryPayload {
+	sql: string;
+	params?: Record<string, unknown>;
+	limit?: number;
 }
 
 export interface InvokeOntologyActionPayload {
@@ -341,6 +374,19 @@ export interface IGraphState {
 		targetAppId: string,
 		ontologyId: string,
 	): Promise<void>;
+	/** Preview rows for an object of an installed remote ontology (read live from the source). */
+	sampleRemoteImport(
+		appId: string,
+		importId: string,
+		label: string,
+		n?: number,
+	): Promise<unknown[]>;
+	/** Run a read-only query against an installed remote ontology's exposed tables. */
+	queryRemoteImport(
+		appId: string,
+		importId: string,
+		payload: RemoteImportQueryPayload,
+	): Promise<ExecuteSqlResult>;
 	invokeOntologyAction(
 		appId: string,
 		ontologyId: string,
@@ -403,6 +449,12 @@ export interface IGraphState {
 		payload: NeighborsPayload,
 		userScoped?: boolean,
 	): Promise<SubgraphResult>;
+	children(
+		appId: string,
+		overlayId: string,
+		payload: OverlayChildrenPayload,
+		userScoped?: boolean,
+	): Promise<SubgraphResult>;
 	subgraph(
 		appId: string,
 		overlayId: string,
@@ -434,4 +486,16 @@ export interface IGraphState {
 		n?: number,
 		userScoped?: boolean,
 	): Promise<unknown[]>;
+	upsertNodes(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult>;
+	upsertEdges(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult>;
 }

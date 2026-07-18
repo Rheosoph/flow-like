@@ -1,5 +1,5 @@
-import { useReactFlow } from "@xyflow/react";
-import { ChevronDown } from "lucide-react";
+import { useReactFlow, useStore } from "@xyflow/react";
+import { ChevronDown, RefreshCw } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useBackend } from "../../../..";
@@ -197,16 +197,131 @@ function useOverlays(appId: string, open: boolean) {
 	return { overlays, loading, error };
 }
 
-function siblingValue(
-	boardRef: RefObject<IBoard | undefined> | undefined,
-	nodeId: string,
-	pinName: string,
-): string {
-	const pins = boardRef?.current?.nodes?.[nodeId]?.pins ?? {};
+const EMPTY_PINS: Record<string, IPin> = {};
+
+/** Reads the live pins of a node off the ReactFlow store. Reading from the
+ * store (rather than the non-reactive `boardRef.current`) is what re-renders a
+ * dependent selector the moment its parent pin changes: the FlowPin memo won't
+ * re-render it otherwise, because only the parent pin's value changed, not its
+ * own. */
+function useStoreNodePins(nodeId: string): Record<string, IPin> {
+	return useStore((state) => {
+		const data = state.nodeLookup.get(nodeId)?.data as
+			| { node?: { pins?: Record<string, IPin> } }
+			| undefined;
+		return data?.node?.pins ?? EMPTY_PINS;
+	});
+}
+
+/** Reactively reads a sibling pin's string value off the live board node. */
+function useSiblingPinValue(nodeId: string, pinName: string): string {
+	const pins = useStoreNodePins(nodeId);
 	const pin = Object.values(pins).find(
 		(candidate) => candidate.name === pinName,
 	);
 	return normalizeStringValue(pin?.default_value);
+}
+
+/** Reactively reads a sibling pin's baked struct schema off the live board
+ * node. `undefined` means the pin is absent (e.g. a per-property binding). */
+function useSiblingPinSchema(
+	nodeId: string,
+	pinName: string,
+): string | undefined {
+	const pins = useStoreNodePins(nodeId);
+	return (
+		Object.values(pins).find((candidate) => candidate.name === pinName)
+			?.schema ?? undefined
+	);
+}
+
+/** Order-independent JSON serialization for stable schema comparison. */
+function stableStringify(value: unknown): string {
+	if (value === null || typeof value !== "object") return JSON.stringify(value);
+	if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+	const entries = Object.entries(value as Record<string, unknown>).sort(
+		([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+	);
+	return `{${entries
+		.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`)
+		.join(",")}}`;
+}
+
+function schemaStrEqual(a: string | undefined, b: string | undefined): boolean {
+	const normalize = (schema: string | undefined) => {
+		if (!schema) return "";
+		try {
+			return stableStringify(JSON.parse(schema));
+		} catch {
+			return schema;
+		}
+	};
+	return normalize(a) === normalize(b);
+}
+
+/** The schema pins an action selection should write, derived from the live
+ * (producer or installed) contract. Shared by the local and remote selectors. */
+function actionSchemaUpdates(
+	action: OntologyActionDefinition | undefined,
+	contract: GraphOverlay | undefined,
+): SchemaUpdate[] {
+	const updates: SchemaUpdate[] = [];
+	if (action?.parameter_schema) {
+		updates.push({
+			pinName: "parameters",
+			schema: JSON.stringify(action.parameter_schema),
+		});
+	}
+	const object = action
+		? resolveObject(contract, action.object_type)
+		: undefined;
+	if (object) {
+		const objectSchema = objectSchemaString(object);
+		// `objects` (request/input nodes) and the singular `object` (the action
+		// input node) share the object's schema; updates for absent pins are
+		// ignored by the persist step.
+		updates.push({ pinName: "objects", schema: objectSchema });
+		updates.push({ pinName: "object", schema: objectSchema });
+	}
+	return updates;
+}
+
+/** True when a placed node's baked schema no longer matches the live contract.
+ * The runtime stays safe regardless (the producer validates authoritatively);
+ * this only surfaces a one-click resync so typed pins stay honest. */
+function actionSchemaDrift(
+	action: OntologyActionDefinition | undefined,
+	contract: GraphOverlay | undefined,
+	currentParametersSchema: string | undefined,
+): boolean {
+	if (!action) return false;
+	// Only the governed `parameters` contract drives drift. The `objects` schema
+	// is advisory typing whose formatting is noisy, and generated bindings drop
+	// the `parameters` struct pin entirely (per-property pins) — so a missing
+	// pin means "not applicable", never drift.
+	const update = actionSchemaUpdates(action, contract).find(
+		(candidate) => candidate.pinName === "parameters",
+	);
+	if (!update) return false;
+	if (currentParametersSchema === undefined) return false;
+	return !schemaStrEqual(currentParametersSchema, update.schema);
+}
+
+/** Advisory drift affordance: re-applies the current contract schema to the
+ * placed node's typed pins. Never auto-fires — the user clicks to resync. */
+function SchemaSyncButton({ onSync }: Readonly<{ onSync: () => void }>) {
+	return (
+		<button
+			type="button"
+			onMouseDown={(event) => event.stopPropagation()}
+			onPointerDown={(event) => event.stopPropagation()}
+			onClick={onSync}
+			className="ml-1 mt-1 inline-flex w-fit items-center gap-1 rounded-sm border border-border bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+			title="The contract changed since this node was configured. Re-apply the current typed schema."
+		>
+			<RefreshCw className="h-3 w-3" /> Sync schema
+		</button>
+	);
 }
 
 // ─── Compact select shell (matches the remote-event dropdown styling) ───
@@ -284,7 +399,13 @@ export function OntologySelect({
 	setValue: (value: number[] | undefined) => void;
 }>) {
 	const [open, setOpen] = useState(false);
-	const { overlays, loading, error } = useOverlays(appId, open);
+	const selectedId = normalizeStringValue(value);
+	// Fetch eagerly when a value is set so the id resolves to a friendly name
+	// instead of showing a raw UUID until the dropdown is opened.
+	const { overlays, loading, error } = useOverlays(
+		appId,
+		open || Boolean(selectedId),
+	);
 	const persist = useOntologyPinPersist(
 		appId,
 		boardId,
@@ -292,7 +413,6 @@ export function OntologySelect({
 		boardRef,
 		setValue,
 	);
-	const selectedId = normalizeStringValue(value);
 	const selected = overlays.find((overlay) => overlay.id === selectedId);
 
 	return (
@@ -300,7 +420,7 @@ export function OntologySelect({
 			open={open}
 			onOpenChange={setOpen}
 			value={selected?.name ?? selectedId}
-			placeholder="Select ontology"
+			placeholder="Ontology"
 			label={pin.friendly_name}
 			onChange={(id) =>
 				void persist(pin, id, { clearPins: ["object_type", "action_id"] })
@@ -340,7 +460,11 @@ export function OntologyObjectSelect({
 	setValue: (value: number[] | undefined) => void;
 }>) {
 	const [open, setOpen] = useState(false);
-	const { overlays, loading, error } = useOverlays(appId, open);
+	const ontologyId = useSiblingPinValue(nodeId, "ontology_id");
+	const { overlays, loading, error } = useOverlays(
+		appId,
+		open || Boolean(ontologyId),
+	);
 	const persist = useOntologyPinPersist(
 		appId,
 		boardId,
@@ -348,17 +472,19 @@ export function OntologyObjectSelect({
 		boardRef,
 		setValue,
 	);
-	const ontologyId = siblingValue(boardRef, nodeId, "ontology_id");
 	const overlay = overlays.find((item) => item.id === ontologyId);
 	const selected = normalizeStringValue(value);
+	// Object bindings persist the stable identifier (id/api_name), so resolve it
+	// back to the object's label for display instead of showing the raw slug.
+	const selectedObject = resolveObject(overlay, selected);
 
 	return (
 		<CompactSelect
 			open={open}
 			onOpenChange={setOpen}
 			disabled={!ontologyId}
-			value={selected}
-			placeholder={ontologyId ? "Select object type" : "Pick an ontology first"}
+			value={selectedObject?.label ?? selected}
+			placeholder={ontologyId ? "Object type" : "Pick ontology"}
 			label={pin.friendly_name}
 			onChange={(objectType) => {
 				const object = resolveObject(overlay, objectType);
@@ -404,7 +530,13 @@ export function OntologyActionSelect({
 	setValue: (value: number[] | undefined) => void;
 }>) {
 	const [open, setOpen] = useState(false);
-	const { overlays, loading, error } = useOverlays(appId, open);
+	const selectedId = normalizeStringValue(value);
+	// Fetch eagerly when a value is already selected so schema drift surfaces
+	// without opening the dropdown first.
+	const { overlays, loading, error } = useOverlays(
+		appId,
+		open || Boolean(selectedId),
+	);
 	const persist = useOntologyPinPersist(
 		appId,
 		boardId,
@@ -412,32 +544,15 @@ export function OntologyActionSelect({
 		boardRef,
 		setValue,
 	);
-	const ontologyId = siblingValue(boardRef, nodeId, "ontology_id");
+	const ontologyId = useSiblingPinValue(nodeId, "ontology_id");
+	const parametersSchema = useSiblingPinSchema(nodeId, "parameters");
 	const overlay = overlays.find((item) => item.id === ontologyId);
 	const actions = (overlay?.actions ?? []).filter((action) => action.enabled);
-	const selectedId = normalizeStringValue(value);
 	const selected = actions.find((action) => action.id === selectedId);
 
 	const selectAction = useCallback(
 		(action: OntologyActionDefinition | undefined, actionId: string) => {
-			const schemaUpdates: SchemaUpdate[] = [];
-			// Type the parameters pin from the action's contract so downstream
-			// pins and the struct editor reflect the action's real inputs.
-			if (action?.parameter_schema) {
-				schemaUpdates.push({
-					pinName: "parameters",
-					schema: JSON.stringify(action.parameter_schema),
-				});
-			}
-			const object = action
-				? resolveObject(overlay, action.object_type)
-				: undefined;
-			if (object) {
-				schemaUpdates.push({
-					pinName: "objects",
-					schema: objectSchemaString(object),
-				});
-			}
+			const schemaUpdates = actionSchemaUpdates(action, overlay);
 			void persist(pin, actionId, {
 				schemaUpdates: schemaUpdates.length > 0 ? schemaUpdates : undefined,
 			});
@@ -445,32 +560,39 @@ export function OntologyActionSelect({
 		[overlay, persist, pin],
 	);
 
+	const drift = actionSchemaDrift(selected, overlay, parametersSchema);
+
 	return (
-		<CompactSelect
-			open={open}
-			onOpenChange={setOpen}
-			disabled={!ontologyId}
-			value={selected?.name ?? selectedId}
-			placeholder={ontologyId ? "Select action" : "Pick an ontology first"}
-			label={pin.friendly_name}
-			onChange={(actionId) =>
-				selectAction(
-					actions.find((action) => action.id === actionId),
-					actionId,
-				)
-			}
-		>
-			{loading && <SelectLabel>Loading actions…</SelectLabel>}
-			{error && <SelectLabel>Could not load actions</SelectLabel>}
-			{!loading && !error && actions.length === 0 && (
-				<SelectLabel>No enabled actions</SelectLabel>
+		<div className="flex flex-col items-start max-w-full overflow-hidden">
+			<CompactSelect
+				open={open}
+				onOpenChange={setOpen}
+				disabled={!ontologyId}
+				value={selected?.name ?? selectedId}
+				placeholder={ontologyId ? "Action" : "Pick ontology"}
+				label={pin.friendly_name}
+				onChange={(actionId) =>
+					selectAction(
+						actions.find((action) => action.id === actionId),
+						actionId,
+					)
+				}
+			>
+				{loading && <SelectLabel>Loading actions…</SelectLabel>}
+				{error && <SelectLabel>Could not load actions</SelectLabel>}
+				{!loading && !error && actions.length === 0 && (
+					<SelectLabel>No enabled actions</SelectLabel>
+				)}
+				{actions.map((action) => (
+					<SelectItem key={action.id} value={action.id}>
+						{action.name}
+					</SelectItem>
+				))}
+			</CompactSelect>
+			{drift && selected && (
+				<SchemaSyncButton onSync={() => selectAction(selected, selectedId)} />
 			)}
-			{actions.map((action) => (
-				<SelectItem key={action.id} value={action.id}>
-					{action.name}
-				</SelectItem>
-			))}
-		</CompactSelect>
+		</div>
 	);
 }
 
@@ -524,7 +646,11 @@ export function RemoteOntologySelect({
 	setValue: (value: number[] | undefined) => void;
 }>) {
 	const [open, setOpen] = useState(false);
-	const { imports, loading, error } = useImports(appId, open);
+	const selectedId = normalizeStringValue(value);
+	const { imports, loading, error } = useImports(
+		appId,
+		open || Boolean(selectedId),
+	);
 	const persist = useOntologyPinPersist(
 		appId,
 		boardId,
@@ -532,7 +658,6 @@ export function RemoteOntologySelect({
 		boardRef,
 		setValue,
 	);
-	const selectedId = normalizeStringValue(value);
 	const selected = imports.find((item) => item.id === selectedId);
 
 	return (
@@ -540,7 +665,7 @@ export function RemoteOntologySelect({
 			open={open}
 			onOpenChange={setOpen}
 			value={selected?.contract.name ?? selectedId}
-			placeholder="Select installed ontology"
+			placeholder="Installed ontology"
 			label={pin.friendly_name}
 			onChange={(id) => void persist(pin, id, { clearPins: ["object_type"] })}
 		>
@@ -578,7 +703,11 @@ export function RemoteOntologyObjectSelect({
 	setValue: (value: number[] | undefined) => void;
 }>) {
 	const [open, setOpen] = useState(false);
-	const { imports, loading, error } = useImports(appId, open);
+	const bindingId = useSiblingPinValue(nodeId, "binding_id");
+	const { imports, loading, error } = useImports(
+		appId,
+		open || Boolean(bindingId),
+	);
 	const persist = useOntologyPinPersist(
 		appId,
 		boardId,
@@ -586,17 +715,20 @@ export function RemoteOntologyObjectSelect({
 		boardRef,
 		setValue,
 	);
-	const bindingId = siblingValue(boardRef, nodeId, "binding_id");
 	const contract = imports.find((item) => item.id === bindingId)?.contract;
 	const selected = normalizeStringValue(value);
+	// Remote bindings persist the stable object identifier (id/api_name), so
+	// resolve it back to the object's label for display; without this the pin
+	// shows the raw slug (e.g. "wmylhbri2juwcid…") instead of the object name.
+	const selectedObject = resolveObject(contract, selected);
 
 	return (
 		<CompactSelect
 			open={open}
 			onOpenChange={setOpen}
 			disabled={!bindingId}
-			value={selected}
-			placeholder={bindingId ? "Select object type" : "Pick an ontology first"}
+			value={selectedObject?.label ?? selected}
+			placeholder={bindingId ? "Object type" : "Pick ontology"}
 			label={pin.friendly_name}
 			onChange={(objectType) => {
 				const object = resolveObject(contract, objectType);
@@ -621,5 +753,87 @@ export function RemoteOntologyObjectSelect({
 				<SelectLabel>No object types</SelectLabel>
 			)}
 		</CompactSelect>
+	);
+}
+
+export function RemoteOntologyActionSelect({
+	pin,
+	value,
+	appId,
+	boardId,
+	nodeId,
+	boardRef,
+	setValue,
+}: Readonly<{
+	pin: IPin;
+	value: number[] | undefined | null;
+	appId: string;
+	boardId?: string;
+	nodeId: string;
+	boardRef?: RefObject<IBoard | undefined>;
+	setValue: (value: number[] | undefined) => void;
+}>) {
+	const [open, setOpen] = useState(false);
+	const selectedId = normalizeStringValue(value);
+	const { imports, loading, error } = useImports(
+		appId,
+		open || Boolean(selectedId),
+	);
+	const persist = useOntologyPinPersist(
+		appId,
+		boardId,
+		nodeId,
+		boardRef,
+		setValue,
+	);
+	const bindingId = useSiblingPinValue(nodeId, "binding_id");
+	const parametersSchema = useSiblingPinSchema(nodeId, "parameters");
+	const contract = imports.find((item) => item.id === bindingId)?.contract;
+	const actions = (contract?.actions ?? []).filter((action) => action.enabled);
+	const selected = actions.find((action) => action.id === selectedId);
+
+	const selectAction = useCallback(
+		(action: OntologyActionDefinition | undefined, actionId: string) => {
+			const schemaUpdates = actionSchemaUpdates(action, contract);
+			void persist(pin, actionId, {
+				schemaUpdates: schemaUpdates.length > 0 ? schemaUpdates : undefined,
+			});
+		},
+		[contract, persist, pin],
+	);
+
+	const drift = actionSchemaDrift(selected, contract, parametersSchema);
+
+	return (
+		<div className="flex flex-col items-start max-w-full overflow-hidden">
+			<CompactSelect
+				open={open}
+				onOpenChange={setOpen}
+				disabled={!bindingId}
+				value={selected?.name ?? selectedId}
+				placeholder={bindingId ? "Action" : "Pick ontology"}
+				label={pin.friendly_name}
+				onChange={(actionId) =>
+					selectAction(
+						actions.find((action) => action.id === actionId),
+						actionId,
+					)
+				}
+			>
+				{loading && <SelectLabel>Loading actions…</SelectLabel>}
+				{error && <SelectLabel>Could not load actions</SelectLabel>}
+				{!loading && !error && actions.length === 0 && (
+					<SelectLabel>No enabled actions</SelectLabel>
+				)}
+				{actions.map((action) => (
+					<SelectItem key={action.id} value={action.id}>
+						{action.name}
+					</SelectItem>
+				))}
+			</CompactSelect>
+			{drift && selected && (
+				<SchemaSyncButton onSync={() => selectAction(selected, selectedId)} />
+			)}
+		</div>
 	);
 }

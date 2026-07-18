@@ -41,6 +41,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
+import { Switch } from "../../ui/switch";
 
 export interface DataStudioTableInfo {
 	name: string;
@@ -171,6 +172,7 @@ function inferEdges(objects: InferredObject[]): EdgeLabelMapping[] {
 				dst_column: column.name,
 				src_label: source.label,
 				dst_label: target.label,
+				containment: false,
 				property_columns: [],
 				style: {
 					color: source.style.color,
@@ -245,7 +247,14 @@ export function OntologySetupDialog({
 				.map((candidate) => {
 					const existing = byKey.get(edgeKey(candidate));
 					return existing
-						? { ...candidate, id: existing.id, label: existing.label }
+						? {
+								...candidate,
+								id: existing.id,
+								label: existing.label,
+								containment: existing.containment,
+								dst_ontology: existing.dst_ontology,
+								dst_binding_id: existing.dst_binding_id,
+							}
 						: candidate;
 				});
 		});
@@ -325,10 +334,10 @@ export function OntologySetupDialog({
 		[],
 	);
 
-	const updateEdgeLabel = useCallback(
-		(target: EdgeLabelMapping, label: string) => {
+	const updateEdge = useCallback(
+		(target: EdgeLabelMapping, patch: Partial<EdgeLabelMapping>) => {
 			setEdges((current) =>
-				current.map((edge) => (edge === target ? { ...edge, label } : edge)),
+				current.map((edge) => (edge === target ? { ...edge, ...patch } : edge)),
 			);
 		},
 		[],
@@ -755,7 +764,7 @@ export function OntologySetupDialog({
 										<EdgeReviewCard
 											key={edge.id ?? edgeKey(edge)}
 											edge={edge}
-											onLabelChange={updateEdgeLabel}
+											onEdgeChange={updateEdge}
 											onRemove={removeEdge}
 										/>
 									))
@@ -891,15 +900,19 @@ export function OntologySetupDialog({
 
 interface EdgeReviewCardProps {
 	edge: EdgeLabelMapping;
-	onLabelChange: (edge: EdgeLabelMapping, label: string) => void;
+	onEdgeChange: (
+		edge: EdgeLabelMapping,
+		patch: Partial<EdgeLabelMapping>,
+	) => void;
 	onRemove: (edge: EdgeLabelMapping) => void;
 }
 
 function EdgeReviewCard({
 	edge,
-	onLabelChange,
+	onEdgeChange,
 	onRemove,
 }: Readonly<EdgeReviewCardProps>) {
+	const containmentId = `edge-containment-${edge.id ?? edgeKey(edge)}`;
 	return (
 		<div className="space-y-3 rounded-xl border p-4">
 			<div className="flex items-center justify-between gap-3">
@@ -922,7 +935,9 @@ function EdgeReviewCard({
 					<Label>Relationship label</Label>
 					<Input
 						value={edge.label}
-						onChange={(event) => onLabelChange(edge, event.target.value)}
+						onChange={(event) =>
+							onEdgeChange(edge, { label: event.target.value })
+						}
 						className="font-mono text-xs"
 					/>
 				</div>
@@ -932,6 +947,18 @@ function EdgeReviewCard({
 						{edge.src_column} → {edge.dst_column}
 					</p>
 				</div>
+			</div>
+			<div className="flex items-center gap-2">
+				<Switch
+					id={containmentId}
+					checked={Boolean(edge.containment)}
+					onCheckedChange={(checked) =>
+						onEdgeChange(edge, { containment: checked })
+					}
+				/>
+				<Label htmlFor={containmentId} className="text-xs font-medium">
+					Hierarchy (parent → child)
+				</Label>
 			</div>
 		</div>
 	);

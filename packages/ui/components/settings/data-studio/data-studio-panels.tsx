@@ -5,13 +5,18 @@ import {
 	ArrowRight,
 	Box,
 	Braces,
+	Check,
 	CheckCircle2,
+	ChevronDown,
 	ChevronRight,
 	CircleDot,
+	Cloud,
+	Copy,
 	Database,
 	ExternalLink,
 	FileKey,
 	GitBranch,
+	Hash,
 	Layers3,
 	Loader2,
 	MoreVertical,
@@ -33,6 +38,7 @@ import type { IBoard } from "../../../lib/schema/flow/board";
 import { IVersionType } from "../../../lib/schema/flow/version-type";
 import { useBackend } from "../../../state/backend-state";
 import type {
+	EdgeLabelMapping,
 	GraphOverlay,
 	InvokeOntologyActionPayload,
 	NodeLabelMapping,
@@ -70,6 +76,12 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
+import {
+	CopyButton,
+	PropertyValue,
+	inferValueKind,
+} from "../../ui/graph/graph-node-inspector";
+import { getGraphIcon } from "../../ui/graph/icons";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { ScrollArea } from "../../ui/scroll-area";
@@ -81,7 +93,13 @@ import {
 	SelectValue,
 } from "../../ui/select";
 import { Separator } from "../../ui/separator";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../ui/sheet";
+import {
+	Sheet,
+	SheetContent,
+	SheetDescription,
+	SheetHeader,
+	SheetTitle,
+} from "../../ui/sheet";
 import { Switch } from "../../ui/switch";
 import { Textarea } from "../../ui/textarea";
 
@@ -129,12 +147,14 @@ function EmptyStudioState({
 export function DataStudioOverview({
 	ontologies,
 	tableCount,
+	remoteCount,
 	onCreateOntology,
 	onOpenOntology,
 	onNavigate,
 }: Readonly<
 	StudioPanelBaseProps & {
 		tableCount: number;
+		remoteCount: number;
 		onOpenOntology: (ontologyId: string) => void;
 		onNavigate: (view: string) => void;
 	}
@@ -151,12 +171,13 @@ export function DataStudioOverview({
 
 	return (
 		<div className="space-y-6">
-			<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+			<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
 				{[
 					{ label: "Ontologies", value: ontologies.length, icon: Layers3 },
 					{ label: "Object types", value: objectCount, icon: Box },
 					{ label: "Actions", value: actionCount, icon: Workflow },
 					{ label: "Shared", value: exposedCount, icon: Share2 },
+					{ label: "Remote", value: remoteCount, icon: Cloud },
 				].map(({ label, value, icon: Icon }) => (
 					<Card key={label}>
 						<CardContent className="flex items-center justify-between p-4">
@@ -295,15 +316,37 @@ export function DataStudioOverview({
 	);
 }
 
+interface ExplorerSource {
+	/** Unique select value: overlay id for local, import id for remote. */
+	value: string;
+	name: string;
+	overlay: GraphOverlay;
+	/** Present when this source is an installed remote ontology. */
+	remoteImportId?: string;
+	/** Source app label, shown as the remote provenance. */
+	sourceLabel?: string;
+}
+
 export function ObjectExplorerPanel({
 	ontologies,
+	remoteImports,
+	initialSourceValue,
 	onCreateOntology,
 	onSample,
+	onSampleRemote,
 	onInvokeAction,
+	resolveSourceName,
 }: Readonly<
 	StudioPanelBaseProps & {
+		remoteImports?: RemoteOntologyImport[];
+		initialSourceValue?: string;
 		onSample: (
 			ontologyId: string,
+			objectType: string,
+			limit: number,
+		) => Promise<unknown[]>;
+		onSampleRemote?: (
+			importId: string,
 			objectType: string,
 			limit: number,
 		) => Promise<unknown[]>;
@@ -313,10 +356,30 @@ export function ObjectExplorerPanel({
 			payload: InvokeOntologyActionPayload,
 			onStatus?: (run: OntologyActionRun) => void,
 		) => Promise<OntologyActionRun>;
+		resolveSourceName?: (targetAppId: string) => string;
 	}
 >) {
-	const [selectedOntologyId, setSelectedOntologyId] = useState(
-		ontologies[0]?.id ?? "",
+	const sources = useMemo<ExplorerSource[]>(() => {
+		const local: ExplorerSource[] = ontologies.map((overlay) => ({
+			value: overlay.id,
+			name: overlay.name,
+			overlay,
+		}));
+		const remote: ExplorerSource[] = (remoteImports ?? []).map((imported) => ({
+			value: imported.id,
+			name: imported.contract.name,
+			// Remote actions run through their own governed invoke path, not the
+			// local action endpoint — strip them so the object sheet stays read-only.
+			overlay: { ...imported.contract, actions: [] },
+			remoteImportId: imported.id,
+			sourceLabel:
+				resolveSourceName?.(imported.target_app_id) ?? imported.target_app_id,
+		}));
+		return [...local, ...remote];
+	}, [ontologies, remoteImports, resolveSourceName]);
+
+	const [selectedSourceValue, setSelectedSourceValue] = useState(
+		initialSourceValue ?? sources[0]?.value ?? "",
 	);
 	const [selectedObjectKey, setSelectedObjectKey] = useState("");
 	const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -329,12 +392,12 @@ export function ObjectExplorerPanel({
 	const [error, setError] = useState<string | null>(null);
 	const loadGeneration = useRef(0);
 
-	const ontology = useMemo(
+	const source = useMemo(
 		() =>
-			ontologies.find((item) => item.id === selectedOntologyId) ??
-			ontologies[0],
-		[ontologies, selectedOntologyId],
+			sources.find((item) => item.value === selectedSourceValue) ?? sources[0],
+		[sources, selectedSourceValue],
 	);
+	const ontology = source?.overlay;
 	const objectType = useMemo(
 		() =>
 			ontology?.nodes.find(
@@ -344,15 +407,15 @@ export function ObjectExplorerPanel({
 	);
 
 	useEffect(() => {
-		if (!ontology) return;
-		setSelectedOntologyId(ontology.id);
-		if (!objectType && ontology.nodes[0])
+		if (!source) return;
+		setSelectedSourceValue(source.value);
+		if (!objectType && ontology?.nodes[0])
 			setSelectedObjectKey(objectKey(ontology.nodes[0]));
 		else if (objectType) setSelectedObjectKey(objectKey(objectType));
-	}, [objectType, ontology]);
+	}, [objectType, source, ontology]);
 
 	const activeObjectKey = objectType ? objectKey(objectType) : "";
-	const activeSelectionKey = `${ontology?.id ?? ""}:${activeObjectKey}`;
+	const activeSelectionKey = `${source?.value ?? ""}:${activeObjectKey}`;
 	const activeSelectionRef = useRef(activeSelectionKey);
 	useEffect(() => {
 		activeSelectionRef.current = activeSelectionKey;
@@ -363,13 +426,19 @@ export function ObjectExplorerPanel({
 	}, [activeSelectionKey]);
 
 	const loadObjects = useCallback(async () => {
-		if (!ontology || !objectType) return;
+		if (!source || !objectType) return;
 		const generation = ++loadGeneration.current;
 		const selectionKey = activeSelectionKey;
 		setLoading(true);
 		setError(null);
 		try {
-			const result = await onSample(ontology.id, objectType.label, 100);
+			const result = source.remoteImportId
+				? ((await onSampleRemote?.(
+						source.remoteImportId,
+						objectType.label,
+						100,
+					)) ?? [])
+				: await onSample(source.overlay.id, objectType.label, 100);
 			if (
 				generation !== loadGeneration.current ||
 				selectionKey !== activeSelectionRef.current
@@ -403,7 +472,7 @@ export function ObjectExplorerPanel({
 		} finally {
 			if (generation === loadGeneration.current) setLoading(false);
 		}
-	}, [activeSelectionKey, objectType, onSample, ontology]);
+	}, [activeSelectionKey, objectType, onSample, onSampleRemote, source]);
 
 	useEffect(() => {
 		loadObjects();
@@ -429,7 +498,7 @@ export function ObjectExplorerPanel({
 		return Array.from(new Set([...preferred, ...rest])).slice(0, 8);
 	}, [objectType]);
 
-	if (ontologies.length === 0) {
+	if (sources.length === 0) {
 		return (
 			<EmptyStudioState
 				title="No objects to explore"
@@ -444,9 +513,9 @@ export function ObjectExplorerPanel({
 			<aside className="min-h-0 border-b bg-muted/20 lg:border-r lg:border-b-0">
 				<div className="border-b p-3">
 					<Select
-						value={ontology?.id}
+						value={source?.value}
 						onValueChange={(value) => {
-							setSelectedOntologyId(value);
+							setSelectedSourceValue(value);
 							setSelectedObjectKey("");
 						}}
 					>
@@ -457,9 +526,16 @@ export function ObjectExplorerPanel({
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							{ontologies.map((item) => (
-								<SelectItem key={item.id} value={item.id}>
-									{item.name}
+							{sources.map((item) => (
+								<SelectItem key={item.value} value={item.value}>
+									<span className="flex items-center gap-2">
+										<span className="truncate">{item.name}</span>
+										{item.remoteImportId && (
+											<Badge variant="outline" className="gap-1 text-[10px]">
+												<Cloud className="h-3 w-3" /> Remote
+											</Badge>
+										)}
+									</span>
 								</SelectItem>
 							))}
 						</SelectContent>
@@ -495,9 +571,17 @@ export function ObjectExplorerPanel({
 						<div className="flex items-center gap-2">
 							<h2 className="font-semibold">{objectType?.label}</h2>
 							<Badge variant="outline">{visibleRows.length} preview</Badge>
+							{source?.remoteImportId && (
+								<Badge variant="outline" className="gap-1">
+									<Cloud className="h-3 w-3" /> Remote · {source.sourceLabel}
+								</Badge>
+							)}
 						</div>
 						<p className="text-xs text-muted-foreground">
-							Standard object view · source {objectType?.table}
+							{source?.remoteImportId
+								? "Remote object · read-only"
+								: "Standard object view"}{" "}
+							· source {objectType?.table}
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
@@ -620,6 +704,49 @@ export function ObjectExplorerPanel({
 	);
 }
 
+function CopyChip({ text, label }: Readonly<{ text: string; label: string }>) {
+	const [copied, setCopied] = useState(false);
+	const handleCopy = useCallback(() => {
+		navigator.clipboard.writeText(text);
+		setCopied(true);
+		setTimeout(() => setCopied(false), 1500);
+	}, [text]);
+	return (
+		<Button
+			variant="outline"
+			size="sm"
+			className="h-7 shrink-0 gap-1.5 px-2.5 text-xs"
+			onClick={handleCopy}
+		>
+			{copied ? (
+				<Check className="h-3.5 w-3.5 text-green-500" />
+			) : (
+				<Copy className="h-3.5 w-3.5" />
+			)}
+			{label}
+		</Button>
+	);
+}
+
+function ObjectFieldCard({
+	label,
+	value,
+}: Readonly<{ label: string; value: unknown }>) {
+	return (
+		<div className="min-w-0 rounded-xl border bg-muted/30 p-3">
+			<div className="mb-1 flex items-center justify-between gap-2">
+				<p className="truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+					{label}
+				</p>
+				<span className="shrink-0 text-[9px] uppercase tracking-wide text-muted-foreground/50">
+					{inferValueKind(value).kind}
+				</span>
+			</div>
+			<PropertyValue value={value} propKey={label} />
+		</div>
+	);
+}
+
 function ObjectViewSheet({
 	ontology,
 	objectType,
@@ -648,18 +775,16 @@ function ObjectViewSheet({
 		setLastRow(row);
 		setShowAllProperties(false);
 	}
+	const emptyType: NodeLabelMapping = {
+		label: "",
+		table: "",
+		id_column: "",
+		property_columns: [],
+		style: { color: "", icon: "", size: { mode: "fixed" } },
+	};
+	const activeKey = objectKey(objectType ?? emptyType);
 	const view = ontology?.object_views?.find(
-		(item) =>
-			item.object_type ===
-			objectKey(
-				objectType ?? {
-					label: "",
-					table: "",
-					id_column: "",
-					property_columns: [],
-					style: { color: "", icon: "", size: { mode: "fixed" } },
-				},
-			),
+		(item) => item.object_type === activeKey,
 	);
 	const titleProperty =
 		view?.title_property ?? objectType?.display_column ?? objectType?.id_column;
@@ -669,18 +794,7 @@ function ObjectViewSheet({
 		[];
 	const actions =
 		ontology?.actions?.filter(
-			(action) =>
-				action.enabled &&
-				action.object_type ===
-					objectKey(
-						objectType ?? {
-							label: "",
-							table: "",
-							id_column: "",
-							property_columns: [],
-							style: { color: "", icon: "", size: { mode: "fixed" } },
-						},
-					),
+			(action) => action.enabled && action.object_type === activeKey,
 		) ?? [];
 	const prominentKeys = row ? prominent.filter((key) => key in row) : [];
 	const prominentSet = new Set(prominentKeys);
@@ -690,109 +804,181 @@ function ObjectViewSheet({
 	const restEntries = row
 		? Object.entries(row).filter(([key]) => !prominentSet.has(key))
 		: [];
-	const canToggleProperties =
-		prominentEntries.length > 0 && restEntries.length > 0;
-	const visibleEntries =
-		showAllProperties || prominentEntries.length === 0
-			? [...prominentEntries, ...restEntries]
-			: prominentEntries;
+	const hasProminent = prominentEntries.length > 0;
+	const restCollapsed = hasProminent && !showAllProperties;
+	const totalFields = prominentEntries.length + restEntries.length;
+
+	const accentColor = objectType?.style?.color || "hsl(var(--primary))";
+	const TypeIcon = getGraphIcon(objectType?.style?.icon ?? "database");
+	const titleValue = String(
+		row?.[titleProperty ?? ""] ??
+			row?.[objectType?.id_column ?? ""] ??
+			"Object",
+	);
+	const idRaw = row?.[objectType?.id_column ?? ""];
+	const idValue = idRaw === undefined || idRaw === null ? "" : String(idRaw);
+	const showIdChip = idValue !== "" && idValue !== titleValue;
+
 	return (
 		<Sheet open={Boolean(row)} onOpenChange={(open) => !open && onClose()}>
-			<SheetContent className="w-full overflow-y-auto sm:max-w-xl">
-				<SheetHeader className="border-b pb-4 text-left">
-					<div className="flex items-center gap-2 text-xs text-muted-foreground">
-						<Box className="h-3.5 w-3.5" />
-						{objectType?.label}
-					</div>
-					<SheetTitle className="text-xl">
-						{String(
-							row?.[titleProperty ?? ""] ??
-								row?.[objectType?.id_column ?? ""] ??
-								"Object",
-						)}
-					</SheetTitle>
-				</SheetHeader>
-				{row && (
-					<div className="space-y-6 py-5">
-						{prominent.length > 0 && (
-							<div className="grid grid-cols-2 gap-3">
-								{prominent.map((property) => (
-									<div
-										key={property}
-										className="rounded-xl border bg-muted/20 p-3"
-									>
-										<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-											{humanizeIdentifier(property)}
-										</p>
-										<p className="mt-1 break-words text-sm font-medium">
-											{String(row[property] ?? "—")}
-										</p>
-									</div>
-								))}
+			<SheetContent className="w-full p-0 sm:max-w-xl">
+				<div className="flex h-full min-h-0 flex-col">
+					<SheetHeader className="gap-0 space-y-0 border-b p-5 pr-12 text-left">
+						<div className="flex items-start gap-3.5">
+							<div
+								className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white shadow-sm"
+								style={{
+									backgroundColor: accentColor,
+									boxShadow: `0 0 0 4px color-mix(in srgb, ${accentColor} 14%, transparent)`,
+								}}
+							>
+								<TypeIcon className="h-5 w-5" />
 							</div>
-						)}
-						{actions.length > 0 && (
-							<div>
-								<p className="mb-2 text-xs font-medium text-muted-foreground">
-									Available actions
+							<div className="min-w-0 flex-1">
+								<p className="truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+									{objectType?.label || "Object"}
 								</p>
-								<div className="flex flex-wrap gap-2">
-									{actions.map((action) => (
-										<Button
-											key={action.id}
-											variant="outline"
-											size="sm"
-											className="gap-1.5"
-											onClick={() => setSelectedAction(action)}
-										>
-											<Workflow className="h-3 w-3" />
-											{action.name}
-										</Button>
-									))}
-								</div>
+								<SheetTitle className="mt-0.5 truncate text-xl leading-tight">
+									{titleValue}
+								</SheetTitle>
+								{showIdChip && (
+									<div className="group mt-1.5 flex items-center gap-1 text-muted-foreground">
+										<Hash className="h-3 w-3 shrink-0 opacity-70" />
+										<span className="truncate font-mono text-xs">
+											{idValue}
+										</span>
+										<CopyButton text={idValue} />
+									</div>
+								)}
 							</div>
-						)}
-						<Separator />
-						<div className="space-y-1">
-							{visibleEntries.map(([property, value]) => (
-								<div
-									key={property}
-									className="grid grid-cols-[minmax(120px,0.8fr)_minmax(0,1.4fr)] gap-4 border-b py-2.5"
-								>
-									<p className="text-xs text-muted-foreground">
-										{humanizeIdentifier(property)}
-									</p>
-									<p className="break-words text-sm">
-										{typeof value === "object"
-											? JSON.stringify(value)
-											: String(value ?? "—")}
-									</p>
-								</div>
-							))}
-							{canToggleProperties && (
-								<Button
-									variant="ghost"
-									size="sm"
-									className="mt-1 w-full justify-center text-muted-foreground"
-									onClick={() => setShowAllProperties((current) => !current)}
-								>
-									{showAllProperties
-										? "Show fewer properties"
-										: `Show all (${prominentEntries.length + restEntries.length})`}
-								</Button>
-							)}
 						</div>
-						<div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
-							<div className="flex items-center gap-1.5 font-medium text-foreground">
-								<Database className="h-3.5 w-3.5" />
-								Lineage
+						<SheetDescription className="sr-only">
+							{objectType?.label || "Object"} details from ontology{" "}
+							{ontology?.name ?? ""}
+						</SheetDescription>
+					</SheetHeader>
+
+					{row && (
+						<div className="relative min-h-0 flex-1 overflow-y-auto">
+							<div className="space-y-6 p-5">
+								{actions.length > 0 && (
+									<section>
+										<p className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+											<Workflow className="h-3.5 w-3.5" />
+											Actions
+										</p>
+										<div className="space-y-1.5">
+											{actions.map((action) => (
+												<button
+													key={action.id}
+													type="button"
+													onClick={() => setSelectedAction(action)}
+													className="group flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-accent"
+												>
+													<span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+														<Workflow className="h-4 w-4" />
+													</span>
+													<span className="min-w-0 flex-1">
+														<span className="block truncate text-sm font-medium">
+															{action.name}
+														</span>
+														{action.description && (
+															<span className="block truncate text-xs text-muted-foreground">
+																{action.description}
+															</span>
+														)}
+													</span>
+													<ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+												</button>
+											))}
+										</div>
+									</section>
+								)}
+
+								{hasProminent && (
+									<section>
+										<p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+											Highlights
+										</p>
+										<div className="grid grid-cols-2 gap-2.5">
+											{prominentEntries.map(([key, value]) => (
+												<ObjectFieldCard
+													key={key}
+													label={humanizeIdentifier(key)}
+													value={value}
+												/>
+											))}
+										</div>
+									</section>
+								)}
+
+								{restEntries.length > 0 && (
+									<section>
+										<div className="mb-2.5 flex items-center justify-between">
+											<p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+												{hasProminent ? "More properties" : "Properties"}
+											</p>
+											<span className="text-[10px] text-muted-foreground">
+												{totalFields} fields
+											</span>
+										</div>
+										{!restCollapsed && (
+											<div className="space-y-1.5">
+												{restEntries.map(([key, value]) => (
+													<ObjectFieldCard
+														key={key}
+														label={humanizeIdentifier(key)}
+														value={value}
+													/>
+												))}
+											</div>
+										)}
+										{hasProminent && (
+											<Button
+												variant="ghost"
+												size="sm"
+												className="mt-1.5 w-full justify-center gap-1 text-muted-foreground"
+												onClick={() =>
+													setShowAllProperties((current) => !current)
+												}
+											>
+												<ChevronDown
+													className={`h-3.5 w-3.5 transition-transform ${showAllProperties ? "rotate-180" : ""}`}
+												/>
+												{showAllProperties
+													? "Show fewer"
+													: `Show all ${restEntries.length} fields`}
+											</Button>
+										)}
+									</section>
+								)}
+
+								{totalFields === 0 && (
+									<p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+										This object has no properties to display.
+									</p>
+								)}
 							</div>
-							<p className="mt-1">
-								{objectType?.table} · ontology {ontology?.name}
-							</p>
+
+							<div className="sticky bottom-0 flex items-center justify-between gap-3 border-t bg-background/80 p-4 backdrop-blur">
+								<div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+									<Database className="h-3.5 w-3.5 shrink-0" />
+									<span className="truncate">
+										<span className="text-foreground">
+											{objectType?.table || "—"}
+										</span>
+										{ontology?.name ? ` · ${ontology.name}` : ""}
+									</span>
+								</div>
+								<CopyChip
+									text={JSON.stringify(row, null, 2)}
+									label="Copy JSON"
+								/>
+							</div>
 						</div>
-					</div>
-				)}
+					)}
+				</div>
+
 				<OntologyActionDialog
 					key={selectedAction?.id ?? "no-action"}
 					open={Boolean(selectedAction)}
@@ -848,7 +1034,7 @@ function parameterType(property: ActionSchemaProperty): string {
 	return property.type ?? "string";
 }
 
-function initialActionParameters(
+export function initialActionParameters(
 	schema?: Record<string, unknown>,
 ): Record<string, unknown> {
 	const definition = toActionParameterSchema(schema);
@@ -871,7 +1057,7 @@ function initialActionParameters(
 	);
 }
 
-function OntologyActionParameterForm({
+export function OntologyActionParameterForm({
 	actionId,
 	schema,
 	parameters,
@@ -1525,15 +1711,133 @@ function OntologyLifecycleMenu({
 	);
 }
 
+function encodeEdgeTarget(edge: EdgeLabelMapping): string {
+	if (edge.dst_ontology) return `local:${edge.dst_ontology}`;
+	if (edge.dst_binding_id) return `remote:${edge.dst_binding_id}`;
+	return "self";
+}
+
+function decodeEdgeTarget(value: string): Partial<EdgeLabelMapping> {
+	if (value.startsWith("local:")) {
+		return { dst_ontology: value.slice(6), dst_binding_id: undefined };
+	}
+	if (value.startsWith("remote:")) {
+		return { dst_binding_id: value.slice(7), dst_ontology: undefined };
+	}
+	return { dst_ontology: undefined, dst_binding_id: undefined };
+}
+
+function RelationshipRow({
+	edge,
+	index,
+	otherOntologies,
+	installedOntologies,
+	onChange,
+}: Readonly<{
+	edge: EdgeLabelMapping;
+	index: number;
+	otherOntologies: GraphOverlay[];
+	installedOntologies: RemoteOntologyImport[];
+	onChange?: (index: number, patch: Partial<EdgeLabelMapping>) => void;
+}>) {
+	const rowId = edge.id ?? edge.api_name ?? `edge-${index}`;
+	const summary = (
+		<div className="flex items-center gap-2 text-sm">
+			<Badge variant="outline">{edge.src_label}</Badge>
+			<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+			<span className="font-medium">{humanizeIdentifier(edge.label)}</span>
+			<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+			<Badge variant="outline">{edge.dst_label}</Badge>
+			<code className="ml-auto hidden text-[10px] text-muted-foreground sm:block">
+				{edge.table}.{edge.dst_column}
+			</code>
+		</div>
+	);
+
+	if (!onChange) {
+		return <div className="rounded-lg border px-3 py-2">{summary}</div>;
+	}
+
+	return (
+		<div className="space-y-2.5 rounded-lg border px-3 py-2.5">
+			{summary}
+			<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+				<div className="flex items-center gap-2">
+					<Switch
+						id={`edge-containment-${rowId}`}
+						checked={Boolean(edge.containment)}
+						onCheckedChange={(checked) =>
+							onChange(
+								index,
+								checked
+									? { containment: true }
+									: {
+											containment: false,
+											dst_ontology: undefined,
+											dst_binding_id: undefined,
+										},
+							)
+						}
+					/>
+					<div>
+						<Label
+							htmlFor={`edge-containment-${rowId}`}
+							className="text-xs font-medium"
+						>
+							Hierarchy
+						</Label>
+						<p className="text-[10px] text-muted-foreground">
+							Drill-down parent → child
+						</p>
+					</div>
+				</div>
+				{edge.containment && (
+					<Select
+						value={encodeEdgeTarget(edge)}
+						onValueChange={(value) => onChange(index, decodeEdgeTarget(value))}
+					>
+						<SelectTrigger
+							className="h-8 w-full text-xs sm:w-64"
+							aria-label="Child object location"
+						>
+							<SelectValue placeholder="Child location" />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="self">This ontology</SelectItem>
+							{otherOntologies.map((ontology) => (
+								<SelectItem key={ontology.id} value={`local:${ontology.id}`}>
+									{ontology.name}
+								</SelectItem>
+							))}
+							{installedOntologies.map((imported) => (
+								<SelectItem key={imported.id} value={`remote:${imported.id}`}>
+									Remote: {imported.contract.name}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				)}
+			</div>
+		</div>
+	);
+}
+
 export function OntologyModelPanel({
 	ontologies,
 	appId,
+	installedOntologies,
 	onCreateOntology,
 	onOpenOntology,
+	onSaveEdges,
 }: Readonly<
 	StudioPanelBaseProps & {
 		appId?: string;
+		installedOntologies?: RemoteOntologyImport[];
 		onOpenOntology: (ontologyId: string) => void;
+		onSaveEdges?: (
+			ontologyId: string,
+			edges: EdgeLabelMapping[],
+		) => Promise<void> | void;
 	}
 >) {
 	const [selectedId, setSelectedId] = useState(ontologies[0]?.id ?? "");
@@ -1542,6 +1846,31 @@ export function OntologyModelPanel({
 	useEffect(() => {
 		if (selected) setSelectedId(selected.id);
 	}, [selected]);
+	const [syncedEdges, setSyncedEdges] = useState<
+		EdgeLabelMapping[] | undefined
+	>(() => ontologies[0]?.edges);
+	const [edgesDraft, setEdgesDraft] = useState<EdgeLabelMapping[]>(
+		() => ontologies[0]?.edges ?? [],
+	);
+	if (selected && selected.edges !== syncedEdges) {
+		setSyncedEdges(selected.edges);
+		setEdgesDraft(selected.edges);
+	}
+	const otherOntologies = useMemo(
+		() => ontologies.filter((ontology) => ontology.id !== selected?.id),
+		[ontologies, selected?.id],
+	);
+	const handleEdgeChange = useCallback(
+		(index: number, patch: Partial<EdgeLabelMapping>) => {
+			if (!selected || !onSaveEdges) return;
+			const next = edgesDraft.map((edge, edgeIndex) =>
+				edgeIndex === index ? { ...edge, ...patch } : edge,
+			);
+			setEdgesDraft(next);
+			void onSaveEdges(selected.id, next);
+		},
+		[edgesDraft, onSaveEdges, selected],
+	);
 	if (ontologies.length === 0)
 		return (
 			<EmptyStudioState
@@ -1689,22 +2018,19 @@ export function OntologyModelPanel({
 							</div>
 						) : (
 							<div className="space-y-2">
-								{selected.edges.map((edge) => (
-									<div
-										key={edge.id ?? edge.api_name ?? edge.label}
-										className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm"
-									>
-										<Badge variant="outline">{edge.src_label}</Badge>
-										<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-										<span className="font-medium">
-											{humanizeIdentifier(edge.label)}
-										</span>
-										<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-										<Badge variant="outline">{edge.dst_label}</Badge>
-										<code className="ml-auto hidden text-[10px] text-muted-foreground sm:block">
-											{edge.table}.{edge.dst_column}
-										</code>
-									</div>
+								{edgesDraft.map((edge, index) => (
+									<RelationshipRow
+										key={
+											edge.id ??
+											edge.api_name ??
+											`${edge.src_label}-${edge.dst_label}-${index}`
+										}
+										edge={edge}
+										index={index}
+										otherOntologies={otherOntologies}
+										installedOntologies={installedOntologies ?? []}
+										onChange={onSaveEdges ? handleEdgeChange : undefined}
+									/>
 								))}
 							</div>
 						)}
@@ -1759,6 +2085,7 @@ export function OntologyActionsPanel({
 	const [editingActionId, setEditingActionId] = useState<string | null>(null);
 	const [actionEnabled, setActionEnabled] = useState(true);
 	const [allowBulk, setAllowBulk] = useState(false);
+	const [actionExposed, setActionExposed] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState<string | null>(null);
 	const [repairingOntologyId, setRepairingOntologyId] = useState<string | null>(
@@ -1827,6 +2154,7 @@ export function OntologyActionsPanel({
 		setSelectedVersion(null);
 		setActionEnabled(true);
 		setAllowBulk(false);
+		setActionExposed(true);
 	}, []);
 	const openActionEditor = useCallback(
 		(owner?: GraphOverlay, action?: OntologyActionDefinition) => {
@@ -1843,6 +2171,7 @@ export function OntologyActionsPanel({
 				setSelectedVersion(action.board_version ?? null);
 				setActionEnabled(action.enabled);
 				setAllowBulk(action.allow_bulk);
+				setActionExposed(action.exposed ?? true);
 			} else {
 				resetActionEditor();
 				const initialOntology = ontologies[0];
@@ -1938,6 +2267,7 @@ export function OntologyActionsPanel({
 				start_node_id: startNodeId,
 				enabled: actionEnabled,
 				allow_bulk: allowBulk,
+				exposed: actionExposed,
 				parameter_schema:
 					inferredParameterSchema ??
 					(previous?.board_id === boardId &&
@@ -1968,6 +2298,7 @@ export function OntologyActionsPanel({
 		selectedVersion,
 		actionEnabled,
 		allowBulk,
+		actionExposed,
 		description,
 		editingActionId,
 		inferredParameterSchema,
@@ -2394,6 +2725,22 @@ export function OntologyActionsPanel({
 								id="ontology-action-bulk"
 								checked={allowBulk}
 								onCheckedChange={setAllowBulk}
+							/>
+						</div>
+						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+							<div>
+								<Label htmlFor="ontology-action-exposed">
+									Expose to connected projects
+								</Label>
+								<p className="text-xs text-muted-foreground">
+									Off hides this action from connected projects; it still runs
+									locally
+								</p>
+							</div>
+							<Switch
+								id="ontology-action-exposed"
+								checked={actionExposed}
+								onCheckedChange={setActionExposed}
 							/>
 						</div>
 					</div>

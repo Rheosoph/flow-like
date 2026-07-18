@@ -26,6 +26,7 @@ pub mod list_tables;
 pub mod list_tables_user;
 pub mod optimize;
 pub mod presign_db_access;
+pub mod saved_queries;
 pub mod table_view;
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -107,6 +108,17 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_tables::list_tables))
         .route("/user", get(list_tables_user::list_tables_user))
+        .route(
+            "/queries",
+            get(saved_queries::list_saved_queries).post(saved_queries::create_saved_query),
+        )
+        .route("/queries/execute", post(saved_queries::execute_query))
+        .route(
+            "/queries/{query_id}",
+            get(saved_queries::get_saved_query)
+                .put(saved_queries::update_saved_query)
+                .delete(saved_queries::delete_saved_query),
+        )
         .route("/presign", post(presign_db_access::presign_db_access))
         .route(
             "/presign/project",

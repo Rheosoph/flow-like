@@ -167,6 +167,9 @@ pub struct FrontendToolBridge {
 pub struct FrontendToolContext {
     pub app_id: Option<String>,
     pub board_id: Option<String>,
+    /// The overlay/ontology the current Data Studio page has selected. Injected into
+    /// data-studio tool calls so the specialist defaults to it, exactly like `app_id`.
+    pub overlay_id: Option<String>,
     /// Correlates runtime/database calls made by a nested FlowPilot run with the outer
     /// `flowpilot_board`/`flowpilot_widget` request that started it.
     pub parent_request_id: Option<String>,
@@ -473,7 +476,7 @@ impl FrontendToolBridge {
             .and_then(|execution| execution.deadline)
             .map(|deadline| timeout.min(deadline.saturating_duration_since(Instant::now())))
             .unwrap_or(timeout);
-        apply_tool_context(&mut arguments, self.context.as_ref());
+        apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
         let request_id = next_request_id();
         let mut trace = FrontendToolTrace::new(
             request_id.clone(),
@@ -822,15 +825,48 @@ fn lost_frontend_response_result(
     })
 }
 
-fn apply_tool_context(arguments: &mut Value, context: Option<&FrontendToolContext>) {
+/// Tool names of the Data Studio specialist. Unlike board runtime tools, these accept the current
+/// app/overlay as DEFAULTS the model may override to reach another project, so their ids are filled
+/// only when absent instead of being overwritten.
+fn is_data_studio_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "graph_overlay_tool" | "graph_query_tool" | "graph_element_tool" | "ontology_action_tool"
+    )
+}
+
+fn fill_default_arg(arguments: &mut serde_json::Map<String, Value>, key: &str, value: &str) {
+    let needs_fill = match arguments.get(key) {
+        None | Some(Value::Null) => true,
+        Some(Value::String(existing)) => existing.trim().is_empty(),
+        Some(_) => false,
+    };
+    if needs_fill {
+        arguments.insert(key.to_string(), Value::String(value.to_string()));
+    }
+}
+
+fn apply_tool_context(
+    tool_name: &str,
+    arguments: &mut Value,
+    context: Option<&FrontendToolContext>,
+) {
     let Some(context) = context else {
         return;
     };
     let Value::Object(arguments) = arguments else {
         return;
     };
+    let data_studio = is_data_studio_tool(tool_name);
     if let Some(app_id) = context.app_id.as_ref() {
-        arguments.insert("app_id".to_string(), Value::String(app_id.clone()));
+        if data_studio {
+            fill_default_arg(arguments, "app_id", app_id);
+        } else {
+            arguments.insert("app_id".to_string(), Value::String(app_id.clone()));
+        }
+    }
+    if data_studio && let Some(overlay_id) = context.overlay_id.as_ref() {
+        fill_default_arg(arguments, "overlay_id", overlay_id);
     }
     if let Some(board_id) = context.board_id.as_ref() {
         arguments.insert("board_id".to_string(), Value::String(board_id.clone()));
@@ -894,6 +930,7 @@ fn safe_request_context(context: &FrontendToolSafeContext) -> Option<FrontendToo
         .then(|| FrontendToolContext {
             app_id: context.app_id.clone(),
             board_id: context.board_id.clone(),
+            overlay_id: None,
             parent_request_id: context.parent_request_id.clone(),
             conversation_id: None,
             source_user_prompt: None,
@@ -1336,12 +1373,13 @@ mod tests {
         let context = FrontendToolContext {
             app_id: Some("scoped-app".to_string()),
             board_id: Some("scoped-board".to_string()),
+            overlay_id: None,
             parent_request_id: Some("outer-request".to_string()),
             conversation_id: None,
             source_user_prompt: None,
         };
 
-        apply_tool_context(&mut arguments, Some(&context));
+        apply_tool_context("database_tool", &mut arguments, Some(&context));
 
         assert_eq!(
             arguments.get("app_id").and_then(Value::as_str),
@@ -1369,6 +1407,7 @@ mod tests {
         let context = FrontendToolContext {
             app_id: Some("app-safe".to_string()),
             board_id: Some("board-safe".to_string()),
+            overlay_id: None,
             parent_request_id: Some("flowpilot-tool-parent-1".to_string()),
             conversation_id: None,
             source_user_prompt: None,
@@ -1444,6 +1483,7 @@ mod tests {
             context: Some(FrontendToolContext {
                 app_id: Some("app".to_string()),
                 board_id: Some("board".to_string()),
+                overlay_id: None,
                 parent_request_id: Some("parent".to_string()),
                 conversation_id: None,
                 source_user_prompt: None,

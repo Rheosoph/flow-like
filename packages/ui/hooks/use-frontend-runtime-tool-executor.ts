@@ -19,6 +19,16 @@ import type {
 	IDatabaseSchemaField,
 	IDatabaseState,
 } from "../state/backend-state/db-state";
+import type {
+	CreateOverlayPayload,
+	GraphOverlay,
+	IGraphState,
+	InvokeOntologyActionPayload,
+	NeighborsPayload,
+	OntologyObjectRef,
+	SubgraphPayload,
+	UpdateOverlayPayload,
+} from "../state/backend-state/graph-state";
 import type { IPage } from "../state/backend-state/page-state";
 import type { IWidget } from "../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../state/execution-service-context";
@@ -30,6 +40,10 @@ export const FRONTEND_RUNTIME_TOOL_NAMES = [
 	"execute_event",
 	"execute_node",
 	"query_execution_logs",
+	"graph_overlay_tool",
+	"graph_query_tool",
+	"graph_element_tool",
+	"ontology_action_tool",
 ] as const;
 
 export type FrontendRuntimeToolName =
@@ -40,6 +54,8 @@ interface FrontendRuntimeToolExecutorOptions {
 	defaultAppId?: string;
 	/** Board context used when ui_inspect omits board_id. */
 	defaultBoardId?: string;
+	/** Overlay/ontology context used when a Data Studio tool omits overlay_id. */
+	defaultOverlayId?: string;
 }
 
 function getArgString(
@@ -586,10 +602,340 @@ export async function queryExecutionLogsRuntime(
  * Executes app-scoped runtime tools for both the embedded FlowPilot and the
  * global assistant bridge. Approval remains the caller's responsibility.
  */
+function getArgOverlayId(
+	args: Record<string, unknown>,
+	defaultOverlayId?: string,
+): string {
+	return (
+		getArgString(args, "overlay_id", "overlayId") ?? defaultOverlayId ?? ""
+	);
+}
+
+/**
+ * Executes one Data Studio graph tool against `backend.graphState`. Read operations are silent;
+ * mutating/execute operations were already approved before this runs. `appId`/`overlayId` are
+ * resolved by the caller (arg value, else the current Data Studio page default).
+ */
+async function executeGraphTool(
+	graphState: IGraphState,
+	toolName: FrontendRuntimeToolName,
+	operation: string,
+	args: Record<string, unknown>,
+	appId: string,
+	overlayId: string,
+	userScoped: boolean,
+): Promise<unknown> {
+	const limit = getArgString(args, "limit")
+		? getArgNumber(args, "limit")
+		: (args.limit as number | undefined);
+
+	switch (toolName) {
+		case "graph_overlay_tool":
+			switch (operation) {
+				case "list_overlays":
+					return {
+						status: "ok",
+						overlays: await graphState.listOverlays(appId, userScoped),
+					};
+				case "get_overlay":
+					return {
+						status: "ok",
+						overlay: await graphState.getOverlay(appId, overlayId, userScoped),
+					};
+				case "get_schema":
+					return {
+						status: "ok",
+						schema: await graphState.getSchema(appId, overlayId, userScoped),
+					};
+				case "validate_overlay":
+					return {
+						status: "ok",
+						validation: await graphState.validateOverlay(
+							appId,
+							overlayId,
+							userScoped,
+							args.draft as GraphOverlay | undefined,
+						),
+					};
+				case "create_overlay": {
+					// `actions` and `exposed` are governed and intentionally omitted here.
+					const payload: CreateOverlayPayload = {
+						name: getArgString(args, "name") ?? "",
+						description: getArgString(args, "description"),
+						nodes: (args.nodes as CreateOverlayPayload["nodes"]) ?? [],
+						edges: (args.edges as CreateOverlayPayload["edges"]) ?? [],
+						object_views:
+							args.object_views as CreateOverlayPayload["object_views"],
+						bindings_enabled: getArgBool(
+							args,
+							"bindings_enabled",
+							"bindingsEnabled",
+							false,
+						),
+						default_limit: args.default_limit as number | undefined,
+					};
+					return {
+						status: "ok",
+						overlay: await graphState.createOverlay(appId, payload, userScoped),
+					};
+				}
+				case "update_overlay": {
+					const payload: UpdateOverlayPayload = {
+						expected_updated_at: getArgString(
+							args,
+							"expected_updated_at",
+							"expectedUpdatedAt",
+						),
+						name: getArgString(args, "name"),
+						description: getArgString(args, "description"),
+						nodes: args.nodes as UpdateOverlayPayload["nodes"],
+						edges: args.edges as UpdateOverlayPayload["edges"],
+						object_views:
+							args.object_views as UpdateOverlayPayload["object_views"],
+						bindings_enabled: args.bindings_enabled as boolean | undefined,
+						default_limit: args.default_limit as number | undefined,
+					};
+					return {
+						status: "ok",
+						overlay: await graphState.updateOverlay(
+							appId,
+							overlayId,
+							payload,
+							userScoped,
+						),
+					};
+				}
+				case "delete_overlay":
+					await graphState.deleteOverlay(appId, overlayId, userScoped);
+					return { status: "ok" };
+				default:
+					return {
+						status: "error",
+						error: `Unsupported graph_overlay_tool operation '${operation}'.`,
+					};
+			}
+		case "graph_query_tool":
+			switch (operation) {
+				case "cypher":
+					return {
+						status: "ok",
+						rows: await graphState.cypher(
+							appId,
+							overlayId,
+							{
+								query: getArgString(args, "query") ?? "",
+								params: args.params as Record<string, unknown> | undefined,
+								limit,
+							},
+							userScoped,
+						),
+					};
+				case "sql":
+					return {
+						status: "ok",
+						rows: await graphState.sql(
+							appId,
+							overlayId,
+							{ query: getArgString(args, "query") ?? "", limit },
+							userScoped,
+						),
+					};
+				case "neighbors":
+					return {
+						status: "ok",
+						result: await graphState.neighbors(
+							appId,
+							overlayId,
+							{
+								label: getArgString(args, "label") ?? "",
+								node_id: args.node_id ?? args.nodeId,
+								depth: args.depth as number | undefined,
+								direction: args.direction as NeighborsPayload["direction"],
+								limit,
+							},
+							userScoped,
+						),
+					};
+				case "subgraph":
+					return {
+						status: "ok",
+						result: await graphState.subgraph(
+							appId,
+							overlayId,
+							{
+								seeds: (args.seeds as SubgraphPayload["seeds"]) ?? [],
+								depth: args.depth as number | undefined,
+								limit,
+							},
+							userScoped,
+						),
+					};
+				case "paths":
+					return {
+						status: "ok",
+						result: await graphState.paths(
+							appId,
+							overlayId,
+							{
+								from_label: getArgString(args, "from_label", "fromLabel") ?? "",
+								from_id: args.from_id ?? args.fromId,
+								to_label: getArgString(args, "to_label", "toLabel") ?? "",
+								to_id: args.to_id ?? args.toId,
+								max_depth: args.max_depth as number | undefined,
+								limit,
+							},
+							userScoped,
+						),
+					};
+				case "analytics":
+					return {
+						status: "ok",
+						analytics: await graphState.analytics(
+							appId,
+							overlayId,
+							limit,
+							userScoped,
+						),
+					};
+				case "search_nodes":
+					return {
+						status: "ok",
+						nodes: await graphState.searchNodes(
+							appId,
+							overlayId,
+							{ query: getArgString(args, "query") ?? "", limit },
+							userScoped,
+						),
+					};
+				case "sample":
+					return {
+						status: "ok",
+						rows: await graphState.sample(
+							appId,
+							overlayId,
+							getArgString(args, "label") ?? "",
+							args.n as number | undefined,
+							userScoped,
+						),
+					};
+				default:
+					return {
+						status: "error",
+						error: `Unsupported graph_query_tool operation '${operation}'.`,
+					};
+			}
+		case "graph_element_tool": {
+			const label = getArgString(args, "label") ?? "";
+			const rows = (args.rows as Record<string, unknown>[]) ?? [];
+			if (operation === "add_nodes") {
+				return {
+					status: "ok",
+					...(await graphState.upsertNodes(
+						appId,
+						overlayId,
+						{ label, rows },
+						userScoped,
+					)),
+				};
+			}
+			if (operation === "add_edges") {
+				return {
+					status: "ok",
+					...(await graphState.upsertEdges(
+						appId,
+						overlayId,
+						{ label, rows },
+						userScoped,
+					)),
+				};
+			}
+			return {
+				status: "error",
+				error: `Unsupported graph_element_tool operation '${operation}'.`,
+			};
+		}
+		case "ontology_action_tool": {
+			const actionId = getArgString(args, "action_id", "actionId") ?? "";
+			switch (operation) {
+				case "list_actions": {
+					const overlay = await graphState.getOverlay(
+						appId,
+						overlayId,
+						userScoped,
+					);
+					return {
+						status: "ok",
+						actions: (overlay.actions ?? []).map((action) => ({
+							id: action.id,
+							name: action.name,
+							description: action.description,
+							object_type: action.object_type,
+							enabled: action.enabled,
+							allow_bulk: action.allow_bulk,
+						})),
+					};
+				}
+				case "describe_action": {
+					const overlay = await graphState.getOverlay(
+						appId,
+						overlayId,
+						userScoped,
+					);
+					const action = (overlay.actions ?? []).find(
+						(candidate) => candidate.id === actionId,
+					);
+					const prerun = await graphState.prerunOntologyAction(
+						appId,
+						overlayId,
+						actionId,
+					);
+					return { status: "ok", action, prerun };
+				}
+				case "prerun_action":
+					return {
+						status: "ok",
+						prerun: await graphState.prerunOntologyAction(
+							appId,
+							overlayId,
+							actionId,
+						),
+					};
+				case "invoke_action": {
+					const payload: InvokeOntologyActionPayload = {
+						object_refs: (args.object_refs as OntologyObjectRef[]) ?? [],
+						parameters: args.parameters as Record<string, unknown> | undefined,
+						idempotency_key: getArgString(
+							args,
+							"idempotency_key",
+							"idempotencyKey",
+						),
+					};
+					return {
+						status: "ok",
+						run: await graphState.invokeOntologyAction(
+							appId,
+							overlayId,
+							actionId,
+							payload,
+						),
+					};
+				}
+				default:
+					return {
+						status: "error",
+						error: `Unsupported ontology_action_tool operation '${operation}'.`,
+					};
+			}
+		}
+		default:
+			return { status: "error", error: `Unsupported tool '${toolName}'.` };
+	}
+}
+
 export function useFrontendRuntimeToolExecutor(
 	options: FrontendRuntimeToolExecutorOptions = {},
 ) {
-	const { defaultAppId, defaultBoardId } = options;
+	const { defaultAppId, defaultBoardId, defaultOverlayId } = options;
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 
@@ -1164,17 +1510,41 @@ export function useFrontendRuntimeToolExecutor(
 						}
 					}
 				}
+				case "graph_overlay_tool":
+				case "graph_query_tool":
+				case "graph_element_tool":
+				case "ontology_action_tool": {
+					const operation = getArgString(args, "operation") ?? "";
+					const overlayId = getArgOverlayId(args, defaultOverlayId);
+					const userScoped = getArgBool(
+						args,
+						"user_scoped",
+						"userScoped",
+						false,
+					);
+					return executeGraphTool(
+						backend.graphState,
+						toolName,
+						operation,
+						args,
+						toolAppId,
+						overlayId,
+						userScoped,
+					);
+				}
 			}
 		},
 		[
 			backend.boardState,
 			backend.dbState,
 			backend.eventState,
+			backend.graphState,
 			backend.pageState,
 			backend.storageState,
 			backend.widgetState,
 			defaultAppId,
 			defaultBoardId,
+			defaultOverlayId,
 			executionService,
 		],
 	);

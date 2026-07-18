@@ -137,9 +137,17 @@ fn action_event(
 }
 
 /// Ensures the exact board version a governed action pins exists as an
-/// immutable snapshot. The Data Studio editor pins the board's working
-/// version, which is not published until now; without a snapshot the managed
-/// event's `validate_event_references` fails when it tries to load the version.
+/// immutable snapshot, then derives the action's parameter schema from that
+/// pinned board. The Data Studio editor pins the board's working version, which
+/// is not published until now; without a snapshot the managed event's
+/// `validate_event_references` fails when it tries to load the version.
+///
+/// The derived schema is authoritative: it is read from the start node's
+/// `parameters` struct pin on the pinned board that actually executes, so a
+/// client cannot pin a board doing X while advertising a schema for Y. The
+/// client-supplied `parameter_schema` is ignored for materialized actions and
+/// overwritten with the board-derived value (or `None` when the start node has
+/// no typed `parameters` pin — invoke then accepts any object payload).
 async fn ensure_action_board_published(
     app: &App,
     action: &mut OntologyActionDef,
@@ -170,13 +178,12 @@ async fn ensure_action_board_published(
             current
         }
     };
-    if !existing.contains(&pinned) {
-        if pinned != current {
-            return Err(ApiError::bad_request(format!(
-                "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
-                pinned.0, pinned.1, pinned.2
-            )));
-        }
+    if pinned == current {
+        // Pinning the working draft: always re-snapshot so the immutable version
+        // reflects the latest edits. `snapshot_at_version` does not bump the
+        // board version, so a prior save can leave a stale snapshot at this
+        // number that is missing nodes added since — the managed event's
+        // `validate_event_references` then fails with "node not found in board".
         board
             .lock()
             .await
@@ -187,8 +194,43 @@ async fn ensure_action_board_published(
                     "Could not publish the action's board version: {error}"
                 ))
             })?;
+    } else if !existing.contains(&pinned) {
+        return Err(ApiError::bad_request(format!(
+            "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
+            pinned.0, pinned.1, pinned.2
+        )));
     }
+    action.parameter_schema = derive_action_parameter_schema(app, action, pinned).await?;
     Ok(())
+}
+
+/// Reads the authoritative parameter schema from the pinned board version's
+/// start node. Loading the pinned snapshot (rather than the working board)
+/// guarantees the schema matches the exact implementation that executes, even
+/// when the action pins an older published version.
+async fn derive_action_parameter_schema(
+    app: &App,
+    action: &OntologyActionDef,
+    pinned: (u32, u32, u32),
+) -> Result<Option<Value>, ApiError> {
+    let Some(start_node_id) = action
+        .start_node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let board = app
+        .open_board(action.board_id.clone(), Some(false), Some(pinned))
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "Could not load the action's pinned board version to derive its parameter schema: {error}"
+            ))
+        })?;
+    let schema = board.lock().await.action_parameter_schema(start_node_id);
+    Ok(schema)
 }
 
 fn managed_event_matches(event: &Event, ontology_id: &str, action_id: &str) -> bool {
@@ -582,6 +624,11 @@ pub async fn prerun_ontology_action(
         .iter()
         .find(|action| action.id == action_id && action.enabled)
         .ok_or_else(|| ApiError::not_found("Enabled ontology action not found"))?;
+    if user.is_connected_app() && !action.exposed {
+        return Err(ApiError::forbidden(
+            "This ontology action is not exposed to connected projects",
+        ));
+    }
     let event_id = action.event_id.as_deref().ok_or_else(|| {
         ApiError::conflict(
             "The ontology action binding is not materialized. Repair it in Data Studio.",
@@ -671,6 +718,11 @@ pub async fn invoke_ontology_action(
         .find(|action| action.id == action_id && action.enabled)
         .cloned()
         .ok_or_else(|| ApiError::not_found("Enabled ontology action not found"))?;
+    if user.is_connected_app() && !action.exposed {
+        return Err(ApiError::forbidden(
+            "This ontology action is not exposed to connected projects",
+        ));
+    }
     let ids = validate_request(&action, &request)?;
     let objects =
         lancegraph::load_overlay_objects(&connection, &ontology, &action.object_type, &ids)

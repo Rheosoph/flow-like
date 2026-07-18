@@ -201,7 +201,7 @@ pub(crate) struct RemoteAppSession {
     pub target_app_id: String,
 }
 
-async fn remote_app_session(
+pub(crate) async fn remote_app_session(
     context: &ExecutionContext,
     target_app_id: &str,
 ) -> flow_like_types::Result<RemoteAppSession> {
@@ -462,6 +462,164 @@ pub(crate) async fn open_remote_project_database(
         })
         .await?;
     Ok(connection.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Invocation helpers (SSE collection)
+//
+// Shared by every node that invokes a connected project's event or governed
+// ontology action and waits for the run result. The producer is authoritative:
+// these helpers only transport the request and collect the streamed outcome.
+// ---------------------------------------------------------------------------
+
+pub(crate) struct SseOutcome {
+    pub(crate) run_id: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) error_message: Option<String>,
+    pub(crate) generic_result: Option<Value>,
+    pub(crate) chat_out: Option<Value>,
+    pub(crate) chat_stream: Option<Value>,
+}
+
+impl SseOutcome {
+    pub(crate) fn status_str(&self) -> String {
+        self.status
+            .clone()
+            .unwrap_or_else(|| "Completed".to_string())
+    }
+
+    pub(crate) fn ensure_ok(&self) -> flow_like_types::Result<()> {
+        if matches!(
+            self.status.as_deref(),
+            Some("Failed") | Some("Cancelled") | Some("Timeout")
+        ) {
+            return Err(flow_like_types::anyhow!(
+                "Remote run {} ended with status {}: {}",
+                self.run_id.clone().unwrap_or_default(),
+                self.status_str(),
+                self.error_message.clone().unwrap_or_default()
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn chat_result(&self) -> Option<Value> {
+        self.chat_out
+            .clone()
+            .or_else(|| self.chat_stream.clone())
+            .or_else(|| self.generic_result.clone())
+    }
+}
+
+pub(crate) async fn post_json(
+    session: &RemoteAppSession,
+    url: &str,
+    body: &Value,
+) -> flow_like_types::Result<reqwest::Response> {
+    let response = http_client()
+        .post(url)
+        .bearer_auth(&session.token)
+        .json(body)
+        .send()
+        .await
+        .map_err(|err| flow_like_types::anyhow!("Failed to invoke remote event: {}", err))?;
+    error_for_status(response, "Remote event invocation").await
+}
+
+pub(crate) async fn invoke_and_collect(
+    session: &RemoteAppSession,
+    url: &str,
+    body: &Value,
+    timeout: u64,
+) -> flow_like_types::Result<SseOutcome> {
+    let response = post_json(session, url, body).await?;
+    flow_like_types::tokio::time::timeout(
+        std::time::Duration::from_secs(timeout),
+        collect_sse_outcome(response),
+    )
+    .await
+    .map_err(|_| {
+        flow_like_types::anyhow!("Remote event did not finish within {} seconds", timeout)
+    })?
+}
+
+async fn collect_sse_outcome(response: reqwest::Response) -> flow_like_types::Result<SseOutcome> {
+    use futures::StreamExt;
+
+    let mut outcome = SseOutcome {
+        run_id: None,
+        status: None,
+        error_message: None,
+        generic_result: None,
+        chat_out: None,
+        chat_stream: None,
+    };
+    let mut stream = response.bytes_stream();
+    let mut buffer = String::new();
+
+    'outer: while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|err| flow_like_types::anyhow!("Failed to read event stream: {}", err))?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        // SSE allows CRLF line endings; normalize so frame detection below
+        // ("\n\n") also matches "\r\n\r\n"-terminated frames.
+        if buffer.contains('\r') {
+            buffer = buffer.replace("\r\n", "\n");
+        }
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let frame = buffer[..pos].to_string();
+            buffer.drain(..pos + 2);
+
+            for line in frame.lines() {
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let Ok(parsed) = flow_like_types::json::from_str::<Value>(data.trim()) else {
+                    continue;
+                };
+
+                if outcome.run_id.is_none()
+                    && let Some(run_id) = parsed.get("run_id").and_then(|v| v.as_str())
+                {
+                    outcome.run_id = Some(run_id.to_string());
+                }
+
+                let event_type = parsed
+                    .get("event_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                match event_type {
+                    "generic_result" if outcome.generic_result.is_none() => {
+                        outcome.generic_result = parsed.get("payload").cloned();
+                    }
+                    "chat_out" => {
+                        outcome.chat_out = parsed.get("payload").cloned();
+                    }
+                    "chat_stream" => {
+                        outcome.chat_stream = parsed.get("payload").cloned();
+                    }
+                    "completed" => {
+                        outcome.status = parsed
+                            .get("payload")
+                            .and_then(|p| p.get("status"))
+                            .and_then(|s| s.as_str())
+                            .map(|s| s.to_string());
+                        outcome.error_message = parsed
+                            .get("payload")
+                            .and_then(|p| p.get("error_message"))
+                            .and_then(|s| s.as_str())
+                            .map(|s| s.to_string());
+                        break 'outer;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(outcome)
 }
 
 #[cfg(test)]

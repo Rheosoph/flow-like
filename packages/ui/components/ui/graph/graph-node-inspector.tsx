@@ -3,11 +3,13 @@
 import {
 	Check,
 	ChevronDown,
+	ChevronsDownUp,
 	Copy,
 	Expand,
 	Eye,
 	EyeOff,
 	Filter,
+	ListTree,
 	Route,
 	Workflow,
 	X,
@@ -40,6 +42,10 @@ export interface GraphNodeInspectorProps {
 	connections?: ConnectionInfo[];
 	onClose: () => void;
 	onExpand?: (depth: number) => void;
+	hasChildren?: boolean;
+	childrenExpanded?: boolean;
+	onExpandChildren?: () => void;
+	onCollapseChildren?: () => void;
 	onConnectionClick?: (nodeId: string) => void;
 	onFindPath?: (node: SubgraphNode) => void;
 	onRunAction?: (action: OntologyActionDefinition, node: SubgraphNode) => void;
@@ -354,6 +360,10 @@ export function GraphNodeInspector({
 	connections,
 	onClose,
 	onExpand,
+	hasChildren,
+	childrenExpanded,
+	onExpandChildren,
+	onCollapseChildren,
 	onConnectionClick,
 	onFindPath,
 	onRunAction,
@@ -463,7 +473,9 @@ export function GraphNodeInspector({
 			<ScrollArea className="flex-1 min-h-0">
 				<div className="space-y-4 p-4">
 					{/* Explore actions */}
-					{(onExpand || onFindPath) && (
+					{(onExpand ||
+						onFindPath ||
+						(hasChildren && (onExpandChildren || onCollapseChildren))) && (
 						<div className="flex flex-wrap gap-1.5">
 							{onExpand && (
 								<Button
@@ -486,6 +498,30 @@ export function GraphNodeInspector({
 									title="Expand neighbors up to 2 hops away"
 								>
 									<Expand className="h-3.5 w-3.5" />2 hops
+								</Button>
+							)}
+							{hasChildren && onExpandChildren && !childrenExpanded && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={onExpandChildren}
+									title="Expand containment children"
+								>
+									<ListTree className="h-3.5 w-3.5" />
+									Expand children
+								</Button>
+							)}
+							{hasChildren && onCollapseChildren && childrenExpanded && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={onCollapseChildren}
+									title="Collapse containment children"
+								>
+									<ChevronsDownUp className="h-3.5 w-3.5" />
+									Collapse
 								</Button>
 							)}
 							{onFindPath && (

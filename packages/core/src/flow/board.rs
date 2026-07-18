@@ -2,7 +2,7 @@ use super::{
     execution::LogLevel,
     node::{Node, NodeLogic},
     pin::Pin,
-    variable::Variable,
+    variable::{Variable, VariableType},
 };
 use crate::{
     a2ui::widget::Page,
@@ -269,6 +269,26 @@ impl Board {
     pub fn mark_changed(&mut self) {
         self.updated_at = SystemTime::now();
         self.hash();
+    }
+
+    /// Derives a governed ontology action's parameter schema from the start
+    /// node's `parameters` struct pin.
+    ///
+    /// This is the authoritative source: the schema is read from the pinned,
+    /// published board that actually executes, so a governed action can never
+    /// advertise a contract its implementation board does not honor. Returns
+    /// `None` when the start node has no typed `parameters` pin, which callers
+    /// treat as "accepts any object payload".
+    pub fn action_parameter_schema(&self, start_node_id: &str) -> Option<flow_like_types::Value> {
+        let node = self.nodes.get(start_node_id)?;
+        let pin = node.pins.values().find(|pin| {
+            pin.name == "parameters"
+                && pin.data_type == VariableType::Struct
+                && pin.schema.is_some()
+        })?;
+        let parsed: flow_like_types::Value =
+            flow_like_types::json::from_str(pin.schema.as_ref()?).ok()?;
+        parsed.is_object().then_some(parsed)
     }
 
     pub fn hash(&mut self) {

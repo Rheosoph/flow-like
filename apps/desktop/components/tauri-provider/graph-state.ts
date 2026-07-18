@@ -1,6 +1,7 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
+	ExecuteSqlResult,
 	GraphAnalyticsResult,
 	GraphOverlay,
 	GraphPathsResult,
@@ -12,13 +13,17 @@ import type {
 	OntologyActionPrerun,
 	OntologyActionRun,
 	OntologyActionStreamEvent,
+	OverlayChildrenPayload,
 	PathsPayload,
+	RemoteImportQueryPayload,
 	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
 	SubgraphPayload,
 	SubgraphResult,
 	UpdateOverlayPayload,
+	UpsertGraphElementsPayload,
+	UpsertGraphElementsResult,
 	ValidationResult,
 } from "@flow-like/flow-like-ui";
 import { applyOntologyActionStreamEvent } from "@flow-like/flow-like-ui";
@@ -121,6 +126,43 @@ export class GraphState implements IGraphState {
 			this.backend.profile,
 			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
 			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async sampleRemoteImport(
+		appId: string,
+		importId: string,
+		label: string,
+		n?: number,
+	): Promise<unknown[]> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			throw new Error("Remote ontology imports require an online connection.");
+		}
+		const params = new URLSearchParams({ label });
+		if (n !== undefined) params.set("n", String(n));
+		return fetcher<unknown[]>(
+			this.backend.profile,
+			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/sample?${params.toString()}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async queryRemoteImport(
+		appId: string,
+		importId: string,
+		payload: RemoteImportQueryPayload,
+	): Promise<ExecuteSqlResult> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			throw new Error("Remote ontology imports require an online connection.");
+		}
+		return fetcher<ExecuteSqlResult>(
+			this.backend.profile,
+			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/query`,
+			{ method: "POST", body: JSON.stringify(payload) },
 			this.backend.auth,
 		);
 	}
@@ -459,6 +501,31 @@ export class GraphState implements IGraphState {
 		});
 	}
 
+	async children(
+		appId: string,
+		overlayId: string,
+		payload: OverlayChildrenPayload,
+		userScoped?: boolean,
+	): Promise<SubgraphResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<SubgraphResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/children${scopeQuery(userScoped)}`,
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_overlay_children", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
 	async subgraph(
 		appId: string,
 		overlayId: string,
@@ -591,6 +658,56 @@ export class GraphState implements IGraphState {
 			overlayId,
 			label,
 			n,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async upsertNodes(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<UpsertGraphElementsResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/nodes${scopeQuery(userScoped)}`,
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_upsert_nodes", {
+			appId,
+			overlayId,
+			payload,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async upsertEdges(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return fetcher<UpsertGraphElementsResult>(
+				this.requireProfile(),
+				`apps/${appId}/graph/${overlayId}/edges${scopeQuery(userScoped)}`,
+				{ method: "POST", body: JSON.stringify(payload) },
+				this.backend.auth,
+			);
+		}
+
+		return invoke("graph_upsert_edges", {
+			appId,
+			overlayId,
+			payload,
 			userScoped: userScoped ?? false,
 		});
 	}

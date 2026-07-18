@@ -16,6 +16,7 @@ import {
 	type IHelperState,
 	type IPageState,
 	type IProfile,
+	type IQueryState,
 	type QueryClient,
 	type IRegistryState,
 	type IRoleState,
@@ -50,6 +51,7 @@ import {
 	WebGraphState,
 	WebHelperState,
 	WebPageState,
+	WebQueryState,
 	WebRegistryState,
 	WebRoleState,
 	WebRouteState,
@@ -82,6 +84,7 @@ export class WebBackend implements IBackendState {
 	aiState: IAIState;
 	dbState: IDatabaseState;
 	graphState: IGraphState;
+	queryState: IQueryState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -116,6 +119,7 @@ export class WebBackend implements IBackendState {
 		this.aiState = new WebAIState(this.backendRef);
 		this.dbState = new WebDatabaseState(this.backendRef);
 		this.graphState = new WebGraphState(this.backendRef);
+		this.queryState = new WebQueryState(this.backendRef);
 		this.widgetState = new WebWidgetState(this.backendRef);
 		this.pageState = new WebPageState(this.backendRef);
 		this.registryState = new WebRegistryState(this.backendRef);

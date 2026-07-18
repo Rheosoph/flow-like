@@ -2,7 +2,8 @@ use super::chat_event::Attachment;
 use crate::data::path::FlowPath;
 use crate::remote_util::{
     RemoteAppSession, error_for_status, follow_get_redirect_without_credentials, http_client,
-    http_client_no_redirect, validate_path_id, with_event_registration_headers,
+    http_client_no_redirect, invoke_and_collect, post_json, validate_path_id,
+    with_event_registration_headers,
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like::flow::{
@@ -13,10 +14,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::history::History;
-use flow_like_types::{Value, async_trait, json::json, tokio};
-use futures::StreamExt;
+use flow_like_types::{Value, async_trait, json::json};
 use serde::Deserialize;
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 /// Pin names special-cased by the flow editor. The project/event pins render
 /// interactive dropdowns; the meta pin is auto-filled with the event's typed
@@ -1039,157 +1039,6 @@ impl CallRemoteEventNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Invocation helpers (SSE collection)
-// ---------------------------------------------------------------------------
-
-struct SseOutcome {
-    run_id: Option<String>,
-    status: Option<String>,
-    error_message: Option<String>,
-    generic_result: Option<Value>,
-    chat_out: Option<Value>,
-    chat_stream: Option<Value>,
-}
-
-impl SseOutcome {
-    fn status_str(&self) -> String {
-        self.status
-            .clone()
-            .unwrap_or_else(|| "Completed".to_string())
-    }
-
-    fn ensure_ok(&self) -> flow_like_types::Result<()> {
-        if matches!(
-            self.status.as_deref(),
-            Some("Failed") | Some("Cancelled") | Some("Timeout")
-        ) {
-            return Err(flow_like_types::anyhow!(
-                "Remote run {} ended with status {}: {}",
-                self.run_id.clone().unwrap_or_default(),
-                self.status_str(),
-                self.error_message.clone().unwrap_or_default()
-            ));
-        }
-        Ok(())
-    }
-
-    fn chat_result(&self) -> Option<Value> {
-        self.chat_out
-            .clone()
-            .or_else(|| self.chat_stream.clone())
-            .or_else(|| self.generic_result.clone())
-    }
-}
-
-async fn post_json(
-    session: &RemoteAppSession,
-    url: &str,
-    body: &Value,
-) -> flow_like_types::Result<flow_like_types::reqwest::Response> {
-    let response = http_client()
-        .post(url)
-        .bearer_auth(&session.token)
-        .json(body)
-        .send()
-        .await
-        .map_err(|err| flow_like_types::anyhow!("Failed to invoke remote event: {}", err))?;
-    error_for_status(response, "Remote event invocation").await
-}
-
-async fn invoke_and_collect(
-    session: &RemoteAppSession,
-    url: &str,
-    body: &Value,
-    timeout: u64,
-) -> flow_like_types::Result<SseOutcome> {
-    let response = post_json(session, url, body).await?;
-    tokio::time::timeout(Duration::from_secs(timeout), collect_sse_outcome(response))
-        .await
-        .map_err(|_| {
-            flow_like_types::anyhow!("Remote event did not finish within {} seconds", timeout)
-        })?
-}
-
-async fn collect_sse_outcome(
-    response: flow_like_types::reqwest::Response,
-) -> flow_like_types::Result<SseOutcome> {
-    let mut outcome = SseOutcome {
-        run_id: None,
-        status: None,
-        error_message: None,
-        generic_result: None,
-        chat_out: None,
-        chat_stream: None,
-    };
-    let mut stream = response.bytes_stream();
-    let mut buffer = String::new();
-
-    'outer: while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|err| flow_like_types::anyhow!("Failed to read event stream: {}", err))?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        // SSE allows CRLF line endings; normalize so frame detection below
-        // ("\n\n") also matches "\r\n\r\n"-terminated frames.
-        if buffer.contains('\r') {
-            buffer = buffer.replace("\r\n", "\n");
-        }
-
-        while let Some(pos) = buffer.find("\n\n") {
-            let frame = buffer[..pos].to_string();
-            buffer.drain(..pos + 2);
-
-            for line in frame.lines() {
-                let Some(data) = line.strip_prefix("data:") else {
-                    continue;
-                };
-                let Ok(parsed) = flow_like_types::json::from_str::<Value>(data.trim()) else {
-                    continue;
-                };
-
-                if outcome.run_id.is_none()
-                    && let Some(run_id) = parsed.get("run_id").and_then(|v| v.as_str())
-                {
-                    outcome.run_id = Some(run_id.to_string());
-                }
-
-                let event_type = parsed
-                    .get("event_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                match event_type {
-                    "generic_result" if outcome.generic_result.is_none() => {
-                        outcome.generic_result = parsed.get("payload").cloned();
-                    }
-                    "chat_out" => {
-                        outcome.chat_out = parsed.get("payload").cloned();
-                    }
-                    "chat_stream" => {
-                        outcome.chat_stream = parsed.get("payload").cloned();
-                    }
-                    "completed" => {
-                        outcome.status = parsed
-                            .get("payload")
-                            .and_then(|p| p.get("status"))
-                            .and_then(|s| s.as_str())
-                            .map(|s| s.to_string());
-                        outcome.error_message = parsed
-                            .get("payload")
-                            .and_then(|p| p.get("error_message"))
-                            .and_then(|s| s.as_str())
-                            .map(|s| s.to_string());
-                        break 'outer;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    Ok(outcome)
 }
 
 // ---------------------------------------------------------------------------

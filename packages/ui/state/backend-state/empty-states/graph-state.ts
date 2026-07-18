@@ -11,6 +11,7 @@ import type {
 	NeighborsPayload,
 	OntologyActionPrerun,
 	OntologyActionRun,
+	OverlayChildrenPayload,
 	PathsPayload,
 	RemoteOntologyImport,
 	SqlPayload,
@@ -18,8 +19,10 @@ import type {
 	SubgraphPayload,
 	SubgraphResult,
 	UpdateOverlayPayload,
+	UpsertGraphElementsResult,
 	ValidationResult,
 } from "../graph-state";
+import type { ExecuteSqlResult } from "../query-state";
 
 export class EmptyGraphState implements IGraphState {
 	listOverlays(): Promise<GraphOverlay[]> {
@@ -35,6 +38,12 @@ export class EmptyGraphState implements IGraphState {
 		throw new Error("Method not implemented.");
 	}
 	uninstallRemoteOntology(): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	sampleRemoteImport(): Promise<unknown[]> {
+		throw new Error("Method not implemented.");
+	}
+	queryRemoteImport(): Promise<ExecuteSqlResult> {
 		throw new Error("Method not implemented.");
 	}
 	invokeOntologyAction(
@@ -95,6 +104,13 @@ export class EmptyGraphState implements IGraphState {
 	): Promise<SubgraphResult> {
 		throw new Error("Method not implemented.");
 	}
+	children(
+		_appId: string,
+		_overlayId: string,
+		_payload: OverlayChildrenPayload,
+	): Promise<SubgraphResult> {
+		throw new Error("Method not implemented.");
+	}
 	subgraph(
 		_appId: string,
 		_overlayId: string,
@@ -124,6 +140,12 @@ export class EmptyGraphState implements IGraphState {
 		throw new Error("Method not implemented.");
 	}
 	sample(): Promise<unknown[]> {
+		throw new Error("Method not implemented.");
+	}
+	upsertNodes(): Promise<UpsertGraphElementsResult> {
+		throw new Error("Method not implemented.");
+	}
+	upsertEdges(): Promise<UpsertGraphElementsResult> {
 		throw new Error("Method not implemented.");
 	}
 }

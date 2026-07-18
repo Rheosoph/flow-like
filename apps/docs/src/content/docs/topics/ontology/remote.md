@@ -44,13 +44,13 @@ Turning **Expose** on is all a producer has to do. Consumers with a qualifying c
 The **Available remote ontologies** panel lists your active connections. For each one:
 
 1. **Discover** (or **Refresh**) — calls the connected project and lists the ontology contracts it exposes. Each shows its name and object-type count.
-2. **Install object bindings** — installs the sanitized contract into your project. Its status badge flips to **Installed**, and the contract's object bindings are added to your node catalog.
+2. **Install** — installs the sanitized contract into your project. Its status badge flips to **Installed**, and the contract's object bindings are added to your node catalog.
 
-An installed contract is labelled **"object bindings only"** — a reminder that you receive object semantics and action *definitions*, never the producer's boards.
+An installed contract is labelled **"bindings only"** — a reminder that you receive object semantics and action *definitions*, never the producer's boards.
 
 ### Keeping in sync
 
-Each installed contract remembers the producer version it was captured from. When the producer changes their ontology, the badge shows **Update available**. Click **Refresh object bindings** to pull the latest sanitized contract and regenerate your bindings.
+Each installed contract remembers the producer version it was captured from. When the producer changes their ontology, the badge shows **Update available**. Click **Refresh** to pull the latest sanitized contract and regenerate your bindings.
 
 ### Removing one
 
@@ -61,7 +61,12 @@ Each installed contract remembers the producer version it was captured from. Whe
 Once installed with bindings enabled, the remote ontology contributes nodes to your catalog:
 
 - **Query Remote Ontology Objects** — read objects of a remote object type. This runs against the producer through your connection, honoring the producer's exposure and connection role.
-- Remote action bindings — invoke the producer's governed actions by object reference. The producer executes the pinned board version and enforces its own parameter schema and permissions.
+- **Query Remote Ontology Children** — expand a parent object's [containment children](/topics/ontology/overview/#hierarchy--composition) within the installed contract. Like the objects node, it runs against the producer and honors exposure.
+- **Invoke Remote Ontology Action** — invoke the producer's governed actions by object reference. The producer executes the pinned board version and enforces its own parameter schema and permissions.
+
+:::note[Remote hierarchies resolve within the exposed contract]
+A producer's containment links keep their hierarchy flag when shared, so you can drill down through an installed contract. But a link that pointed at *another* of the producer's ontologies has its target stripped during sanitization — a remote subtree only ever resolves within the exposed contract, never into a producer overlay you weren't given.
+:::
 
 ## Governance summary
 
@@ -69,6 +74,7 @@ Once installed with bindings enabled, the remote ontology contributes nodes to y
 |-----------|-----|
 | Consumers see only what producers allow | Discovery returns exposed contracts only; the connection role must permit reading data |
 | No implementation leaks | `board_id`, `board_version`, `start_node_id`, and event IDs are stripped from shared action contracts |
+| No cross-ontology leaks | Containment link targets (`dst_ontology`, `dst_binding_id`) are stripped, so a remote subtree can't resolve into a producer overlay that wasn't exposed |
 | Actions can't be widened by editing metadata | Each action pins an immutable board version and a contract hash that's re-checked at invoke time |
 | Revocation is immediate | Turning off **Expose** stops new discovery/installs; existing consumers lose access on their next remote call |
 | Consumers can always clean up | Uninstall never requires the connection to still be active |

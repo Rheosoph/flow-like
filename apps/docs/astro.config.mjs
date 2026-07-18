@@ -134,6 +134,21 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 							],
 						},
 						{
+							label: "Data Studio",
+							collapsed: false,
+							items: [
+								{ label: "Overview", slug: "apps/data-studio" },
+								{
+									label: "Ontology & Knowledge Graph",
+									slug: "topics/ontology/overview",
+								},
+								{
+									label: "Shared & Remote Ontologies",
+									slug: "topics/ontology/remote",
+								},
+							],
+						},
+						{
 							label: "Apps",
 							collapsed: true,
 							items: [

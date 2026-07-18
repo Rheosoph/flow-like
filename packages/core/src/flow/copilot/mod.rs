@@ -22,8 +22,9 @@ mod types;
 mod validation;
 
 pub use assistant::{
-    AttachmentManifestEntry, GlobalOpenBoardContext, PlatformContextInput, build_platform_context,
-    global_assistant_system_prompt, open_board_section, run_platform_chat,
+    AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
+    build_platform_context, data_studio_section, global_assistant_system_prompt,
+    open_board_section, run_platform_chat,
 };
 pub use context::{
     EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, prepare_context,

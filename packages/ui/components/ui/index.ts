@@ -45,6 +45,7 @@ export * from "./model-benchmarks";
 export * from "./model-detail-sheet";
 export * from "./monaco-file-editor";
 export * from "./package-status-badge";
+export * from "./sql-editor";
 export * from "./popover";
 export * from "./progress";
 export * from "./progress-toast";

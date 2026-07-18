@@ -22,6 +22,7 @@ import {
 	type IHelperState,
 	type IPageState,
 	type IProfile,
+	type IQueryState,
 	type IRegistryState,
 	type IRoleState,
 	type ISalesState,
@@ -60,6 +61,7 @@ import { AppState } from "./tauri-provider/app-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import { DatabaseState } from "./tauri-provider/db-state";
+import { QueryState } from "./tauri-provider/query-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
@@ -125,6 +127,7 @@ export class TauriBackend implements IBackendState {
 	aiState: IAIState;
 	dbState: IDatabaseState;
 	graphState: IGraphState;
+	queryState: IQueryState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -158,6 +161,7 @@ export class TauriBackend implements IBackendState {
 		this.aiState = new AiState(this);
 		this.dbState = new DatabaseState(this);
 		this.graphState = new GraphState(this);
+		this.queryState = new QueryState(this);
 		this.widgetState = new WidgetState(this);
 		this.pageState = new PageState(this);
 		this.registryState = new RegistryState(this);

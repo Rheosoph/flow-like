@@ -121,6 +121,7 @@ pub async fn create_overlay(
             enabled: action.enabled,
             allow_bulk: action.allow_bulk,
             parameter_schema: action.parameter_schema.clone(),
+            exposed: action.exposed,
         })
         .collect::<Vec<_>>();
     super::actions::validate_action_object_types(&actions, |object_type| {
@@ -181,6 +182,9 @@ pub async fn create_overlay(
                 dst_label: e.dst_label.clone(),
                 src_node_column: e.src_node_column.clone(),
                 dst_node_column: e.dst_node_column.clone(),
+                containment: e.containment,
+                dst_ontology: e.dst_ontology.clone(),
+                dst_binding_id: e.dst_binding_id.clone(),
                 property_columns: e
                     .property_columns
                     .iter()

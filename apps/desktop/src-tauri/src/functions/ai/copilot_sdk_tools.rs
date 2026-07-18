@@ -25,8 +25,8 @@ use flow_like::flow::copilot::memory::AssistantMemory;
 use flow_like::flow::copilot::platform::run_memory_tool;
 use flow_like::flow::copilot::tool_spec::{
     INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
-    find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
-    resolve_tool_approval, runtime_execution_tool_specs,
+    data_studio_tool_specs, find_global_tool_spec, global_assistant_tool_specs,
+    missing_required_args, resolve_tool_approval, runtime_execution_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -803,6 +803,26 @@ pub fn create_global_assistant_tools(
         .iter()
         .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), memory.clone()))
         .collect()
+}
+
+/// Tool set for the nested Data Studio specialist. It reuses the shipped `database_tool` (table/DB
+/// setup) and the cross-app discovery tools (`list_apps`/`describe_app_interface`), then adds the
+/// graph/ontology/action tools generated from the shared Data Studio specs — so every backend
+/// (Bits/rig, GitHub Copilot, Codex, Claude Code) advertises the same data tools. Every call routes
+/// through the frontend bridge to `backend.graphState` / `backend.dbState`.
+pub fn create_data_studio_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    let mut tools = vec![create_database_tool(bridge.clone())];
+    tools.extend(
+        data_studio_tool_specs()
+            .iter()
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None)),
+    );
+    for name in ["list_apps", "describe_app_interface"] {
+        if let Some(spec) = find_global_tool_spec(name) {
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
+        }
+    }
+    tools
 }
 
 fn frontend_tool_result(

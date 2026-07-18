@@ -124,6 +124,9 @@ pub async fn update_overlay(
                 dst_label: e.dst_label,
                 src_node_column: e.src_node_column,
                 dst_node_column: e.dst_node_column,
+                containment: e.containment,
+                dst_ontology: e.dst_ontology,
+                dst_binding_id: e.dst_binding_id,
                 property_columns: e
                     .property_columns
                     .into_iter()
@@ -171,6 +174,7 @@ pub async fn update_overlay(
                     enabled: action.enabled,
                     allow_bulk: action.allow_bulk,
                     parameter_schema: action.parameter_schema,
+                    exposed: action.exposed,
                 }
             })
             .collect::<Vec<_>>();
