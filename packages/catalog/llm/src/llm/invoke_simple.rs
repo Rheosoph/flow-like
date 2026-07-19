@@ -16,7 +16,7 @@ use flow_like::{
 use flow_like_model_provider::{
     history::{History, HistoryMessage, Role},
     llm::LLMCallback,
-    response::LLMUsageStats,
+    response::{LLMUsageStats, Response},
     response_chunk::ResponseChunk,
 };
 use flow_like_types::{
@@ -46,11 +46,11 @@ impl NodeLogic for InvokeLLMSimpleNode {
         let mut node = Node::new(
             "ai_generative_invoke_simple",
             "Invoke Simple",
-            "Invokes an LLM with a single system prompt + user prompt and streams back tokens.",
+            "Invokes an LLM with a system prompt and user prompt, returning text and the full structured response.",
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         // Generic cloud/local model invocation: balanced defaults with light perf bias.
         node.set_scores(
@@ -95,6 +95,14 @@ impl NodeLogic for InvokeLLMSimpleNode {
         )
         .set_default_value(Some(json!("")));
 
+        node.add_input_pin(
+            "stream",
+            "Stream",
+            "Stream text tokens when possible. Disable to preserve structured media responses and replay them as rich chunks.",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+
         node.add_output_pin(
             "on_stream",
             "On Stream",
@@ -110,6 +118,15 @@ impl NodeLogic for InvokeLLMSimpleNode {
         );
 
         node.add_output_pin(
+            "chunk",
+            "Chunk",
+            "Most recent structured stream or replay chunk, including media content parts",
+            VariableType::Struct,
+        )
+        .set_schema::<ResponseChunk>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
+
+        node.add_output_pin(
             "done",
             "Done",
             "Signals when the invocation finished",
@@ -122,6 +139,15 @@ impl NodeLogic for InvokeLLMSimpleNode {
             "Final assistant message extracted from the response",
             VariableType::String,
         );
+
+        node.add_output_pin(
+            "response",
+            "Response",
+            "Full structured model response, including media content parts and reasoning",
+            VariableType::Struct,
+        )
+        .set_schema::<Response>()
+        .set_options(PinOptions::new().set_enforce_schema(true).build());
 
         node.add_output_pin(
             "stats",
@@ -146,6 +172,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
         }
         let system_prompt = context.evaluate_pin::<String>("system_prompt").await?;
         let prompt = context.evaluate_pin::<String>("prompt").await?;
+        let stream = context.evaluate_pin::<bool>("stream").await?;
         let model_factory = context.app_state.model_factory.clone();
         let model = model_factory
             .lock()
@@ -161,6 +188,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
         let mut history = History::new(model_name.clone(), vec![]);
         history.set_system_prompt(system_prompt.clone());
         history.push_message(HistoryMessage::from_string(Role::User, &prompt));
+        history.set_stream(stream);
 
         let on_stream = context.get_pin_by_name("on_stream").await?;
         context.activate_exec_pin_ref(&on_stream).await?;
@@ -171,6 +199,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
             let context = Arc::new(Mutex::new(context.create_sub_context(&node).await));
             connected_nodes.insert(node.node.lock().await.id.clone(), context);
         }
+        let has_stream_consumers = !connected_nodes.is_empty();
 
         let parent_node_id = context.node.node.lock().await.id.clone();
         let ctx = context.clone();
@@ -189,6 +218,7 @@ impl NodeLogic for InvokeLLMSimpleNode {
                 let string_token = input.get_streamed_token().unwrap_or("".to_string());
                 let mut ctx = ctx.clone();
                 ctx.set_pin_value("token", json!(string_token)).await?;
+                ctx.set_pin_value("chunk", json!(input)).await?;
                 let count = callback_count.fetch_add(1, Ordering::SeqCst);
                 for entry in connected_nodes.iter() {
                     let (id, context) = entry.pair();
@@ -231,7 +261,8 @@ impl NodeLogic for InvokeLLMSimpleNode {
         );
 
         let start = Instant::now();
-        let res = model.invoke(&history, Some(callback)).await?;
+        let callback = has_stream_consumers.then_some(callback);
+        let res = model.invoke(&history, callback).await?;
         let duration_ms = start.elapsed().as_millis() as u64;
         let mut response_string = "".to_string();
 
@@ -259,10 +290,26 @@ impl NodeLogic for InvokeLLMSimpleNode {
         context
             .set_pin_value("result", json!(response_string))
             .await?;
+        context.set_pin_value("response", json!(res)).await?;
         context.set_pin_value("stats", json!(stats)).await?;
         context.deactivate_exec_pin("on_stream").await?;
         context.activate_exec_pin("done").await?;
 
         return Ok(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exposes_structured_response_and_stream_control() {
+        let node = InvokeLLMSimpleNode::new().get_node();
+        assert_eq!(node.version, Some(5));
+        assert!(node.get_pin_by_name("stream").is_some());
+        assert!(node.get_pin_by_name("response").is_some());
+        assert!(node.get_pin_by_name("chunk").is_some());
+        assert!(node.get_pin_by_name("result").is_some());
     }
 }

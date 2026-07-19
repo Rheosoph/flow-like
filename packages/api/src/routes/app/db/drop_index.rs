@@ -1,9 +1,9 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    routes::app::db::{ScopeParams, resolve_write_connection, validate_table_name},
     state::AppState,
 };
 use axum::{
@@ -43,7 +43,13 @@ pub async fn drop_index(
     Path((app_id, table, index_name)): Path<(String, String, String)>,
     Query(scope): Query<ScopeParams>,
 ) -> Result<Json<()>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::WriteFiles,
+        RolePermissions::WriteDatabase
+    );
     validate_table_name(&table)?;
 
     // Validate index_name with the same rules as table names
@@ -70,7 +76,7 @@ pub async fn drop_index(
         ));
     }
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
     let db = LanceDBVectorStore::from_connection(connection, table).await;
 
     db.drop_index(&index_name).await?;

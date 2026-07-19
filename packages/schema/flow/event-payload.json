@@ -1,114 +1,295 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "EventPayload",
-	"anyOf": [
-		{
-			"$ref": "#/definitions/ChatEventParameters"
-		},
-		{
-			"$ref": "#/definitions/EmailEventParameters"
-		},
-		{
-			"$ref": "#/definitions/ApiEventParameters"
-		},
-		{
-			"type": "object",
-			"additionalProperties": true
-		},
-		{
-			"type": "null"
-		}
-	],
-	"definitions": {
-		"ChatEventParameters": {
-			"type": "object",
-			"properties": {
-				"history_elements": {
-					"type": ["integer", "null"],
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				"allow_file_upload": {
-					"type": ["boolean", "null"]
-				},
-				"allow_voice_input": {
-					"type": ["boolean", "null"]
-				},
-				"allow_voice_output": {
-					"type": ["boolean", "null"]
-				},
-				"tools": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "string"
-					}
-				},
-				"default_tools": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "string"
-					}
-				},
-				"example_messages": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "string"
-					}
-				}
-			}
-		},
-		"EmailEventParameters": {
-			"type": "object",
-			"properties": {
-				"mail": {
-					"type": ["string", "null"]
-				},
-				"sender_name": {
-					"type": ["string", "null"]
-				},
-				"smtp_server": {
-					"type": ["string", "null"]
-				},
-				"smtp_port": {
-					"type": ["integer", "null"],
-					"format": "uint16",
-					"minimum": 0.0
-				},
-				"smtp_username": {
-					"type": ["string", "null"]
-				},
-				"secret_smtp_password": {
-					"type": ["string", "null"]
-				},
-				"imap_server": {
-					"type": ["string", "null"]
-				},
-				"imap_port": {
-					"type": ["integer", "null"],
-					"format": "uint16",
-					"minimum": 0.0
-				},
-				"imap_username": {
-					"type": ["string", "null"]
-				},
-				"secret_imap_password": {
-					"type": ["string", "null"]
-				}
-			}
-		},
-		"ApiEventParameters": {
-			"type": "object",
-			"properties": {
-				"path_suffix": {
-					"type": ["string", "null"]
-				},
-				"method": {
-					"type": ["string", "null"]
-				},
-				"public_endpoint": {
-					"type": ["boolean", "null"]
-				}
-			}
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EventPayload",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/ChatEventParameters"
+    },
+    {
+      "$ref": "#/$defs/EmailEventParameters"
+    },
+    {
+      "$ref": "#/$defs/ApiEventParameters"
+    },
+    {
+      "type": "object",
+      "additionalProperties": true
+    },
+    {
+      "type": "null"
+    }
+  ],
+  "$defs": {
+    "ChatEventParameters": {
+      "type": "object",
+      "properties": {
+        "history_elements": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "allow_file_upload": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_voice_input": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_voice_output": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_voice_mode": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatVoiceParameters"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_tools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "example_messages": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "attach_widget_snapshots": {
+          "description": "Attach PNG snapshots of the latest assistant message's embedded widgets\nto the outgoing user turn so vision-capable models see the rendered UI.\nDefaults to enabled.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "custom_css": {
+          "description": "Custom CSS scoped to the chat interface.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "background_image": {
+          "description": "Background image URL or app storage path for the chat interface.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color_scheme": {
+          "description": "Preferred chat color scheme: \"system\" | \"light\" | \"dark\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ai_disclosure": {
+          "description": "User-facing disclosure that the conversation is with an AI.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ChatVoiceParameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Capture mode: \"disabled\" | \"stt\" (frontend transcript) | \"record\" (audio).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "invoke": {
+          "description": "Invoke mode: \"manual\" | \"hold\" | \"auto\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variant": {
+          "description": "Visual style: \"conservative\" | \"waveform\" | \"orb\" | \"vortex\" | \"shader\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Element size: \"sm\" | \"md\" | \"lg\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "description": "Base accent color (CSS color string).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recording_color": {
+          "description": "Accent color while recording (CSS color string).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "playback": {
+          "description": "Answer playback: \"text\" | \"audio\" | \"both\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_duration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "auto_stop": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "EmailEventParameters": {
+      "type": "object",
+      "properties": {
+        "mail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sender_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "smtp_server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "smtp_port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "smtp_username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secret_smtp_password": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "imap_server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "imap_port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "imap_username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secret_imap_password": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ApiEventParameters": {
+      "type": "object",
+      "properties": {
+        "path_suffix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "public_endpoint": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    }
+  }
 }

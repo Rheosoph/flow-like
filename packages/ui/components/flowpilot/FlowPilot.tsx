@@ -1,6 +1,6 @@
 "use client";
 
-import Editor, { type Monaco } from "@monaco-editor/react";
+import { createId } from "@paralleldrive/cuid2";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	ArrowDown,
@@ -9,7 +9,6 @@ import {
 	ChevronDownIcon,
 	CircleDashedIcon,
 	ClockIcon,
-	CopyIcon,
 	FileCode2Icon,
 	FileDiffIcon,
 	ImageIcon,
@@ -19,15 +18,16 @@ import {
 	SendIcon,
 	SparklesIcon,
 	SquarePenIcon,
-	WrenchIcon,
 	WorkflowIcon,
+	WrenchIcon,
 	XIcon,
 } from "lucide-react";
-import { useTheme } from "next-themes";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCopilotSDK, useInvoke } from "../../hooks";
+import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import { IBitTypes } from "../../lib";
+import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import {
 	type IFlowPilotConversation,
 	addMessage,
@@ -38,8 +38,6 @@ import {
 } from "../../lib/flowpilot-db";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
-import { IIndexType } from "../../state/backend-state/db-state";
-import { useExecutionServiceOptional } from "../../state/execution-service-context";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -72,9 +70,44 @@ import { HistoryPanel } from "./HistoryPanel";
 import { MessageContent } from "./MessageContent";
 import { PendingCommandsView } from "./PendingCommandsView";
 import { PendingComponentsView } from "./PendingComponentsView";
-import { ModelSelector, ProviderSelector } from "./ProviderSelector";
 import { StatusPill } from "./StatusPill";
+import { resolveFrontendToolExecutionDeadline } from "./board-edit-guard";
+import { releaseReturnedFlowIrCommitBeforeStaleResponse } from "./copilot-request-context";
+import {
+	type CopilotStreamEvent,
+	appendBoundedStreamDetail,
+	createCopilotStreamParser,
+} from "./copilot-stream-parser";
+import {
+	type FlowScriptWorkspaceCandidate,
+	extractFlowScriptWorkspaceCandidates,
+	isFlowScriptWorkspaceApplicable,
+	rememberFlowScriptWorkspaceCandidate,
+	resolveFinalFlowScriptWorkspaceCandidate,
+} from "./flowscript-workspace-candidates";
+import {
+	FlowScriptWorkspacePanel,
+	formatLineCount,
+} from "./flowscript-workspace-panel";
+import {
+	FrontendToolRequestGuard,
+	type FrontendToolRequestLease,
+} from "./frontend-tool-request-guard";
+import { FlowPilotGenerationMetricsRun } from "./generation-metrics";
+import { flowPilotPanelConversationId } from "./panel-conversation-scope";
 import { buildBudgetedHistory } from "./history-budget";
+import {
+	InlineFlowScriptPreview,
+	type InlineFlowScriptPreviewValue,
+	flowScriptWorkspaceOwnsApply,
+	isDraftingFlowScriptWorkspace,
+	resolveDisplayedFlowScriptPreview,
+	resolveLiveFlowScriptPreviewForMessage,
+} from "./inline-flowscript-preview";
+import {
+	type ProviderModelPickerProvider,
+	ProviderModelReasoningPicker,
+} from "./provider-model-reasoning-picker";
 import type {
 	AIProvider,
 	AgentBackendProvider,
@@ -85,7 +118,6 @@ import type {
 	FlowPilotProcessEventStatus,
 	FlowPilotProps,
 	LoadingPhase,
-	NormalizedAIProvider,
 	UnifiedPlanStep,
 } from "./types";
 import {
@@ -102,6 +134,9 @@ import {
 import type {
 	CanvasSettings,
 	CopilotScope,
+	FlowIrCommitDisposition,
+	FlowIrCommitDispositionResult,
+	FlowIrCommitToken,
 	UnifiedChatMessage,
 } from "../../lib/schema/copilot";
 import type { BoardCommand, Suggestion } from "../../lib/schema/flow/copilot";
@@ -115,149 +150,51 @@ const ALLOWED_ATTACHED_IMAGE_TYPES = new Set([
 	"image/webp",
 	"image/gif",
 ]);
-const FLOWSCRIPT_LANGUAGE_ID = "flowscript";
-let flowScriptLanguageRegistered = false;
 
-function registerFlowScriptLanguage(monaco: Monaco, isDark: boolean) {
-	const hasRegisteredLanguage = monaco.languages
-		.getLanguages()
-		.some((language) => language.id === FLOWSCRIPT_LANGUAGE_ID);
+const DESTRUCTIVE_FLOWSCRIPT_DIAGNOSTIC_PREFIX =
+	"FlowScript edit would delete ";
+const FLOW_IR_DISMISS_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
+const FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS = 80;
 
-	if (!flowScriptLanguageRegistered && !hasRegisteredLanguage) {
-		monaco.languages.register({ id: FLOWSCRIPT_LANGUAGE_ID });
-		monaco.languages.setLanguageConfiguration(FLOWSCRIPT_LANGUAGE_ID, {
-			comments: { lineComment: "//" },
-			brackets: [
-				["{", "}"],
-				["[", "]"],
-				["(", ")"],
-			],
-			autoClosingPairs: [
-				{ open: "{", close: "}" },
-				{ open: "[", close: "]" },
-				{ open: "(", close: ")" },
-				{ open: '"', close: '"', notIn: ["string", "comment"] },
-			],
-			surroundingPairs: [
-				{ open: "{", close: "}" },
-				{ open: "[", close: "]" },
-				{ open: "(", close: ")" },
-				{ open: '"', close: '"' },
-			],
-			indentationRules: {
-				increaseIndentPattern: /^.*\{[^}"']*$/,
-				decreaseIndentPattern: /^\s*\}/,
-			},
-		});
-		monaco.languages.setMonarchTokensProvider(FLOWSCRIPT_LANGUAGE_ID, {
-			tokenizer: {
-				root: [
-					[/\/\/@[nvl]:.*$/, "comment.flow-anchor"],
-					[/\/\/.*$/, "comment"],
-					[/@"?[A-Za-z_$][\w$]*"?/, "annotation"],
-					[/"([^"\\]|\\.)*$/, "string.invalid"],
-					[/"/, "string", "@string"],
-					[/\b(const|let|function)\b/, "keyword.storage"],
-					[/\b(if|else|for|of|return)\b/, "keyword.control"],
-					[
-						/\b(string|int|float|bool|void|Date|Generic|Byte|PathBuf|Struct|Map|Set)\b/,
-						"type",
-					],
-					[/\b(true|false|null)\b/, "constant.language"],
-					[/\b-?\d+\.\d+([eE][+-]?\d+)?\b/, "number.float"],
-					[/\b-?\d+\b/, "number"],
-					[/[A-Za-z_$][\w$]*(?=\s*\()/, "entity.name.function"],
-					[/[A-Za-z_$][\w$]*(?=\s*:)/, "variable.parameter"],
-					[/[A-Za-z_$][\w$]*/, "identifier"],
-					[/===|!==|==|!=|>=|<=|>|<|&&|\|\||!|\+|-|\*|\/|%|=|\?/, "operator"],
-					[/[{}()[\]]/, "@brackets"],
-				],
-				string: [
-					[/[^\\"]+/, "string"],
-					[/\\(?:["\\/nrt]|u[0-9A-Fa-f]{4})/, "string.escape"],
-					[/"/, "string", "@pop"],
-				],
-			},
-		});
-		flowScriptLanguageRegistered = true;
-	} else if (hasRegisteredLanguage) {
-		flowScriptLanguageRegistered = true;
+function applyResultDiagnostics(applyResult: unknown): string[] {
+	if (!applyResult || typeof applyResult !== "object") return [];
+	const diagnostics = (applyResult as { diagnostics?: unknown }).diagnostics;
+	return Array.isArray(diagnostics)
+		? diagnostics.filter((diagnostic): diagnostic is string => {
+				return typeof diagnostic === "string";
+			})
+		: [];
+}
+
+function applyResultCommandCount(applyResult: unknown): number | undefined {
+	if (!applyResult || typeof applyResult !== "object") return undefined;
+	const commands = (applyResult as { commands?: unknown }).commands;
+	return Array.isArray(commands) ? commands.length : undefined;
+}
+
+function applyResultBoardCommands(applyResult: unknown): BoardCommand[] {
+	if (!applyResult || typeof applyResult !== "object") return [];
+	const boardCommands = (applyResult as { board_commands?: unknown })
+		.board_commands;
+	return Array.isArray(boardCommands) ? (boardCommands as BoardCommand[]) : [];
+}
+
+function flowPilotBoardNodeCount(
+	board: FlowPilotProps["board"],
+): number | undefined {
+	if (!board) return undefined;
+	const nodeIds = new Set(Object.keys(board.nodes ?? {}));
+	for (const layer of Object.values(board.layers ?? {})) {
+		for (const nodeId of Object.keys(layer?.nodes ?? {})) nodeIds.add(nodeId);
 	}
+	return nodeIds.size;
+}
 
-	monaco.editor.defineTheme("flowpilot-flowscript-light", {
-		base: "vs",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "7a7f8a", fontStyle: "italic" },
-			{ token: "comment.flow-anchor", foreground: "2563eb", fontStyle: "bold" },
-			{ token: "annotation", foreground: "8b5cf6" },
-			{ token: "keyword", foreground: "b91c6b", fontStyle: "bold" },
-			{ token: "keyword.storage", foreground: "315ac5", fontStyle: "bold" },
-			{ token: "type", foreground: "6d55c7" },
-			{ token: "entity.name.function", foreground: "087ea4" },
-			{ token: "variable.parameter", foreground: "a56a00" },
-			{ token: "string", foreground: "159447" },
-			{ token: "number", foreground: "c2410c" },
-			{ token: "constant.language", foreground: "7c3aed" },
-			{ token: "operator", foreground: "5b6270" },
-		],
-		colors: {
-			"editor.background": "#fbfafc",
-			"editor.foreground": "#24252b",
-			"editorGutter.background": "#fbfafc",
-			"editorLineNumber.foreground": "#a6a8b3",
-			"editorLineNumber.activeForeground": "#6b7280",
-			"editorCursor.foreground": "#ec4899",
-			"editor.selectionBackground": "#8b5cf626",
-			"editor.inactiveSelectionBackground": "#8b5cf617",
-			"editor.lineHighlightBackground": "#11182708",
-			"editorIndentGuide.background1": "#11182712",
-			"editorIndentGuide.activeBackground1": "#8b5cf64a",
-			"editorBracketMatch.background": "#8b5cf61c",
-			"editorBracketMatch.border": "#8b5cf670",
-			"scrollbarSlider.background": "#71717a33",
-			"scrollbarSlider.hoverBackground": "#71717a4d",
-			"scrollbarSlider.activeBackground": "#71717a66",
-		},
-	});
-	monaco.editor.defineTheme("flowpilot-flowscript-dark", {
-		base: "vs-dark",
-		inherit: true,
-		rules: [
-			{ token: "comment", foreground: "a1a1aa", fontStyle: "italic" },
-			{ token: "comment.flow-anchor", foreground: "38bdf8", fontStyle: "bold" },
-			{ token: "annotation", foreground: "c084fc" },
-			{ token: "keyword", foreground: "f472b6", fontStyle: "bold" },
-			{ token: "keyword.storage", foreground: "60a5fa", fontStyle: "bold" },
-			{ token: "type", foreground: "a78bfa" },
-			{ token: "entity.name.function", foreground: "22d3ee" },
-			{ token: "variable.parameter", foreground: "facc15" },
-			{ token: "string", foreground: "86efac" },
-			{ token: "number", foreground: "fb923c" },
-			{ token: "constant.language", foreground: "c084fc" },
-			{ token: "operator", foreground: "d4d4d8" },
-		],
-		colors: {
-			"editor.background": "#111116",
-			"editor.foreground": "#e5e7eb",
-			"editorGutter.background": "#111116",
-			"editorLineNumber.foreground": "#686b76",
-			"editorLineNumber.activeForeground": "#d4d4d8",
-			"editorCursor.foreground": "#f472b6",
-			"editor.selectionBackground": "#a855f733",
-			"editor.inactiveSelectionBackground": "#a855f71f",
-			"editor.lineHighlightBackground": "#ffffff08",
-			"editorIndentGuide.background1": "#ffffff12",
-			"editorIndentGuide.activeBackground1": "#a855f65c",
-			"editorBracketMatch.background": "#a855f61f",
-			"editorBracketMatch.border": "#c084fc70",
-			"scrollbarSlider.background": "#a1a1aa33",
-			"scrollbarSlider.hoverBackground": "#a1a1aa4d",
-			"scrollbarSlider.activeBackground": "#a1a1aa66",
-		},
-	});
-	monaco.editor.setTheme(
-		isDark ? "flowpilot-flowscript-dark" : "flowpilot-flowscript-light",
+function destructiveFlowScriptDiagnostic(diagnostics: string[]): string | null {
+	return (
+		diagnostics.find((diagnostic) =>
+			diagnostic.startsWith(DESTRUCTIVE_FLOWSCRIPT_DIAGNOSTIC_PREFIX),
+		) ?? null
 	);
 }
 
@@ -278,25 +215,6 @@ function base64ByteLength(data: string): number {
 	return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 }
 
-function parseFlowScriptWorkspaceEvent(payload: string): {
-	source: string;
-	status?: string;
-} | null {
-	try {
-		const parsed = JSON.parse(payload);
-		if (typeof parsed === "string") return { source: parsed };
-		if (parsed && typeof parsed.source === "string") {
-			return {
-				source: parsed.source,
-				status: typeof parsed.status === "string" ? parsed.status : undefined,
-			};
-		}
-	} catch {
-		return null;
-	}
-	return null;
-}
-
 function parseStreamJson(payload: string): Record<string, unknown> | null {
 	try {
 		const parsed = JSON.parse(payload);
@@ -306,25 +224,28 @@ function parseStreamJson(payload: string): Record<string, unknown> | null {
 	}
 }
 
-function normalizeEnabledAIProvider(provider?: AIProvider): NormalizedAIProvider {
-	const normalized = normalizeAIProvider(provider);
-	return normalized === "claude-code" ? "codex" : normalized;
-}
-
 function getProcessToolLabel(toolName?: string): string {
 	if (!toolName) return "Using tool";
 	switch (toolName) {
 		case "think":
 		case "analyze":
 			return "Thinking";
+		case "get_current_flowscript":
+			return "Reading current FlowScript";
 		case "get_declarations":
 			return "Looking up FlowScript declarations";
+		case "write_flowscript":
+			return "Writing FlowScript";
+		case "patch_flowscript":
+			return "Repairing FlowScript";
+		case "check_flowscript":
+			return "Checking FlowScript";
+		case "commit_flowscript":
+			return "Queueing checked FlowScript";
 		case "edit_flowscript":
 			return "Editing FlowScript";
 		case "catalog_search":
 			return "Searching catalog";
-		case "validate_commands":
-			return "Validating board changes";
 		case "emit_commands":
 			return "Queueing board changes";
 		case "emit_ui":
@@ -342,8 +263,14 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Using database";
 		case "storage_tool":
 			return "Using storage";
+		case "ui_inspect":
+			return "Inspecting pages & widgets";
 		case "execute_event":
 			return "Executing event";
+		case "execute_node":
+			return "Executing node";
+		case "query_execution_logs":
+			return "Reading execution logs";
 		case "ask_user":
 			return "Asking for input";
 		default:
@@ -364,11 +291,6 @@ function processStatusFromPlanStepStatus(
 		default:
 			return "info";
 	}
-}
-
-function formatLineCount(source: string): string {
-	const lines = source ? source.split("\n").length : 0;
-	return `${lines} line${lines === 1 ? "" : "s"}`;
 }
 
 function formatProcessElapsed(
@@ -408,6 +330,8 @@ interface FrontendToolRequest {
 	toolName: string;
 	arguments: Record<string, unknown>;
 	approval?: FrontendToolApproval;
+	deadlineAtMs?: number;
+	deadline_at_ms?: number;
 }
 
 interface FrontendToolResponse {
@@ -443,7 +367,10 @@ interface FrontendToolQueuedDialog {
 }
 
 type TauriCoreModule = {
-	invoke: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
+	invoke: <T = unknown>(
+		command: string,
+		args?: Record<string, unknown>,
+	) => Promise<T>;
 };
 
 type TauriEventModule = {
@@ -458,6 +385,7 @@ type TauriHttpModule = {
 };
 
 const FLOWPILOT_FRONTEND_TOOL_EVENT = "flowpilot://frontend-tool-request";
+const FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT = "flowpilot://frontend-tool-cancel";
 
 function isTauriRuntime(): boolean {
 	if (typeof window === "undefined") return false;
@@ -486,16 +414,6 @@ function getArgString(
 	return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function getArgBool(
-	args: Record<string, unknown>,
-	snake: string,
-	camel = snake,
-	defaultValue = false,
-): boolean {
-	const value = args[snake] ?? args[camel];
-	return typeof value === "boolean" ? value : defaultValue;
-}
-
 function getArgNumber(
 	args: Record<string, unknown>,
 	snake: string,
@@ -511,73 +429,6 @@ function getArgNumber(
 function clampToolLimit(value: number, defaultValue: number, maxValue: number) {
 	if (!Number.isFinite(value) || value <= 0) return defaultValue;
 	return Math.min(Math.floor(value), maxValue);
-}
-
-function resolveToolAppId(
-	args: Record<string, unknown>,
-	defaultAppId?: string,
-): string {
-	const appId = getArgString(args, "app_id", "appId") ?? defaultAppId;
-	if (!appId) {
-		throw new Error("Missing app_id. Provide app_id or open FlowPilot from an app context.");
-	}
-	return appId;
-}
-
-function mapIndexType(value: unknown): IIndexType {
-	const normalized = String(value ?? "Auto")
-		.replace(/[\s-]/g, "_")
-		.toLowerCase();
-	switch (normalized) {
-		case "fulltext":
-		case "full_text":
-			return IIndexType.FullText;
-		case "btree":
-		case "b_tree":
-			return IIndexType.BTree;
-		case "bitmap":
-			return IIndexType.Bitmap;
-		case "labellist":
-		case "label_list":
-			return IIndexType.LabelList;
-		default:
-			return IIndexType.Auto;
-	}
-}
-
-function splitStoragePath(path: string): { prefix: string; fileName: string } {
-	const normalized = path.replace(/^\/+/, "");
-	const lastSlash = normalized.lastIndexOf("/");
-	if (lastSlash < 0) return { prefix: "", fileName: normalized };
-	return {
-		prefix: normalized.slice(0, lastSlash),
-		fileName: normalized.slice(lastSlash + 1),
-	};
-}
-
-function compactJson(value: unknown, maxChars = 12_000): unknown {
-	try {
-		const text = JSON.stringify(value);
-		if (text.length <= maxChars) return value;
-		return {
-			truncated: true,
-			chars: text.length,
-			preview: text.slice(0, maxChars),
-		};
-	} catch {
-		return String(value);
-	}
-}
-
-function compactLogEvents(events: unknown[], maxEvents = 80): unknown[] {
-	return events.slice(-maxEvents).map((event) => {
-		if (!event || typeof event !== "object") return event;
-		const object = event as Record<string, unknown>;
-		return {
-			event_type: object.event_type,
-			payload: compactJson(object.payload, 3000),
-		};
-	});
 }
 
 async function fetchJsonViaTauri(url: string): Promise<unknown> {
@@ -654,7 +505,7 @@ function buildFlowScriptDiff(
 	);
 }
 
-export function FlowPilot({
+function FlowPilotImpl({
 	agentMode,
 	title = "FlowPilot",
 	className,
@@ -670,6 +521,8 @@ export function FlowPilot({
 	selectedNodeIds = [],
 	onAcceptSuggestion,
 	onExecuteCommands,
+	onApplyFlowScript,
+	onApplyFlowIrCommit,
 	onFocusNode,
 	onSelectNodes,
 	runContext,
@@ -688,16 +541,15 @@ export function FlowPilot({
 	const [loading, setLoading] = useState(false);
 	const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>("idle");
 	const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
-	const [elapsedSeconds, setElapsedSeconds] = useState(0);
-	const [tokenCount, setTokenCount] = useState(0);
 	const [planSteps, setPlanSteps] = useState<UnifiedPlanStep[]>([]);
 	const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
 	const [userScrolledUp, setUserScrolledUp] = useState(false);
 	const [selectedModelId, setSelectedModelId] = useState("");
+	const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("");
 
 	// Provider state
 	const [provider, setProvider] = useState<AIProvider>(
-		normalizeEnabledAIProvider(forceProvider ?? defaultProvider),
+		normalizeAIProvider(forceProvider ?? defaultProvider),
 	);
 	const normalizedProvider = normalizeAIProvider(provider);
 	const activeAgentBackend: AgentBackendProvider = isAgentBackendProvider(
@@ -708,9 +560,26 @@ export function FlowPilot({
 
 	// Board-specific state
 	const [pendingCommands, setPendingCommands] = useState<BoardCommand[]>([]);
+	const [pendingFlowIrCommit, setPendingFlowIrCommit] =
+		useState<FlowIrCommitToken>();
+	const pendingFlowIrCommitRef = useRef<FlowIrCommitToken | undefined>(
+		undefined,
+	);
 	const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
 	const [currentToolCall, setCurrentToolCall] = useState<string | null>(null);
 	const [flowscriptWorkspace, setFlowscriptWorkspace] = useState("");
+	const [flowscriptWorkspaceStatus, setFlowscriptWorkspaceStatus] = useState<
+		string | undefined
+	>();
+	const [inlineFlowScriptPreview, setInlineFlowScriptPreview] =
+		useState<InlineFlowScriptPreviewValue | null>(null);
+	const [appliedFlowScriptWorkspace, setAppliedFlowScriptWorkspace] =
+		useState("");
+	const [destructiveApplyRequest, setDestructiveApplyRequest] = useState<{
+		flowscript: string;
+		diagnostic: string;
+	} | null>(null);
+	const [destructiveApplyPending, setDestructiveApplyPending] = useState(false);
 	const [showWorkspace, setShowWorkspace] = useState(false);
 	const [processEvents, setProcessEvents] = useState<FlowPilotProcessEvent[]>(
 		[],
@@ -731,6 +600,37 @@ export function FlowPilot({
 		string | undefined
 	>();
 	const currentMessageIdRef = useRef<string | undefined>(undefined);
+	const activeCopilotRequestIdRef = useRef<string | undefined>(undefined);
+	const generationMetricsRunRef = useRef<
+		FlowPilotGenerationMetricsRun | undefined
+	>(undefined);
+	const flowIrApplyInFlightRef = useRef(false);
+	const currentBoardIdRef = useRef<string | undefined>(board?.id);
+	const currentBoardNodeCountRef = useRef<number | undefined>(
+		flowPilotBoardNodeCount(board),
+	);
+	const previousBoardIdRef = useRef<string | undefined>(board?.id);
+	currentBoardIdRef.current = board?.id;
+	currentBoardNodeCountRef.current = flowPilotBoardNodeCount(board);
+	const settleGenerationReview = useCallback(
+		(
+			disposition: "applied" | "dismissed" | "stale" | "error",
+			token?: FlowIrCommitToken,
+			finalBoardNodeCount?: number,
+		) => {
+			const run = generationMetricsRunRef.current;
+			if (!run) return;
+			run.disposeReview(
+				disposition,
+				token,
+				finalBoardNodeCount ?? currentBoardNodeCountRef.current,
+			);
+			if (generationMetricsRunRef.current === run) {
+				generationMetricsRunRef.current = undefined;
+			}
+		},
+		[],
+	);
 
 	// Refs
 	const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -741,30 +641,202 @@ export function FlowPilot({
 
 	// Backend context
 	const backendContext = useBackend();
-	const executionService = useExecutionServiceOptional();
+	const resolveFlowIrCommit = useCallback(
+		async (
+			token: FlowIrCommitToken,
+			disposition: FlowIrCommitDisposition,
+		): Promise<FlowIrCommitDispositionResult> => {
+			const resolve = backendContext.boardState.flowIrCommitDisposition;
+			if (!resolve) {
+				return {
+					status: "error",
+					code: "IR_COMMIT_DISPOSITION_UNAVAILABLE",
+					message:
+						"This backend cannot safely resolve the retained compiled workflow review.",
+				};
+			}
+			try {
+				return await resolve.call(
+					backendContext.boardState,
+					token,
+					disposition,
+				);
+			} catch (error) {
+				return {
+					status: "error",
+					code: "IR_COMMIT_DISPOSITION_UNAVAILABLE",
+					message:
+						error instanceof Error
+							? error.message
+							: "The compiled workflow review state could not be updated.",
+				};
+			}
+		},
+		[backendContext.boardState],
+	);
+	const dismissFlowIrCommitWithRetry = useCallback(
+		async (token: FlowIrCommitToken) => {
+			let lastResult: FlowIrCommitDispositionResult = {
+				status: "error",
+				code: "IR_COMMIT_DISPOSITION_UNAVAILABLE",
+				message: "The compiled workflow review could not be dismissed.",
+			};
+			for (const delayMs of FLOW_IR_DISMISS_RETRY_DELAYS_MS) {
+				if (delayMs > 0) {
+					await new Promise<void>((resolveDelay) =>
+						setTimeout(resolveDelay, delayMs),
+					);
+				}
+				lastResult = await resolveFlowIrCommit(token, "dismissed");
+				if (
+					lastResult.status === "dismissed" ||
+					lastResult.code === "IR_COMMIT_TOKEN_INVALID"
+				) {
+					return lastResult;
+				}
+			}
+			return lastResult;
+		},
+		[resolveFlowIrCommit],
+	);
+	const dismissPendingFlowIrCommit = useCallback(async () => {
+		if (!pendingFlowIrCommit) return true;
+		const result = await dismissFlowIrCommitWithRetry(pendingFlowIrCommit);
+		if (
+			result.status === "dismissed" ||
+			result.code === "IR_COMMIT_TOKEN_INVALID"
+		) {
+			settleGenerationReview("dismissed", pendingFlowIrCommit);
+			pendingFlowIrCommitRef.current = undefined;
+			setPendingFlowIrCommit(undefined);
+			return true;
+		}
+		setValidationWarnings([
+			result.message ||
+				"The compiled workflow review could not be dismissed; retry before leaving it.",
+		]);
+		return false;
+	}, [
+		dismissFlowIrCommitWithRetry,
+		pendingFlowIrCommit,
+		settleGenerationReview,
+	]);
+	useEffect(() => {
+		pendingFlowIrCommitRef.current = pendingFlowIrCommit;
+	}, [pendingFlowIrCommit]);
+	useEffect(() => {
+		const previousBoardId = previousBoardIdRef.current;
+		previousBoardIdRef.current = board?.id;
+		if (!previousBoardId || previousBoardId === board?.id) return;
+
+		const activeRequestId = activeCopilotRequestIdRef.current;
+		activeCopilotRequestIdRef.current = undefined;
+		if (activeRequestId) {
+			void backendContext.boardState
+				.cancelCopilotChat?.(activeRequestId)
+				.catch((error) =>
+					console.error(
+						"Failed to cancel FlowPilot request after board change:",
+						error,
+					),
+				);
+		}
+
+		const pendingToken = pendingFlowIrCommitRef.current;
+		pendingFlowIrCommitRef.current = undefined;
+		setPendingFlowIrCommit(undefined);
+		setPendingCommands([]);
+		setDestructiveApplyRequest(null);
+		setFlowscriptWorkspaceStatus((status) =>
+			status === "queued" ? "stale" : status,
+		);
+		if (!pendingToken) {
+			const metricsRun = generationMetricsRunRef.current;
+			metricsRun?.abandon("cancelled");
+			if (generationMetricsRunRef.current === metricsRun) {
+				generationMetricsRunRef.current = undefined;
+			}
+		}
+		if (pendingToken) {
+			void dismissFlowIrCommitWithRetry(pendingToken).then((result) => {
+				if (
+					result.status !== "dismissed" &&
+					result.code !== "IR_COMMIT_TOKEN_INVALID"
+				) {
+					console.error(
+						"Failed to release compiled workflow review after board change:",
+						result.message,
+					);
+				} else {
+					settleGenerationReview("stale", pendingToken);
+				}
+			});
+		}
+	}, [
+		backendContext.boardState,
+		board?.id,
+		dismissFlowIrCommitWithRetry,
+		settleGenerationReview,
+	]);
+	useEffect(() => {
+		return () => {
+			const activeRequestId = activeCopilotRequestIdRef.current;
+			activeCopilotRequestIdRef.current = undefined;
+			if (activeRequestId) {
+				void backendContext.boardState
+					.cancelCopilotChat?.(activeRequestId)
+					.catch((error) =>
+						console.error(
+							"Failed to cancel FlowPilot request on unmount:",
+							error,
+						),
+					);
+			}
+			const pendingToken = pendingFlowIrCommitRef.current;
+			if (pendingToken) {
+				void dismissFlowIrCommitWithRetry(pendingToken).then((result) => {
+					if (
+						result.status !== "dismissed" &&
+						result.code !== "IR_COMMIT_TOKEN_INVALID"
+					) {
+						console.error(
+							"Failed to release compiled workflow review on unmount:",
+							result.message,
+						);
+					} else {
+						settleGenerationReview("stale", pendingToken);
+					}
+				});
+			} else {
+				const metricsRun = generationMetricsRunRef.current;
+				metricsRun?.abandon("cancelled");
+				if (generationMetricsRunRef.current === metricsRun) {
+					generationMetricsRunRef.current = undefined;
+				}
+			}
+		};
+	}, [
+		backendContext.boardState,
+		dismissFlowIrCommitWithRetry,
+		settleGenerationReview,
+	]);
 	const activeAppId = appId ?? runContext?.app_id;
+	const executeRuntimeTool = useFrontendRuntimeToolExecutor({
+		defaultAppId: activeAppId,
+		defaultBoardId: board?.id,
+	});
 	const approvedFrontendToolKeysRef = useRef<Set<string>>(new Set());
-	const frontendToolDialogResolverRef = useRef<
-		((value: any) => void) | null
-	>(null);
+	const frontendToolRequestGuardRef = useRef(new FrontendToolRequestGuard());
+	const frontendToolDialogResolverRef = useRef<((value: any) => void) | null>(
+		null,
+	);
+	const frontendToolDialogRef = useRef<FrontendToolDialogState | null>(null);
 	const frontendToolDialogQueueRef = useRef<FrontendToolQueuedDialog[]>([]);
 	const [frontendToolDialog, setFrontendToolDialog] =
 		useState<FrontendToolDialogState | null>(null);
 
 	// Agent backend hook
 	const copilotSDK = useCopilotSDK(activeAgentBackend);
-
-	// Elapsed time tracking
-	useEffect(() => {
-		if (!loading || !loadingStartTime) {
-			setElapsedSeconds(0);
-			return;
-		}
-		const interval = setInterval(() => {
-			setElapsedSeconds(Math.floor((Date.now() - loadingStartTime) / 1000));
-		}, 1000);
-		return () => clearInterval(interval);
-	}, [loading, loadingStartTime]);
 
 	// Fetch user profile
 	const profile = useInvoke(
@@ -817,18 +889,27 @@ export function FlowPilot({
 				return;
 			}
 			frontendToolDialogResolverRef.current = resolve;
+			frontendToolDialogRef.current = dialog;
 			setFrontendToolDialog(dialog);
 		},
 		[],
 	);
 
 	const requestFrontendToolApproval = useCallback(
-		(request: FrontendToolRequest): Promise<{ approved: boolean; remember: boolean }> => {
+		(
+			request: FrontendToolRequest,
+		): Promise<{ approved: boolean; remember: boolean }> => {
 			const approval = request.approval;
 			const sessionKey =
-				approval?.sessionKey || `${request.toolName}:${approval?.kind ?? "none"}`;
+				approval?.sessionKey ||
+				`${request.toolName}:${approval?.kind ?? "none"}`;
 			if (
 				approval?.kind === "none" ||
+				shouldSkipUnavailableCreateTableApproval(
+					request.toolName,
+					request.arguments,
+					activeAppId,
+				) ||
 				approvedFrontendToolKeysRef.current.has(sessionKey)
 			) {
 				return Promise.resolve({ approved: true, remember: false });
@@ -845,7 +926,7 @@ export function FlowPilot({
 				);
 			});
 		},
-		[openFrontendToolDialog],
+		[activeAppId, openFrontendToolDialog],
 	);
 
 	const requestFrontendUserInput = useCallback(
@@ -894,391 +975,97 @@ export function FlowPilot({
 		[openFrontendToolDialog],
 	);
 
-	const runInternetSearchTool = useCallback(async (args: Record<string, unknown>) => {
-		const query = getArgString(args, "query");
-		if (!query) throw new Error("internet_search requires query.");
-		const language = getArgString(args, "language") ?? "en-US";
-		const page = Math.max(1, getArgNumber(args, "page", "page", 1));
-		const limit = clampToolLimit(getArgNumber(args, "limit", "limit", 8), 8, 20);
-		const url = new URL("https://search.flow-like.com/search");
-		url.searchParams.set("q", query);
-		url.searchParams.set("format", "json");
-		url.searchParams.set("pageno", String(page));
-		url.searchParams.set("language", language);
+	const cancelFrontendToolDialogs = useCallback((requestId: string) => {
+		const activeDialog = frontendToolDialogRef.current;
+		if (activeDialog?.request.requestId === requestId) {
+			const resolver = frontendToolDialogResolverRef.current;
+			frontendToolDialogResolverRef.current = null;
+			frontendToolDialogRef.current = null;
+			resolver?.(
+				activeDialog.type === "approval"
+					? { approved: false, remember: false }
+					: null,
+			);
+			setFrontendToolDialog(null);
+		}
 
-		const json = (await fetchJsonViaTauri(url.toString())) as Record<
-			string,
-			unknown
-		>;
-		const results = Array.isArray(json.results) ? json.results : [];
-		return {
-			status: "ok",
-			query,
-			page,
-			results: results.slice(0, limit).map((result) => {
-				const item = result as Record<string, unknown>;
-				return {
-					title: item.title,
-					url: item.url,
-					content: item.content,
-					publishedDate: item.publishedDate,
-					engine: item.engine,
-					category: item.category,
-					score: item.score,
-				};
-			}),
-		};
+		const retained: FrontendToolQueuedDialog[] = [];
+		for (const queued of frontendToolDialogQueueRef.current) {
+			if (queued.dialog.request.requestId !== requestId) {
+				retained.push(queued);
+				continue;
+			}
+			queued.resolve(
+				queued.dialog.type === "approval"
+					? { approved: false, remember: false }
+					: null,
+			);
+		}
+		frontendToolDialogQueueRef.current = retained;
+
+		if (!frontendToolDialogResolverRef.current) {
+			const next = frontendToolDialogQueueRef.current.shift();
+			if (next) {
+				frontendToolDialogResolverRef.current = next.resolve;
+				frontendToolDialogRef.current = next.dialog;
+				setFrontendToolDialog(next.dialog);
+			}
+		}
 	}, []);
 
-	const runDatabaseTool = useCallback(
+	const runInternetSearchTool = useCallback(
 		async (args: Record<string, unknown>) => {
-			const operation = getArgString(args, "operation") ?? "list_tables";
-			const toolAppId = resolveToolAppId(args, activeAppId);
-			const tableName = getArgString(args, "table_name", "tableName");
-			const userScoped = getArgBool(args, "user_scoped", "userScoped", false);
-			const offset = Math.max(0, getArgNumber(args, "offset", "offset", 0));
+			const query = getArgString(args, "query");
+			if (!query) throw new Error("internet_search requires query.");
+			const language = getArgString(args, "language") ?? "en-US";
+			const page = Math.max(1, getArgNumber(args, "page", "page", 1));
 			const limit = clampToolLimit(
-				getArgNumber(args, "limit", "limit", operation === "describe_table" ? 10 : 50),
-				operation === "describe_table" ? 10 : 50,
-				200,
+				getArgNumber(args, "limit", "limit", 8),
+				8,
+				20,
 			);
+			const url = new URL("https://search.flow-like.com/search");
+			url.searchParams.set("q", query);
+			url.searchParams.set("format", "json");
+			url.searchParams.set("pageno", String(page));
+			url.searchParams.set("language", language);
 
-			switch (operation) {
-				case "list_tables": {
-					const [projectTables, userTables] = await Promise.all([
-						backendContext.dbState.listTables(toolAppId),
-						backendContext.dbState.listTablesUser(toolAppId),
-					]);
-					return {
-						status: "ok",
-						app_id: toolAppId,
-						project_tables: projectTables,
-						user_tables: userTables,
-					};
-				}
-				case "describe_table": {
-					if (!tableName) throw new Error("describe_table requires table_name.");
-					const [schema, indices, rowCount, sample] = await Promise.all([
-						backendContext.dbState.getSchema(toolAppId, tableName, userScoped),
-						backendContext.dbState.getIndices(toolAppId, tableName, userScoped),
-						backendContext.dbState.countItems(toolAppId, tableName, userScoped),
-						backendContext.dbState.listItems(
-							toolAppId,
-							tableName,
-							0,
-							limit,
-							userScoped,
-						),
-					]);
-					return {
-						status: "ok",
-						table_name: tableName,
-						user_scoped: userScoped,
-						schema,
-						indices,
-						row_count: rowCount,
-						sample,
-					};
-				}
-				case "query": {
-					if (!tableName) throw new Error("query requires table_name.");
-					const query =
-						args.query && typeof args.query === "object"
-							? (args.query as Record<string, unknown>)
-							: {};
-					const rows = await backendContext.dbState.queryItems(
-						toolAppId,
-						tableName,
-						query,
-						offset,
-						limit,
-						userScoped,
-					);
-					return {
-						status: "ok",
-						table_name: tableName,
-						user_scoped: userScoped,
-						row_count: rows.length,
-						rows,
-					};
-				}
-				case "insert":
-				case "add_items": {
-					if (!tableName) throw new Error("insert requires table_name.");
-					const items = Array.isArray(args.items) ? args.items : [];
-					if (items.length === 0) throw new Error("insert requires non-empty items.");
-					await backendContext.dbState.addItems(
-						toolAppId,
-						tableName,
-						items,
-						userScoped,
-					);
-					return { status: "ok", inserted: items.length, table_name: tableName };
-				}
-				case "delete":
-				case "remove_items": {
-					if (!tableName) throw new Error("delete requires table_name.");
-					const filter = getArgString(args, "filter");
-					if (!filter) throw new Error("delete requires filter.");
-					await backendContext.dbState.removeItems(
-						toolAppId,
-						tableName,
-						filter,
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, filter };
-				}
-				case "update": {
-					if (!tableName) throw new Error("update requires table_name.");
-					const filter = getArgString(args, "filter");
-					const updates =
-						args.updates && typeof args.updates === "object"
-							? (args.updates as Record<string, unknown>)
-							: undefined;
-					if (!filter || !updates) {
-						throw new Error("update requires filter and updates.");
-					}
-					await backendContext.dbState.updateItem(
-						toolAppId,
-						tableName,
-						filter,
-						updates,
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, filter };
-				}
-				case "build_index": {
-					if (!tableName) throw new Error("build_index requires table_name.");
-					const column = getArgString(args, "column");
-					if (!column) throw new Error("build_index requires column.");
-					await backendContext.dbState.buildIndex(
-						toolAppId,
-						tableName,
-						column,
-						mapIndexType(args.index_type ?? args.indexType),
-						getArgBool(args, "optimize", "optimize", false),
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, column };
-				}
-				case "drop_index": {
-					if (!tableName) throw new Error("drop_index requires table_name.");
-					const indexName = getArgString(args, "index_name", "indexName");
-					if (!indexName) throw new Error("drop_index requires index_name.");
-					await backendContext.dbState.dropIndex(
-						toolAppId,
-						tableName,
-						indexName,
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, index_name: indexName };
-				}
-				case "optimize": {
-					if (!tableName) throw new Error("optimize requires table_name.");
-					await backendContext.dbState.optimize(
-						toolAppId,
-						tableName,
-						getArgBool(args, "keep_versions", "keepVersions", false),
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName };
-				}
-				case "add_column": {
-					if (!tableName) throw new Error("add_column requires table_name.");
-					const column =
-						args.column_definition && typeof args.column_definition === "object"
-							? (args.column_definition as { name: string; sql_expression: string })
-							: undefined;
-					if (!column?.name || !column?.sql_expression) {
-						throw new Error("add_column requires column_definition.name and sql_expression.");
-					}
-					await backendContext.dbState.addColumn(
-						toolAppId,
-						tableName,
-						column,
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, column: column.name };
-				}
-				case "drop_columns": {
-					if (!tableName) throw new Error("drop_columns requires table_name.");
-					const columns = Array.isArray(args.columns)
-						? args.columns.filter((value): value is string => typeof value === "string")
-						: [];
-					if (columns.length === 0) throw new Error("drop_columns requires columns.");
-					await backendContext.dbState.dropColumns(
-						toolAppId,
-						tableName,
-						columns,
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, columns };
-				}
-				case "alter_column": {
-					if (!tableName) throw new Error("alter_column requires table_name.");
-					const column = getArgString(args, "column");
-					if (!column) throw new Error("alter_column requires column.");
-					await backendContext.dbState.alterColumn(
-						toolAppId,
-						tableName,
-						column,
-						getArgBool(args, "nullable", "nullable", true),
-						userScoped,
-					);
-					return { status: "ok", table_name: tableName, column };
-				}
-				default:
-					throw new Error(`Unsupported database_tool operation '${operation}'.`);
-			}
-		},
-		[activeAppId, backendContext.dbState],
-	);
-
-	const runStorageTool = useCallback(
-		async (args: Record<string, unknown>) => {
-			const operation = getArgString(args, "operation") ?? "list_files";
-			const toolAppId = resolveToolAppId(args, activeAppId);
-			const userScoped = getArgBool(args, "user_scoped", "userScoped", false);
-			const storage = backendContext.storageState;
-			const list = userScoped
-				? storage.listStorageItemsUser.bind(storage)
-				: storage.listStorageItems.bind(storage);
-			const download = userScoped
-				? storage.downloadStorageItemsUser.bind(storage)
-				: storage.downloadStorageItems.bind(storage);
-			const upload = userScoped
-				? storage.uploadStorageItemsUser.bind(storage)
-				: storage.uploadStorageItems.bind(storage);
-			const remove = userScoped
-				? storage.deleteStorageItemsUser.bind(storage)
-				: storage.deleteStorageItems.bind(storage);
-
-			switch (operation) {
-				case "list_files": {
-					const prefix = getArgString(args, "prefix") ?? "";
-					const items = await list(toolAppId, prefix);
-					return {
-						status: "ok",
-						prefix,
-						user_scoped: userScoped,
-						items,
-					};
-				}
-				case "read_file": {
-					const path = getArgString(args, "path");
-					if (!path) throw new Error("read_file requires path.");
-					const maxChars = clampToolLimit(
-						getArgNumber(args, "max_chars", "maxChars", 20_000),
-						20_000,
-						120_000,
-					);
-					const [file] = await download(toolAppId, [path]);
-					if (!file || file.error) {
-						throw new Error(file?.error ?? `Unable to resolve storage path '${path}'.`);
-					}
-					if (!file.url) {
-						return {
-							status: "ok",
-							path,
-							message: "Storage provider returned no readable URL.",
-						};
-					}
-					const response = await fetch(file.url);
-					const content = await response.text();
-					return {
-						status: "ok",
-						path,
-						url: file.url,
-						truncated: content.length > maxChars,
-						content: content.slice(0, maxChars),
-						chars: content.length,
-					};
-				}
-				case "create_file": {
-					const path = getArgString(args, "path");
-					if (!path) throw new Error("create_file requires path.");
-					const content = String(args.content ?? "");
-					const mimeType = getArgString(args, "mime_type", "mimeType") ?? "text/plain";
-					const { prefix, fileName } = splitStoragePath(path);
-					if (!fileName) throw new Error("create_file path must include a file name.");
-					const file = new File([content], fileName, { type: mimeType });
-					await upload(toolAppId, prefix, [file]);
-					return {
-						status: "ok",
-						path,
-						bytes: new Blob([content]).size,
-						user_scoped: userScoped,
-					};
-				}
-				case "delete_files": {
-					const paths = Array.isArray(args.paths)
-						? args.paths.filter((value): value is string => typeof value === "string")
-						: getArgString(args, "path")
-							? [getArgString(args, "path") as string]
-							: [];
-					if (paths.length === 0) throw new Error("delete_files requires paths.");
-					await remove(toolAppId, paths);
-					return { status: "ok", deleted: paths, user_scoped: userScoped };
-				}
-				default:
-					throw new Error(`Unsupported storage_tool operation '${operation}'.`);
-			}
-		},
-		[activeAppId, backendContext.storageState],
-	);
-
-	const runExecuteEventTool = useCallback(
-		async (args: Record<string, unknown>) => {
-			const toolAppId = resolveToolAppId(args, activeAppId);
-			const eventId = getArgString(args, "event_id", "eventId");
-			if (!eventId) throw new Error("execute_event requires event_id.");
-			const streamState = getArgBool(args, "stream_state", "streamState", true);
-			const skipConsentCheck = getArgBool(
-				args,
-				"skip_consent_check",
-				"skipConsentCheck",
-				false,
-			);
-			const payload =
-				args.payload && typeof args.payload === "object"
-					? ({ id: eventId, ...(args.payload as Record<string, unknown>) } as any)
-					: { id: eventId, payload: {} };
-			const logs: unknown[] = [];
-			let runId: string | undefined;
-			const execute =
-				executionService?.executeEvent ??
-				backendContext.eventState.executeEvent.bind(backendContext.eventState);
-			const metadata = await execute(
-				toolAppId,
-				eventId,
-				payload,
-				streamState,
-				(id) => {
-					runId = id;
-				},
-				(events) => {
-					logs.push(...events);
-				},
-				skipConsentCheck,
-			);
+			const json = (await fetchJsonViaTauri(url.toString())) as Record<
+				string,
+				unknown
+			>;
+			const results = Array.isArray(json.results) ? json.results : [];
 			return {
 				status: "ok",
-				app_id: toolAppId,
-				event_id: eventId,
-				run_id: runId,
-				metadata,
-				log_count: logs.length,
-				logs: compactLogEvents(logs),
+				query,
+				page,
+				results: results.slice(0, limit).map((result) => {
+					const item = result as Record<string, unknown>;
+					return {
+						title: item.title,
+						url: item.url,
+						content: item.content,
+						publishedDate: item.publishedDate,
+						engine: item.engine,
+						category: item.category,
+						score: item.score,
+					};
+				}),
 			};
 		},
-		[activeAppId, backendContext.eventState, executionService],
+		[],
 	);
 
 	const executeFrontendToolRequest = useCallback(
-		async (request: FrontendToolRequest): Promise<FrontendToolResponse> => {
+		async (
+			request: FrontendToolRequest,
+			lease: FrontendToolRequestLease,
+		): Promise<FrontendToolResponse> => {
 			try {
+				lease.assertActive("approval handling");
 				if (request.toolName === "ask_user") {
 					const answer = await requestFrontendUserInput(request);
+					lease.assertActive("question response");
 					return {
 						requestId: request.requestId,
 						approved: true,
@@ -1287,6 +1074,7 @@ export function FlowPilot({
 				}
 
 				const approval = await requestFrontendToolApproval(request);
+				lease.assertActive("approval response");
 				if (!approval.approved) {
 					return {
 						requestId: request.requestId,
@@ -1298,26 +1086,31 @@ export function FlowPilot({
 					request.approval?.sessionKey ||
 					`${request.toolName}:${request.approval?.kind ?? "none"}`;
 				if (approval.remember && request.approval?.kind !== "none") {
+					lease.assertActive("approval persistence");
 					approvedFrontendToolKeysRef.current.add(sessionKey);
 				}
 
+				lease.assertActive("tool execution");
 				let result: unknown;
 				switch (request.toolName) {
 					case "internet_search":
 						result = await runInternetSearchTool(request.arguments);
 						break;
 					case "database_tool":
-						result = await runDatabaseTool(request.arguments);
-						break;
 					case "storage_tool":
-						result = await runStorageTool(request.arguments);
-						break;
+					case "ui_inspect":
 					case "execute_event":
-						result = await runExecuteEventTool(request.arguments);
+					case "execute_node":
+					case "query_execution_logs":
+						result = await executeRuntimeTool(
+							request.toolName,
+							request.arguments,
+						);
 						break;
 					default:
 						throw new Error(`Unsupported frontend tool '${request.toolName}'.`);
 				}
+				lease.assertActive("tool result publication");
 
 				return {
 					requestId: request.requestId,
@@ -1333,12 +1126,10 @@ export function FlowPilot({
 			}
 		},
 		[
+			executeRuntimeTool,
 			requestFrontendToolApproval,
 			requestFrontendUserInput,
-			runDatabaseTool,
-			runExecuteEventTool,
 			runInternetSearchTool,
-			runStorageTool,
 		],
 	);
 	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
@@ -1360,36 +1151,77 @@ export function FlowPilot({
 					importTauriCore(),
 				]);
 
-				const stop = await eventApi.listen<FrontendToolRequest>(
-					FLOWPILOT_FRONTEND_TOOL_EVENT,
-					async (event) => {
-						if (disposed) return;
-						const request = event.payload;
-						if (!request?.requestId || !request.toolName) return;
-						const response = await executeFrontendToolRequestRef.current(request);
-						if (disposed) return;
-						try {
-							await coreApi.invoke("flowpilot_frontend_tool_result", {
-								response,
+				const [stop, stopCancellation] = await Promise.all([
+					eventApi.listen<FrontendToolRequest>(
+						FLOWPILOT_FRONTEND_TOOL_EVENT,
+						async (event) => {
+							if (disposed) return;
+							const request = event.payload;
+							if (!request?.requestId || !request.toolName) return;
+							const lease = frontendToolRequestGuardRef.current.begin({
+								requestId: request.requestId,
+								deadlineAtMs: resolveFrontendToolExecutionDeadline({
+									toolName: request.toolName,
+									backendDeadlineAtMs:
+										request.deadlineAtMs ?? request.deadline_at_ms,
+								}),
+								onInvalidated: () =>
+									cancelFrontendToolDialogs(request.requestId),
 							});
-						} catch (error) {
-							if (!disposed) {
-								console.warn(
-									"Failed to return FlowPilot frontend tool result:",
-									error,
+							// Keep the original immutable generation until it settles; a duplicate
+							// event must never revive a cancelled request id.
+							if (!lease) return;
+							try {
+								const response = await executeFrontendToolRequestRef.current(
+									request,
+									lease,
 								);
+								if (disposed || !lease.isActive()) return;
+								lease.assertActive("frontend response delivery");
+								try {
+									await coreApi.invoke("flowpilot_frontend_tool_result", {
+										response,
+									});
+								} catch (error) {
+									if (!disposed) {
+										console.warn(
+											"Failed to return FlowPilot frontend tool result:",
+											error,
+										);
+									}
+								}
+							} finally {
+								lease.settle();
 							}
-						}
-					},
-				);
+						},
+					),
+					eventApi.listen<{ requestId?: string }>(
+						FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT,
+						(event) => {
+							const requestId = event.payload?.requestId;
+							if (!requestId) return;
+							frontendToolRequestGuardRef.current.cancel(
+								requestId,
+								"cancelled",
+							);
+						},
+					),
+				]);
 
 				if (disposed) {
 					stop();
+					stopCancellation();
 				} else {
-					unlisten = stop;
+					unlisten = () => {
+						stop();
+						stopCancellation();
+					};
 				}
 			} catch (error) {
-				console.warn("Failed to install FlowPilot frontend tool bridge:", error);
+				console.warn(
+					"Failed to install FlowPilot frontend tool bridge:",
+					error,
+				);
 			}
 		}
 
@@ -1398,22 +1230,56 @@ export function FlowPilot({
 		return () => {
 			disposed = true;
 			unlisten?.();
+			frontendToolRequestGuardRef.current.cancelAll("unmounted");
 		};
-	}, []);
+	}, [cancelFrontendToolDialogs]);
 
-	const resolveFrontendToolDialog = useCallback((value: unknown) => {
-		const resolver = frontendToolDialogResolverRef.current;
-		frontendToolDialogResolverRef.current = null;
-		resolver?.(value);
+	const resolveFrontendToolDialog = useCallback(
+		(requestId: string, value: unknown) => {
+			// A click queued from a dialog that was cancelled must not answer the next dialog
+			// rendered in the same slot.
+			if (frontendToolDialogRef.current?.request.requestId !== requestId)
+				return;
+			const resolver = frontendToolDialogResolverRef.current;
+			frontendToolDialogResolverRef.current = null;
+			resolver?.(value);
 
-		const next = frontendToolDialogQueueRef.current.shift();
-		if (next) {
-			frontendToolDialogResolverRef.current = next.resolve;
-			setFrontendToolDialog(next.dialog);
-		} else {
-			setFrontendToolDialog(null);
-		}
-	}, []);
+			const next = frontendToolDialogQueueRef.current.shift();
+			if (next) {
+				frontendToolDialogResolverRef.current = next.resolve;
+				frontendToolDialogRef.current = next.dialog;
+				setFrontendToolDialog(next.dialog);
+			} else {
+				frontendToolDialogRef.current = null;
+				setFrontendToolDialog(null);
+			}
+		},
+		[],
+	);
+
+	useEffect(
+		() => () => {
+			// Navigation can unmount the board while the native agent is awaiting approval/input.
+			// Settle every promise so the bridge can unwind instead of waiting until its timeout.
+			const active = frontendToolDialogResolverRef.current;
+			const activeDialog = frontendToolDialogRef.current;
+			frontendToolDialogResolverRef.current = null;
+			frontendToolDialogRef.current = null;
+			active?.(
+				activeDialog?.type === "approval"
+					? { approved: false, remember: false }
+					: null,
+			);
+			for (const queued of frontendToolDialogQueueRef.current.splice(0)) {
+				queued.resolve(
+					queued.dialog.type === "approval"
+						? { approved: false, remember: false }
+						: null,
+				);
+			}
+		},
+		[],
+	);
 
 	// Get current models based on provider
 	const currentModels = useMemo(() => {
@@ -1423,6 +1289,9 @@ export function FlowPilot({
 		return bitsModels;
 	}, [normalizedProvider, copilotSDK.models, bitsModels]);
 	const previousModelProviderRef = useRef(normalizedProvider);
+	const selectedAgentModel = isAgentBackendProvider(normalizedProvider)
+		? copilotSDK.models.find((model) => model.id === selectedModelId)
+		: undefined;
 
 	// Set default model when models are loaded or provider changes
 	useEffect(() => {
@@ -1441,10 +1310,12 @@ export function FlowPilot({
 			let preferredModel = currentModels[0];
 			if (normalizedProvider === "codex") {
 				preferredModel =
-					currentModels.find((m) => m.id === "default") ||
-					currentModels[0];
+					currentModels.find((m) => m.id === "default") || currentModels[0];
 			} else if (normalizedProvider === "claude-code") {
+				// Honor the CLI's recommended "default" entry (from dynamic
+				// discovery) before falling back to Sonnet, matching Codex.
 				preferredModel =
+					currentModels.find((m) => m.id === "default") ||
 					currentModels.find((m) => m.id.includes("sonnet")) ||
 					currentModels[0];
 			} else {
@@ -1465,6 +1336,19 @@ export function FlowPilot({
 		}
 	}, [currentModels, selectedModelId, normalizedProvider, bitsModels]);
 
+	// Effort capabilities belong to a specific provider/model pair. Keep an
+	// explicit choice only while the live catalog still advertises it; an empty
+	// value means the backend remains in control of its default.
+	useEffect(() => {
+		const efforts = selectedAgentModel?.supportedReasoningEfforts ?? [];
+		if (
+			selectedReasoningEffort &&
+			!efforts.some((effort) => effort.id === selectedReasoningEffort)
+		) {
+			setSelectedReasoningEffort("");
+		}
+	}, [selectedAgentModel, selectedReasoningEffort]);
+
 	// Copilot connection handlers
 	const handleStartCopilot = useCallback(
 		async (backend?: AgentBackendProvider, serverUrl?: string) => {
@@ -1478,9 +1362,23 @@ export function FlowPilot({
 	);
 
 	const handleStopCopilot = useCallback(async () => {
+		const activeRequestId = activeCopilotRequestIdRef.current;
+		activeCopilotRequestIdRef.current = undefined;
+		if (activeRequestId) {
+			try {
+				await backendContext.boardState.cancelCopilotChat?.(activeRequestId);
+			} catch (error) {
+				console.error("Failed to cancel active FlowPilot request:", error);
+			}
+		}
 		await copilotSDK.stop();
+		const metricsRun = generationMetricsRunRef.current;
+		metricsRun?.abandon("cancelled");
+		if (generationMetricsRunRef.current === metricsRun) {
+			generationMetricsRunRef.current = undefined;
+		}
 		setProvider("bits");
-	}, [copilotSDK]);
+	}, [backendContext.boardState, copilotSDK]);
 
 	// Scroll handling
 	const scrollToBottom = useCallback(
@@ -1507,7 +1405,9 @@ export function FlowPilot({
 	}, [messages, userScrolledUp, scrollToBottom]);
 
 	// New chat handler
-	const handleNewChat = useCallback(() => {
+	const handleNewChat = useCallback(async () => {
+		if (!(await dismissPendingFlowIrCommit())) return;
+		settleGenerationReview("dismissed", pendingFlowIrCommit);
 		setMessages([]);
 		setPlanSteps([]);
 		setInput("");
@@ -1517,16 +1417,23 @@ export function FlowPilot({
 		setValidationWarnings([]);
 		setSuggestions([]);
 		setFlowscriptWorkspace("");
+		setFlowscriptWorkspaceStatus(undefined);
+		setInlineFlowScriptPreview(null);
+		setAppliedFlowScriptWorkspace("");
+		setDestructiveApplyRequest(null);
+		setDestructiveApplyPending(false);
 		setShowWorkspace(false);
 		setProcessEvents([]);
 		setCurrentConversationId(undefined);
 		currentMessageIdRef.current = undefined;
 		setShowHistory(false);
-	}, []);
+	}, [dismissPendingFlowIrCommit, pendingFlowIrCommit, settleGenerationReview]);
 
 	// Select conversation from history
 	const handleSelectConversation = useCallback(
 		async (conversation: IFlowPilotConversation) => {
+			if (!(await dismissPendingFlowIrCommit())) return;
+			settleGenerationReview("dismissed", pendingFlowIrCommit);
 			try {
 				const storedMessages = await getMessages(conversation.id);
 				const loadedMessages: CopilotMessage[] = storedMessages.map((m) => ({
@@ -1541,12 +1448,19 @@ export function FlowPilot({
 					appliedComponents: m.appliedComponents,
 					executedCommands: m.executedCommands,
 					flowscriptWorkspace: m.flowscriptWorkspace,
+					processEvents: m.processEvents,
+					planSteps: m.planSteps,
 				}));
 				const latestWorkspace = [...loadedMessages]
 					.reverse()
 					.find((message) => message.flowscriptWorkspace)?.flowscriptWorkspace;
 				setMessages(loadedMessages);
 				setFlowscriptWorkspace(latestWorkspace ?? "");
+				setFlowscriptWorkspaceStatus(undefined);
+				setInlineFlowScriptPreview(null);
+				setAppliedFlowScriptWorkspace(latestWorkspace ?? "");
+				setDestructiveApplyRequest(null);
+				setDestructiveApplyPending(false);
 				setShowWorkspace(Boolean(latestWorkspace));
 				setCurrentConversationId(conversation.id);
 				setPlanSteps([]);
@@ -1560,7 +1474,7 @@ export function FlowPilot({
 				console.error("Failed to load conversation:", err);
 			}
 		},
-		[],
+		[dismissPendingFlowIrCommit, pendingFlowIrCommit, settleGenerationReview],
 	);
 
 	// Image handling
@@ -1660,17 +1574,15 @@ export function FlowPilot({
 		}
 	}, []);
 
-	// Board mode handlers
-	const handleExecuteCommands = useCallback(() => {
-		if (onExecuteCommands && pendingCommands.length > 0) {
+	const recordExecutedBoardCommands = useCallback(
+		(appliedBoardCommands: BoardCommand[]) => {
 			const lastAssistantMessage = [...messages]
 				.reverse()
 				.find((message) => message.role === "assistant");
 			const nextExecutedCommands = [
 				...(lastAssistantMessage?.executedCommands ?? []),
-				...pendingCommands,
+				...appliedBoardCommands,
 			];
-			onExecuteCommands(pendingCommands);
 			setMessages((prev) => {
 				const newMessages = [...prev];
 				for (let i = newMessages.length - 1; i >= 0; i--) {
@@ -1678,7 +1590,7 @@ export function FlowPilot({
 						const existingCommands = newMessages[i].executedCommands || [];
 						newMessages[i] = {
 							...newMessages[i],
-							executedCommands: [...existingCommands, ...pendingCommands],
+							executedCommands: [...existingCommands, ...appliedBoardCommands],
 						};
 						break;
 					}
@@ -1690,12 +1602,196 @@ export function FlowPilot({
 					executedCommands: nextExecutedCommands,
 				});
 			}
-			setPendingCommands([]);
+		},
+		[messages],
+	);
+
+	const preflightPendingFlowIrCommit = useCallback(async () => {
+		if (!pendingFlowIrCommit) return true;
+		const result = await resolveFlowIrCommit(pendingFlowIrCommit, "preflight");
+		if (result.status === "current") return true;
+
+		setValidationWarnings([
+			result.message ||
+				"The board changed after this compiled workflow was generated. Regenerate it from the current board before applying.",
+		]);
+		if (result.code === "IR_COMMIT_REVIEW_STALE") {
+			const dismissed = await resolveFlowIrCommit(
+				pendingFlowIrCommit,
+				"dismissed",
+			);
+			if (dismissed.status === "dismissed") {
+				settleGenerationReview("stale", pendingFlowIrCommit);
+				pendingFlowIrCommitRef.current = undefined;
+				setPendingFlowIrCommit(undefined);
+				setPendingCommands([]);
+				setFlowscriptWorkspaceStatus("stale");
+			}
 		}
-	}, [messages, onExecuteCommands, pendingCommands]);
+		return false;
+	}, [pendingFlowIrCommit, resolveFlowIrCommit, settleGenerationReview]);
+
+	// Board mode handlers
+	const executePendingCommands = useCallback(async () => {
+		const hasRetainedCompiledBatch = Boolean(pendingFlowIrCommit);
+		if (
+			pendingFlowIrCommit &&
+			pendingFlowIrCommit.board_id !== currentBoardIdRef.current
+		) {
+			setValidationWarnings([
+				"This compiled workflow review belongs to a different board and cannot be applied here. It has been dismissed; regenerate against the board currently open.",
+			]);
+			await dismissPendingFlowIrCommit();
+			setPendingCommands([]);
+			setFlowscriptWorkspaceStatus("stale");
+			return;
+		}
+		if (hasRetainedCompiledBatch && flowIrApplyInFlightRef.current) return;
+		const shouldApplyFlowScript =
+			!hasRetainedCompiledBatch &&
+			Boolean(onApplyFlowScript) &&
+			isFlowScriptWorkspaceApplicable({
+				source: flowscriptWorkspace,
+				status: flowscriptWorkspaceStatus,
+			}) &&
+			flowscriptWorkspace !== appliedFlowScriptWorkspace;
+		if (
+			hasRetainedCompiledBatch ||
+			shouldApplyFlowScript ||
+			(onExecuteCommands && pendingCommands.length > 0)
+		) {
+			if (hasRetainedCompiledBatch && !(await preflightPendingFlowIrCommit()))
+				return;
+			let appliedBoardCommands: BoardCommand[] = pendingCommands;
+			let finalBoardNodeCount: number | undefined;
+			try {
+				let applyResult: unknown;
+				if (hasRetainedCompiledBatch) {
+					const token = pendingFlowIrCommit;
+					if (!token || !onApplyFlowIrCommit) {
+						setValidationWarnings([
+							"This backend cannot atomically apply the retained compiled workflow batch. It was not re-reconciled or partially executed; dismiss it and regenerate on a supported host.",
+						]);
+						return;
+					}
+					flowIrApplyInFlightRef.current = true;
+					let compiledResult: Awaited<ReturnType<typeof onApplyFlowIrCommit>>;
+					try {
+						compiledResult = await onApplyFlowIrCommit(token);
+					} finally {
+						flowIrApplyInFlightRef.current = false;
+					}
+					if (pendingFlowIrCommitRef.current?.claim_id !== token.claim_id) {
+						return;
+					}
+					applyResult = compiledResult;
+					appliedBoardCommands = compiledResult.board_commands;
+					finalBoardNodeCount = compiledResult.final_board_node_count;
+					if (compiledResult.status !== "applied") {
+						setValidationWarnings([
+							compiledResult.message ||
+								"The live board no longer matches this compiled workflow review.",
+						]);
+						if (compiledResult.status === "stale") {
+							settleGenerationReview("stale", token);
+							await dismissPendingFlowIrCommit();
+							setPendingCommands([]);
+							setFlowscriptWorkspaceStatus("stale");
+						} else {
+							settleGenerationReview("error", token);
+						}
+						return;
+					}
+					pendingFlowIrCommitRef.current = undefined;
+					setPendingFlowIrCommit(undefined);
+				} else if (shouldApplyFlowScript && onApplyFlowScript) {
+					applyResult = await onApplyFlowScript(flowscriptWorkspace, {
+						suppressBlockedToast: true,
+					});
+					if (!applyResult) return;
+
+					appliedBoardCommands = applyResultBoardCommands(applyResult);
+				} else if (onExecuteCommands) {
+					await onExecuteCommands(pendingCommands);
+				}
+				if (
+					finalBoardNodeCount === undefined &&
+					applyResult &&
+					typeof applyResult === "object"
+				) {
+					const reportedCount = (
+						applyResult as { final_board_node_count?: unknown }
+					).final_board_node_count;
+					if (
+						Number.isSafeInteger(reportedCount) &&
+						(reportedCount as number) >= 0
+					) {
+						finalBoardNodeCount = reportedCount as number;
+					}
+				}
+				const diagnostics = applyResultDiagnostics(applyResult);
+				if (
+					applyResultCommandCount(applyResult) === 0 &&
+					diagnostics.length > 0
+				) {
+					const destructiveDiagnostic =
+						destructiveFlowScriptDiagnostic(diagnostics);
+					if (shouldApplyFlowScript && destructiveDiagnostic) {
+						setDestructiveApplyRequest({
+							flowscript: flowscriptWorkspace,
+							diagnostic: destructiveDiagnostic,
+						});
+						return;
+					}
+					setFlowscriptWorkspaceStatus("validation_errors");
+					settleGenerationReview("error", pendingFlowIrCommit);
+					return;
+				}
+				if (shouldApplyFlowScript || hasRetainedCompiledBatch) {
+					setAppliedFlowScriptWorkspace(flowscriptWorkspace);
+					setFlowscriptWorkspaceStatus("applied");
+				}
+			} catch (error) {
+				settleGenerationReview("error", pendingFlowIrCommit);
+				console.error("Failed to apply FlowPilot commands:", error);
+				return;
+			}
+			settleGenerationReview(
+				"applied",
+				pendingFlowIrCommit,
+				finalBoardNodeCount,
+			);
+			recordExecutedBoardCommands(appliedBoardCommands);
+			setPendingCommands([]);
+			setDestructiveApplyRequest(null);
+		}
+	}, [
+		appliedFlowScriptWorkspace,
+		flowscriptWorkspace,
+		flowscriptWorkspaceStatus,
+		onApplyFlowScript,
+		onExecuteCommands,
+		pendingCommands,
+		pendingFlowIrCommit,
+		preflightPendingFlowIrCommit,
+		dismissPendingFlowIrCommit,
+		onApplyFlowIrCommit,
+		recordExecutedBoardCommands,
+		settleGenerationReview,
+	]);
+	const handleExecuteCommands = useCallback(
+		() => executePendingCommands(),
+		[executePendingCommands],
+	);
 
 	const handleExecuteSingle = useCallback(
-		(index: number) => {
+		async (index: number) => {
+			// A compiled workflow commit is one atomic reviewed batch; never split its
+			// lifecycle token across individual command buttons.
+			if (pendingFlowIrCommit) {
+				await handleExecuteCommands();
+				return;
+			}
 			if (onExecuteCommands && pendingCommands[index]) {
 				const command = pendingCommands[index];
 				const lastAssistantMessage = [...messages]
@@ -1705,7 +1801,15 @@ export function FlowPilot({
 					...(lastAssistantMessage?.executedCommands ?? []),
 					command,
 				];
-				onExecuteCommands([command]);
+				try {
+					await onExecuteCommands([command]);
+				} catch (error) {
+					console.error("Failed to apply FlowPilot command:", error);
+					return;
+				}
+				if (pendingCommands.length === 1) {
+					settleGenerationReview("applied");
+				}
 				setMessages((prev) => {
 					const newMessages = [...prev];
 					for (let i = newMessages.length - 1; i >= 0; i--) {
@@ -1728,12 +1832,74 @@ export function FlowPilot({
 				setPendingCommands((prev) => prev.filter((_, i) => i !== index));
 			}
 		},
-		[messages, onExecuteCommands, pendingCommands],
+		[
+			handleExecuteCommands,
+			messages,
+			onExecuteCommands,
+			pendingCommands,
+			pendingFlowIrCommit,
+			settleGenerationReview,
+		],
 	);
 
-	const handleDismissCommands = useCallback(() => {
+	const handleDismissCommands = useCallback(async () => {
+		if (!(await dismissPendingFlowIrCommit())) return;
+		settleGenerationReview("dismissed", pendingFlowIrCommit);
+		if (flowscriptWorkspace) {
+			setAppliedFlowScriptWorkspace(flowscriptWorkspace);
+			setFlowscriptWorkspaceStatus("dismissed");
+		}
 		setPendingCommands([]);
-	}, []);
+		setDestructiveApplyRequest(null);
+	}, [
+		dismissPendingFlowIrCommit,
+		flowscriptWorkspace,
+		pendingFlowIrCommit,
+		settleGenerationReview,
+	]);
+
+	const handleApproveFlowScriptDeletion = useCallback(async () => {
+		if (!destructiveApplyRequest || !onApplyFlowScript) return;
+		if (!(await preflightPendingFlowIrCommit())) return;
+
+		setDestructiveApplyPending(true);
+		try {
+			const applyResult = await onApplyFlowScript(
+				destructiveApplyRequest.flowscript,
+				{ allowDeletions: true },
+			);
+			if (!applyResult) return;
+
+			const diagnostics = applyResultDiagnostics(applyResult);
+			if (
+				applyResultCommandCount(applyResult) === 0 &&
+				diagnostics.length > 0
+			) {
+				setFlowscriptWorkspaceStatus("validation_errors");
+				setDestructiveApplyRequest(null);
+				settleGenerationReview("error");
+				return;
+			}
+
+			settleGenerationReview("applied");
+			recordExecutedBoardCommands(applyResultBoardCommands(applyResult));
+			setAppliedFlowScriptWorkspace(destructiveApplyRequest.flowscript);
+			setFlowscriptWorkspaceStatus("applied");
+			setPendingCommands([]);
+			setDestructiveApplyRequest(null);
+		} catch (error) {
+			settleGenerationReview("error");
+			console.error("Failed to apply destructive FlowScript edit:", error);
+		} finally {
+			setDestructiveApplyPending(false);
+		}
+	}, [
+		destructiveApplyRequest,
+		onApplyFlowScript,
+		preflightPendingFlowIrCommit,
+		recordExecutedBoardCommands,
+		settleGenerationReview,
+	]);
 
 	// UI mode handlers
 	const handleApplyComponents = useCallback(() => {
@@ -1795,6 +1961,16 @@ export function FlowPilot({
 				]);
 				return;
 			}
+			if (pendingFlowIrCommit) {
+				setValidationWarnings([
+					"Apply or dismiss the pending compiled workflow before starting another board-generation turn.",
+				]);
+				return;
+			}
+			// A new request replaces any unreviewed raw FlowScript/direct-command preview. Retained
+			// compiled workflow reviews are blocked above and must be resolved explicitly first.
+			generationMetricsRunRef.current?.disposeReview("dismissed");
+			generationMetricsRunRef.current = undefined;
 
 			if (
 				isAgentBackendProvider(normalizedProvider) &&
@@ -1851,9 +2027,9 @@ export function FlowPilot({
 			setLoading(true);
 			setLoadingPhase("initializing");
 			setLoadingStartTime(Date.now());
-			setTokenCount(0);
 			setPlanSteps([]);
 			setProcessEvents([]);
+			setInlineFlowScriptPreview(null);
 			setUserScrolledUp(false);
 
 			// In "both" mode, reset all pending states
@@ -1940,13 +2116,20 @@ export function FlowPilot({
 			}
 
 			let phaseTimer: ReturnType<typeof setTimeout> | undefined;
+			let draftingPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+			let pendingDraftingPreview: InlineFlowScriptPreviewValue | undefined;
+			let hasAuthoritativeFlowScriptWorkspace = false;
+			let generationMetricsRun: FlowPilotGenerationMetricsRun | undefined;
 			try {
 				let currentMessageContent = "";
 				let lastUpdateTime = 0;
 				const UPDATE_INTERVAL = 100;
-				let tagBuffer = ""; // Buffer for partial XML tags that might be split across tokens
+				const streamParser = createCopilotStreamParser();
 				let currentPlanSteps: UnifiedPlanStep[] = [];
 				let latestFlowScriptWorkspace = flowscriptWorkspace;
+				let latestAuthoritativeFlowScriptWorkspace = flowscriptWorkspace;
+				let generatedFlowScriptWorkspaceStatus: string | undefined;
+				let workspaceCandidates: FlowScriptWorkspaceCandidate[] = [];
 				let currentProcessEvents: FlowPilotProcessEvent[] = [];
 
 				phaseTimer = setTimeout(() => setLoadingPhase("analyzing"), 300);
@@ -2015,12 +2198,61 @@ export function FlowPilot({
 					return found;
 				};
 
-				const applyFlowScriptWorkspace = (workspace: string) => {
+				const publishDraftingPreview = () => {
+					draftingPreviewTimer = undefined;
+					const preview = pendingDraftingPreview;
+					pendingDraftingPreview = undefined;
+					if (!preview) return;
+					setFlowscriptWorkspace(preview.source);
+					setFlowscriptWorkspaceStatus("drafting");
+					setInlineFlowScriptPreview(preview);
+					setShowWorkspace(true);
+				};
+
+				const scheduleDraftingPreview = (
+					preview: InlineFlowScriptPreviewValue,
+				) => {
+					pendingDraftingPreview = preview;
+					if (draftingPreviewTimer) return;
+					draftingPreviewTimer = setTimeout(
+						publishDraftingPreview,
+						FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS,
+					);
+				};
+
+				const discardPendingDraftingPreview = () => {
+					if (draftingPreviewTimer) clearTimeout(draftingPreviewTimer);
+					draftingPreviewTimer = undefined;
+					pendingDraftingPreview = undefined;
+				};
+
+				const applyFlowScriptWorkspace = (
+					workspace: string,
+					status?: string,
+				) => {
 					const source = workspace;
 					if (!source.trim()) return;
-					const previousWorkspace = latestFlowScriptWorkspace;
+					const preview = { source, status };
+					const previousWorkspace = latestAuthoritativeFlowScriptWorkspace;
 					latestFlowScriptWorkspace = source;
+					generatedFlowScriptWorkspaceStatus = status ?? "submitted";
+					if (isDraftingFlowScriptWorkspace(status)) {
+						// Draft snapshots are display-only. Coalesce renderer updates and never let an
+						// incomplete JSON-argument stream enter recovery, history, or the apply path.
+						scheduleDraftingPreview(preview);
+						return;
+					}
+
+					discardPendingDraftingPreview();
+					hasAuthoritativeFlowScriptWorkspace = true;
+					latestAuthoritativeFlowScriptWorkspace = source;
+					workspaceCandidates = rememberFlowScriptWorkspaceCandidate(
+						workspaceCandidates,
+						{ source, status },
+					);
 					setFlowscriptWorkspace(source);
+					setFlowscriptWorkspaceStatus(status ?? "submitted");
+					setInlineFlowScriptPreview(preview);
 					setShowWorkspace(true);
 					if (previousWorkspace !== source) {
 						appendProcessEvent({
@@ -2052,22 +2284,8 @@ export function FlowPilot({
 					}
 				};
 
-				const onToken = (rawToken: string) => {
-					setTokenCount((prev) => prev + 1);
-
-					// Combine with buffer for partial tags
-					let token = tagBuffer + rawToken;
-					tagBuffer = "";
-
-					// Check if we have an incomplete XML tag at the end
-					const lastOpenTag = token.lastIndexOf("<");
-					if (lastOpenTag !== -1 && !token.slice(lastOpenTag).includes(">")) {
-						// Incomplete tag - buffer it for next token
-						tagBuffer = token.slice(lastOpenTag);
-						token = token.slice(0, lastOpenTag);
-						if (!token) return; // Nothing to process yet
-					}
-
+				const processStreamToken = (rawToken: string) => {
+					let token = rawToken;
 					// Parse scope decision events (skip them - they're internal)
 					const scopeDecisionMatch = token.match(
 						/<scope_decision>([\s\S]*?)<\/scope_decision>/,
@@ -2077,20 +2295,15 @@ export function FlowPilot({
 					}
 
 					// Parse FlowScript workspace updates
-					const workspaceMatch = token.match(
-						/<flowscript_workspace>([\s\S]*?)<\/flowscript_workspace>/,
-					);
-					if (workspaceMatch) {
-						const workspaceEvent = parseFlowScriptWorkspaceEvent(
-							workspaceMatch[1],
-						);
-						if (workspaceEvent) {
-							applyFlowScriptWorkspace(workspaceEvent.source);
+					const workspaceFrames = extractFlowScriptWorkspaceCandidates(token);
+					if (workspaceFrames.candidates.length > 0) {
+						for (const workspaceEvent of workspaceFrames.candidates) {
+							applyFlowScriptWorkspace(
+								workspaceEvent.source,
+								workspaceEvent.status,
+							);
 						}
-						token = token.replace(
-							/<flowscript_workspace>[\s\S]*?<\/flowscript_workspace>/g,
-							"",
-						);
+						token = workspaceFrames.remainder;
 						if (!token.trim()) return;
 					}
 
@@ -2137,11 +2350,19 @@ export function FlowPilot({
 							} else if (
 								toolName === "emit_commands" ||
 								toolName === "emit_ui" ||
+								toolName === "write_flowscript" ||
+								toolName === "patch_flowscript" ||
+								toolName === "check_flowscript" ||
+								toolName === "commit_flowscript" ||
 								toolName === "edit_flowscript" ||
-								toolName === "execute_event"
+								toolName === "execute_event" ||
+								toolName === "execute_node"
 							) {
 								setLoadingPhase("generating");
-							} else if (toolName === "get_unconfigured_nodes") {
+							} else if (
+								toolName === "get_unconfigured_nodes" ||
+								toolName === "query_execution_logs"
+							) {
 								setLoadingPhase("searching");
 							}
 						} catch {
@@ -2165,9 +2386,7 @@ export function FlowPilot({
 							if (toolCallId && message) {
 								const updated = updateProcessEvent(toolCallId, (event) => ({
 									summary: message,
-									details: event.details
-										? `${event.details}\n\n${message}`
-										: message,
+									details: appendBoundedStreamDetail(event.details, message),
 								}));
 								if (!updated) {
 									appendProcessEvent({
@@ -2254,6 +2473,10 @@ export function FlowPilot({
 								} else if (
 									step.tool_name === "emit_commands" ||
 									step.tool_name === "emit_surface" ||
+									step.tool_name === "write_flowscript" ||
+									step.tool_name === "patch_flowscript" ||
+									step.tool_name === "check_flowscript" ||
+									step.tool_name === "commit_flowscript" ||
 									step.tool_name === "edit_flowscript" ||
 									step.tool_name === "modify_component"
 								) {
@@ -2303,48 +2526,33 @@ export function FlowPilot({
 						return;
 					}
 
-					// Handle tool calls (board mode)
-					if (token.includes("tool_call:")) {
-						const match = token.match(/tool_call:(\w+)/);
-						if (match) {
-							const toolName = match[1];
-							setCurrentToolCall(toolName);
-							if (
-								toolName.includes("search") ||
-								toolName.includes("catalog") ||
-								toolName.includes("filter")
-							) {
-								setLoadingPhase("searching");
-							} else if (toolName === "think") {
-								setLoadingPhase("reasoning");
-							} else if (
-								toolName === "emit_commands" ||
-								toolName === "emit_surface" ||
-								toolName === "edit_flowscript"
-							) {
-								setLoadingPhase("generating");
-							}
-						}
-						return;
-					}
-					if (token.includes("tool_result:")) {
-						setCurrentToolCall(null);
-						return;
-					}
-
 					// Parse command blocks from Copilot SDK emit_commands tool
 					const commandsMatch = token.match(/<commands>([\s\S]*?)<\/commands>/);
 					if (commandsMatch) {
 						try {
 							const commands = JSON.parse(commandsMatch[1]);
 							if (Array.isArray(commands) && commands.length > 0) {
-								setPendingCommands((prev) => [...prev, ...commands]);
+								const flowScriptOwnsApply = flowScriptWorkspaceOwnsApply(
+									latestFlowScriptWorkspace,
+									generatedFlowScriptWorkspaceStatus,
+								);
+								if (!flowScriptOwnsApply) {
+									setPendingCommands((prev) => [...prev, ...commands]);
+								}
 								appendProcessEvent({
 									id: `commands-${Date.now()}`,
 									kind: "commands",
 									status: "done",
-									title: "Queued board changes",
-									summary: `${commands.length} change${commands.length === 1 ? "" : "s"} ready for review`,
+									title: flowScriptOwnsApply
+										? "Derived FlowScript changes"
+										: "Queued board changes",
+									summary: `${commands.length} change${
+										commands.length === 1 ? "" : "s"
+									} ${
+										flowScriptOwnsApply
+											? "derived from FlowScript"
+											: "ready for review"
+									}`,
 									commands,
 								});
 							}
@@ -2443,28 +2651,27 @@ export function FlowPilot({
 					}
 				};
 
-				// Build the prompt with context
-				let userMsg = currentInput;
-				if (runContext) {
-					const runInfo = {
-						run_id: runContext.run_id,
-						app_id: runContext.app_id,
-						board_id: runContext.board_id,
-						event_id: runContext.event_id,
-					};
-					userMsg = `[RUN CONTEXT - User is asking about a flow execution run. Use the query_logs tool to fetch relevant logs.]
-\`\`\`json
-${JSON.stringify(runInfo, null, 2)}
-\`\`\`
+				const processStreamEvent = (event: CopilotStreamEvent) => {
+					if (event.type === "text") {
+						if (event.text) processStreamToken(event.text);
+						return;
+					}
+					if (event.type === "usage_stat") return;
+					processStreamToken(
+						`<${event.type}>${event.raw ?? ""}</${event.type}>`,
+					);
+				};
 
-${currentInput}`;
-				}
+				const onToken = (rawToken: string) => {
+					generationMetricsRun?.push(rawToken);
+					for (const event of streamParser.push(rawToken)) {
+						processStreamEvent(event);
+					}
+				};
 
-				if (scope === "Both") {
-					userMsg = `[UNIFIED MODE - You can generate both workflow nodes AND UI components. If the user wants a UI, you can create A2UI components. If they want workflow automation, create nodes. You can also connect UI actions to workflows via action invokes.]
-
-${userMsg}`;
-				}
+				// Scope and run data already travel in trusted request context and system guidance. Keep
+				// the user message immutable so host wrappers cannot influence routing or acceptance.
+				const userMsg = currentInput;
 
 				const chatHistory: UnifiedChatMessage[] = buildBudgetedHistory({
 					agentMode,
@@ -2495,37 +2702,172 @@ ${userMsg}`;
 					selectedModelId,
 				);
 
-				const response = await backendContext.boardState.copilot_chat(
-					scope,
-					board ?? null,
-					catalogNodes,
-					selectedNodeIds,
-					currentComponents,
-					selectedComponentIds,
-					userMsg,
-					chatHistory,
-					requestImages,
-					onToken,
-					effectiveModelId,
-					undefined,
-					backendRunContext,
-					undefined, // actionContext - can be added later
+				const nativeRequestId = `flowpilot:${createId()}`;
+				generationMetricsRun = new FlowPilotGenerationMetricsRun(
+					nativeRequestId,
 				);
+				generationMetricsRunRef.current = generationMetricsRun;
+				activeCopilotRequestIdRef.current = nativeRequestId;
+				let response: Awaited<
+					ReturnType<typeof backendContext.boardState.copilot_chat>
+				>;
+				let responseBelongsToActiveRequest = false;
+				try {
+					response = await backendContext.boardState.copilot_chat(
+						scope,
+						board ?? null,
+						catalogNodes,
+						selectedNodeIds,
+						currentComponents,
+						selectedComponentIds,
+						userMsg,
+						chatHistory,
+						requestImages,
+						onToken,
+						effectiveModelId,
+						selectedReasoningEffort || undefined,
+						undefined,
+						backendRunContext,
+						undefined, // actionContext - can be added later
+						undefined, // nested
+						undefined, // readOnly
+						activeAppId
+							? {
+									appId: activeAppId,
+									boardId: board?.id,
+									conversationId: flowPilotPanelConversationId(
+										board?.id ?? activeAppId,
+									),
+									sourceUserPrompt: currentInput,
+								}
+							: undefined,
+						nativeRequestId,
+						currentInput,
+						activeAppId,
+					);
+					responseBelongsToActiveRequest =
+						activeCopilotRequestIdRef.current === nativeRequestId;
+				} finally {
+					if (activeCopilotRequestIdRef.current === nativeRequestId) {
+						activeCopilotRequestIdRef.current = undefined;
+					}
+				}
+				const staleDismissal =
+					await releaseReturnedFlowIrCommitBeforeStaleResponse(
+						responseBelongsToActiveRequest,
+						response.flow_ir_commit,
+						dismissFlowIrCommitWithRetry,
+					);
+				if (!responseBelongsToActiveRequest) {
+					if (
+						response.flow_ir_commit &&
+						staleDismissal?.status !== "dismissed" &&
+						staleDismissal?.code !== "IR_COMMIT_TOKEN_INVALID"
+					) {
+						pendingFlowIrCommitRef.current = response.flow_ir_commit;
+						setPendingFlowIrCommit(response.flow_ir_commit);
+						setValidationWarnings((warnings) => [
+							...warnings,
+							staleDismissal?.message ||
+								"The stale compiled workflow review could not be released; dismiss it before generating another workflow.",
+						]);
+					}
+					generationMetricsRun.finish(
+						"cancelled",
+						Boolean(response.flow_ir_commit),
+						currentBoardNodeCountRef.current,
+					);
+					if (response.flow_ir_commit) {
+						generationMetricsRun.disposeReview(
+							"stale",
+							response.flow_ir_commit,
+							currentBoardNodeCountRef.current,
+						);
+					}
+					if (generationMetricsRunRef.current === generationMetricsRun) {
+						generationMetricsRunRef.current = undefined;
+					}
+					throw new Error(
+						"FlowPilot request was cancelled because its board or session changed.",
+					);
+				}
+				if (
+					response.flow_ir_commit &&
+					response.flow_ir_commit.board_id !== currentBoardIdRef.current
+				) {
+					const mismatchedToken = response.flow_ir_commit;
+					const dismissal = await dismissFlowIrCommitWithRetry(mismatchedToken);
+					if (
+						dismissal.status !== "dismissed" &&
+						dismissal.code !== "IR_COMMIT_TOKEN_INVALID"
+					) {
+						pendingFlowIrCommitRef.current = mismatchedToken;
+						setPendingFlowIrCommit(mismatchedToken);
+					}
+					generationMetricsRun.finish(
+						"cancelled",
+						true,
+						currentBoardNodeCountRef.current,
+					);
+					generationMetricsRun.disposeReview(
+						"stale",
+						mismatchedToken,
+						currentBoardNodeCountRef.current,
+					);
+					if (generationMetricsRunRef.current === generationMetricsRun) {
+						generationMetricsRunRef.current = undefined;
+					}
+					throw new Error(
+						"FlowPilot finished against a board that is no longer open; its compiled workflow review was dismissed.",
+					);
+				}
 
+				for (const event of streamParser.flush()) processStreamEvent(event);
 				flushMessageContent();
 
 				const finalAssistantContent =
 					currentMessageContent || response.message || "";
+				pendingFlowIrCommitRef.current = response.flow_ir_commit;
+				setPendingFlowIrCommit(response.flow_ir_commit);
 				if (response.flowscript_workspace) {
-					applyFlowScriptWorkspace(response.flowscript_workspace);
+					const finalWorkspace = resolveFinalFlowScriptWorkspaceCandidate(
+						workspaceCandidates,
+						response.flowscript_workspace,
+						(response.commands?.length ?? 0) > 0,
+					);
+					if (finalWorkspace) {
+						applyFlowScriptWorkspace(
+							finalWorkspace.source,
+							finalWorkspace.status,
+						);
+					}
 				}
 
-				// Save final assistant message to DB
-				if (assistantMessageId && finalAssistantContent) {
+				// Save final assistant message to DB. Persist the process timeline and completed
+				// plan steps too, so a workflow-edit turn (whose visible output is the timeline, not
+				// prose) still renders when reloaded from history. Large string fields inside these
+				// are offloaded to disk by the Dexie blob-offload middleware.
+				const completedPlanSteps = currentPlanSteps.filter(
+					(s) => s.status === "Completed",
+				);
+				if (
+					assistantMessageId &&
+					(finalAssistantContent ||
+						currentProcessEvents.length > 0 ||
+						hasAuthoritativeFlowScriptWorkspace)
+				) {
 					try {
 						await updateMessage(assistantMessageId, {
 							content: finalAssistantContent,
-							flowscriptWorkspace: latestFlowScriptWorkspace || undefined,
+							flowscriptWorkspace: hasAuthoritativeFlowScriptWorkspace
+								? latestFlowScriptWorkspace
+								: undefined,
+							processEvents:
+								currentProcessEvents.length > 0
+									? currentProcessEvents
+									: undefined,
+							planSteps:
+								completedPlanSteps.length > 0 ? completedPlanSteps : undefined,
 						});
 					} catch (err) {
 						console.error("Failed to update assistant message:", err);
@@ -2542,7 +2884,7 @@ ${userMsg}`;
 						if (!lastMessage.content.trim()) {
 							lastMessage.content = finalAssistantContent;
 						}
-						if (latestFlowScriptWorkspace) {
+						if (hasAuthoritativeFlowScriptWorkspace) {
 							lastMessage.flowscriptWorkspace = latestFlowScriptWorkspace;
 						}
 						if (currentProcessEvents.length > 0) {
@@ -2553,7 +2895,14 @@ ${userMsg}`;
 				});
 
 				// Handle board commands
-				if (response.commands.length > 0) {
+				if (
+					response.commands.length > 0 &&
+					(response.flow_ir_commit ||
+						!flowScriptWorkspaceOwnsApply(
+							latestFlowScriptWorkspace,
+							generatedFlowScriptWorkspaceStatus,
+						))
+				) {
 					setPendingCommands(response.commands);
 				}
 
@@ -2589,9 +2938,93 @@ ${userMsg}`;
 					}
 				}
 
+				const awaitingWorkflowReview =
+					(agentMode === "board" || agentMode === "both") &&
+					(Boolean(response.flow_ir_commit) ||
+						response.commands.length > 0 ||
+						generatedFlowScriptWorkspaceStatus === "queued");
+				generationMetricsRun.finish(
+					generatedFlowScriptWorkspaceStatus === "validation_errors"
+						? "partial"
+						: "ok",
+					awaitingWorkflowReview,
+					currentBoardNodeCountRef.current,
+				);
+				if (
+					!awaitingWorkflowReview &&
+					generationMetricsRunRef.current === generationMetricsRun
+				) {
+					generationMetricsRunRef.current = undefined;
+				}
+
 				setLoadingPhase("finalizing");
 			} catch (error) {
+				if (draftingPreviewTimer) clearTimeout(draftingPreviewTimer);
+				draftingPreviewTimer = undefined;
+				if (pendingDraftingPreview) {
+					const interruptedPreview = {
+						...pendingDraftingPreview,
+						status: "interrupted",
+					};
+					pendingDraftingPreview = undefined;
+					setFlowscriptWorkspace(interruptedPreview.source);
+					setFlowscriptWorkspaceStatus("interrupted");
+					setInlineFlowScriptPreview(interruptedPreview);
+					setShowWorkspace(true);
+				} else {
+					setFlowscriptWorkspaceStatus((status) =>
+						status === "drafting" ? "interrupted" : status,
+					);
+					setInlineFlowScriptPreview((preview) =>
+						preview?.status === "drafting"
+							? { ...preview, status: "interrupted" }
+							: preview,
+					);
+				}
+				const generationError =
+					error instanceof Error ? error.message.toLowerCase() : "";
+				generationMetricsRun?.finish(
+					generationError.includes("timeout") ||
+						generationError.includes("timed out")
+						? "timeout"
+						: generationError.includes("cancel")
+							? "cancelled"
+							: "error",
+					false,
+					currentBoardNodeCountRef.current,
+				);
+				if (generationMetricsRunRef.current === generationMetricsRun) {
+					generationMetricsRunRef.current = undefined;
+				}
 				console.error("FlowPilot error:", error);
+				// Streamed command frames are previews until the final response transfers any
+				// retained compiled workflow review token. A failed/cancelled transport releases
+				// that native claim, so keeping those commands applyable would bypass stale-board
+				// preflight.
+				if (agentMode === "board" || agentMode === "both") {
+					const transferredToken = pendingFlowIrCommitRef.current;
+					if (transferredToken) {
+						const dismissal = await resolveFlowIrCommit(
+							transferredToken,
+							"dismissed",
+						);
+						if (dismissal.status === "dismissed") {
+							pendingFlowIrCommitRef.current = undefined;
+							setPendingFlowIrCommit(undefined);
+						} else {
+							setPendingFlowIrCommit(transferredToken);
+							setValidationWarnings((warnings) => [
+								...warnings,
+								dismissal.message ||
+									"The interrupted compiled workflow review could not be released. Dismiss it before generating another workflow.",
+							]);
+						}
+					}
+					setPendingCommands([]);
+					setFlowscriptWorkspaceStatus((status) =>
+						status === "queued" ? "stale" : status,
+					);
+				}
 				setMessages((prev) => {
 					const newMessages = [...prev];
 					const lastMessage = newMessages[newMessages.length - 1];
@@ -2618,6 +3051,17 @@ ${userMsg}`;
 				});
 			} finally {
 				if (phaseTimer) clearTimeout(phaseTimer);
+				if (draftingPreviewTimer) clearTimeout(draftingPreviewTimer);
+				if (pendingDraftingPreview && !hasAuthoritativeFlowScriptWorkspace) {
+					const interruptedPreview = {
+						...pendingDraftingPreview,
+						status: "interrupted",
+					};
+					setFlowscriptWorkspace(interruptedPreview.source);
+					setFlowscriptWorkspaceStatus("interrupted");
+					setInlineFlowScriptPreview(interruptedPreview);
+					setShowWorkspace(true);
+				}
 				setLoading(false);
 				setLoadingPhase("idle");
 				setLoadingStartTime(null);
@@ -2632,9 +3076,11 @@ ${userMsg}`;
 			board,
 			selectedNodeIds,
 			selectedModelId,
+			selectedReasoningEffort,
 			runContext,
 			currentComponents,
 			selectedComponentIds,
+			activeAppId,
 			onComponentsGenerated,
 			backendContext.boardState,
 			captureScreenshot,
@@ -2643,7 +3089,12 @@ ${userMsg}`;
 			copilotSDK.isRunning,
 			currentConversationId,
 			flowscriptWorkspace,
+			flowscriptWorkspaceStatus,
 			loading,
+			pendingFlowIrCommit,
+			resolveFlowIrCommit,
+			dismissFlowIrCommitWithRetry,
+			activeAppId,
 		],
 	);
 
@@ -2771,7 +3222,23 @@ ${userMsg}`;
 	const hasFlowScriptWorkspace =
 		Boolean(flowscriptWorkspace) &&
 		(agentMode === "board" || agentMode === "both");
+	const hasUnappliedFlowScriptWorkspace =
+		hasFlowScriptWorkspace &&
+		!pendingFlowIrCommit &&
+		Boolean(onApplyFlowScript) &&
+		isFlowScriptWorkspaceApplicable({
+			source: flowscriptWorkspace,
+			status: flowscriptWorkspaceStatus,
+		}) &&
+		flowscriptWorkspace !== appliedFlowScriptWorkspace;
 	const showFlowScriptWorkspace = hasFlowScriptWorkspace && showWorkspace;
+	const visiblePendingCommands = hasUnappliedFlowScriptWorkspace
+		? []
+		: pendingCommands;
+	const hasDismissOnlyStaleReview =
+		Boolean(pendingFlowIrCommit) &&
+		visiblePendingCommands.length === 0 &&
+		flowscriptWorkspaceStatus === "stale";
 
 	useEffect(() => {
 		onWorkspaceVisibleChange?.(showFlowScriptWorkspace);
@@ -2794,7 +3261,7 @@ ${userMsg}`;
 				title={title}
 				loading={loading}
 				loadingPhase={loadingPhase}
-				elapsedSeconds={elapsedSeconds}
+				loadingStartTime={loadingStartTime}
 				runContext={runContext}
 				onNewChat={handleNewChat}
 				onClose={onClose}
@@ -2811,6 +3278,8 @@ ${userMsg}`;
 				bitsModels={bitsModels}
 				selectedModelId={selectedModelId}
 				setSelectedModelId={setSelectedModelId}
+				selectedReasoningEffort={selectedReasoningEffort}
+				setSelectedReasoningEffort={setSelectedReasoningEffort}
 				hasWorkspace={hasFlowScriptWorkspace}
 				showWorkspace={showWorkspace}
 				onToggleWorkspace={() => setShowWorkspace((value) => !value)}
@@ -2843,8 +3312,23 @@ ${userMsg}`;
 							) : (
 								messages.map((message, index) => {
 									const isLastMessage = index === messages.length - 1;
+									// Completed (non-last) bubbles get only stable props so their
+									// React.memo holds and they don't reconcile (re-parsing markdown)
+									// on every streaming flush. Only the live last bubble takes the
+									// per-flush loading/step props.
+									if (!isLastMessage) {
+										return (
+											<MessageBubble
+												key={index}
+												message={message}
+												agentMode={agentMode}
+												board={board}
+												onFocusNode={onFocusNode}
+												onSelectNodes={onSelectNodes}
+											/>
+										);
+									}
 									const renderedMessage =
-										isLastMessage &&
 										processEvents.length > 0 &&
 										(!message.processEvents ||
 											message.processEvents.length < processEvents.length)
@@ -2854,11 +3338,11 @@ ${userMsg}`;
 										<MessageBubble
 											key={index}
 											message={renderedMessage}
-											isLoading={loading && isLastMessage}
+											isLoading={loading}
 											loadingPhase={loadingPhase}
 											currentToolCall={currentToolCall}
 											currentStep={
-												loading && isLastMessage
+												loading
 													? planSteps.find((s) => s.status === "InProgress")
 													: undefined
 											}
@@ -2866,6 +3350,14 @@ ${userMsg}`;
 											board={board}
 											onFocusNode={onFocusNode}
 											onSelectNodes={onSelectNodes}
+											liveFlowScriptPreview={resolveLiveFlowScriptPreviewForMessage(
+												{
+													isLatestMessage: isLastMessage,
+													messageRole: message.role,
+													preview: inlineFlowScriptPreview,
+													workspaceStatus: flowscriptWorkspaceStatus,
+												},
+											)}
 										/>
 									);
 								})
@@ -2897,11 +3389,16 @@ ${userMsg}`;
 					</AnimatePresence>
 
 					{/* Pending commands (board mode or both mode) */}
-					{(agentMode === "board" || agentMode === "both") &&
-						pendingCommands.length > 0 && (
+					{!loading &&
+						(agentMode === "board" || agentMode === "both") &&
+						(visiblePendingCommands.length > 0 ||
+							hasUnappliedFlowScriptWorkspace ||
+							hasDismissOnlyStaleReview) && (
 							<div className="px-3 pb-2">
 								<PendingCommandsView
-									commands={pendingCommands}
+									commands={visiblePendingCommands}
+									flowscriptReady={hasUnappliedFlowScriptWorkspace}
+									dismissOnly={hasDismissOnlyStaleReview}
 									onExecute={handleExecuteCommands}
 									onExecuteSingle={handleExecuteSingle}
 									onDismiss={handleDismissCommands}
@@ -3067,15 +3564,69 @@ ${userMsg}`;
 				</section>
 
 				{showFlowScriptWorkspace && (
-					<FlowScriptWorkspacePanel source={flowscriptWorkspace} />
+					<FlowScriptWorkspacePanel
+						source={flowscriptWorkspace}
+						status={flowscriptWorkspaceStatus}
+						onClose={() => setShowWorkspace(false)}
+					/>
 				)}
 			</div>
 
 			<FrontendToolRequestDialog
 				dialog={frontendToolDialog}
 				onDialogChange={setFrontendToolDialog}
-				onResolve={resolveFrontendToolDialog}
+				onResolve={(value) => {
+					if (!frontendToolDialog) return;
+					resolveFrontendToolDialog(
+						frontendToolDialog.request.requestId,
+						value,
+					);
+				}}
 			/>
+
+			<Dialog
+				open={Boolean(destructiveApplyRequest)}
+				onOpenChange={(open) => {
+					if (!open && !destructiveApplyPending) {
+						setDestructiveApplyRequest(null);
+					}
+				}}
+			>
+				<DialogContent className="max-w-md">
+					<DialogHeader>
+						<DialogTitle>Approve deletion</DialogTitle>
+						<DialogDescription>
+							FlowScript apply needs to delete existing board items before it
+							can continue.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogBody>
+						<div className="max-h-36 overflow-y-auto rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-foreground">
+							{destructiveApplyRequest?.diagnostic}
+						</div>
+					</DialogBody>
+					<DialogFooter>
+						<Button
+							variant="secondary"
+							disabled={destructiveApplyPending}
+							onClick={() => setDestructiveApplyRequest(null)}
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							className="gap-2"
+							disabled={destructiveApplyPending}
+							onClick={handleApproveFlowScriptDeletion}
+						>
+							{destructiveApplyPending ? (
+								<Loader2 className="h-3.5 w-3.5 animate-spin" />
+							) : null}
+							Delete and apply
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 
 			{/* History Panel */}
 			<HistoryPanel
@@ -3089,6 +3640,8 @@ ${userMsg}`;
 		</motion.div>
 	);
 }
+
+export const FlowPilot = memo(FlowPilotImpl);
 
 interface FrontendToolRequestDialogProps {
 	dialog: FrontendToolDialogState | null;
@@ -3113,7 +3666,8 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 		"FlowPilot request";
 	const description =
 		dialog.type === "approval"
-			? (dialog.request.approval?.description ?? "Approve this FlowPilot action?")
+			? (dialog.request.approval?.description ??
+				"Approve this FlowPilot action?")
 			: getArgString(args, "description") ||
 				getArgString(args, "placeholder") ||
 				"Provide the value FlowPilot needs to continue.";
@@ -3136,7 +3690,9 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 		);
 	};
 
-	const updateAsk = (patch: Partial<Extract<FrontendToolDialogState, { type: "ask" }>>) => {
+	const updateAsk = (
+		patch: Partial<Extract<FrontendToolDialogState, { type: "ask" }>>,
+	) => {
 		if (dialog.type !== "ask") return;
 		onDialogChange({ ...dialog, ...patch });
 	};
@@ -3146,7 +3702,11 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 			open
 			onOpenChange={(open) => {
 				if (!open) {
-					onResolve(dialog.type === "approval" ? { approved: false, remember: false } : null);
+					onResolve(
+						dialog.type === "approval"
+							? { approved: false, remember: false }
+							: null,
+					);
 				}
 			}}
 		>
@@ -3189,7 +3749,9 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 					) : dialog.mode === "freeform" ? (
 						<Textarea
 							value={dialog.answer}
-							placeholder={getArgString(args, "placeholder") ?? "Enter value..."}
+							placeholder={
+								getArgString(args, "placeholder") ?? "Enter value..."
+							}
 							className="min-h-28 resize-none"
 							onChange={(event) => updateAsk({ answer: event.target.value })}
 						/>
@@ -3267,135 +3829,32 @@ const FrontendToolRequestDialog = memo(function FrontendToolRequestDialog({
 	);
 });
 
-interface FlowScriptWorkspacePanelProps {
-	source: string;
-}
-
-const FlowScriptWorkspacePanel = memo(function FlowScriptWorkspacePanel({
-	source,
-}: FlowScriptWorkspacePanelProps) {
-	const [copied, setCopied] = useState(false);
-	const { resolvedTheme } = useTheme();
-	const monacoRef = useRef<Monaco | null>(null);
-	const isDark = resolvedTheme === "dark";
-
-	const handleCopyWorkspace = useCallback(async () => {
-		await navigator.clipboard.writeText(source);
-		setCopied(true);
-		setTimeout(() => setCopied(false), 1200);
-	}, [source]);
-
-	const handleBeforeMount = useCallback(
-		(monaco: Monaco) => {
-			monacoRef.current = monaco;
-			registerFlowScriptLanguage(monaco, isDark);
-		},
-		[isDark],
+// Self-contained elapsed-time pill: owns the 1s tick so it does NOT re-render the
+// whole FlowPilot tree every second during loading.
+const ElapsedStatusPill = memo(function ElapsedStatusPill({
+	phase,
+	loadingStartTime,
+	compact,
+}: {
+	phase: LoadingPhase;
+	loadingStartTime: number | null;
+	compact?: boolean;
+}) {
+	const [elapsed, setElapsed] = useState(() =>
+		loadingStartTime ? Math.floor((Date.now() - loadingStartTime) / 1000) : 0,
 	);
-
 	useEffect(() => {
-		if (!monacoRef.current) return;
-		registerFlowScriptLanguage(monacoRef.current, isDark);
-	}, [isDark]);
-
-	return (
-		<aside className="flex h-[42dvh] min-h-[260px] w-full shrink-0 flex-col border-t border-border/30 bg-muted/20 md:h-full md:min-h-0 md:w-[48%] md:min-w-[420px] md:max-w-[660px] md:border-l md:border-t-0">
-			<div className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-b border-border/30 bg-background/75 px-3 py-2.5 backdrop-blur-sm">
-				<div className="flex min-w-0 items-center gap-2.5">
-					<FileCode2Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
-					<div className="min-w-0 text-sm font-semibold text-foreground">
-						FlowScript
-					</div>
-					<div className="hidden truncate text-xs text-muted-foreground sm:block">
-						Virtual workspace
-					</div>
-					<div className="rounded-full border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-						{formatLineCount(source)}
-					</div>
-				</div>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							className="h-7 w-7 shrink-0 rounded-md"
-							onClick={handleCopyWorkspace}
-						>
-							{copied ? (
-								<CheckCircle2 className="h-4 w-4 text-green-600" />
-							) : (
-								<CopyIcon className="h-4 w-4" />
-							)}
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent side="bottom" className="text-xs">
-						Copy FlowScript
-					</TooltipContent>
-				</Tooltip>
-			</div>
-			<div className="min-h-0 flex-1 bg-linear-to-b from-muted/20 to-background/50 p-3">
-				<div className="h-full min-h-0 overflow-hidden rounded-xl border border-border/45 bg-card shadow-[0_18px_45px_rgba(15,23,42,0.08)] ring-1 ring-black/[0.02] dark:shadow-black/25 dark:ring-white/[0.03]">
-					<Editor
-						beforeMount={handleBeforeMount}
-						height="100%"
-						language={FLOWSCRIPT_LANGUAGE_ID}
-						theme={
-							isDark
-								? "flowpilot-flowscript-dark"
-								: "flowpilot-flowscript-light"
-						}
-						value={source}
-						options={{
-							readOnly: true,
-							automaticLayout: true,
-							bracketPairColorization: { enabled: true },
-							contextmenu: true,
-							copyWithSyntaxHighlighting: true,
-							cursorBlinking: "smooth",
-							cursorSmoothCaretAnimation: "on",
-							detectIndentation: false,
-							fixedOverflowWidgets: true,
-							folding: true,
-							fontFamily:
-								"JetBrains Mono, SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace",
-							fontLigatures: true,
-							fontSize: 11,
-							glyphMargin: false,
-							guides: {
-								bracketPairs: true,
-								indentation: true,
-							},
-							lineDecorationsWidth: 6,
-							lineHeight: 19,
-							lineNumbers: "on",
-							lineNumbersMinChars: 2,
-							minimap: { enabled: false },
-							overviewRulerBorder: false,
-							overviewRulerLanes: 0,
-							padding: { top: 14, bottom: 14 },
-							renderLineHighlight: "line",
-							renderWhitespace: "selection",
-							scrollBeyondLastLine: false,
-							scrollbar: {
-								alwaysConsumeMouseWheel: false,
-								horizontal: "auto",
-								horizontalScrollbarSize: 8,
-								useShadows: false,
-								vertical: "auto",
-								verticalScrollbarSize: 8,
-							},
-							smoothScrolling: true,
-							stickyScroll: { enabled: false },
-							tabSize: 2,
-							wordWrap: "off",
-							wrappingIndent: "indent",
-						}}
-					/>
-				</div>
-			</div>
-		</aside>
-	);
+		if (!loadingStartTime) {
+			setElapsed(0);
+			return;
+		}
+		setElapsed(Math.floor((Date.now() - loadingStartTime) / 1000));
+		const interval = setInterval(() => {
+			setElapsed(Math.floor((Date.now() - loadingStartTime) / 1000));
+		}, 1000);
+		return () => clearInterval(interval);
+	}, [loadingStartTime]);
+	return <StatusPill phase={phase} elapsed={elapsed} compact={compact} />;
 });
 
 // Header component
@@ -3403,7 +3862,7 @@ interface HeaderProps {
 	title: string;
 	loading: boolean;
 	loadingPhase: LoadingPhase;
-	elapsedSeconds: number;
+	loadingStartTime: number | null;
 	runContext?: { run_id: string };
 	onNewChat: () => void;
 	onClose?: () => void;
@@ -3424,6 +3883,8 @@ interface HeaderProps {
 	bitsModels: any[];
 	selectedModelId: string;
 	setSelectedModelId: (id: string) => void;
+	selectedReasoningEffort: string;
+	setSelectedReasoningEffort: (effort: string) => void;
 	hasWorkspace: boolean;
 	showWorkspace: boolean;
 	onToggleWorkspace: () => void;
@@ -3433,7 +3894,7 @@ const Header = memo(function Header({
 	title,
 	loading,
 	loadingPhase,
-	elapsedSeconds,
+	loadingStartTime,
 	runContext,
 	onNewChat,
 	onClose,
@@ -3448,10 +3909,72 @@ const Header = memo(function Header({
 	bitsModels,
 	selectedModelId,
 	setSelectedModelId,
+	selectedReasoningEffort,
+	setSelectedReasoningEffort,
 	hasWorkspace,
 	showWorkspace,
 	onToggleWorkspace,
 }: HeaderProps) {
+	const normalizedProvider = normalizeAIProvider(provider);
+	const pickerProviders: ProviderModelPickerProvider[] = [
+		{ id: "bits", label: "Bits", title: "Use configured model bits" },
+		{
+			id: "github-copilot",
+			label: "Copilot",
+			title: "Use GitHub Copilot SDK (local)",
+			disabled: !isTauriRuntime(),
+		},
+		{
+			id: "codex",
+			label: "Codex",
+			title: "Use a tool-capable Codex backend adapter",
+			disabled: !isTauriRuntime(),
+		},
+		{
+			id: "claude-code",
+			label: "Claude Code",
+			title: "Use the Claude Code CLI through the shared FlowPilot MCP tools",
+			disabled: !isTauriRuntime(),
+		},
+	];
+	const pickerModels =
+		normalizedProvider === "bits"
+			? bitsModels.map((model) => ({
+					id: model.id as string,
+					label:
+						model.meta?.en?.name ?? model.friendly_name ?? (model.id as string),
+				}))
+			: copilotSDK.models.map((model) => ({
+					id: model.id,
+					label: model.name || model.id,
+					supportedReasoningEfforts: model.supportedReasoningEfforts,
+					defaultReasoningEffort: model.defaultReasoningEffort,
+				}));
+	const handlePickerProviderChange = useCallback(
+		async (nextProvider: AIProvider) => {
+			const normalized = normalizeAIProvider(nextProvider);
+			onProviderChange(normalized);
+			if (!isAgentBackendProvider(normalized) || !isTauriRuntime()) return;
+			if (
+				copilotSDK.isRunning &&
+				normalized === normalizeAIProvider(provider)
+			) {
+				return;
+			}
+			try {
+				await onStartCopilot(normalized);
+			} catch {
+				// The SDK hook surfaces connection failures in its own status.
+			}
+		},
+		[copilotSDK.isRunning, onProviderChange, onStartCopilot, provider],
+	);
+	const connectionStatus = isAgentBackendProvider(normalizedProvider)
+		? copilotSDK.authStatus?.authenticated && copilotSDK.authStatus.login
+			? `Signed in as ${copilotSDK.authStatus.login}${copilotSDK.authStatus.message ? ` · ${copilotSDK.authStatus.message}` : ""}`
+			: copilotSDK.authStatus?.message
+		: undefined;
+
 	return (
 		<div className="relative overflow-hidden shrink-0">
 			<div className="absolute inset-0 bg-linear-to-br from-primary/8 via-violet-500/5 to-pink-500/5" />
@@ -3493,9 +4016,9 @@ const Header = memo(function Header({
 					<div>
 						<h3 className="text-sm font-bold">{title}</h3>
 						{loading ? (
-							<StatusPill
+							<ElapsedStatusPill
 								phase={loadingPhase}
-								elapsed={elapsedSeconds}
+								loadingStartTime={loadingStartTime}
 								compact
 							/>
 						) : (
@@ -3577,33 +4100,32 @@ const Header = memo(function Header({
 				</div>
 			</div>
 
-			{/* Provider and Model selector */}
-			<div className="relative flex flex-col gap-2 px-3 pb-3 md:flex-row md:items-center">
-				{/* Provider selector (only show if not forced) */}
-				{!forceProvider && (
-					<ProviderSelector
-						provider={provider}
-						onProviderChange={onProviderChange}
-						copilotModels={copilotSDK.models}
-						copilotAuthStatus={copilotSDK.authStatus}
-						copilotRunning={copilotSDK.isRunning}
-						copilotConnecting={copilotSDK.isConnecting}
-						onStartCopilot={onStartCopilot}
-						onStopCopilot={onStopCopilot}
-						disabled={loading}
-						className="w-full md:w-auto md:max-w-[60%]"
-					/>
-				)}
-
-				{/* Model selector */}
-				<ModelSelector
+			{/* Provider, model, and model-native effort are one selection surface. */}
+			<div className="relative px-3 pb-3">
+				<ProviderModelReasoningPicker
 					provider={provider}
-					bitsModels={bitsModels}
-					copilotModels={copilotSDK.models}
+					providers={pickerProviders}
+					models={pickerModels}
 					selectedModelId={selectedModelId}
+					selectedEffort={selectedReasoningEffort}
+					onProviderChange={handlePickerProviderChange}
 					onModelChange={setSelectedModelId}
+					onEffortChange={setSelectedReasoningEffort}
 					disabled={loading}
-					className="w-full min-w-0 md:flex-1"
+					connecting={copilotSDK.isConnecting}
+					connected={
+						copilotSDK.isRunning && isAgentBackendProvider(normalizedProvider)
+					}
+					onDisconnect={onStopCopilot}
+					statusText={connectionStatus}
+					showProviderSection={!forceProvider}
+					triggerClassName="w-full justify-start md:w-auto md:max-w-full"
+					contentClassName="z-150"
+					emptyModelLabel={
+						normalizedProvider === "bits"
+							? "No models available"
+							: "Loading backend models…"
+					}
 				/>
 			</div>
 
@@ -4112,6 +4634,7 @@ interface MessageBubbleProps {
 	board?: any;
 	onFocusNode?: (nodeId: string) => void;
 	onSelectNodes?: (nodeIds: string[]) => void;
+	liveFlowScriptPreview?: InlineFlowScriptPreviewValue;
 }
 
 const MessageBubble = memo(function MessageBubble({
@@ -4124,10 +4647,19 @@ const MessageBubble = memo(function MessageBubble({
 	board,
 	onFocusNode,
 	onSelectNodes,
+	liveFlowScriptPreview,
 }: MessageBubbleProps) {
 	const isUser = message.role === "user";
 	const hasProcessEvents =
 		!isUser && message.processEvents && message.processEvents.length > 0;
+	const displayedFlowScriptPreview = resolveDisplayedFlowScriptPreview({
+		messageRole: message.role,
+		livePreview: liveFlowScriptPreview,
+		messageWorkspace: message.flowscriptWorkspace,
+	});
+	const hasFlowScriptPreview = Boolean(
+		displayedFlowScriptPreview?.source.trim(),
+	);
 
 	const getLoadingContent = () => {
 		// Show current step with details
@@ -4146,8 +4678,12 @@ const MessageBubble = memo(function MessageBubble({
 								: currentStep.tool_name === "emit_surface"
 									? "Generating UI"
 									: currentStep.tool_name === "emit_commands" ||
+											currentStep.tool_name === "write_flowscript" ||
+											currentStep.tool_name === "patch_flowscript" ||
+											currentStep.tool_name === "check_flowscript" ||
+											currentStep.tool_name === "commit_flowscript" ||
 											currentStep.tool_name === "edit_flowscript"
-										? "Building flow"
+										? "Building FlowScript"
 										: currentStep.tool_name === "get_component_schema"
 											? "Looking up schema"
 											: currentStep.tool_name === "get_style_examples"
@@ -4197,7 +4733,9 @@ const MessageBubble = memo(function MessageBubble({
 			<div
 				className={cn(
 					"box-border min-w-0 overflow-hidden rounded-xl px-3 py-2 text-sm",
-					hasProcessEvents ? "w-full max-w-full" : "max-w-[85%]",
+					hasProcessEvents || hasFlowScriptPreview
+						? "w-full max-w-full"
+						: "max-w-[85%]",
 					isUser
 						? "bg-muted/60 text-foreground rounded-br-sm border border-border/40"
 						: "bg-background border border-border/40 rounded-bl-sm",
@@ -4205,7 +4743,10 @@ const MessageBubble = memo(function MessageBubble({
 				style={{
 					wordBreak: "break-word",
 					overflowWrap: "anywhere",
-					contain: hasProcessEvents ? "inline-size" : undefined,
+					contain:
+						hasProcessEvents || hasFlowScriptPreview
+							? "inline-size"
+							: undefined,
 				}}
 			>
 				{/* Images */}
@@ -4236,7 +4777,9 @@ const MessageBubble = memo(function MessageBubble({
 						/>
 					)}
 
-				{/* Content */}
+				{/* Content. While this bubble is actively streaming, render plain text
+				    to avoid re-parsing the full markdown/Slate document on every 100ms
+				    flush; the formatted markdown mounts once when streaming completes. */}
 				{message.content ? (
 					<MessageContent
 						content={message.content}
@@ -4244,10 +4787,14 @@ const MessageBubble = memo(function MessageBubble({
 						board={
 							agentMode === "board" || agentMode === "both" ? board : undefined
 						}
-						enableMarkdown={true}
+						enableMarkdown={!isLoading}
 					/>
-				) : isLoading ? null : (
+				) : isLoading || hasProcessEvents || hasFlowScriptPreview ? null : (
 					<p className="text-muted-foreground italic text-xs">No response</p>
+				)}
+
+				{displayedFlowScriptPreview && hasFlowScriptPreview && (
+					<InlineFlowScriptPreview preview={displayedFlowScriptPreview} />
 				)}
 
 				{hasProcessEvents && (

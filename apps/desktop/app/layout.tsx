@@ -13,6 +13,7 @@ import "@flow-like/flow-like-ui/global.css";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
 import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
+import { isWebkitLite } from "@flow-like/flow-like-ui/lib/platform";
 import {
 	Architects_Daughter,
 	DM_Sans,
@@ -46,6 +47,9 @@ import { DesktopAuthProvider } from "../components/auth-provider";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
 import DownloadNotificationProvider from "../components/download-notification-provider";
 import GlobalAnchorHandler from "../components/global-anchor-component";
+import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
+import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
+import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
@@ -141,6 +145,14 @@ function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 	const isOnline = useNetworkStatus();
 
 	useEffect(() => {
+		// Tag the document so CSS can disable WebKit-expensive effects (backdrop
+		// filters etc.) on WKWebView/Safari while Chromium keeps the full look.
+		document.documentElement.dataset.engine = isWebkitLite()
+			? "webkit"
+			: "blink";
+	}, []);
+
+	useEffect(() => {
 		// When network comes back online, refetch all active queries
 		if (isOnline) {
 			console.log("Network reconnected - refetching stale queries");
@@ -209,6 +221,9 @@ export default function RootLayout({
 																			<PostHogPageView />
 																			<ThemeLoader />
 																			<AppSidebar>{children}</AppSidebar>
+																			<GlobalToolBridge />
+																			<GlobalChatOverlay />
+																			<FlowPilotBubbleButton />
 																		</SpotlightWrapper>
 																	</ExecutionEngineProviderComponent>
 																</ExecutionServiceProvider>

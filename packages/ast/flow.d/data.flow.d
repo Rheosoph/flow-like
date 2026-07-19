@@ -1210,6 +1210,17 @@ declare function dfListTables({ session: Struct }): { tables: Struct[], tableNam
  */
 declare function openLocalDb({ name: string, userScoped?: bool, batchSize?: int }): Struct;
 
+/**
+ * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. Storage credentials are valid for about an hour — long-running flows with many writes should flush regularly (Flush node).
+ * @param flowRemoteAppId (optional) — Connected project to open the database from
+ * @param flowRemoteDatabase (optional) — Shared database of the selected project
+ * @param writeAccess (optional) — Request write access to the remote database. Requires the connection role to allow writing databases (or files).
+ * @param batchSize (optional) — Number of items to buffer before flushing writes to storage. 0 = no buffering.
+ * @returns database — Database Connection Reference
+ * @impure has side effects / drives control flow
+ */
+declare function openRemoteDb({ flowRemoteAppId?: string, flowRemoteDatabase?: string, writeAccess?: bool, batchSize?: int }): Struct;
+
 
 // === Data/Database/Delete ===
 
@@ -2129,6 +2140,23 @@ declare function externalS3ExpressStore({ provider: Struct, bucket: string, pref
  */
 declare function externalS3Store({ provider: Struct, bucket: string, prefix?: string, pathStyle?: bool }): Struct;
 
+/**
+ * Turn an SMB2/3 share into a FlowPath.
+ * @param address — SMB server address. Use host:port, or host to use port 445.
+ * @param share — SMB share name
+ * @param authMode (optional) — How to authenticate: 'credentials' (username/password/domain), 'guest', or 'kerberos_ccache' (local FILE ccache/kinit)
+ * @param prefix (optional) — Optional path prefix within the share
+ * @param username (optional) — SMB username
+ * @param password (optional) — SMB password
+ * @param domain (optional) — Optional SMB domain or workgroup
+ * @param timeoutSeconds (optional) — Connection timeout in seconds
+ * @param compression (optional) — Enable SMB compression when supported by the server
+ * @param dfsEnabled (optional) — Enable DFS referral handling
+ * @returns path — FlowPath pointing to the SMB share
+ * @impure has side effects / drives control flow
+ */
+declare function externalSmbStore({ address: string, share: string, authMode?: string, prefix?: string, username?: string, password?: string, domain?: string, timeoutSeconds?: int, compression?: bool, dfsEnabled?: bool }): Struct;
+
 
 // === Data/Files/Operations ===
 
@@ -2146,6 +2174,20 @@ declare function pathExists({ path: Struct }): void;
  * @impure has side effects / drives control flow
  */
 declare function pathGet({ path: Struct }): bytes[];
+
+/**
+ * Diffs a folder against a manifest, emitting added, updated and deleted files. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents
+ * @param manifest — FlowPath to the manifest file. May not exist yet — everything is then reported as added
+ * @param root — Root folder to scan for changes
+ * @param recursive (optional) — Scan the root folder recursively
+ * @param mode (optional) — Auto: trust store ETags, hashing only files with a missing/weak ETag (fast). Checksum: always Blake3-hash contents, ignoring ETags (correct on backends with mtime-based ETags such as local disk)
+ * @returns added — Files present in the folder but not in the manifest
+ * @returns updated — Files whose ETag/hash changed since the manifest
+ * @returns deleted — Files in the manifest that no longer exist in the folder
+ * @returns session — Diff session carrying the next manifest, feed into 'Write Directory Manifest'
+ * @impure has side effects / drives control flow
+ */
+declare function pathGetChanges({ manifest: Struct, root: Struct, recursive?: bool, mode?: string }): { added: Struct[], updated: Struct[], deleted: Struct[], session: Struct };
 
 /**
  * Reads a range of bytes from a file
@@ -2220,6 +2262,14 @@ declare function pathPut({ path: Struct, bytes: bytes[] }): void;
  * @impure has side effects / drives control flow
  */
 declare function pathRename({ from: Struct, to: Struct, overwrite?: bool }): void;
+
+/**
+ * Persists the manifest carried by a diff session, so the next diff sees the current state
+ * @param session — Diff session produced by 'Diff Directory'
+ * @returns manifest — FlowPath of the written manifest file
+ * @impure has side effects / drives control flow
+ */
+declare function pathWriteManifest({ session: Struct }): Struct;
 
 /**
  * Generates a signed URL for accessing a file
@@ -5404,3 +5454,4 @@ declare function writeQrcode({ data: string, format?: string, scale?: int, margi
  * @impure has side effects / drives control flow
  */
 declare function tdmsMetadata({ tdmsPath: Struct }): Struct;
+

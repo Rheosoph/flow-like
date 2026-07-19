@@ -103,9 +103,24 @@ pub fn interfaces_for_variables(vars: &[VarDecl]) -> Vec<InterfaceDecl> {
             continue;
         };
 
+        // Dedup collisions against earlier variables' interfaces. Renames must also be
+        // applied to the `Named` references within this schema family, otherwise a
+        // renamed `$defs` interface is declared under the new name while fields keep
+        // pointing at the old one — which now belongs to a different schema.
+        let mut renames: HashMap<String, String> = HashMap::new();
         for decl in &mut decls {
             let base = decl.name.clone();
             decl.name = unique_name(&base, &mut used_names);
+            if decl.name != base {
+                renames.insert(base, decl.name.clone());
+            }
+        }
+        for decl in &mut decls {
+            if !renames.is_empty() {
+                for field in &mut decl.fields {
+                    rename_type_refs(&mut field.ty, &renames);
+                }
+            }
             if decl.schema.is_none() {
                 decl.schema = schema_from_interface(decl);
             }
@@ -333,6 +348,12 @@ fn interface_schema_value(interface: &InterfaceDecl, include_title: bool) -> Opt
     for field in &interface.fields {
         let mut field_schema = schema_value_from_type(&field.ty)?;
         if let Some(default) = &field.default {
+            // `any` maps to the boolean schema `true`; upgrade it to its object
+            // equivalent `{}` so the default can attach instead of failing the
+            // whole interface (which would wipe the variable's schema).
+            if !field_schema.is_object() {
+                field_schema = Value::Object(Map::new());
+            }
             field_schema
                 .as_object_mut()?
                 .insert("default".to_string(), literal_to_json(default));
@@ -421,6 +442,23 @@ fn simple_json_type_name(ty: &InterfaceType) -> Option<Value> {
     Some(Value::String(name.to_string()))
 }
 
+fn rename_type_refs(ty: &mut InterfaceType, renames: &HashMap<String, String>) {
+    match ty {
+        InterfaceType::Named(name) => {
+            if let Some(renamed) = renames.get(name) {
+                *name = renamed.clone();
+            }
+        }
+        InterfaceType::Array(inner) | InterfaceType::Map(inner) => rename_type_refs(inner, renames),
+        InterfaceType::Union(members) => {
+            for member in members {
+                rename_type_refs(member, renames);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn collect_type_refs(ty: &InterfaceType, refs: &mut BTreeSet<String>) {
     match ty {
         InterfaceType::Named(name)
@@ -484,7 +522,9 @@ fn pascal_case(input: &str) -> String {
     let mut out = String::new();
     let mut upper_next = true;
     for c in input.chars() {
-        if c == '_' || c == '-' || c == ' ' {
+        // Interface names must lex as identifiers; every non-alphanumeric char
+        // (`.`, `/`, `:` … not just `_`/`-`/space) acts as a word separator.
+        if !c.is_alphanumeric() {
             upper_next = true;
             continue;
         }
@@ -497,6 +537,8 @@ fn pascal_case(input: &str) -> String {
     }
     if out.is_empty() {
         "StructShape".to_string()
+    } else if out.chars().next().is_some_and(|c| c.is_numeric()) {
+        format!("_{out}")
     } else {
         out
     }

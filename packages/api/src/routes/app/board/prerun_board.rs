@@ -99,6 +99,7 @@ pub async fn prerun_board(
     Path((app_id, board_id)): Path<(String, String)>,
     Query(query): Query<PrerunBoardQuery>,
 ) -> Result<Json<PrerunBoardResponse>, ApiError> {
+    super::ensure_connected_app_board_invoke_denied(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteBoards);
     let sub = permission.sub()?;
 

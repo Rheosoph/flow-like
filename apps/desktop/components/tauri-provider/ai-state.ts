@@ -13,6 +13,7 @@ export class AiState implements IAIState {
 
 	async streamChatComplete(
 		messages: IHistoryMessage[],
+		appId?: string,
 	): Promise<ReadableStream<IResponseChunk[]>> {
 		const channel = new Channel<IIntercomEvent[]>();
 
@@ -46,6 +47,7 @@ export class AiState implements IAIState {
 			messages: messages,
 			onChunk: channel,
 			token: token,
+			appId,
 		});
 
 		this.backend.backgroundTaskHandler(request);
@@ -53,11 +55,15 @@ export class AiState implements IAIState {
 		return stream;
 	}
 
-	async chatComplete(messages: IHistoryMessage[]): Promise<IResponse> {
+	async chatComplete(
+		messages: IHistoryMessage[],
+		appId?: string,
+	): Promise<IResponse> {
 		const token = this.backend.auth?.user?.access_token;
 		const response = await invoke<IResponse>("chat_completion", {
 			messages: messages,
 			token: token,
+			appId,
 		});
 
 		return response;

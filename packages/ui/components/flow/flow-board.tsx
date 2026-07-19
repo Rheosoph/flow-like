@@ -36,6 +36,7 @@ import {
 	ArrowBigLeftDashIcon,
 	CheckIcon,
 	Eye,
+	FileCode2Icon,
 	FileTextIcon,
 	HistoryIcon,
 	LayoutTemplateIcon,
@@ -56,14 +57,19 @@ import {
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import {
+	type ComponentProps,
 	type ReactElement,
+	memo,
 	useCallback,
 	useEffect,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
-import type { ImperativePanelHandle } from "react-resizable-panels";
+import type {
+	ImperativePanelGroupHandle,
+	ImperativePanelHandle,
+} from "react-resizable-panels";
 import {
 	Button,
 	Sheet,
@@ -84,6 +90,7 @@ import {
 	type FlowNodeInfoOverlayHandle,
 } from "../../components/flow/flow-node/flow-node-info-overlay";
 import { FlowPages } from "../../components/flow/flow-pages";
+import { FlowScriptPanel } from "../../components/flow/flowscript/flowscript-panel";
 import { MediaNode } from "../../components/flow/media-node";
 import { Traces } from "../../components/flow/traces";
 import { UploadPlaceholderNode } from "../../components/flow/upload-placeholder-node";
@@ -124,14 +131,15 @@ import {
 	upsertCommentCommand,
 	upsertVariableCommand,
 } from "../../lib";
+import { getErrorMessage } from "../../lib/error-message";
 import { computeFlowLayout } from "../../lib/flow-auto-layout";
 import {
+	getFunctionReferenceNodeIdsFromEdge,
 	handleConnection,
 	handleEdgesChange,
 	handleNodesChange,
 	handlePlaceNode,
 	handlePlacePlaceholder,
-	getFunctionReferenceNodeIdsFromEdge,
 	removeFunctionReferenceCommandForEdge,
 } from "../../lib/flow-board-helpers";
 import {
@@ -142,7 +150,6 @@ import {
 	parseBoard,
 	shouldIgnoreBoardClipboardEvent,
 } from "../../lib/flow-board-utils";
-import { getErrorMessage } from "../../lib/error-message";
 import { toastError, toastSuccess } from "../../lib/messages";
 import { getRuntimeConfiguredVariables } from "../../lib/runtime-vars-utils";
 import { IAppVisibility } from "../../lib/schema/app/app";
@@ -157,6 +164,10 @@ import { type INode, IVariableType } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
 import { convertJsonToUint8Array } from "../../lib/uint8";
+import {
+	type AssistantBoardSurface,
+	useAssistantSurface,
+} from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import { useFlowBoardParentState } from "../../state/flow-board-parent-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
@@ -168,22 +179,22 @@ import { AutoLayoutDialog, type LayoutStyle } from "./auto-layout-dialog";
 import { BoardMeta } from "./board-meta";
 import { CallFunctionNode } from "./call-function-node";
 import { FlowChat } from "./flow-chat";
-import { FlowCopilot, type Suggestion } from "./flow-copilot";
-import { FlowCursors } from "./flow-cursors";
+import { FlowCopilot } from "./flow-copilot";
+import { FlowCursorsLayer } from "./flow-cursors";
 import { FlowDataEdge } from "./flow-data-edge";
 import { FlowExecutionEdge } from "./flow-execution-edge";
 import { useUndoRedo } from "./flow-history";
+import { FlowLayerIndicators } from "./flow-layer-indicators";
+import { PinEditModal } from "./flow-pin/edit-modal";
+import { FlowPresenceBar } from "./flow-presence-bar";
+import { FlowRuns } from "./flow-runs";
+import { FlowSearch } from "./flow-search";
 import {
 	type FlowElementOption,
 	createEmptyFlowSelectorData,
 	flattenPageElements,
 	indexBitsByRef,
 } from "./flow-selector-data";
-import { FlowLayerIndicators } from "./flow-layer-indicators";
-import { PinEditModal } from "./flow-pin/edit-modal";
-import { FlowPresenceBar } from "./flow-presence-bar";
-import { FlowRuns } from "./flow-runs";
-import { FlowSearch } from "./flow-search";
 import { FlowTemplateSelector } from "./flow-template-selector";
 import { FlowVeilEdge } from "./flow-veil-edge";
 import { LayerInnerNode } from "./layer-inner-node";
@@ -193,6 +204,136 @@ import { WasmSandboxWarningDialog } from "./wasm-sandbox-warning-dialog";
 
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 
+type ReactFlowProps = ComponentProps<typeof ReactFlow>;
+
+interface FlowCanvasProps {
+	flowRef: ReactFlowProps["ref"];
+	nodes: ReactFlowProps["nodes"];
+	edges: ReactFlowProps["edges"];
+	nodeTypes: ReactFlowProps["nodeTypes"];
+	edgeTypes: ReactFlowProps["edgeTypes"];
+	colorMode: ReactFlowProps["colorMode"];
+	nodesInteractive: boolean;
+	onlyRenderVisible: boolean;
+	currentLayer: string | undefined;
+	onContextMenu: ReactFlowProps["onContextMenu"];
+	onInit: ReactFlowProps["onInit"];
+	onNodeDoubleClick: ReactFlowProps["onNodeDoubleClick"];
+	onNodesChange: ReactFlowProps["onNodesChange"];
+	onEdgesChange: ReactFlowProps["onEdgesChange"];
+	onNodeDragStop: ReactFlowProps["onNodeDragStop"];
+	onNodeDrag: ReactFlowProps["onNodeDrag"];
+	isValidConnection: ReactFlowProps["isValidConnection"];
+	onConnect: ReactFlowProps["onConnect"];
+	onSelectionChange: ReactFlowProps["onSelectionChange"];
+	onReconnect: ReactFlowProps["onReconnect"];
+	onReconnectStart: ReactFlowProps["onReconnectStart"];
+	onMoveEnd: ReactFlowProps["onMoveEnd"];
+	onReconnectEnd: ReactFlowProps["onReconnectEnd"];
+	onConnectEnd: ReactFlowProps["onConnectEnd"];
+	onScreenshot: () => void;
+	miniMapNodeColor: (node: Node) => string;
+}
+
+// Memoized so unrelated FlowBoard re-renders (presence, dialogs, copilot toggles,
+// menus) skip reconciling the entire React Flow canvas. All props passed in are
+// referentially stable (state arrays + useCallback handlers), so the memo holds.
+const FlowCanvas = memo(function FlowCanvas({
+	flowRef,
+	nodes,
+	edges,
+	nodeTypes,
+	edgeTypes,
+	colorMode,
+	nodesInteractive,
+	onlyRenderVisible,
+	currentLayer,
+	onContextMenu,
+	onInit,
+	onNodeDoubleClick,
+	onNodesChange,
+	onEdgesChange,
+	onNodeDragStop,
+	onNodeDrag,
+	isValidConnection,
+	onConnect,
+	onSelectionChange,
+	onReconnect,
+	onReconnectStart,
+	onMoveEnd,
+	onReconnectEnd,
+	onConnectEnd,
+	onScreenshot,
+	miniMapNodeColor,
+}: FlowCanvasProps) {
+	return (
+		<ReactFlow
+			suppressHydrationWarning
+			deleteKeyCode={null}
+			onContextMenu={onContextMenu}
+			nodesDraggable={nodesInteractive}
+			nodesConnectable={nodesInteractive}
+			onlyRenderVisibleElements={onlyRenderVisible}
+			onInit={onInit}
+			ref={flowRef}
+			colorMode={colorMode}
+			nodes={nodes}
+			nodeTypes={nodeTypes}
+			edges={edges}
+			edgeTypes={edgeTypes}
+			maxZoom={3}
+			minZoom={0.1}
+			onNodeDoubleClick={onNodeDoubleClick}
+			onNodesChange={onNodesChange}
+			onEdgesChange={onEdgesChange}
+			onNodeDragStop={onNodeDragStop}
+			onNodeDrag={onNodeDrag}
+			isValidConnection={isValidConnection}
+			onConnect={onConnect}
+			onSelectionChange={onSelectionChange}
+			onReconnect={onReconnect}
+			onReconnectStart={onReconnectStart}
+			onMoveEnd={onMoveEnd}
+			onReconnectEnd={onReconnectEnd}
+			onConnectEnd={onConnectEnd}
+			fitView
+			proOptions={{ hideAttribution: true }}
+		>
+			<Controls>
+				<ControlButton onClick={onScreenshot}>
+					<ShareIcon className="size-4" />
+				</ControlButton>
+			</Controls>
+			<MiniMap
+				pannable
+				zoomable
+				bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
+				maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
+				nodeColor={miniMapNodeColor}
+			/>
+			<Background
+				variant={
+					currentLayer ? BackgroundVariant.Lines : BackgroundVariant.Dots
+				}
+				color={
+					currentLayer
+						? "color-mix(in oklch, var(--foreground) 5%, transparent)"
+						: "color-mix(in oklch, var(--foreground) 20%, transparent)"
+				}
+				bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
+				gap={12}
+				size={1}
+			/>
+		</ReactFlow>
+	);
+});
+
+// Index of each panel inside the outer horizontal ResizablePanelGroup, ordered by
+// their `order` prop: variables(0), main container(1), runs(2), flowscript(3), search(4).
+const MAIN_PANEL_INDEX = 1;
+const RUNS_PANEL_INDEX = 2;
+const FLOWSCRIPT_PANEL_INDEX = 3;
+
 export function FlowBoard({
 	appId,
 	boardId,
@@ -201,6 +342,7 @@ export function FlowBoard({
 	extraDockItems,
 	renderOverlay,
 	sub,
+	externalAssistant = false,
 }: Readonly<{
 	appId: string;
 	boardId: string;
@@ -216,6 +358,11 @@ export function FlowBoard({
 	}>;
 	renderOverlay?: () => React.ReactNode;
 	sub?: string;
+	/**
+	 * When true the host app provides the assistant (global chat) — FlowPilot launchers route to
+	 * requestOpenAssistant() and the embedded FlowCopilot panel/sheet are not mounted.
+	 */
+	externalAssistant?: boolean;
 }>) {
 	const {
 		pushCommand,
@@ -225,6 +372,7 @@ export function FlowBoard({
 		rollbackUndo,
 		rollbackRedo,
 		clearHistory,
+		stampHistory,
 	} = useUndoRedo(appId, boardId);
 	const router = useRouter();
 	const backend = useBackend();
@@ -233,8 +381,14 @@ export function FlowBoard({
 	const edgeReconnectSuccessful = useRef(true);
 	const { isOver, setNodeRef, active } = useDroppable({ id: "flow" });
 	const parentRegister = useFlowBoardParentState();
-	const { refetchLogs, setCurrentMetadata, currentMetadata } =
-		useLogAggregation();
+	// Field selectors: the log store also holds currentLogs/isLoading, which
+	// churn during runs — subscribing to the whole store re-renders the entire
+	// board on every log tick.
+	const refetchLogs = useLogAggregation((state) => state.refetchLogs);
+	const setCurrentMetadata = useLogAggregation(
+		(state) => state.setCurrentMetadata,
+	);
+	const currentMetadata = useLogAggregation((state) => state.currentMetadata);
 	const flowRef = useRef<any>(null);
 	const initialVersionKey = initialVersion?.join(".");
 	const [version, setVersion] = useState<[number, number, number] | undefined>(
@@ -260,6 +414,8 @@ export function FlowBoard({
 	const varPanelRef = useRef<ImperativePanelHandle>(null);
 
 	const runsPanelRef = useRef<ImperativePanelHandle>(null);
+	const flowScriptPanelRef = useRef<ImperativePanelHandle>(null);
+	const panelGroupRef = useRef<ImperativePanelGroupHandle>(null);
 	const nodeInfoOverlayRef = useRef<FlowNodeInfoOverlayHandle>(null);
 
 	const shiftPressed = useKeyPress("Shift");
@@ -286,7 +442,6 @@ export function FlowBoard({
 	const selectorDataRef = useRef(createEmptyFlowSelectorData());
 	const [selectorDataVersion, setSelectorDataVersion] = useState(0);
 	const selectorCacheKeyRef = useRef("");
-	const selectorPrefetchKeyRef = useRef("");
 	const elementOptionsPromiseRef = useRef<
 		Promise<FlowElementOption[]> | undefined
 	>(undefined);
@@ -305,176 +460,177 @@ export function FlowBoard({
 		bitOptionsPromiseRef.current = undefined;
 	}
 
-	const loadElementOptions = useCallback(async () => {
-		const cache = selectorDataRef.current;
-		if (cache.elementsLoaded) return cache.elementOptions;
-		if (elementOptionsPromiseRef.current)
-			return elementOptionsPromiseRef.current;
+	const loadElementOptions = useCallback(
+		async (force = false) => {
+			const cache = selectorDataRef.current;
+			if (elementOptionsPromiseRef.current)
+				return elementOptionsPromiseRef.current;
+			if (!force && cache.elementsLoaded) return cache.elementOptions;
 
-		const cacheKey = selectorCacheKeyRef.current;
-		cache.elementsLoading = true;
-		cache.elementsError = undefined;
+			const cacheKey = selectorCacheKeyRef.current;
+			cache.elementsLoading = true;
+			cache.elementsError = undefined;
 
-		const promise = (async () => {
-			try {
-				const [routes, events, pages] = await Promise.all([
-					backend.routeState.getRoutes(appId),
-					backend.eventState.getEvents(appId),
-					backend.pageState.getPages(appId),
-				]);
-				const eventsMap = new Map(events.map((event) => [event.id, event]));
-				const pagesById = new Map(pages.map((page) => [page.pageId, page]));
-				const pageTargets = new Map<
-					string,
-					{ pageName?: string; pagePath?: string; boardId?: string }
-				>();
+			const promise = (async () => {
+				try {
+					const [routes, events, pages] = await Promise.all([
+						backend.routeState.getRoutes(appId),
+						backend.eventState.getEvents(appId),
+						backend.pageState.getPages(appId),
+					]);
+					const eventsMap = new Map(events.map((event) => [event.id, event]));
+					const pagesById = new Map(pages.map((page) => [page.pageId, page]));
+					const pageTargets = new Map<
+						string,
+						{ pageName?: string; pagePath?: string; boardId?: string }
+					>();
 
-				const queuePage = (
-					pageId: string,
-					pageName?: string,
-					pagePath?: string,
-					boardId?: string,
-				) => {
-					const existing = pageTargets.get(pageId);
-					if (existing) {
-						existing.pageName ??= pageName;
-						existing.pagePath ??= pagePath;
-						existing.boardId ??= boardId;
-						return;
+					const queuePage = (
+						pageId: string,
+						pageName?: string,
+						pagePath?: string,
+						boardId?: string,
+					) => {
+						const existing = pageTargets.get(pageId);
+						if (existing) {
+							existing.pageName ??= pageName;
+							existing.pagePath ??= pagePath;
+							existing.boardId ??= boardId;
+							return;
+						}
+
+						pageTargets.set(pageId, { pageName, pagePath, boardId });
+					};
+
+					for (const route of routes) {
+						const event = eventsMap.get(route.eventId);
+						const pageId = event?.default_page_id;
+						if (!pageId) continue;
+
+						const pageInfo = pagesById.get(pageId);
+						queuePage(
+							pageId,
+							pageInfo?.name,
+							route.path,
+							pageInfo?.boardId ?? event.board_id,
+						);
 					}
 
-					pageTargets.set(pageId, { pageName, pagePath, boardId });
-				};
+					for (const pageInfo of pages) {
+						queuePage(
+							pageInfo.pageId,
+							pageInfo.name,
+							undefined,
+							pageInfo.boardId,
+						);
+					}
 
-				for (const route of routes) {
-					const event = eventsMap.get(route.eventId);
-					const pageId = event?.default_page_id;
-					if (!pageId) continue;
-
-					const pageInfo = pagesById.get(pageId);
-					queuePage(
-						pageId,
-						pageInfo?.name,
-						route.path,
-						pageInfo?.boardId ?? event.board_id,
+					const seenIds = new Set<string>();
+					const pageElements = await Promise.all(
+						Array.from(pageTargets.entries()).map(
+							async ([pageId, pageInfo]) => {
+								try {
+									const page = await backend.pageState.getPage(
+										appId,
+										pageId,
+										pageInfo.boardId,
+									);
+									return flattenPageElements(page.components ?? []).map(
+										(element) => ({
+											...element,
+											id: `${pageId}/${element.id}`,
+											rawId: element.id,
+											label: pageInfo.pageName
+												? `${pageInfo.pageName} / ${element.label}`
+												: element.label,
+											pageName: pageInfo.pageName,
+											pagePath: pageInfo.pagePath,
+										}),
+									);
+								} catch {
+									return [];
+								}
+							},
+						),
 					);
+
+					const allElements = pageElements.flat().filter((element) => {
+						if (seenIds.has(element.id)) return false;
+						seenIds.add(element.id);
+						return true;
+					});
+
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.elementOptions = allElements;
+						cache.elementsLoaded = true;
+						setSelectorDataVersion((current) => current + 1);
+					}
+
+					return allElements;
+				} catch (error) {
+					console.error("Failed to load page elements:", error);
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.elementsError = error;
+						setSelectorDataVersion((current) => current + 1);
+					}
+					return [];
+				} finally {
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.elementsLoading = false;
+					}
+					elementOptionsPromiseRef.current = undefined;
 				}
+			})();
 
-				for (const pageInfo of pages) {
-					queuePage(
-						pageInfo.pageId,
-						pageInfo.name,
-						undefined,
-						pageInfo.boardId,
-					);
+			elementOptionsPromiseRef.current = promise;
+			return promise;
+		},
+		[appId, backend.eventState, backend.pageState, backend.routeState],
+	);
+
+	const loadBitOptions = useCallback(
+		async (force = false) => {
+			const cache = selectorDataRef.current;
+			if (bitOptionsPromiseRef.current) return bitOptionsPromiseRef.current;
+			if (!force && cache.bitsLoaded) return cache.bitOptions;
+
+			const cacheKey = selectorCacheKeyRef.current;
+			cache.bitsLoading = true;
+			cache.bitsError = undefined;
+
+			const promise = (async () => {
+				try {
+					const bits = await backend.bitState.getProfileBits();
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.bitOptions = bits;
+						cache.bitsByRef = indexBitsByRef(bits);
+						cache.bitsLoaded = true;
+						setSelectorDataVersion((current) => current + 1);
+					}
+					return bits;
+				} catch (error) {
+					console.error("Failed to load profile bits:", error);
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.bitsError = error;
+						setSelectorDataVersion((current) => current + 1);
+					}
+					return [];
+				} finally {
+					if (selectorCacheKeyRef.current === cacheKey) {
+						cache.bitsLoading = false;
+					}
+					bitOptionsPromiseRef.current = undefined;
 				}
+			})();
 
-				const seenIds = new Set<string>();
-				const pageElements = await Promise.all(
-					Array.from(pageTargets.entries()).map(async ([pageId, pageInfo]) => {
-						try {
-							const page = await backend.pageState.getPage(
-								appId,
-								pageId,
-								pageInfo.boardId,
-							);
-							return flattenPageElements(page.components ?? []).map(
-								(element) => ({
-									...element,
-									id: `${pageId}/${element.id}`,
-									rawId: element.id,
-									label: pageInfo.pageName
-										? `${pageInfo.pageName} / ${element.label}`
-										: element.label,
-									pageName: pageInfo.pageName,
-									pagePath: pageInfo.pagePath,
-								}),
-							);
-						} catch {
-							return [];
-						}
-					}),
-				);
-
-				const allElements = pageElements.flat().filter((element) => {
-					if (seenIds.has(element.id)) return false;
-					seenIds.add(element.id);
-					return true;
-				});
-
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.elementOptions = allElements;
-					cache.elementsLoaded = true;
-					setSelectorDataVersion((current) => current + 1);
-				}
-
-				return allElements;
-			} catch (error) {
-				console.error("Failed to load page elements:", error);
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.elementsError = error;
-					setSelectorDataVersion((current) => current + 1);
-				}
-				return [];
-			} finally {
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.elementsLoading = false;
-				}
-				elementOptionsPromiseRef.current = undefined;
-			}
-		})();
-
-		elementOptionsPromiseRef.current = promise;
-		return promise;
-	}, [appId, backend.eventState, backend.pageState, backend.routeState]);
-
-	const loadBitOptions = useCallback(async () => {
-		const cache = selectorDataRef.current;
-		if (cache.bitsLoaded) return cache.bitOptions;
-		if (bitOptionsPromiseRef.current) return bitOptionsPromiseRef.current;
-
-		const cacheKey = selectorCacheKeyRef.current;
-		cache.bitsLoading = true;
-		cache.bitsError = undefined;
-
-		const promise = (async () => {
-			try {
-				const bits = await backend.bitState.getProfileBits();
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.bitOptions = bits;
-					cache.bitsByRef = indexBitsByRef(bits);
-					cache.bitsLoaded = true;
-					setSelectorDataVersion((current) => current + 1);
-				}
-				return bits;
-			} catch (error) {
-				console.error("Failed to load profile bits:", error);
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.bitsError = error;
-					setSelectorDataVersion((current) => current + 1);
-				}
-				return [];
-			} finally {
-				if (selectorCacheKeyRef.current === cacheKey) {
-					cache.bitsLoading = false;
-				}
-				bitOptionsPromiseRef.current = undefined;
-			}
-		})();
-
-		bitOptionsPromiseRef.current = promise;
-		return promise;
-	}, [backend.bitState]);
+			bitOptionsPromiseRef.current = promise;
+			return promise;
+		},
+		[backend.bitState],
+	);
 
 	selectorDataRef.current.loadElements = loadElementOptions;
 	selectorDataRef.current.loadBits = loadBitOptions;
-
-	useEffect(() => {
-		if (selectorPrefetchKeyRef.current === selectorCacheKey) return;
-		selectorPrefetchKeyRef.current = selectorCacheKey;
-		void loadElementOptions();
-		void loadBitOptions();
-	}, [selectorCacheKey, loadElementOptions, loadBitOptions]);
 	const app = useInvoke(backend.appState.getApp, backend.appState, [appId]);
 	const { addRun, removeRun, pushUpdate } = useRunExecutionStore();
 	const { screenToFlowPosition, getViewport, setViewport, fitView, getNodes } =
@@ -589,22 +745,25 @@ export function FlowBoard({
 			</Button>,
 		);
 
-		// FlowPilot button with fancy styling
-		right.push(
-			<Button
-				variant={"outline"}
-				size={"icon"}
-				aria-label="Open FlowPilot"
-				onClick={() => setCopilotOpen(true)}
-				className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
-			>
-				<div className="absolute inset-0 rounded-md bg-linear-to-br from-primary/20 via-violet-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-				<SparklesIcon className="w-4 h-4 text-primary relative z-10" />
-				{currentMetadata && (
-					<span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
-				)}
-			</Button>,
-		);
+		// FlowPilot button with fancy styling. When the host provides the global assistant, the
+		// floating FlowPilot bubble is the entry point instead, so skip this in-interface button.
+		if (!externalAssistant) {
+			right.push(
+				<Button
+					variant={"outline"}
+					size={"icon"}
+					aria-label="Open FlowPilot"
+					onClick={() => openAssistant()}
+					className="relative group border-primary/30 hover:border-primary/60 hover:bg-primary/5"
+				>
+					<div className="absolute inset-0 rounded-md bg-linear-to-br from-primary/20 via-violet-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+					<SparklesIcon className="w-4 h-4 text-primary relative z-10" />
+					{currentMetadata && (
+						<span className="absolute -top-1 -right-1 w-2 h-2 bg-amber-500 rounded-full" />
+					)}
+				</Button>,
+			);
+		}
 
 		if (currentLayer) {
 			left.push(
@@ -630,6 +789,7 @@ export function FlowBoard({
 		parentRegister.boardParents,
 		boardId,
 		updateHeader,
+		externalAssistant,
 	]);
 
 	const pinToNode = useCallback(
@@ -660,6 +820,8 @@ export function FlowBoard({
 	const {
 		executeCommand,
 		executeCommands,
+		applyFlowScript,
+		applyFlowIrCommit,
 		awarenessRef: commandAwarenessRef,
 	} = useCommandExecution({
 		appId,
@@ -668,6 +830,7 @@ export function FlowBoard({
 		version,
 		pushCommand,
 		pushCommands,
+		stampHistory,
 	});
 
 	// Realtime collaboration
@@ -675,6 +838,7 @@ export function FlowBoard({
 		awareness,
 		connectionStatus,
 		peerStates,
+		cursorStore,
 		reconnect,
 		broadcastActiveNode,
 	} = useRealtimeCollaboration({
@@ -803,6 +967,7 @@ export function FlowBoard({
 
 	// Realtime chat
 	const [chatOpen, setChatOpen] = useState(false);
+	const handleToggleChat = useCallback(() => setChatOpen((v) => !v), []);
 	const {
 		messages: chatMessages,
 		sendMessage,
@@ -927,6 +1092,8 @@ export function FlowBoard({
 
 	const [varsOpen, setVarsOpen] = useState(false);
 
+	const [flowScriptSheetOpen, setFlowScriptSheetOpen] = useState(false);
+	const [flowScriptPanelVisible, setFlowScriptPanelVisible] = useState(false);
 	const [runsOpen, setRunsOpen] = useState(false);
 	const [logsOpen, setLogsOpen] = useState(false);
 	const [logNodeIdFilter, setLogNodeIdFilter] = useState<string | undefined>();
@@ -938,6 +1105,33 @@ export function FlowBoard({
 	const [copilotInitialPrompt, setCopilotInitialPrompt] = useState<
 		string | undefined
 	>();
+	// Stable snapshot of the selected flow-node ids handed to FlowPilot. Kept as
+	// state (updated only on real selection changes) so the copilot subtree is not
+	// re-rendered on every unrelated FlowBoard render.
+	const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+
+	const handleCopilotClose = useCallback(() => {
+		setCopilotOpen(false);
+		setCopilotInitialPrompt(undefined);
+		setCopilotWorkspaceVisible(false);
+	}, []);
+	// Single launcher: hosts with a global assistant (desktop) route to the shared surface store,
+	// everything else keeps the embedded FlowCopilot panel.
+	const openAssistant = useCallback(
+		(prompt?: string) => {
+			if (externalAssistant) {
+				useAssistantSurface.getState().requestOpenAssistant(prompt);
+				return;
+			}
+			if (prompt) setCopilotInitialPrompt(prompt);
+			setCopilotOpen(true);
+		},
+		[externalAssistant],
+	);
+	const handleClearRunContext = useCallback(
+		() => setCurrentMetadata(undefined),
+		[setCurrentMetadata],
+	);
 
 	useEffect(() => {
 		if (!copilotOpen) {
@@ -946,14 +1140,43 @@ export function FlowBoard({
 	}, [copilotOpen]);
 	const isMobile = useMediaQuery("(max-width: 767px)");
 
-	const { toggleVars, toggleRunHistory, toggleLogs } = useFlowPanels({
+	const { toggleVars, toggleLogs } = useFlowPanels({
 		varPanelRef,
-		runsPanelRef,
 		logPanelRef,
 		setVarsOpen,
-		setRunsOpen,
 		setLogsOpen,
 	});
+
+	// Runs and FlowScript are collapsible siblings on the right edge of the outer
+	// horizontal group. Collapsing one via the per-panel imperative API makes
+	// react-resizable-panels hand the freed width to its immediate neighbor, which
+	// un-collapses it (e.g. closing FlowScript surfaces Runs). Rewrite the whole
+	// layout instead and give the freed width back to the flexible main container.
+	const setSidePanelSize = useCallback((index: number, size: number) => {
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const layout = group.getLayout();
+		const current = layout[index] ?? 0;
+		if (Math.abs(current - size) < 0.01) return;
+		const next = [...layout];
+		next[index] = size;
+		next[MAIN_PANEL_INDEX] = Math.max(
+			0,
+			(next[MAIN_PANEL_INDEX] ?? 0) - (size - current),
+		);
+		group.setLayout(next);
+	}, []);
+
+	const toggleRunHistory = useCallback(() => {
+		if (isMobile) {
+			setRunsOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[RUNS_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(RUNS_PANEL_INDEX, open ? 30 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	const togglePages = useCallback(() => {
 		if (isMobile) {
@@ -964,6 +1187,17 @@ export function FlowBoard({
 			setPagesOpen((v) => !v);
 		}
 	}, [isMobile]);
+
+	const toggleFlowScript = useCallback(() => {
+		if (isMobile) {
+			setFlowScriptSheetOpen((v) => !v);
+			return;
+		}
+		const group = panelGroupRef.current;
+		if (!group) return;
+		const open = (group.getLayout()[FLOWSCRIPT_PANEL_INDEX] ?? 0) < 1;
+		setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, open ? 35 : 0);
+	}, [isMobile, setSidePanelSize]);
 
 	// Clear selections when version changes
 	useEffect(() => {
@@ -1624,10 +1858,9 @@ export function FlowBoard({
 					? "Explain what this node does and how it works in the context of this flow."
 					: `Explain what these ${nodeCount} selected nodes do and how they work together in this flow.`;
 
-			setCopilotInitialPrompt(prompt);
-			setCopilotOpen(true);
+			openAssistant(prompt);
 		},
-		[setNodes],
+		[setNodes, openAssistant],
 	);
 
 	const placeNode = useCallback(
@@ -1850,6 +2083,7 @@ export function FlowBoard({
 		redo,
 		rollbackUndo,
 		rollbackRedo,
+		stampHistory,
 	});
 
 	useEffect(() => {
@@ -2086,7 +2320,7 @@ export function FlowBoard({
 
 		setNodes(parsed.nodes);
 		setEdges(parsed.edges);
-		setPinCache(new Map(parsed.cache));
+		setPinCache(parsed.cache);
 	}, [
 		board.data,
 		currentLayer,
@@ -2124,21 +2358,26 @@ export function FlowBoard({
 		});
 	}, [remoteExecutingNodeIds, setNodes]);
 
-	// Inject peerUsers map into node data so nodes can display avatars for remote selections
+	// Inject peerUsers map into node data so nodes can display avatars for remote
+	// selections. peerUsers now has a stable identity (see usePeerUserInfo), so this
+	// runs only when peer user content actually changes — not on every render — and
+	// returns the same nodes array when nothing changed so ReactFlow doesn't reconcile.
 	const peerUsersRef = useRef(peerUsers);
 	peerUsersRef.current = peerUsers;
 	useEffect(() => {
-		if (peerStates.length === 0) return;
 		setNodes((nds: any) => {
 			if (nds.length === 0) return nds;
-			return nds.map((node: any) => {
+			let changed = false;
+			const next = nds.map((node: any) => {
 				if (node.type !== "node" && node.type !== "callFunctionNode")
 					return node;
 				if (node.data.peerUsers === peerUsers) return node;
+				changed = true;
 				return { ...node, data: { ...node.data, peerUsers } };
 			});
+			return changed ? next : nds;
 		});
-	}, [peerUsers, peerStates.length, setNodes]);
+	}, [peerUsers, setNodes]);
 
 	const nodeTypes = useMemo(
 		() => ({
@@ -2214,7 +2453,6 @@ export function FlowBoard({
 
 	const onSelectionChange = useCallback<OnSelectionChangeFunc<Node, Edge>>(
 		({ nodes: selectedNodes }) => {
-			if (!awareness) return;
 			const nodeIds = selectedNodes
 				.filter(
 					(selectedNode) =>
@@ -2222,6 +2460,12 @@ export function FlowBoard({
 						selectedNode.type === "callFunctionNode",
 				)
 				.map((selectedNode) => selectedNode.id);
+			setSelectedNodeIds((prev) => {
+				if (prev.length !== nodeIds.length) return nodeIds;
+				const prevSet = new Set(prev);
+				return nodeIds.every((id) => prevSet.has(id)) ? prev : nodeIds;
+			});
+			if (!awareness) return;
 			awareness.setLocalStateField("selection", { nodes: nodeIds });
 			// Broadcast active node when user clicks a single node
 			if (nodeIds.length === 1) {
@@ -2860,38 +3104,71 @@ export function FlowBoard({
 		[board.data, currentLayer, executeCommands, fitView, version],
 	);
 
-	const [ghostNodes, setGhostNodes] = useState<
-		{
-			id: string;
-			node_type: string;
-			position: { x: number; y: number };
-			reason: string;
-		}[]
-	>([]);
-
-	const handleGhostNodesChange = useCallback((suggestions: Suggestion[]) => {
-		setGhostNodes(
-			suggestions.map((s, i) => ({
-				id: `ghost-${i}`,
-				node_type: s.node_type,
-				position: s.position || { x: 0, y: 0 },
-				reason: s.reason,
-			})),
-		);
-	}, []);
-
 	// Use the copilot commands hook for executing AI-generated commands
 	const { handleExecuteCommands } = useCopilotCommands({
 		board,
 		catalog,
-		executeCommand,
+		executeCommands,
 		currentLayer,
 	});
+	const handleApplyFlowScript = useCallback(
+		(
+			flowscript: string,
+			options?: { allowDeletions?: boolean; suppressBlockedToast?: boolean },
+		) => applyFlowScript(flowscript, currentLayer, catalog.data, options),
+		[applyFlowScript, currentLayer, catalog.data],
+	);
+	const handleApplyFlowIrCommit = useCallback(
+		(token: Parameters<typeof applyFlowIrCommit>[0]) =>
+			applyFlowIrCommit(token),
+		[applyFlowIrCommit],
+	);
+
+	// Publish the live board surface for the global assistant while this board is
+	// mounted (old versions are read-only, so they never register).
+	useEffect(() => {
+		if (typeof version !== "undefined") return;
+		const surface: AssistantBoardSurface = {
+			appId,
+			boardId,
+			board: board.data,
+			currentLayer,
+			catalogNodes: catalog.data,
+			selectedNodeIds,
+			runContext: currentMetadata,
+			applyFlowScript: handleApplyFlowScript,
+			applyFlowIrCommit: handleApplyFlowIrCommit,
+			executeCommands: handleExecuteCommands,
+			focusNode,
+			selectNodes,
+			clearRunContext: handleClearRunContext,
+		};
+		useAssistantSurface.getState().setBoardSurface(surface);
+		return () => {
+			const store = useAssistantSurface.getState();
+			if (store.boardSurface === surface) store.setBoardSurface(null);
+		};
+	}, [
+		version,
+		appId,
+		boardId,
+		board.data,
+		currentLayer,
+		catalog.data,
+		selectedNodeIds,
+		currentMetadata,
+		handleApplyFlowScript,
+		handleApplyFlowIrCommit,
+		handleExecuteCommands,
+		focusNode,
+		selectNodes,
+		handleClearRunContext,
+	]);
 
 	return (
 		<div className="w-full flex flex-1 grow flex-col min-h-0 relative overflow-hidden">
-			{/* Desktop FlowPilot floating panel */}
-			{copilotOpen && (
+			{/* Desktop FlowPilot floating panel (embedded hosts only) */}
+			{!externalAssistant && copilotOpen && (
 				<div className="hidden md:block fixed inset-0 z-100 pointer-events-none">
 					<div
 						className="absolute inset-y-0 right-0 pointer-events-auto transition-[width] duration-300 ease-out"
@@ -2905,19 +3182,16 @@ export function FlowBoard({
 							appId={appId}
 							board={board.data}
 							catalogNodes={catalog.data}
-							selectedNodeIds={Array.from(selected.current)}
+							selectedNodeIds={selectedNodeIds}
 							onAcceptSuggestion={onAcceptSuggestion}
 							onFocusNode={focusNode}
 							onSelectNodes={selectNodes}
-							onGhostNodesChange={handleGhostNodesChange}
 							onExecuteCommands={handleExecuteCommands}
+							onApplyFlowScript={handleApplyFlowScript}
+							onApplyFlowIrCommit={handleApplyFlowIrCommit}
 							runContext={currentMetadata}
-							onClearRunContext={() => setCurrentMetadata(undefined)}
-							onClose={() => {
-								setCopilotOpen(false);
-								setCopilotInitialPrompt(undefined);
-								setCopilotWorkspaceVisible(false);
-							}}
+							onClearRunContext={handleClearRunContext}
+							onClose={handleCopilotClose}
 							onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 							mode="panel"
 							initialPrompt={copilotInitialPrompt}
@@ -2929,13 +3203,13 @@ export function FlowBoard({
 			<div className="fixed right-3 top-16 z-50 flex items-center gap-2 sm:right-4 sm:top-16 md:right-6 md:top-6">
 				{/* Connection status indicator */}
 				{awareness && connectionStatus === "connected" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--primary)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-primary animate-pulse" />
 						<span className="text-xs font-medium text-primary">Live</span>
 					</div>
 				)}
 				{awareness && connectionStatus === "reconnecting" && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--yellow-500)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiIcon className="h-3.5 w-3.5 text-yellow-500 animate-pulse" />
 						<span className="text-xs font-medium text-yellow-500">
 							Reconnecting...
@@ -2946,7 +3220,7 @@ export function FlowBoard({
 					<button
 						type="button"
 						onClick={() => reconnect()}
-						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
+						className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--destructive)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm hover:bg-[color-mix(in_oklch,var(--background)_85%,transparent)] transition-colors cursor-pointer"
 					>
 						<WifiOffIcon className="h-3.5 w-3.5 text-destructive" />
 						<span className="text-xs font-medium text-destructive">
@@ -2955,7 +3229,7 @@ export function FlowBoard({
 					</button>
 				)}
 				{!awareness && (
-					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 backdrop-blur-sm shadow-sm">
+					<div className="flex items-center gap-2 rounded-xl border border-[color-mix(in_oklch,var(--muted-foreground)_35%,transparent)] bg-[color-mix(in_oklch,var(--background)_92%,transparent)] px-3 py-1.5 shadow-sm">
 						<WifiOffIcon className="h-3.5 w-3.5 text-muted-foreground" />
 						<span className="text-xs font-medium text-muted-foreground">
 							Offline
@@ -2973,7 +3247,7 @@ export function FlowBoard({
 						onToggleFollow={toggleFollow}
 						onJumpToUser={jumpToUser}
 						onJumpToLayer={jumpToLayer}
-						onOpenChat={() => setChatOpen((v) => !v)}
+						onOpenChat={handleToggleChat}
 						unreadCount={unreadCount}
 					/>
 				)}
@@ -3088,6 +3362,13 @@ export function FlowBoard({
 							},
 						},
 						{
+							icon: <FileCode2Icon />,
+							title: "FlowScript",
+							onClick: async () => {
+								toggleFlowScript();
+							},
+						},
+						{
 							icon: <HistoryIcon />,
 							separator: "left",
 							title: "Run History",
@@ -3120,13 +3401,19 @@ export function FlowBoard({
 								]
 							: []),
 						...(extraDockItems ?? []),
-						{
-							icon: <SparklesIcon className="text-white" />,
-							title: "FlowPilot",
-							separator: "left",
-							special: true,
-							onClick: () => setCopilotOpen(true),
-						},
+						// The floating FlowPilot bubble replaces this dock item when the host
+						// provides the global assistant.
+						...(externalAssistant
+							? []
+							: [
+									{
+										icon: <SparklesIcon className="text-white" />,
+										title: "FlowPilot",
+										separator: "left",
+										special: true,
+										onClick: () => openAssistant(),
+									},
+								]),
 					]}
 				/>
 				{renderOverlay?.()}
@@ -3141,6 +3428,7 @@ export function FlowBoard({
 			)}
 
 			<ResizablePanelGroup
+				ref={panelGroupRef}
 				direction="horizontal"
 				className="flex grow flex-1 min-h-0 h-full overscroll-none"
 				style={{
@@ -3150,8 +3438,9 @@ export function FlowBoard({
 			>
 				{/* Desktop/Tablet side panels */}
 				<ResizablePanel
+					id="flow-variables"
+					order={1}
 					className="z-50 bg-background hidden md:block"
-					autoSave="flow-variables"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3168,7 +3457,7 @@ export function FlowBoard({
 					)}
 				</ResizablePanel>
 				<ResizableHandle withHandle />
-				<ResizablePanel autoSave="flow-main-container">
+				<ResizablePanel id="flow-main-container" order={2}>
 					<ResizablePanelGroup
 						direction="vertical"
 						className="h-full flex grow"
@@ -3266,21 +3555,18 @@ export function FlowBoard({
 											Version {version[0]}.{version[1]}.{version[2]} - Read-Only
 										</h3>
 									)}
-									<ReactFlow
-										suppressHydrationWarning
-										deleteKeyCode={null}
-										onContextMenu={onContextMenuCB}
-										nodesDraggable={typeof version === "undefined"}
-										nodesConnectable={typeof version === "undefined"}
-										onInit={initializeFlow}
-										ref={flowRef}
-										colorMode={colorMode}
+									<FlowCanvas
+										flowRef={flowRef}
 										nodes={nodes}
-										nodeTypes={nodeTypes}
 										edges={edges}
+										nodeTypes={nodeTypes}
 										edgeTypes={edgeTypes}
-										maxZoom={3}
-										minZoom={0.1}
+										colorMode={colorMode}
+										nodesInteractive={typeof version === "undefined"}
+										onlyRenderVisible={nodes.length > 65}
+										currentLayer={currentLayer}
+										onContextMenu={onContextMenuCB}
+										onInit={initializeFlow}
 										onNodeDoubleClick={onNodeDoubleClick}
 										onNodesChange={onNodesChangeIntercept}
 										onEdgesChange={onEdgesChange}
@@ -3292,49 +3578,16 @@ export function FlowBoard({
 										onReconnect={onReconnect}
 										onReconnectStart={onReconnectStart}
 										onMoveEnd={onMoveEnd}
-										// onEdgeDoubleClick={(e, edge) => {
-										// 	console.dir({e, edge})
-										// }}
 										onReconnectEnd={onReconnectEnd}
 										onConnectEnd={onConnectEnd}
-										fitView
-										proOptions={{ hideAttribution: true }}
-									>
-										<Controls>
-											<ControlButton onClick={onScreenshot}>
-												<ShareIcon className="size-4" />
-											</ControlButton>
-										</Controls>
-										<MiniMap
-											pannable
-											zoomable
-											bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
-											maskColor="color-mix(in oklch, var(--foreground) 10%, transparent)"
-											nodeColor={miniMapNodeColor}
-										/>
-										<Background
-											variant={
-												currentLayer
-													? BackgroundVariant.Lines
-													: BackgroundVariant.Dots
-											}
-											color={
-												currentLayer
-													? "color-mix(in oklch, var(--foreground) 5%, transparent)"
-													: "color-mix(in oklch, var(--foreground) 20%, transparent)"
-											}
-											bgColor="color-mix(in oklch, var(--background) 80%, transparent)"
-											gap={12}
-											size={1}
-										/>
-									</ReactFlow>
-									{peerStates.length > 0 && (
-										<FlowCursors
-											peers={peerStates}
-											currentLayerPath={layerPath ?? "root"}
-											peerUsers={peerUsers}
-										/>
-									)}
+										onScreenshot={onScreenshot}
+										miniMapNodeColor={miniMapNodeColor}
+									/>
+									<FlowCursorsLayer
+										store={cursorStore}
+										currentLayerPath={layerPath ?? "root"}
+										peerUsers={peerUsers}
+									/>
 									{peerStates.length > 0 && (
 										<FlowLayerIndicators
 											peers={peerStates}
@@ -3395,8 +3648,9 @@ export function FlowBoard({
 				</ResizablePanel>
 				<ResizableHandle withHandle />
 				<ResizablePanel
+					id="flow-runs"
+					order={3}
 					className="z-50 hidden md:block"
-					autoSave="flow-runs"
 					defaultSize={0}
 					collapsible={true}
 					collapsedSize={0}
@@ -3414,10 +3668,36 @@ export function FlowBoard({
 						/>
 					)}
 				</ResizablePanel>
+				<ResizableHandle withHandle />
+				<ResizablePanel
+					id="flow-flowscript"
+					order={4}
+					className="z-50 hidden md:block"
+					defaultSize={0}
+					collapsible={true}
+					collapsedSize={0}
+					ref={flowScriptPanelRef}
+					onExpand={() => setFlowScriptPanelVisible(true)}
+					onCollapse={() => setFlowScriptPanelVisible(false)}
+				>
+					{board.data && flowScriptPanelVisible && (
+						<FlowScriptPanel
+							appId={appId}
+							boardId={boardId}
+							version={version}
+							boardUpdatedAt={board.dataUpdatedAt}
+							catalogNodes={catalog.data}
+							onApplyFlowScript={handleApplyFlowScript}
+							onClose={() => setSidePanelSize(FLOWSCRIPT_PANEL_INDEX, 0)}
+						/>
+					)}
+				</ResizablePanel>
 				{searchMode === "sidebar" && searchOpen && (
 					<>
 						<ResizableHandle withHandle />
 						<ResizablePanel
+							id="flow-search"
+							order={5}
 							className="z-50 hidden md:block min-w-[280px] max-w-[400px]"
 							defaultSize={20}
 							minSize={15}
@@ -3496,6 +3776,27 @@ export function FlowBoard({
 						)}
 					</SheetContent>
 				</Sheet>
+				{/* FlowScript Sheet (mobile) */}
+				<Sheet open={flowScriptSheetOpen} onOpenChange={setFlowScriptSheetOpen}>
+					<SheetContent side="bottom" className="h-[90dvh] w-full p-0">
+						<SheetHeader className="px-4 pt-4">
+							<SheetTitle>FlowScript</SheetTitle>
+						</SheetHeader>
+						{board.data && flowScriptSheetOpen && (
+							<div className="h-[calc(90dvh-3.5rem)] w-full">
+								<FlowScriptPanel
+									appId={appId}
+									boardId={boardId}
+									version={version}
+									boardUpdatedAt={board.dataUpdatedAt}
+									catalogNodes={catalog.data}
+									onApplyFlowScript={handleApplyFlowScript}
+									onClose={() => setFlowScriptSheetOpen(false)}
+								/>
+							</div>
+						)}
+					</SheetContent>
+				</Sheet>
 				{/* Pages Sheet */}
 				<Sheet open={pagesOpen} onOpenChange={setPagesOpen}>
 					<SheetContent side="right" className="w-[400px] sm:w-[540px] p-0">
@@ -3511,9 +3812,9 @@ export function FlowBoard({
 						/>
 					</SheetContent>
 				</Sheet>
-				{/* Mobile FlowPilot Sheet */}
+				{/* Mobile FlowPilot Sheet (embedded hosts only) */}
 				<Sheet
-					open={copilotOpen && isMobile}
+					open={!externalAssistant && copilotOpen && isMobile}
 					onOpenChange={(open) => {
 						setCopilotOpen(open);
 						if (!open) setCopilotInitialPrompt(undefined);
@@ -3525,19 +3826,16 @@ export function FlowBoard({
 								appId={appId}
 								board={board.data}
 								catalogNodes={catalog.data}
-								selectedNodeIds={Array.from(selected.current)}
+								selectedNodeIds={selectedNodeIds}
 								onAcceptSuggestion={onAcceptSuggestion}
 								onFocusNode={focusNode}
 								onSelectNodes={selectNodes}
-								onGhostNodesChange={handleGhostNodesChange}
 								onExecuteCommands={handleExecuteCommands}
+								onApplyFlowScript={handleApplyFlowScript}
+								onApplyFlowIrCommit={handleApplyFlowIrCommit}
 								runContext={currentMetadata}
-								onClearRunContext={() => setCurrentMetadata(undefined)}
-								onClose={() => {
-									setCopilotOpen(false);
-									setCopilotInitialPrompt(undefined);
-									setCopilotWorkspaceVisible(false);
-								}}
+								onClearRunContext={handleClearRunContext}
+								onClose={handleCopilotClose}
 								onWorkspaceVisibleChange={setCopilotWorkspaceVisible}
 								mode="panel"
 								initialPrompt={copilotInitialPrompt}
@@ -3578,6 +3876,7 @@ export function FlowBoard({
 				existingValues={existingRuntimeVars}
 				onSave={handleRuntimeVarsSave}
 				onCancel={handleRuntimeVarsCancel}
+				refs={board.data?.refs}
 			/>
 
 			{/* WASM Sandbox Warning */}

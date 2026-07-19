@@ -362,9 +362,8 @@ async fn spawn_message_reader(
                             })
                             .map(|(_, p)| p.clone())
                             .collect();
-                        for pin in pins {
+                        if let Some(pin) = pins.first() {
                             pin.set_value(json!(text)).await;
-                            break;
                         }
                     }
                 } else if single_byte {
@@ -379,9 +378,8 @@ async fn spawn_message_reader(
                         })
                         .map(|(_, p)| p.clone())
                         .collect();
-                    for pin in pins {
+                    if let Some(pin) = pins.first() {
                         pin.set_value(json!(data)).await;
-                        break;
                     }
                 } else {
                     let payload_pins: Vec<_> = ctx

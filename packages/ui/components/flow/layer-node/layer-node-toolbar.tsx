@@ -26,7 +26,7 @@ export const ToolbarButton = memo(
 		tooltip,
 		variant = "default",
 	}: {
-		onClick: (e: Event | undefined) => void;
+		onClick: (e?: React.MouseEvent<HTMLButtonElement>) => void;
 		icon: React.ComponentType<{ className?: string }>;
 		tooltip: string;
 		variant?: "default" | "destructive";
@@ -42,7 +42,7 @@ export const ToolbarButton = memo(
 					}`}
 					onClick={(e) => {
 						e.stopPropagation();
-						onClick(undefined);
+						onClick(e);
 					}}
 				>
 					<Icon className="h-3 w-3" />

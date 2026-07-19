@@ -439,7 +439,7 @@ function DeveloperPublishPageContent() {
 				response.message ??
 					"Package published as private! You can manage it from the registry.",
 			);
-			router.push("/store/packages?tab=projects");
+			router.push("/developer");
 		} catch (err) {
 			toast.error(`Publish failed: ${err}`);
 		} finally {
@@ -458,10 +458,7 @@ function DeveloperPublishPageContent() {
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<Button
-							variant="outline"
-							onClick={() => router.push("/store/packages?tab=projects")}
-						>
+						<Button variant="outline" onClick={() => router.push("/developer")}>
 							<ArrowLeft className="mr-2 h-4 w-4" />
 							Back to Projects
 						</Button>
@@ -509,10 +506,7 @@ function DeveloperPublishPageContent() {
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="flex gap-2">
-						<Button
-							variant="outline"
-							onClick={() => router.push("/store/packages?tab=projects")}
-						>
+						<Button variant="outline" onClick={() => router.push("/developer")}>
 							<ArrowLeft className="mr-2 h-4 w-4" />
 							Back
 						</Button>
@@ -540,7 +534,7 @@ function DeveloperPublishPageContent() {
 						variant="ghost"
 						size="sm"
 						className="mb-2 -ml-2"
-						onClick={() => router.push("/store/packages?tab=projects")}
+						onClick={() => router.push("/developer")}
 					>
 						<ArrowLeft className="mr-1 h-4 w-4" />
 						Back to Projects
@@ -1136,9 +1130,7 @@ function DeveloperPublishPageContent() {
 						<Button
 							variant="outline"
 							onClick={
-								step === "manifest"
-									? () => router.push("/store/packages?tab=projects")
-									: prevStep
+								step === "manifest" ? () => router.push("/developer") : prevStep
 							}
 						>
 							Back

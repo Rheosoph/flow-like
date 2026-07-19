@@ -60,6 +60,7 @@ import {
 	FolderClosedIcon,
 	GlobeIcon,
 	KeyIcon,
+	LayersIcon,
 	LayoutGridIcon,
 	LockIcon,
 	Maximize2Icon,
@@ -88,7 +89,8 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
-import { EVENT_CONFIG } from "../../../lib/event-config";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import { isIosTauriRuntime } from "../../../lib/platform";
 
 const navigationItems: {
 	href: string;
@@ -168,9 +170,9 @@ const navigationItems: {
 	},
 	{
 		href: "/library/config/explore",
-		label: "Explore Data",
+		label: "Data Studio",
 		icon: DatabaseIcon,
-		description: "Browse and query your data",
+		description: "Model, explore, operate, and share project data",
 		group: "Data",
 	},
 	{
@@ -189,6 +191,20 @@ const navigationItems: {
 			IAppVisibility.Public,
 			IAppVisibility.Prototype,
 			IAppVisibility.PublicRequestAccess,
+		],
+		group: "Collaborate",
+	},
+	{
+		href: "/library/config/suites",
+		label: "Suites",
+		icon: LayersIcon,
+		description: "Bundle this app with related apps into one store listing",
+		// A suite is presentation, not membership — private apps curate them too.
+		visibilities: [
+			IAppVisibility.Public,
+			IAppVisibility.Prototype,
+			IAppVisibility.PublicRequestAccess,
+			IAppVisibility.Private,
 		],
 		group: "Collaborate",
 	},
@@ -313,20 +329,9 @@ export default function Id({
 		[publicationRequests.data],
 	);
 
-	const isIosTauri = useMemo(() => {
-		if (typeof window === "undefined" || typeof navigator === "undefined") {
-			return false;
-		}
-
-		const isTauri =
-			"__TAURI__" in (window as any) ||
-			"__TAURI_IPC__" in (window as any) ||
-			"__TAURI_INTERNALS__" in (window as any);
-		const isIOS =
-			/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-			(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
-		return isTauri && isIOS;
+	const [isIosTauri, setIsIosTauri] = useState(false);
+	useEffect(() => {
+		setIsIosTauri(isIosTauriRuntime());
 	}, []);
 
 	// Lock page scroll on desktop (md+) so only the right card scrolls

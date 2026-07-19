@@ -9,6 +9,8 @@ import {
 	Circle,
 	Columns3,
 	CreditCard,
+	FileDiff,
+	GanttChartSquare,
 	Image,
 	ImagePlus,
 	Layers,
@@ -17,6 +19,7 @@ import {
 	List,
 	Loader2,
 	MessageSquare,
+	Mic,
 	MousePointer,
 	PanelLeft,
 	Rows3,
@@ -31,6 +34,7 @@ import {
 	ToggleLeft,
 	Type,
 	Upload,
+	UserRound,
 	Video,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -207,6 +211,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		description: "User avatar",
 	},
 	{
+		type: "userProfile",
+		label: "User Profile",
+		icon: UserRound,
+		category: "Display",
+		description: "Lookup and display a user by sub",
+	},
+	{
 		type: "progress",
 		label: "Progress",
 		icon: SlidersHorizontal,
@@ -261,6 +272,14 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Image,
 		category: "Display",
 		description: "Preview files (PDF, images, etc)",
+	},
+	{
+		type: "diffView",
+		label: "Diff View",
+		icon: FileDiff,
+		category: "Display",
+		description:
+			"Side-by-side, unified or inline diff for text, code, markdown & documents",
 	},
 	{
 		type: "nivoChart",
@@ -361,6 +380,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: ImagePlus,
 		category: "Interactive",
 		description: "Image upload with preview",
+	},
+	{
+		type: "voiceInput",
+		label: "Voice Input",
+		icon: Mic,
+		category: "Interactive",
+		description: "Record audio or speech-to-text",
 	},
 	{
 		type: "link",
@@ -519,6 +545,20 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Square,
 		category: "Display",
 		description: "Interactive geographic map with markers and routes",
+	},
+	{
+		type: "calendar",
+		label: "Calendar",
+		icon: Calendar,
+		category: "Display",
+		description: "Interactive calendar with month/week/day/agenda views",
+	},
+	{
+		type: "gantt",
+		label: "Gantt",
+		icon: GanttChartSquare,
+		category: "Display",
+		description: "Interactive Gantt timeline for planning tasks",
 	},
 ];
 

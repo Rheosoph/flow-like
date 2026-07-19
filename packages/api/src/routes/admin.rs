@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 pub mod ai_act;
 pub mod bit;
+pub mod connections;
 pub mod forks;
 pub mod governance;
 pub mod logs;
@@ -24,6 +25,10 @@ pub mod users;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/connections/graph",
+            get(connections::get_global_connection_graph),
+        )
         .route(
             "/bit/{bit_id}",
             put(upsert_bit::upsert_bit).delete(delete_bit::delete_bit),
@@ -60,12 +65,20 @@ pub fn routes() -> Router<AppState> {
             patch(publication::upsert_requests::upsert_request),
         )
         .route(
+            "/publication/suites",
+            get(publication::get_group_requests::get_group_requests),
+        )
+        .route(
             "/publication/apps/{app_id}/content",
             get(publication::get_app_content::get_app_content),
         )
         .route(
             "/publication/apps/{app_id}/board/{board_id}",
             get(publication::get_board::get_board),
+        )
+        .route(
+            "/publication/apps/{app_id}/page/{page_id}",
+            get(publication::get_page::get_page),
         )
         // Package management routes
         .route("/packages", get(packages::get_packages::get_packages))

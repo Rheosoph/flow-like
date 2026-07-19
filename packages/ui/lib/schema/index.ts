@@ -24,6 +24,15 @@ export {
 	ITtsModelType,
 	ITtsRuntimePreference,
 } from "./bit/bit/tts-parameters";
+export type {
+	ISttAssetRef,
+	ISttModelParameters,
+} from "./bit/bit/stt-parameters";
+export {
+	ISttDTypePreference,
+	ISttModelType,
+	ISttRuntimePreference,
+} from "./bit/bit/stt-parameters";
 export type { IVlmParameters } from "./bit/bit/vlm-parameters";
 export type { IProvider } from "./bit/bit/provider";
 export * from "./storage/storage-item";
@@ -49,7 +58,7 @@ export type {
 	ICanaryEvent,
 	IReleaseNotes,
 } from "./flow/event";
-export { IEventExecutionMode } from "./flow/event";
+export { IEventExecutionMode, IEventExposure } from "./flow/event";
 export type { IEventPayload } from "./flow/event-payload";
 export type { IEventPayloadMail } from "./flow/event-payload-mail";
 export type { IEventPayloadChat } from "./flow/event-payload-chat";

@@ -13,6 +13,7 @@ pub mod invoke;
 pub mod lazy_register_tools;
 pub mod memory;
 pub mod register_mcp_tools;
+pub mod register_remote_mcp_tools;
 pub mod register_thinking;
 pub mod register_tools;
 pub mod set_system_prompt;
@@ -29,6 +30,123 @@ pub struct McpServerConfig {
     /// If Some, only tools in this set are used
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_filter: Option<HashSet<String>>,
+
+    /// Optional bearer token (without the `Bearer ` prefix) sent in the
+    /// Authorization header of every request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_header: Option<String>,
+
+    /// Connected app whose short-lived bearer should be resolved immediately
+    /// before opening the MCP transport. Keeping identity instead of a token in
+    /// the serialized agent avoids freezing an expiring credential in a pin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_app_id: Option<String>,
+
+    /// MCP event hosted by `remote_app_id`. Remote transports reconstruct
+    /// their URI from this validated identity and the freshly minted session;
+    /// the serialized `uri` is never trusted as a bearer-token destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_event_id: Option<String>,
+
+    /// Additional headers included with every MCP request. Connected-app MCP
+    /// proxies use this for registration auth while `auth_header` remains the
+    /// app-connection bearer token.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub custom_headers: HashMap<String, String>,
+}
+
+/// Builds the streamable-HTTP transport config for an MCP server,
+/// attaching the configured Authorization header to every request.
+#[cfg(feature = "execute")]
+pub(crate) fn mcp_transport_config(
+    config: &McpServerConfig,
+) -> rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
+    use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+
+    let mut transport_config = StreamableHttpClientTransportConfig::with_uri(config.uri.clone());
+    // RMCP expects the raw bearer token and adds the `Bearer` scheme itself.
+    // Accept the legacy serialized form to avoid double-prefixing saved agents.
+    transport_config.auth_header = config
+        .auth_header
+        .as_deref()
+        .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).to_string());
+    transport_config.custom_headers = config
+        .custom_headers
+        .iter()
+        .filter_map(|(name, value)| {
+            match (
+                flow_like_types::reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+                flow_like_types::reqwest::header::HeaderValue::from_bytes(value.as_bytes()),
+            ) {
+                (Ok(name), Ok(value)) => Some((name, value)),
+                _ => {
+                    // A dropped registration header would otherwise surface only
+                    // as a downstream 401 with no cause; log which header so a
+                    // stray control byte in a pasted credential is diagnosable.
+                    tracing::warn!(
+                        header = %name,
+                        "Skipping MCP custom header that is not a valid HTTP header name/value"
+                    );
+                    None
+                }
+            }
+        })
+        .collect();
+    transport_config
+}
+
+/// Builds an MCP transport and resolves a connected-app bearer at the last
+/// responsible moment. The underlying session helper is run-scoped,
+/// expiry-aware, and single-flight, so this is cheap for repeated agents.
+#[cfg(feature = "execute")]
+pub(crate) async fn mcp_transport_config_for_execution(
+    config: &McpServerConfig,
+    context: &flow_like::flow::execution::context::ExecutionContext,
+) -> flow_like_types::Result<
+    rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig,
+> {
+    match (
+        config.remote_app_id.as_deref(),
+        config.remote_event_id.as_deref(),
+    ) {
+        (None, None) => Ok(mcp_transport_config(config)),
+        (Some(remote_app_id), Some(remote_event_id)) => {
+            let remote_app_id = flow_like_catalog_data::remote_util::validate_path_id(
+                remote_app_id,
+                "remote project",
+            )?;
+            let remote_event_id = flow_like_catalog_data::remote_util::validate_path_id(
+                remote_event_id,
+                "remote event",
+            )?;
+            let session = flow_like_catalog_data::remote_util::remote_app_session_for_mcp(
+                context,
+                &remote_app_id,
+            )
+            .await?;
+            let trusted_uri = session.url(&format!("events/{remote_event_id}/mcp"));
+            Ok(mcp_transport_config_with_remote_credentials(
+                config,
+                trusted_uri,
+                session.token,
+            ))
+        }
+        _ => Err(flow_like_types::anyhow!(
+            "Remote MCP configuration requires both a remote project and event"
+        )),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn mcp_transport_config_with_remote_credentials(
+    config: &McpServerConfig,
+    trusted_uri: String,
+    token: String,
+) -> rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
+    let mut trusted = config.clone();
+    trusted.uri = trusted_uri;
+    trusted.auth_header = Some(token);
+    mcp_transport_config(&trusted)
 }
 
 /// DataFusion session context for SQL-based data analysis
@@ -398,5 +516,116 @@ mod tests {
         let agent = Agent::new(Bit::default(), 4);
 
         assert!(agent.get_system_prompt().is_none());
+    }
+
+    #[test]
+    fn remote_mcp_config_serializes_identity_without_a_bearer() {
+        let config = McpServerConfig {
+            uri: "https://example.invalid/mcp".to_string(),
+            tool_filter: None,
+            auth_header: None,
+            remote_app_id: Some("remote-app".to_string()),
+            remote_event_id: Some("remote-event".to_string()),
+            custom_headers: HashMap::new(),
+        };
+
+        let serialized = flow_like_types::json::to_value(&config).unwrap();
+        assert_eq!(
+            serialized
+                .get("remote_app_id")
+                .and_then(|value| value.as_str()),
+            Some("remote-app")
+        );
+        assert_eq!(
+            serialized
+                .get("remote_event_id")
+                .and_then(|value| value.as_str()),
+            Some("remote-event")
+        );
+        assert!(serialized.get("auth_header").is_none());
+
+        let legacy: McpServerConfig = flow_like_types::json::from_value(
+            flow_like_types::json::json!({ "uri": "https://example.invalid/mcp" }),
+        )
+        .unwrap();
+        assert!(legacy.remote_app_id.is_none());
+        assert!(legacy.remote_event_id.is_none());
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn remote_mcp_bearer_ignores_a_serialized_untrusted_uri() {
+        let crafted = McpServerConfig {
+            uri: "https://attacker.invalid/collect".to_string(),
+            tool_filter: None,
+            auth_header: Some("attacker-controlled".to_string()),
+            remote_app_id: Some("remote-app".to_string()),
+            remote_event_id: Some("remote-event".to_string()),
+            custom_headers: HashMap::new(),
+        };
+
+        let transport = mcp_transport_config_with_remote_credentials(
+            &crafted,
+            "https://hub.invalid/api/v1/apps/remote-app/events/remote-event/mcp".to_string(),
+            "fresh-connection-token".to_string(),
+        );
+
+        assert_eq!(
+            transport.uri.as_ref(),
+            "https://hub.invalid/api/v1/apps/remote-app/events/remote-event/mcp"
+        );
+        assert_eq!(
+            transport.auth_header.as_deref(),
+            Some("fresh-connection-token")
+        );
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn mcp_transport_keeps_connection_bearer_and_registration_headers_separate() {
+        let config = McpServerConfig {
+            uri: "https://example.invalid/mcp".to_string(),
+            tool_filter: None,
+            auth_header: Some("connection-token".to_string()),
+            remote_app_id: None,
+            remote_event_id: None,
+            custom_headers: HashMap::from([
+                (
+                    "x-flow-like-event-authorization".to_string(),
+                    "Bearer registration-token".to_string(),
+                ),
+                ("x-api-key".to_string(), "secret".to_string()),
+            ]),
+        };
+
+        let transport = mcp_transport_config(&config);
+        let event_auth_header = flow_like_types::reqwest::header::HeaderName::from_static(
+            "x-flow-like-event-authorization",
+        );
+        let api_key_header = flow_like_types::reqwest::header::HeaderName::from_static("x-api-key");
+
+        assert_eq!(transport.auth_header.as_deref(), Some("connection-token"));
+        assert_eq!(transport.custom_headers.len(), 2);
+        assert_eq!(
+            transport
+                .custom_headers
+                .get(&event_auth_header)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer registration-token")
+        );
+        assert_eq!(
+            transport
+                .custom_headers
+                .get(&api_key_header)
+                .and_then(|value| value.to_str().ok()),
+            Some("secret")
+        );
+
+        let mut legacy = config;
+        legacy.auth_header = Some("Bearer legacy-token".to_string());
+        assert_eq!(
+            mcp_transport_config(&legacy).auth_header.as_deref(),
+            Some("legacy-token")
+        );
     }
 }

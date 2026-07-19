@@ -43,6 +43,7 @@ async-trait = "0.1"
 # Concurrency
 parking_lot = "0.12"
 dashmap.workspace = true
+ahash.workspace = true
 
 # HTTP Client
 reqwest.workspace = true
@@ -78,8 +79,9 @@ default = ["component-model"]
 wasi = []
 # Enable Component Model support (for Python, etc.)
 component-model = ["wasmtime/component-model"]
-# Enable model/embedding support for WASM host functions
-model = ["flow-like/model"]
+# Enable model/embedding support for WASM host functions, including the
+# authenticated embedding proxy used by hosted/remote-capable Bits.
+model = ["flow-like/model", "flow-like/remote-ml"]
 # Enable OpenAPI schema generation
 openapi = ["utoipa", "flow-like/openapi"]
 # Enable all cranelift backends for cross-compilation

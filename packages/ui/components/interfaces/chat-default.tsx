@@ -29,10 +29,11 @@ import {
 	IRole,
 	Response,
 } from "../../lib";
+import { getCurrentPageContext } from "../../lib/page-context";
 import type { IInteractionRequest } from "../../lib/schema/interaction";
 import { useSetQueryParams } from "../../lib/set-query-params";
-import { getCurrentPageContext } from "../../lib/page-context";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
+import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import { useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import {
@@ -54,15 +55,21 @@ import {
 	HoverCardTrigger,
 } from "../ui";
 import { fileToAttachment } from "./chat-default/attachment";
+import { ChatAppearance } from "./chat-default/appearance";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
 	type IMessage,
 	chatDb,
 } from "./chat-default/chat-db";
+import {
+	ChatWidgetExecutionProvider,
+	type RunWidgetAction,
+} from "./chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
+import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
@@ -107,7 +114,11 @@ async function prepareAttachments(
 			...(await fileToAttachment([audioFile], backend, isOffline)),
 		);
 	}
-	return { imageAttachments, otherAttachments };
+	return {
+		imageAttachments,
+		otherAttachments,
+		historyAttachments: [...imageAttachments, ...otherAttachments],
+	};
 }
 
 /**
@@ -145,10 +156,7 @@ function deduplicateConsecutiveMessages(messages: IMessage[]): IMessage[] {
 	return result;
 }
 
-function createHistoryMessage(
-	content: string,
-	imageAttachments: IAttachment[],
-) {
+function createHistoryMessage(content: string, attachments: IAttachment[]) {
 	const historyMessage: IHistoryMessage = {
 		content: [
 			{
@@ -159,14 +167,144 @@ function createHistoryMessage(
 		role: IRole.User,
 	};
 
-	for (const image of imageAttachments) {
-		const url = typeof image === "string" ? image : image.url;
-		(historyMessage.content as IContent[]).push({
-			type: IContentType.IImageURL,
-			image_url: {
-				url: url,
-			},
-		});
+	for (const attachment of attachments) {
+		const url = typeof attachment === "string" ? attachment : attachment.url;
+		const explicitMime =
+			typeof attachment === "string" ? undefined : attachment.type;
+		const dataMime = url.match(/^data:([^;,]+)/)?.[1];
+		const mime = (explicitMime || dataMime || "").toLowerCase();
+		const cleanUrl = url.split(/[?#]/, 1)[0].toLowerCase();
+		const canInferFromExtension = mime === "";
+		const parts = historyMessage.content as IContent[];
+
+		if (
+			[
+				"image/jpeg",
+				"image/jpg",
+				"image/png",
+				"image/gif",
+				"image/webp",
+				"image/heic",
+				"image/heif",
+				"image/svg+xml",
+			].includes(mime) ||
+			(canInferFromExtension &&
+				/\.(jpe?g|png|gif|webp|heic|heif|svg)$/.test(cleanUrl))
+		) {
+			parts.push({
+				type: IContentType.IImageURL,
+				image_url: { url, media_type: mime || undefined },
+			});
+			continue;
+		}
+		if (
+			[
+				"audio/wav",
+				"audio/x-wav",
+				"audio/wave",
+				"audio/mp3",
+				"audio/mpeg",
+				"audio/mpeg3",
+				"audio/aiff",
+				"audio/x-aiff",
+				"audio/aac",
+				"audio/ogg",
+				"audio/flac",
+				"audio/m4a",
+				"audio/x-m4a",
+				"audio/mp4",
+				"audio/pcm16",
+				"audio/pcm24",
+			].includes(mime) ||
+			(canInferFromExtension &&
+				/\.(wav|mp3|aiff?|aac|ogg|flac|m4a|pcm16|pcm24)$/.test(cleanUrl))
+		) {
+			parts.push({
+				type: IContentType.AudioURL,
+				audio_url: url,
+				media_type: mime || undefined,
+			});
+			continue;
+		}
+		if (
+			[
+				"video/avi",
+				"video/x-msvideo",
+				"video/mp4",
+				"video/mpeg",
+				"video/mov",
+				"video/quicktime",
+				"video/webm",
+			].includes(mime) ||
+			(canInferFromExtension && /\.(avi|mp4|mpe?g|mov|webm)$/.test(cleanUrl))
+		) {
+			parts.push({
+				type: IContentType.VideoURL,
+				video_url: url,
+				media_type: mime || undefined,
+			});
+			continue;
+		}
+		if (
+			[
+				"application/pdf",
+				"text/plain",
+				"text/rtf",
+				"application/rtf",
+				"text/html",
+				"text/css",
+				"text/markdown",
+				"text/md",
+				"text/x-markdown",
+				"text/csv",
+				"text/xml",
+				"application/xml",
+				"application/x-javascript",
+				"application/javascript",
+				"text/javascript",
+				"text/x-javascript",
+				"application/x-python",
+				"text/x-python",
+			].includes(mime) ||
+			(canInferFromExtension &&
+				/\.(pdf|txt|rtf|html?|css|md|markdown|csv|xml|m?js|cjs|py)$/.test(
+					cleanUrl,
+				))
+		) {
+			parts.push({
+				type: IContentType.DocumentURL,
+				document_url: url,
+				media_type: mime || undefined,
+			});
+			continue;
+		}
+
+		// Unrecognized media types must still reach the model: fall back to the MIME's top-level
+		// type so an attachment is never silently dropped from the outgoing message.
+		if (mime.startsWith("image/")) {
+			parts.push({
+				type: IContentType.IImageURL,
+				image_url: { url, media_type: mime },
+			});
+		} else if (mime.startsWith("audio/")) {
+			parts.push({
+				type: IContentType.AudioURL,
+				audio_url: url,
+				media_type: mime,
+			});
+		} else if (mime.startsWith("video/")) {
+			parts.push({
+				type: IContentType.VideoURL,
+				video_url: url,
+				media_type: mime,
+			});
+		} else {
+			parts.push({
+				type: IContentType.DocumentURL,
+				document_url: url,
+				media_type: mime || undefined,
+			});
+		}
 	}
 	return historyMessage;
 }
@@ -236,6 +374,11 @@ function createPayload(
 								type: c.type,
 								text: c.text,
 								image_url: c.image_url,
+								audio_url: c.audio_url,
+								video_url: c.video_url,
+								document_url: c.document_url,
+								media_type: c.media_type,
+								additional_params: c.additional_params,
 							})),
 			})),
 			historyMessage,
@@ -285,6 +428,7 @@ function cloneResponseMessageForCompletion(
 	clonedMessage.plan_steps = undefined;
 	clonedMessage.current_step_id = undefined;
 	clonedMessage.usage_stats = undefined;
+	clonedMessage.widgets = undefined;
 
 	return clonedMessage;
 }
@@ -470,46 +614,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			}
 
 			try {
-				if (interaction.responder_jwt) {
-					const profile = backend.profile;
-					let baseUrl = profile?.hub ?? "api.flow-like.com";
-					if (
-						typeof process !== "undefined" &&
-						process.env?.NEXT_PUBLIC_API_URL
-					) {
-						baseUrl = process.env.NEXT_PUBLIC_API_URL;
-					}
-					if (
-						!baseUrl.startsWith("http://") &&
-						!baseUrl.startsWith("https://")
-					) {
-						baseUrl =
-							profile?.secure === false
-								? `http://${baseUrl}`
-								: `https://${baseUrl}`;
-					}
-					if (!baseUrl.endsWith("/")) baseUrl += "/";
-					const url = `${baseUrl}api/v1/interaction/${interactionId}/respond`;
-
-					const res = await fetch(url, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							Authorization: `Bearer ${interaction.responder_jwt}`,
-						},
-						body: JSON.stringify({ value }),
-					});
-					if (!res.ok) {
-						const errorText = await res.text();
-						throw new Error(`API responded ${res.status}: ${errorText}`);
-					}
-				} else {
-					const { invoke } = await import("@tauri-apps/api/core");
-					await invoke("respond_to_interaction", {
-						interactionId,
-						value,
-					});
-				}
+				await submitInteractionResponse(interaction, value, backend.profile);
 
 				setActiveInteractions((prev) =>
 					prev.map((i) =>
@@ -1125,14 +1230,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				// Clear pending message since OAuth is satisfied
 				pendingMessageRef.current = null;
 
-				const { imageAttachments, otherAttachments } = await prepareAttachments(
-					filesAttached,
-					audioFile,
-					backend,
-					isOffline,
-				);
+				const { otherAttachments, historyAttachments } =
+					await prepareAttachments(
+						filesAttached,
+						audioFile,
+						backend,
+						isOffline,
+					);
 
-				const historyMessage = createHistoryMessage(content, imageAttachments);
+				const historyMessage = createHistoryMessage(
+					content,
+					historyAttachments,
+				);
 
 				const userMessage = createUserMessage(
 					sessionIdParameter,
@@ -1148,10 +1257,45 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				const lastMessages =
 					messagesRef.current?.slice(-history_elements) ?? [];
 
+				// Let vision-capable models see the rendered UI: snapshot the
+				// latest assistant message's embedded widgets and attach them to
+				// the outgoing turn only — the persisted user message stays clean.
+				let payloadHistoryMessage = historyMessage;
+				if (config?.attach_widget_snapshots !== false) {
+					try {
+						const latestWidgets = [...lastMessages]
+							.reverse()
+							.find(
+								(message) =>
+									message.inner.role === IRole.Assistant &&
+									message.widgets?.length,
+							)?.widgets;
+						if (latestWidgets?.length) {
+							const snapshots = await captureWidgetSnapshots(
+								latestWidgets.map((widget) => widget.instance_id),
+							);
+							if (snapshots.length) {
+								payloadHistoryMessage = {
+									...historyMessage,
+									content: [
+										...(historyMessage.content as IContent[]),
+										...snapshots.map((url) => ({
+											type: IContentType.IImageURL,
+											image_url: { url },
+										})),
+									],
+								};
+							}
+						}
+					} catch (error) {
+						console.warn("[Chat] widget snapshot failed:", error);
+					}
+				}
+
 				const payload = createPayload(
 					userMessage,
 					lastMessages,
-					historyMessage,
+					payloadHistoryMessage,
 					localState,
 					globalState,
 					activeTools ?? [],
@@ -1516,35 +1660,148 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		setQueryParams("message", undefined);
 	}, [setQueryParams]);
 
+	// Runs a widget action triggered from an embedded chat widget. Like the app
+	// view, this is a plain BOARD run starting at the bound node (payload.id) —
+	// never the chat event, whose node would reject the widget payload. The
+	// run executes against the widget's own app/board (for widgets of this
+	// chat that equals appId/event.board_id; a widget `origin` may point
+	// elsewhere). Its a2ui events (forwarded via onA2UIEvents) update the
+	// widget in place; toasts surface via the executeBoard transport; and any
+	// chat pushes from the triggered workflow become a new assistant message.
+	const runWidgetAction = useCallback<RunWidgetAction>(
+		async (actionAppId, actionBoardId, runPayload, onA2UIEvents) => {
+			const responseMessage = createResponseMessage(
+				sessionIdParameter,
+				appId,
+				event.name,
+			);
+			let intermediateResponse = Response.default();
+			const attachments = new Map<string, IAttachment>();
+
+			const result = await backend.boardState.executeBoard(
+				actionAppId,
+				actionBoardId,
+				runPayload,
+				false,
+				undefined,
+				(events) => {
+					if (events.length) {
+						console.debug(
+							"[ChatWidget] action run events:",
+							events.map((e) => e.event_type),
+						);
+					}
+					handleNavigationEvents(events);
+					onA2UIEvents?.(events);
+
+					const processed = processChatEvents(events, {
+						intermediateResponse,
+						responseMessage,
+						attachments,
+						tmpLocalState: null,
+						tmpGlobalState: null,
+						done: false,
+						appId,
+						eventId: event.id,
+						sessionId: sessionIdParameter,
+					});
+
+					intermediateResponse = processed.intermediateResponse;
+					Object.assign(responseMessage, processed.responseMessage);
+
+					if (processed.interactions?.length) {
+						addInteractions(processed.interactions);
+					}
+
+					// The assistant bubble appears only once the action actually
+					// streams chat content — a pure widget update shows nothing.
+					if (processed.shouldUpdate) {
+						chatRef.current?.pushCurrentMessageUpdate({
+							...processed.responseMessage,
+						});
+						chatRef.current?.scrollToBottom();
+					}
+				},
+			);
+
+			// LogLevel::Error = 3 — a node failure inside the run resolves normally
+			// (errors are run logs, not exceptions), so surface it explicitly.
+			if ((result?.log_level ?? 0) >= 3) {
+				toast.error(
+					"Widget action failed — check the flow's Runs panel for the failing node.",
+				);
+			}
+
+			const textContent =
+				typeof responseMessage.inner.content === "string"
+					? responseMessage.inner.content.trim()
+					: (responseMessage.inner.content?.length ?? 0);
+			const hasContent = Boolean(
+				textContent ||
+					responseMessage.files?.length ||
+					responseMessage.widgets?.length ||
+					responseMessage.plan_steps?.length,
+			);
+
+			// Only persist a new assistant message when the action produced chat
+			// content; a pure in-place widget update leaves no residue.
+			if (hasContent) {
+				await chatDb.messages.put(responseMessage);
+			}
+			chatRef.current?.clearCurrentMessageUpdate();
+			if (hasContent) {
+				chatRef.current?.scrollToBottom();
+			}
+
+			return result;
+		},
+		[
+			backend,
+			appId,
+			event,
+			sessionIdParameter,
+			addInteractions,
+			handleNavigationEvents,
+		],
+	);
+
 	return (
 		<>
-			{!messagesLoaded ? (
-				<div className="flex flex-col items-center justify-center h-full gap-3">
-					<Loader2Icon className="w-6 h-6 animate-spin text-muted-foreground" />
-					<p className="text-sm text-muted-foreground">
-						Loading conversation...
-					</p>
-				</div>
-			) : showWelcome ? (
-				<ChatWelcome
-					onSendMessage={handleSendMessage}
-					event={event}
-					config={config}
-					isSending={isSendingFromWelcome}
-				/>
-			) : (
-				<Chat
-					ref={chatRef}
-					sessionId={sessionIdParameter}
-					messages={messages}
-					onSendMessage={handleSendMessage}
-					onMessageUpdate={onMessageUpdate}
-					config={config}
-					isStreamActive={isStreamActive}
-					activeInteractions={activeInteractions}
-					onRespondToInteraction={handleRespondToInteraction}
-				/>
-			)}
+			<ChatAppearance appId={appId} eventId={event.id} config={config}>
+				{!messagesLoaded ? (
+					<div className="flex h-full flex-col items-center justify-center gap-3">
+						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
+						<p className="text-sm text-muted-foreground">
+							Loading conversation...
+						</p>
+					</div>
+				) : showWelcome ? (
+					<ChatWelcome
+						onSendMessage={handleSendMessage}
+						event={event}
+						config={config}
+						isSending={isSendingFromWelcome}
+					/>
+				) : (
+					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+						<Chat
+							ref={chatRef}
+							sessionId={sessionIdParameter}
+							messages={messages}
+							onSendMessage={handleSendMessage}
+							onMessageUpdate={onMessageUpdate}
+							config={config}
+							isStreamActive={isStreamActive}
+							activeInteractions={activeInteractions}
+							onRespondToInteraction={handleRespondToInteraction}
+							appId={appId}
+							boardId={event.board_id}
+							eventId={event.id}
+							showAiDisclosure
+						/>
+					</ChatWidgetExecutionProvider>
+				)}
+			</ChatAppearance>
 			<AlertDialog
 				open={showPrefilledConfirm}
 				onOpenChange={(open) => {

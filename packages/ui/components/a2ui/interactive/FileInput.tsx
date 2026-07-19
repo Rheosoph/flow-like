@@ -18,6 +18,10 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { BoundValue, FileInputComponent } from "../types";
+import {
+	limitUploadBatch,
+	mergeSuccessfulUploadBatch,
+} from "./upload-input-state";
 
 interface FileData {
 	name: string;
@@ -27,6 +31,7 @@ interface FileData {
 	url?: string;
 	backendUrl?: string;
 	flowPath?: ITemporaryFlowPath;
+	uploadId?: string;
 	uploading?: boolean;
 	uploadError?: string;
 }
@@ -34,6 +39,7 @@ interface FileData {
 function toStoredFile(file: FileData): FileData {
 	const {
 		dataUrl: _dataUrl,
+		uploadId: _uploadId,
 		uploading: _uploading,
 		uploadError: _uploadError,
 		...stored
@@ -104,7 +110,7 @@ export function A2UIFileInput({
 	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
-	const { appId } = useActionContext();
+	const { appId, resolveTemporaryUploadTarget } = useActionContext();
 	const value = useResolved<FileData | FileData[]>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const error = useResolved<boolean>(component.error);
@@ -118,38 +124,47 @@ export function A2UIFileInput({
 		useResolved<number>(component.maxFiles) ?? Number.POSITIVE_INFINITY;
 	const { setByPath } = useData();
 
-	const [localFiles, setLocalFiles] = useState<FileData[]>([]);
+	const [localFiles, setLocalFiles] = useState<FileData[] | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
+	const uploadOperationRef = useRef(0);
 	const isBusy = isUploading || isTriggering;
 
 	const files = normalizeFileValue(value);
-	const displayFiles = localFiles.length > 0 ? localFiles : files;
+	const displayFiles = localFiles ?? files;
 
 	const clearFiles = useCallback(() => {
+		uploadOperationRef.current += 1;
 		setLocalFiles([]);
+		setIsUploading(false);
 		if (component.value && "path" in component.value) {
 			setByPath(component.value.path, multiple ? [] : null);
 		}
 	}, [component.value, multiple, setByPath]);
 
+	useEffect(
+		() => () => {
+			uploadOperationRef.current += 1;
+		},
+		[],
+	);
+
 	useEffect(() => {
-		const handleClearFileInput = (
-			event: CustomEvent<{ surfaceId: string; componentId: string }>,
-		) => {
+		const handleClearFileInput = (event: Event) => {
+			const { detail } = event as CustomEvent<{
+				surfaceId: string;
+				componentId: string;
+			}>;
 			if (
-				event.detail.surfaceId === surfaceId &&
-				event.detail.componentId === componentId
+				detail.surfaceId === surfaceId &&
+				detail.componentId === componentId
 			) {
 				clearFiles();
 			}
 		};
 
-		window.addEventListener("a2ui:clearFileInput" as any, handleClearFileInput);
+		window.addEventListener("a2ui:clearFileInput", handleClearFileInput);
 		return () => {
-			window.removeEventListener(
-				"a2ui:clearFileInput" as any,
-				handleClearFileInput,
-			);
+			window.removeEventListener("a2ui:clearFileInput", handleClearFileInput);
 		};
 	}, [surfaceId, componentId, clearFiles]);
 
@@ -157,35 +172,57 @@ export function A2UIFileInput({
 		const selectedFiles = Array.from(e.target.files || []);
 		if (selectedFiles.length === 0) return;
 
-		const validFiles = selectedFiles.filter((f) => f.size <= maxSize);
+		const currentFiles = displayFiles.filter(
+			(file) => !file.uploading && !file.uploadError,
+		);
+		const validFiles = limitUploadBatch(
+			selectedFiles.filter((file) => file.size <= maxSize),
+			currentFiles.length,
+			Boolean(multiple),
+			maxFiles,
+		);
+		if (validFiles.length === 0) {
+			if (inputRef.current) inputRef.current.value = "";
+			return;
+		}
 
+		const operationId = ++uploadOperationRef.current;
 		setIsUploading(true);
-		const uploadedFiles: FileData[] = [];
-
-		for (const file of validFiles) {
-			const fileData: FileData = {
+		const pendingFiles = validFiles.map(
+			(file, index): FileData => ({
 				name: file.name,
 				size: file.size,
 				type: file.type,
+				uploadId: `${operationId}-${index}`,
 				uploading: true,
-			};
+			}),
+		);
+		setLocalFiles(
+			multiple ? [...currentFiles, ...pendingFiles] : [pendingFiles[0]],
+		);
+		const uploadResults: FileData[] = [];
+		const executionTarget = await resolveTemporaryUploadTarget?.(
+			component.actions?.[0],
+		);
+		if (uploadOperationRef.current !== operationId) return;
 
-			setLocalFiles((prev) => {
-				const updated = multiple
-					? [...prev, fileData].slice(0, maxFiles)
-					: [fileData];
-				return updated;
-			});
-
+		for (const [index, file] of validFiles.entries()) {
+			if (uploadOperationRef.current !== operationId) return;
+			const uploadId = pendingFiles[index].uploadId;
 			try {
-				const temporaryFile =
-					(await backend.helperState.fileToTemporaryFile?.(
+				const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
+					file,
+					false,
+					appId,
+					executionTarget,
+				)) ?? {
+					url: await backend.helperState.fileToUrl(
 						file,
 						false,
 						appId,
-					)) ?? {
-						url: await backend.helperState.fileToUrl(file, false, appId),
-					};
+						executionTarget,
+					),
+				};
 
 				const uploadedFile: FileData = {
 					name: file.name,
@@ -196,13 +233,15 @@ export function A2UIFileInput({
 					flowPath: temporaryFile.flowPath,
 					uploading: false,
 				};
-				uploadedFiles.push(uploadedFile);
+				uploadResults.push(uploadedFile);
 
-				setLocalFiles((prev) =>
-					prev.map((f) =>
-						f.name === file.name && f.uploading ? uploadedFile : f,
-					),
-				);
+				if (uploadOperationRef.current === operationId) {
+					setLocalFiles((previous) =>
+						(previous ?? []).map((entry) =>
+							entry.uploadId === uploadId ? uploadedFile : entry,
+						),
+					);
+				}
 			} catch (err) {
 				const errorFile: FileData = {
 					name: file.name,
@@ -211,28 +250,44 @@ export function A2UIFileInput({
 					uploading: false,
 					uploadError: "Upload failed",
 				};
+				uploadResults.push(errorFile);
 
-				setLocalFiles((prev) =>
-					prev.map((f) =>
-						f.name === file.name && f.uploading ? errorFile : f,
-					),
-				);
+				if (uploadOperationRef.current === operationId) {
+					setLocalFiles((previous) =>
+						(previous ?? []).map((entry) =>
+							entry.uploadId === uploadId ? errorFile : entry,
+						),
+					);
+				}
 			}
 		}
 
+		if (uploadOperationRef.current !== operationId) return;
 		setIsUploading(false);
 
-		const successfulUploads = uploadedFiles.filter((f) => f.backendUrl);
+		const successfulUploads = uploadResults.filter((file) => file.backendUrl);
+		const failedUploads = uploadResults.filter((file) => file.uploadError);
+		const committedFiles = mergeSuccessfulUploadBatch(
+			currentFiles,
+			uploadResults,
+			Boolean(multiple),
+			maxFiles,
+			(file) => Boolean(file.backendUrl),
+		);
+		setLocalFiles(
+			multiple ? [...committedFiles, ...failedUploads] : committedFiles,
+		);
+
 		if (successfulUploads.length > 0) {
-			const newValue = multiple
-				? [...files, ...successfulUploads].slice(0, maxFiles)
-				: successfulUploads[0];
+			const newValue = multiple ? committedFiles : committedFiles[0];
 
 			if (component.value && "path" in component.value) {
 				setByPath(component.value.path, newValue);
 			}
 
-			const urls = successfulUploads.map((f) => (f.url ?? f.backendUrl) as string);
+			const urls = successfulUploads.map(
+				(f) => (f.url ?? f.backendUrl) as string,
+			);
 
 			onAction?.({
 				type: "userAction",
@@ -259,7 +314,10 @@ export function A2UIFileInput({
 
 	const handleRemove = (index: number) => {
 		const newFiles = displayFiles.filter((_, i) => i !== index);
-		const newValue = multiple ? newFiles : null;
+		const committedFiles = newFiles.filter(
+			(file) => !file.uploading && !file.uploadError,
+		);
+		const newValue = multiple ? committedFiles : null;
 
 		setLocalFiles(newFiles);
 
@@ -267,7 +325,9 @@ export function A2UIFileInput({
 			setByPath(component.value.path, newValue);
 		}
 
-		const urls = newFiles.map((f) => f.url ?? f.backendUrl).filter(Boolean);
+		const urls = committedFiles
+			.map((file) => file.url ?? file.backendUrl)
+			.filter(Boolean);
 
 		onAction?.({
 			type: "userAction",
@@ -280,10 +340,18 @@ export function A2UIFileInput({
 				signedUrls: multiple ? urls : (urls[0] ?? null),
 			},
 		});
+
+		const action = component.actions?.[0];
+		if (action) {
+			void executeAction(action, componentId, {
+				signedUrls: multiple ? urls : (urls[0] ?? null),
+			});
+		}
 	};
 
 	return (
 		<div
+			data-card-action-stop
 			className={cn("space-y-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>
@@ -291,26 +359,28 @@ export function A2UIFileInput({
 				<Label className={cn(error && "text-destructive")}>{label}</Label>
 			)}
 
-			<div
+			<Input
+				ref={inputRef}
+				type="file"
+				className="hidden"
+				accept={accept}
+				multiple={multiple}
+				disabled={disabled || isBusy}
+				onChange={handleFileSelect}
+			/>
+
+			<button
+				type="button"
 				className={cn(
-					"border-2 border-dashed rounded-lg p-4 transition-colors",
+					"w-full appearance-none bg-transparent border-2 border-dashed rounded-lg p-4 transition-colors",
 					disabled || isBusy
 						? "opacity-50 cursor-not-allowed"
 						: "cursor-pointer hover:border-primary",
 					error ? "border-destructive" : "border-muted-foreground/25",
 				)}
 				onClick={() => !disabled && !isBusy && inputRef.current?.click()}
+				disabled={disabled || isBusy}
 			>
-				<Input
-					ref={inputRef}
-					type="file"
-					className="hidden"
-					accept={accept}
-					multiple={multiple}
-					disabled={disabled || isBusy}
-					onChange={handleFileSelect}
-				/>
-
 				<div className="flex flex-col items-center gap-2 text-muted-foreground">
 					{isBusy ? (
 						<>
@@ -335,7 +405,7 @@ export function A2UIFileInput({
 						</>
 					)}
 				</div>
-			</div>
+			</button>
 
 			{displayFiles.length > 0 && (
 				<div className="space-y-2">

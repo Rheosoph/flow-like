@@ -71,6 +71,10 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             pin.set_schema::<MarkdownProps>();
             true
         }
+        "diffview" => {
+            pin.set_schema::<DiffViewProps>();
+            true
+        }
         "divider" => {
             pin.set_schema::<DividerProps>();
             true
@@ -81,6 +85,10 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
         }
         "avatar" => {
             pin.set_schema::<AvatarProps>();
+            true
+        }
+        "userprofile" => {
+            pin.set_schema::<UserProfileProps>();
             true
         }
         "progress" => {
@@ -143,6 +151,10 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
         }
         "imageinput" => {
             pin.set_schema::<ImageInputProps>();
+            true
+        }
+        "voiceinput" => {
+            pin.set_schema::<VoiceInputProps>();
             true
         }
         "link" => {
@@ -240,6 +252,16 @@ pub fn set_component_schema_by_type(pin: &mut Pin, component_type: &str) -> bool
             true
         }
 
+        // Planning
+        "calendar" => {
+            pin.set_schema::<CalendarProps>();
+            true
+        }
+        "gantt" => {
+            pin.set_schema::<GanttProps>();
+            true
+        }
+
         // Unknown type - use generic element
         _ => {
             pin.set_schema::<A2UIElement>();
@@ -272,9 +294,11 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "video",
         "lottie",
         "markdown",
+        "diffView",
         "divider",
         "badge",
         "avatar",
+        "userProfile",
         "progress",
         "spinner",
         "skeleton",
@@ -291,6 +315,7 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "dateTimeInput",
         "fileInput",
         "imageInput",
+        "voiceInput",
         "link",
         // Container
         "card",
@@ -316,5 +341,8 @@ pub fn valid_component_types() -> &'static [&'static str] {
         // Embeds
         "iframe",
         "plotlyChart",
+        // Planning
+        "calendar",
+        "gantt",
     ]
 }

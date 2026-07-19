@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { IIndexType } from "@flow-like/flow-like-ui";
 import type {
 	IAddColumnPayload,
+	ICreateTableResult,
+	IDatabaseSchemaField,
 	IDatabaseState,
 	IIndexConfig,
-	IIndexType,
 	IQueryTablePayload,
 } from "@flow-like/flow-like-ui";
 import { fetcher } from "../../lib/api";
@@ -24,6 +26,51 @@ function appendScope(url: string, userScoped?: boolean): string {
 
 export class DatabaseState implements IDatabaseState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	async createTable(
+		appId: string,
+		tableName: string,
+		fields: IDatabaseSchemaField[],
+		ifNotExists = true,
+		userScoped?: boolean,
+	): Promise<ICreateTableResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return await fetcher(
+				this.backend.profile!,
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}`,
+					userScoped,
+				),
+				{
+					method: "POST",
+					body: JSON.stringify({ fields, if_not_exists: ifNotExists }),
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke<ICreateTableResult>("db_create_table", {
+			appId,
+			tableName,
+			fields,
+			ifNotExists,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	private indexTypeToString(indexType: IIndexType): string {
+		const map: Record<IIndexType, string> = {
+			[IIndexType.FullText]: "FullText",
+			[IIndexType.BTree]: "BTree",
+			[IIndexType.Bitmap]: "Bitmap",
+			[IIndexType.LabelList]: "LabelList",
+			[IIndexType.Auto]: "Auto",
+		};
+		return map[indexType] ?? "Auto";
+	}
+
 	async buildIndex(
 		appId: string,
 		tableName: string,
@@ -45,8 +92,8 @@ export class DatabaseState implements IDatabaseState {
 					method: "POST",
 					body: JSON.stringify({
 						column,
-						indexType,
-						optimize,
+						index_type: this.indexTypeToString(indexType),
+						optimize: optimize ?? false,
 					}),
 				},
 				this.backend.auth,
@@ -362,7 +409,7 @@ export class DatabaseState implements IDatabaseState {
 				),
 				{
 					method: "POST",
-					body: JSON.stringify({ keepVersions: keepVersions ?? false }),
+					body: JSON.stringify({ keep_versions: keepVersions ?? false }),
 				},
 				this.backend.auth,
 			);

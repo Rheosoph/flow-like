@@ -270,6 +270,10 @@ html:has(.node-doc) {
 	--pin-execution: var(--sl-color-white);
 }
 
+html:has(.node-doc) mobile-starlight-toc {
+	display: none;
+}
+
 .node-doc,
 .node-doc *,
 .node-doc *::before,

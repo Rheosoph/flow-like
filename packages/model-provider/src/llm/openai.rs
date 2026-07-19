@@ -1,6 +1,7 @@
 use std::any::Any;
 
 use super::{ModelLogic, UsageReportingMode, extract_headers, merge_additional_params};
+use crate::llm::CompletionClientDyn;
 use crate::provider::random_provider;
 use crate::{
     history::History,
@@ -8,8 +9,6 @@ use crate::{
     provider::{ModelProvider, ModelProviderConfiguration},
 };
 use flow_like_types::{Cacheable, Result, async_trait, json::json};
-#[allow(deprecated)]
-use rig::client::completion::CompletionClientDyn;
 
 #[derive(Clone)]
 enum OpenAIClientType {
@@ -227,8 +226,8 @@ mod tests {
             .agent(&model.default_model.unwrap_or(history.model.clone()))
             .build();
 
-        let (prompt, history_msgs) = history.extract_prompt_and_history().unwrap();
-        let response: String = agent.chat(prompt, history_msgs).await.unwrap();
+        let (prompt, mut history_msgs) = history.extract_prompt_and_history().unwrap();
+        let response: String = agent.chat(prompt, &mut history_msgs).await.unwrap();
 
         assert!(!response.is_empty());
     }
@@ -283,9 +282,9 @@ mod tests {
             .temperature(1.0)
             .build();
 
-        let (prompt, history) = history.extract_prompt_and_history().unwrap();
+        let (prompt, mut history) = history.extract_prompt_and_history().unwrap();
 
-        let response: String = agent.chat(prompt, history).await.unwrap();
+        let response: String = agent.chat(prompt, &mut history).await.unwrap();
         println!("Final response: {:?}", response);
         assert!(!response.is_empty());
     }
@@ -340,7 +339,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                     chunks += 1;
@@ -414,7 +413,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                     chunks += 1;
@@ -567,10 +566,11 @@ mod tests {
             .tool(WeatherTool)
             .build();
 
+        let mut history = Vec::<Message>::new();
         let response: String = agent
             .chat(
                 "Call the tool to get the weather for San Francisco, CA in celsius.",
-                Vec::<Message>::new(),
+                &mut history,
             )
             .await
             .expect("Failed to get response");
@@ -616,7 +616,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                 }
@@ -649,10 +649,11 @@ mod tests {
             .build();
 
         // This will automatically call the tool and use its result
+        let mut history = Vec::<Message>::new();
         let response: String = agent
             .chat(
                 "What is the weather in Paris in celsius? Use the tool.",
-                Vec::<Message>::new(),
+                &mut history,
             )
             .await
             .expect("Failed to get response");
@@ -692,6 +693,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -711,9 +714,9 @@ mod tests {
             .agent(&model.default_model.unwrap_or(history.model.clone()))
             .build();
 
-        let (prompt, history_msgs) = history.extract_prompt_and_history().unwrap();
+        let (prompt, mut history_msgs) = history.extract_prompt_and_history().unwrap();
 
-        let response: String = match agent.chat(prompt, history_msgs).await {
+        let response: String = match agent.chat(prompt, &mut history_msgs).await {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("{e}");
@@ -760,6 +763,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -789,7 +794,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                     chunks += 1;
@@ -860,10 +865,11 @@ mod tests {
             .tool(WeatherTool)
             .build();
 
+        let mut history = Vec::<Message>::new();
         let response: String = agent
             .chat(
                 "Call the tool to get the weather for San Francisco, CA in celsius.",
-                Vec::<Message>::new(),
+                &mut history,
             )
             .await
             .expect("Failed to get response");
@@ -904,7 +910,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                 }
@@ -932,10 +938,11 @@ mod tests {
             .tool(WeatherTool)
             .build();
 
+        let mut history = Vec::<Message>::new();
         let response: String = agent
             .chat(
                 "What is the weather in Paris in celsius? Use the tool.",
-                Vec::<Message>::new(),
+                &mut history,
             )
             .await
             .expect("Failed to get response");
@@ -980,6 +987,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -999,9 +1008,9 @@ mod tests {
             .agent(&model.default_model.unwrap_or(history.model.clone()))
             .build();
 
-        let (prompt, history_msgs) = history.extract_prompt_and_history().unwrap();
+        let (prompt, mut history_msgs) = history.extract_prompt_and_history().unwrap();
 
-        let response: String = match agent.chat(prompt, history_msgs).await {
+        let response: String = match agent.chat(prompt, &mut history_msgs).await {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("{e}");
@@ -1049,6 +1058,8 @@ mod tests {
                             image_url: ImageUrl {
                                 url: image_url.to_string(),
                                 detail: None,
+                                media_type: None,
+                                additional_params: None,
                             },
                         },
                     ]),
@@ -1078,7 +1089,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                     chunks += 1;
@@ -1124,7 +1135,8 @@ mod tests {
 
         let prompt =
             "Call both weather and forecast tools for Berlin (3 days), return tool calls only.";
-        let response: String = agent.chat(prompt, Vec::<Message>::new()).await.unwrap();
+        let mut history = Vec::<Message>::new();
+        let response: String = agent.chat(prompt, &mut history).await.unwrap();
 
         assert!(!response.is_empty());
         assert!(response.contains("Berlin") || response.contains("berlin"));
@@ -1158,7 +1170,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                 }
@@ -1190,7 +1202,8 @@ mod tests {
 
         let prompt =
             "Call both weather and forecast tools for Berlin (3 days), return tool calls only.";
-        let response: String = agent.chat(prompt, Vec::<Message>::new()).await.unwrap();
+        let mut history = Vec::<Message>::new();
+        let response: String = agent.chat(prompt, &mut history).await.unwrap();
 
         assert!(!response.is_empty());
         assert!(response.contains("Berlin") || response.contains("berlin"));
@@ -1220,7 +1233,7 @@ mod tests {
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
-                    Text { text },
+                    Text { text, .. },
                 ))) => {
                     response.push_str(&text);
                 }

@@ -15,7 +15,7 @@
 		"@types/node": "^22.10.10",
 		"dotenv": "^17.2.2",
 		"drizzle-kit": "^0.31.8",
-		"drizzle-orm": "^0.44.5",
+		"drizzle-orm": "0.45.2",
 		"pg": "^8.16.3",
 		"prisma": "^7.2.0",
 		"tsx": "^4.19.2",

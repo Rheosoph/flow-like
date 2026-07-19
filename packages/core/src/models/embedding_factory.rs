@@ -7,7 +7,7 @@ use flow_like_model_provider::{
 
 use crate::{bit::Bit, state::FlowLikeState};
 
-#[cfg(feature = "remote-ml")]
+#[cfg(any(feature = "remote-ml", test))]
 use super::llm::ModelUsageContext;
 #[cfg(feature = "local-ml")]
 use super::{
@@ -21,6 +21,32 @@ pub struct EmbeddingFactory {
     pub cached_text_models: HashMap<String, Arc<dyn EmbeddingModelLogic>>,
     pub cached_image_models: HashMap<String, Arc<dyn ImageEmbeddingModelLogic>>,
     pub ttl_list: HashMap<String, SystemTime>,
+}
+
+#[cfg(any(feature = "remote-ml", test))]
+fn embedding_usage_headers(usage_context: Option<&ModelUsageContext>) -> Vec<(String, String)> {
+    let Some(context) = usage_context else {
+        return Vec::new();
+    };
+
+    let mut headers = Vec::new();
+    if let Some(app_id) = context
+        .app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|app_id| !app_id.is_empty())
+    {
+        headers.push(("x-flow-like-app-id".to_string(), app_id.to_string()));
+    }
+    if let Some(run_id) = context
+        .run_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+    {
+        headers.push(("x-flow-like-run-id".to_string(), run_id.to_string()));
+    }
+    headers
 }
 
 impl Default for EmbeddingFactory {
@@ -89,7 +115,7 @@ impl EmbeddingFactory {
     pub async fn build_image(
         &mut self,
         bit: &Bit,
-        app_state: Arc<FlowLikeState>,
+        _app_state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Arc<dyn ImageEmbeddingModelLogic>> {
         let provider = bit.try_to_image_embedding();
         if provider.is_none() {
@@ -107,7 +133,7 @@ impl EmbeddingFactory {
                     return Ok(model.clone());
                 }
 
-                let local_model = LocalImageEmbeddingModel::new(bit, app_state, self).await?;
+                let local_model = LocalImageEmbeddingModel::new(bit, _app_state, self).await?;
                 self.ttl_list.insert(bit.id.clone(), SystemTime::now());
                 self.cached_image_models
                     .insert(bit.id.clone(), local_model.clone());
@@ -144,28 +170,7 @@ impl EmbeddingFactory {
             ));
         }
 
-        let usage_headers = usage_context
-            .map(|context| {
-                let mut headers = Vec::new();
-                if let Some(app_id) = context
-                    .app_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|app_id| !app_id.is_empty())
-                {
-                    headers.push(("x-flow-like-app-id".to_string(), app_id.to_string()));
-                }
-                if let Some(run_id) = context
-                    .run_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|run_id| !run_id.is_empty())
-                {
-                    headers.push(("x-flow-like-run-id".to_string(), run_id.to_string()));
-                }
-                headers
-            })
-            .unwrap_or_default();
+        let usage_headers = embedding_usage_headers(usage_context.as_ref());
 
         let proxy_model = ProxyEmbeddingModel::new(
             embedding_provider,
@@ -201,5 +206,43 @@ impl EmbeddingFactory {
             self.cached_image_models.remove(&id);
             self.ttl_list.remove(&id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(usage_context: Option<&ModelUsageContext>) -> HashMap<String, String> {
+        embedding_usage_headers(usage_context).into_iter().collect()
+    }
+
+    #[test]
+    fn offline_embedding_usage_omits_app_header_but_keeps_run_header() {
+        let usage_context = ModelUsageContext {
+            app_id: None,
+            run_id: Some("run-1".to_string()),
+        };
+        let headers = headers(Some(&usage_context));
+
+        assert!(!headers.contains_key("x-flow-like-app-id"));
+        assert_eq!(headers["x-flow-like-run-id"], "run-1");
+    }
+
+    #[test]
+    fn server_backed_embedding_usage_includes_app_and_run_headers() {
+        let usage_context = ModelUsageContext {
+            app_id: Some("app-1".to_string()),
+            run_id: Some("run-1".to_string()),
+        };
+        let headers = headers(Some(&usage_context));
+
+        assert_eq!(headers["x-flow-like-app-id"], "app-1");
+        assert_eq!(headers["x-flow-like-run-id"], "run-1");
+    }
+
+    #[test]
+    fn missing_embedding_usage_context_adds_no_headers() {
+        assert!(headers(None).is_empty());
     }
 }

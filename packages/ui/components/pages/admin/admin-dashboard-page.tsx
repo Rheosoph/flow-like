@@ -24,6 +24,7 @@ import {
 	ShieldAlert,
 	UserCog,
 	Users,
+	Waypoints,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -222,7 +223,8 @@ const ADMIN_SECTIONS: AdminSection[] = [
 	},
 	{
 		title: "Governance",
-		description: "Review publication requests and manage app submissions.",
+		description:
+			"Review app and suite publication requests and manage submissions.",
 		icon: BookOpen,
 		href: "/admin/governance",
 		permission: GlobalPermission.ReadPublishing,
@@ -231,6 +233,7 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Overview", href: "/admin/governance" },
 			{ label: "Review Queue", href: "/admin/governance/requests" },
+			{ label: "Suites", href: "/admin/governance/suites" },
 			{ label: "Scores", href: "/admin/governance/scores" },
 		],
 	},
@@ -303,6 +306,16 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		permission: GlobalPermission.Admin,
 		actionLabel: "Manage Tokens",
 		color: "text-rose-500",
+	},
+	{
+		title: "Process Graph",
+		description:
+			"Platform-wide map of app connections, observed call chains, and process notes.",
+		icon: Waypoints,
+		href: "/admin/connections",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Process Graph",
+		color: "text-teal-500",
 	},
 	{
 		title: "Logs & Observability",
@@ -873,7 +886,9 @@ function TechnicalUsers({
 		<Card>
 			<CardHeader>
 				<CardTitle className="text-base">Technical Users</CardTitle>
-				<CardDescription>API keys with the highest tracked usage.</CardDescription>
+				<CardDescription>
+					API keys with the highest tracked usage.
+				</CardDescription>
 			</CardHeader>
 			<CardContent className="space-y-2">
 				{loading && <Skeleton className="h-36 w-full" />}
@@ -947,7 +962,9 @@ function TechnicalUserLimitEditor({
 }) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
-	const [cost, setCost] = useState(costInputValue(technicalUser.limits, period));
+	const [cost, setCost] = useState(
+		costInputValue(technicalUser.limits, period),
+	);
 	const [tokens, setTokens] = useState(
 		tokenInputValue(technicalUser.limits, period),
 	);
@@ -1596,9 +1613,7 @@ function UsageOperations({
 								<div className="truncate text-xs text-muted-foreground">
 									{item.provider ?? "provider"} - {item.status} -{" "}
 									{item.appId ?? "no app"}
-									{item.technicalUserId
-										? ` - key ${item.technicalUserId}`
-										: ""}
+									{item.technicalUserId ? ` - key ${item.technicalUserId}` : ""}
 								</div>
 							</div>
 							<div className="text-right">

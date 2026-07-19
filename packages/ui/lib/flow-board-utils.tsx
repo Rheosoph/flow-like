@@ -16,6 +16,7 @@ import { translateDify } from "./importer/dify-translator";
 import { translateN8n } from "./importer/n8n-translator";
 import type { DifyWorkflow, N8nWorkflow } from "./importer/types";
 import { toastSuccess } from "./messages";
+import { isWebkitLite } from "./platform";
 import type { IGenericCommand, IValueType, IVariable } from "./schema";
 import {
 	type IBoard,
@@ -45,6 +46,53 @@ export function normalizeSelectionNodes(value: unknown): string[] {
 	return value.filter(
 		(nodeId: unknown): nodeId is string => typeof nodeId === "string",
 	);
+}
+
+const identityTokenCache = new WeakMap<object, number>();
+let identityTokenSeq = 0;
+
+function identityToken(value: object | null | undefined): string {
+	if (!value) return "-";
+	let token = identityTokenCache.get(value);
+	if (token === undefined) {
+		token = ++identityTokenSeq;
+		identityTokenCache.set(value, token);
+	}
+	return String(token);
+}
+
+function stringHash(value: string): number {
+	let hash = 0;
+	for (let i = 0; i < value.length; i++) {
+		hash = (hash * 31 + value.charCodeAt(i)) | 0;
+	}
+	return hash;
+}
+
+// Identity-based instead of updated_at-based: react-query structural sharing
+// keeps unchanged sub-objects referentially stable across refetches, so this
+// token only changes when variables/refs/layers content or node membership
+// actually changes — letting parseBoard reuse rendered nodes by reference
+// across unrelated board edits. The membership hash is order-independent
+// because serde HashMap serialization does not guarantee key order.
+function boardDataVersion(board: IBoard): string {
+	let membershipHash = 0;
+	for (const node of Object.values(board.nodes ?? {})) {
+		membershipHash =
+			(membershipHash + stringHash(`${node.id}:${node.layer ?? ""}`)) | 0;
+	}
+	return [
+		board.id,
+		board.version?.join(".") ?? "",
+		identityToken(board.variables),
+		identityToken(board.refs),
+		identityToken(board.layers),
+		membershipHash,
+	].join(":");
+}
+
+function renderedNodeCacheKey(id: string, hash: unknown): string {
+	return `${id}:${String(hash)}`;
 }
 
 interface ISerializedPin {
@@ -409,19 +457,33 @@ export function parseBoard(
 	const nodes: any[] = [];
 	const edges: any[] = [];
 	const cache = new Map<string, [IPin, INode | ILayer, boolean]>();
-	const oldNodesMap = new Map<number, any>();
+	const oldNodesMap = new Map<string, any>();
 	const oldEdgesMap = new Map<string, any>();
 	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
+	const boardVersionToken = boardDataVersion(board);
 
-	// Compute a hash of all fn_refs to detect changes
-	const fnRefsHash = Object.values(board.nodes)
-		.map((n) => `${n.id}:${n.fn_refs?.fn_refs?.join(",") ?? ""}`)
-		.join(";");
+	// Hash only nodes that actually reference functions (sorted — serde HashMap
+	// order is unstable), so adding/removing unrelated nodes doesn't force every
+	// FlowNode to re-render. Also count connections in the same pass: above the
+	// threshold, continuous edge animations are disabled — hundreds of endlessly
+	// animating SVG paths repaint the whole canvas layer every frame.
+	const fnRefEntries: string[] = [];
+	let connectionCount = 0;
+	for (const node of Object.values(board.nodes)) {
+		if ((node.fn_refs?.fn_refs?.length ?? 0) > 0) {
+			fnRefEntries.push(`${node.id}:${node.fn_refs?.fn_refs?.join(",") ?? ""}`);
+		}
+		for (const pin of Object.values(node.pins)) {
+			connectionCount += pin.connected_to.length;
+		}
+	}
+	const fnRefsHash = fnRefEntries.sort().join(";");
+	const reduceEdgeMotion = isWebkitLite() || connectionCount > 150;
 
 	for (const oldNode of oldNodes ?? []) {
-		// Only add to oldNodesMap if we haven't seen this hash before (prevents duplicate hash collisions)
-		if (oldNode.data?.hash && !oldNodesMap.has(oldNode.data.hash)) {
-			oldNodesMap.set(oldNode.data.hash, oldNode);
+		const hash = oldNode.data?.hash;
+		if (typeof oldNode.id === "string" && hash !== undefined && hash !== null) {
+			oldNodesMap.set(renderedNodeCacheKey(oldNode.id, hash), oldNode);
 		}
 	}
 
@@ -458,13 +520,17 @@ export function parseBoard(
 					)
 				: !catalogLookup.nodeNames.has(node.name)
 			: false;
-		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
+		const oldNode =
+			hash === -1
+				? undefined
+				: oldNodesMap.get(renderedNodeCacheKey(node.id, hash));
 		const sel = selected.has(node.id);
 		if (
 			oldNode &&
 			oldNode.selected === sel &&
 			oldNode.data?.isUnavailable === isUnavailable &&
 			oldNode.data?.fnRefsHash === fnRefsHash &&
+			oldNode.data?.boardDataVersion === boardVersionToken &&
 			oldNode.data?.selectorDataRef === selectorDataRef &&
 			oldNode.data?.selectorDataVersion === selectorDataVersion
 		) {
@@ -484,6 +550,7 @@ export function parseBoard(
 					fnRefsHash,
 					node: nodeForData,
 					boardRef,
+					boardDataVersion: boardVersionToken,
 					selectorDataRef,
 					selectorDataVersion,
 				},
@@ -506,6 +573,7 @@ export function parseBoard(
 				data: {
 					label: node.name,
 					boardRef: boardRef,
+					boardDataVersion: boardVersionToken,
 					selectorDataRef,
 					selectorDataVersion,
 					fnRefsHash: fnRefsHash,
@@ -580,6 +648,7 @@ export function parseBoard(
 							boardId: board.id,
 							appId: appId,
 							boardRef: boardRef,
+							boardDataVersion: boardVersionToken,
 							selectorDataRef,
 							selectorDataVersion,
 							type: InnerLayerNodeType.INPUT,
@@ -626,6 +695,7 @@ export function parseBoard(
 							boardId: board.id,
 							appId: appId,
 							boardRef: boardRef,
+							boardDataVersion: boardVersionToken,
 							selectorDataRef,
 							selectorDataVersion,
 							type: InnerLayerNodeType.RETURN,
@@ -684,6 +754,7 @@ export function parseBoard(
 					appId: appId,
 					layer: layer,
 					boardRef: boardRef,
+					boardDataVersion: boardVersionToken,
 					selectorDataRef,
 					selectorDataVersion,
 					hash: layer.hash ?? -1,
@@ -787,7 +858,8 @@ export function parseBoard(
 				oldEdge.source === sourceNodeId &&
 				oldEdge.target === targetNodeId &&
 				oldEdge.selected === sel &&
-				oldEdge.data?.pathType === connectionMode
+				oldEdge.data?.pathType === connectionMode &&
+				oldEdge.data?.reduceMotion === reduceEdgeMotion
 			) {
 				edges.push(oldEdge);
 				continue;
@@ -804,8 +876,9 @@ export function parseBoard(
 						toLayer: (connectedNode as any).layer,
 						pathType: connectionMode,
 						data_type: pin.data_type,
+						reduceMotion: reduceEdgeMotion,
 					},
-					animated: pin.data_type !== "Execution",
+					animated: !reduceEdgeMotion && pin.data_type !== "Execution",
 					reconnectable: true,
 					target: targetNodeId,
 					targetHandle: conntectedPin.id,
@@ -840,7 +913,10 @@ export function parseBoard(
 
 				const existingEdge = oldEdgesMap.get(edgeId);
 
-				if (existingEdge) {
+				if (
+					existingEdge &&
+					existingEdge.data?.reduceMotion === reduceEdgeMotion
+				) {
 					edges.push(existingEdge);
 				} else {
 					edges.push({
@@ -855,8 +931,9 @@ export function parseBoard(
 							toLayer: targetLayer,
 							isFnRef: true,
 							pathType: connectionMode,
+							reduceMotion: reduceEdgeMotion,
 						},
-						animated: true,
+						animated: !reduceEdgeMotion,
 						reconnectable: true,
 						style: {
 							stroke: "var(--pin-fn-ref)",
@@ -873,7 +950,10 @@ export function parseBoard(
 			(comment.layer ?? "") === "" ? undefined : comment.layer;
 		if (commentLayer !== currentLayer) continue;
 		const hash = comment.hash ?? -1;
-		const oldNode = hash === -1 ? undefined : oldNodesMap.get(hash);
+		const oldNode =
+			hash === -1
+				? undefined
+				: oldNodesMap.get(renderedNodeCacheKey(comment.id, hash));
 		if (oldNode) {
 			nodes.push(oldNode);
 			continue;

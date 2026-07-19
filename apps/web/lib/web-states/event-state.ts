@@ -11,6 +11,7 @@ import {
 	type IVersionType,
 	type ProgressToastData,
 	checkOAuthTokens,
+	checkOAuthTokensFromPrerun,
 	finishAllProgressToasts,
 	getCurrentPageContext,
 	showProgressToast,
@@ -121,7 +122,7 @@ export class WebEventState implements IEventState {
 		eventId: string,
 		version?: [number, number, number],
 	): Promise<IEvent> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		const params = version ? `?version=${version.join("_")}` : "";
 		return apiGet<IEvent>(
 			`apps/${appId}/events/${eventId}${params}`,
 			this.backend.auth,
@@ -177,7 +178,7 @@ export class WebEventState implements IEventState {
 		try {
 			// Get the board for this event
 			const boardParams = event.board_version
-				? `?version=${event.board_version.join(".")}`
+				? `?version=${event.board_version.join("_")}`
 				: "";
 			const board = await apiGet<IBoard>(
 				`apps/${appId}/board/${event.board_id}${boardParams}`,
@@ -237,6 +238,42 @@ export class WebEventState implements IEventState {
 		}
 	}
 
+	async checkOAuthRequirements(
+		appId: string,
+		requirements: Array<{ provider_id: string; scopes: string[] }>,
+	): Promise<IOAuthCheckResult> {
+		const hub = await getHubConfig(this.backend.profile);
+		const oauthService = getOAuthService(
+			getOAuthApiBaseUrl(this.backend.profile?.hub),
+		);
+		const oauthResult = await checkOAuthTokensFromPrerun(
+			requirements,
+			oauthTokenStore,
+			hub,
+			{ refreshToken: oauthService.refreshToken.bind(oauthService) },
+		);
+		const consentedIds = await oauthConsentStore.getConsentedProviderIds(appId);
+		const missingProviders = [...oauthResult.missingProviders];
+		for (const provider of oauthResult.requiredProviders) {
+			if (
+				oauthResult.tokens[provider.id] !== undefined &&
+				!consentedIds.has(provider.id)
+			) {
+				missingProviders.push(provider);
+			}
+		}
+		if (missingProviders.length > 0) {
+			return { tokens: undefined, missingProviders };
+		}
+		return {
+			tokens:
+				Object.keys(oauthResult.tokens).length > 0
+					? oauthResult.tokens
+					: undefined,
+			missingProviders: [],
+		};
+	}
+
 	async deleteEvent(appId: string, eventId: string): Promise<void> {
 		await apiDelete(`apps/${appId}/events/${eventId}`, this.backend.auth);
 	}
@@ -246,7 +283,7 @@ export class WebEventState implements IEventState {
 		eventId: string,
 		version?: [number, number, number],
 	): Promise<void> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		const params = version ? `?version=${version.join("_")}` : "";
 		await apiPost(
 			`apps/${appId}/events/${eventId}/validate${params}`,
 			undefined,
@@ -301,7 +338,7 @@ export class WebEventState implements IEventState {
 		// Get the event and its board for OAuth checking
 		const event = await this.getEvent(appId, eventId);
 		const boardParams = event.board_version
-			? `?version=${event.board_version.join(".")}`
+			? `?version=${event.board_version.join("_")}`
 			: "";
 		const board = await apiGet<IBoard>(
 			`apps/${appId}/board/${event.board_id}${boardParams}`,
@@ -586,7 +623,7 @@ export class WebEventState implements IEventState {
 		eventId: string,
 		version?: [number, number, number],
 	): Promise<IPrerunEventResponse> {
-		const params = version ? `?version=${version.join(".")}` : "";
+		const params = version ? `?version=${version.join("_")}` : "";
 		return apiGet<IPrerunEventResponse>(
 			`apps/${appId}/events/${eventId}/prerun${params}`,
 			this.backend.auth,

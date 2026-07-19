@@ -1,150 +1,185 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "CanaryEvent",
-	"type": "object",
-	"required": [
-		"board_id",
-		"created_at",
-		"node_id",
-		"updated_at",
-		"variables",
-		"weight"
-	],
-	"properties": {
-		"weight": {
-			"type": "number",
-			"format": "float"
-		},
-		"variables": {
-			"type": "object",
-			"additionalProperties": {
-				"$ref": "#/definitions/Variable"
-			}
-		},
-		"board_id": {
-			"type": "string"
-		},
-		"board_version": {
-			"type": ["array", "null"],
-			"items": [
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			],
-			"maxItems": 3,
-			"minItems": 3
-		},
-		"node_id": {
-			"type": "string"
-		},
-		"created_at": {
-			"$ref": "#/definitions/SystemTime"
-		},
-		"updated_at": {
-			"$ref": "#/definitions/SystemTime"
-		}
-	},
-	"definitions": {
-		"Variable": {
-			"type": "object",
-			"required": [
-				"data_type",
-				"editable",
-				"exposed",
-				"id",
-				"name",
-				"secret",
-				"value_type"
-			],
-			"properties": {
-				"id": {
-					"type": "string"
-				},
-				"name": {
-					"type": "string"
-				},
-				"category": {
-					"type": ["string", "null"]
-				},
-				"description": {
-					"type": ["string", "null"]
-				},
-				"default_value": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "integer",
-						"format": "uint8",
-						"minimum": 0.0
-					}
-				},
-				"data_type": {
-					"$ref": "#/definitions/VariableType"
-				},
-				"value_type": {
-					"$ref": "#/definitions/ValueType"
-				},
-				"exposed": {
-					"type": "boolean"
-				},
-				"secret": {
-					"type": "boolean"
-				},
-				"editable": {
-					"type": "boolean"
-				},
-				"hash": {
-					"type": ["integer", "null"],
-					"format": "uint64",
-					"minimum": 0.0
-				}
-			}
-		},
-		"VariableType": {
-			"type": "string",
-			"enum": [
-				"Execution",
-				"String",
-				"Integer",
-				"Float",
-				"Boolean",
-				"Date",
-				"PathBuf",
-				"Generic",
-				"Struct",
-				"Byte"
-			]
-		},
-		"ValueType": {
-			"type": "string",
-			"enum": ["Array", "Normal", "HashMap", "HashSet"]
-		},
-		"SystemTime": {
-			"type": "object",
-			"required": ["nanos_since_epoch", "secs_since_epoch"],
-			"properties": {
-				"secs_since_epoch": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0.0
-				},
-				"nanos_since_epoch": {
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			}
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CanaryEvent",
+  "type": "object",
+  "properties": {
+    "weight": {
+      "type": "number",
+      "format": "float"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Variable"
+      }
+    },
+    "board_id": {
+      "type": "string"
+    },
+    "board_version": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "node_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "$ref": "#/$defs/SystemTime"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/SystemTime"
+    }
+  },
+  "required": [
+    "weight",
+    "variables",
+    "board_id",
+    "node_id",
+    "created_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "Variable": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_value": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "data_type": {
+          "$ref": "#/$defs/VariableType"
+        },
+        "value_type": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "exposed": {
+          "type": "boolean"
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "hash": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime_configured": {
+          "description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "data_type",
+        "value_type",
+        "exposed",
+        "secret",
+        "editable"
+      ]
+    },
+    "VariableType": {
+      "type": "string",
+      "enum": [
+        "Execution",
+        "String",
+        "Integer",
+        "Float",
+        "Boolean",
+        "Date",
+        "PathBuf",
+        "Generic",
+        "Struct",
+        "Byte"
+      ]
+    },
+    "ValueType": {
+      "type": "string",
+      "enum": [
+        "Array",
+        "Normal",
+        "HashMap",
+        "HashSet"
+      ]
+    },
+    "SystemTime": {
+      "type": "object",
+      "properties": {
+        "secs_since_epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nanos_since_epoch": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "secs_since_epoch",
+        "nanos_since_epoch"
+      ]
+    }
+  }
 }

@@ -2,6 +2,8 @@ import { createId } from "@paralleldrive/cuid2";
 import {
 	ChatInterface,
 	CronJobConfig,
+	DEFAULT_CHAT_AI_DISCLOSURE,
+	DEFAULT_CHAT_THEME_CSS,
 	DaemonConfig,
 	DeeplinkConfig,
 	DiscordConfig,
@@ -30,6 +32,18 @@ export const EVENT_CONFIG: IEventMapping = {
 			simple_chat: {
 				allow_file_upload: true,
 				allow_voice_input: false,
+				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,
+				background_image: "",
+				custom_css: DEFAULT_CHAT_THEME_CSS,
+				voice: {
+					mode: "disabled",
+					invoke: "manual",
+					variant: "conservative",
+					size: "md",
+					playback: "text",
+					max_duration: 300,
+					auto_stop: false,
+				},
 				history_elements: 5,
 				tools: [],
 				default_tools: [],
@@ -60,7 +74,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 		},
 		defaultEventType: "simple_chat",
-		eventTypes: ["simple_chat", "advanced_chat", "discord", "telegram"],
+		eventTypes: ["simple_chat", "discord", "telegram"],
 		withSink: ["discord", "telegram"],
 		sinkAvailability: {
 			discord: {
@@ -177,8 +191,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 			rest: {
 				availability: "remote",
-				description:
-					"Multi-endpoint REST API server with auth - remote only",
+				description: "Multi-endpoint REST API server with auth - remote only",
 			},
 			mcp: {
 				availability: "remote",

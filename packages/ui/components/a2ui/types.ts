@@ -280,7 +280,8 @@ export interface AbsoluteComponent extends ComponentBase {
 
 export interface BoxComponent extends ComponentBase {
 	type: "box";
-	as?: BoundValue; // "div" | "section" | "header" | "footer" | "main" | "aside" | "nav" | "article" | "figure" | "figcaption" | "span"
+	/** Resolves to one of the allowlisted semantic elements; invalid values render as div. */
+	as?: BoundValue;
 }
 
 export interface CenterComponent extends ComponentBase {
@@ -372,6 +373,23 @@ export interface AvatarComponent extends ComponentBase {
 	src?: BoundValue;
 	fallback?: BoundValue;
 	size?: BoundValue; // "sm" | "md" | "lg" | "xl"
+}
+
+export interface UserProfileComponent extends ComponentBase {
+	type: "userProfile";
+	/** User subject/sub ID. Compatible with Set Element Value via component.value. */
+	value: BoundValue;
+	/** "avatar" | "chip" | "row" | "detailed" | "card" */
+	variant?: BoundValue;
+	/** "xs" | "sm" | "md" | "lg" | "xl" | "2xl" */
+	avatarSize?: BoundValue;
+	showHover?: BoundValue;
+	showEmail?: BoundValue;
+	showDescription?: BoundValue;
+	showUserId?: BoundValue;
+	showProfileLink?: BoundValue;
+	fallbackLabel?: BoundValue;
+	muted?: BoundValue;
 }
 
 export interface ProgressComponent extends ComponentBase {
@@ -605,7 +623,24 @@ export interface VoiceInputComponent extends ComponentBase {
 	silenceDuration?: BoundValue;
 	disabled?: BoundValue;
 	error?: BoundValue;
+	/** Deprecated alias for `variant`. */
 	visualizer?: BoundValue;
+	/** "conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse" */
+	variant?: BoundValue;
+	/** "sm" | "md" | "lg" */
+	size?: BoundValue;
+	/** "record" (send audio) | "stt" (send transcript text) */
+	mode?: BoundValue;
+	/** "manual" | "hold" | "auto" */
+	invoke?: BoundValue;
+	color?: BoundValue;
+	recordingColor?: BoundValue;
+	/** Post-input look: "player" (animated playback) | "autoplay" (play the backend-set response media immediately, for conversations) | "summary" (compact info + delete). Default "player". */
+	resultMode?: BoundValue;
+	/** Backend-set response media URL (e.g. via Set Media Source). In "autoplay" mode this is what plays — until it arrives the element shows a loading state. */
+	src?: BoundValue;
+	/** Alias for `src` (Set Media Source writes both). */
+	url?: BoundValue;
 }
 
 export interface LinkComponent extends ComponentBase {
@@ -1029,6 +1064,32 @@ export interface FilePreviewComponent extends ComponentBase {
 	height?: BoundValue;
 	showDownload?: BoundValue;
 	loading?: BoundValue; // "lazy" | "eager"
+	/** Audio only: when set, render an animated visualizer player instead of the default controls. "conservative" | "waveform" | "orb" | "vortex" | "shader" | "aurora" | "pulse" */
+	variant?: BoundValue;
+	/** Audio (animated `variant`) only: auto-play when the source is set, e.g. for a conversation reply. Default false. */
+	autoPlay?: BoundValue;
+}
+
+export interface DiffViewComponent extends ComponentBase {
+	type: "diffView";
+	original: BoundValue; // left / old content (text or document URL)
+	modified: BoundValue; // right / new content (text or document URL)
+	mode?: BoundValue; // "split" | "unified" | "inline"
+	kind?: BoundValue; // "auto" | "text" | "code" | "markdown" | "json" | "document"
+	language?: BoundValue; // syntax language for code/json
+	markdownMode?: BoundValue; // "source" | "rendered"
+	showLineNumbers?: BoundValue;
+	wordWrap?: BoundValue;
+	wordLevel?: BoundValue; // intra-line word-level highlighting
+	collapseUnchanged?: BoundValue;
+	contextLines?: BoundValue; // context lines kept around changes when collapsing
+	showStats?: BoundValue;
+	originalLabel?: BoundValue;
+	modifiedLabel?: BoundValue;
+	ignoreWhitespace?: BoundValue;
+	ignoreCase?: BoundValue;
+	trimTrailingWhitespace?: BoundValue;
+	swapSides?: BoundValue;
 }
 
 // NivoChart - Nivo chart library component
@@ -1417,6 +1478,98 @@ export interface GeoMapComponent extends ComponentBase {
 	clusterMaxZoom?: BoundValue;
 }
 
+// ── Planning: Calendar & Gantt (mirrors Rust structs) ──────────────
+
+// A single calendar event (mirrors CalendarEvent in update_schemas.rs)
+export interface CalendarEvent {
+	id: string;
+	title: string;
+	start: string; // ISO 8601
+	end?: string; // ISO 8601
+	allDay?: boolean;
+	color?: string;
+	description?: string;
+	location?: string;
+	calendarId?: string;
+	editable?: boolean;
+	/** Opened from the detail dialog: relative = in-app route, absolute = external. */
+	link?: string;
+	/** Key-value metadata shown in the detail dialog (e.g. ticket number). */
+	metadata?: Record<string, unknown>;
+}
+
+export type CalendarView = "month" | "week" | "day" | "agenda";
+
+/** Visual density preset for planning components. */
+export type PlanningDensity = "compact" | "default" | "comfortable";
+
+export interface CalendarComponent extends ComponentBase {
+	type: "calendar";
+	events: BoundValue; // CalendarEvent[]
+	view?: BoundValue; // CalendarView
+	date?: BoundValue; // focused date (ISO 8601)
+	title?: BoundValue; // optional header title
+	density?: BoundValue; // PlanningDensity
+	editable?: BoundValue;
+	selectable?: BoundValue;
+	firstDayOfWeek?: BoundValue; // 0 = Sunday
+	minTime?: BoundValue; // "06:00"
+	maxTime?: BoundValue; // "22:00"
+	slotDuration?: BoundValue; // minutes
+	showWeekends?: BoundValue;
+	showNowIndicator?: BoundValue;
+	showAllDay?: BoundValue;
+	showViewSwitcher?: BoundValue;
+	locale?: BoundValue;
+	height?: BoundValue;
+	responsive?: BoundValue;
+	compactBreakpoint?: BoundValue; // px
+}
+
+// A single gantt task (mirrors GanttTask in update_schemas.rs)
+export interface GanttTask {
+	id: string;
+	name: string;
+	start: string; // ISO 8601
+	end: string; // ISO 8601
+	progress?: number; // 0-100
+	dependencies?: string[]; // predecessor task ids
+	parent?: string;
+	color?: string;
+	assignee?: string;
+	milestone?: boolean;
+	collapsed?: boolean;
+	/** Opened from the detail dialog: relative = in-app route, absolute = external. */
+	link?: string;
+	/** Key-value metadata shown in the detail dialog (e.g. ticket number). */
+	metadata?: Record<string, unknown>;
+}
+
+export type GanttView = "day" | "week" | "month" | "quarter" | "compact";
+
+export interface GanttComponent extends ComponentBase {
+	type: "gantt";
+	tasks: BoundValue; // GanttTask[]
+	view?: BoundValue; // GanttView
+	title?: BoundValue; // header title (default "Timeline")
+	density?: BoundValue; // PlanningDensity
+	editable?: BoundValue;
+	draggable?: BoundValue;
+	resizable?: BoundValue;
+	showDependencies?: BoundValue;
+	showProgress?: BoundValue;
+	showToday?: BoundValue;
+	showViewSwitcher?: BoundValue;
+	showTaskList?: BoundValue; // show/hide the left task panel
+	taskListWidth?: BoundValue; // px width of the left task panel
+	shadeWeekends?: BoundValue; // shade Sat/Sun columns in day/week views
+	rowHeight?: BoundValue;
+	columns?: BoundValue; // string[] extra left-panel columns
+	height?: BoundValue;
+	responsive?: BoundValue;
+	compactBreakpoint?: BoundValue; // px
+}
+
 // Widget Instance Component - references a widget definition stored in page.widgetRefs
 // The widget definition is looked up by instanceId from the page's widgetRefs
 export interface WidgetInstanceComponent extends ComponentBase {
@@ -1458,6 +1611,7 @@ export type A2UIComponent =
 	| DividerComponent
 	| BadgeComponent
 	| AvatarComponent
+	| UserProfileComponent
 	| ProgressComponent
 	| SpinnerComponent
 	| SkeletonComponent
@@ -1499,11 +1653,14 @@ export type A2UIComponent =
 	| IframeComponent
 	| PlotlyChartComponent
 	| FilePreviewComponent
+	| DiffViewComponent
 	| NivoChartComponent
 	| BoundingBoxOverlayComponent
 	| ImageLabelerComponent
 	| ImageHotspotComponent
 	| GeoMapComponent
+	| CalendarComponent
+	| GanttComponent
 	| WidgetInstanceComponent;
 
 // Surface and data model

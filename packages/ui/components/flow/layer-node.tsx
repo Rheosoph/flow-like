@@ -47,6 +47,7 @@ export type LayerNode = Node<
 		hash: string;
 		appId: string;
 		boardRef?: RefObject<IBoard | undefined>;
+		boardDataVersion?: string;
 		selectorDataRef?: FlowSelectorDataRef;
 		selectorDataVersion?: number;
 		pushLayer(layer: ILayer): Promise<void>;
@@ -66,13 +67,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 	const [isHovered, setIsHovered] = useState(false);
 	const { resolvedTheme } = useTheme();
 
-	const { currentMetadata } = useLogAggregation();
-	const { runs } = useRunExecutionStore();
-	const [executionState, setExecutionState] = useState<
-		"done" | "running" | "none"
-	>("none");
-	const debouncedExecutionState = useDebounce(executionState, 100);
-	const [runId, setRunId] = useState<string | undefined>(undefined);
+	const currentMetadata = useLogAggregation((s) => s.currentMetadata);
 
 	const fetchChildNodeIDs = useCallback(() => {
 		const layers = props.data.boardRef?.current?.layers ?? {};
@@ -110,17 +105,40 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 		return Object.values(nodes)
 			.filter((n) => n.layer && collected.has(n.layer))
 			.map((n) => n.id);
-	}, [props.data.layer.id, props.data.boardRef]);
+	}, [props.data.layer.id, props.data.boardRef, props.data.boardDataVersion]);
+
+	// Descendant node ids are derived once and recomputed only when the board
+	// structure changes — not on every run/log store tick.
+	const childNodeIds = useMemo(
+		() => new Set(fetchChildNodeIDs()),
+		[fetchChildNodeIDs],
+	);
+
+	// Primitive selector: only re-renders this layer node when ITS OWN aggregate
+	// execution state changes, instead of on every run-store transaction.
+	const executionState = useRunExecutionStore((state) => {
+		for (const [, run] of state.runs) {
+			for (const id of childNodeIds) {
+				if (run.nodes.has(id)) return "running" as const;
+			}
+		}
+		for (const [, run] of state.runs) {
+			for (const id of childNodeIds) {
+				if (run.already_executed.has(id)) return "done" as const;
+			}
+		}
+		return "none" as const;
+	});
+	const debouncedExecutionState = useDebounce(executionState, 100);
 
 	const [executed, severity] = useMemo(() => {
 		const severity = ILogLevel.Debug;
 		let childNodeExecuted = false;
 		let worstSeverity = 0;
 
-		const nodeIds = fetchChildNodeIDs();
 		if (!currentMetadata) return [false, severity];
 		currentMetadata.nodes?.forEach(([localNodeId, severity]) => {
-			if (nodeIds.includes(localNodeId.toString())) {
+			if (childNodeIds.has(localNodeId.toString())) {
 				childNodeExecuted = true;
 				worstSeverity = Math.max(worstSeverity, severity as number);
 			}
@@ -131,43 +149,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 		}
 
 		return [false, severity];
-	}, [props.data.layer.id, currentMetadata]);
-
-	useEffect(() => {
-		const nodeIds = fetchChildNodeIDs();
-		let isRunning = false;
-		let already_executed = false;
-		let foundRunId: string | undefined;
-
-		for (const [rId, run] of runs) {
-			if (nodeIds.some((nid) => run.nodes.has(nid))) {
-				isRunning = true;
-				foundRunId = rId;
-				break;
-			}
-
-			if (nodeIds.some((nid) => run.already_executed.has(nid))) {
-				already_executed = true;
-				foundRunId = foundRunId ?? rId;
-			}
-		}
-
-		if (foundRunId !== undefined) {
-			setRunId(foundRunId);
-		}
-
-		if (isRunning) {
-			setExecutionState("running");
-			return;
-		}
-
-		if (already_executed) {
-			setExecutionState("done");
-			return;
-		}
-
-		setExecutionState("none");
-	}, [runs, props.id, props.data.layer.nodes]);
+	}, [childNodeIds, currentMetadata]);
 
 	useEffect(() => {
 		const height = Math.max(
@@ -331,6 +313,8 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								appId={props.data.appId}
 								node={props.data.pinLookup[pin.id] ?? props.data.layer}
 								boardId={props.data.boardId}
+								boardRef={props.data.boardRef}
+								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}
@@ -347,6 +331,8 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 								appId={props.data.appId}
 								node={props.data.pinLookup[pin.id] ?? props.data.layer}
 								boardId={props.data.boardId}
+								boardRef={props.data.boardRef}
+								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
 								key={pin.id}
 								skipOffset={true}

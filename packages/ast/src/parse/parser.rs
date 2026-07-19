@@ -19,14 +19,37 @@ pub fn parse(src: &str) -> Result<BoardAst, ParseError> {
         src,
         toks: tokens,
         pos: 0,
+        depth: 0,
     };
     parser.board()
+}
+
+/// Recursion ceiling for nested expressions/blocks. User-authored text feeds this parser
+/// directly (editor view, API route), so unbounded recursion is a process-killing DoS.
+/// Each level costs ~5 stack frames through the Pratt chain; 128 keeps the worst case
+/// well inside a 2 MiB (debug/test) stack while allowing any realistic board.
+const MAX_NESTING_DEPTH: usize = 128;
+
+fn binary_operator_precedence(op: &str) -> Option<u8> {
+    match op {
+        "||" => Some(1),
+        "&&" => Some(2),
+        "|" => Some(3),
+        "^" => Some(4),
+        "==" | "!=" | "===" | "!==" => Some(5),
+        ">" | ">=" | "<" | "<=" => Some(6),
+        "+" | "-" => Some(7),
+        "*" | "/" | "%" => Some(8),
+        "**" => Some(9),
+        _ => None,
+    }
 }
 
 struct Parser<'a> {
     src: &'a str,
     toks: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 /// A parsed `@decorator`, optionally carrying a single string argument.
@@ -102,25 +125,29 @@ impl Parser<'_> {
     // ---- trailing comments (labels / anchors) ---------------------------------------------
 
     /// Consume a trailing anchor comment (`//@n:id`) if present; returns the id.
+    /// Only the known anchor kinds (`n`/`v`/`l`) qualify — any other `@…` comment is an
+    /// ordinary user comment and must not be swallowed as an anchor.
     fn take_anchor(&mut self) -> Option<String> {
         if let Tok::Comment(text) = self.cur()
             && let Some(rest) = text.strip_prefix('@')
+            && let Some((kind, id)) = rest.split_once(':')
+            && matches!(kind, "n" | "v" | "l")
         {
-            // form is `n:id` / `v:id` / `l:id`; keep only the id portion.
-            let id = rest
-                .split_once(':')
-                .map(|(_, id)| id)
-                .unwrap_or("")
-                .to_string();
+            let id = id.to_string();
             self.bump();
             return Some(id);
         }
         None
     }
 
-    /// Consume a trailing non-anchor comment (a branch arm label) if present.
-    fn take_label(&mut self) -> Option<String> {
+    /// Consume a trailing non-anchor comment on `line` (a branch arm label) if present.
+    ///
+    /// Newlines are otherwise insignificant to the parser, but labels are deliberately trailing
+    /// syntax (`{ // exec_success`). A normal first-line comment inside the block must stay in the
+    /// block and must not turn a boolean `if` into the labelled call-branch form.
+    fn take_label_on_line(&mut self, line: usize) -> Option<String> {
         if let Tok::Comment(text) = self.cur()
+            && self.cur_token().line == line
             && !text.starts_with('@')
         {
             let label = text.clone();
@@ -241,6 +268,11 @@ impl Parser<'_> {
                     ast.events.push(self.event_block()?);
                 }
                 Tok::Comment(_) => {
+                    if !decorators.is_empty() {
+                        return Err(self.err(
+                            "decorators must be immediately followed by a variable declaration",
+                        ));
+                    }
                     // Stray top-level comment (no AST slot): skip.
                     self.bump();
                 }
@@ -261,7 +293,14 @@ impl Parser<'_> {
         self.expect(&Tok::LBrace)?;
         let mut fields = Vec::new();
         while !matches!(self.cur(), Tok::RBrace) {
-            let field_name = self.ident()?;
+            // Non-identifier JSON-schema property names render as quoted strings.
+            let field_name = match self.cur().clone() {
+                Tok::Str(name) => {
+                    self.bump();
+                    name
+                }
+                _ => self.ident()?,
+            };
             let optional = self.eat(&Tok::Question);
             self.expect(&Tok::Colon)?;
             let ty = self.interface_type()?;
@@ -344,6 +383,13 @@ impl Parser<'_> {
 
     fn event_block(&mut self) -> Result<EventBlock, ParseError> {
         let name = self.ident()?;
+        // Optional given name (`eventsSimple dashboardLoad() { }`): the first identifier selects
+        // the event type, the second names this specific entry.
+        let event_name = if matches!(self.cur(), Tok::Ident(_)) {
+            Some(self.ident()?)
+        } else {
+            None
+        };
         self.expect(&Tok::LParen)?;
         let params = self.params(&Tok::RParen)?;
         self.expect(&Tok::RParen)?;
@@ -353,6 +399,7 @@ impl Parser<'_> {
         Ok(EventBlock {
             name,
             node_type: String::new(),
+            event_name,
             params,
             body,
             anchor,
@@ -414,6 +461,23 @@ impl Parser<'_> {
 
     fn interface_type_primary(&mut self) -> Result<InterfaceType, ParseError> {
         let mut ty = match self.cur().clone() {
+            // Grouping, e.g. `(string | null)[]` — the renderer parenthesises unions
+            // under an array suffix so they don't reparse as `string | (null[])`.
+            // Count the group against the recursion budget: parenthesised types recurse into
+            // `interface_type`, so deeply nested `((((…))))` would otherwise bypass the limit
+            // and overflow the stack on user-authored input.
+            Tok::LParen => {
+                if self.depth >= MAX_NESTING_DEPTH {
+                    return Err(self.err("interface type nesting too deep"));
+                }
+                self.depth += 1;
+                self.bump();
+                let inner = self.interface_type();
+                self.depth -= 1;
+                let inner = inner?;
+                self.expect(&Tok::RParen)?;
+                inner
+            }
             Tok::Str(value) => {
                 self.bump();
                 InterfaceType::StringLiteral(value)
@@ -461,10 +525,26 @@ impl Parser<'_> {
     /// Parse statements until a closing `}` (which is consumed). Assumes the opening `{`
     /// (and any trailing label/anchor) was already consumed.
     fn block_body(&mut self) -> Result<Block, ParseError> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("block nesting too deep"));
+        }
+        self.depth += 1;
+        let result = self.block_body_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn block_body_inner(&mut self) -> Result<Block, ParseError> {
         let mut stmts = Vec::new();
         while !matches!(self.cur(), Tok::RBrace) {
             if self.at_eof() {
                 return Err(self.err("unexpected end of input inside block"));
+            }
+            if matches!(self.cur(), Tok::LBrace) {
+                self.bump();
+                let nested = self.block_body()?;
+                stmts.extend(nested.stmts);
+                continue;
             }
             stmts.push(self.stmt()?);
         }
@@ -594,7 +674,8 @@ impl Parser<'_> {
                 values.push(self.expr()?);
             }
         }
-        Ok(Stmt::Return { values })
+        let anchor = self.take_anchor();
+        Ok(Stmt::Return { values, anchor })
     }
 
     /// Detect a nested event-handler header (`name(params) { … }`). Call/branch arguments are
@@ -604,33 +685,31 @@ impl Parser<'_> {
         if !matches!(self.cur(), Tok::Ident(_)) {
             return false;
         }
-        if !matches!(
+        // A named handler (`eventsSimple dashboardLoad(...)`) carries a second identifier before
+        // the parameter list; nothing else places two bare identifiers back to back.
+        let lparen = if matches!(
             self.toks.get(self.pos + 1).map(|t| &t.tok),
-            Some(Tok::LParen)
+            Some(Tok::Ident(_))
         ) {
+            self.pos + 2
+        } else {
+            self.pos + 1
+        };
+        if !matches!(self.toks.get(lparen).map(|t| &t.tok), Some(Tok::LParen)) {
             return false;
         }
         // Empty params `name()` — a handler unless the following block is a branch-arm map.
-        if matches!(
-            self.toks.get(self.pos + 2).map(|t| &t.tok),
-            Some(Tok::RParen)
-        ) {
-            if !matches!(
-                self.toks.get(self.pos + 3).map(|t| &t.tok),
-                Some(Tok::LBrace)
-            ) {
+        if matches!(self.toks.get(lparen + 1).map(|t| &t.tok), Some(Tok::RParen)) {
+            if !matches!(self.toks.get(lparen + 2).map(|t| &t.tok), Some(Tok::LBrace)) {
                 return false;
             }
-            return !self.brace_opens_branch_arms(self.pos + 3);
+            return !self.brace_opens_branch_arms(lparen + 2);
         }
         // Typed params `name(ident : …` — never produced by an object-arg call.
         matches!(
-            self.toks.get(self.pos + 2).map(|t| &t.tok),
+            self.toks.get(lparen + 1).map(|t| &t.tok),
             Some(Tok::Ident(_))
-        ) && matches!(
-            self.toks.get(self.pos + 3).map(|t| &t.tok),
-            Some(Tok::Colon)
-        )
+        ) && matches!(self.toks.get(lparen + 2).map(|t| &t.tok), Some(Tok::Colon))
     }
 
     /// True if the block opened at `brace_pos` (a `{`) begins a branch-arm map (`label: { … }`),
@@ -668,6 +747,23 @@ impl Parser<'_> {
             });
         }
         let value = self.expr()?;
+        // `base.field = expr` (or `base.a.b`, `base.items[0]`) — a struct-field write. Kept as a
+        // first-class `Stmt::FieldAssign` (round-trips back to the dot form); reconcile expands it
+        // to `structSet({ structIn: base, field: "path", value })` and rebinds `base`.
+        if matches!(self.cur(), Tok::Assign) {
+            let (base, path) = lvalue_to_field_path(&value).filter(|(_, p)| !p.is_empty()).ok_or_else(
+                || self.err("assignment target must be a variable or a struct field path (e.g. `x.field`)"),
+            )?;
+            self.bump(); // =
+            let rhs = self.expr()?;
+            let anchor = self.take_anchor();
+            return Ok(Stmt::FieldAssign {
+                base,
+                path,
+                value: rhs,
+                anchor,
+            });
+        }
         // `call(...) { … }` — a general N-way branch fan-out.
         if matches!(self.cur(), Tok::LBrace) {
             self.bump(); // {
@@ -734,22 +830,23 @@ impl Parser<'_> {
         }
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
+        let true_brace_line = self.line();
         self.expect(&Tok::LBrace)?;
-        // A trailing non-anchor comment marks the labelled (call-based) branch form.
-        let true_label = self.take_label();
-        let anchor = if true_label.is_some() {
-            None
-        } else {
-            self.take_anchor()
-        };
+        // A trailing non-anchor comment marks the labelled (call-based) branch form. The anchor
+        // comment can FOLLOW the label on the same line (`{ // exec_out   //@n:id`) — the lexer
+        // splits them into separate Comment tokens, so consume the anchor after the label or the
+        // branch node counts as deleted on reconcile.
+        let true_label = self.take_label_on_line(true_brace_line);
+        let anchor = self.take_anchor();
         let true_body = self.block_body()?;
 
         let mut else_label = None;
         let mut else_body = None;
         if self.is_ident("else") {
             self.bump(); // else
+            let else_brace_line = self.line();
             self.expect(&Tok::LBrace)?;
-            else_label = self.take_label();
+            else_label = self.take_label_on_line(else_brace_line);
             else_body = Some(self.block_body()?);
         }
 
@@ -858,7 +955,13 @@ impl Parser<'_> {
     // ---- expressions (Pratt) --------------------------------------------------------------
 
     fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.ternary()
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.err("expression nesting too deep"));
+        }
+        self.depth += 1;
+        let result = self.ternary();
+        self.depth -= 1;
+        result
     }
 
     fn ternary(&mut self) -> Result<Expr, ParseError> {
@@ -877,13 +980,38 @@ impl Parser<'_> {
         Ok(cond)
     }
 
-    /// Single-precedence left-associative binary parse. The renderer fully parenthesises
-    /// nested binary/ternary operands, so explicit parens carry all the grouping.
+    /// Parse binary expressions with JavaScript-like precedence. FlowScript's renderer
+    /// parenthesises nested binary operands, but model-authored source frequently omits those
+    /// redundant parentheses (`a == b && c == d`), so the reader must still preserve the usual
+    /// operator semantics.
     fn binary(&mut self) -> Result<Expr, ParseError> {
+        self.binary_precedence(0)
+    }
+
+    fn binary_precedence(&mut self, minimum: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.postfix()?;
         while let Tok::Op(op) = self.cur().clone() {
+            let Some(precedence) = binary_operator_precedence(&op) else {
+                break;
+            };
+            if precedence < minimum {
+                break;
+            }
             self.bump();
-            let rhs = self.postfix()?;
+            if self.depth >= MAX_NESTING_DEPTH {
+                return Err(self.err("binary expression nesting too deep"));
+            }
+            self.depth += 1;
+            // Exponentiation is right-associative; all other supported operators are
+            // left-associative.
+            let next_minimum = if op == "**" {
+                precedence
+            } else {
+                precedence + 1
+            };
+            let rhs = self.binary_precedence(next_minimum);
+            self.depth -= 1;
+            let rhs = rhs?;
             lhs = Expr::Binary {
                 op,
                 lhs: Box::new(lhs),
@@ -1109,6 +1237,36 @@ fn placeholder_call() -> Call {
         display: String::new(),
         args: Vec::new(),
         anchor: None,
+    }
+}
+
+/// Flattens an lvalue member/index chain rooted at a variable into `(base_variable, dot_path)`:
+/// `pref.cost_weight` → `("pref", "cost_weight")`, `p.a.b` → `("p", "a.b")`,
+/// `p.items[0].name` → `("p", "items[0].name")`. Returns `None` for non-static lvalues.
+fn lvalue_to_field_path(expr: &Expr) -> Option<(String, String)> {
+    // `.field` renders as `Expr::Field` for camelCase-stable keys and `Expr::Member` otherwise;
+    // as an assignment target both are struct field-path segments.
+    let dot = |base: &Expr, key: &str| -> Option<(String, String)> {
+        let (var, path) = lvalue_to_field_path(base)?;
+        let joined = if path.is_empty() {
+            key.to_string()
+        } else {
+            format!("{path}.{key}")
+        };
+        Some((var, joined))
+    };
+    match expr {
+        Expr::Ref(name) => Some((name.clone(), String::new())),
+        Expr::Member { base, field } => dot(base, field),
+        Expr::Field { base, pin } => dot(base, pin),
+        Expr::Index { base, index } => {
+            let (var, path) = lvalue_to_field_path(base)?;
+            let Expr::Literal(Literal::Int(i)) = &**index else {
+                return None;
+            };
+            Some((var, format!("{path}[{i}]")))
+        }
+        _ => None,
     }
 }
 

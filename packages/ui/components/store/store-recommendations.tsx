@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Package, SparklesIcon } from "lucide-react";
+import { AlertCircle, SparklesIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useMemo } from "react";
 import { useInfiniteInvoke } from "../../hooks/use-invoke";
@@ -10,7 +10,9 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { AppCard } from "../ui/app-card";
 import { Skeleton } from "../ui/skeleton";
 
-export const StoreRecommendations = memo(function StoreRecommendations() {
+export const StoreRecommendations = memo(function StoreRecommendations({
+	excludeAppId,
+}: Readonly<{ excludeAppId?: string }>) {
 	const backend = useBackend();
 	const router = useRouter();
 
@@ -30,8 +32,8 @@ export const StoreRecommendations = memo(function StoreRecommendations() {
 
 	const combinedApps = useMemo(() => {
 		if (!apps) return [];
-		return apps.pages.flat();
-	}, [apps]);
+		return apps.pages.flat().filter(([app]) => app.id !== excludeAppId);
+	}, [apps, excludeAppId]);
 
 	if (!combinedApps.length && !isLoading) return null;
 
@@ -51,20 +53,13 @@ export const StoreRecommendations = memo(function StoreRecommendations() {
 
 			{isLoading ? (
 				<div className="flex gap-4 overflow-hidden">
-					{[...Array(4)].map((_, i) => (
-						<div key={i} className="shrink-0 w-65 md:w-75 space-y-3">
+					{["sk-1", "sk-2", "sk-3", "sk-4"].map((key) => (
+						<div key={key} className="shrink-0 w-65 md:w-75 space-y-3">
 							<Skeleton className="h-40 w-full rounded-xl" />
 							<Skeleton className="h-4 w-3/4 rounded-full" />
 							<Skeleton className="h-3 w-1/2 rounded-full" />
 						</div>
 					))}
-				</div>
-			) : combinedApps.length === 0 ? (
-				<div className="py-12 text-center">
-					<Package className="w-10 h-10 mx-auto text-muted-foreground/20 mb-2" />
-					<p className="text-sm text-muted-foreground/60">
-						No recommendations right now.
-					</p>
 				</div>
 			) : (
 				<div className="-mx-6 md:-mx-10">

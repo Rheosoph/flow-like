@@ -29,6 +29,13 @@ fn ensure_test_dir() -> PathBuf {
     dir
 }
 
+#[cfg(feature = "execute")]
+fn configured_session_builder() -> flow_like_model_provider::ml::ort::Result<
+    flow_like_model_provider::ml::ort::session::builder::SessionBuilder,
+> {
+    flow_like_model_provider::ml::ort_runtime::configured_session_builder()
+}
+
 /// Download a file from URL if it doesn't exist locally
 fn download_if_missing(url: &str, filename: &str) -> PathBuf {
     let dir = ensure_test_dir();
@@ -350,30 +357,29 @@ const BERT_NER_URL: &str =
 #[cfg(feature = "execute")]
 mod onnx_session_tests {
     use super::*;
-    use flow_like_model_provider::ml::ort::session::Session;
 
     #[test]
     #[ignore]
     fn test_load_ultraface_model() {
         let model_path = download_if_missing(ULTRAFACE_URL, "ultraface_RFB_320.onnx");
 
-        let session = Session::builder()
+        let session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         println!("Model inputs:");
-        for input in &session.inputs {
-            println!("  - {} {:?}", input.name, input.input_type);
+        for input in session.inputs() {
+            println!("  - {} {:?}", input.name(), input.dtype());
         }
 
         println!("Model outputs:");
-        for output in &session.outputs {
-            println!("  - {} {:?}", output.name, output.output_type);
+        for output in session.outputs() {
+            println!("  - {} {:?}", output.name(), output.dtype());
         }
 
-        assert!(!session.inputs.is_empty(), "Model should have inputs");
-        assert!(!session.outputs.is_empty(), "Model should have outputs");
+        assert!(!session.inputs().is_empty(), "Model should have inputs");
+        assert!(!session.outputs().is_empty(), "Model should have outputs");
     }
 
     #[test]
@@ -381,26 +387,26 @@ mod onnx_session_tests {
     fn test_load_silero_vad_model() {
         let model_path = download_if_missing(SILERO_VAD_URL, "silero_vad.onnx");
 
-        let session = Session::builder()
+        let session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         println!("Silero VAD inputs:");
-        for input in &session.inputs {
-            println!("  - {} {:?}", input.name, input.input_type);
+        for input in session.inputs() {
+            println!("  - {} {:?}", input.name(), input.dtype());
         }
 
         println!("Silero VAD outputs:");
-        for output in &session.outputs {
-            println!("  - {} {:?}", output.name, output.output_type);
+        for output in session.outputs() {
+            println!("  - {} {:?}", output.name(), output.dtype());
         }
 
         // Silero VAD should have specific inputs
-        let input_names: Vec<&str> = session.inputs.iter().map(|i| i.name.as_str()).collect();
+        let input_names: Vec<&str> = session.inputs().iter().map(|input| input.name()).collect();
         println!("Input names: {:?}", input_names);
 
-        assert!(!session.inputs.is_empty());
+        assert!(!session.inputs().is_empty());
     }
 
     #[test]
@@ -408,23 +414,23 @@ mod onnx_session_tests {
     fn test_load_squeezenet_model() {
         let model_path = download_if_missing(SQUEEZENET_URL, "squeezenet1.0-12.onnx");
 
-        let session = Session::builder()
+        let session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         println!("SqueezeNet inputs:");
-        for input in &session.inputs {
-            println!("  - {} {:?}", input.name, input.input_type);
+        for input in session.inputs() {
+            println!("  - {} {:?}", input.name(), input.dtype());
         }
 
         println!("SqueezeNet outputs:");
-        for output in &session.outputs {
-            println!("  - {} {:?}", output.name, output.output_type);
+        for output in session.outputs() {
+            println!("  - {} {:?}", output.name(), output.dtype());
         }
 
-        assert!(!session.inputs.is_empty(), "Model should have inputs");
-        assert!(!session.outputs.is_empty(), "Model should have outputs");
+        assert!(!session.inputs().is_empty(), "Model should have inputs");
+        assert!(!session.outputs().is_empty(), "Model should have outputs");
     }
 }
 // ============================================================================
@@ -434,7 +440,7 @@ mod face_detection_tests {
     use super::*;
     use flow_like_model_provider::ml::{
         ndarray::Array4,
-        ort::{inputs, session::Session, value::Value},
+        ort::{inputs, value::Value},
     };
     use image::GenericImageView;
 
@@ -443,7 +449,7 @@ mod face_detection_tests {
     fn test_ultraface_inference() {
         let model_path = download_if_missing(ULTRAFACE_URL, "ultraface_RFB_320.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
@@ -503,7 +509,7 @@ mod vad_tests {
     use super::*;
     use flow_like_model_provider::ml::{
         ndarray::{Array1, Array3},
-        ort::{inputs, session::Session, value::Value},
+        ort::{inputs, value::Value},
     };
 
     #[test]
@@ -511,19 +517,19 @@ mod vad_tests {
     fn test_silero_vad_inference() {
         let model_path = download_if_missing(SILERO_VAD_URL, "silero_vad.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         // Print model info
         println!("Model inputs:");
-        for input in session.inputs.iter() {
-            println!("  - {} : {:?}", input.name, input.input_type);
+        for input in session.inputs().iter() {
+            println!("  - {} : {:?}", input.name(), input.dtype());
         }
         println!("Model outputs:");
-        for output in session.outputs.iter() {
-            println!("  - {} : {:?}", output.name, output.output_type);
+        for output in session.outputs().iter() {
+            println!("  - {} : {:?}", output.name(), output.dtype());
         }
 
         // Create fake audio chunk (512 samples at 16kHz = 32ms)
@@ -825,7 +831,7 @@ mod classification_tests {
     use super::*;
     use flow_like_model_provider::ml::{
         ndarray::Array4,
-        ort::{inputs, session::Session, value::Value},
+        ort::{inputs, value::Value},
     };
     use image::GenericImageView;
 
@@ -834,15 +840,15 @@ mod classification_tests {
     fn test_squeezenet_inference() {
         let model_path = download_if_missing(SQUEEZENET_URL, "squeezenet1.0-12.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         // Print model info
         println!("SqueezeNet inputs:");
-        for input in session.inputs.iter() {
-            println!("  - {} : {:?}", input.name, input.input_type);
+        for input in session.inputs().iter() {
+            println!("  - {} : {:?}", input.name(), input.dtype());
         }
 
         // Create test image (224x224 for SqueezeNet)
@@ -906,19 +912,19 @@ mod classification_tests {
     fn test_mobilenet_inference() {
         let model_path = download_if_missing(MOBILENET_URL, "mobilenetv2-12.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         // Print model info
         println!("MobileNetV2 inputs:");
-        for input in session.inputs.iter() {
-            println!("  - {} : {:?}", input.name, input.input_type);
+        for input in session.inputs().iter() {
+            println!("  - {} : {:?}", input.name(), input.dtype());
         }
         println!("MobileNetV2 outputs:");
-        for output in session.outputs.iter() {
-            println!("  - {} : {:?}", output.name, output.output_type);
+        for output in session.outputs().iter() {
+            println!("  - {} : {:?}", output.name(), output.dtype());
         }
 
         // Create test image (224x224 for MobileNet)
@@ -946,7 +952,7 @@ mod classification_tests {
         let input_value = Value::from_array(input).expect("Failed to create input tensor");
 
         // Get input name from session (clone to avoid borrow conflict)
-        let input_name = session.inputs[0].name.clone();
+        let input_name = session.inputs()[0].name().to_owned();
         let outputs = session
             .run(inputs![input_name.as_str() => input_value])
             .expect("Inference failed");
@@ -970,7 +976,7 @@ mod object_detection_tests {
     use flow_like_catalog_onnx::{Provider, detection::ObjectDetection, load::determine_provider};
     use flow_like_model_provider::ml::{
         ndarray::Array4,
-        ort::{inputs, session::Session, value::Value},
+        ort::{inputs, value::Value},
     };
     use image::GenericImageView;
 
@@ -979,22 +985,22 @@ mod object_detection_tests {
     fn test_tiny_yolov2_load() {
         let model_path = download_if_missing(TINY_YOLOV2_URL, "tinyyolov2-8.onnx");
 
-        let session = Session::builder()
+        let session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         println!("TinyYOLOv2 inputs:");
-        for input in &session.inputs {
-            println!("  - {} {:?}", input.name, input.input_type);
+        for input in session.inputs() {
+            println!("  - {} {:?}", input.name(), input.dtype());
         }
         println!("TinyYOLOv2 outputs:");
-        for output in &session.outputs {
-            println!("  - {} {:?}", output.name, output.output_type);
+        for output in session.outputs() {
+            println!("  - {} {:?}", output.name(), output.dtype());
         }
 
-        assert!(!session.inputs.is_empty());
-        assert!(!session.outputs.is_empty());
+        assert!(!session.inputs().is_empty());
+        assert!(!session.outputs().is_empty());
 
         let provider = determine_provider(&session).expect("provider detection should succeed");
         assert!(
@@ -1008,7 +1014,7 @@ mod object_detection_tests {
     fn test_tiny_yolov2_inference() {
         let model_path = download_if_missing(TINY_YOLOV2_URL, "tinyyolov2-8.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
@@ -1031,7 +1037,7 @@ mod object_detection_tests {
 
         let input_value = Value::from_array(input).expect("Failed to create input tensor");
 
-        let input_name = session.inputs[0].name.clone();
+        let input_name = session.inputs()[0].name().to_owned();
         {
             let outputs = session
                 .run(inputs![input_name.as_str() => input_value])
@@ -1069,7 +1075,7 @@ mod object_detection_tests {
             "yolov3-12.onnx",
         );
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
@@ -1119,7 +1125,7 @@ mod object_detection_tests {
         for case in ONNX_MODEL_ZOO_OBJECT_DETECTION_MODELS {
             println!("--- {} ---", case.name);
             let model_path = download_if_missing(case.url, case.filename);
-            let mut session = Session::builder()
+            let mut session = configured_session_builder()
                 .expect("Failed to create session builder")
                 .commit_from_file(&model_path)
                 .unwrap_or_else(|err| panic!("Failed to load {}: {err}", case.name));
@@ -1165,7 +1171,7 @@ mod object_detection_tests {
         for case in ONNX_MODEL_ZOO_SEGMENTATION_MODELS {
             println!("--- {} ---", case.name);
             let model_path = download_if_missing(case.url, case.filename);
-            let session = Session::builder()
+            let session = configured_session_builder()
                 .expect("Failed to create session builder")
                 .commit_from_file(&model_path)
                 .unwrap_or_else(|err| panic!("Failed to load {}: {err}", case.name));
@@ -1191,7 +1197,7 @@ mod emotion_tests {
     use super::*;
     use flow_like_model_provider::ml::{
         ndarray::Array4,
-        ort::{inputs, session::Session, value::Value},
+        ort::{inputs, value::Value},
     };
 
     #[test]
@@ -1199,22 +1205,22 @@ mod emotion_tests {
     fn test_emotion_ferplus_load() {
         let model_path = download_if_missing(EMOTION_FERPLUS_URL, "emotion-ferplus-8.onnx");
 
-        let session = Session::builder()
+        let session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         println!("Emotion FERPlus inputs:");
-        for input in &session.inputs {
-            println!("  - {} {:?}", input.name, input.input_type);
+        for input in session.inputs() {
+            println!("  - {} {:?}", input.name(), input.dtype());
         }
         println!("Emotion FERPlus outputs:");
-        for output in &session.outputs {
-            println!("  - {} {:?}", output.name, output.output_type);
+        for output in session.outputs() {
+            println!("  - {} {:?}", output.name(), output.dtype());
         }
 
-        assert!(!session.inputs.is_empty());
-        assert!(!session.outputs.is_empty());
+        assert!(!session.inputs().is_empty());
+        assert!(!session.outputs().is_empty());
     }
 
     #[test]
@@ -1222,7 +1228,7 @@ mod emotion_tests {
     fn test_emotion_ferplus_inference() {
         let model_path = download_if_missing(EMOTION_FERPLUS_URL, "emotion-ferplus-8.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
@@ -1243,7 +1249,7 @@ mod emotion_tests {
 
         let input_value = Value::from_array(input).expect("Failed to create input tensor");
 
-        let input_name = session.inputs[0].name.clone();
+        let input_name = session.inputs()[0].name().to_owned();
         let outputs = session
             .run(inputs![input_name.as_str() => input_value])
             .expect("Inference failed");
@@ -1294,7 +1300,7 @@ mod segmentation_tests {
     use super::*;
     use flow_like_model_provider::ml::{
         ndarray::Array4,
-        ort::{inputs, session::Session, value::Value},
+        ort::{inputs, value::Value},
     };
 
     #[test]
@@ -1302,22 +1308,22 @@ mod segmentation_tests {
     fn test_fcn_int8_load() {
         let model_path = download_if_missing(FCN_INT8_URL, "fcn-resnet50-12-int8.onnx");
 
-        let session = Session::builder()
+        let session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
 
         println!("FCN ResNet-50-int8 inputs:");
-        for input in &session.inputs {
-            println!("  - {} {:?}", input.name, input.input_type);
+        for input in session.inputs() {
+            println!("  - {} {:?}", input.name(), input.dtype());
         }
         println!("FCN ResNet-50-int8 outputs:");
-        for output in &session.outputs {
-            println!("  - {} {:?}", output.name, output.output_type);
+        for output in session.outputs() {
+            println!("  - {} {:?}", output.name(), output.dtype());
         }
 
-        assert!(!session.inputs.is_empty());
-        assert!(!session.outputs.is_empty());
+        assert!(!session.inputs().is_empty());
+        assert!(!session.outputs().is_empty());
     }
 
     #[test]
@@ -1325,7 +1331,7 @@ mod segmentation_tests {
     fn test_fcn_int8_inference() {
         let model_path = download_if_missing(FCN_INT8_URL, "fcn-resnet50-12-int8.onnx");
 
-        let mut session = Session::builder()
+        let mut session = configured_session_builder()
             .expect("Failed to create session builder")
             .commit_from_file(&model_path)
             .expect("Failed to load model");
@@ -1354,7 +1360,7 @@ mod segmentation_tests {
 
         let input_value = Value::from_array(input).expect("Failed to create input tensor");
 
-        let input_name = session.inputs[0].name.clone();
+        let input_name = session.inputs()[0].name().to_owned();
         let outputs = session
             .run(inputs![input_name.as_str() => input_value])
             .expect("Inference failed");
@@ -1517,8 +1523,6 @@ mod ner_tests {
 #[test]
 #[ignore]
 fn test_all_models_summary() {
-    use flow_like_model_provider::ml::ort::session::Session;
-
     println!("\n================================================================================");
     println!("ONNX MODEL COMPATIBILITY SUMMARY");
     println!("================================================================================\n");
@@ -1567,7 +1571,7 @@ fn test_all_models_summary() {
 
         match std::panic::catch_unwind(|| {
             let model_path = download_if_missing(url, filename);
-            Session::builder()
+            configured_session_builder()
                 .expect("session builder")
                 .commit_from_file(&model_path)
                 .expect("load model")
@@ -1575,12 +1579,12 @@ fn test_all_models_summary() {
             Ok(session) => {
                 println!("✓ Load: SUCCESS");
                 println!("  Inputs:");
-                for input in &session.inputs {
-                    println!("    - {} {:?}", input.name, input.input_type);
+                for input in session.inputs() {
+                    println!("    - {} {:?}", input.name(), input.dtype());
                 }
                 println!("  Outputs:");
-                for output in &session.outputs {
-                    println!("    - {} {:?}", output.name, output.output_type);
+                for output in session.outputs() {
+                    println!("    - {} {:?}", output.name(), output.dtype());
                 }
             }
             Err(e) => {

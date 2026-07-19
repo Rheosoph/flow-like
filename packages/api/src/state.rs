@@ -23,7 +23,11 @@ use jsonwebtoken::{
     jwk::{AlgorithmParameters, JwkSet},
 };
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use crate::compilation::{CompilationDispatchConfig, CompilationDispatcher};
 use crate::credentials::{CredentialsAccess, RuntimeCredentials};
@@ -34,6 +38,28 @@ use crate::permission::wasm_package_permission::WasmPackagePermission;
 use crate::routes::registry::ServerRegistry;
 
 pub type AppState = Arc<State>;
+
+/// Stable ownership key for retained FlowPilot drafts and applied-review receipts.
+///
+/// Board ids are normally globally unique, but the review token is an authority boundary. Include
+/// the authenticated principal and app explicitly so a same-id board in another app (or another
+/// user's session) can never resolve the retained commands.
+pub(crate) fn flow_ir_draft_store_key(sub: &str, app_id: &str, board_id: &str) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        sub.trim(),
+        app_id.trim(),
+        board_id.trim()
+    )
+}
+
+/// Process-local serialization key for every canonical writer of one board.
+///
+/// Unlike the retained-draft authority key, this deliberately excludes the user: two authorized
+/// collaborators still mutate the same canonical app board and must take the same mutex.
+pub(crate) fn board_mutation_lock_key(app_id: &str, board_id: &str) -> String {
+    format!("{}\u{1f}{}", app_id.trim(), board_id.trim())
+}
 
 const CONFIG: &str = include_str!("../../../flow-like.config.json");
 const JWKS: &str = include_str!(concat!(env!("OUT_DIR"), "/jwks.json"));
@@ -57,6 +83,21 @@ pub enum CachedAuth {
         app_id: String,
         run_id: String,
         technical_user_id: Option<String>,
+        app_chain: Option<Vec<String>>,
+        correlation: Option<crate::correlation::CorrelationContext>,
+    },
+    /// App-connection JWT: one app calling another app it is connected to.
+    /// `exp` is re-checked on cache hits so short-lived tokens cannot outlive
+    /// their expiry through the auth cache.
+    AppConnection {
+        sub: Option<String>,
+        origin_app_id: String,
+        target_app_id: String,
+        app_chain: Vec<String>,
+        technical_user_id: Option<String>,
+        run_id: Option<String>,
+        correlation: Option<crate::correlation::CorrelationContext>,
+        exp: i64,
     },
     /// Invalid/expired token
     Invalid,
@@ -79,6 +120,15 @@ pub struct State {
     pub permission_cache: moka::sync::Cache<String, Arc<role::Model>>,
     pub credentials_cache: moka::sync::Cache<String, Arc<RuntimeCredentials>>,
     pub state_cache: moka::sync::Cache<String, Arc<FlowLikeState>>,
+    /// User+app+board-scoped typed workflow drafts retained across stateless chat HTTP requests.
+    /// Each store is internally bounded; the outer TTL/cap keeps abandoned board sessions finite.
+    pub flow_ir_draft_stores:
+        moka::sync::Cache<String, Arc<flow_like::flow::copilot::FlowIrDraftStore>>,
+    /// Serialize all canonical writers for one app+board within this API process. The registry is
+    /// process-local; multi-replica deployments still need a shared durable lock/CAS before a
+    /// retained review can be fully atomic across instances.
+    board_mutation_locks:
+        parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
     pub cdn_bucket: Arc<FlowLikeStore>,
     pub meta_bucket: Arc<FlowLikeStore>,
@@ -114,6 +164,26 @@ pub struct State {
 }
 
 impl State {
+    pub(crate) fn board_mutation_lock(
+        &self,
+        app_id: &str,
+        board_id: &str,
+    ) -> Arc<flow_like_types::tokio::sync::Mutex<()>> {
+        let key = board_mutation_lock_key(app_id, board_id);
+        let mut locks = self.board_mutation_locks.lock();
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return lock;
+        }
+        // Weak entries make cleanup safe: a mutex can disappear only when no holder or waiter has
+        // an Arc, so eviction can never create a second live lock for the same board.
+        if locks.len() >= 4_096 {
+            locks.retain(|_, lock| lock.strong_count() > 0);
+        }
+        let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+
     pub async fn new(
         catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
         cdn_bucket: Arc<FlowLikeStore>,
@@ -398,6 +468,11 @@ impl State {
                 .max_capacity(32 * 1024 * 1024) // 32 MB
                 .time_to_live(Duration::from_secs(30 * 60))
                 .build(),
+            flow_ir_draft_stores: moka::sync::Cache::builder()
+                .max_capacity(2_048)
+                .time_to_idle(Duration::from_secs(2 * 60 * 60))
+                .build(),
+            board_mutation_locks: parking_lot::Mutex::new(HashMap::new()),
             credentials_cache: cache,
             content_bucket,
             cdn_bucket,
@@ -653,7 +728,7 @@ impl State {
         role_id: &str,
         app_id: &str,
     ) -> flow_like_types::Result<()> {
-        use crate::entity::membership;
+        use crate::entity::{app_connection, membership};
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
         let user_ids: Vec<String> = membership::Entity::find()
@@ -667,6 +742,22 @@ impl State {
 
         for user_id in &user_ids {
             self.invalidate_permission(user_id, app_id);
+        }
+
+        let source_app_ids: Vec<String> = app_connection::Entity::find()
+            .filter(app_connection::Column::RoleId.eq(role_id))
+            .filter(app_connection::Column::TargetAppId.eq(app_id))
+            .select_only()
+            .column(app_connection::Column::SourceAppId)
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+
+        for source_app_id in &source_app_ids {
+            self.invalidate_permission(
+                &crate::middleware::jwt::app_connection_cache_sub(source_app_id),
+                app_id,
+            );
         }
 
         Ok(())
@@ -703,4 +794,34 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
         _ => bail!("Unsupported algorithm"),
     }?;
     Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{board_mutation_lock_key, flow_ir_draft_store_key};
+
+    #[test]
+    fn retained_flow_ir_key_is_scoped_by_user_app_and_board() {
+        let key = flow_ir_draft_store_key("user", "app", "board");
+        assert_ne!(key, flow_ir_draft_store_key("other", "app", "board"));
+        assert_ne!(key, flow_ir_draft_store_key("user", "other", "board"));
+        assert_ne!(key, flow_ir_draft_store_key("user", "app", "other"));
+        assert_eq!(key, flow_ir_draft_store_key(" user ", " app ", " board "));
+    }
+
+    #[test]
+    fn board_mutation_lock_is_shared_across_authorized_users() {
+        assert_eq!(
+            board_mutation_lock_key("app", "board"),
+            board_mutation_lock_key(" app ", " board ")
+        );
+        assert_ne!(
+            board_mutation_lock_key("app", "board"),
+            board_mutation_lock_key("other", "board")
+        );
+        assert_ne!(
+            board_mutation_lock_key("app", "board"),
+            board_mutation_lock_key("app", "other")
+        );
+    }
 }

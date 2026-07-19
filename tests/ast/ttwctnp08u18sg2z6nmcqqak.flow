@@ -60,6 +60,92 @@ interface Bit {
     model_slug?: string | null = null;
     model_evaluation?: LlmModelEvaluation | null = null;
 }
+interface HistoryMessage {
+    role: "system" | "user" | "assistant" | "function" | "tool";
+    content: string | Struct[];
+    name?: string | null;
+    tool_calls?: ToolCall[] | null;
+    tool_call_id?: string | null;
+    annotations?: Annotation[] | null;
+}
+interface ImageUrl {
+    url: string;
+    detail?: string | null;
+}
+interface ToolCall {
+    id: string;
+    type: string;
+    function: ToolCallFunction;
+}
+interface ToolCallFunction {
+    name: string;
+    arguments: string;
+}
+interface Annotation {
+    type: string;
+    url_citation?: UrlCitation | null;
+}
+interface UrlCitation {
+    end_index: int;
+    start_index: int;
+    title: string;
+    url: string;
+    content?: string | null;
+}
+interface StreamOptions {
+    include_usage: bool;
+}
+interface Tool {
+    type: "function";
+    function: HistoryFunction;
+}
+interface HistoryFunction {
+    name: string;
+    description?: string | null;
+    parameters: HistoryFunctionParameters;
+}
+interface HistoryFunctionParameters {
+    type: "object" | "number" | "string" | "array" | "null" | "boolean";
+    properties?: Map<string, HistoryJSONSchemaDefine> | null;
+    required?: string[] | null;
+}
+interface HistoryJSONSchemaDefine {
+    type?: "object" | "number" | "string" | "array" | "null" | "boolean" | null;
+    description?: string | null;
+    enum?: string[] | null;
+    properties?: Map<string, HistoryJSONSchemaDefine> | null;
+    required?: string[] | null;
+    items?: HistoryJSONSchemaDefine | null;
+}
+interface Usage {
+    include: bool;
+}
+interface History {
+    model: string;
+    messages: HistoryMessage[];
+    preset?: string | null;
+    stream?: bool | null;
+    stream_options?: StreamOptions | null;
+    max_completion_tokens?: int | null;
+    top_p?: float | null;
+    temperature?: float | null;
+    thinking?: "off" | "low" | "mid" | "high" | null;
+    seed?: int | null;
+    presence_penalty?: float | null;
+    frequency_penalty?: float | null;
+    user?: string | null;
+    stop?: string[] | null;
+    response_format?: string | any | null;
+    n?: int | null;
+    tools?: Tool[] | null;
+    tool_choice?: null | Struct | null;
+    usage?: Usage | null;
+}
+interface User {
+    sub: string;
+    name: string;
+    bot?: bool | null;
+}
 
 const attachedFiles: Struct = {}
 const embeddingModel: CachedEmbeddingModel = {"cache_key":""}
@@ -78,9 +164,10 @@ const smallModel: Bit = {"id":"","type":"Other","meta":{},"authors":[],"reposito
 
 function constructPrompt(prompt: string): (out: string) {
     const now2 = utilsDatetimeNow()
+    return stringFormat({ formatString: "{prompt}\n\nCurrent Time: {time}", prompt: prompt, time: utilsDatetimeFormat({ date: now2.date, format: "rfc3339" }) })
 }
 
-chatEvent(history: Struct, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: Struct) {
+chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {
     const extractAttachments = aiGenLlmHistoryExtractAttachments({ history: history, attachments: attachments })
     attachedFiles = {}
     for (const forEach4 of controlForEach({ array: extractAttachments.paths })) {
@@ -135,18 +222,18 @@ indexPath(path: string, payload: Struct) {
             writeString({ path: setExtension7.pathOut, content: pagesToMarkdown.markdown })
             const embedDocument = embedDocument({ queryString: summarizeDocument.summary.summary, model: embeddingModel })
             let record2 = structSet({ structIn: {}, field: "vector", value: embedDocument.vector }).structOut
-            record2 = structSet({ structIn: record2, field: "content", value: summarizeDocument.summary.summary }).structOut
+            record2.content = summarizeDocument.summary.summary
             const now3 = utilsDatetimeNow()
             let row = structSet({ structIn: record2, field: "indexed", value: now3.date }).structOut
-            row = structSet({ structIn: row, field: "path", value: rawPath({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) }) }).structOut
-            row = structSet({ structIn: row, field: "file_name", value: filename({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), removeExtension: true }) }).structOut
+            row.path = rawPath({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })
+            row.file_name = filename({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), removeExtension: true })
             const cUIDV2 = cuid()
-            row = structSet({ structIn: row, field: "reference_db", value: cUIDV2.cuid }).structOut
+            row.reference_db = cUIDV2.cuid
             insertLocalDb({ database: files, value: row })
             const readToBytes2 = readToBytes({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })
             const blake3Hash2 = utilsHashBlake3({ input: readToBytes2.content })
             let row2 = structSet({ structIn: {}, field: "hash", value: blake3Hash2.hash }).structOut
-            row2 = structSet({ structIn: row2, field: "reference_db", value: cUIDV2.cuid }).structOut
+            row2.reference_db = cUIDV2.cuid
             const setExtension3 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })
             writeString({ path: setExtension3.pathOut, content: valToString({ value: row2, pretty: false }) })
             const openDatabase5 = openLocalDb({ name: cUIDV2.cuid, userScoped: true, batchSize: 1000 })
@@ -155,7 +242,7 @@ indexPath(path: string, payload: Struct) {
                 const chunkText = chunkText({ text: forEach2.value.content, model: embeddingModel, capacity: 8000, overlap: 20, markdown: true })
                 for (const forEach3 of controlForEach({ array: chunkText.chunks })) {
                     let record3 = structSet({ structIn: record4, field: "content", value: forEach3.value }).structOut
-                    record3 = structSet({ structIn: record3, field: "chunk_id", value: forEach3.index }).structOut
+                    record3.chunk_id = forEach3.index
                     const embedDocument2 = embedDocument({ queryString: forEach3.value, model: embeddingModel })
                     let row3 = structSet({ structIn: record3, field: "vector", value: embedDocument2.vector }).structOut
                     insertLocalDb({ database: openDatabase5.database, value: row3 })
@@ -367,7 +454,7 @@ listFilesInPath(path: string, payload: Struct) {
     const listPaths = pathListPaths({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })
     const listFolders = pathListFolders({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })
     let record5 = structSet({ structIn: {}, field: "files", value: listPaths.paths }).structOut
-    record5 = structSet({ structIn: record5, field: "folders", value: listFolders.folders }).structOut
+    record5.folders = listFolders.folders
     return record5
 }
 

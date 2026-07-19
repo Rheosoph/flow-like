@@ -11,7 +11,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
-:root {
+:root,
+[data-fl-chat-color-scheme="light"] {
 	--background: oklch(0.9841 0.0035 39.4848);
 	--foreground: oklch(0.184 0.0081 285.5768);
 	--card: oklch(1.0 0 0);
@@ -79,6 +80,10 @@
 		env(safe-area-inset-bottom, 0px),
 		var(--fl-native-safe-bottom, 0px)
 	);
+	/* Breathing room below the chat composer, on top of any device safe-area inset. Global so it
+	   applies to every chat surface; the compact docked FlowPilot overlay overrides it tighter. */
+	--fl-chat-pad-bottom: 1rem;
+	--fl-chat-user-message-background: var(--muted);
 
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
@@ -92,7 +97,8 @@
 	--pin-fn-ref: oklch(63.582% 0.18307 43.26);
 }
 
-.dark {
+.dark,
+[data-fl-chat-color-scheme="dark"] {
 	--background: oklch(0.164 0.0111 268.0057);
 	--foreground: oklch(0.9544 0.0059 59.6503);
 	--card: oklch(0.1993 0.0111 260.661);
@@ -150,6 +156,11 @@
 	--shadow-xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.0), 0px 8px
 		10px -1px hsl(202.8169 89.1213% 53.1373% / 0.0);
 	--shadow-2xl: 0px 2px 0px 0px hsl(202.8169 89.1213% 53.1373% / 0.0);
+	--fl-chat-user-message-background: color-mix(
+		in oklch,
+		var(--muted) 30%,
+		transparent
+	);
 
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
@@ -161,6 +172,136 @@
 	--pin-date: oklch(82.8% 0.189 84.429);
 	--pin-pathbuf: oklch(44.4% 0.011 73.639);
 	--pin-fn-ref: oklch(63.582% 0.18307 43.26);
+}
+
+.fl-chat-root {
+	--fl-chat-content-width: 64rem;
+	--fl-chat-message-radius: 0.75rem;
+	--fl-chat-surface-background: transparent;
+	--fl-chat-composer-background: var(--background);
+	--fl-chat-user-message-foreground: var(--foreground);
+	--fl-chat-ai-message-background: transparent;
+	--fl-chat-ai-message-foreground: var(--foreground);
+	--fl-chat-disclosure-background: color-mix(
+		in oklch,
+		var(--primary) 10%,
+		var(--background)
+	);
+	--fl-chat-disclosure-foreground: var(--foreground);
+	--fl-chat-background-overlay: color-mix(
+		in oklch,
+		var(--background) 38%,
+		transparent
+	);
+	--fl-chat-background-overlay-strong: color-mix(
+		in oklch,
+		var(--background) 56%,
+		transparent
+	);
+	--fl-chat-background-size: cover;
+	--fl-chat-background-position: center;
+}
+
+/* Background art needs local contrast, not one heavy wash over the whole image. These
+   values remain CSS variables so event-level custom CSS can tune the treatment. */
+.fl-chat-root:where([data-fl-chat-has-background="true"]) {
+	--fl-chat-composer-background: color-mix(
+		in oklch,
+		var(--background) 76%,
+		transparent
+	);
+	--fl-chat-user-message-background: color-mix(
+		in oklch,
+		var(--muted) 82%,
+		transparent
+	);
+	--fl-chat-ai-message-background: color-mix(
+		in oklch,
+		var(--background) 76%,
+		transparent
+	);
+	--fl-chat-disclosure-background: color-mix(
+		in oklch,
+		var(--background) 84%,
+		transparent
+	);
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-welcome-panel] {
+	border: 1px solid color-mix(in oklch, var(--foreground) 10%, transparent);
+	border-radius: 1.25rem;
+	background: linear-gradient(
+		145deg,
+		color-mix(in oklch, var(--background) 62%, transparent),
+		color-mix(in oklch, var(--background) 52%, transparent)
+	);
+	box-shadow: 0 1.5rem 4rem -1.5rem oklch(0 0 0 / 42%), inset 0 1px 0
+		oklch(1 0 0 / 6%);
+	padding: clamp(1rem, 2vw, 1.5rem);
+	-webkit-backdrop-filter: blur(18px) saturate(110%);
+	backdrop-filter: blur(18px) saturate(110%);
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-suggestion] {
+	min-height: 2.75rem;
+	border-color: color-mix(in oklch, var(--foreground) 8%, transparent);
+	border-radius: 0.625rem;
+	background-color: color-mix(in oklch, var(--foreground) 4%, transparent);
+	color: color-mix(in oklch, var(--foreground) 82%, transparent);
+	line-height: 1.35;
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-suggestion]:hover {
+	border-color: color-mix(in oklch, var(--foreground) 12%, transparent);
+	background-color: color-mix(in oklch, var(--foreground) 8%, transparent);
+	color: var(--foreground);
+	transform: translateY(-1px);
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-suggestions]
+	> p {
+	color: color-mix(in oklch, var(--foreground) 60%, transparent);
+	font-size: 0.6875rem;
+	letter-spacing: 0.08em;
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-composer]
+	> div {
+	border-color: color-mix(in oklch, var(--foreground) 10%, transparent);
+	border-radius: 0.875rem;
+	box-shadow: 0 1rem 2.5rem -1.5rem oklch(0 0 0 / 40%), inset 0 1px 0
+		oklch(1 0 0 / 5%);
+	-webkit-backdrop-filter: blur(18px) saturate(112%);
+	backdrop-filter: blur(18px) saturate(112%);
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-composer]
+	textarea::placeholder {
+	color: color-mix(in oklch, var(--foreground) 65%, transparent);
+}
+
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-message],
+:where(.fl-chat-root[data-fl-chat-has-background="true"])
+	[data-fl-chat-ai-disclosure] {
+	border: 1px solid color-mix(in oklch, var(--border) 62%, transparent);
+	box-shadow: 0 0.75rem 2rem -1rem oklch(0 0 0 / 35%);
+	-webkit-backdrop-filter: blur(18px) saturate(115%);
+	backdrop-filter: blur(18px) saturate(115%);
+}
+
+@media (max-width: 40rem) {
+	:where(.fl-chat-root[data-fl-chat-has-background="true"])
+		[data-fl-chat-welcome-panel] {
+		border-radius: 1rem;
+		padding: 1rem;
+	}
 }
 
 @theme inline {
@@ -1023,4 +1164,15 @@
 .dark .shiki-wrapper .shiki span {
 	color: var(--shiki-dark);
 	background-color: var(--shiki-dark-bg);
+}
+
+/*
+ * WebKit (WKWebView / Safari) performance gate.
+ * A runtime script sets data-engine="webkit" on <html> for WebKit engines, which
+ * paint backdrop-filter far slower than Blink. Disable it there (backgrounds are
+ * already near-opaque, so the visual loss is minimal) while Chromium keeps it.
+ */
+html[data-engine="webkit"] [class*="backdrop-blur"] {
+	-webkit-backdrop-filter: none !important;
+	backdrop-filter: none !important;
 }

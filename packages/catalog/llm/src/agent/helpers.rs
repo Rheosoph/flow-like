@@ -363,6 +363,7 @@ async fn summarize_history_to_budget(
     let summary_msg = rig::message::Message::User {
         content: OneOrMany::one(rig::message::UserContent::Text(rig::message::Text {
             text: format!("[Previous conversation summary: {}]", summary_text),
+            additional_params: None,
         })),
     };
 
@@ -1127,23 +1128,27 @@ pub async fn execute_agent_streaming(
     let mut mcp_tool_clients: HashMap<String, rmcp::service::ServerSink> = HashMap::new();
     let mut _mcp_clients = Vec::new();
 
-    let client_info = ClientInfo {
-        meta: None,
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "Flow-Like".to_string(),
-            version: "alpha".to_string(),
-            title: None,
-            description: None,
-            icons: None,
-            website_url: Some("https://flow-like.com".to_string()),
-        },
-    };
+    let mut implementation = Implementation::new("Flow-Like", "alpha");
+    implementation.website_url = Some("https://flow-like.com".to_string());
+    let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
     for mcp_config in &agent.mcp_servers {
+        let transport_config =
+            match crate::agent::mcp_transport_config_for_execution(mcp_config, context).await {
+                Ok(config) => config,
+                Err(error) => {
+                    context.log_message(
+                        &format!(
+                            "Failed to authorize MCP server {}: {}",
+                            mcp_config.uri, error
+                        ),
+                        LogLevel::Error,
+                    );
+                    continue;
+                }
+            };
         let transport =
-            rmcp::transport::StreamableHttpClientTransport::from_uri(mcp_config.uri.as_str());
+            rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
         let client = match client_info.clone().serve(transport).await {
             Ok(c) => c,
             Err(e) => {
@@ -1176,10 +1181,7 @@ pub async fn execute_agent_streaming(
 
             // Check if there are more pages
             if let Some(next_cursor) = response.next_cursor {
-                cursor = Some(PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(next_cursor),
-                });
+                cursor = Some(PaginatedRequestParams::default().with_cursor(Some(next_cursor)));
             } else {
                 break;
             }
@@ -1802,6 +1804,7 @@ pub async fn execute_agent_streaming(
             content: OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                 OneOrMany::one(AssistantContent::Text(rig::message::Text {
                     text: String::new(),
+                    additional_params: None,
                 }))
             }),
         };
@@ -1835,15 +1838,9 @@ pub async fn execute_agent_streaming(
                     );
 
                     let args_map = arguments.as_object().cloned();
-                    match mcp_peer
-                        .call_tool(CallToolRequestParams {
-                            meta: None,
-                            name: name.clone().into(),
-                            arguments: args_map,
-                            task: None,
-                        })
-                        .await
-                    {
+                    let mut params = CallToolRequestParams::new(name.clone());
+                    params.arguments = args_map;
+                    match mcp_peer.call_tool(params).await {
                         Ok(result) => {
                             context.log_message(
                                 &format!(
@@ -2264,7 +2261,6 @@ async fn handle_memory_tool_call(
     tool_name: &str,
     arguments: &Value,
 ) -> flow_like_types::Result<Value> {
-    use flow_like_catalog_core::CachedDB;
     use flow_like_storage::databases::vector::{
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
@@ -2278,17 +2274,7 @@ async fn handle_memory_tool_call(
         .as_ref()
         .ok_or_else(|| anyhow!("Memory not configured on agent"))?;
 
-    let cached_db: CachedDB = {
-        let cache = context.cache.read().await;
-        let entry = cache
-            .get(&memory.database.cache_key)
-            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
-        entry
-            .as_any()
-            .downcast_ref::<CachedDB>()
-            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
-            .clone()
-    };
+    let cached_db = memory.database.load(context).await?;
 
     match tool_name {
         "_memory_search" => {
@@ -2494,7 +2480,6 @@ async fn store_evicted_to_memory(
     agent: &Agent,
     evicted: &[rig::message::Message],
 ) -> flow_like_types::Result<()> {
-    use flow_like_catalog_core::CachedDB;
     use flow_like_storage::databases::vector::{
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
@@ -2572,17 +2557,7 @@ async fn store_evicted_to_memory(
         "timestamp": now,
     });
 
-    let cached_db: CachedDB = {
-        let cache = context.cache.read().await;
-        let entry = cache
-            .get(&memory.database.cache_key)
-            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
-        entry
-            .as_any()
-            .downcast_ref::<CachedDB>()
-            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
-            .clone()
-    };
+    let cached_db = memory.database.load(context).await?;
 
     let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
     db.insert(vec![record]).await?;

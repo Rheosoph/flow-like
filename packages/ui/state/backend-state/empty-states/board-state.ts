@@ -1,4 +1,5 @@
 import type {
+	IApplyFlowScriptResponse,
 	IBoard,
 	IBoardState,
 	IConnectionMode,
@@ -88,6 +89,7 @@ export class EmptyBoardState implements IBoardState {
 		lastMeta?: ILogMetadata,
 		offset?: number,
 		limit?: number,
+		includeNodes?: boolean,
 	): Promise<ILogMetadata[]> {
 		throw new Error("Method not implemented.");
 	}
@@ -143,11 +145,32 @@ export class EmptyBoardState implements IBoardState {
 		throw new Error("Method not implemented.");
 	}
 
+	applyFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		currentLayer?: string,
+		catalogNodes?: INode[],
+		allowDeletions?: boolean,
+	): Promise<IApplyFlowScriptResponse> {
+		throw new Error("Method not implemented.");
+	}
+
+	getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors?: boolean,
+	): Promise<string> {
+		throw new Error("Method not implemented.");
+	}
+
 	getExecutionElements(
 		appId: string,
 		boardId: string,
 		pageId: string,
 		wildcard?: boolean,
+		version?: [number, number, number],
 	): Promise<Record<string, unknown>> {
 		throw new Error("Method not implemented.");
 	}
@@ -164,9 +187,16 @@ export class EmptyBoardState implements IBoardState {
 		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
+		reasoningEffort?: string,
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		nested?: boolean,
+		readOnly?: boolean,
+		toolContext?: import("../../../lib/schema/copilot").CopilotToolContext,
+		_requestId?: string,
+		_rawUserPrompt?: string,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		throw new Error("Method not implemented.");
 	}

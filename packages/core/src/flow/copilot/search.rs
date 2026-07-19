@@ -302,6 +302,27 @@ pub fn search_result_hint_lines(metadata: &NodeMetadata) -> Vec<String> {
     hints
 }
 
+/// Compact model-facing rendering of catalog search results (one line per node + usage hints).
+/// Single source for the `catalog_search` tool output across every backend executor.
+pub fn render_catalog_search_results(results: &[NodeMetadata]) -> String {
+    if results.is_empty() {
+        return "No nodes found matching your query. Try different keywords.".to_string();
+    }
+
+    results
+        .iter()
+        .map(|meta| {
+            let hints = search_result_hint_lines(meta);
+            if hints.is_empty() {
+                meta.to_compact()
+            } else {
+                format!("{} [{}]", meta.to_compact(), hints.join("; "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn token_synonyms(token: &str) -> &'static [&'static str] {
     match token {
         "email" | "mail" => &["smtp", "imap", "gmail", "outlook", "message"],
@@ -346,10 +367,39 @@ fn companion_nodes_for(node_name: &str) -> Vec<String> {
             "email_imap_mark_seen".to_string(),
         ],
         "email_imap_inbox_fetch_mail" => vec![
+            "email_imap_connect".to_string(),
+            "mail_imap_inbox".to_string(),
+            "mail_imap_list".to_string(),
             "email_get_headers".to_string(),
+            "email_get_content".to_string(),
+            "mail_address_fields".to_string(),
             "email_imap_mark_seen".to_string(),
             "email_imap_move_message".to_string(),
         ],
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imap_fetch_companions_include_the_required_upstream_chain() {
+        let companions = companion_nodes_for("email_imap_inbox_fetch_mail");
+        for required in [
+            "email_imap_connect",
+            "mail_imap_inbox",
+            "mail_imap_list",
+            "email_get_headers",
+            "email_get_content",
+            "mail_address_fields",
+            "email_imap_mark_seen",
+        ] {
+            assert!(
+                companions.iter().any(|companion| companion == required),
+                "missing {required} in {companions:?}"
+            );
+        }
     }
 }

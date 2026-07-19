@@ -1,6 +1,44 @@
 // Image — FlowScript node declarations (generated, do not edit).
 // One declare-function per catalog node. Names are camelCase node types.
 
+// === Image ===
+
+/**
+ * Decode a still image and write it as PNG, JPEG, GIF, WebP, or AVIF
+ * @param source — Source image FlowPath
+ * @param target — Target image FlowPath
+ * @param format (optional) — Output image format, or auto from target extension
+ * @returns result — Written image FlowPath
+ * @returns report — Image conversion report
+ * @impure has side effects / drives control flow
+ */
+declare function videoConvertImageFormat({ source: Struct, target: Struct, format?: string }): { result: Struct, report: Struct };
+
+/**
+ * Apply crop, resize, flip, rotate, blur, and color filters to a still image
+ * @param source — Source image FlowPath
+ * @param target — Target image FlowPath
+ * @param format (optional) — Output image format, or auto from target extension
+ * @param cropX (optional)
+ * @param cropY (optional)
+ * @param cropWidth (optional)
+ * @param cropHeight (optional)
+ * @param resizeWidth (optional)
+ * @param resizeHeight (optional)
+ * @param rotateDegrees (optional)
+ * @param blurRadius (optional)
+ * @param flipHorizontal (optional)
+ * @param flipVertical (optional)
+ * @param brightness (optional) — -1.0 to 1.0
+ * @param contrast (optional) — 1.0 keeps contrast unchanged
+ * @param saturation (optional) — 1.0 keeps saturation unchanged
+ * @returns result — Written image FlowPath
+ * @returns report — Image transform report
+ * @impure has side effects / drives control flow
+ */
+declare function videoTransformImage({ source: Struct, target: Struct, format?: string, cropX?: int, cropY?: int, cropWidth?: int, cropHeight?: int, resizeWidth?: int, resizeHeight?: int, rotateDegrees?: int, blurRadius?: int, flipHorizontal?: bool, flipVertical?: bool, brightness?: float, contrast?: float, saturation?: float }): { result: Struct, report: Struct };
+
+
 // === Image/Annotate ===
 
 /**
@@ -191,3 +229,4 @@ declare function cropImage({ imageIn: Struct, bbox: Struct, useRef?: bool }): St
  * @impure has side effects / drives control flow
  */
 declare function resizeImage({ imageIn: Struct, useRef?: bool, mode?: string, filter?: string, widthIn?: int, heightIn?: int }): { imageOut: Struct, widthOut: int, heightOut: int };
+

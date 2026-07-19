@@ -62,6 +62,41 @@ impl EventExecutionMode {
     }
 }
 
+/// Where an event is reachable from. `Public` events with a REST/MCP surface
+/// are served on the public inbound routers with their configured auth.
+/// `Internal` events are only callable by connected apps through the
+/// app-connection proxy (gated by the connection role) and are never exposed
+/// publicly — so a public secret can never be bypassed via the proxy.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum EventExposure {
+    /// Public HTTP surface (REST/MCP), protected by the event's own auth.
+    #[default]
+    Public,
+    /// Reachable only via app connections, never publicly.
+    Internal,
+}
+
+impl EventExposure {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventExposure::Public => "PUBLIC",
+            EventExposure::Internal => "INTERNAL",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "Internal" | "internal" | "INTERNAL" => EventExposure::Internal,
+            _ => EventExposure::Public,
+        }
+    }
+
+    pub fn is_internal(&self) -> bool {
+        matches!(self, EventExposure::Internal)
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct CanaryEvent {
     pub weight: f32,
@@ -113,6 +148,37 @@ pub struct Event {
     /// the board's `execution_mode` when that mode is not Hybrid.
     #[serde(default)]
     pub execution_mode: EventExecutionMode,
+
+    /// Whether the event is publicly reachable or only callable by connected
+    /// apps via the app-connection proxy. Only meaningful for REST/MCP events.
+    #[serde(default)]
+    pub exposure: EventExposure,
+
+    /// Process-mining case-key mappings: business key name → dot-path into
+    /// the invocation payload (e.g. `order_id` → `order.id`). Extracted on
+    /// every run so cases group by business object automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_mappings: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct ChatVoiceParameters {
+    /// Capture mode: "disabled" | "stt" (frontend transcript) | "record" (audio).
+    pub mode: Option<String>,
+    /// Invoke mode: "manual" | "hold" | "auto".
+    pub invoke: Option<String>,
+    /// Visual style: "conservative" | "waveform" | "orb" | "vortex" | "shader".
+    pub variant: Option<String>,
+    /// Element size: "sm" | "md" | "lg".
+    pub size: Option<String>,
+    /// Base accent color (CSS color string).
+    pub color: Option<String>,
+    /// Accent color while recording (CSS color string).
+    pub recording_color: Option<String>,
+    /// Answer playback: "text" | "audio" | "both".
+    pub playback: Option<String>,
+    pub max_duration: Option<u32>,
+    pub auto_stop: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -122,9 +188,22 @@ pub struct ChatEventParameters {
     pub allow_voice_input: Option<bool>,
     pub allow_voice_output: Option<bool>,
     pub allow_voice_mode: Option<bool>,
+    pub voice: Option<ChatVoiceParameters>,
     pub tools: Option<Vec<String>>,
     pub default_tools: Option<Vec<String>>,
     pub example_messages: Option<Vec<String>>,
+    /// Attach PNG snapshots of the latest assistant message's embedded widgets
+    /// to the outgoing user turn so vision-capable models see the rendered UI.
+    /// Defaults to enabled.
+    pub attach_widget_snapshots: Option<bool>,
+    /// Custom CSS scoped to the chat interface.
+    pub custom_css: Option<String>,
+    /// Background image URL or app storage path for the chat interface.
+    pub background_image: Option<String>,
+    /// Preferred chat color scheme: "system" | "light" | "dark".
+    pub color_scheme: Option<String>,
+    /// User-facing disclosure that the conversation is with an AI.
+    pub ai_disclosure: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -156,6 +235,65 @@ pub enum EventPayload {
     ApiEvent(ApiEventParameters),
     AnyEvent(HashMap<String, flow_like_types::Value>),
     QuickAction,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChatEventParameters, EventPayload};
+    use serde_json::json;
+
+    #[test]
+    fn chat_event_parameters_default_presentation_fields_to_none() {
+        let parameters: ChatEventParameters = serde_json::from_value(json!({})).unwrap();
+
+        assert!(parameters.custom_css.is_none());
+        assert!(parameters.background_image.is_none());
+        assert!(parameters.color_scheme.is_none());
+        assert!(parameters.ai_disclosure.is_none());
+    }
+
+    #[test]
+    fn chat_event_payload_round_trips_presentation_fields() {
+        let payload: EventPayload = serde_json::from_value(json!({
+            "custom_css": ".message { border-radius: 1rem; }",
+            "background_image": "https://example.com/chat-background.webp",
+            "color_scheme": "dark",
+            "ai_disclosure": "Plot twist: you're chatting with an AI."
+        }))
+        .unwrap();
+
+        let EventPayload::ChatEvent(parameters) = &payload else {
+            panic!("presentation fields should deserialize as chat event parameters");
+        };
+        assert_eq!(
+            parameters.custom_css.as_deref(),
+            Some(".message { border-radius: 1rem; }")
+        );
+        assert_eq!(
+            parameters.background_image.as_deref(),
+            Some("https://example.com/chat-background.webp")
+        );
+        assert_eq!(parameters.color_scheme.as_deref(), Some("dark"));
+        assert_eq!(
+            parameters.ai_disclosure.as_deref(),
+            Some("Plot twist: you're chatting with an AI.")
+        );
+
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            serialized["custom_css"],
+            json!(".message { border-radius: 1rem; }")
+        );
+        assert_eq!(
+            serialized["background_image"],
+            json!("https://example.com/chat-background.webp")
+        );
+        assert_eq!(serialized["color_scheme"], json!("dark"));
+        assert_eq!(
+            serialized["ai_disclosure"],
+            json!("Plot twist: you're chatting with an AI.")
+        );
+    }
 }
 
 pub fn canary_equal(a: &Option<CanaryEvent>, b: &Option<CanaryEvent>) -> bool {

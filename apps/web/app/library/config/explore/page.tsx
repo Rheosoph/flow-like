@@ -1,6 +1,6 @@
 "use client";
 
-import { ExploreDataPage } from "@flow-like/flow-like-ui/components/settings/explore/explore-page";
+import { DataStudioPage } from "@flow-like/flow-like-ui/components/settings/explore/explore-page";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import NotFound from "../not-found";
@@ -11,5 +11,5 @@ export default function Page(): React.ReactElement {
 
 	if (!id) return <NotFound />;
 
-	return <ExploreDataPage appId={id} />;
+	return <DataStudioPage appId={id} />;
 }

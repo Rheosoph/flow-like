@@ -19,11 +19,13 @@ pub mod analytics;
 pub mod api;
 pub mod board;
 pub mod comments;
+pub mod connection;
 pub mod data;
 pub mod db;
 pub mod events;
 pub mod fork;
 pub mod graph;
+pub mod groups;
 pub mod invoke;
 pub mod meta;
 pub mod notifications;
@@ -72,6 +74,8 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/meta", meta::routes())
         .nest("/{app_id}/roles", roles::routes())
         .nest("/{app_id}/team", team::routes())
+        .nest("/{app_id}/connections", connection::routes())
+        .nest("/{app_id}/groups", groups::routes())
         .nest("/{app_id}/analytics", analytics::routes())
         .nest("/{app_id}/sales", sales::routes())
         .nest("/{app_id}/events", events::routes())
@@ -94,6 +98,22 @@ macro_rules! ensure_permission {
     ($user:expr, $app_id:expr, $state:expr, $perm:expr) => {{
         let sub = $user.app_permission($app_id, $state).await?;
         if !sub.has_permission($perm) {
+            if let Ok(user_id) = sub.sub() {
+                $state.invalidate_permission(&user_id, $app_id);
+            }
+            return Err($crate::error::ApiError::FORBIDDEN);
+        }
+        sub
+    }};
+}
+
+/// Like `ensure_permission!`, but passes when the principal holds ANY of the
+/// listed permissions (e.g. `ReadFiles` OR `ReadDatabase`).
+#[macro_export]
+macro_rules! ensure_any_permission {
+    ($user:expr, $app_id:expr, $state:expr, $($perm:expr),+ $(,)?) => {{
+        let sub = $user.app_permission($app_id, $state).await?;
+        if !($(sub.has_permission($perm))||+) {
             if let Ok(user_id) = sub.sub() {
                 $state.invalidate_permission(&user_id, $app_id);
             }

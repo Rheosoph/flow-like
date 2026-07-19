@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -41,10 +41,22 @@ pub async fn get_overlay(
     Path((app_id, overlay_id)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
 ) -> Result<Json<flow_like_catalog_core::GraphOverlay>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let def = lancegraph::load_overlay(&connection, &overlay_id).await?;
+    let mut def = lancegraph::load_overlay(&connection, &overlay_id).await?;
+    if user.is_connected_app() {
+        if !def.exposed {
+            return Err(ApiError::not_found("Ontology not found"));
+        }
+        def = crate::routes::app::connection::remote_ontologies::sanitize_remote_contract(def);
+    }
 
     Ok(Json(super::list_overlays::def_to_overlay(def)))
 }

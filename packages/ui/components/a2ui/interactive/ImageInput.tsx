@@ -3,11 +3,15 @@
 import { ImagePlus, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
+import {
+	type ITemporaryFlowPath,
+	useBackend,
+} from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import {
+	useActionContext,
 	useExecuteAction,
 	useIsComponentTriggering,
 	useOnAction,
@@ -16,22 +20,38 @@ import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { BoundValue, ImageInputComponent } from "../types";
+import {
+	limitUploadBatch,
+	mergeSuccessfulUploadBatch,
+} from "./upload-input-state";
 
 interface ImageData {
 	name: string;
 	size: number;
 	type: string;
-	dataUrl: string;
+	dataUrl?: string;
+	url?: string;
 	backendUrl?: string;
+	flowPath?: ITemporaryFlowPath;
+	uploadId?: string;
 	uploading?: boolean;
 	uploadError?: string;
 }
 
-type StoredImageData = Omit<ImageData, "dataUrl" | "uploading" | "uploadError">;
+interface ReadableImageFile {
+	file: File;
+	image: ImageData & { dataUrl: string; uploadId: string; uploading: true };
+}
+
+type StoredImageData = Omit<
+	ImageData,
+	"dataUrl" | "uploadId" | "uploading" | "uploadError"
+>;
 
 function toStoredImage(image: ImageData): StoredImageData {
 	const {
 		dataUrl: _dataUrl,
+		uploadId: _uploadId,
 		uploading: _uploading,
 		uploadError: _uploadError,
 		...stored
@@ -78,6 +98,7 @@ export function A2UIImageInput({
 	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
+	const { appId, resolveTemporaryUploadTarget } = useActionContext();
 	const value = useResolved<ImageData | ImageData[]>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const error = useResolved<boolean>(component.error);
@@ -93,8 +114,9 @@ export function A2UIImageInput({
 	const aspectRatio = useResolved<string>(component.aspectRatio);
 	const { setByPath } = useData();
 
-	const [localImages, setLocalImages] = useState<ImageData[]>([]);
+	const [localImages, setLocalImages] = useState<ImageData[] | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
+	const uploadOperationRef = useRef(0);
 	const isBusy = isUploading || isTriggering;
 
 	const images: ImageData[] = Array.isArray(value)
@@ -104,14 +126,23 @@ export function A2UIImageInput({
 			: [];
 	const showPreview = showPreviewResolved !== false;
 
-	const displayImages = localImages.length > 0 ? localImages : images;
+	const displayImages = localImages ?? images;
 
 	const clearImages = useCallback(() => {
+		uploadOperationRef.current += 1;
 		setLocalImages([]);
+		setIsUploading(false);
 		if (component.value && "path" in component.value) {
 			setByPath(component.value.path, multiple ? [] : null);
 		}
 	}, [component.value, setByPath, multiple]);
+
+	useEffect(
+		() => () => {
+			uploadOperationRef.current += 1;
+		},
+		[],
+	);
 
 	useEffect(() => {
 		const handleClear = (
@@ -140,45 +171,89 @@ export function A2UIImageInput({
 		const selectedFiles = Array.from(e.target.files || []);
 		if (selectedFiles.length === 0) return;
 
-		const validFiles = selectedFiles.filter(
-			(f) => f.size <= maxSize && f.type.startsWith("image/"),
+		const currentImages = displayImages.filter(
+			(image) => !image.uploading && !image.uploadError,
 		);
+		const validFiles = limitUploadBatch(
+			selectedFiles.filter(
+				(file) => file.size <= maxSize && file.type.startsWith("image/"),
+			),
+			currentImages.length,
+			Boolean(multiple),
+			maxFiles,
+		);
+		if (validFiles.length === 0) {
+			if (inputRef.current) inputRef.current.value = "";
+			return;
+		}
 
+		const operationId = ++uploadOperationRef.current;
 		setIsUploading(true);
 
-		const imageDataPromises = validFiles.map(
-			async (file): Promise<ImageData> => {
-				const dataUrl = await readFileAsDataUrl(file);
-				return {
-					name: file.name,
-					size: file.size,
-					type: file.type,
-					dataUrl,
-					uploading: true,
-				};
-			},
+		const readableFiles = (
+			await Promise.all(
+				validFiles.map(
+					async (file, index): Promise<ReadableImageFile | null> => {
+						try {
+							return {
+								file,
+								image: {
+									name: file.name,
+									size: file.size,
+									type: file.type,
+									dataUrl: await readFileAsDataUrl(file),
+									uploadId: `${operationId}-${index}`,
+									uploading: true,
+								} satisfies ImageData,
+							};
+						} catch {
+							return null;
+						}
+					},
+				),
+			)
+		).filter((entry): entry is ReadableImageFile => entry !== null);
+		if (uploadOperationRef.current !== operationId) return;
+		if (readableFiles.length === 0) {
+			setIsUploading(false);
+			if (inputRef.current) inputRef.current.value = "";
+			return;
+		}
+
+		const pendingImages = readableFiles.map((entry) => entry.image);
+		setLocalImages(
+			multiple ? [...currentImages, ...pendingImages] : [pendingImages[0]],
 		);
+		const executionTarget = await resolveTemporaryUploadTarget?.(
+			component.actions?.[0],
+		);
+		if (uploadOperationRef.current !== operationId) return;
 
-		const pendingImages = await Promise.all(imageDataPromises);
-		const newPending = multiple
-			? [
-					...displayImages.filter((img) => !img.uploading),
-					...pendingImages,
-				].slice(0, maxFiles)
-			: [pendingImages[0]];
-		setLocalImages(newPending);
-
-		const uploadPromises = validFiles.map(
-			async (file, index): Promise<ImageData> => {
-				const dataUrl = pendingImages[index].dataUrl;
+		const uploadPromises = readableFiles.map(
+			async ({ file, image }): Promise<ImageData> => {
 				try {
-					const backendUrl = await backend.helperState.fileToUrl(file, false);
+					const temporaryFile =
+						(await backend.helperState.fileToTemporaryFile?.(
+							file,
+							false,
+							appId,
+							executionTarget,
+						)) ?? {
+							url: await backend.helperState.fileToUrl(
+								file,
+								false,
+								appId,
+								executionTarget,
+							),
+						};
 					return {
 						name: file.name,
 						size: file.size,
 						type: file.type,
-						dataUrl,
-						backendUrl,
+						dataUrl: image.dataUrl,
+						url: temporaryFile.url,
+						backendUrl: temporaryFile.url,
+						flowPath: temporaryFile.flowPath,
 						uploading: false,
 					};
 				} catch (err) {
@@ -186,7 +261,7 @@ export function A2UIImageInput({
 						name: file.name,
 						size: file.size,
 						type: file.type,
-						dataUrl,
+						dataUrl: image.dataUrl,
 						uploading: false,
 						uploadError: err instanceof Error ? err.message : "Upload failed",
 					};
@@ -195,23 +270,32 @@ export function A2UIImageInput({
 		);
 
 		const uploadedImages = await Promise.all(uploadPromises);
-		const newValue = multiple
-			? [
-					...displayImages.filter((img) => !img.uploading),
-					...uploadedImages,
-				].slice(0, maxFiles)
-			: uploadedImages[0];
-
-		setLocalImages(
-			Array.isArray(newValue) ? newValue : newValue ? [newValue] : [],
-		);
+		if (uploadOperationRef.current !== operationId) return;
 		setIsUploading(false);
 
+		const successfulUploads = uploadedImages.filter((img) => img.backendUrl);
+		const failedUploads = uploadedImages.filter((img) => img.uploadError);
+		const committedImages = mergeSuccessfulUploadBatch(
+			currentImages,
+			uploadedImages,
+			Boolean(multiple),
+			maxFiles,
+			(image) => Boolean(image.backendUrl),
+		);
+		setLocalImages(
+			multiple ? [...committedImages, ...failedUploads] : committedImages,
+		);
+
+		if (successfulUploads.length === 0) {
+			if (inputRef.current) inputRef.current.value = "";
+			return;
+		}
+
+		const newValue = multiple ? committedImages : committedImages[0];
 		if (component.value && "path" in component.value) {
 			setByPath(component.value.path, newValue);
 		}
 
-		const successfulUploads = uploadedImages.filter((img) => img.backendUrl);
 		const urls = successfulUploads.map((img) => img.backendUrl as string);
 		const actionValue = multiple ? urls : urls[0];
 
@@ -227,13 +311,11 @@ export function A2UIImageInput({
 			},
 		});
 
-		if (successfulUploads.length > 0) {
-			const action = component.actions?.[0];
-			if (action) {
-				await executeAction(action, componentId, {
-					signedUrls: actionValue,
-				});
-			}
+		const action = component.actions?.[0];
+		if (action) {
+			await executeAction(action, componentId, {
+				signedUrls: actionValue,
+			});
 		}
 
 		if (inputRef.current) inputRef.current.value = "";
@@ -241,7 +323,10 @@ export function A2UIImageInput({
 
 	const handleRemove = (index: number) => {
 		const newImages = displayImages.filter((_, i) => i !== index);
-		const newValue = multiple ? newImages : null;
+		const committedImages = newImages.filter(
+			(image) => !image.uploading && !image.uploadError,
+		);
+		const newValue = multiple ? committedImages : null;
 
 		setLocalImages(newImages);
 
@@ -250,7 +335,7 @@ export function A2UIImageInput({
 		}
 
 		const urls = multiple
-			? newImages.map((img) => img.backendUrl).filter(Boolean)
+			? committedImages.map((img) => img.backendUrl).filter(Boolean)
 			: null;
 
 		onAction?.({
@@ -264,88 +349,99 @@ export function A2UIImageInput({
 				signedUrls: multiple ? urls : null,
 			},
 		});
+
+		const action = component.actions?.[0];
+		if (action) {
+			void executeAction(action, componentId, {
+				signedUrls: multiple ? urls : null,
+			});
+		}
 	};
 
-	const renderSingleUpload = () => (
-		<div
-			className={cn(
-				"relative border-2 border-dashed rounded-lg transition-colors overflow-hidden",
-				disabled || isBusy
-					? "opacity-50 cursor-not-allowed"
-					: "cursor-pointer hover:border-primary",
-				error ? "border-destructive" : "border-muted-foreground/25",
-				aspectRatio ? "" : "aspect-video",
-			)}
-			style={aspectRatio ? { aspectRatio } : undefined}
-			onClick={() => !disabled && !isBusy && inputRef.current?.click()}
-		>
-			{displayImages[0] && showPreview ? (
-				<>
-					<img
-						src={displayImages[0].dataUrl}
-						alt={displayImages[0].name}
-						className="absolute inset-0 w-full h-full object-cover"
-					/>
-					{displayImages[0].uploading || isTriggering ? (
-						<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-							<div className="flex flex-col items-center gap-2 text-white">
-								<Loader2 className="h-8 w-8 animate-spin" />
-								{isTriggering && (
-									<span className="text-sm">Running action...</span>
-								)}
-							</div>
-						</div>
-					) : displayImages[0].uploadError ? (
-						<div className="absolute inset-0 bg-destructive/60 flex flex-col items-center justify-center gap-2">
-							<p className="text-white text-sm">
-								{displayImages[0].uploadError}
-							</p>
-							<Button
-								variant="secondary"
-								size="sm"
-								onClick={(e) => {
-									e.stopPropagation();
-									handleRemove(0);
-								}}
-							>
-								<X className="h-4 w-4 mr-1" /> Remove
-							</Button>
-						</div>
-					) : (
-						<div className="absolute inset-0 bg-black/40 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
-							<Button
-								variant="secondary"
-								size="sm"
-								onClick={(e) => {
-									e.stopPropagation();
-									handleRemove(0);
-								}}
-								disabled={disabled || isBusy}
-							>
-								<X className="h-4 w-4 mr-1" /> Remove
-							</Button>
-						</div>
-					)}
-				</>
-			) : (
-				<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-					{isBusy ? (
+	const renderSingleUpload = () => {
+		const image = displayImages[0];
+		return (
+			<div
+				className={cn(
+					"group relative border-2 border-dashed rounded-lg transition-colors overflow-hidden",
+					disabled || isBusy
+						? "opacity-50 cursor-not-allowed"
+						: "cursor-pointer hover:border-primary",
+					error ? "border-destructive" : "border-muted-foreground/25",
+					aspectRatio ? "" : "aspect-video",
+				)}
+				style={aspectRatio ? { aspectRatio } : undefined}
+			>
+				<button
+					type="button"
+					className="absolute inset-0 h-full w-full appearance-none bg-transparent text-left"
+					onClick={() => inputRef.current?.click()}
+					disabled={disabled || isBusy}
+					aria-label={image ? "Replace image" : "Upload image"}
+				>
+					{image && showPreview ? (
 						<>
-							<Loader2 className="h-8 w-8 animate-spin" />
-							<span className="text-sm">
-								{isUploading ? "Uploading..." : "Running action..."}
-							</span>
+							<img
+								src={image.dataUrl ?? image.url ?? image.backendUrl}
+								alt={image.name}
+								className="absolute inset-0 w-full h-full object-cover"
+							/>
+							{image.uploading || isTriggering ? (
+								<div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+									<div className="flex flex-col items-center gap-2 text-white">
+										<Loader2 className="h-8 w-8 animate-spin" />
+										{isTriggering && (
+											<span className="text-sm">Running action...</span>
+										)}
+									</div>
+								</div>
+							) : null}
 						</>
 					) : (
-						<>
-							<ImagePlus className="h-8 w-8" />
-							<span className="text-sm">Click to upload image</span>
-						</>
+						<div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+							{isBusy ? (
+								<>
+									<Loader2 className="h-8 w-8 animate-spin" />
+									<span className="text-sm">
+										{isUploading ? "Uploading..." : "Running action..."}
+									</span>
+								</>
+							) : (
+								<>
+									<ImagePlus className="h-8 w-8" />
+									<span className="text-sm">Click to upload image</span>
+								</>
+							)}
+						</div>
 					)}
-				</div>
-			)}
-		</div>
-	);
+				</button>
+
+				{image && !image.uploading && !isTriggering ? (
+					<div
+						className={cn(
+							"pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 transition-opacity",
+							image.uploadError
+								? "bg-destructive/60"
+								: "bg-black/40 opacity-0 group-hover:opacity-100",
+						)}
+					>
+						{image.uploadError ? (
+							<p className="text-white text-sm">{image.uploadError}</p>
+						) : null}
+						<Button
+							variant="secondary"
+							size="sm"
+							className="pointer-events-auto"
+							onClick={() => handleRemove(0)}
+							disabled={disabled || isBusy}
+						>
+							<X className="h-4 w-4 mr-1" /> Remove
+						</Button>
+					</div>
+				) : null}
+			</div>
+		);
+	};
 
 	const renderMultipleUpload = () => (
 		<div className="space-y-3">
@@ -360,7 +456,7 @@ export function A2UIImageInput({
 							)}
 						>
 							<img
-								src={image.dataUrl}
+								src={image.dataUrl ?? image.url ?? image.backendUrl}
 								alt={image.name}
 								className="w-full h-full object-cover"
 							/>
@@ -377,7 +473,10 @@ export function A2UIImageInput({
 										variant="secondary"
 										size="icon"
 										className="h-6 w-6"
-										onClick={() => handleRemove(index)}
+										onClick={(event) => {
+											event.stopPropagation();
+											handleRemove(index);
+										}}
 										disabled={disabled || isBusy}
 									>
 										<X className="h-4 w-4" />
@@ -389,7 +488,10 @@ export function A2UIImageInput({
 										variant="secondary"
 										size="icon"
 										className="h-8 w-8"
-										onClick={() => handleRemove(index)}
+										onClick={(event) => {
+											event.stopPropagation();
+											handleRemove(index);
+										}}
 										disabled={disabled || isBusy}
 									>
 										<X className="h-4 w-4" />
@@ -408,17 +510,17 @@ export function A2UIImageInput({
 					))}
 
 				{displayImages.length < maxFiles && (
-					<div
+					<button
+						type="button"
 						className={cn(
-							"aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-1 transition-colors",
+							"w-full appearance-none bg-transparent aspect-square border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-1 transition-colors",
 							disabled || isBusy
 								? "opacity-50 cursor-not-allowed"
 								: "cursor-pointer hover:border-primary",
 							error ? "border-destructive" : "border-muted-foreground/25",
 						)}
-						onClick={() =>
-							!disabled && !isBusy && inputRef.current?.click()
-						}
+						onClick={() => !disabled && !isBusy && inputRef.current?.click()}
+						disabled={disabled || isBusy}
 					>
 						{isBusy ? (
 							<div className="flex flex-col items-center gap-1 text-muted-foreground">
@@ -431,7 +533,7 @@ export function A2UIImageInput({
 								<span className="text-xs text-muted-foreground">Add</span>
 							</>
 						)}
-					</div>
+					</button>
 				)}
 			</div>
 
@@ -447,6 +549,7 @@ export function A2UIImageInput({
 
 	return (
 		<div
+			data-card-action-stop
 			className={cn("space-y-2", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
 		>

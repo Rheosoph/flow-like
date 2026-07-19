@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 #[derive(Debug, Deserialize, IntoParams, ToSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct GetPagesParams {
+    #[serde(alias = "boardId")]
     pub board_id: Option<String>,
 }
 

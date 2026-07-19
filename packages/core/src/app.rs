@@ -438,6 +438,28 @@ impl App {
         Ok(board_ref)
     }
 
+    /// Load a board directly from its persisted object, bypassing the
+    /// process-local board registry.
+    ///
+    /// The registry is ideal for interactive editing, but publication paths
+    /// must not use a cached draft as their source of truth: another API
+    /// process may already have committed a newer floating board under the
+    /// same semantic version. Immutable/version-pinning workflows should use
+    /// this method before deciding which content to publish.
+    pub async fn open_board_authoritative(
+        &self,
+        board_id: String,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Arc<Mutex<Board>>> {
+        let storage_root = Path::from("apps").child(self.id.clone());
+        let state = self
+            .app_state
+            .clone()
+            .ok_or(flow_like_types::anyhow!("App state not found"))?;
+        let board = Board::load(storage_root, &board_id, state, version).await?;
+        Ok(Arc::new(Mutex::new(board)))
+    }
+
     pub async fn delete_board(&mut self, board_id: &str) -> flow_like_types::Result<()> {
         self.boards.retain(|b| b != board_id);
         let board_dir = Path::from("apps")
@@ -476,7 +498,7 @@ impl App {
         Ok(())
     }
 
-    /// EVENTS
+    // EVENTS
 
     pub async fn get_event_versions(
         &self,
@@ -538,7 +560,7 @@ impl App {
         Ok(())
     }
 
-    /// TEMPLATES
+    // TEMPLATES
 
     pub async fn upsert_template(
         &mut self,

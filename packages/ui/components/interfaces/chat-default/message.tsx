@@ -13,6 +13,7 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
+import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import {
 	Badge,
 	Button,
@@ -28,6 +29,8 @@ import {
 	Textarea,
 } from "../../ui";
 import { StreamingTextEditor } from "../../ui/streaming-text-editor";
+import { AgentDebugReport } from "./agent-debug-report";
+import { AppReferences } from "./app-references";
 import { FilePreview, type ProcessedAttachment } from "./attachment";
 import {
 	FileDialog,
@@ -37,6 +40,7 @@ import {
 } from "./attachment-dialog";
 import type { IAttachment, IMessage } from "./chat-db";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
+import { MessageWidgets } from "./message-widgets";
 import { PlanSteps } from "./plan-steps";
 import { UsageStats } from "./usage-stats";
 
@@ -47,6 +51,12 @@ interface MessageProps {
 		messageId: string,
 		updates: Partial<IMessage>,
 	) => void | Promise<void>;
+	/** App id owning the chat — needed to render + trigger embedded widgets. */
+	appId?: string;
+	/** Board id of the chat event — target for widget action workflows. */
+	boardId?: string;
+	/** Chat event id — forwarded to embedded widget surfaces. */
+	eventId?: string;
 }
 
 const MessageActionButton = ({
@@ -103,11 +113,13 @@ const FullscreenEditDialog = ({
 	onOpenChange,
 	content,
 	onSave,
+	appId,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	content: string;
 	onSave: (content: string) => void;
+	appId?: string;
 }) => {
 	const [editedContent, setEditedContent] = useState(content);
 
@@ -173,6 +185,7 @@ const FullscreenEditDialog = ({
 			<div className="flex-1 p-6 ">
 				<div className="relative h-full border border-border rounded-lg">
 					<TextEditor
+						appId={appId}
 						initialContent={content}
 						onChange={setEditedContent}
 						isMarkdown={true}
@@ -484,6 +497,9 @@ export const MessageComponent = memo(
 		message,
 		loading,
 		onMessageUpdate,
+		appId,
+		boardId,
+		eventId,
 	}: Readonly<MessageProps>) {
 		const isUser = message.inner.role === IRole.User;
 		const [isExpanded, setIsExpanded] = useState(false);
@@ -525,10 +541,39 @@ export const MessageComponent = memo(
 					text += `${part.text}\n`;
 					continue;
 				}
-				if (part.image_url?.url) attachments.push(part.image_url?.url);
+				if (part.image_url?.url)
+					attachments.push({
+						url: part.image_url.url,
+						type: part.image_url.media_type ?? "image/*",
+					});
+				else if (part.audio_url)
+					attachments.push({
+						url: part.audio_url,
+						type: part.media_type,
+					});
+				else if (part.video_url)
+					attachments.push({
+						url: part.video_url,
+						type: part.media_type,
+					});
+				else if (part.document_url)
+					attachments.push({
+						url: part.document_url,
+						type: part.media_type,
+					});
 			}
 
-			return { text, attachments: [...attachments, ...(message.files ?? [])] };
+			const uniqueAttachments = new Map<string, IAttachment>();
+			for (const attachment of [...attachments, ...(message.files ?? [])]) {
+				const url =
+					typeof attachment === "string" ? attachment : attachment.url;
+				const existing = uniqueAttachments.get(url);
+				if (!existing || typeof attachment !== "string") {
+					uniqueAttachments.set(url, attachment);
+				}
+			}
+
+			return { text, attachments: [...uniqueAttachments.values()] };
 		}, [message.inner.content, message.files]);
 
 		const processedAttachments = useProcessedAttachments(
@@ -707,28 +752,44 @@ export const MessageComponent = memo(
 
 		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 		const hasUsageStats = usageStats.length > 0;
-		const hasFooterContent = hasUsageStats || processedAttachments.length > 0;
+		const hasFooterContent =
+			hasUsageStats ||
+			processedAttachments.length > 0 ||
+			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
 		const compactUserActions = isUser && !hasFooterContent;
 
 		return (
 			<>
 				<div
 					className={cn(
-						"max-w-5xl flex gap-1 flex-col transition-all duration-300 ease-in-out",
+						"flex w-full flex-col gap-1 transition-all duration-300 ease-in-out",
 						isUser ? "items-end" : "items-start",
 					)}
+					style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
 				>
 					<div
 						className={cn(
-							"rounded-xl rounded-tr-sm p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							"p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
 							compactUserActions && "relative",
-							isUser
-								? "bg-muted dark:bg-muted/30 text-foreground max-w-3xl"
-								: "bg-background text-foreground max-w-full w-full pb-0",
+							isUser ? "max-w-3xl" : "w-full max-w-full pb-0",
 						)}
+						data-fl-chat-message={isUser ? "user" : "assistant"}
+						style={{
+							backgroundColor: isUser
+								? "var(--fl-chat-user-message-background, var(--muted))"
+								: "var(--fl-chat-ai-message-background, var(--background))",
+							borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+							color: isUser
+								? "var(--fl-chat-user-message-foreground, var(--foreground))"
+								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
+						}}
 					>
 						{!isUser && planSteps.length > 0 && (
-							<PlanSteps steps={planSteps} currentStepId={currentPlanStepId} />
+							<PlanSteps
+								steps={planSteps}
+								currentStepId={currentPlanStepId}
+								loading={loading}
+							/>
 						)}
 						<div
 							ref={contentRef}
@@ -789,8 +850,22 @@ export const MessageComponent = memo(
 							onFileClick={handleFileClick}
 							onFullscreen={setFullscreenFile}
 						/>
+						{(message.widgets?.length ?? 0) > 0 && (
+							<MessageWidgets
+								widgets={message.widgets}
+								appId={appId}
+								boardId={boardId}
+								eventId={eventId}
+							/>
+						)}
+						{!isUser && (message.app_refs?.length ?? 0) > 0 && (
+							<AppReferences appIds={message.app_refs ?? []} />
+						)}
 						{hasUsageStats && (
 							<UsageStats stats={usageStats} className="mt-1" />
+						)}
+						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
+							<AgentDebugReport report={message.debug_report} />
 						)}
 						{!loading && (
 							<MessageActions
@@ -831,6 +906,7 @@ export const MessageComponent = memo(
 					</Dialog>
 				)}
 				<FullscreenEditDialog
+					appId={appId}
 					open={showEditDialog}
 					onOpenChange={setShowEditDialog}
 					content={messageContent.text}
@@ -868,6 +944,12 @@ export const MessageComponent = memo(
 			prev.message.plan_steps === next.message.plan_steps &&
 			prev.message.current_step_id === next.message.current_step_id &&
 			prev.message.usage_stats === next.message.usage_stats &&
+			prev.message.debug_report === next.message.debug_report &&
+			prev.message.app_refs === next.message.app_refs &&
+			prev.message.widgets === next.message.widgets &&
+			prev.appId === next.appId &&
+			prev.boardId === next.boardId &&
+			prev.eventId === next.eventId &&
 			prev.loading === next.loading &&
 			prev.onMessageUpdate === next.onMessageUpdate
 		);

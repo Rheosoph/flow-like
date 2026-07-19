@@ -12,13 +12,16 @@ import {
 	useState,
 } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
-import type { IEventPayloadChat } from "../../../lib";
+import { type IEventPayloadChat, resolveChatColorScheme } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { VoiceMode } from "./VoiceMode";
+import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent } from "./message";
+import { useAnswerPlayback } from "./use-answer-playback";
+import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
 type ChatItem =
 	| { type: "message"; data: IMessage; timestamp: number }
@@ -40,6 +43,18 @@ function getMessageTextContent(message: IMessage): string {
 	return textContent?.text ?? "";
 }
 
+function sameStringArray(
+	left: readonly string[] | undefined,
+	right: readonly string[],
+): boolean {
+	return (
+		left === right ||
+		(left !== undefined &&
+			left.length === right.length &&
+			left.every((value, index) => value === right[index]))
+	);
+}
+
 export interface IChatProps {
 	messages: IMessage[];
 	onSendMessage: ISendMessageFunction;
@@ -52,6 +67,16 @@ export interface IChatProps {
 	isStreamActive?: boolean;
 	activeInteractions?: IInteractionRequest[];
 	onRespondToInteraction?: (interactionId: string, value: any) => void;
+	/** Rendered pinned between the message feed and the input — e.g. tool approval prompts. */
+	inlinePrompt?: React.ReactNode;
+	/** App id owning the chat — needed to render + trigger embedded widgets. */
+	appId?: string;
+	/** Board id of the chat event — target for widget action workflows. */
+	boardId?: string;
+	/** Chat event id — forwarded to embedded widget surfaces. */
+	eventId?: string;
+	/** The event Chat UI keeps its AI transparency disclosure below the composer. */
+	showAiDisclosure?: boolean;
 }
 
 export interface IChatRef {
@@ -75,6 +100,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			isStreamActive = false,
 			activeInteractions,
 			onRespondToInteraction,
+			inlinePrompt,
+			appId,
+			boardId,
+			eventId,
+			showAiDisclosure = false,
 		},
 		ref,
 	) => {
@@ -94,6 +124,45 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const pendingMessageRef = useRef<IMessage | null>(null);
 		const rafIdRef = useRef<number | null>(null);
 		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+
+		const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
+		const voiceEnabled = isVoiceEnabled(voiceConfig);
+		const configuredColorScheme = resolveChatColorScheme(config.color_scheme);
+		const chatTheme =
+			configuredColorScheme === "system"
+				? resolvedTheme
+				: configuredColorScheme;
+
+		const latestAudioUrl = useMemo(() => {
+			let assistant: IMessage | null = null;
+			if (currentMessage?.inner.role === "assistant") {
+				assistant = currentMessage;
+			} else {
+				for (let i = localMessages.length - 1; i >= 0; i--) {
+					if (localMessages[i]?.inner.role === "assistant") {
+						assistant = localMessages[i];
+						break;
+					}
+				}
+			}
+			if (!assistant) return null;
+			for (const file of assistant.files ?? []) {
+				if (
+					file &&
+					typeof file === "object" &&
+					file.url &&
+					file.type?.includes("audio")
+				) {
+					return file.url;
+				}
+			}
+			return null;
+		}, [currentMessage, localMessages]);
+
+		const playback = useAnswerPlayback(
+			voiceConfig.playback === "audio" || voiceConfig.playback === "both",
+			latestAudioUrl,
+		);
 
 		// Cleanup RAF on unmount
 		useEffect(() => {
@@ -187,18 +256,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				.reverse()
 				.find((msg) => msg.inner.role === "user");
 
+			let nextActiveTools: string[];
 			if (lastUserMessage) {
 				const availableTools = config?.tools ?? [];
 				const lastActiveTools = lastUserMessage.tools ?? [];
-				const newActiveTools = lastActiveTools.filter((tool) =>
+				nextActiveTools = lastActiveTools.filter((tool) =>
 					availableTools.includes(tool),
 				);
-
-				setDefaultActiveTools(newActiveTools);
-				return;
+			} else {
+				nextActiveTools = config?.default_tools ?? [];
 			}
 
-			setDefaultActiveTools(config?.default_tools ?? []);
+			// `config` is often assembled by a parent render. Avoid setting a freshly-created but
+			// semantically identical array on every pass, which otherwise causes an update-depth
+			// loop when `config.tools`/`default_tools` are inline arrays.
+			setDefaultActiveTools((current) =>
+				sameStringArray(current, nextActiveTools) ? current : nextActiveTools,
+			);
 		}, [messages, config?.tools, config?.default_tools]);
 
 		// Initial scroll to bottom when messages first load
@@ -291,7 +365,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		const handleVoiceModeSend = useCallback(
 			async (audioFile: File) => {
-				setVoiceModeOpen(false);
+				// keep voice mode open so the orb can react to the spoken answer;
+				// VoiceMode closes itself once the answer has been delivered.
 				await handleSendMessage("", undefined, undefined, audioFile);
 			},
 			[handleSendMessage],
@@ -387,28 +462,38 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		return (
 			<main
-				className="flex flex-col flex-1 min-h-0 w-full items-center bg-background overflow-hidden"
+				className="fl-chat-surface flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden bg-transparent"
+				data-fl-chat-surface
 				style={{
+					backgroundColor:
+						"var(--fl-chat-surface-background, var(--background))",
 					WebkitOverflowScrolling: "touch",
 					touchAction: "manipulation",
 				}}
 			>
-				<div className="flex-1 min-h-0 flex flex-col bg-background w-full overflow-hidden">
+				<div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
 					{/* Messages Container */}
 					<div
 						ref={scrollContainerRef}
 						onScroll={handleScroll}
 						className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
+						data-fl-chat-messages
 						style={{ WebkitOverflowScrolling: "touch" }}
 					>
 						{chatItems.map((item) => (
 							<div
-								className="w-full max-w-5xl px-1 sm:px-4"
+								className="w-full px-1 sm:px-4"
 								key={`msg-${item.data.id}`}
+								style={{
+									maxWidth: "var(--fl-chat-content-width, 64rem)",
+								}}
 							>
 								<MessageComponent
 									message={item.data as IMessage}
 									onMessageUpdate={onMessageUpdate}
+									appId={appId}
+									boardId={boardId}
+									eventId={eventId}
 								/>
 							</div>
 						))}
@@ -418,8 +503,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									m.inner.role === "user" &&
 									getMessageTextContent(m) === sendingContent,
 							) && (
-								<div className="w-full max-w-5xl px-4 flex flex-col items-end space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
-									<div className="bg-muted dark:bg-muted/30 text-foreground px-4 py-2 rounded-xl rounded-tr-sm max-w-3xl shadow-sm">
+								<div
+									className="flex w-full animate-in flex-col items-end space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+									style={{
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
+									}}
+								>
+									<div
+										className="max-w-3xl px-4 py-2 shadow-sm"
+										data-fl-chat-message="user"
+										style={{
+											backgroundColor:
+												"var(--fl-chat-user-message-background, var(--muted))",
+											borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+											color:
+												"var(--fl-chat-user-message-foreground, var(--foreground))",
+										}}
+									>
 										<p className="whitespace-pre-wrap text-sm">
 											{sendingContent}
 										</p>
@@ -427,7 +527,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									<div className="flex items-center gap-2 pr-1">
 										<PuffLoader
 											size={16}
-											color={resolvedTheme === "dark" ? "white" : "black"}
+											color={chatTheme === "dark" ? "white" : "black"}
 										/>
 										<span className="text-xs text-muted-foreground">
 											Processing...
@@ -437,17 +537,29 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 							)}
 						{currentMessage && (
 							<div
-								className="w-full max-w-5xl px-4"
+								className="w-full px-4"
 								key={`msg-${currentMessage.id}`}
+								style={{
+									maxWidth: "var(--fl-chat-content-width, 64rem)",
+								}}
 							>
-								<MessageComponent loading message={currentMessage} />
+								<MessageComponent
+									loading
+									message={currentMessage}
+									appId={appId}
+									boardId={boardId}
+									eventId={eventId}
+								/>
 							</div>
 						)}
 						{interactionItems.map((item) =>
 							item.type === "interaction-group" ? (
 								<div
-									className="w-full max-w-5xl px-4 flex flex-col items-start"
+									className="flex w-full flex-col items-start px-4"
 									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
+									style={{
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
+									}}
 								>
 									<InteractionGroup
 										interactions={item.data as IInteractionRequest[]}
@@ -456,8 +568,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								</div>
 							) : (
 								<div
-									className="w-full max-w-5xl px-4 flex flex-col items-start"
+									className="flex w-full flex-col items-start px-4"
 									key={`int-${(item.data as IInteractionRequest).id}`}
+									style={{
+										maxWidth: "var(--fl-chat-content-width, 64rem)",
+									}}
 								>
 									<Interaction
 										interaction={item.data as IInteractionRequest}
@@ -469,12 +584,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						<div ref={messagesEndRef} />
 					</div>
 
+					{inlinePrompt && (
+						<div
+							className="mx-auto w-full shrink-0 px-2 pt-1"
+							style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
+						>
+							{inlinePrompt}
+						</div>
+					)}
+
 					{/* ChatBox */}
 					<div
-						className="bg-background px-2 pb-2 max-w-5xl w-full mx-auto"
+						className="mx-auto w-full space-y-2 px-3"
+						data-fl-chat-composer-dock
 						style={{
+							maxWidth: "var(--fl-chat-content-width, 64rem)",
 							paddingBottom:
-								"calc(0.5rem + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
+								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 						}}
 					>
 						{defaultActiveTools && (
@@ -484,14 +610,23 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								defaultActiveTools={defaultActiveTools}
 								onSendMessage={handleSendMessage}
 								fileUpload={config?.allow_file_upload ?? false}
-								audioInput={config?.allow_voice_input ?? true}
+								audioInput={voiceEnabled}
+								voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
+								voiceInvoke={voiceConfig.invoke}
 								sendDisabled={isSending || isStreamActive}
+								onInterrupt={playback.stop}
 								onVoiceModeToggle={
-									(config?.allow_voice_mode ?? true)
-										? () => setVoiceModeOpen(true)
+									voiceEnabled && voiceConfig.invoke === "auto"
+										? () => {
+												playback.stop();
+												setVoiceModeOpen(true);
+											}
 										: undefined
 								}
 							/>
+						)}
+						{showAiDisclosure && (
+							<ChatAiDisclosure text={config.ai_disclosure} />
 						)}
 					</div>
 				</div>
@@ -501,6 +636,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					open={voiceModeOpen}
 					onClose={() => setVoiceModeOpen(false)}
 					onSend={handleVoiceModeSend}
+					voice={voiceConfig}
+					busy={isStreamActive || playback.isPlaying}
+					speaking={playback.isPlaying}
+					speakingAnalyser={playback.analyser}
+					onInterrupt={() => playback.stop()}
 				/>
 			</main>
 		);

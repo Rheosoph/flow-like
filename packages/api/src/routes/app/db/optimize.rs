@@ -1,9 +1,9 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    routes::app::db::{ScopeParams, resolve_write_connection, validate_table_name},
     state::AppState,
 };
 use axum::{
@@ -48,10 +48,16 @@ pub async fn optimize_table(
     Query(scope): Query<ScopeParams>,
     Json(payload): Json<OptimizePayload>,
 ) -> Result<Json<()>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::WriteFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::WriteFiles,
+        RolePermissions::WriteDatabase
+    );
     validate_table_name(&table)?;
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
     let db = LanceDBVectorStore::from_connection(connection, table).await;
 
     db.optimize(payload.keep_versions).await?;

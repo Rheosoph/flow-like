@@ -1,7 +1,12 @@
 import type { IApiState } from "@flow-like/flow-like-ui";
+import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { IProfile } from "@flow-like/flow-like-ui/types";
-import { type WebBackendRef, ensureProtectedAppRouteAuth } from "./api-utils";
+import {
+	type WebBackendRef,
+	ensureProtectedAppRouteAuth,
+	requestSilentRenew,
+} from "./api-utils";
 
 export class WebApiState implements IApiState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -123,7 +128,11 @@ export class WebApiState implements IApiState {
 		});
 
 		if (!response.ok) {
-			throw new Error(`API error: ${response.status}`);
+			if (response.status === 401 && this.backend.auth) {
+				requestSilentRenew(this.backend.auth, "after 401");
+			}
+			const errorText = await response.text();
+			throw apiResponseError(response, errorText, path);
 		}
 
 		return response.json();
@@ -177,7 +186,11 @@ export class WebApiState implements IApiState {
 		});
 
 		if (!response.ok) {
-			throw new Error(`Stream error: ${response.status}`);
+			if (response.status === 401 && this.backend.auth) {
+				requestSilentRenew(this.backend.auth, "after 401");
+			}
+			const errorText = await response.text();
+			throw apiResponseError(response, errorText, path);
 		}
 
 		if (!response.body) return;

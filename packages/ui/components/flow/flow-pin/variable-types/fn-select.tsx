@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useBackend, useInvoke } from "../../../..";
+import type { RefObject } from "react";
 import {
 	Select,
 	SelectContent,
@@ -8,6 +8,7 @@ import {
 	SelectLabel,
 	SelectTrigger,
 } from "../../../../components/ui/select";
+import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
 	convertJsonToUint8Array,
@@ -17,25 +18,20 @@ import {
 export function FnVariable({
 	pin,
 	value,
-	boardId,
-	appId,
+	boardRef,
 	setValue,
 }: Readonly<{
 	pin: IPin;
 	value: number[] | undefined | null;
-	boardId: string;
-	appId: string;
-	setValue: (value: any) => void;
+	boardRef?: RefObject<IBoard | undefined>;
+	setValue: (value: unknown) => void;
 }>) {
-	const backend = useBackend();
-	const board = useInvoke(backend.boardState.getBoard, backend.boardState, [
-		appId,
-		boardId,
-	]);
+	const boardData = boardRef?.current;
 
 	return (
 		<div className="flex flex-row items-center justify-start max-w-full ml-1 overflow-hidden">
 			<Select
+				disabled={!boardData}
 				defaultValue={parseUint8ArrayToJson(value)}
 				value={parseUint8ArrayToJson(value)}
 				onValueChange={(value) => setValue(convertJsonToUint8Array(value))}
@@ -49,10 +45,9 @@ export function FnVariable({
 					className="w-fit! max-w-full! p-0 border-0 text-xs bg-card! text-start max-h-fit h-4 gap-0.5 flex-row items-center overflow-hidden"
 				>
 					<small className="text-start text-[10px] m-0! truncate">
-						{!board.data && "Loading..."}
-						{board.data &&
-							(board?.data?.nodes?.[parseUint8ArrayToJson(value)]
-								?.friendly_name ??
+						{!boardData && "Board unavailable"}
+						{boardData &&
+							(boardData.nodes?.[parseUint8ArrayToJson(value)]?.friendly_name ??
 								"No Function Selected")}
 					</small>
 					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground shrink-0" />
@@ -60,7 +55,7 @@ export function FnVariable({
 				<SelectContent>
 					<SelectGroup>
 						<SelectLabel>{pin.friendly_name}</SelectLabel>
-						{Object.values(board?.data?.nodes ?? {})
+						{Object.values(boardData?.nodes ?? {})
 							?.filter((node) => node.start)
 							.map((node) => {
 								return (

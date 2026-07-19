@@ -1,10 +1,12 @@
 "use client";
 
 import {
+	BrainCircuitIcon,
 	Code2Icon,
 	GithubIcon,
 	LayersIcon,
 	ServerIcon,
+	SparklesIcon,
 } from "lucide-react";
 import { memo, useCallback } from "react";
 
@@ -63,7 +65,6 @@ export const ProviderSelector = memo(function ProviderSelector({
 	const handleProviderChange = useCallback(
 		async (newProvider: AIProvider) => {
 			const normalized = normalizeAIProvider(newProvider);
-			if (normalized === "claude-code") return;
 
 			onProviderChange(normalized);
 
@@ -104,6 +105,12 @@ export const ProviderSelector = memo(function ProviderSelector({
 			label: "Codex",
 			icon: Code2Icon,
 			tooltip: "Use a tool-capable Codex backend adapter",
+		},
+		{
+			id: "claude-code",
+			label: "Claude Code",
+			icon: SparklesIcon,
+			tooltip: "Use the Claude Code CLI through the shared FlowPilot MCP tools",
 		},
 	];
 
@@ -180,11 +187,12 @@ export const ProviderSelector = memo(function ProviderSelector({
 							{copilotRunning && active ? (
 								<div>
 									<div className="font-medium">{option.label} Connected</div>
-									{copilotAuthStatus?.authenticated && copilotAuthStatus.login && (
-										<div className="text-muted-foreground mt-0.5">
-											Signed in as {copilotAuthStatus.login}
-										</div>
-									)}
+									{copilotAuthStatus?.authenticated &&
+										copilotAuthStatus.login && (
+											<div className="text-muted-foreground mt-0.5">
+												Signed in as {copilotAuthStatus.login}
+											</div>
+										)}
 									{copilotAuthStatus?.message && (
 										<div className="text-muted-foreground mt-0.5">
 											{copilotAuthStatus.message}
@@ -252,8 +260,7 @@ export const ModelSelector = memo(function ModelSelector({
 	className,
 }: ModelSelectorProps) {
 	const normalizedProvider = normalizeAIProvider(provider);
-	const models =
-		normalizedProvider === "bits" ? bitsModels : copilotModels;
+	const models = normalizedProvider === "bits" ? bitsModels : copilotModels;
 
 	if (models.length === 0) {
 		return (
@@ -287,12 +294,13 @@ export const ModelSelector = memo(function ModelSelector({
 			</SelectTrigger>
 			<SelectContent className="rounded-lg z-150">
 				{models.map((model) => {
+					const bitsModel = model as ModelSelectorProps["bitsModels"][number];
 					const displayName =
 						normalizedProvider !== "bits"
 							? (model as CopilotModel).name || (model as CopilotModel).id
-							: (model as any).meta?.en?.name ||
-								(model as any).friendly_name ||
-								model.id;
+							: bitsModel.meta?.en?.name ||
+								bitsModel.friendly_name ||
+								bitsModel.id;
 
 					return (
 						<SelectItem
@@ -304,6 +312,79 @@ export const ModelSelector = memo(function ModelSelector({
 						</SelectItem>
 					);
 				})}
+			</SelectContent>
+		</Select>
+	);
+});
+
+const PROVIDER_DEFAULT_REASONING = "__provider_default__";
+
+interface ReasoningEffortSelectorProps {
+	model?: CopilotModel;
+	selectedEffort: string;
+	onEffortChange: (effort: string) => void;
+	disabled?: boolean;
+	className?: string;
+}
+
+/**
+ * Model-aware reasoning control. Every concrete option comes from the active
+ * backend's live model catalog; an empty value deliberately defers to that
+ * provider's advertised/configured default.
+ */
+export const ReasoningEffortSelector = memo(function ReasoningEffortSelector({
+	model,
+	selectedEffort,
+	onEffortChange,
+	disabled = false,
+	className,
+}: ReasoningEffortSelectorProps) {
+	const efforts = model?.supportedReasoningEfforts ?? [];
+	if (efforts.length === 0) return null;
+
+	const defaultName = model?.defaultReasoningEffort
+		? (efforts.find((effort) => effort.id === model.defaultReasoningEffort)
+				?.name ?? model.defaultReasoningEffort)
+		: undefined;
+	const defaultLabel = defaultName
+		? `Default (${defaultName})`
+		: "Default (recommended)";
+
+	return (
+		<Select
+			value={selectedEffort || PROVIDER_DEFAULT_REASONING}
+			onValueChange={(value) =>
+				onEffortChange(value === PROVIDER_DEFAULT_REASONING ? "" : value)
+			}
+		>
+			<SelectTrigger
+				aria-label="Reasoning effort"
+				className={cn(
+					"h-8 min-w-0 overflow-hidden rounded-lg border-border/30 bg-background/60 text-xs backdrop-blur-sm transition-all duration-200 hover:border-primary/30 focus:ring-2 focus:ring-primary/20",
+					className,
+				)}
+				disabled={disabled}
+			>
+				<BrainCircuitIcon className="mr-1.5 size-3.5 shrink-0 text-muted-foreground" />
+				<SelectValue placeholder="Reasoning" />
+			</SelectTrigger>
+			<SelectContent className="z-150 rounded-lg">
+				<SelectItem
+					value={PROVIDER_DEFAULT_REASONING}
+					className="rounded-md text-xs"
+				>
+					{defaultLabel}
+				</SelectItem>
+				{efforts.map((effort) => (
+					<SelectItem
+						key={effort.id}
+						value={effort.id}
+						className="rounded-md text-xs"
+						title={effort.description}
+					>
+						{effort.name || effort.id}
+					</SelectItem>
+				))}
 			</SelectContent>
 		</Select>
 	);

@@ -1,6 +1,6 @@
-/// A2UI Component Documentation for AI Copilot
-/// This module contains comprehensive documentation for all A2UI components
-/// that can be used by the AI copilot to generate UIs.
+//! A2UI Component Documentation for AI Copilot
+//! This module contains comprehensive documentation for all A2UI components
+//! that can be used by the AI copilot to generate UIs.
 
 pub const COMPONENT_CATALOG: &str = r##"
 # A2UI Component Catalog
@@ -27,8 +27,10 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `video` - Video player
 - `lottie` - Lottie animations
 - `markdown` - Markdown renderer
+- `diffView` - Side-by-side, unified or inline diff for text, code, markdown & documents (props: original, modified, mode, kind, language, ...)
 - `badge` - Small label/tag
 - `avatar` - User avatar
+- `userProfile` - User lookup display by sub with avatar, chip, row, detailed, and card variants
 - `progress` - Progress bar
 - `spinner` - Loading spinner
 - `divider` - Visual separator
@@ -61,6 +63,10 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `plotlyChart` - Plotly.js charts (line, bar, scatter, pie, area, histogram)
 - `nivoChart` - Nivo charts (25+ chart types)
 
+### Planning Components
+- `calendar` - Interactive calendar (month/week/day/agenda) with detail/edit dialogs and right-click menus; fires create/update/move/resize/open/delete actions (props: events, view, date, title, density, editable, selectable, ...)
+- `gantt` - Interactive Gantt timeline with drag/resize/dependency-link, detail/edit dialogs, right-click menus and task-list drag-reordering; fires create/update/move/resize/open/delete/link/reorder actions (props: tasks, view, title, density, editable, showDependencies, showTaskList, ...)
+
 ### Media Components
 - `iframe` - Embedded external content or HTML preview (supports src URL and srcdoc HTML)
 - `filePreview` - Generic file preview
@@ -86,10 +92,45 @@ pub const COMPONENT_CATALOG: &str = r##"
 ### Widget System
 - `widgetInstance` - Reusable widget component instance
 
+## Wiring UI to Workflows
+
+### Actions -> named board events
+Interactive components carry actions INSIDE the component object:
+`"actions": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]`
+(actions[0] fires on the component's primary interaction).
+- Create ONE named board event per purpose (e.g. dashboard-load, add-target, refresh-status).
+  Never route several buttons through one generic catch-all event.
+- The action context carries routing ids ONLY (nodeId, optional boardId/appId). Do NOT push
+  element values, form payloads, or target ids through the context: the event body fetches
+  current element state itself at runtime via Get Element (`a2uiGetElement`), Get Element Value
+  (`a2uiGetElementValue`), and Get File Input Files (`a2uiGetFileInputFiles`).
+- Other built-in action names: "navigate_page" (context.route, optional context.queryParams)
+  and "external_link" (context.url).
+- A board can set or re-point an element's action later with Set Element Action
+  (`a2uiSetElementAction`, action_type "workflow_event" + node_id).
+
+### Displaying workflow data -> element-level setters
+When a workflow must change what a component SHOWS, target the element directly:
+- text / badge / markdown: Set Element Text (`a2uiSetElementText`), Set Badge Content
+  (`a2uiSetBadgeContent`), Set Markdown Content (`a2uiSetMarkdownContent`)
+- inputs: Set Element Value (`a2uiSetElementValue`)
+- table: Push CSV to Table (`a2uiWriteCsvToTable`) for full loads, Update Table
+  (`a2uiUpdateTable`) for incremental row edits
+- chart: Push Data to Chart (`a2uiPushCsvToChart`), styled via `a2uiSetNivoConfig` /
+  `a2uiSetChartLayout`
+- progress: Set Progress (`a2uiSetProgress`)
+Data Update (`a2uiDataUpdate`) is almost never the right node for display updates - reach for an
+element-level setter first and reserve it for a `$.data.*` binding no setter covers.
+
 "##;
 
 pub const CHART_DOCUMENTATION: &str = r##"
 # Chart Components Documentation
+
+Literal `data` props are for static/design-time data only. When a WORKFLOW supplies the data,
+push it into the element: Push Data to Chart (`a2uiPushCsvToChart`) for nivoChart/plotlyChart and
+Push CSV to Table (`a2uiWriteCsvToTable`) / Update Table (`a2uiUpdateTable`) for table -
+not Data Update (`a2uiDataUpdate`).
 
 ## Nivo Charts (nivoChart)
 

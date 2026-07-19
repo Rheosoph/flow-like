@@ -77,6 +77,7 @@ export interface CanvasSettings {
 export interface IPage {
 	id: string;
 	name: string;
+	route?: string;
 	title?: string;
 	/** Canvas settings for page styling (background, padding, custom CSS) */
 	canvasSettings?: CanvasSettings;

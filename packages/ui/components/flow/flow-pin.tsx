@@ -1,11 +1,19 @@
 "use client";
 import { Handle, type HandleType, Position, useReactFlow } from "@xyflow/react";
 import { EllipsisVerticalIcon, GripIcon, ListIcon, Trash2 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+	type RefObject,
+	memo,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../hooks";
 import { updateNodeCommand } from "../../lib";
-import type { ILayer } from "../../lib/schema/flow/board";
+import { isWebkitLite } from "../../lib/platform";
+import type { IBoard, ILayer } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
 import { type IPin, IPinType, IValueType } from "../../lib/schema/flow/pin";
 import { useBackendStore } from "../../state/backend-state";
@@ -15,13 +23,7 @@ import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { typeToColor } from "./utils";
 
 /** A Handle that shows a small inner dot while keeping a larger hitbox. */
-const SmallDotHandle = memo(function SmallDotHandle({
-	dotColor,
-	showBorderWhenTransparent = true,
-	dotSize = 5,
-	isExecution = false,
-	...props
-}: Omit<React.ComponentProps<typeof Handle>, "children"> & {
+type SmallDotHandleProps = React.ComponentProps<typeof Handle> & {
 	/** Visual color of the inner dot. Use transparent to hide fill. */
 	dotColor: string;
 	/** Draw a 1px border when dot is transparent (for Execution pins, etc.). */
@@ -30,12 +32,38 @@ const SmallDotHandle = memo(function SmallDotHandle({
 	dotSize?: number;
 	/** Is this an execution pin? */
 	isExecution?: boolean;
-} & { children?: React.ReactNode }) {
-	const { className, style, children } = props as any;
+};
 
+function defaultValuesEqual(
+	a: number[] | null | undefined,
+	b: number[] | null | undefined,
+): boolean {
+	if (a === b) return true;
+	if (a == null || b == null) return a == null && b == null;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+const SmallDotHandle = memo(function SmallDotHandle({
+	dotColor,
+	showBorderWhenTransparent = true,
+	dotSize = 5,
+	isExecution = false,
+	className,
+	style,
+	children,
+	...props
+}: SmallDotHandleProps) {
 	const size = dotSize;
 	const isTransparent = dotColor === "transparent";
 	const visualSize = 7; // Data pins size
+	// WebKit rasterizes the radial-gradient + oklch color-mix + blurred glow per
+	// pin very slowly; on WebKit fall back to a flat fill + 0-blur ring (cheap),
+	// keeping the data-type color identity. Chromium keeps the glossy look.
+	const lite = isWebkitLite();
 
 	return (
 		<Handle
@@ -59,15 +87,21 @@ const SmallDotHandle = memo(function SmallDotHandle({
 						height: visualSize,
 						background: isTransparent
 							? "transparent"
-							: `
+							: lite
+								? dotColor
+								: `
 								radial-gradient(
 									circle at 35% 35%,
 									color-mix(in oklch, ${dotColor} 100%, white 25%),
 									${dotColor} 70%
 								)
 							`,
-						border: `1px solid ${dotColor}`,
-						boxShadow: `
+						border: lite ? "none" : `1px solid ${dotColor}`,
+						boxShadow: isTransparent
+							? "none"
+							: lite
+								? "0 0 0 1px var(--background)"
+								: `
 							0 0 4px color-mix(in oklch, ${dotColor} 25%, transparent),
 							inset 0 0.5px 1px color-mix(in oklch, white 20%, transparent)
 						`,
@@ -79,29 +113,34 @@ const SmallDotHandle = memo(function SmallDotHandle({
 	);
 });
 
-function FlowPinInnerComponent({
-	pin,
-	boardId,
-	appId,
-	node,
-	skipOffset,
-	onPinRemove,
-	version,
-	currentLayerId,
-	selectorDataRef,
-	selectorDataVersion,
-}: Readonly<{
+type FlowPinInnerProps = Readonly<{
 	pin: IPin;
 	boardId: string;
 	appId: string;
 	node: INode | ILayer;
+	boardRef?: RefObject<IBoard | undefined>;
+	boardDataVersion?: string;
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
 	currentLayerId?: string;
 	selectorDataRef?: FlowSelectorDataRef;
 	selectorDataVersion?: number;
-}>) {
+}>;
+
+function FlowPinInnerComponent({
+	pin,
+	boardId,
+	appId,
+	node,
+	boardRef,
+	skipOffset,
+	onPinRemove,
+	version,
+	currentLayerId,
+	selectorDataRef,
+	selectorDataVersion,
+}: FlowPinInnerProps) {
 	const { pushCommand } = useUndoRedo(appId, boardId);
 	const invalidate = useInvalidateInvoke();
 	const { getNode } = useReactFlow();
@@ -172,7 +211,7 @@ function FlowPinInnerComponent({
 	}, [appId, boardId, invalidate]);
 
 	const updateNode = useCallback(
-		async (value: any) => {
+		async (value: IPin["default_value"]) => {
 			if (typeof version !== "undefined") {
 				return;
 			}
@@ -214,8 +253,13 @@ function FlowPinInnerComponent({
 	);
 
 	useEffect(() => {
-		setDefaultValue(pin.default_value);
-	}, [pin]);
+		// pin.default_value is a fresh array reference on every board re-parse even
+		// when the bytes are unchanged; guard by value so React bails out instead of
+		// scheduling a redundant render.
+		setDefaultValue((prev) =>
+			defaultValuesEqual(prev, pin.default_value) ? prev : pin.default_value,
+		);
+	}, [pin.default_value]);
 
 	const pinTypeProps = useMemo(
 		() => ({
@@ -236,7 +280,9 @@ function FlowPinInnerComponent({
 							width: 8,
 							height: 8,
 							transform: "translate(-50%, -50%) rotate(45deg)",
-							background: `
+							background: isWebkitLite()
+								? "var(--foreground)"
+								: `
 								linear-gradient(
 									135deg,
 									color-mix(in oklch, var(--foreground) 100%, white 15%),
@@ -245,7 +291,9 @@ function FlowPinInnerComponent({
 							`,
 							border: "1.5px solid var(--foreground)",
 							borderRadius: "1.5px",
-							boxShadow: `
+							boxShadow: isWebkitLite()
+								? "none"
+								: `
 								0 0 5px color-mix(in oklch, var(--foreground) 25%, transparent),
 								inset 0 0.5px 1px color-mix(in oklch, white 15%, transparent)
 							`,
@@ -302,7 +350,8 @@ function FlowPinInnerComponent({
 						nodeName={node.name}
 						pin={pin}
 						appId={appId}
-						boardId={boardId}
+						boardId={typeof version === "undefined" ? boardId : undefined}
+						boardRef={boardRef}
 						defaultValue={defaultValue}
 						changeDefaultValue={setDefaultValue}
 						saveDefaultValue={async (value) => {
@@ -314,6 +363,7 @@ function FlowPinInnerComponent({
 					/>
 					{pin.dynamic && onPinRemove && (
 						<button
+							type="button"
 							className="opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary"
 							title="Delete Pin"
 							onClick={() => onPinRemove(pin)}
@@ -325,6 +375,7 @@ function FlowPinInnerComponent({
 			)}
 			{!shouldRenderPinEdit && onPinRemove && pin.dynamic && (
 				<button
+					type="button"
 					className={`opacity-0 bg-background border p-0.5 rounded-full group-hover:opacity-100 hover:text-primary ${
 						pin.pin_type === IPinType.Input
 							? "ml-2.5"
@@ -340,9 +391,21 @@ function FlowPinInnerComponent({
 	);
 }
 
-function pinPropsAreEqual(prevProps: any, nextProps: any) {
+function versionKey(version?: readonly number[]) {
+	return version?.join(".") ?? "";
+}
+
+function pinPropsAreEqual(
+	prevProps: FlowPinInnerProps,
+	nextProps: FlowPinInnerProps,
+) {
 	if (
 		prevProps.boardId !== nextProps.boardId ||
+		prevProps.boardRef !== nextProps.boardRef ||
+		prevProps.boardRef?.current !== nextProps.boardRef?.current ||
+		prevProps.boardDataVersion !== nextProps.boardDataVersion ||
+		versionKey(prevProps.version) !== versionKey(nextProps.version) ||
+		prevProps.currentLayerId !== nextProps.currentLayerId ||
 		prevProps.node?.id !== nextProps.node?.id ||
 		prevProps.pin.id !== nextProps.pin.id ||
 		prevProps.pin.index !== nextProps.pin.index ||
@@ -390,6 +453,8 @@ function FlowPin({
 	boardId,
 	appId,
 	node,
+	boardRef,
+	boardDataVersion,
 	onPinRemove,
 	skipOffset,
 	version,
@@ -401,6 +466,8 @@ function FlowPin({
 	boardId: string;
 	appId: string;
 	node: INode | ILayer;
+	boardRef?: RefObject<IBoard | undefined>;
+	boardDataVersion?: string;
 	skipOffset?: boolean;
 	onPinRemove?: (pin: IPin) => Promise<void>;
 	version?: [number, number, number];
@@ -415,6 +482,8 @@ function FlowPin({
 				appId={appId}
 				pin={pin}
 				boardId={boardId}
+				boardRef={boardRef}
+				boardDataVersion={boardDataVersion}
 				node={node}
 				skipOffset={skipOffset}
 				onPinRemove={onPinRemove}
@@ -432,6 +501,8 @@ function FlowPin({
 			appId={appId}
 			pin={pin}
 			boardId={boardId}
+			boardRef={boardRef}
+			boardDataVersion={boardDataVersion}
 			node={node}
 			skipOffset={skipOffset}
 			version={version}

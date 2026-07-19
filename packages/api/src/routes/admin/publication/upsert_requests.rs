@@ -1,13 +1,15 @@
 use crate::{
     audit,
     entity::{
-        app, membership, meta, publication_log, publication_request,
+        app, app_group, membership, meta, publication_log, publication_request,
         sea_orm_active_enums::PublicationRequestStatus, user,
     },
     error::ApiError,
-    mail::{EmailMessage, templates::app_publication_update},
+    mail::{EmailMessage, templates::publication_update},
     middleware::jwt::AppUser,
     permission::global_permission::GlobalPermission,
+    publication::{PublicationTarget, gate::require_group_assessments},
+    routes::app::groups::{group_display_name, notify_group_members_of_visibility},
     state::AppState,
 };
 use axum::{
@@ -17,7 +19,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder,
+    QueryOrder, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -34,7 +36,10 @@ pub struct ReviewPublicationBody {
 pub struct ReviewPublicationResponse {
     pub id: String,
     pub status: String,
-    pub app_id: String,
+    /// Set when the review targets an app; null for suite reviews.
+    pub app_id: Option<String>,
+    /// Set when the review targets a suite; null for app reviews.
+    pub group_id: Option<String>,
     pub approver_id: Option<String>,
 }
 
@@ -95,52 +100,89 @@ pub async fn upsert_request(
         }
     };
 
-    // When the EU AI Act feature is enabled, a publication request may not be
-    // approved until the app owner has submitted a conformity assessment. Draft,
-    // blocked or missing assessments block approval (reject/hold remain allowed).
-    if new_status == PublicationRequestStatus::Accepted && state.platform_config.features.ai_act {
-        use crate::entity::{ai_act_assessment, sea_orm_active_enums::AiActAssessmentStatus};
-        let assessment = ai_act_assessment::Entity::find()
-            .filter(ai_act_assessment::Column::AppId.eq(&request.app_id))
-            .order_by_desc(ai_act_assessment::Column::Version)
-            .one(&state.db)
-            .await?;
+    let target = PublicationTarget::from_model(&request)?;
 
-        match assessment {
-            None => {
-                return Err(ApiError::bad_request(
-                    "Approval blocked: the app owner has not submitted an EU AI Act conformity assessment.".to_string(),
-                ));
+    // When the EU AI Act feature is enabled, a publication request may not be
+    // approved until the conformity assessment is in place. Draft, blocked or
+    // missing assessments block approval (reject/hold remain allowed). A suite
+    // is gated on the aggregate over its active member apps, since it cannot
+    // own an assessment of its own.
+    if new_status == PublicationRequestStatus::Accepted {
+        match &target {
+            PublicationTarget::App(app_id) => {
+                use crate::entity::{
+                    ai_act_assessment, sea_orm_active_enums::AiActAssessmentStatus,
+                };
+                if state.platform_config.features.ai_act {
+                    let assessment = ai_act_assessment::Entity::find()
+                        .filter(ai_act_assessment::Column::AppId.eq(app_id))
+                        .order_by_desc(ai_act_assessment::Column::Version)
+                        .one(&state.db)
+                        .await?;
+
+                    match assessment {
+                        None => {
+                            return Err(ApiError::bad_request(
+                                "Approval blocked: the app owner has not submitted an EU AI Act conformity assessment.".to_string(),
+                            ));
+                        }
+                        Some(a) if a.status == AiActAssessmentStatus::Blocked => {
+                            return Err(ApiError::bad_request(
+                                "Approval blocked: this app declares a prohibited AI practice and cannot be published.".to_string(),
+                            ));
+                        }
+                        Some(a) if a.status == AiActAssessmentStatus::Draft => {
+                            return Err(ApiError::bad_request(
+                                "Approval blocked: the EU AI Act conformity assessment is still a draft and must be submitted by the owner.".to_string(),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
             }
-            Some(a) if a.status == AiActAssessmentStatus::Blocked => {
-                return Err(ApiError::bad_request(
-                    "Approval blocked: this app declares a prohibited AI practice and cannot be published.".to_string(),
-                ));
+            PublicationTarget::Group(group_id) => {
+                require_group_assessments(&state, group_id).await?;
             }
-            Some(a) if a.status == AiActAssessmentStatus::Draft => {
-                return Err(ApiError::bad_request(
-                    "Approval blocked: the EU AI Act conformity assessment is still a draft and must be submitted by the owner.".to_string(),
-                ));
-            }
-            Some(_) => {}
         }
     }
+
+    // The status flip and the visibility write must not be able to diverge —
+    // an accepted request whose target never became public is invisible to
+    // everyone but the database.
+    let txn = state.db.begin().await?;
 
     let mut active: publication_request::ActiveModel = request.clone().into_active_model();
     active.status = Set(new_status.clone());
     active.approver_id = Set(approver_id.clone());
     active.updated_at = Set(now);
-    let updated = active.update(&state.db).await?;
+    let updated = active.update(&txn).await?;
 
     if new_status == PublicationRequestStatus::Accepted {
-        let app_update = app::ActiveModel {
-            id: Set(request.app_id.clone()),
-            visibility: Set(request.target_visibility.clone()),
-            updated_at: Set(now),
-            ..Default::default()
-        };
-        app_update.update(&state.db).await?;
+        match &target {
+            PublicationTarget::App(app_id) => {
+                app::ActiveModel {
+                    id: Set(app_id.clone()),
+                    visibility: Set(request.target_visibility.clone()),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .update(&txn)
+                .await?;
+            }
+            PublicationTarget::Group(group_id) => {
+                app_group::ActiveModel {
+                    id: Set(group_id.clone()),
+                    visibility: Set(request.target_visibility.clone()),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .update(&txn)
+                .await?;
+            }
+        }
     }
+
+    txn.commit().await?;
 
     // Resolve a bound EU AI Act assessment alongside the publication decision.
     if let Some(assessment_id) = &request.ai_act_assessment_id {
@@ -183,34 +225,57 @@ pub async fn upsert_request(
     };
     log.insert(&state.db).await?;
 
-    // Notify the app owner via email
+    // The anchor app is who we notify and audit against for a suite, since a
+    // suite has no team of its own.
+    let (entity_label, entity_name, notify_app_id, entity_url) = match &target {
+        PublicationTarget::App(app_id) => {
+            let name = app_display_name(&state, app_id).await;
+            ("App", name, app_id.clone(), format!("apps/{}", app_id))
+        }
+        PublicationTarget::Group(group_id) => {
+            let group = app_group::Entity::find_by_id(group_id)
+                .one(&state.db)
+                .await?
+                .ok_or(ApiError::NOT_FOUND)?;
+            let name = group_display_name(&state, group_id).await;
+            (
+                "Suite",
+                name,
+                group.owner_app_id.clone(),
+                format!("apps/{}/suites/{}", group.owner_app_id, group_id),
+            )
+        }
+    };
+
+    // Member apps keep authority over their own membership, so they are told
+    // whenever the suite they are part of changes how publicly it is listed.
+    if new_status == PublicationRequestStatus::Accepted
+        && let PublicationTarget::Group(group_id) = &target
+    {
+        notify_group_members_of_visibility(
+            &state,
+            group_id,
+            &entity_name,
+            &request.target_visibility,
+        )
+        .await;
+    }
+
     if let Some(mail_client) = &state.mail_client {
         let frontend_url = std::env::var("FRONTEND_URL")
             .unwrap_or_else(|_| "https://app.flow-like.com".to_string());
-        let app_url = format!("{}/apps/{}", frontend_url, request.app_id);
-
-        let app_name = app::Entity::find_by_id(&request.app_id)
-            .find_also_related(meta::Entity)
-            .filter(meta::Column::Lang.eq("en"))
-            .one(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|(_, m)| m)
-            .map(|m| m.name)
-            .unwrap_or_else(|| request.app_id.clone());
-
+        let entity_url = format!("{}/{}", frontend_url, entity_url);
         let visibility_str = format!("{:?}", request.target_visibility);
 
         // Find the owner via the app's owner_role_id → membership → user
         let owner_email = async {
-            let app_record = app::Entity::find_by_id(&request.app_id)
+            let app_record = app::Entity::find_by_id(&notify_app_id)
                 .one(&state.db)
                 .await
                 .ok()??;
             let owner_role = app_record.owner_role_id?;
             let member = membership::Entity::find()
-                .filter(membership::Column::AppId.eq(&request.app_id))
+                .filter(membership::Column::AppId.eq(&notify_app_id))
                 .filter(membership::Column::RoleId.eq(&owner_role))
                 .one(&state.db)
                 .await
@@ -224,9 +289,10 @@ pub async fn upsert_request(
         .await;
 
         if let Some(addr) = owner_email {
-            let (html, text) = app_publication_update(
-                &app_name,
-                &app_url,
+            let (html, text) = publication_update(
+                entity_label,
+                &entity_name,
+                &entity_url,
                 &body.action,
                 &visibility_str,
                 reviewer_message.as_deref(),
@@ -234,7 +300,7 @@ pub async fn upsert_request(
 
             let email = EmailMessage {
                 to: addr,
-                subject: format!("Publication Update: {} — {}", app_name, body.action),
+                subject: format!("Publication Update: {} — {}", entity_name, body.action),
                 body_html: Some(html),
                 body_text: Some(text),
             };
@@ -252,14 +318,31 @@ pub async fn upsert_request(
         "publication_request",
         request_id,
         format!(
-            "Publication request {}: app {}",
-            body.action, request.app_id
+            "Publication request {}: {} {}",
+            body.action,
+            target.kind(),
+            target.app_id().or(target.group_id()).unwrap_or_default()
         )
     );
     Ok(Json(ReviewPublicationResponse {
         id: updated.id,
         status: format!("{:?}", updated.status).to_uppercase(),
         app_id: updated.app_id,
+        group_id: updated.group_id,
         approver_id: updated.approver_id,
     }))
+}
+
+/// English display name of an app, falling back to its id.
+async fn app_display_name(state: &AppState, app_id: &str) -> String {
+    app::Entity::find_by_id(app_id)
+        .find_also_related(meta::Entity)
+        .filter(meta::Column::Lang.eq("en"))
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|(_, m)| m)
+        .map(|m| m.name)
+        .unwrap_or_else(|| app_id.to_string())
 }

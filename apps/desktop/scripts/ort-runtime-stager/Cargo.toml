@@ -1,0 +1,10 @@
+[package]
+name = "flowlike-ort-runtime-stager"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+ort-sys = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "copy-dylibs", "directml", "download-binaries", "std", "tls-native"] }

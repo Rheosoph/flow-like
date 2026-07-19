@@ -3,6 +3,7 @@ import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
 import type { AuthContextProps } from "react-oidc-context";
+import { ApiResponseError, apiResponseError } from "./api-error";
 
 const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"analytics",
@@ -72,6 +73,19 @@ function isProtectedAppRoute(path: string, method: string): boolean {
 	return PROTECTED_APP_ROUTE_SEGMENTS.has(segment);
 }
 
+export function requestSilentRenew(
+	auth: AuthContextProps,
+	reason: string,
+): void {
+	try {
+		void Promise.resolve(auth.startSilentRenew()).catch((error) => {
+			console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+		});
+	} catch (error) {
+		console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+	}
+}
+
 export function ensureProtectedAppRouteAuth(
 	path: string,
 	auth?: AuthContextProps | null,
@@ -81,11 +95,7 @@ export function ensureProtectedAppRouteAuth(
 	if (auth?.user?.access_token) return;
 
 	if (auth?.isAuthenticated) {
-		try {
-			auth.startSilentRenew();
-		} catch (error) {
-			console.warn("[Auth] Silent renew failed before API request:", error);
-		}
+		requestSilentRenew(auth, "before API request");
 	}
 
 	throw new Error(`Authentication token required for app request: ${path}`);
@@ -204,7 +214,8 @@ async function streamFetcherRaw<T>(
 	});
 
 	if (!response.ok) {
-		throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
+		const errorText = await response.text();
+		throw apiResponseError(response, errorText, url);
 	}
 
 	if (!response.body) {
@@ -385,6 +396,29 @@ async function streamFetcherEventSource<T>(
 	});
 }
 
+// --- Dev-only request stats: count HTTP-plugin calls per normalized endpoint so
+// we can see which backend endpoint dominates IPC traffic for online apps. Gated
+// to development so no debug globals/overhead ship in production builds.
+// In the app console: `__apiStats()` for a ranked list, `__apiStatsReset()` to clear.
+const API_STATS_ENABLED = process.env.NODE_ENV !== "production";
+const __apiCallStats = new Map<string, number>();
+function normalizeApiPath(method: string, path: string): string {
+	const base = path
+		.split("?")[0]
+		.replace(/[0-9a-f-]{16,}/gi, ":id")
+		.replace(/\/\d+(?=\/|$)/g, "/:n");
+	return `${method} ${base}`;
+}
+if (API_STATS_ENABLED && typeof window !== "undefined") {
+	(window as unknown as Record<string, unknown>).__apiStats = () =>
+		[...__apiCallStats.entries()]
+			.sort((a, b) => b[1] - a[1])
+			.map(([k, v]) => `${v}\t${k}`)
+			.join("\n");
+	(window as unknown as Record<string, unknown>).__apiStatsReset = () =>
+		__apiCallStats.clear();
+}
+
 export async function fetcher<T>(
 	profile: IProfile,
 	path: string,
@@ -392,6 +426,10 @@ export async function fetcher<T>(
 	auth?: AuthContextProps,
 ): Promise<T> {
 	ensureProtectedAppRouteAuth(path, auth, methodOf(options));
+	if (API_STATS_ENABLED) {
+		const statKey = normalizeApiPath(methodOf(options), path);
+		__apiCallStats.set(statKey, (__apiCallStats.get(statKey) ?? 0) + 1);
+	}
 	const headers: HeadersInit = {};
 	if (auth?.user?.access_token) {
 		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;
@@ -404,7 +442,7 @@ export async function fetcher<T>(
 	}
 
 	const url = constructUrl(profile, path);
-	console.log("[API DEBUG] Fetching URL:", url);
+	if (API_STATS_ENABLED) console.log("[API DEBUG] Fetching URL:", url);
 	try {
 		const response = await tauriFetch(url, {
 			...options,
@@ -417,28 +455,35 @@ export async function fetcher<T>(
 			priority: "high",
 		});
 
-		console.log("[API DEBUG] Response received:", response);
+		if (API_STATS_ENABLED) {
+			console.log("[API DEBUG] Response received:", {
+				status: response.status,
+				statusText: response.statusText,
+			});
+		}
 
 		if (!response.ok) {
-			console.warn(`Error fetching ${path}:`, response);
 			if (response.status === 401 && auth) {
-				auth?.startSilentRenew();
+				requestSilentRenew(auth, "after 401");
 			}
-			console.error(`Error fetching ${path}:`, response);
 			const errorText = await response.text();
-			console.error(errorText);
-			throw new Error(apiErrorMessage(response, errorText));
+			const apiError = apiResponseError(response, errorText, path);
+			console.error(`Error fetching ${path}:`, apiError.toJSON());
+			throw apiError;
 		}
 
 		const text = await response.text();
 		if (!text) return undefined as T;
 		const json = tryParseJSON<T>(text);
 		if (json === null) return text as T;
-		console.groupCollapsed(`API Request: ${path}`);
-		console.dir(json, { depth: null });
-		console.groupEnd();
+		if (API_STATS_ENABLED) {
+			console.groupCollapsed(`API Request: ${path}`);
+			console.dir(json, { depth: null });
+			console.groupEnd();
+		}
 		return json;
 	} catch (error) {
+		if (error instanceof ApiResponseError) throw error;
 		console.groupCollapsed(`API Request: ${path}`);
 		console.error(`Error fetching ${path}:`, error);
 		console.groupEnd();
@@ -459,24 +504,6 @@ export async function fetcher<T>(
 
 		throw new Error(`Error fetching data: ${error}`);
 	}
-}
-
-function apiErrorMessage(response: Response, body: string): string {
-	if (body) {
-		try {
-			const parsed = JSON.parse(body);
-			const message =
-				parsed?.error?.message ?? parsed?.message ?? parsed?.error;
-			if (typeof message === "string" && message.trim()) {
-				return message;
-			}
-		} catch {
-			const trimmed = body.trim();
-			if (trimmed) return trimmed;
-		}
-	}
-
-	return response.statusText || `HTTP error: ${response.status}`;
 }
 
 export async function post<T>(

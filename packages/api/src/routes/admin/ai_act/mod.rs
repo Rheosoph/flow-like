@@ -1273,13 +1273,26 @@ pub async fn assist(
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
 
+    // App-scoped hosted usage must never silently fall back to user-only
+    // accounting. Global publishing access alone does not authorize charging
+    // an app, so require app execution membership as well.
+    user.execution_app_permission(&app_id, &state).await?;
+    let usage_context = Some(flow_like::models::llm::ModelUsageContext {
+        app_id: Some(app_id.clone()),
+        run_id: None,
+    });
+
     let sub = user.sub()?;
+    // Hosted Bit models bill against the caller's token via this server's metered proxy.
+    let token = crate::routes::ai::copilot::user_access_token(&user);
     let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
         &state,
         &sub,
         &app_id,
         body.model_id,
         body.profile,
+        token,
+        usage_context,
     )
     .await?;
 

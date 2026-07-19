@@ -4,6 +4,7 @@ import type {
 	IAppState,
 	IAppVisibility,
 	IBoard,
+	IGroup,
 	IMetadata,
 } from "@flow-like/flow-like-ui";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
@@ -46,6 +47,15 @@ export class EmptyAppState implements IAppState {
 		offset?: number,
 		limit?: number,
 	): Promise<[IApp, IMetadata | undefined][]> {
+		throw new Error("Method not implemented.");
+	}
+	getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]> {
+		throw new Error("Method not implemented.");
+	}
+	getStoreGroup(groupId: string): Promise<IGroup> {
+		throw new Error("Method not implemented.");
+	}
+	getMyGroups(): Promise<IGroup[]> {
 		throw new Error("Method not implemented.");
 	}
 	getApps(): Promise<[IApp, IMetadata | undefined][]> {

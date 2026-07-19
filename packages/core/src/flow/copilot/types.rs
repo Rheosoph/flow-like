@@ -98,6 +98,12 @@ pub struct PlaceholderPinDef {
     pub pin_type: String,           // "Input" or "Output"
     pub data_type: String, // "String", "Integer", "Float", "Boolean", "Struct", "Generic", "Execution"
     pub value_type: Option<String>, // "Normal", "Array", "HashMap", "HashSet" (default: "Normal")
+    /// JSON Schema carried by a typed Struct boundary. Older command payloads omit it.
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// Whether connections must agree with `schema`. Older payloads default to permissive.
+    #[serde(default)]
+    pub enforce_schema: bool,
 }
 
 /// Edge in the graph
@@ -217,6 +223,23 @@ pub struct CopilotResponse {
     pub suggestions: Vec<Suggestion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flowscript_workspace: Option<String>,
+    /// Exact typed-IR command batch retained by the host for atomic Apply/Dismiss review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_ir_commit: Option<FlowIrCommitToken>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FlowIrCommitToken {
+    pub board_id: String,
+    pub draft_id: String,
+    pub revision: u64,
+    pub base_fingerprint: String,
+    pub claim_id: String,
+    /// Host-derived review policy. This is a UI hint only: native Apply derives the same policy
+    /// again from the retained draft and fails closed unless the host passes explicit approval.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_destructive_approval: bool,
 }
 
 /// Context for a specific run (for log queries)
@@ -250,6 +273,10 @@ pub enum BoardCommand {
         position: Option<NodePosition>,
         #[serde(default)]
         friendly_name: Option<String>,
+        /// Additional pins to append to the catalog node when it is created. FlowScript uses
+        /// this for user-declared outputs on a new `events_generic` entry node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        additional_pins: Option<Vec<PlaceholderPinDef>>,
         /// Target layer ID to place the node in. If None, uses current layer.
         #[serde(default)]
         target_layer: Option<String>,
@@ -295,6 +322,23 @@ pub enum BoardCommand {
         node_id: String,
         pin_id: String,
         value: serde_json::Value,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    /// Rename an existing node's friendly (display) name without touching its behavior. Used by
+    /// FlowScript named events (`eventsSimple dashboardLoad() { }`) when only the name changed.
+    RenameNode {
+        node_id: String,
+        friendly_name: String,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    /// Set a node's function references (e.g. an agent's registered tool functions). `fn_refs`
+    /// carries the referenced targets as ref tokens (`$N` ref-ids, board node/layer anchors, or
+    /// names) which the applier resolves to concrete node ids.
+    SetNodeFunctionRefs {
+        node_id: String,
+        fn_refs: Vec<String>,
         #[serde(default)]
         summary: Option<String>,
     },
@@ -402,7 +446,17 @@ pub enum BoardCommand {
     // Layer/grouping management
     CreateLayer {
         name: String,
+        /// Reference ID like "$0" for same-batch references. FlowScript reconcile uses this when
+        /// creating a new function layer and placing its body nodes inside it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ref_id: Option<String>,
+        /// Layer kind. Omitted/default means "Collapsed"; FlowScript functions use "Function".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_type: Option<String>,
+        #[serde(default)]
         node_ids: Vec<String>, // Nodes to include in the layer
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pins: Option<Vec<PlaceholderPinDef>>,
         position: Option<NodePosition>,
         color: Option<String>,
         /// Parent layer ID. If None, creates at root or current layer.

@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission,
+    ensure_any_permission,
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -42,7 +42,13 @@ pub async fn get_db_schema(
     Path((app_id, table)): Path<(String, String)>,
     Query(scope): Query<ScopeParams>,
 ) -> Result<Json<Schema>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
     validate_table_name(&table)?;
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;

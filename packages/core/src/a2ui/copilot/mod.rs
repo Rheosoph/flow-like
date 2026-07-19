@@ -22,11 +22,11 @@ pub use types::*;
 
 use std::sync::Arc;
 
+use flow_like_model_provider::llm::CompletionClientDyn;
 use flow_like_types::Result;
 use futures::StreamExt;
 use rig::{
     OneOrMany,
-    client::completion::CompletionClientDyn,
     completion::Completion,
     message::{
         AssistantContent, DocumentSourceKind, Image, ImageDetail, ImageMediaType, UserContent,
@@ -37,6 +37,7 @@ use rig::{
 
 use crate::a2ui::SurfaceComponent;
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
+use crate::models::llm::ModelUsageContext;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use flow_like_model_provider::provider::ModelProvider;
@@ -45,12 +46,21 @@ use flow_like_model_provider::provider::ModelProvider;
 pub struct A2UICopilot {
     state: Arc<FlowLikeState>,
     profile: Option<Arc<Profile>>,
+    usage_context: Option<ModelUsageContext>,
 }
 
 impl A2UICopilot {
     /// Create a new A2UICopilot
-    pub async fn new(state: Arc<FlowLikeState>, profile: Option<Arc<Profile>>) -> Result<Self> {
-        Ok(Self { state, profile })
+    pub async fn new(
+        state: Arc<FlowLikeState>,
+        profile: Option<Arc<Profile>>,
+        usage_context: Option<ModelUsageContext>,
+    ) -> Result<Self> {
+        Ok(Self {
+            state,
+            profile,
+            usage_context,
+        })
     }
 
     /// Main entry point - generate or modify A2UI surfaces via structured output
@@ -90,12 +100,16 @@ impl A2UICopilot {
                 "image/png" | "png" => Some(ImageMediaType::PNG),
                 "image/gif" | "gif" => Some(ImageMediaType::GIF),
                 "image/webp" | "webp" => Some(ImageMediaType::WEBP),
+                "image/heic" | "heic" => Some(ImageMediaType::HEIC),
+                "image/heif" | "heif" => Some(ImageMediaType::HEIF),
+                "image/svg+xml" | "svg" | "svg+xml" => Some(ImageMediaType::SVG),
                 _ => None,
             }
         };
 
         let mut prompt_contents = vec![UserContent::Text(rig::message::Text {
             text: prompt.clone(),
+            additional_params: None,
         })];
 
         if let Some(images) = &current_images {
@@ -113,6 +127,7 @@ impl A2UICopilot {
             content: OneOrMany::many(prompt_contents).unwrap_or_else(|_| {
                 OneOrMany::one(UserContent::Text(rig::message::Text {
                     text: prompt.clone(),
+                    additional_params: None,
                 }))
             }),
         };
@@ -125,6 +140,7 @@ impl A2UICopilot {
                     let mut contents: Vec<UserContent> =
                         vec![UserContent::Text(rig::message::Text {
                             text: msg.content.clone(),
+                            additional_params: None,
                         })];
 
                     if let Some(images) = &msg.images {
@@ -147,6 +163,7 @@ impl A2UICopilot {
                     id: None,
                     content: OneOrMany::one(AssistantContent::Text(rig::message::Text {
                         text: msg.content.clone(),
+                        additional_params: None,
                     })),
                 }),
             })
@@ -323,6 +340,7 @@ impl A2UICopilot {
                 OneOrMany::many(response_contents.clone()).unwrap_or_else(|_| {
                     OneOrMany::one(AssistantContent::Text(rig::message::Text {
                         text: iteration_text.clone(),
+                        additional_params: None,
                     }))
                 });
 
@@ -355,7 +373,10 @@ impl A2UICopilot {
                     id: tool_call.id.clone(),
                     call_id: None,
                     content: OneOrMany::one(rig::message::ToolResultContent::Text(
-                        rig::message::Text { text: result },
+                        rig::message::Text {
+                            text: result,
+                            additional_params: None,
+                        },
                     )),
                 }));
             }
@@ -473,7 +494,7 @@ impl A2UICopilot {
         let model = model_factory
             .lock()
             .await
-            .build(&bit, self.state.clone(), token, None)
+            .build(&bit, self.state.clone(), token, self.usage_context.clone())
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
         let provider = model.provider().await?;

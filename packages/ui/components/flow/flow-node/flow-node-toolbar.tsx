@@ -1,5 +1,6 @@
 "use client";
 import { InfoCircledIcon } from "@radix-ui/react-icons";
+import { useStore } from "@xyflow/react";
 import {
 	AlignCenterVerticalIcon,
 	AlignEndVerticalIcon,
@@ -18,7 +19,7 @@ import {
 	SquarePenIcon,
 	Trash2Icon,
 } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { IPinType, IVariableType } from "../../../lib";
 import type { INode } from "../../../lib/schema/flow/node";
 import {
@@ -36,7 +37,6 @@ interface FlowNodeToolbarProps {
 	node: INode;
 	appId: string;
 	boardId: string;
-	selectedCount: number;
 	isReadOnly: boolean;
 	onCopy: () => Promise<void>;
 	onDelete: () => Promise<void>;
@@ -163,7 +163,6 @@ Divider.displayName = "Divider";
 const FlowNodeToolbar = memo(
 	({
 		node,
-		selectedCount,
 		isReadOnly,
 		onCopy,
 		onDelete,
@@ -176,8 +175,20 @@ const FlowNodeToolbar = memo(
 		onAlign,
 		onExplain,
 	}: FlowNodeToolbarProps) => {
-		const isSingleSelection = selectedCount <= 1;
-		const isMultiSelection = selectedCount > 1;
+		// Subscribe to selection only from the (rarely mounted) toolbar, narrowed to
+		// a boolean that flips at the 1<->2 boundary so it re-renders far less often
+		// than the old per-node global count subscription.
+		const isMultiSelection = useStore((s) => {
+			let count = 0;
+			for (const n of s.nodeLookup.values()) {
+				if (n.selected) {
+					count++;
+					if (count > 1) return true;
+				}
+			}
+			return false;
+		});
+		const isSingleSelection = !isMultiSelection;
 
 		const isExec = useMemo(
 			() =>
@@ -199,6 +210,20 @@ const FlowNodeToolbar = memo(
 
 		const isGenericEvent = node.name === "events_generic";
 		const isStartNode = node.start ?? false;
+
+		// Stable onClick so the memoized ToolbarButton (and its Radix Tooltip/Popper,
+		// which measures the DOM on render) doesn't re-render on every toolbar render.
+		const handleCollapseClick = useCallback(
+			(e?: React.MouseEvent<HTMLButtonElement>) => {
+				const rect = e?.currentTarget?.getBoundingClientRect?.();
+				if (rect) {
+					onCollapse(rect.x + rect.width / 2, rect.y + rect.height / 2);
+				} else {
+					onCollapse(0, 0);
+				}
+			},
+			[onCollapse],
+		);
 
 		if (isReadOnly) return null;
 
@@ -256,19 +281,7 @@ const FlowNodeToolbar = memo(
 					{isMultiSelection && (
 						<>
 							<ToolbarButton
-								onClick={(e) => {
-									const rect = (
-										e?.currentTarget as HTMLElement
-									)?.getBoundingClientRect?.();
-									if (rect) {
-										onCollapse(
-											rect.x + rect.width / 2,
-											rect.y + rect.height / 2,
-										);
-									} else {
-										onCollapse(0, 0);
-									}
-								}}
+								onClick={handleCollapseClick}
 								icon={FoldVerticalIcon}
 								tooltip="Collapse"
 							/>

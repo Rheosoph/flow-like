@@ -1,304 +1,451 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "Event",
-	"type": "object",
-	"required": [
-		"active",
-		"board_id",
-		"config",
-		"created_at",
-		"description",
-		"event_type",
-		"event_version",
-		"id",
-		"name",
-		"node_id",
-		"priority",
-		"updated_at",
-		"variables"
-	],
-	"properties": {
-		"id": {
-			"type": "string"
-		},
-		"name": {
-			"type": "string"
-		},
-		"description": {
-			"type": "string"
-		},
-		"board_id": {
-			"type": "string"
-		},
-		"board_version": {
-			"type": ["array", "null"],
-			"items": [
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			],
-			"maxItems": 3,
-			"minItems": 3
-		},
-		"node_id": {
-			"type": "string"
-		},
-		"variables": {
-			"type": "object",
-			"additionalProperties": {
-				"$ref": "#/definitions/Variable"
-			}
-		},
-		"config": {
-			"type": "array",
-			"items": {
-				"type": "integer",
-				"format": "uint8",
-				"minimum": 0.0
-			}
-		},
-		"active": {
-			"type": "boolean"
-		},
-		"canary": {
-			"anyOf": [
-				{
-					"$ref": "#/definitions/CanaryEvent"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"priority": {
-			"type": "integer",
-			"format": "uint32",
-			"minimum": 0.0
-		},
-		"event_type": {
-			"type": "string"
-		},
-		"notes": {
-			"anyOf": [
-				{
-					"$ref": "#/definitions/ReleaseNotes"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"event_version": {
-			"type": "array",
-			"items": [
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				},
-				{
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			],
-			"maxItems": 3,
-			"minItems": 3
-		},
-		"created_at": {
-			"$ref": "#/definitions/SystemTime"
-		},
-		"updated_at": {
-			"$ref": "#/definitions/SystemTime"
-		}
-	},
-	"definitions": {
-		"Variable": {
-			"type": "object",
-			"required": [
-				"data_type",
-				"editable",
-				"exposed",
-				"id",
-				"name",
-				"secret",
-				"value_type"
-			],
-			"properties": {
-				"id": {
-					"type": "string"
-				},
-				"name": {
-					"type": "string"
-				},
-				"category": {
-					"type": ["string", "null"]
-				},
-				"description": {
-					"type": ["string", "null"]
-				},
-				"default_value": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "integer",
-						"format": "uint8",
-						"minimum": 0.0
-					}
-				},
-				"data_type": {
-					"$ref": "#/definitions/VariableType"
-				},
-				"value_type": {
-					"$ref": "#/definitions/ValueType"
-				},
-				"exposed": {
-					"type": "boolean"
-				},
-				"secret": {
-					"type": "boolean"
-				},
-				"editable": {
-					"type": "boolean"
-				},
-				"hash": {
-					"type": ["integer", "null"],
-					"format": "uint64",
-					"minimum": 0.0
-				}
-			}
-		},
-		"VariableType": {
-			"type": "string",
-			"enum": [
-				"Execution",
-				"String",
-				"Integer",
-				"Float",
-				"Boolean",
-				"Date",
-				"PathBuf",
-				"Generic",
-				"Struct",
-				"Byte"
-			]
-		},
-		"ValueType": {
-			"type": "string",
-			"enum": ["Array", "Normal", "HashMap", "HashSet"]
-		},
-		"CanaryEvent": {
-			"type": "object",
-			"required": [
-				"board_id",
-				"created_at",
-				"node_id",
-				"updated_at",
-				"variables",
-				"weight"
-			],
-			"properties": {
-				"weight": {
-					"type": "number",
-					"format": "float"
-				},
-				"variables": {
-					"type": "object",
-					"additionalProperties": {
-						"$ref": "#/definitions/Variable"
-					}
-				},
-				"board_id": {
-					"type": "string"
-				},
-				"board_version": {
-					"type": ["array", "null"],
-					"items": [
-						{
-							"type": "integer",
-							"format": "uint32",
-							"minimum": 0.0
-						},
-						{
-							"type": "integer",
-							"format": "uint32",
-							"minimum": 0.0
-						},
-						{
-							"type": "integer",
-							"format": "uint32",
-							"minimum": 0.0
-						}
-					],
-					"maxItems": 3,
-					"minItems": 3
-				},
-				"node_id": {
-					"type": "string"
-				},
-				"created_at": {
-					"$ref": "#/definitions/SystemTime"
-				},
-				"updated_at": {
-					"$ref": "#/definitions/SystemTime"
-				}
-			}
-		},
-		"SystemTime": {
-			"type": "object",
-			"required": ["nanos_since_epoch", "secs_since_epoch"],
-			"properties": {
-				"secs_since_epoch": {
-					"type": "integer",
-					"format": "uint64",
-					"minimum": 0.0
-				},
-				"nanos_since_epoch": {
-					"type": "integer",
-					"format": "uint32",
-					"minimum": 0.0
-				}
-			}
-		},
-		"ReleaseNotes": {
-			"oneOf": [
-				{
-					"type": "object",
-					"required": ["NOTES"],
-					"properties": {
-						"NOTES": {
-							"type": "string"
-						}
-					},
-					"additionalProperties": false
-				},
-				{
-					"type": "object",
-					"required": ["URL"],
-					"properties": {
-						"URL": {
-							"type": "string"
-						}
-					},
-					"additionalProperties": false
-				}
-			]
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Event",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "board_id": {
+      "type": "string"
+    },
+    "board_version": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "node_id": {
+      "type": "string"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Variable"
+      }
+    },
+    "config": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "active": {
+      "type": "boolean"
+    },
+    "canary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CanaryEvent"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "priority": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseNotes"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "event_version": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "created_at": {
+      "$ref": "#/$defs/SystemTime"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/SystemTime"
+    },
+    "default_page_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inputs": {
+      "description": "Input pins copied from the node (populated at upsert time)",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EventInput"
+      },
+      "default": []
+    },
+    "route": {
+      "description": "URL route path that maps to this event (e.g., \"/\", \"/dashboard\")",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "is_default": {
+      "description": "Whether this is the default event/route for the app (shown at \"/\")",
+      "type": "boolean",
+      "default": false
+    },
+    "execution_mode": {
+      "description": "Where this event runs (Local/offline vs Remote/server). Inherited from\nthe board's `execution_mode` when that mode is not Hybrid.",
+      "$ref": "#/$defs/EventExecutionMode",
+      "default": "Local"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "description",
+    "board_id",
+    "node_id",
+    "variables",
+    "config",
+    "active",
+    "priority",
+    "event_type",
+    "event_version",
+    "created_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "Variable": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_value": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "data_type": {
+          "$ref": "#/$defs/VariableType"
+        },
+        "value_type": {
+          "$ref": "#/$defs/ValueType"
+        },
+        "exposed": {
+          "type": "boolean"
+        },
+        "secret": {
+          "type": "boolean"
+        },
+        "editable": {
+          "type": "boolean"
+        },
+        "hash": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime_configured": {
+          "description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "data_type",
+        "value_type",
+        "exposed",
+        "secret",
+        "editable"
+      ]
+    },
+    "VariableType": {
+      "type": "string",
+      "enum": [
+        "Execution",
+        "String",
+        "Integer",
+        "Float",
+        "Boolean",
+        "Date",
+        "PathBuf",
+        "Generic",
+        "Struct",
+        "Byte"
+      ]
+    },
+    "ValueType": {
+      "type": "string",
+      "enum": [
+        "Array",
+        "Normal",
+        "HashMap",
+        "HashSet"
+      ]
+    },
+    "CanaryEvent": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number",
+          "format": "float"
+        },
+        "variables": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Variable"
+          }
+        },
+        "board_id": {
+          "type": "string"
+        },
+        "board_version": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "created_at": {
+          "$ref": "#/$defs/SystemTime"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/SystemTime"
+        }
+      },
+      "required": [
+        "weight",
+        "variables",
+        "board_id",
+        "node_id",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "SystemTime": {
+      "type": "object",
+      "properties": {
+        "secs_since_epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nanos_since_epoch": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "secs_since_epoch",
+        "nanos_since_epoch"
+      ]
+    },
+    "ReleaseNotes": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "NOTES": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "NOTES"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "URL": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "URL"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "EventInput": {
+      "description": "Simplified input pin metadata for events (used when board can't be fetched)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "friendly_name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "data_type": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string"
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default_value": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "friendly_name",
+        "description",
+        "data_type",
+        "value_type",
+        "index"
+      ]
+    },
+    "EventExecutionMode": {
+      "description": "Where a single event runs. Unlike `Board::ExecutionMode`, events are never\nHybrid — an event is always bound to exactly one environment so its\nconfiguration (URLs, credentials, tutorials) can be unambiguous.",
+      "oneOf": [
+        {
+          "description": "Runs on the user's device (desktop app / synced into local sqlite).",
+          "type": "string",
+          "const": "Local"
+        },
+        {
+          "description": "Runs on the server (cloud endpoint, cron worker, sink service).",
+          "type": "string",
+          "const": "Remote"
+        }
+      ]
+    }
+  }
 }

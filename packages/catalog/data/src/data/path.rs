@@ -13,6 +13,14 @@ use flow_like_types::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+fn path_without_final_extension(path: &str, extension: &str) -> String {
+    if extension.is_empty() {
+        return path.to_string();
+    }
+    let suffix = format!(".{extension}");
+    path.strip_suffix(&suffix).unwrap_or(path).to_string()
+}
+
 pub mod content;
 pub mod dirs;
 pub mod manipulation;
@@ -33,6 +41,13 @@ impl FlowPath {
             store_ref,
             cache_store_ref,
         }
+    }
+
+    /// Clones this path, pointing at `path` within the same store/cache layer.
+    pub fn with_path(&self, path: &str) -> Self {
+        let mut clone = self.clone();
+        clone.path = path.to_string();
+        clone
     }
 
     pub async fn get(
@@ -167,13 +182,7 @@ impl FlowPath {
 
     fn get_base_path_without_extension(&self, runtime: &FlowPathRuntime) -> String {
         let current_extension = runtime.path.extension().unwrap_or_default().to_string();
-        let mut current_path = runtime.path.as_ref().to_string();
-
-        if !current_extension.is_empty() {
-            current_path = current_path.replace(&format!(".{}", current_extension), "");
-        }
-
-        current_path
+        path_without_final_extension(runtime.path.as_ref(), &current_extension)
     }
 
     fn get_etag_path(&self, base_path: &str) -> Path {
@@ -491,6 +500,18 @@ mod tests {
 
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn only_the_final_extension_is_removed() {
+        assert_eq!(
+            path_without_final_extension("models.onnx/face.onnx", "onnx"),
+            "models.onnx/face"
+        );
+        assert_eq!(
+            path_without_final_extension("models/face", ""),
+            "models/face"
+        );
+    }
 
     #[tokio::test]
     async fn test_empty_path_serialization() {

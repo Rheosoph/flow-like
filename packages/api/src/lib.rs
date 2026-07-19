@@ -32,6 +32,7 @@ mod db_backfills;
 pub mod error;
 pub mod mail;
 pub mod permission;
+pub mod publication;
 pub mod push_notifications;
 pub mod state;
 pub mod storage_config;
@@ -40,8 +41,10 @@ pub mod usage_limits;
 pub mod user_management;
 pub mod utils;
 
+pub mod app_connection_jwt;
 pub mod backend_jwt;
 pub mod compilation;
+pub mod correlation;
 pub mod execution;
 
 pub use routes::registry::ServerRegistry;

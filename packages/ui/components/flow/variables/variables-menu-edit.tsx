@@ -13,15 +13,18 @@ import { DateVariable } from "./date-variable";
 import { FloatArrayVariable } from "./float-array-variable";
 import { FloatSetVariable } from "./float-set-variable";
 import { FloatVariable } from "./float-variable";
+import { GenericVariable } from "./generic-variable";
 import { IntegerArrayVariable } from "./integer-array-variable";
 import { IntegerSetVariable } from "./integer-set-variable";
 import { IntegerVariable } from "./integer-variable";
+import { MapVariable } from "./map-variable";
 import { PathbufArrayVariable } from "./pathbuf-array-variable";
 import { PathbufSetVariable } from "./pathbuf-set-variable";
 import { PathbufVariable } from "./pathbuf-variable";
 import { StringArrayVariable } from "./string-array-variable";
 import { StringSetVariable } from "./string-set-variable";
 import { StringVariable } from "./string-variable";
+import { StructArrayVariable } from "./struct-array-variable";
 import { StructVariable } from "./struct-variable";
 
 export function VariablesMenuEdit({
@@ -41,6 +44,18 @@ export function VariablesMenuEdit({
 		if (intermediateValue === variable) return;
 		updateVariable(intermediateValue);
 	}, [intermediateValue]);
+
+	// HashMap keys are always strings; the value type is the variable's data
+	// type, so a single editor covers every data type (including Generic).
+	if (variable.value_type === IValueType.HashMap) {
+		return (
+			<MapVariable
+				disabled={disabled}
+				variable={intermediateValue}
+				onChange={setIntermediateValue}
+			/>
+		);
+	}
 
 	if (
 		variable.data_type === IVariableType.String &&
@@ -237,6 +252,16 @@ export function VariablesMenuEdit({
 		);
 	}
 
+	if (variable.data_type === IVariableType.Generic) {
+		return (
+			<GenericVariable
+				disabled={disabled}
+				variable={intermediateValue}
+				onChange={setIntermediateValue}
+			/>
+		);
+	}
+
 	if (
 		variable.data_type === IVariableType.PathBuf &&
 		variable.value_type === IValueType.Normal
@@ -282,6 +307,21 @@ export function VariablesMenuEdit({
 	) {
 		return (
 			<StructVariable
+				disabled={disabled}
+				variable={intermediateValue}
+				onChange={setIntermediateValue}
+				refs={refs}
+			/>
+		);
+	}
+
+	if (
+		variable.data_type === IVariableType.Struct &&
+		(variable.value_type === IValueType.Array ||
+			variable.value_type === IValueType.HashSet)
+	) {
+		return (
+			<StructArrayVariable
 				disabled={disabled}
 				variable={intermediateValue}
 				onChange={setIntermediateValue}

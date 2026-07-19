@@ -10,27 +10,42 @@
  * existing imports and usage.
  */
 
+import { memo, useMemo } from "react";
 import { FlowPilot } from "../../flowpilot";
 import type { FlowCopilotProps } from "./types";
 
-export function FlowCopilotWrapper({
+function FlowCopilotWrapperImpl({
 	appId,
 	board,
 	catalogNodes,
 	selectedNodeIds,
 	onAcceptSuggestion,
 	onExecuteCommands,
+	onApplyFlowScript,
+	onApplyFlowIrCommit,
 	onFocusNode,
 	onSelectNodes,
 	runContext,
 	initialPrompt,
 	onClose,
 	onWorkspaceVisibleChange,
-	mode,
-	embedded,
-	onGhostNodesChange,
-	onClearRunContext,
 }: FlowCopilotProps) {
+	// Stabilize the runContext object identity so the memoized FlowPilot only
+	// re-renders when the underlying run actually changes. The parent passes a
+	// store-backed value, so its identity is already stable between run changes.
+	const stableRunContext = useMemo(
+		() =>
+			runContext
+				? {
+						run_id: runContext.run_id,
+						app_id: runContext.app_id,
+						board_id: runContext.board_id,
+						event_id: runContext.event_id,
+					}
+				: undefined,
+		[runContext],
+	);
+
 	return (
 		<FlowPilot
 			agentMode="board"
@@ -41,24 +56,19 @@ export function FlowCopilotWrapper({
 			selectedNodeIds={selectedNodeIds}
 			onAcceptSuggestion={onAcceptSuggestion}
 			onExecuteCommands={onExecuteCommands}
+			onApplyFlowScript={onApplyFlowScript}
+			onApplyFlowIrCommit={onApplyFlowIrCommit}
 			onFocusNode={onFocusNode}
 			onSelectNodes={onSelectNodes}
-			runContext={
-				runContext
-					? {
-							run_id: runContext.run_id,
-							app_id: runContext.app_id,
-							board_id: runContext.board_id,
-							event_id: runContext.event_id,
-						}
-					: undefined
-			}
+			runContext={stableRunContext}
 			initialPrompt={initialPrompt}
 			onClose={onClose}
 			onWorkspaceVisibleChange={onWorkspaceVisibleChange}
 		/>
 	);
 }
+
+export const FlowCopilotWrapper = memo(FlowCopilotWrapperImpl);
 
 // Re-export for backward compatibility
 export { FlowCopilotWrapper as FlowCopilot };

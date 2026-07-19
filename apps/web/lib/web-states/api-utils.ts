@@ -1,4 +1,5 @@
 import type { IProfile, QueryClient } from "@flow-like/flow-like-ui";
+import { apiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { AuthContextProps } from "react-oidc-context";
 
@@ -7,6 +8,7 @@ const PROTECTED_APP_ROUTE_SEGMENTS = new Set([
 	"api",
 	"board",
 	"comments",
+	"connections",
 	"data",
 	"db",
 	"events",
@@ -95,31 +97,23 @@ export function ensureProtectedAppRouteAuth(
 	if (auth?.user?.access_token) return;
 
 	if (auth?.isAuthenticated) {
-		try {
-			auth.startSilentRenew();
-		} catch (error) {
-			console.warn("[Auth] Silent renew failed before API request:", error);
-		}
+		requestSilentRenew(auth, "before API request");
 	}
 
 	throw new Error(`Authentication token required for app request: ${path}`);
 }
 
-function apiErrorMessage(status: number, body: string): string {
-	if (body) {
-		try {
-			const parsed = JSON.parse(body);
-			const message =
-				parsed?.error?.message ?? parsed?.message ?? parsed?.error;
-			if (typeof message === "string" && message.trim()) {
-				return message;
-			}
-		} catch {
-			const trimmed = body.trim();
-			if (trimmed) return trimmed;
-		}
+export function requestSilentRenew(
+	auth: AuthContextProps,
+	reason: string,
+): void {
+	try {
+		void Promise.resolve(auth.startSilentRenew()).catch((error) => {
+			console.warn(`[Auth] Silent renew failed ${reason}:`, error);
+		});
+	} catch (error) {
+		console.warn(`[Auth] Silent renew failed ${reason}:`, error);
 	}
-	return `API error: ${status}`;
 }
 
 export async function apiFetch<T>(
@@ -133,7 +127,7 @@ export async function apiFetch<T>(
 	};
 
 	if (auth?.user?.access_token) {
-		headers["Authorization"] = `Bearer ${auth.user.access_token}`;
+		headers.Authorization = `Bearer ${auth.user.access_token}`;
 	}
 
 	const url = constructApiUrl(path);
@@ -146,12 +140,13 @@ export async function apiFetch<T>(
 	});
 
 	if (!response.ok) {
-		if (response.status === 401 && auth?.isAuthenticated) {
-			auth.startSilentRenew();
+		if (response.status === 401 && auth) {
+			requestSilentRenew(auth, "after 401");
 		}
 		const errorText = await response.text();
-		console.error(`API error ${response.status} for ${path}:`, errorText);
-		throw new Error(apiErrorMessage(response.status, errorText));
+		const error = apiResponseError(response, errorText, path);
+		console.error(`API error ${response.status} for ${path}:`, error.toJSON());
+		throw error;
 	}
 
 	const text = await response.text();

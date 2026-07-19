@@ -21,9 +21,9 @@ inventory = "0.3"
 flow-like-wasm-sdk-macros = "0.3.7"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rig-core = { version = "0.34.0", default-features = false, optional = true }
+rig = { package = "rig-core", version = "0.38.2", default-features = false, optional = true }
 futures = { version = "0.3", optional = true }
 
 [features]
 default = []
-rig = ["dep:rig-core", "dep:futures"]
+rig = ["dep:rig", "dep:futures"]

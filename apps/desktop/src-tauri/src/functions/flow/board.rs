@@ -4,9 +4,13 @@ use crate::{
 };
 use flow_like::{
     app::App,
-    flow::board::{Board, VersionType, commands::GenericCommand},
+    flow::{
+        ast::{ApplyFlowScriptResult, RenderOptions, board_to_flowscript},
+        board::{Board, VersionType, commands::GenericCommand},
+        node::Node,
+    },
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 
@@ -105,6 +109,63 @@ pub async fn get_board(
     }
 
     Err(TauriFunctionError::new("Board not found"))
+}
+
+#[tauri::command(async)]
+pub async fn get_flowscript(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    version: Option<(u32, u32, u32)>,
+    anchors: Option<bool>,
+) -> Result<String, TauriFunctionError> {
+    let render_options = RenderOptions {
+        anchors: anchors.unwrap_or(true),
+        ..RenderOptions::default()
+    };
+
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    if let Ok(board) = flow_like_state.get_board(&board_id, version) {
+        let board = board.lock().await;
+        return Ok(board_to_flowscript(&board, &render_options));
+    }
+
+    if let Ok(app) = App::load(app_id, flow_like_state).await {
+        let board = app.open_board(board_id, Some(true), version).await?;
+        let board = board.lock().await;
+        return Ok(board_to_flowscript(&board, &render_options));
+    }
+
+    Err(TauriFunctionError::new("Board not found"))
+}
+
+/// A positioned FlowScript diagnostic produced by the authoritative Rust parser.
+#[derive(serde::Serialize)]
+pub struct FlowScriptDiagnostic {
+    pub message: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column number.
+    pub col: usize,
+    /// "error" | "warning"
+    pub severity: String,
+}
+
+/// Parse-only FlowScript validation. Non-mutating: it never touches the board, so it is
+/// safe to call on every keystroke (debounced) for realtime linting in the studio.
+#[tauri::command(async)]
+pub async fn lint_flowscript(
+    flowscript: String,
+) -> Result<Vec<FlowScriptDiagnostic>, TauriFunctionError> {
+    match flow_like::flow::ast::parse(&flowscript) {
+        Ok(_) => Ok(Vec::new()),
+        Err(error) => Ok(vec![FlowScriptDiagnostic {
+            message: error.message,
+            line: error.line,
+            col: error.col,
+            severity: "error".to_string(),
+        }]),
+    }
 }
 
 #[tauri::command(async)]
@@ -225,6 +286,67 @@ pub async fn execute_commands(
     Ok(commands)
 }
 
+#[tauri::command(async)]
+pub async fn apply_flowscript(
+    handler: AppHandle,
+    app_id: String,
+    board_id: String,
+    flowscript: String,
+    current_layer: Option<String>,
+    catalog_nodes: Option<Vec<Node>>,
+    allow_deletions: Option<bool>,
+) -> Result<ApplyFlowScriptResult, TauriFunctionError> {
+    let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
+    let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
+    let board = flow_like_state.get_board(&board_id, None)?;
+
+    let all_nodes = flow_like_state.node_registry.read().await.get_nodes()?;
+    let app = App::load(app_id, flow_like_state.clone()).await?;
+    let allowed_packages: HashSet<String> = app.packages.keys().cloned().collect();
+
+    let mut catalog_nodes_for_app = all_nodes
+        .into_iter()
+        .filter(|node| match &node.wasm {
+            None => true,
+            Some(wasm) => allowed_packages.contains(&wasm.package_id),
+        })
+        .collect::<Vec<_>>();
+
+    let mut catalog_keys = catalog_nodes_for_app
+        .iter()
+        .map(catalog_node_key)
+        .collect::<HashSet<_>>();
+    for node in catalog_nodes.unwrap_or_default() {
+        if catalog_keys.insert(catalog_node_key(&node)) {
+            catalog_nodes_for_app.push(node);
+        }
+    }
+
+    let mut board = board.lock().await;
+    let result = flow_like::flow::ast::apply_flowscript_to_board(
+        &mut board,
+        &flowscript,
+        &catalog_nodes_for_app,
+        flow_like_state,
+        current_layer,
+        allow_deletions.unwrap_or(false),
+    )
+    .await?;
+
+    if !result.commands.is_empty() {
+        board.save(Some(store)).await?;
+    }
+
+    Ok(result)
+}
+
+fn catalog_node_key(node: &Node) -> (Option<String>, String) {
+    (
+        node.wasm.as_ref().map(|wasm| wasm.package_id.clone()),
+        node.name.clone(),
+    )
+}
+
 /// Gets the elements required for executing a workflow on a specific page.
 ///
 /// This returns only the elements that are referenced by nodes in the board,
@@ -232,12 +354,20 @@ pub async fn execute_commands(
 #[tauri::command(async)]
 pub async fn get_execution_elements(
     handler: AppHandle,
+    app_id: String,
     board_id: String,
     page_id: String,
     wildcard: bool,
+    version: Option<(u32, u32, u32)>,
 ) -> Result<std::collections::HashMap<String, flow_like_types::Value>, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
-    let board = flow_like_state.get_board(&board_id, None)?;
+    let board = match flow_like_state.get_board(&board_id, version) {
+        Ok(board) => board,
+        Err(_) => {
+            let app = App::load(app_id, flow_like_state.clone()).await?;
+            app.open_board(board_id, Some(true), version).await?
+        }
+    };
     let board = board.lock().await;
 
     let elements = board

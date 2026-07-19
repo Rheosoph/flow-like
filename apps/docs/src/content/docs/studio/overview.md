@@ -35,4 +35,4 @@ Flow Like Desktop
 └── App2
 ```
 
-*Flows* can access and modify [storage and databases](/apps/storage/) within their app. Similarily, [events](/apps/events) can be configured for all *Flows* at the app level.
+*Flows* can access and modify [file storage](/apps/storage/) and [databases](/apps/data-studio/) within their app. Similarily, [events](/apps/events) can be configured for all *Flows* at the app level.

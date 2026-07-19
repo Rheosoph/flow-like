@@ -1,12 +1,37 @@
 "use client";
 
-import { Loader2, Mic, Square, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, Mic, Trash2 } from "lucide-react";
+import {
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
+import {
+	type ITemporaryFlowPath,
+	useBackend,
+} from "../../../state/backend-state";
 import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
 import {
+	AudioPlayback,
+	VOICE_DEFAULT_COLOR,
+	VOICE_DEFAULT_RECORDING_COLOR,
+	type VoiceInvokeMode,
+	type VoiceMode,
+	type VoiceSize,
+	type VoiceVariant,
+	type VoiceVisualState,
+	getVoiceVisualizer,
+	useSpeakerActivity,
+	useSpeechRecognition,
+	useVoiceRecorder,
+} from "../../voice";
+import {
+	useActionContext,
 	useComponentActionTrigger,
 	useIsComponentTriggering,
 	useOnAction,
@@ -21,13 +46,19 @@ interface VoiceData {
 	size: number;
 	type: string;
 	duration: number;
+	url?: string;
 	backendUrl?: string;
+	flowPath?: ITemporaryFlowPath;
+	transcript?: string;
 	uploading?: boolean;
 	uploadError?: string;
 }
 
+/** Trailing buffer so a manual/hold stop doesn't clip the user's last words. */
+const STOP_DELAY_MS = 700;
+
 function toStoredVoice(voice: VoiceData): VoiceData {
-	const { uploading: _uploading, uploadError: _uploadError, ...stored } = voice;
+	const { uploading: _u, uploadError: _e, ...stored } = voice;
 	return stored;
 }
 
@@ -49,178 +80,6 @@ function formatFileSize(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Waveform visualizer that reacts to live audio input
-function WaveformVisualizer({
-	analyser,
-	isRecording,
-	visualizer,
-}: {
-	analyser: AnalyserNode | null;
-	isRecording: boolean;
-	visualizer: string;
-}) {
-	const canvasRef = useRef<HTMLCanvasElement>(null);
-	const animationRef = useRef<number>(0);
-
-	useEffect(() => {
-		const canvas = canvasRef.current;
-		if (!canvas || !analyser || !isRecording) {
-			if (canvas) {
-				const ctx = canvas.getContext("2d");
-				if (ctx) {
-					ctx.clearRect(0, 0, canvas.width, canvas.height);
-				}
-			}
-			return;
-		}
-
-		const ctx = canvas.getContext("2d");
-		if (!ctx) return;
-
-		const bufferLength = analyser.frequencyBinCount;
-		const dataArray = new Uint8Array(bufferLength);
-
-		const draw = () => {
-			animationRef.current = requestAnimationFrame(draw);
-			analyser.getByteTimeDomainData(dataArray);
-
-			const { width, height } = canvas;
-			ctx.clearRect(0, 0, width, height);
-
-			if (visualizer === "bars") {
-				drawBars(ctx, dataArray, bufferLength, width, height);
-			} else {
-				drawWaveform(ctx, dataArray, bufferLength, width, height);
-			}
-		};
-
-		draw();
-
-		return () => {
-			cancelAnimationFrame(animationRef.current);
-		};
-	}, [analyser, isRecording, visualizer]);
-
-	return (
-		<canvas
-			ref={canvasRef}
-			width={300}
-			height={80}
-			className="w-full h-20 rounded-lg"
-		/>
-	);
-}
-
-function drawWaveform(
-	ctx: CanvasRenderingContext2D,
-	dataArray: Uint8Array,
-	bufferLength: number,
-	width: number,
-	height: number,
-) {
-	const sliceWidth = width / bufferLength;
-	let x = 0;
-
-	// Glow effect
-	ctx.shadowBlur = 6;
-	ctx.shadowColor = "rgba(139, 92, 246, 0.5)";
-	ctx.lineWidth = 2.5;
-
-	// Gradient stroke
-	const gradient = ctx.createLinearGradient(0, 0, width, 0);
-	gradient.addColorStop(0, "rgba(139, 92, 246, 0.9)");
-	gradient.addColorStop(0.5, "rgba(59, 130, 246, 0.9)");
-	gradient.addColorStop(1, "rgba(139, 92, 246, 0.9)");
-	ctx.strokeStyle = gradient;
-
-	ctx.beginPath();
-	for (let i = 0; i < bufferLength; i++) {
-		const v = dataArray[i] / 128.0;
-		const y = (v * height) / 2;
-		if (i === 0) {
-			ctx.moveTo(x, y);
-		} else {
-			ctx.lineTo(x, y);
-		}
-		x += sliceWidth;
-	}
-	ctx.stroke();
-
-	// Mirror line (subtle)
-	ctx.shadowBlur = 0;
-	ctx.globalAlpha = 0.15;
-	x = 0;
-	ctx.beginPath();
-	for (let i = 0; i < bufferLength; i++) {
-		const v = dataArray[i] / 128.0;
-		const y = height - (v * height) / 2;
-		if (i === 0) {
-			ctx.moveTo(x, y);
-		} else {
-			ctx.lineTo(x, y);
-		}
-		x += sliceWidth;
-	}
-	ctx.stroke();
-	ctx.globalAlpha = 1;
-}
-
-function drawBars(
-	ctx: CanvasRenderingContext2D,
-	dataArray: Uint8Array,
-	bufferLength: number,
-	width: number,
-	height: number,
-) {
-	const barCount = 48;
-	const barWidth = width / barCount - 2;
-	const step = Math.floor(bufferLength / barCount);
-
-	for (let i = 0; i < barCount; i++) {
-		const value = dataArray[i * step] / 128.0;
-		const barHeight = Math.max(2, Math.abs(value - 1) * height * 0.8);
-
-		const hue = 250 + (i / barCount) * 60;
-		ctx.fillStyle = `hsla(${hue}, 80%, 65%, 0.85)`;
-
-		const x = i * (barWidth + 2);
-		const y = (height - barHeight) / 2;
-
-		ctx.beginPath();
-		ctx.roundRect(x, y, barWidth, barHeight, 2);
-		ctx.fill();
-	}
-}
-
-// Idle pulsing ring animation
-function IdlePulseRing() {
-	return (
-		<div className="relative flex items-center justify-center">
-			<div className="absolute w-20 h-20 rounded-full bg-primary/5 animate-ping" />
-			<div className="absolute w-16 h-16 rounded-full bg-primary/10 animate-pulse" />
-			<div className="relative w-14 h-14 rounded-full bg-linear-to-br from-violet-500 to-blue-500 flex items-center justify-center shadow-lg shadow-violet-500/20 cursor-pointer hover:scale-105 transition-transform">
-				<Mic className="w-6 h-6 text-white" />
-			</div>
-		</div>
-	);
-}
-
-// Recording pulse ring
-function RecordingPulseRing({ duration }: { duration: number }) {
-	return (
-		<div className="relative flex items-center justify-center">
-			<div className="absolute w-20 h-20 rounded-full bg-red-500/10 animate-ping" />
-			<div className="absolute w-16 h-16 rounded-full bg-red-500/15 animate-pulse" />
-			<div className="relative w-14 h-14 rounded-full bg-linear-to-br from-red-500 to-rose-600 flex items-center justify-center shadow-lg shadow-red-500/30 cursor-pointer hover:scale-105 transition-transform">
-				<Square className="w-5 h-5 text-white fill-white" />
-			</div>
-			<div className="absolute -bottom-6 text-xs font-mono text-red-500 font-medium">
-				{formatDuration(duration)}
-			</div>
-		</div>
-	);
-}
-
 export function A2UIVoiceInput({
 	component,
 	style,
@@ -231,6 +90,7 @@ export function A2UIVoiceInput({
 	const triggerAction = useComponentActionTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 	const backend = useBackend();
+	const { appId, resolveTemporaryUploadTarget } = useActionContext();
 	const { setByPath } = useData();
 
 	const value = useResolved<VoiceData>(component.value);
@@ -244,373 +104,533 @@ export function A2UIVoiceInput({
 		useResolved<number>(component.silenceThreshold) ?? 0.01;
 	const silenceDuration =
 		useResolved<number>(component.silenceDuration) ?? 2000;
-	const visualizer = useResolved<string>(component.visualizer) ?? "waveform";
+	const variantProp = useResolved<VoiceVariant>(component.variant);
+	const visualizerProp = useResolved<string>(component.visualizer);
+	const variant = (variantProp ??
+		(visualizerProp as VoiceVariant) ??
+		"waveform") as VoiceVariant;
+	const size = (useResolved<VoiceSize>(component.size) ?? "md") as VoiceSize;
+	const mode = (useResolved<VoiceMode>(component.mode) ??
+		"record") as VoiceMode;
+	const invoke = (useResolved<VoiceInvokeMode>(component.invoke) ??
+		"manual") as VoiceInvokeMode;
+	const color = useResolved<string>(component.color) ?? VOICE_DEFAULT_COLOR;
+	const recordingColor =
+		useResolved<string>(component.recordingColor) ??
+		VOICE_DEFAULT_RECORDING_COLOR;
+	const resultModeRaw = useResolved<string>(component.resultMode) ?? "player";
+	const resultMode =
+		resultModeRaw === "summary"
+			? "summary"
+			: resultModeRaw === "autoplay"
+				? "autoplay"
+				: "player";
 
-	const [isRecording, setIsRecording] = useState(false);
-	const [recordingTime, setRecordingTime] = useState(0);
-	const [isUploading, setIsUploading] = useState(false);
 	const [localVoice, setLocalVoice] = useState<VoiceData | null>(null);
-	const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
-
-	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-	const audioChunksRef = useRef<Blob[]>([]);
-	const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-	const audioContextRef = useRef<AudioContext | null>(null);
-	const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const analyserRef = useRef<AnalyserNode | null>(null);
-
-	const display = localVoice || value || null;
-
-	// Cleanup on unmount
-	useEffect(() => {
-		return () => {
-			if (timerRef.current) clearInterval(timerRef.current);
-			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-			if (audioContextRef.current) {
-				audioContextRef.current.close().catch(() => {});
-			}
-		};
-	}, []);
-
-	const detectSilence = useCallback(
-		(analyser: AnalyserNode) => {
-			const dataArray = new Float32Array(analyser.fftSize);
-			let silentSince: number | null = null;
-
-			const check = () => {
-				if (
-					!mediaRecorderRef.current ||
-					mediaRecorderRef.current.state !== "recording"
-				)
-					return;
-
-				analyser.getFloatTimeDomainData(dataArray);
-				let sumSquares = 0;
-				for (let i = 0; i < dataArray.length; i++) {
-					sumSquares += dataArray[i] * dataArray[i];
-				}
-				const rms = Math.sqrt(sumSquares / dataArray.length);
-
-				if (rms < silenceThreshold) {
-					if (!silentSince) silentSince = Date.now();
-					if (Date.now() - silentSince > silenceDuration) {
-						stopRecording();
-						return;
-					}
-				} else {
-					silentSince = null;
-				}
-
-				silenceTimerRef.current = setTimeout(check, 100);
-			};
-
-			check();
-		},
-		[silenceThreshold, silenceDuration],
+	const [isUploading, setIsUploading] = useState(false);
+	const [hover, setHover] = useState(false);
+	const [localUrl, setLocalUrl] = useState<string | null>(null);
+	const localUrlRef = useRef<string | null>(null);
+	const uploadOperationRef = useRef(0);
+	const [dismissedResponse, setDismissedResponse] = useState<string | null>(
+		null,
 	);
 
-	const startRecording = useCallback(async () => {
-		if (disabled) return;
+	const replaceLocalUrl = useCallback((file: File | null) => {
+		if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
+		const url = file ? URL.createObjectURL(file) : null;
+		localUrlRef.current = url;
+		setLocalUrl(url);
+	}, []);
 
-		try {
-			const stream = await navigator.mediaDevices.getUserMedia({
-				audio: true,
-			});
+	useEffect(
+		() => () => {
+			uploadOperationRef.current += 1;
+			if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
+		},
+		[],
+	);
 
-			// Set up audio context for visualization + silence detection
-			const audioContext = new AudioContext();
-			const source = audioContext.createMediaStreamSource(stream);
-			const analyser = audioContext.createAnalyser();
-			analyser.fftSize = 2048;
-			source.connect(analyser);
-			audioContextRef.current = audioContext;
-			analyserRef.current = analyser;
-			setAnalyserNode(analyser);
+	const display = localVoice || value || null;
+	// The user's own recording.
+	const recordingSrc = localUrl ?? display?.backendUrl ?? null;
+	// A response the backend pushed onto this element (e.g. via Set Media Source).
+	const responseMedia =
+		(useResolved<string>(component.src) ??
+			useResolved<string>(component.url) ??
+			null) ||
+		null;
+	const responseMediaRef = useRef<string | null>(null);
+	responseMediaRef.current = responseMedia;
+	// Ignore a stale response once the user records again, until a new one arrives.
+	const activeResponse =
+		responseMedia && responseMedia !== dismissedResponse ? responseMedia : null;
 
-			const mediaRecorder = new MediaRecorder(stream);
-			mediaRecorderRef.current = mediaRecorder;
-			audioChunksRef.current = [];
-
-			mediaRecorder.ondataavailable = (event) => {
-				if (event.data.size > 0) {
-					audioChunksRef.current.push(event.data);
-				}
+	const handleRecorded = useCallback(
+		async (file: File, duration: number) => {
+			const operationId = ++uploadOperationRef.current;
+			const voiceData: VoiceData = {
+				name: file.name,
+				size: file.size,
+				type: file.type,
+				duration,
+				uploading: true,
 			};
-
-			mediaRecorder.onstop = () => {
-				stream.getTracks().forEach((track) => track.stop());
-				if (audioContextRef.current) {
-					audioContextRef.current.close().catch(() => {});
-					audioContextRef.current = null;
-				}
-				setAnalyserNode(null);
-			};
-
-			mediaRecorder.start();
-			setIsRecording(true);
-			setRecordingTime(0);
-			setLocalVoice(null);
-
-			timerRef.current = setInterval(() => {
-				setRecordingTime((prev) => {
-					if (prev + 1 >= maxDuration) {
-						stopRecording();
-						return prev;
-					}
-					return prev + 1;
-				});
-			}, 1000);
-
-			if (autoStop) {
-				detectSilence(analyser);
-			}
-		} catch (err) {
-			console.error("Microphone access denied:", err);
-		}
-	}, [disabled, maxDuration, autoStop, detectSilence]);
-
-	const stopRecording = useCallback(() => {
-		const recorder = mediaRecorderRef.current;
-		if (!recorder || recorder.state !== "recording") return;
-
-		// Grab the final duration before stopping
-		const finalDuration = recordingTime;
-
-		recorder.addEventListener(
-			"stop",
-			async () => {
-				if (timerRef.current) {
-					clearInterval(timerRef.current);
-					timerRef.current = null;
-				}
-				if (silenceTimerRef.current) {
-					clearTimeout(silenceTimerRef.current);
-					silenceTimerRef.current = null;
-				}
-
-				const audioBlob = new Blob(audioChunksRef.current, {
-					type: "audio/webm",
-				});
-				const audioFile = new File([audioBlob], `voice-${Date.now()}.webm`, {
-					type: "audio/webm",
-				});
-
-				const voiceData: VoiceData = {
-					name: audioFile.name,
-					size: audioFile.size,
-					type: audioFile.type,
-					duration: finalDuration,
-					uploading: true,
-				};
-
-				setLocalVoice(voiceData);
-				setIsRecording(false);
-				setIsUploading(true);
-
-				try {
-					const backendUrl = await backend.helperState.fileToUrl(
-						audioFile,
+			replaceLocalUrl(file);
+			setLocalVoice(voiceData);
+			setIsUploading(true);
+			try {
+				const executionTarget = await resolveTemporaryUploadTarget?.(
+					component.actions?.[0],
+				);
+				if (uploadOperationRef.current !== operationId) return;
+				const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
+					file,
+					false,
+					appId,
+					executionTarget,
+				)) ?? {
+					url: await backend.helperState.fileToUrl(
+						file,
 						false,
-					);
-
-					const uploaded: VoiceData = {
-						...voiceData,
-						backendUrl,
-						uploading: false,
-					};
-
-					setLocalVoice(uploaded);
-					setIsUploading(false);
-
-					if (component.value && "path" in component.value) {
-						setByPath(component.value.path, uploaded);
-					}
-
-					onAction?.({
-						type: "userAction",
-						name: "change",
-						surfaceId,
-						sourceComponentId: componentId,
-						timestamp: Date.now(),
-						context: {
-							value: toStoredVoice(uploaded),
-							signedUrls: backendUrl,
-							duration: finalDuration,
-						},
-					});
-
-					await triggerAction(component.actions, {
-						signedUrls: backendUrl,
-						duration: finalDuration,
-					});
-				} catch (err) {
-					const errored: VoiceData = {
-						...voiceData,
-						uploading: false,
-						uploadError: "Upload failed",
-					};
-					setLocalVoice(errored);
-					setIsUploading(false);
+						appId,
+						executionTarget,
+					),
+				};
+				if (uploadOperationRef.current !== operationId) return;
+				const uploaded: VoiceData = {
+					...voiceData,
+					url: temporaryFile.url,
+					backendUrl: temporaryFile.url,
+					flowPath: temporaryFile.flowPath,
+					uploading: false,
+				};
+				setLocalVoice(uploaded);
+				setIsUploading(false);
+				if (component.value && "path" in component.value) {
+					setByPath(component.value.path, toStoredVoice(uploaded));
 				}
-			},
-			{ once: true },
-		);
-
-		recorder.stop();
-	}, [
-		recordingTime,
-		backend.helperState,
-		component.actions,
-		component.value,
-		componentId,
-		onAction,
-		setByPath,
-		surfaceId,
-		triggerAction,
-	]);
-
-	const clearRecording = useCallback(() => {
-		setLocalVoice(null);
-		setRecordingTime(0);
-		if (component.value && "path" in component.value) {
-			setByPath(component.value.path, null);
-		}
-		onAction?.({
-			type: "userAction",
-			name: "change",
+				onAction?.({
+					type: "userAction",
+					name: "change",
+					surfaceId,
+					sourceComponentId: componentId,
+					timestamp: Date.now(),
+					context: {
+						value: toStoredVoice(uploaded),
+						signedUrls: temporaryFile.url,
+						duration,
+					},
+				});
+				await triggerAction(component.actions, {
+					signedUrls: temporaryFile.url,
+					duration,
+				});
+			} catch {
+				if (uploadOperationRef.current !== operationId) return;
+				setLocalVoice({
+					...voiceData,
+					uploading: false,
+					uploadError: "Upload failed",
+				});
+				setIsUploading(false);
+			}
+		},
+		[
+			appId,
+			backend.helperState,
+			component.actions,
+			component.value,
+			componentId,
+			onAction,
+			replaceLocalUrl,
+			resolveTemporaryUploadTarget,
+			setByPath,
 			surfaceId,
-			sourceComponentId: componentId,
-			timestamp: Date.now(),
-			context: { value: null },
-		});
-	}, [component.value, componentId, onAction, setByPath, surfaceId]);
+			triggerAction,
+		],
+	);
 
-	// Clear event listener
+	const handleTranscript = useCallback(
+		async (text: string) => {
+			const trimmed = text.trim();
+			if (!trimmed) return;
+			const voiceData: VoiceData = {
+				name: "transcript",
+				size: trimmed.length,
+				type: "text/plain",
+				duration: 0,
+				transcript: trimmed,
+			};
+			setLocalVoice(voiceData);
+			if (component.value && "path" in component.value) {
+				setByPath(component.value.path, voiceData);
+			}
+			onAction?.({
+				type: "userAction",
+				name: "change",
+				surfaceId,
+				sourceComponentId: componentId,
+				timestamp: Date.now(),
+				context: { value: voiceData, transcript: trimmed },
+			});
+			await triggerAction(component.actions, { transcript: trimmed });
+		},
+		[
+			component.actions,
+			component.value,
+			componentId,
+			onAction,
+			setByPath,
+			surfaceId,
+			triggerAction,
+		],
+	);
+
+	const recorder = useVoiceRecorder({
+		maxDuration,
+		stopDelay: STOP_DELAY_MS,
+		onComplete: (file, duration) => {
+			void handleRecorded(file, duration);
+		},
+	});
+	const speech = useSpeechRecognition({
+		onEnd: (text) => {
+			void handleTranscript(text);
+		},
+	});
+
+	const effectiveMode: VoiceMode =
+		mode === "stt" && speech.isSupported ? "stt" : "record";
+
 	useEffect(() => {
-		const handleClear = (
-			event: CustomEvent<{ surfaceId: string; componentId: string }>,
-		) => {
+		if (mode === "stt" && !speech.isSupported) {
+			console.warn(
+				"[voiceInput] STT requested but the Web Speech API is unavailable here " +
+					"(common in desktop/Tauri webviews); falling back to audio recording. " +
+					"Transcribe the recording in the flow instead.",
+			);
+		}
+	}, [mode, speech.isSupported]);
+
+	const capturing =
+		effectiveMode === "stt" ? speech.isListening : recorder.isRecording;
+	const arming = effectiveMode === "record" && recorder.isArming;
+	const autoplayMode = resultMode === "autoplay";
+	// In autoplay mode we wait for the backend to push a response before playing —
+	// the user's own recording is never auto-played back.
+	const awaitingResponse =
+		autoplayMode &&
+		!activeResponse &&
+		!capturing &&
+		!arming &&
+		!display?.uploadError &&
+		(display != null || isTriggering);
+
+	const beginCapture = useCallback(() => {
+		if (disabled) return;
+		uploadOperationRef.current += 1;
+		setIsUploading(false);
+		setLocalVoice(null);
+		replaceLocalUrl(null);
+		setDismissedResponse(responseMediaRef.current);
+		if (effectiveMode === "stt") {
+			speech.reset();
+			speech.start();
+		} else {
+			void recorder.start();
+		}
+	}, [disabled, effectiveMode, speech, recorder, replaceLocalUrl]);
+
+	const endCapture = useCallback(() => {
+		if (effectiveMode === "stt") speech.stop();
+		else recorder.stop();
+	}, [effectiveMode, speech, recorder]);
+
+	useSpeakerActivity({
+		analyser: recorder.analyser,
+		active:
+			effectiveMode === "record" &&
+			recorder.isRecording &&
+			(autoStop || invoke === "auto"),
+		silenceThreshold,
+		silenceDuration,
+		onSilence: () => recorder.stop(),
+	});
+
+	const clearRecording = useCallback(
+		(executeConfiguredAction: boolean) => {
+			uploadOperationRef.current += 1;
+			setIsUploading(false);
+			setLocalVoice(null);
+			replaceLocalUrl(null);
+			setDismissedResponse(responseMediaRef.current);
+			if (component.value && "path" in component.value) {
+				setByPath(component.value.path, null);
+			}
+			onAction?.({
+				type: "userAction",
+				name: "change",
+				surfaceId,
+				sourceComponentId: componentId,
+				timestamp: Date.now(),
+				context: { value: null },
+			});
+			if (executeConfiguredAction) {
+				void triggerAction(component.actions, {
+					signedUrls: null,
+					transcript: null,
+					duration: 0,
+				});
+			}
+		},
+		[
+			component.actions,
+			component.value,
+			componentId,
+			onAction,
+			replaceLocalUrl,
+			setByPath,
+			surfaceId,
+			triggerAction,
+		],
+	);
+
+	useEffect(() => {
+		const handleClear = (event: Event) => {
+			const { detail } = event as CustomEvent<{
+				surfaceId: string;
+				componentId: string;
+			}>;
 			if (
-				event.detail.surfaceId === surfaceId &&
-				event.detail.componentId === componentId
+				detail.surfaceId === surfaceId &&
+				detail.componentId === componentId
 			) {
-				clearRecording();
+				clearRecording(false);
 			}
 		};
-		window.addEventListener(
-			"a2ui:clearFileInput" as never,
-			handleClear as EventListener,
-		);
+		window.addEventListener("a2ui:clearFileInput", handleClear);
 		return () => {
-			window.removeEventListener(
-				"a2ui:clearFileInput" as never,
-				handleClear as EventListener,
-			);
+			window.removeEventListener("a2ui:clearFileInput", handleClear);
 		};
 	}, [surfaceId, componentId, clearRecording]);
+
+	const supported =
+		effectiveMode === "stt" ? speech.isSupported : recorder.isSupported;
+	const blocked = disabled || !supported;
+
+	const visualState: VoiceVisualState = capturing
+		? "recording"
+		: arming || isUploading || isTriggering
+			? "processing"
+			: "idle";
+
+	const Visualizer = useMemo(() => getVoiceVisualizer(variant), [variant]);
+
+	const interactionProps =
+		invoke === "hold"
+			? {
+					onPointerEnter: () => recorder.prewarm(),
+					onPointerDown: () => beginCapture(),
+					onPointerUp: () => endCapture(),
+					onPointerLeave: () => {
+						if (capturing) endCapture();
+					},
+					// Suppress the mobile long-press context menu / selection magnifier,
+					// which otherwise interrupts the hold-to-record pointer flow.
+					onContextMenu: (e: ReactMouseEvent) => e.preventDefault(),
+				}
+			: {
+					onPointerEnter: () => recorder.prewarm(),
+					onClick: () => (capturing ? endCapture() : beginCapture()),
+				};
+
+	const recordAgainHint =
+		invoke === "hold" ? "Hold to record again" : "Tap to record again";
+
+	const hint = arming
+		? "Starting…"
+		: capturing
+			? effectiveMode === "stt"
+				? speech.transcript || "Listening…"
+				: formatDuration(recorder.recordingTime)
+			: invoke === "hold"
+				? "Hold to record"
+				: effectiveMode === "stt"
+					? "Tap to dictate"
+					: invoke === "auto"
+						? "Tap to start — stops when you pause"
+						: "Tap to start recording";
 
 	const containerStyle = resolveStyle(style);
 	const inlineStyle = resolveInlineStyle(style);
 
 	return (
-		<div className={cn("space-y-2", containerStyle)} style={inlineStyle}>
+		<div
+			data-card-action-stop
+			className={cn("space-y-2", containerStyle)}
+			style={inlineStyle}
+		>
 			{label && <Label className="text-sm font-medium">{label}</Label>}
 
 			<div
 				className={cn(
-					"relative rounded-xl border overflow-hidden transition-all duration-300",
-					isRecording
-						? "border-red-500/50 bg-linear-to-b from-red-500/5 to-transparent shadow-lg shadow-red-500/5"
+					"relative overflow-hidden rounded-xl border transition-all duration-300",
+					capturing || arming
+						? "border-primary/40 bg-linear-to-b from-primary/5 to-transparent"
 						: display
 							? "border-primary/30 bg-linear-to-b from-primary/5 to-transparent"
 							: "border-border bg-background hover:border-primary/30",
 					error && "border-destructive",
-					disabled && "opacity-50 pointer-events-none",
+					blocked && "pointer-events-none opacity-50",
 				)}
 			>
-				{/* Main content area */}
-				<div className="flex flex-col items-center justify-center p-6 min-h-40">
-					{isRecording ? (
-						<>
-							{/* Live visualizer */}
-							<div className="w-full mb-4">
-								<WaveformVisualizer
-									analyser={analyserNode}
-									isRecording={isRecording}
-									visualizer={visualizer}
+				<div className="flex min-h-40 flex-col items-center justify-center p-6">
+					{autoplayMode && activeResponse && !capturing && !arming ? (
+						<AudioPlayback
+							src={activeResponse}
+							variant={variant}
+							size={size}
+							color={color}
+							recordingColor={recordingColor}
+							autoPlay
+							recordControl={blocked ? undefined : interactionProps}
+							recordHint={recordAgainHint}
+							onDelete={() => clearRecording(true)}
+						/>
+					) : awaitingResponse ? (
+						<div className="flex w-full flex-col items-center gap-3">
+							<div className="flex w-full justify-center">
+								<Visualizer
+									analyser={null}
+									state="processing"
+									size={size}
+									color={color}
+									recordingColor={recordingColor}
 								/>
 							</div>
-
-							{/* Recording controls */}
-							<div className="flex items-center gap-4">
-								<button type="button" onClick={stopRecording} className="group">
-									<RecordingPulseRing duration={recordingTime} />
-								</button>
+							<p className="animate-pulse text-sm text-muted-foreground">
+								Processing…
+							</p>
+							<div className="flex items-center gap-3">
+								{!blocked && (
+									<Button
+										type="button"
+										size="icon"
+										variant="outline"
+										className="size-9 rounded-full"
+										style={{
+											borderColor: recordingColor,
+											color: recordingColor,
+										}}
+										{...interactionProps}
+									>
+										<Mic className="size-4" />
+										<span className="sr-only">{recordAgainHint}</span>
+									</Button>
+								)}
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									className="size-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
+									onClick={() => clearRecording(true)}
+								>
+									<Trash2 className="size-4" />
+								</Button>
 							</div>
-
-							{maxDuration < 300 && (
-								<div className="mt-8 w-full">
-									<div className="h-1 bg-muted/30 rounded-full overflow-hidden">
-										<div
-											className="h-full bg-linear-to-r from-red-500 to-rose-400 rounded-full transition-all duration-1000"
-											style={{
-												width: `${(recordingTime / maxDuration) * 100}%`,
-											}}
-										/>
-									</div>
-								</div>
-							)}
-						</>
-					) : display ? (
-						<>
-							{/* Recorded state */}
-							<div className="flex items-center gap-4 w-full">
-								<div className="shrink-0 w-12 h-12 rounded-full bg-linear-to-br from-violet-500 to-blue-500 flex items-center justify-center shadow-md">
-									<Mic className="w-5 h-5 text-white" />
-								</div>
-								<div className="flex-1 min-w-0">
-									<p className="text-sm font-medium truncate">{display.name}</p>
+						</div>
+					) : !autoplayMode &&
+						display &&
+						!capturing &&
+						resultMode !== "summary" &&
+						recordingSrc &&
+						!display.uploadError ? (
+						<AudioPlayback
+							src={recordingSrc}
+							variant={variant}
+							size={size}
+							color={color}
+							recordingColor={recordingColor}
+							title={display.transcript ?? display.name}
+							busy={display.uploading || isTriggering}
+							recordControl={blocked ? undefined : interactionProps}
+							recordHint={recordAgainHint}
+							onDelete={() => clearRecording(true)}
+						/>
+					) : display && !capturing ? (
+						<div className="flex w-full items-center gap-4">
+							<div
+								className="flex size-12 shrink-0 items-center justify-center rounded-full shadow-md"
+								style={{ backgroundColor: color }}
+							>
+								<Mic className="size-5 text-white" />
+							</div>
+							<div className="min-w-0 flex-1">
+								<p className="truncate text-sm font-medium">
+									{display.transcript ?? display.name}
+								</p>
+								{!display.transcript && (
 									<p className="text-xs text-muted-foreground">
 										{formatDuration(display.duration)} &middot;{" "}
 										{formatFileSize(display.size)}
 									</p>
-								</div>
-								{display.uploading || isTriggering ? (
-									<Loader2 className="w-5 h-5 animate-spin text-primary" />
-								) : display.uploadError ? (
-									<span className="text-xs text-destructive">
-										{display.uploadError}
-									</span>
-								) : (
-									<Button
-										type="button"
-										size="sm"
-										variant="ghost"
-										className="h-8 w-8 p-0 rounded-full hover:bg-destructive/10 hover:text-destructive"
-										onClick={clearRecording}
-									>
-										<Trash2 className="w-4 h-4" />
-									</Button>
 								)}
 							</div>
-						</>
+							{display.uploading || isTriggering ? (
+								<Loader2 className="size-5 animate-spin text-primary" />
+							) : display.uploadError ? (
+								<span className="text-xs text-destructive">
+									{display.uploadError}
+								</span>
+							) : (
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									className="size-8 rounded-full p-0 hover:bg-destructive/10 hover:text-destructive"
+									onClick={() => clearRecording(true)}
+								>
+									<Trash2 className="size-4" />
+								</Button>
+							)}
+						</div>
 					) : (
 						<>
-							{/* Idle state - click to record */}
 							<button
 								type="button"
-								onClick={startRecording}
-								disabled={
-									disabled ||
-									typeof navigator?.mediaDevices?.getUserMedia !== "function"
-								}
-								className="group focus:outline-none"
+								disabled={blocked}
+								className="group flex select-none flex-col items-center gap-3 focus:outline-none"
+								onMouseEnter={() => setHover(true)}
+								onMouseLeave={() => setHover(false)}
+								{...interactionProps}
 							>
-								<IdlePulseRing />
+								<Visualizer
+									analyser={recorder.analyser}
+									state={visualState}
+									size={size}
+									color={color}
+									recordingColor={recordingColor}
+									hover={hover}
+								/>
 							</button>
-							<p className="mt-8 text-sm text-muted-foreground">
-								Click to start recording
-							</p>
+							<p className="mt-4 text-sm text-muted-foreground">{hint}</p>
+							{capturing &&
+								effectiveMode === "record" &&
+								maxDuration > 0 &&
+								maxDuration < 300 && (
+									<div className="mt-4 w-full">
+										<div className="h-1 overflow-hidden rounded-full bg-muted/30">
+											<div
+												className="h-full rounded-full transition-all duration-1000"
+												style={{
+													width: `${(recorder.recordingTime / maxDuration) * 100}%`,
+													backgroundColor: recordingColor,
+												}}
+											/>
+										</div>
+									</div>
+								)}
 						</>
 					)}
 				</div>

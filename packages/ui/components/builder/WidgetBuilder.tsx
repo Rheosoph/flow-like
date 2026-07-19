@@ -22,14 +22,16 @@ import {
 	presignCanvasSettings,
 	presignPageAssets,
 } from "../../lib/presign-assets";
+import {
+	type AssistantWidgetSurface,
+	useAssistantSurface,
+} from "../../state/assistant-surface";
 import { useBackend } from "../../state/backend-state";
 import type { IWidgetRef } from "../../state/backend-state/page-state";
 import type { IWidget } from "../../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { A2UIRenderer } from "../a2ui/A2UIRenderer";
-import { normalizeBoxes, resolveBoxesField } from "../a2ui/bbox-utils";
-import { applyMediaSourceUpdate } from "../a2ui/media-source";
-import { applyStyleUpdate } from "../a2ui/style-updates";
+import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -156,7 +158,6 @@ export interface WidgetBuilderProps {
 	actionContext?: {
 		appId?: string;
 		boardId?: string;
-		boardVersion?: [number, number, number];
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
 		widgetActions?: { id: string; label: string; description?: string }[];
@@ -166,6 +167,11 @@ export interface WidgetBuilderProps {
 	currentPageId?: string;
 	/** Called when user switches to a different page */
 	onPageChange?: (pageId: string) => void;
+	/**
+	 * When true the host app provides the assistant (global chat) — the FlowPilot button routes to
+	 * requestOpenAssistant() and the embedded A2UICopilot panel/sheet are not mounted.
+	 */
+	externalAssistant?: boolean;
 }
 
 export function WidgetBuilder({
@@ -181,6 +187,7 @@ export function WidgetBuilder({
 	actionContext,
 	currentPageId,
 	onPageChange,
+	externalAssistant = false,
 }: WidgetBuilderProps) {
 	const [mode, setMode] = useState<"edit" | "preview">("edit");
 	const [leftTab, setLeftTab] = useState<"palette" | "hierarchy">("palette");
@@ -220,6 +227,7 @@ export function WidgetBuilder({
 				onExport={onExport}
 				currentPageId={currentPageId}
 				onPageChange={onPageChange}
+				externalAssistant={externalAssistant}
 			/>
 		</BuilderProvider>
 	);
@@ -243,6 +251,7 @@ interface WidgetBuilderContentProps {
 	onExport?: (components: SurfaceComponent[]) => void;
 	currentPageId?: string;
 	onPageChange?: (pageId: string) => void;
+	externalAssistant?: boolean;
 }
 
 // Wrapper that provides DnD context - must be inside BuilderProvider to access setIsDraggingGlobal
@@ -272,6 +281,7 @@ function WidgetBuilderContent({
 	onExport,
 	currentPageId,
 	onPageChange,
+	externalAssistant,
 }: WidgetBuilderContentProps) {
 	const {
 		components,
@@ -405,8 +415,37 @@ function WidgetBuilderContent({
 		setPendingComponents([]);
 	}, [setPendingComponents]);
 
-	const currentComponents = Array.from(components.values());
+	const currentComponents = useMemo(
+		() => Array.from(components.values()),
+		[components],
+	);
 	const selectedIds = selection.componentIds;
+
+	// Publish the live widget surface for the global assistant while the builder is mounted.
+	useEffect(() => {
+		const surface: AssistantWidgetSurface = {
+			surfaceId,
+			appId: actionContext?.appId,
+			currentComponents,
+			selectedComponentIds: selectedIds,
+			captureScreenshot,
+			applyComponents: handleApplyComponents,
+			componentsGenerated: handleComponentsGenerated,
+		};
+		useAssistantSurface.getState().setWidgetSurface(surface);
+		return () => {
+			const store = useAssistantSurface.getState();
+			if (store.widgetSurface === surface) store.setWidgetSurface(null);
+		};
+	}, [
+		surfaceId,
+		actionContext?.appId,
+		currentComponents,
+		selectedIds,
+		captureScreenshot,
+		handleApplyComponents,
+		handleComponentsGenerated,
+	]);
 
 	return (
 		<>
@@ -430,15 +469,19 @@ function WidgetBuilderContent({
 						onPageChange={onPageChange}
 					/>
 					<div className="flex-1" />
-					<Button
-						variant={copilotOpen ? "secondary" : "ghost"}
-						size="sm"
-						className="h-7 px-2 gap-1.5"
-						onClick={() => setCopilotOpen(!copilotOpen)}
-					>
-						<SparklesIcon className="h-4 w-4" />
-						<span className="text-xs">FlowPilot</span>
-					</Button>
+					{/* When the host provides the global assistant, the floating FlowPilot bubble is the
+					    entry point — only show this in-interface button for the embedded copilot. */}
+					{!externalAssistant && (
+						<Button
+							variant={copilotOpen ? "secondary" : "ghost"}
+							size="sm"
+							className="h-7 px-2 gap-1.5"
+							onClick={() => setCopilotOpen(!copilotOpen)}
+						>
+							<SparklesIcon className="h-4 w-4" />
+							<span className="text-xs">FlowPilot</span>
+						</Button>
+					)}
 				</div>
 
 				{/* Pending components bar */}
@@ -527,8 +570,9 @@ function WidgetBuilderContent({
 								maxSize={50}
 								className="min-h-0 min-w-0 overflow-hidden"
 							>
-								{copilotOpen ? (
+								{copilotOpen && !externalAssistant ? (
 									<A2UICopilot
+										appId={actionContext?.appId}
 										currentComponents={currentComponents}
 										selectedComponentIds={selectedIds}
 										onComponentsGenerated={handleComponentsGenerated}
@@ -545,20 +589,23 @@ function WidgetBuilderContent({
 					)}
 				</ResizablePanelGroup>
 
-				{/* Mobile FlowPilot Sheet */}
-				<Sheet open={copilotOpen} onOpenChange={setCopilotOpen}>
-					<SheetContent side="right" className="w-full sm:max-w-md p-0">
-						<A2UICopilot
-							currentComponents={currentComponents}
-							selectedComponentIds={selectedIds}
-							onComponentsGenerated={handleComponentsGenerated}
-							onApplyComponents={handleApplyComponents}
-							onClose={() => setCopilotOpen(false)}
-							className="h-full"
-							captureScreenshot={captureScreenshot}
-						/>
-					</SheetContent>
-				</Sheet>
+				{/* Mobile FlowPilot Sheet (embedded hosts only) */}
+				{!externalAssistant && (
+					<Sheet open={copilotOpen} onOpenChange={setCopilotOpen}>
+						<SheetContent side="right" className="w-full sm:max-w-md p-0">
+							<A2UICopilot
+								appId={actionContext?.appId}
+								currentComponents={currentComponents}
+								selectedComponentIds={selectedIds}
+								onComponentsGenerated={handleComponentsGenerated}
+								onApplyComponents={handleApplyComponents}
+								onClose={() => setCopilotOpen(false)}
+								className="h-full"
+								captureScreenshot={captureScreenshot}
+							/>
+						</SheetContent>
+					</Sheet>
+				)}
 
 				{/* Dev Mode JSON Editor */}
 				<DevModePanel />
@@ -962,10 +1009,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		useBuilder();
 	const effectiveSurfaceId = actionContext?.pageId ?? surfaceId;
 	const previewCanvasId = useId();
-	const [previewComponents, setPreviewComponents] = useState<Map<
-		string,
-		SurfaceComponent
-	> | null>(null);
+	const [previewSurface, setPreviewSurface] = useState<Surface | null>(null);
 	const [presignedComponents, setPresignedComponents] = useState<Map<
 		string,
 		SurfaceComponent
@@ -982,6 +1026,19 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 	const componentsRef = useRef(components);
 	componentsRef.current = components;
 
+	// Bridge edit-mode BuilderContext state into a real Surface (with an empty
+	// data model present) so runtime messages apply and $.path bindings resolve
+	// in the preview exactly like the runtime page.
+	const builderSurface: Surface = useMemo(
+		() => ({
+			id: effectiveSurfaceId,
+			rootComponentId: ROOT_ID,
+			components: Object.fromEntries(components),
+			dataModel: [],
+		}),
+		[effectiveSurfaceId, components],
+	);
+
 	// Presign assets in components when they change
 	useEffect(() => {
 		const presignAssets = async () => {
@@ -991,9 +1048,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				return;
 			}
 
-			const componentsArray = Array.from(
-				(previewComponents ?? components).entries(),
-			).map(([id, comp]) => ({ ...comp, id }));
+			const source = previewSurface
+				? Object.values(previewSurface.components)
+				: Array.from(components.values());
+			const componentsArray = source.map((comp) => ({ ...comp, id: comp.id }));
 
 			try {
 				const presigned = await presignPageAssets(
@@ -1013,12 +1071,7 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		};
 
 		presignAssets();
-	}, [
-		components,
-		previewComponents,
-		actionContext?.appId,
-		backend.storageState,
-	]);
+	}, [components, previewSurface, actionContext?.appId, backend.storageState]);
 
 	// Presign canvas background image
 	useEffect(() => {
@@ -1048,20 +1101,23 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 		presignCanvas();
 	}, [canvasSettings, actionContext?.appId, backend.storageState]);
 
-	// Use presigned components if available, otherwise fall back to preview or builder components
-	const activeComponents =
-		presignedComponents ?? previewComponents ?? components;
+	// The logical surface is whatever runtime messages have produced, falling
+	// back to the live builder components before any message arrives.
+	const logicalSurface = previewSurface ?? builderSurface;
 
 	// Don't pass canvasSettings to A2UIRenderer — BuilderPreview handles
 	// CSS injection and canvas styling at the outer level to avoid double
-	// scoping and inline-style conflicts.
+	// scoping and inline-style conflicts. Presigned URLs are render-only and
+	// must never be written back into the logical surface.
 	const surface: Surface = useMemo(
 		() => ({
-			id: effectiveSurfaceId,
-			rootComponentId: ROOT_ID,
-			components: Object.fromEntries(activeComponents),
+			...logicalSurface,
+			components: presignedComponents
+				? Object.fromEntries(presignedComponents)
+				: logicalSurface.components,
+			canvasSettings: undefined,
 		}),
-		[effectiveSurfaceId, activeComponents],
+		[logicalSurface, presignedComponents],
 	);
 
 	const handleMessage = useCallback((message: A2UIClientMessage) => {
@@ -1070,12 +1126,11 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
+			// Canvas styling is handled by the outer div via presignedCanvasSettings,
+			// so keep it out of the surface reducer.
 			if (message.type === "setCanvasSettings") {
 				if (message.surfaceId !== effectiveSurfaceId) return;
-
 				setPresignedCanvasSettings((prev) => {
-					// Filter null/undefined values to avoid overwriting existing settings
-					// (Rust serializes Option::None as null)
 					const filtered = Object.fromEntries(
 						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
 					);
@@ -1083,383 +1138,22 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				});
 				return;
 			}
-
-			if (message.type !== "upsertElement") return;
-
-			const { element_id: elementId, value } = message;
-			if (!elementId) return;
-
-			const [msgSurfaceId, componentId] = elementId.includes("/")
-				? elementId.split("/", 2)
-				: [effectiveSurfaceId, elementId];
-
-			if (msgSurfaceId !== effectiveSurfaceId) return;
-
-			setPreviewComponents((prev) => {
-				// Use ref to always get latest components, avoiding stale closure
-				const current = prev ?? new Map(componentsRef.current);
-				const component = current.get(componentId);
-				if (!component) {
-					console.warn(
-						"[BuilderPreview] Component not found:",
-						componentId,
-						"Available:",
-						Array.from(current.keys()),
-					);
-					return prev;
-				}
-				const updateValue = value as Record<string, unknown>;
-				const updateType = updateValue?.type as string;
-				let updatedComponent: SurfaceComponent = { ...component };
-
-				switch (updateType) {
-					case "setText": {
-						const text = updateValue.text as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								content: text,
-								text: text,
-								label: text,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setValue": {
-						const val = updateValue.value as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								value: val,
-								defaultValue: val,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setStyle": {
-						updatedComponent = {
-							...component,
-							style: applyStyleUpdate(component.style, updateValue.style),
-						};
-						break;
-					}
-					case "setVisibility": {
-						const visible = updateValue.visible as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								hidden: { literalBool: !visible },
-							} as unknown as SurfaceComponent["component"],
-							style: visible
-								? applyStyleUpdate(component.style, { opacity: null })
-								: component.style,
-						};
-						break;
-					}
-					case "setDisabled": {
-						const disabled = updateValue.disabled as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								disabled,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setLoading": {
-						const loading = updateValue.loading as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								loading,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setPlaceholder": {
-						const placeholder = updateValue.placeholder as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								placeholder,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setChecked": {
-						const checked = updateValue.checked as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								checked,
-								value: checked,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setSpeakerName": {
-						const name = updateValue.name as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								speakerName: name,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setSpeakerPortrait": {
-						const portraitId = updateValue.portraitId as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								speakerPortraitId: portraitId,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setTypewriter": {
-						const enabled = updateValue.enabled as boolean;
-						const speed = updateValue.speed as number | undefined;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								typewriter: enabled,
-								...(speed !== undefined && { typewriterSpeed: speed }),
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setGeoMapViewport": {
-						const viewport = updateValue.viewport as
-							| { literalJson?: string }
-							| undefined;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								viewport,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setMediaSource": {
-						updatedComponent = applyMediaSourceUpdate(component, updateValue);
-						break;
-					}
-					case "setChartData":
-					case "setNivoData": {
-						const data = updateValue.data;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								data: { literalJson: JSON.stringify(data) },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setChartLayout":
-					case "setNivoConfig": {
-						const configOrLayout = updateValue.layout ?? updateValue.config;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								...(updateValue.layout !== undefined && {
-									layout: { literalJson: JSON.stringify(configOrLayout) },
-								}),
-								...(updateValue.config !== undefined && {
-									config: { literalJson: JSON.stringify(configOrLayout) },
-								}),
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setOverlayBoxes":
-					case "setLabelerBoxes": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "addOverlayBox":
-					case "addLabelerBox": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const existing = resolveBoxesField(componentData.boxes);
-						const added = normalizeBoxes([updateValue.box]);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: [...existing, ...added] },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "clearOverlayBoxes": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: [] },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "removeLabelerBox": {
-						const boxId = updateValue.boxId as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const remaining = resolveBoxesField(componentData.boxes).filter(
-							(box) => box.id !== boxId,
-						);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: remaining },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "updateLabelerBoxLabel": {
-						const boxId = updateValue.boxId as string;
-						const label = updateValue.label as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const updated = resolveBoxesField(componentData.boxes).map((box) =>
-							box.id === boxId ? { ...box, label } : box,
-						);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: updated },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setLabelerImage": {
-						const src = updateValue.src as string;
-						const alt = updateValue.alt as string | undefined;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								src: { literalString: src },
-								...(alt !== undefined ? { alt: { literalString: alt } } : {}),
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					default: {
-						const { type: _updateType, ...rest } = updateValue;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								...rest,
-							} as unknown as SurfaceComponent["component"],
-						};
-					}
-				}
-
-				const newMap = new Map(current);
-				newMap.set(componentId, updatedComponent);
-				return newMap;
+			setPreviewSurface((prev) => {
+				const base = prev ?? {
+					id: effectiveSurfaceId,
+					rootComponentId: ROOT_ID,
+					components: Object.fromEntries(componentsRef.current),
+					dataModel: [],
+				};
+				const nextSurface = applyA2UIMessage(base, message);
+				// A no-op message (unknown component / wrong surface) must not flip
+				// previewSurface from null to a frozen snapshot; keep tracking live
+				// builder edits until a message actually changes the surface.
+				return prev === null && nextSurface === base ? null : nextSurface;
 			});
 		},
 		[effectiveSurfaceId],
-	); // Removed components - using componentsRef instead
+	);
 
 	// Convert components map to elements object for the workflow payload
 	// Uses componentsRef to avoid dependency on components changing (which would cause infinite loops)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface ExecutionPresenceState {
 	/** Nodes currently being executed by this peer */
@@ -68,14 +68,22 @@ export function useExecutionPresence({
 		} satisfies ExecutionPresenceState);
 	}, [awareness, sub, runs, boardId]);
 
-	// Collect remote execution states from peers
+	// Collect remote execution states from peers. Peers broadcast cursors at ~20Hz,
+	// so awareness "change" fires constantly; coalesce to one frame and bail unless
+	// the merged executing-node set actually changed, otherwise this re-renders the
+	// whole FlowBoard ~20Hz × peerCount.
 	useEffect(() => {
 		if (!awareness) {
 			setRemoteExecutions([]);
 			return;
 		}
 
-		const handleChange = () => {
+		let rafId: number | null = null;
+		// null (not "") so the FIRST compute after an awareness swap always commits,
+		// clearing any executing-node highlights left over from the previous session.
+		let lastKey: string | null = null;
+
+		const computeAndSet = () => {
 			const states = awareness.getStates() as Map<
 				number,
 				Record<string, unknown>
@@ -97,26 +105,44 @@ export function useExecutionPresence({
 				});
 			}
 
+			const ids = new Set<string>();
+			for (const re of remote) for (const n of re.executingNodes) ids.add(n);
+			const key = Array.from(ids).sort().join(",");
+			if (key === lastKey) return;
+			lastKey = key;
 			setRemoteExecutions(remote);
 		};
 
-		awareness.on("change", handleChange);
-		handleChange();
+		const scheduleUpdate = () => {
+			if (rafId !== null) return;
+			rafId = requestAnimationFrame(() => {
+				rafId = null;
+				computeAndSet();
+			});
+		};
+
+		awareness.on("change", scheduleUpdate);
+		computeAndSet();
 
 		return () => {
+			if (rafId !== null) cancelAnimationFrame(rafId);
 			try {
-				awareness.off("change", handleChange);
+				awareness.off("change", scheduleUpdate);
 			} catch {}
 		};
 	}, [awareness]);
 
-	// Merged set of all remotely executing node IDs (for visual indicators)
-	const remoteExecutingNodeIds = new Set<string>();
-	for (const re of remoteExecutions) {
-		for (const nodeId of re.executingNodes) {
-			remoteExecutingNodeIds.add(nodeId);
+	// Merged set of all remotely executing node IDs (for visual indicators).
+	// Stable identity when unchanged so the consuming setNodes effect can short-circuit.
+	const remoteExecutingNodeIds = useMemo(() => {
+		const ids = new Set<string>();
+		for (const re of remoteExecutions) {
+			for (const nodeId of re.executingNodes) {
+				ids.add(nodeId);
+			}
 		}
-	}
+		return ids;
+	}, [remoteExecutions]);
 
 	return {
 		remoteExecutions,

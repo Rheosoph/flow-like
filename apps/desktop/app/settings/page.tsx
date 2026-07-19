@@ -8,10 +8,12 @@ import {
 } from "@flow-like/flow-like-ui";
 import {
 	BarChart3,
+	Bell,
 	Brain,
 	ChevronRight,
 	Cpu,
 	ExternalLink,
+	HardDrive,
 	type LucideIcon,
 	Package,
 	Scroll,
@@ -42,6 +44,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 				description: "Name, avatar, interests, and theme",
 				href: "/settings/profiles",
 				icon: User,
+			},
+			{
+				title: "Notifications",
+				description: "Mobile push status and device registration",
+				href: "/settings/notifications",
+				icon: Bell,
 			},
 		],
 	},
@@ -77,6 +85,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 	{
 		label: "System",
 		cards: [
+			{
+				title: "Local Storage",
+				description: "See what Studio stores and clean up local files",
+				href: "/settings/storage",
+				icon: HardDrive,
+			},
 			{
 				title: "System Info",
 				description: "CPU, RAM, and VRAM details",

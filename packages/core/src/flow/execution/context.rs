@@ -34,10 +34,42 @@ use std::{
     time::{Duration, Instant},
 };
 
+const A2UI_UPDATE_LOG_KEY: &str = "__a2ui_update_log";
+/// Backstop against high-frequency streaming loops (e.g. sprite/chart updates)
+/// retaining every payload for the whole run. Chat flows stay far below this.
+const A2UI_UPDATE_LOG_CAP: usize = 1024;
+
+/// Run-scoped, ordered log of surface-mutating a2ui messages. Shared across
+/// nodes via the execution cache so snapshot consumers (e.g. Push Widget) can
+/// replay updates emitted earlier in the run. The lock is never held across an
+/// await, so a sync mutex suffices.
+#[derive(Clone, Default)]
+pub struct A2UIUpdateLog {
+    pub entries: Arc<std::sync::Mutex<Vec<crate::a2ui::A2UIServerMessage>>>,
+    pub truncated: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl A2UIUpdateLog {
+    pub fn is_truncated(&self) -> bool {
+        self.truncated.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Cacheable for A2UIUpdateLog {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct ExecutionContextCache {
     pub stores: FlowLikeStores,
     pub app_id: String,
+    pub model_usage_app_id: Option<String>,
     pub board_dir: Path,
     pub board_id: String,
     pub node_id: String,
@@ -50,13 +82,20 @@ impl ExecutionContextCache {
         state: &Arc<FlowLikeState>,
         node_id: &str,
     ) -> Option<Self> {
-        let (app_id, board_dir, board_id, sub) = match run.upgrade() {
+        let (app_id, model_usage_app_id, board_dir, board_id, sub) = match run.upgrade() {
             Some(run) => {
                 let run = run.lock().await;
                 let app_id = run.app_id.clone();
+                let model_usage_app_id = run.model_usage_app_id.clone();
                 let board = &run.board;
                 let sub = run.sub.clone();
-                (app_id, board.board_dir.clone(), board.id.clone(), sub)
+                (
+                    app_id,
+                    model_usage_app_id,
+                    board.board_dir.clone(),
+                    board.id.clone(),
+                    sub,
+                )
             }
             None => return None,
         };
@@ -66,6 +105,7 @@ impl ExecutionContextCache {
         Some(ExecutionContextCache {
             stores,
             app_id,
+            model_usage_app_id,
             board_dir,
             board_id,
             node_id: node_id.to_string(),
@@ -84,6 +124,7 @@ impl ExecutionContextCache {
         ExecutionContextCache {
             stores,
             app_id: meta.app_id.clone(),
+            model_usage_app_id: meta.model_usage_app_id.clone(),
             board_dir: meta.board_dir.clone(),
             board_id: meta.board_id.clone(),
             node_id: node_id.to_string(),
@@ -289,7 +330,7 @@ impl ExecutionContext {
     pub fn model_usage_context(&self) -> Option<ModelUsageContext> {
         let cache = self.execution_cache.as_ref()?;
         Some(ModelUsageContext {
-            app_id: Some(cache.app_id.clone()),
+            app_id: cache.model_usage_app_id.clone(),
             run_id: Some(self.run_id.clone()),
         })
     }
@@ -1141,7 +1182,72 @@ impl ExecutionContext {
         message: crate::a2ui::A2UIServerMessage,
     ) -> flow_like_types::Result<()> {
         tracing::debug!(message_type = ?message, "Streaming A2UI update");
+        self.record_a2ui_update(&message).await;
         self.stream_response("a2ui", message).await
+    }
+
+    /// Records surface-mutating a2ui messages in a run-scoped log so nodes that
+    /// snapshot UI state later in the same run (e.g. Push Widget embedding a
+    /// widget into a chat message) can replay updates that were streamed before
+    /// the snapshot was taken.
+    async fn record_a2ui_update(&self, message: &crate::a2ui::A2UIServerMessage) {
+        use crate::a2ui::A2UIServerMessage as Msg;
+        if !matches!(
+            message,
+            Msg::UpsertElement { .. }
+                | Msg::DataModelUpdate { .. }
+                | Msg::CreateElement { .. }
+                | Msg::RemoveElement { .. }
+        ) {
+            return;
+        }
+
+        // Get-or-insert under a single write lock: parallel branches emitting
+        // the run's first update must not race two logs into existence.
+        let log = {
+            let mut cache = self.cache.write().await;
+            match cache
+                .get(A2UI_UPDATE_LOG_KEY)
+                .and_then(|c| c.as_any().downcast_ref::<A2UIUpdateLog>().cloned())
+            {
+                Some(log) => log,
+                None => {
+                    let log = A2UIUpdateLog::default();
+                    cache.insert(
+                        A2UI_UPDATE_LOG_KEY.to_string(),
+                        Arc::new(log.clone()) as Arc<dyn Cacheable>,
+                    );
+                    log
+                }
+            }
+        };
+
+        if let Ok(mut entries) = log.entries.lock() {
+            if entries.len() >= A2UI_UPDATE_LOG_CAP {
+                log.truncated
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+            entries.push(message.clone());
+        }
+    }
+
+    /// Returns all surface-mutating a2ui messages streamed so far in this run,
+    /// in emission order, plus whether the log hit its cap and dropped entries.
+    pub async fn get_a2ui_update_log(&self) -> (Vec<crate::a2ui::A2UIServerMessage>, bool) {
+        match self.get_cache(A2UI_UPDATE_LOG_KEY).await {
+            Some(cached) => match cached.as_any().downcast_ref::<A2UIUpdateLog>() {
+                Some(log) => (
+                    log.entries
+                        .lock()
+                        .map(|entries| entries.clone())
+                        .unwrap_or_default(),
+                    log.is_truncated(),
+                ),
+                None => (Vec::new(), false),
+            },
+            None => (Vec::new(), false),
+        }
     }
 
     pub async fn stream_a2ui_begin_rendering(

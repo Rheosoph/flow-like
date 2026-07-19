@@ -2,7 +2,7 @@ name: app
 options:
   bundleIdPrefix: com.flow-like.app
   deploymentTarget:
-    iOS: 13.0
+    iOS: "15.1"
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -73,7 +73,10 @@ targets:
     dependencies:
       - framework: libapp.a
         embed: false
+      - framework: thirdparty/onnxruntime.xcframework
+        embed: false
       - sdk: Accelerate.framework
+      - sdk: CoreML.framework
       - sdk: CoreFoundation.framework
       - sdk: CoreGraphics.framework
       - sdk: CoreMedia.framework

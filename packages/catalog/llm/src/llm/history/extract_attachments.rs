@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use flow_like::flow::{
@@ -15,7 +15,7 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::Cacheable;
 use flow_like_types::{async_trait, json::json};
 
-fn extract_image_urls(history: &History) -> Vec<String> {
+fn extract_media_urls(history: &History) -> Vec<String> {
     history
         .messages
         .last()
@@ -26,13 +26,36 @@ fn extract_image_urls(history: &History) -> Vec<String> {
         .map(|contents| {
             contents
                 .iter()
-                .filter_map(|c| match c {
-                    Content::Image { image_url, .. } => Some(image_url.url.clone()),
-                    _ => None,
-                })
+                .filter_map(Content::media_url)
+                .map(ToOwned::to_owned)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn attachment_url(attachment: &Attachment) -> &str {
+    match attachment {
+        Attachment::Url(url) => url,
+        Attachment::Complex(complex) => &complex.url,
+    }
+}
+
+fn merge_media_attachments(
+    mut attachments: Vec<Attachment>,
+    history: Option<&History>,
+) -> Vec<Attachment> {
+    let mut seen = HashSet::new();
+    attachments.retain(|attachment| seen.insert(attachment_url(attachment).to_owned()));
+
+    if let Some(history) = history {
+        for url in extract_media_urls(history) {
+            if seen.insert(url.clone()) {
+                attachments.push(Attachment::Url(url));
+            }
+        }
+    }
+
+    attachments
 }
 
 fn sanitize_for_path(name: &str) -> String {
@@ -79,11 +102,11 @@ impl NodeLogic for ExtractAttachments {
         let mut node = Node::new(
             "ai_gen_llm_history_extract_attachments",
             "Extract Attachments",
-            "Pulls down image attachments referenced in the latest chat message",
+            "Pulls down image, audio, video, and document attachments referenced in the latest chat message",
             "Events/Chat",
         );
         node.add_icon("/flow/icons/paperclip.svg");
-        node.set_version(1);
+        node.set_version(2);
         node.set_scores(
             NodeScores::new()
                 .set_privacy(7)
@@ -105,7 +128,7 @@ impl NodeLogic for ExtractAttachments {
         node.add_input_pin(
             "history",
             "History",
-            "Chat history whose final message may contain image parts",
+            "Chat history whose final message may contain media parts",
             VariableType::Struct,
         )
         .set_schema::<History>()
@@ -144,14 +167,11 @@ impl NodeLogic for ExtractAttachments {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
-        let mut attachments = context
+        let attachments = context
             .evaluate_pin::<Vec<Attachment>>("attachments")
             .await?;
-
-        if let Ok(history) = context.evaluate_pin::<History>("history").await {
-            let urls = extract_image_urls(&history);
-            attachments.extend(urls.into_iter().map(Attachment::Url));
-        }
+        let history = context.evaluate_pin::<History>("history").await.ok();
+        let attachments = merge_media_attachments(attachments, history.as_ref());
 
         let id = context.id.clone();
         let cache_path = format!("virtual_dir_{}", id);
@@ -213,5 +233,105 @@ impl NodeLogic for ExtractAttachments {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_catalog_data::events::chat_event::ComplexAttachment;
+    use flow_like_model_provider::history::{
+        ContentType, HistoryMessage, ImageUrl, MessageContent, Role,
+    };
+
+    #[test]
+    fn extracts_all_rig_media_inputs() {
+        let history = History::new(
+            "model".to_string(),
+            vec![HistoryMessage {
+                role: Role::User,
+                content: MessageContent::Contents(vec![
+                    Content::Image {
+                        content_type: ContentType::ImageUrl,
+                        image_url: ImageUrl {
+                            url: "https://example.com/image.png".to_string(),
+                            detail: None,
+                            media_type: Some("image/png".to_string()),
+                            additional_params: None,
+                        },
+                    },
+                    Content::Audio {
+                        content_type: ContentType::AudioUrl,
+                        audio_url: "https://example.com/audio.mp3".to_string(),
+                        media_type: Some("audio/mpeg".to_string()),
+                        additional_params: None,
+                    },
+                    Content::Video {
+                        content_type: ContentType::VideoUrl,
+                        video_url: "https://example.com/video.mp4".to_string(),
+                        media_type: Some("video/mp4".to_string()),
+                        additional_params: None,
+                    },
+                    Content::Document {
+                        content_type: ContentType::DocumentUrl,
+                        document_url: "https://example.com/document.pdf".to_string(),
+                        media_type: Some("application/pdf".to_string()),
+                        additional_params: None,
+                    },
+                ]),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                annotations: None,
+            }],
+        );
+
+        assert_eq!(
+            extract_media_urls(&history),
+            vec![
+                "https://example.com/image.png",
+                "https://example.com/audio.mp3",
+                "https://example.com/video.mp4",
+                "https://example.com/document.pdf",
+            ]
+        );
+    }
+
+    #[test]
+    fn media_already_present_in_attachments_is_not_downloaded_twice() {
+        let url = "https://example.com/input.mp3";
+        let history = History::new(
+            "model".to_string(),
+            vec![HistoryMessage {
+                role: Role::User,
+                content: MessageContent::Contents(vec![Content::Audio {
+                    content_type: ContentType::AudioUrl,
+                    audio_url: url.to_string(),
+                    media_type: Some("audio/mpeg".to_string()),
+                    additional_params: None,
+                }]),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                annotations: None,
+            }],
+        );
+        let supplied = vec![Attachment::Complex(ComplexAttachment {
+            url: url.to_string(),
+            preview_text: None,
+            thumbnail_url: None,
+            name: Some("recording.mp3".to_string()),
+            size: None,
+            r#type: Some("audio/mpeg".to_string()),
+            anchor: None,
+            page: None,
+        })];
+
+        let merged = merge_media_attachments(supplied, Some(&history));
+        assert_eq!(merged.len(), 1);
+        assert!(matches!(
+            &merged[0],
+            Attachment::Complex(complex) if complex.name.as_deref() == Some("recording.mp3")
+        ));
     }
 }

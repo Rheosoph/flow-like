@@ -1,4 +1,5 @@
 use super::response_chunk::{Delta, DeltaFunctionCall, ResponseChunk};
+use crate::history::{Content, ContentType};
 use flow_like_types::{
     JsonSchema, Result,
     json::{self, Deserialize, Serialize},
@@ -6,8 +7,8 @@ use flow_like_types::{
 use rig::OneOrMany;
 use rig::completion::{Message as RigMessage, Usage as RigUsage};
 use rig::message::{
-    AssistantContent as RigAssistantContent, Text as RigText, ToolCall as RigToolCall,
-    ToolFunction as RigToolFunction,
+    AssistantContent as RigAssistantContent, Reasoning as RigReasoning, Text as RigText,
+    ToolCall as RigToolCall, ToolFunction as RigToolFunction,
 };
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -75,6 +76,10 @@ pub struct ResponseMessage {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Ordered structured content returned by Rig when the assistant response contains media.
+    /// Text-only responses continue to use `content` alone for OpenAI compatibility.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_parts: Vec<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +97,7 @@ impl Default for ResponseMessage {
     fn default() -> Self {
         ResponseMessage {
             content: None,
+            content_parts: vec![],
             refusal: None,
             annotations: None,
             audio: None,
@@ -103,9 +109,82 @@ impl Default for ResponseMessage {
 }
 
 impl ResponseMessage {
+    /// Returns ordered structured content, adding the legacy `content` string when a mixed-media
+    /// response supplied only media in `content_parts`.
+    pub fn ordered_content_parts(&self) -> Vec<Content> {
+        let mut parts = self.content_parts.clone();
+        let content = self
+            .content
+            .as_deref()
+            .filter(|content| !content.is_empty());
+
+        if parts.is_empty() {
+            return content
+                .map(|text| {
+                    vec![Content::Text {
+                        content_type: ContentType::Text,
+                        text: text.to_string(),
+                    }]
+                })
+                .unwrap_or_default();
+        }
+
+        if !parts
+            .iter()
+            .any(|part| matches!(part, Content::Text { .. }))
+            && let Some(text) = content
+        {
+            parts.insert(
+                0,
+                Content::Text {
+                    content_type: ContentType::Text,
+                    text: text.to_string(),
+                },
+            );
+        }
+
+        parts
+    }
+
     pub fn apply_delta(&mut self, delta: Delta) {
+        let has_text_delta = delta.content.is_some();
+        let structured_parts_contain_text = delta.content_parts.as_ref().is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|part| matches!(part, Content::Text { .. }))
+        });
         if let Some(content) = delta.content {
+            if !self.content_parts.is_empty() && !structured_parts_contain_text {
+                match self.content_parts.last_mut() {
+                    Some(Content::Text { text, .. }) => text.push_str(&content),
+                    _ => self.content_parts.push(Content::Text {
+                        content_type: ContentType::Text,
+                        text: content.clone(),
+                    }),
+                }
+            }
             self.content = Some(self.content.as_deref().unwrap_or("").to_string() + &content);
+        }
+
+        if let Some(content_parts) = delta.content_parts {
+            if self.content_parts.is_empty()
+                && self.content.as_ref().is_some_and(|text| !text.is_empty())
+                && !structured_parts_contain_text
+            {
+                self.content_parts.push(Content::Text {
+                    content_type: ContentType::Text,
+                    text: self.content.clone().unwrap_or_default(),
+                });
+            }
+            if !has_text_delta {
+                for part in &content_parts {
+                    if let Content::Text { text, .. } = part {
+                        self.content =
+                            Some(self.content.as_deref().unwrap_or("").to_string() + text.as_str());
+                    }
+                }
+            }
+            self.content_parts.extend(content_parts);
         }
 
         if let Some(refusal) = delta.refusal {
@@ -174,10 +253,40 @@ impl TryFrom<ResponseMessage> for RigMessage {
     fn try_from(msg: ResponseMessage) -> Result<Self> {
         let mut rig_contents = Vec::new();
 
-        if let Some(content) = msg.content
-            && !content.is_empty()
+        if msg.content_parts.is_empty() {
+            if let Some(content) = msg.content
+                && !content.is_empty()
+            {
+                rig_contents.push(RigAssistantContent::Text(RigText {
+                    text: content,
+                    additional_params: None,
+                }));
+            }
+        } else {
+            let parts_contain_text = msg
+                .content_parts
+                .iter()
+                .any(|part| matches!(part, Content::Text { .. }));
+            if !parts_contain_text
+                && let Some(content) = msg.content
+                && !content.is_empty()
+            {
+                rig_contents.push(RigAssistantContent::Text(RigText {
+                    text: content,
+                    additional_params: None,
+                }));
+            }
+            for part in msg.content_parts {
+                rig_contents.push(part.try_into_rig_assistant()?);
+            }
+        }
+
+        if let Some(reasoning) = msg.reasoning
+            && !reasoning.is_empty()
         {
-            rig_contents.push(RigAssistantContent::Text(RigText { text: content }));
+            rig_contents.push(RigAssistantContent::Reasoning(RigReasoning::new(
+                &reasoning,
+            )));
         }
 
         for tool_call in msg.tool_calls {
@@ -197,6 +306,7 @@ impl TryFrom<ResponseMessage> for RigMessage {
         let content = if rig_contents.is_empty() {
             OneOrMany::one(RigAssistantContent::Text(RigText {
                 text: String::new(),
+                additional_params: None,
             }))
         } else if rig_contents.len() == 1 {
             OneOrMany::one(rig_contents.into_iter().next().unwrap())
@@ -215,7 +325,10 @@ impl TryFrom<RigMessage> for ResponseMessage {
         match msg {
             RigMessage::Assistant { id: _, content } => {
                 let mut text_content = String::new();
+                let mut content_parts = Vec::new();
                 let mut tool_calls = Vec::new();
+                let mut reasoning_content = String::new();
+                let mut has_media = false;
 
                 for item in content.iter() {
                     match item {
@@ -224,6 +337,10 @@ impl TryFrom<RigMessage> for ResponseMessage {
                                 text_content.push('\n');
                             }
                             text_content.push_str(&text.text);
+                            content_parts.push(Content::Text {
+                                content_type: ContentType::Text,
+                                text: text.text.clone(),
+                            });
                         }
                         RigAssistantContent::ToolCall(tool_call) => {
                             tool_calls.push(FunctionCall {
@@ -236,7 +353,19 @@ impl TryFrom<RigMessage> for ResponseMessage {
                                 },
                             });
                         }
-                        RigAssistantContent::Reasoning(_) | RigAssistantContent::Image(_) => {}
+                        RigAssistantContent::Reasoning(reasoning) => {
+                            let display = reasoning.display_text();
+                            if !display.is_empty() {
+                                if !reasoning_content.is_empty() {
+                                    reasoning_content.push('\n');
+                                }
+                                reasoning_content.push_str(&display);
+                            }
+                        }
+                        RigAssistantContent::Image(image) => {
+                            has_media = true;
+                            content_parts.push(Content::from_rig_image(image.clone()));
+                        }
                     }
                 }
 
@@ -247,10 +376,15 @@ impl TryFrom<RigMessage> for ResponseMessage {
                     } else {
                         Some(text_content)
                     },
+                    content_parts: if has_media { content_parts } else { Vec::new() },
                     refusal: None,
                     annotations: None,
                     audio: None,
-                    reasoning: None,
+                    reasoning: if reasoning_content.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning_content)
+                    },
                     tool_calls,
                 })
             }
@@ -361,6 +495,7 @@ impl Response {
                 message: ResponseMessage {
                     role: "assistant".to_string(),
                     content: Some(text.into()),
+                    content_parts: vec![],
                     refusal: None,
                     annotations: None,
                     audio: None,
@@ -546,6 +681,7 @@ impl LLMUsageStats {
 mod tests {
     use super::*;
     use flow_like_types::json;
+    use rig::message::{DocumentSourceKind, Image, ImageDetail, ImageMediaType, Reasoning};
 
     #[test]
     fn deserialize_annotations_with_content() {
@@ -587,5 +723,151 @@ mod tests {
         let out = json::to_string(&resp).unwrap();
         assert!(out.contains("url_citation"));
         assert!(out.contains("content"));
+    }
+
+    #[test]
+    fn rig_assistant_media_and_reasoning_are_preserved() {
+        let content = OneOrMany::many(vec![
+            RigAssistantContent::Reasoning(Reasoning::new("working")),
+            RigAssistantContent::Text(RigText::new("caption")),
+            RigAssistantContent::Image(Image {
+                data: DocumentSourceKind::Base64("aGVsbG8=".to_string()),
+                media_type: Some(ImageMediaType::PNG),
+                detail: Some(ImageDetail::High),
+                additional_params: None,
+            }),
+        ])
+        .expect("multiple assistant parts");
+
+        let response = Response::from_rig_message(RigMessage::Assistant {
+            id: Some("message-1".to_string()),
+            content,
+        })
+        .expect("valid assistant response");
+        let message = response.last_message().expect("response message");
+
+        assert_eq!(message.content.as_deref(), Some("caption"));
+        assert_eq!(message.reasoning.as_deref(), Some("working"));
+        assert_eq!(message.content_parts.len(), 2);
+        assert!(matches!(
+            &message.content_parts[1],
+            Content::Image { image_url, .. }
+                if image_url.url == "data:image/png;base64,aGVsbG8="
+                    && image_url.detail.as_deref() == Some("high")
+        ));
+
+        let round_trip = response.to_rig_message().expect("Rig round trip");
+        let RigMessage::Assistant { content, .. } = round_trip else {
+            panic!("expected assistant message")
+        };
+        assert!(content.iter().any(|part| matches!(
+            part,
+            RigAssistantContent::Image(Image {
+                data: DocumentSourceKind::Base64(data),
+                media_type: Some(ImageMediaType::PNG),
+                ..
+            }) if data == "aGVsbG8="
+        )));
+        assert!(
+            content
+                .iter()
+                .any(|part| matches!(part, RigAssistantContent::Reasoning(_)))
+        );
+    }
+
+    #[test]
+    fn media_delta_keeps_preceding_text_as_an_ordered_part() {
+        let mut message = ResponseMessage::default();
+        message.apply_delta(Delta {
+            role: Some("assistant".to_string()),
+            content: Some("caption".to_string()),
+            content_parts: None,
+            tool_calls: None,
+            refusal: None,
+            reasoning: None,
+        });
+        message.apply_delta(Delta {
+            role: None,
+            content: None,
+            content_parts: Some(vec![Content::Image {
+                content_type: ContentType::ImageUrl,
+                image_url: crate::history::ImageUrl {
+                    url: "https://example.com/generated.png".to_string(),
+                    detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
+                },
+            }]),
+            tool_calls: None,
+            refusal: None,
+            reasoning: None,
+        });
+
+        assert_eq!(message.content.as_deref(), Some("caption"));
+        assert_eq!(message.content_parts.len(), 2);
+        assert!(matches!(
+            &message.content_parts[0],
+            Content::Text { text, .. } if text == "caption"
+        ));
+    }
+
+    #[test]
+    fn text_delta_after_media_remains_an_ordered_part() {
+        let mut message = ResponseMessage::default();
+        message.apply_delta(Delta {
+            role: Some("assistant".to_string()),
+            content: None,
+            content_parts: Some(vec![Content::Image {
+                content_type: ContentType::ImageUrl,
+                image_url: crate::history::ImageUrl {
+                    url: "https://example.com/generated.png".to_string(),
+                    detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
+                },
+            }]),
+            tool_calls: None,
+            refusal: None,
+            reasoning: None,
+        });
+        message.apply_delta(Delta {
+            role: None,
+            content: Some("caption".to_string()),
+            content_parts: None,
+            tool_calls: None,
+            refusal: None,
+            reasoning: None,
+        });
+
+        assert_eq!(message.content.as_deref(), Some("caption"));
+        assert!(matches!(
+            &message.content_parts[1],
+            Content::Text { text, .. } if text == "caption"
+        ));
+    }
+
+    #[test]
+    fn legacy_text_is_prepended_to_media_only_parts() {
+        let message = ResponseMessage {
+            role: "assistant".to_string(),
+            content: Some("caption".to_string()),
+            content_parts: vec![Content::Image {
+                content_type: ContentType::ImageUrl,
+                image_url: crate::history::ImageUrl {
+                    url: "https://example.com/generated.png".to_string(),
+                    detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
+                },
+            }],
+            ..ResponseMessage::default()
+        };
+
+        let parts = message.ordered_content_parts();
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(
+            &parts[0],
+            Content::Text { text, .. } if text == "caption"
+        ));
     }
 }

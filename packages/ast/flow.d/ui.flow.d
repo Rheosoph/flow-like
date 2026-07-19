@@ -45,6 +45,25 @@ declare function a2uiPushToContainer({ containerRef: Struct, elementRef: Struct,
  */
 declare function a2uiRemoveFromContainer({ containerId: string, elementId: string }): bool;
 
+/**
+ * Resolves an element inside a widget instance (from Instantiate Widget). The output plugs into any element node (Set Element Value, Update GeoMap, Push CSV To Chart, …).
+ * @param elementRef — Widget instance reference (from Instantiate Widget)
+ * @param elementId — ID of the element inside the widget (e.g. 'chart-1')
+ * @returns element — The element reference (connect to element nodes)
+ * @returns exists — Whether the element exists in the widget
+ */
+declare function a2uiWidgetGetElement({ elementRef: Struct, elementId: string }): { element: Struct, exists: bool };
+
+/**
+ * Sets the text of an element inside a widget instance (from Instantiate Widget) before it is pushed to the frontend
+ * @param elementRef — Widget instance reference (from Instantiate Widget)
+ * @param elementId — ID of the element inside the widget (e.g. 'title-text')
+ * @param text (optional) — The text to set
+ * @returns elementRefOut — The updated widget instance reference (connect to Push Widget / Push To Container)
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiWidgetSetText({ elementRef: Struct, elementId: string, text?: string }): Struct;
+
 
 // === UI/Data ===
 
@@ -224,6 +243,18 @@ declare function a2uiGetButtonLoading({ elementRef: Struct }): bool;
 declare function a2uiSetButtonLabel({ elementRef: Struct, label: string }): void;
 
 
+// === UI/Elements/Calendar ===
+
+/**
+ * Add, remove, or update calendar events and view configuration
+ * @param elementRef — Reference to the calendar element
+ * @param operation (optional) — What operation to perform
+ * @param events — Array of events
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiUpdateCalendar({ elementRef: Struct, operation?: string, events: Struct[] }): void;
+
+
 // === UI/Elements/Charts ===
 
 /**
@@ -351,6 +382,15 @@ declare function a2uiRemoveChildAtIndex({ containerRef: any, index: int }): void
 declare function a2uiSetBadgeContent({ elementRef: Struct, content: string }): void;
 
 /**
+ * Sets the original and modified content of a diff view element
+ * @param elementRef — Reference to the diff view element
+ * @param original — Left / old content (text or document URL)
+ * @param modified — Right / new content (text or document URL)
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiSetDiffContent({ elementRef: Struct, original: string, modified: string }): void;
+
+/**
  * Sets the icon name of an icon element
  * @param elementRef — Reference to the icon element
  * @param name — The icon name (e.g., 'check', 'x', 'star')
@@ -378,8 +418,8 @@ declare function a2uiSetProgress({ elementRef: Struct, value: float }): void;
 // === UI/Elements/Files ===
 
 /**
- * Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput element
- * @param elementRef — File input element ID or element object from Get Element
+ * Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element
+ * @param elementRef — File or voice input element ID or element object from Get Element
  * @returns files — Uploaded file objects
  * @returns signedUrls — Signed or local URLs for the uploaded files
  * @returns flowPaths — Temporary FlowPaths for uploaded files when available
@@ -416,6 +456,18 @@ declare function a2uiUpdateScene3d({ elementRef: Struct, property?: string, came
  * @impure has side effects / drives control flow
  */
 declare function a2uiUpdateSprite({ elementRef: Struct, property?: string, src: string }): void;
+
+
+// === UI/Elements/Gantt ===
+
+/**
+ * Add, remove, or update gantt tasks, dependencies and configuration
+ * @param elementRef — Reference to the gantt element
+ * @param operation (optional) — What operation to perform
+ * @param tasks — Array of tasks
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiUpdateGantt({ elementRef: Struct, operation?: string, tasks: Struct[] }): void;
 
 
 // === UI/Elements/GeoMap ===

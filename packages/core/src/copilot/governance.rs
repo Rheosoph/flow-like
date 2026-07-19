@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
 use crate::flow::ast::{RenderOptions, board_to_flowscript};
 use crate::flow::board::Board;
+use crate::models::llm::ModelUsageContext;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 use flow_like_model_provider::provider::ModelProvider;
@@ -65,11 +66,20 @@ pub struct GovernanceSuggestion {
 pub struct GovernanceCopilot {
     state: Arc<FlowLikeState>,
     profile: Option<Arc<Profile>>,
+    usage_context: Option<ModelUsageContext>,
 }
 
 impl GovernanceCopilot {
-    pub fn new(state: Arc<FlowLikeState>, profile: Option<Arc<Profile>>) -> Self {
-        Self { state, profile }
+    pub fn new(
+        state: Arc<FlowLikeState>,
+        profile: Option<Arc<Profile>>,
+        usage_context: Option<ModelUsageContext>,
+    ) -> Self {
+        Self {
+            state,
+            profile,
+            usage_context,
+        }
     }
 
     /// Render boards to FlowScript with stable anchors so the agent reasons
@@ -100,7 +110,7 @@ impl GovernanceCopilot {
         token: Option<String>,
     ) -> Result<(
         String,
-        Box<dyn rig::client::completion::CompletionClientDyn + Send + Sync>,
+        Box<dyn flow_like_model_provider::llm::CompletionClientDyn + Send + Sync>,
     )> {
         let bit = if let Some(profile) = &self.profile {
             if let Some(id) = model_id {
@@ -139,7 +149,7 @@ impl GovernanceCopilot {
         let model = model_factory
             .lock()
             .await
-            .build(&bit, self.state.clone(), token, None)
+            .build(&bit, self.state.clone(), token, self.usage_context.clone())
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
         let provider = model.provider().await?;
@@ -184,7 +194,10 @@ impl GovernanceCopilot {
             .preamble(&system_prompt)
             .build();
         let prompt_message = rig::message::Message::User {
-            content: OneOrMany::one(UserContent::Text(rig::message::Text { text: user_text })),
+            content: OneOrMany::one(UserContent::Text(rig::message::Text {
+                text: user_text,
+                additional_params: None,
+            })),
         };
 
         let request = agent

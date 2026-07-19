@@ -60,6 +60,92 @@ interface Bit {
     model_slug?: string | null = null;
     model_evaluation?: LlmModelEvaluation | null = null;
 }
+interface HistoryMessage {
+    role: "system" | "user" | "assistant" | "function" | "tool";
+    content: string | Struct[];
+    name?: string | null;
+    tool_calls?: ToolCall[] | null;
+    tool_call_id?: string | null;
+    annotations?: Annotation[] | null;
+}
+interface ImageUrl {
+    url: string;
+    detail?: string | null;
+}
+interface ToolCall {
+    id: string;
+    type: string;
+    function: ToolCallFunction;
+}
+interface ToolCallFunction {
+    name: string;
+    arguments: string;
+}
+interface Annotation {
+    type: string;
+    url_citation?: UrlCitation | null;
+}
+interface UrlCitation {
+    end_index: int;
+    start_index: int;
+    title: string;
+    url: string;
+    content?: string | null;
+}
+interface StreamOptions {
+    include_usage: bool;
+}
+interface Tool {
+    type: "function";
+    function: HistoryFunction;
+}
+interface HistoryFunction {
+    name: string;
+    description?: string | null;
+    parameters: HistoryFunctionParameters;
+}
+interface HistoryFunctionParameters {
+    type: "object" | "number" | "string" | "array" | "null" | "boolean";
+    properties?: Map<string, HistoryJSONSchemaDefine> | null;
+    required?: string[] | null;
+}
+interface HistoryJSONSchemaDefine {
+    type?: "object" | "number" | "string" | "array" | "null" | "boolean" | null;
+    description?: string | null;
+    enum?: string[] | null;
+    properties?: Map<string, HistoryJSONSchemaDefine> | null;
+    required?: string[] | null;
+    items?: HistoryJSONSchemaDefine | null;
+}
+interface Usage {
+    include: bool;
+}
+interface History {
+    model: string;
+    messages: HistoryMessage[];
+    preset?: string | null;
+    stream?: bool | null;
+    stream_options?: StreamOptions | null;
+    max_completion_tokens?: int | null;
+    top_p?: float | null;
+    temperature?: float | null;
+    thinking?: "off" | "low" | "mid" | "high" | null;
+    seed?: int | null;
+    presence_penalty?: float | null;
+    frequency_penalty?: float | null;
+    user?: string | null;
+    stop?: string[] | null;
+    response_format?: string | any | null;
+    n?: int | null;
+    tools?: Tool[] | null;
+    tool_choice?: null | Struct | null;
+    usage?: Usage | null;
+}
+interface User {
+    sub: string;
+    name: string;
+    bot?: bool | null;
+}
 
 const attachedFiles: Struct = {}   //@v:ovthhqty1jphkp6pfalvyjid
 const embeddingModel: CachedEmbeddingModel = {"cache_key":""}   //@v:g12vxae1e1buhfqo3v7lc0o7
@@ -78,9 +164,10 @@ const smallModel: Bit = {"id":"","type":"Other","meta":{},"authors":[],"reposito
 
 function constructPrompt(prompt: string): (out: string) {   //@l:olhizg2b8s6seeuntnn1ni4o
     const now2 = utilsDatetimeNow()   //@n:j37yxnwykc08y10reikmija1
+    return stringFormat({ formatString: "{prompt}\n\nCurrent Time: {time}", prompt: prompt, time: utilsDatetimeFormat({ date: now2.date, format: "rfc3339" }) })
 }
 
-chatEvent(history: Struct, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: Struct) {   //@n:liqnumu9en44cq30tu9t5kez
+chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {   //@n:liqnumu9en44cq30tu9t5kez
     const extractAttachments = aiGenLlmHistoryExtractAttachments({ history: history, attachments: attachments })   //@n:szmvl23cetvik1iwmnsslj26
     attachedFiles = {}   //@n:xal689cwuihke7lvj801euk9
     for (const forEach4 of controlForEach({ array: extractAttachments.paths })) {   //@n:yqfyly9dkiziqqa6uqmsxdzs
@@ -105,13 +192,13 @@ chatEvent(history: Struct, localSession: Struct, globalSession: Struct, tools: s
 addColumn(table: string, columnName: string, sqlExpression: string, payload: Struct) {   //@n:u11llqlso3ki71m6h6x1slvt
     const openDatabase = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:dcc9b9ioxr85bjr1t6kt0cyt
     const addColumn2 = addColumnLocalDb({ database: openDatabase.database, columnName: columnName, sqlExpression: sqlExpression })   //@n:x02c1keipntdeemua38gmrsw
-    return addColumn2.schema
+    return addColumn2.schema   //@n:tu04p0m2yhjlgyrdwracwafa
 }
 
 dropColumn(table: string, columnName: string, payload: Struct) {   //@n:l4jlgqw2hx5gm0373p8klkmm
     const openDatabase10 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:ig7gcpgqcdnsrbxhuxa8ay62
     const dropColumn2 = dropColumnLocalDb({ database: openDatabase10.database, columnName: columnName })   //@n:soofx7wqq0urk182m50vlgu7
-    return dropColumn2.schema
+    return dropColumn2.schema   //@n:wzuu665q0na68v9umz93x97q
 }
 
 indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
@@ -135,18 +222,18 @@ indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
             writeString({ path: setExtension7.pathOut, content: pagesToMarkdown.markdown })   //@n:ieeqjtlukoozasxoxbzezp2g
             const embedDocument = embedDocument({ queryString: summarizeDocument.summary.summary, model: embeddingModel })   //@n:tt2szytgiqxdo82vh4amz5ol
             let record2 = structSet({ structIn: {}, field: "vector", value: embedDocument.vector }).structOut   //@n:e9kpfkp5ivihjbtmims8fy9r
-            record2 = structSet({ structIn: record2, field: "content", value: summarizeDocument.summary.summary }).structOut   //@n:ql9k0oc83lxycuiyizqz3wk3
+            record2.content = summarizeDocument.summary.summary   //@n:ql9k0oc83lxycuiyizqz3wk3
             const now3 = utilsDatetimeNow()   //@n:q2cbltadjb08t1j1ba9519n2
             let row = structSet({ structIn: record2, field: "indexed", value: now3.date }).structOut   //@n:a22a1br0nmgqkpwov1pz7p2x
-            row = structSet({ structIn: row, field: "path", value: rawPath({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) }) }).structOut   //@n:rf3rktm1f4ftyrwf0e16s8ft
-            row = structSet({ structIn: row, field: "file_name", value: filename({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), removeExtension: true }) }).structOut   //@n:fwdsh4rorfsp1hg0u33u0zgj
+            row.path = rawPath({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })   //@n:rf3rktm1f4ftyrwf0e16s8ft
+            row.file_name = filename({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), removeExtension: true })   //@n:fwdsh4rorfsp1hg0u33u0zgj
             const cUIDV2 = cuid()   //@n:k10gsxn3te6tqaxf8kw6x17z
-            row = structSet({ structIn: row, field: "reference_db", value: cUIDV2.cuid }).structOut   //@n:l6lsh3fdxpszz699wjzheoj0
+            row.reference_db = cUIDV2.cuid   //@n:l6lsh3fdxpszz699wjzheoj0
             insertLocalDb({ database: files, value: row })   //@n:ot9y4104njuph6loxwaeloj1
             const readToBytes2 = readToBytes({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })   //@n:ap9a2oq5jd56oppttnhntyz8
             const blake3Hash2 = utilsHashBlake3({ input: readToBytes2.content })   //@n:u10ggc3447y21xhr6chplfy3
             let row2 = structSet({ structIn: {}, field: "hash", value: blake3Hash2.hash }).structOut   //@n:dlmgbjk5lofic9h0qnlad8hf
-            row2 = structSet({ structIn: row2, field: "reference_db", value: cUIDV2.cuid }).structOut   //@n:j3ln3ged2q3y9im5i8hzznyf
+            row2.reference_db = cUIDV2.cuid   //@n:j3ln3ged2q3y9im5i8hzznyf
             const setExtension3 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })   //@n:i7syn55nzv508vu1vy9zjm0d
             writeString({ path: setExtension3.pathOut, content: valToString({ value: row2, pretty: false }) })   //@n:i988fpbssorl577cu81zakyi
             const openDatabase5 = openLocalDb({ name: cUIDV2.cuid, userScoped: true, batchSize: 1000 })   //@n:fzaqcxl9osvuwy0g9yxw8umg
@@ -155,7 +242,7 @@ indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
                 const chunkText = chunkText({ text: forEach2.value.content, model: embeddingModel, capacity: 8000, overlap: 20, markdown: true })   //@n:sixj9z0by3rq9q3ihg2s9n3j
                 for (const forEach3 of controlForEach({ array: chunkText.chunks })) {   //@n:j105jw40ombeqg414pr7swju
                     let record3 = structSet({ structIn: record4, field: "content", value: forEach3.value }).structOut   //@n:i6nh6fapa0j1wuszj87dit4y
-                    record3 = structSet({ structIn: record3, field: "chunk_id", value: forEach3.index }).structOut   //@n:jm47xl12ci20lk80zlvrbx40
+                    record3.chunk_id = forEach3.index   //@n:jm47xl12ci20lk80zlvrbx40
                     const embedDocument2 = embedDocument({ queryString: forEach3.value, model: embeddingModel })   //@n:xwoggws1xtccwwbdgfosmv61
                     let row3 = structSet({ structIn: record3, field: "vector", value: embedDocument2.vector }).structOut   //@n:q6suqnrf0jpevf6uy04ku267
                     insertLocalDb({ database: openDatabase5.database, value: row3 })   //@n:hpm2vd2nmzj8h7hi1awt6omg
@@ -171,7 +258,7 @@ indexPath(path: string, payload: Struct) {   //@n:mrnr16nfnggz0g8f7kdhsw4q
 
 listTables(payload: Struct) {   //@n:zxvergp3s2e9atgyfgwq7b2i
     const listTables = listTablesDb({ userScoped: true })   //@n:otarxau6e4h01u6yeunmhy66
-    return listTables.tables
+    return listTables.tables   //@n:qy2y4dv238hw0jjzf190nv9p
 }
 
 loadVariables() {   //@n:slde8unylsfksbdl72a0bfce
@@ -193,17 +280,17 @@ upsertDatabaseItem(table: string, idField: string, item: Struct, payload: Struct
     const upsert = upsertLocalDb({ database: openDatabase14.database, idRow: idField, value: item })   //@n:urnrsfrpau9gxxsvnla6pbzg
     upsert {
         execOut: {
-            return stringFormat({ formatString: "Success" })
+            return stringFormat({ formatString: "Success" })   //@n:aw37j39tohjo6z847uc5e6f5
         }
         error: {
-            return upsert.errorMessage
+            return upsert.errorMessage   //@n:s9e85xhqc3x4hd5yyc5u16rc
         }
     }
 }
 
 askUser(payload: Struct, name: string, description: string, optionA: string, optionB: string, freeform: bool) {   //@n:apowdhgvaoh06hpx8a3j4qpu
     const singleChoice = interactionSingleChoice({ name: name, description: description, options: optionA, options: optionB, allowFreeform: freeform, ttlSeconds: 120 })   //@n:n02xez0j5efophju3ufszhc1
-    return singleChoice.response
+    return singleChoice.response   //@n:z0r9eem9ss2lr97m7us60xy9
 }
 
 fetchPage(url: string, payload: Struct) {   //@n:jifmm59liln9cnwc7ec83rf5
@@ -211,19 +298,19 @@ fetchPage(url: string, payload: Struct) {   //@n:jifmm59liln9cnwc7ec83rf5
     const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })   //@n:idrp1wwe0i6p1tbvia6wj7yx
     const toText = httpResponseToText({ response: aPICall.response })   //@n:sy8yfs8c7cyy5mueggnwguo2
     const hTMLToMarkdown = utilsMdHtmlToMd({ html: toText.text, skippedTags: ["script","style","iframe"] })   //@n:ghwpj94m7foo8npks4b5r1qd
-    return hTMLToMarkdown.markdown
+    return hTMLToMarkdown.markdown   //@n:vv2ctjbgw7txduob2we5jdij
 }
 
 makeColumnOptional(table: string, columnName: string, payload: Struct) {   //@n:lrgwibevm2khu0mk1f1md1n4
     const openDatabase18 = openLocalDb({ name: table, userScoped: false, batchSize: 1000 })   //@n:yp2c122fa27nm767znt2ou07
     const makeColumnOptional = makeColumnOptionalLocalDb({ database: openDatabase18.database, columnName: columnName, optional: true })   //@n:hn2d0buerkwfnybvnlp8xzr0
-    return makeColumnOptional.schema
+    return makeColumnOptional.schema   //@n:bdmdj2r9mv42vx16wzx4c1vx
 }
 
 getDatabaseSchema(table: string, payload: Struct) {   //@n:g0r0v1yy9zwr3eel9geizqv3
     const openDatabase11 = openLocalDb({ name: table, userScoped: true, batchSize: 10 })   //@n:ilp9l90rjt8j61zq19fsv4zx
     const getSchema = schemaLocalDb({ database: openDatabase11.database })   //@n:tp60n04v9nna3wgfd1a3u6sp
-    return getSchema.schema
+    return getSchema.schema   //@n:n7fidslubx64cwy1v9f98frs
 }
 
 batchUpsertDatabaseItems(table: string, idColumn: string, items: Struct[], payload: Struct) {   //@n:q13o16fksvxo1i95oqv0ymdy
@@ -231,10 +318,10 @@ batchUpsertDatabaseItems(table: string, idColumn: string, items: Struct[], paylo
     const batchUpsert = batchUpsertLocalDb({ database: openDatabase2.database, idRow: idColumn, value: items })   //@n:bugy5eaytduwrstmt0bn34yp
     batchUpsert {
         execOut: {
-            return stringFormat({ formatString: "Success" })
+            return stringFormat({ formatString: "Success" })   //@n:gl07vam2atuvqbzdhbm78s9w
         }
         error: {
-            return batchUpsert.errorMessage
+            return batchUpsert.errorMessage   //@n:fr2fu7j50j6peyoy31wlqx3n
         }
     }
 }
@@ -246,7 +333,7 @@ queryItems(tables: string[], query: string, payload: Struct) {   //@n:picurh0xaz
         dfRegisterLance({ session: createDataFusionSession.session, database: openDatabase12.database, tableName: forEach.value })   //@n:listba74iwsxf3w7dcoc5jdd
     }
     const sQLQuery = dfSqlQuery({ session: createDataFusionSession.session, query: query })   //@n:tpb52weddm6rw8j90umn5bde
-    return sQLQuery.rows
+    return sQLQuery.rows   //@n:bxd0u96i6a5421ivxz7ifqh6
 }
 
 callLibrarian(task: string, payload: Struct) {   //@n:v36kd2hgbjdmg5m9xy0b2xg6
@@ -260,14 +347,14 @@ callLibrarian(task: string, payload: Struct) {   //@n:v36kd2hgbjdmg5m9xy0b2xg6
     const pushMessage = aiGenerativeAddHistoryMessage({ history: setSystemMessage3.historyOut, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text" }) })   //@n:iluaeq6o8edr3m8igg5dymbd
     const invokeAgent = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentRegisterMemory({ agentIn: agentFromModel({ model: mainModel, maxIter: 20, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }), memoryConfig: memoryCreateConfig({ database: openDatabase6.database, embeddingModel: embeddingModel, maxContextTokens: 4000, recallStrategy: "hybrid", recallTopK: 20, autoCompress: true, compressThreshold: 30 }) }), tools: [readFile, listFilesInPath, searchInFiles, storeAttachment, searchInFile, readAttachment, removePath] }), history: pushMessage.historyOut })   //@n:i7nf9788tbvdlfwurj0nvar7
     eventsChatPushTextToStep({ text: aiGenerativeLlmResponseLastContent({ response: invokeAgent.response }).content })   //@n:sjvd5583rn85d0c51ofe4b3f
-    return aiGenerativeLlmResponseLastContent({ response: invokeAgent.response }).content
+    return aiGenerativeLlmResponseLastContent({ response: invokeAgent.response }).content   //@n:ox8u1qsug8cmwvu4fgke4kxp
 }
 
 internetSearch(query: string, language: string, page: int, payload: Struct) {   //@n:ee1g939f5sshl86mgpju9upt
     eventsChatPushStep({ title: "Searching Internet", description: query })   //@n:ar4s7g8fexh0zz0poakz6hqz
     const aPICall2 = httpFetch({ request: httpMakeRequest({ method: "GET", url: stringFormat({ formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}", page: utilsTypesFallback({ value: page, default: 1 }).result, lang: utilsTypesFallback({ value: language, default: "en-US" }).result, q: a2uiUrlEncode({ input: query }) }) }) })   //@n:jzr66iw7c2h9d0bpb7atcztr
     const toStruct = httpResponseToJson({ response: aPICall2.response })   //@n:epe0y3sh3aczu7mta8f3v4gq
-    return toStruct.struct
+    return toStruct.struct   //@n:jg9pbwemxozegohcwyln8kxc
 }
 
 insertDatabaseItem(table: string, item: Struct, payload: Struct) {   //@n:apiw2bpp3zqew1j7g7nq4ba9
@@ -275,10 +362,10 @@ insertDatabaseItem(table: string, item: Struct, payload: Struct) {   //@n:apiw2b
     const insert = insertLocalDb({ database: openDatabase17.database, value: item })   //@n:dup5je08x8nt00tj18tb4yuh
     insert {
         execOut: {
-            return stringFormat({ formatString: "Success" })
+            return stringFormat({ formatString: "Success" })   //@n:d1j74x14jgx7kqd59ftj0gus
         }
         error: {
-            return insert.errorMessage
+            return insert.errorMessage   //@n:ghfn0xaz2cs12r1ft2jsh053
         }
     }
 }
@@ -290,13 +377,13 @@ internetResearcher(task: string, deep: bool, payload: Struct) {   //@n:mdt4jtown
     const pushMessage3 = aiGenerativeAddHistoryMessage({ history: setSystemMessage.historyOut, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: task }) })   //@n:zk1d180tzg5t7h1du466khvy
     const streamInvokeAgent2 = agentStreamInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentRegisterMemory({ agentIn: agentFromModel({ model: mainModel, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }), memoryConfig: memoryCreateConfig({ database: memory, embeddingModel: embeddingModel, maxContextTokens: 4000, recallStrategy: "hybrid", recallTopK: 20, autoCompress: true, compressThreshold: 30 }) }), tools: [fetchPage, internetSearch] }), history: pushMessage3.historyOut })   //@n:nd5uu5r2ndpt6yqr88ofpib7
     eventsChatPushStat({ stepName: "Internet Research", stat: streamInvokeAgent2.stats })   //@n:hmwfpakf9syclg44t5lnb1ma
-    return aiGenerativeLlmResponseLastContent({ response: streamInvokeAgent2.response }).content
+    return aiGenerativeLlmResponseLastContent({ response: streamInvokeAgent2.response }).content   //@n:qzl76osj1k0fqfj11e6io11h
 }
 
 buildIndex(table: string, column: string, fts: bool, payload: Struct) {   //@n:sc5s1hodo0sps7ie6q4ld9e6
     const openDatabase8 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:i120hg20mn2g6uciwqt59iuf
     indexLocalDb({ database: openDatabase8.database, column: column, type: utilsTypesFallback({ value: fts, default: false }).result ? "FULL TEXT" : "AUTO" })   //@n:lpezrmtusregg82cxtgngv57
-    return stringFormat({ formatString: "Success" })
+    return stringFormat({ formatString: "Success" })   //@n:k110lhoo4xthdph8w1wt8er9
 }
 
 dataScientist(task: string, payload: Struct) {   //@n:cx67riwzc8c16rsfsp3lg197
@@ -308,10 +395,10 @@ batchInsertDatabaseItems(table: string, items: Struct[], payload: Struct) {   //
     const batchInsert = batchInsertLocalDb({ database: openDatabase16.database, value: items })   //@n:scokme2u8nh6x4is1mudh586
     batchInsert {
         execOut: {
-            return stringFormat({ formatString: "Success" })
+            return stringFormat({ formatString: "Success" })   //@n:d9y59rwtk0glh5tdlb9e4cp1
         }
         error: {
-            return batchInsert.errorMessage
+            return batchInsert.errorMessage   //@n:mx3wfhorubk9sz4cfh5rc32k
         }
     }
 }
@@ -323,19 +410,19 @@ databaseManager(task: string, payload: Struct) {   //@n:kmdd1odl4nffsegz4e7oesim
     const pushMessage2 = aiGenerativeAddHistoryMessage({ history: setSystemMessage2.historyOut, message: aiGenerativeMakeHistoryMessage({ role: "User", type: "Text", text: task }) })   //@n:vn5uwqblicmdynd197h3sgz0
     const streamInvokeAgent3 = agentStreamInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentRegisterMemory({ agentIn: agentFromModel({ model: mainModel, maxIter: 15, infiniteContext: false, contextMode: "summarize", maxContextTokens: 32000 }), memoryConfig: memoryCreateConfig({ database: memory, embeddingModel: embeddingModel, maxContextTokens: 4000, recallStrategy: "hybrid", recallTopK: 20, autoCompress: true, compressThreshold: 30 }) }), tools: [listTables, getDatabaseSchema, insertDatabaseItem, batchInsertDatabaseItems, upsertDatabaseItem, batchUpsertDatabaseItems, deleteItems, queryItems, buildIndex, searchItems, addColumn, dropColumn, makeColumnOptional2] }), history: pushMessage2.historyOut })   //@n:u8l6r5y7lwze6fg4xjp9ntdr
     eventsChatPushStat({ stepName: "Database Management", stat: streamInvokeAgent3.stats })   //@n:bl985at3knb84ozg9canzfn2
-    return aiGenerativeLlmResponseLastContent({ response: streamInvokeAgent3.response }).content
+    return aiGenerativeLlmResponseLastContent({ response: streamInvokeAgent3.response }).content   //@n:me917srmuw503ixkjlqt2pbd
 }
 
 deleteItems(table: string, filterQuery: string, payload: Struct) {   //@n:nejwvi3cebr8ia1l81jcd1kj
     const openDatabase7 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:h1384rf2bd8twzif9o1m9j2g
     const delete = filterDeleteLocalDb({ database: openDatabase7.database, filter: filterQuery })   //@n:lb1c6mrwntfnr6gxns3fmnhp
-    return delete.deletedValues
+    return delete.deletedValues   //@n:yybzsh9u9ddsssb1cx694jx4
 }
 
 searchItems(table: string, query: string, filter: string, payload: Struct) {   //@n:os5g5bnq20bd038sdqhlsfay
     const openDatabase3 = openLocalDb({ name: table, userScoped: true, batchSize: 1000 })   //@n:ereuvl7qy3ub4xd98azpo7wb
     const fullTextSearch = ftsSearchLocalDb({ database: openDatabase3.database, search: query, fields: [], filter: utilsTypesFallback({ value: filter, default: "" }).result, limit: 10, offset: 0 })   //@n:vnxt3cb4zshvz081sf0nxysl
-    return fullTextSearch.values
+    return fullTextSearch.values   //@n:r1a6ib6f9c0sakk6y1oachek
 }
 
 addInterest() {   //@n:gj21w8xym9o2w0k6rvma2hrm
@@ -349,17 +436,17 @@ readFile(path: string, summary: bool, payload: Struct) {   //@n:o4dbnck3e6otisqt
             if (utilsTypesFallback({ value: summary, default: true }).result) {   //@n:nfc4p5mgnszvzwoyi0v63e4x
                 const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })   //@n:hei8qighn5h4rd1yw0yayxkv
                 const readToString = readToString({ path: setExtension2.pathOut })   //@n:d25nzcnh8lssfuo5gf8zyetl
-                return readToString.content
+                return readToString.content   //@n:de09bpkohphy3tdcc62kcj8a
             } else {
                 const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })   //@n:sp4r8vqyry058rd5sftfsc6h
                 const readToString2 = readToString({ path: setExtension6.pathOut })   //@n:fx72h965tbhonwgyrehqctem
-                return readToString2.content
+                return readToString2.content   //@n:f5rma68p1tyzrewrxq6zekeu
             }
         } else { // exec_out_missing
             indexPath({ path: path })   //@n:bhf5ysrs8kkvnihujne5oaw8
         }
     } else { // exec_out_missing
-        return stringFormat({ formatString: "Path {path} does not exist. No file found.", path: path })
+        return stringFormat({ formatString: "Path {path} does not exist. No file found.", path: path })   //@n:a2ogmuh4frf12fkbme7f5mst
     }
 }
 
@@ -367,8 +454,8 @@ listFilesInPath(path: string, payload: Struct) {   //@n:iuj7lsynep4xqxshgp8g3h4r
     const listPaths = pathListPaths({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })   //@n:qt2j96v0nx2rb0ps9tjpuw5x
     const listFolders = pathListFolders({ prefix: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: false })   //@n:yly5sss0lnawgzelngi29khs
     let record5 = structSet({ structIn: {}, field: "files", value: listPaths.paths }).structOut   //@n:ndc55i1zej9krr8puvhma6mn
-    record5 = structSet({ structIn: record5, field: "folders", value: listFolders.folders }).structOut   //@n:hwwnb1e3boml2bganej5m98n
-    return record5
+    record5.folders = listFolders.folders   //@n:hwwnb1e3boml2bganej5m98n
+    return record5   //@n:x8yuz6uqnn48da8aeq6cetjv
 }
 
 searchInFiles(query: string, filter: string, payload: Struct) {   //@n:vxoe4h9j60ia1yande7dztwe
@@ -376,7 +463,7 @@ searchInFiles(query: string, filter: string, payload: Struct) {   //@n:vxoe4h9j6
     const embedQuery = embedQuery({ queryString: query, model: embeddingModel })   //@n:bd3soso6llln3wxyuan2rymc
     const hybridSearch2 = hybridSearchLocalDb({ database: files, search: "", vector: embedQuery.vector, fields: [], filter: utilsTypesFallback({ value: filter, default: "" }).result, rerank: true, limit: 10, offset: 0 })   //@n:gxkh5h5asw2j55blmg431shf
     const filterArrayField3 = arrayFilterField({ arrayIn: hybridSearch2.values, field: "vector" })   //@n:x09lmfp5fdh6g136yu2pzu17
-    return filterArrayField3.arrayOut
+    return filterArrayField3.arrayOut   //@n:ry108qasir5oqmruafj8offf
 }
 
 storeAttachment(attachmentPath: string, storagePath: string, payload: Struct) {   //@n:a7cmalf22cbojbumd8bmls7f
@@ -384,7 +471,7 @@ storeAttachment(attachmentPath: string, storagePath: string, payload: Struct) { 
     const readToBytes = readToBytes({ path: structGet({ struct: attachedFiles, field: attachmentPath }).value })   //@n:a159c66tin5k5q03mmh127fy
     writeBytes({ path: fromRawPath({ basePath: pathFromUploadDir(), rawPath: storagePath }), content: readToBytes.content })   //@n:aco0cxuya6lux9e10wswjsx9
     indexPath({ path: storagePath })   //@n:z76l2qgsuuqu2kyfs4xzmo0m
-    return stringFormat({ formatString: "Indexed!" })
+    return stringFormat({ formatString: "Indexed!" })   //@n:yu9rohtu0ehrv6cknaxyqq03
 }
 
 searchInFile(query: string, filter: string, path: string, payload: Struct) {   //@n:mc53d9qa5dv2iipd68u4l2ie
@@ -392,16 +479,16 @@ searchInFile(query: string, filter: string, path: string, payload: Struct) {   /
     const sQLFilterDatabase = filterLocalDb({ database: files, filter: stringFormat({ formatString: "path LIKE '{path}%'", path: path }), limit: 5, offset: 0 })   //@n:esfr5nmtupbk0dgf2wo0j04d
     if (sQLFilterDatabase.values.length > 1) {   //@n:ix14u3xvffieq7tnq2f6ftyz
         const filterArrayField2 = arrayFilterField({ arrayIn: sQLFilterDatabase.values, field: "vector" })   //@n:t14bw17dw14i500farohvuji
-        return filterArrayField2.arrayOut
+        return filterArrayField2.arrayOut   //@n:rw2qg4h2vmn79gw4mbao87dp
     } else {
         if (arrayGet({ arrayIn: sQLFilterDatabase.values, index: 0 }).success) {   //@n:zrh5eolpc1b9ahkv6pdg0c6b
             const openDatabase4 = openLocalDb({ name: sQLFilterDatabase.values[0].reference_db, userScoped: true, batchSize: 1000 })   //@n:f5jgsn39r8puu74twguidrqf
             const embedQuery2 = embedQuery({ queryString: query, model: embeddingModel })   //@n:l70vh3ycqn23g9iuuq1ekku2
             const hybridSearch = hybridSearchLocalDb({ database: openDatabase4.database, search: "", vector: embedQuery2.vector, fields: [], filter: utilsTypesFallback({ value: filter, default: "" }).result, rerank: true, limit: 10, offset: 0 })   //@n:ftshdvqs1az19o4bt94qhq57
             const filterArrayField = arrayFilterField({ arrayIn: hybridSearch.values, field: "vector" })   //@n:m06qw6gdg7afyvmv73ee8p5x
-            return filterArrayField.arrayOut
+            return filterArrayField.arrayOut   //@n:qcwis8zqwdyuxiplx6bhhln3
         } else {
-            return stringFormat({ formatString: "Path not found" })
+            return stringFormat({ formatString: "Path not found" })   //@n:ihfefngj8nf9dhwknmkwv1f1
         }
     }
 }
@@ -410,14 +497,14 @@ readAttachment(attachmentPath: string, payload: Struct) {   //@n:i0qmpqpc8dpmyc5
     eventsChatPushStep({ title: "Reading Attachment", description: attachmentPath })   //@n:saimklf3m7qe4i5n4hf8xu5q
     const aIExtractDocument = aiProcessingExtractDocumentAi({ file: structGet({ struct: attachedFiles, field: attachmentPath }).value, model: smallModel, extractImages: true, imagesPerMessage: 1, pagesPerBatch: 4, temperature: 0.1, maxTokens: 0 })   //@n:dsgyqjfwbdywtcncc201xls7
     const pagesToMarkdown2 = aiProcessingPagesToMarkdown({ pages: aIExtractDocument.pages })   //@n:qp5086ebmbc92k4l1s2dimts
-    return pagesToMarkdown2.markdown
+    return pagesToMarkdown2.markdown   //@n:e803l4ookx7jsswfa6fjwix6
 }
 
 removePath(path: string, payload: Struct) {   //@n:n6bf38mnj6fwi1pl6sqzkt1o
     eventsChatPushStep({ title: "Deleting Artifacts", description: path })   //@n:i3h6qfsa359inh2bn3sp1r1o
     filterDeleteLocalDb({ database: files, filter: stringFormat({ formatString: "path LIKE '{path}%'", path: path }) })   //@n:tn39rpgs45x31nfe82c90uaq
     storageDelete({ path: fromRawPath({ basePath: pathFromUserDir({ nodeScope: false }), rawPath: path }), recursive: true })   //@n:cadftkshruu5fbj4bs3ijxrv
-    return stringFormat({ formatString: "Deleted Files" })
+    return stringFormat({ formatString: "Deleted Files" })   //@n:p7psr8n6ewhhr6ah3h6ir3q2
 }
 
 moveFile(oldPath: string, newPath: string, payload: Struct) {   //@n:p73lfvy4jefdzh2yp1dhbbe1

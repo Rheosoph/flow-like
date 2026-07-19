@@ -59,6 +59,8 @@ impl NodeLogic for SetMapRefNode {
         let value: Value = context.evaluate_pin("value").await?;
 
         let variable = context.get_variable(&var_ref).await?;
+        super::validate_value_type(&value, &variable.data_type)?;
+
         let value_ref = variable.get_value();
         let mut guard = value_ref.lock().await;
 

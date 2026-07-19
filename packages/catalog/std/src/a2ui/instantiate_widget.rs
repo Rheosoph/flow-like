@@ -304,7 +304,7 @@ impl NodeLogic for InstantiateWidget {
 
         node.set_can_reference_fns(true);
         node.set_long_running(true);
-        node.set_version(3);
+        node.set_version(4);
 
         node
     }
@@ -571,16 +571,20 @@ impl NodeLogic for InstantiateWidget {
                 &instance_id,
                 json!({
                     "type": "createComponent",
-                    "component": widget_instance_component
+                    "component": widget_instance_component.clone()
                 }),
             )
             .await?;
 
-        // Output element ref for PushToContainer
+        // Output element ref for PushToContainer / Push Widget. The full inline
+        // component is embedded so chat push nodes can forward a self-contained
+        // widgetInstance without re-reading the surface.
         let element_ref = json!({
             "id": instance_id,
             "instanceId": instance_id,
             "widgetId": widget_id,
+            "surfaceId": instance_id,
+            "component": widget_instance_component,
         });
 
         context

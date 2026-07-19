@@ -1,5 +1,9 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { SurfaceComponent } from "../components/a2ui/types";
+import type {
+	FlowPilotProcessEvent,
+	UnifiedPlanStep,
+} from "../components/flowpilot/types";
 import type { BoardCommand } from "./schema/flow/copilot";
 
 /**
@@ -23,6 +27,10 @@ export interface IFlowPilotMessage {
 	appliedComponents?: SurfaceComponent[];
 	executedCommands?: BoardCommand[];
 	flowscriptWorkspace?: string;
+	/** Process timeline for the turn (tool calls, FlowScript edits, queued changes). */
+	processEvents?: FlowPilotProcessEvent[];
+	/** Completed plan steps for the turn. */
+	planSteps?: UnifiedPlanStep[];
 	createdAt: string;
 }
 
@@ -179,6 +187,8 @@ export async function updateMessage(
 			| "appliedComponents"
 			| "executedCommands"
 			| "flowscriptWorkspace"
+			| "processEvents"
+			| "planSteps"
 		>
 	>,
 ): Promise<void> {

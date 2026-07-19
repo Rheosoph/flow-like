@@ -98,13 +98,13 @@ impl DownloadManager {
             }
         };
         // Offload blocking filesystem write to a dedicated thread to avoid stalling the async runtime.
-        let _ = flow_like_types::tokio::task::spawn_blocking(move || {
+        drop(flow_like_types::tokio::task::spawn_blocking(move || {
             if let Some(parent) = dir.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
             if let Err(e) = std::fs::write(&dir, data) {
                 println!("Error saving download manager: {:?}", e);
             }
-        });
+        }));
     }
 }

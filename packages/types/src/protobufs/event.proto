@@ -52,6 +52,10 @@ message Event {
   // Where this event runs: "Local" (offline/desktop) or "Remote" (server).
   // Defaults to Local when unset for backward compatibility.
   optional string execution_mode = 22;
+  // Reachability: "PUBLIC" (public REST/MCP surface) or "INTERNAL" (only
+  // callable by connected apps via the app-connection proxy). Defaults to
+  // PUBLIC when unset for backward compatibility.
+  optional string exposure = 23;
 }
 
 // Simplified input pin metadata for events

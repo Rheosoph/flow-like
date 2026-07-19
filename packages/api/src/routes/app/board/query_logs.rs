@@ -79,6 +79,19 @@ pub async fn query_logs(
             ApiError::internal_error(anyhow!("Failed to open log database: {}", e))
         })?;
 
+    // A run row is created before its executor has emitted the first log. If
+    // setup fails (for example, because a pinned board object is missing), no
+    // per-run table is ever created. Treat that state like an empty log stream
+    // instead of turning an otherwise inspectable run into a 500 response.
+    let table_names = db.table_names().execute().await.map_err(|e| {
+        tracing::error!(error = %e, path = %base_path, "Failed to list run tables");
+        ApiError::internal_error(anyhow!("Failed to list run tables: {}", e))
+    })?;
+    if !table_names.iter().any(|name| name == &params.run_id) {
+        tracing::debug!(run_id = %params.run_id, "Run has no log table yet");
+        return Ok(Json(Vec::new()));
+    }
+
     let table = db.open_table(&params.run_id).execute().await.map_err(|e| {
         tracing::error!(error = %e, run_id = %params.run_id, "Failed to open run table");
         ApiError::internal_error(anyhow!("Failed to open run table: {}", e))

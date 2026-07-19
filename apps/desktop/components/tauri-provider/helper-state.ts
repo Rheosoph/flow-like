@@ -1,16 +1,17 @@
+import {
+	type IFileMetadata,
+	type IHelperState,
+	type ITemporaryFlowPath,
+	type ITemporaryUploadExecutionTarget,
+	type ITemporaryUploadedFile,
+	getOrUploadTemporaryFile,
+	temporaryFilesDb,
+} from "@flow-like/flow-like-ui";
 import { createId } from "@paralleldrive/cuid2";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appCacheDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { mkdir, writeFile } from "@tauri-apps/plugin-fs";
-import {
-	type IFileMetadata,
-	type IHelperState,
-	type ITemporaryFlowPath,
-	type ITemporaryUploadedFile,
-	getOrUploadTemporaryFile,
-	temporaryFilesDb,
-} from "@flow-like/flow-like-ui";
 import { get } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -49,23 +50,38 @@ export class HelperState implements IHelperState {
 		);
 	}
 
-	async fileToUrl(file: File, offline = false, appId?: string): Promise<string> {
-		return (await this.fileToTemporaryFile(file, offline, appId)).url;
+	async fileToUrl(
+		file: File,
+		offline = false,
+		appId?: string,
+		executionTarget?: ITemporaryUploadExecutionTarget,
+	): Promise<string> {
+		return (
+			await this.fileToTemporaryFile(
+				file,
+				offline,
+				appId,
+				executionTarget,
+			)
+		).url;
 	}
 
 	async fileToTemporaryFile(
 		file: File,
 		offline = false,
 		appId?: string,
+		executionTarget?: ITemporaryUploadExecutionTarget,
 	): Promise<ITemporaryUploadedFile> {
-		const effectiveOffline =
-			offline || (appId ? await this.backend.isOffline(appId) : false);
+		const useLocalTemporaryFile =
+			executionTarget === "local" ||
+			offline ||
+			(appId ? await this.backend.isOffline(appId) : false);
 		const profileScope =
 			this.backend.profile?.id ?? this.backend.profile?.hub ?? "no-profile";
-		const scope = `desktop:${profileScope}:${appId ?? "global"}:${effectiveOffline ? "offline" : "online"}`;
+		const scope = `desktop:${profileScope}:${appId ?? "global"}:${useLocalTemporaryFile ? "local" : "remote"}`;
 
 		return getOrUploadTemporaryFile(file, scope, async () => {
-			if (!effectiveOffline) {
+			if (!useLocalTemporaryFile) {
 				if (!this.backend.profile || !this.backend.auth) {
 					throw new Error("Profile or auth not set");
 				}
@@ -84,7 +100,7 @@ export class HelperState implements IHelperState {
 					this.backend.auth,
 				);
 
-				await fetch(response.uploadUrl, {
+				const uploadResponse = await fetch(response.uploadUrl, {
 					method: "PUT",
 					headers: {
 						"Content-Type": file.type,
@@ -92,6 +108,11 @@ export class HelperState implements IHelperState {
 					},
 					body: file,
 				});
+				if (!uploadResponse.ok) {
+					throw new Error(
+						`Temporary file upload failed (${uploadResponse.status} ${uploadResponse.statusText})`,
+					);
+				}
 
 				return {
 					url: response.downloadUrl,
@@ -119,9 +140,10 @@ export class HelperState implements IHelperState {
 
 			await writeFile(tmpPath, file.stream());
 
-			const postProcessedPath = await invoke<string>("post_process_local_file", {
-				file: tmpPath,
-			});
+			const postProcessedPath = await invoke<string>(
+				"post_process_local_file",
+				{ file: tmpPath },
+			);
 
 			const hash = postProcessedPath.split("/").pop() || fileId;
 

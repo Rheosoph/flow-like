@@ -91,7 +91,7 @@ fn normalize(s: &str) -> String {
     out
 }
 
-/// ============================ Config ============================
+// ============================ Config ============================
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub enum OutputMode {
@@ -199,7 +199,7 @@ impl Default for ExtractConfig {
     }
 }
 
-/// ============================ Public API ============================
+// ============================ Public API ============================
 
 /// Extract raw tables (headers + rows of strings) from a sheet.
 #[cfg(feature = "execute")]
@@ -331,7 +331,7 @@ fn validate_rect(rect: &Rect, height: usize, width: usize) -> Option<Rect> {
     })
 }
 
-/// ============================ Types ============================
+// ============================ Types ============================
 
 #[cfg(feature = "execute")]
 #[derive(Clone, Debug)]
@@ -349,7 +349,7 @@ pub struct Table {
     rows: Vec<Vec<String>>,
 }
 
-/// ============================ IO helpers ============================
+// ============================ IO helpers ============================
 
 #[cfg(feature = "execute")]
 fn read_sheet_grid_capped(
@@ -450,7 +450,7 @@ fn data_to_string(v: &Data) -> String {
     }
 }
 
-/// ============================ Merges ============================
+// ============================ Merges ============================
 
 #[cfg(feature = "execute")]
 #[derive(Clone, Copy, Debug)]
@@ -662,7 +662,7 @@ fn apply_merges(mut grid: Vec<Vec<String>>, merges: &[Merge]) -> Vec<Vec<String>
     grid
 }
 
-/// ============================ Segmentation ============================
+// ============================ Segmentation ============================
 
 #[cfg(feature = "execute")]
 fn segment_rectangles(
@@ -803,7 +803,7 @@ fn count_nonempty_in_rect(grid: &[Vec<String>], rect: &Rect) -> usize {
     n
 }
 
-/// ============================ Table Build ============================
+// ============================ Table Build ============================
 
 #[cfg(feature = "execute")]
 fn build_table_from_rect(
@@ -906,7 +906,7 @@ fn build_table_from_rect(
     table
 }
 
-/// ============================ Units & Totals helpers ============================
+// ============================ Units & Totals helpers ============================
 
 #[cfg(feature = "execute")]
 fn detect_unit_row(
@@ -1371,7 +1371,7 @@ fn detect_kind_idx(s: &str) -> usize {
         Kind::Empty | Kind::Mixed => 4,
     }
 }
-/// ============================ Connectivity split ============================
+// ============================ Connectivity split ============================
 
 #[cfg(feature = "execute")]
 fn is_nonempty(s: &str) -> bool {
@@ -1555,7 +1555,7 @@ fn split_rect_by_connectivity(
     parts
 }
 
-/// ============================ CSV render ============================
+// ============================ CSV render ============================
 
 #[cfg(feature = "execute")]
 #[derive(Clone, Debug)]
@@ -1786,7 +1786,7 @@ fn stitch_tables(
     out
 }
 
-/// ============================ (Optional) Schema stitching ============================
+// ============================ (Optional) Schema stitching ============================
 /// Example: if two rectangles are separated by 2 blank rows but headers are "the same",
 /// you could merge them. Hook this in `segment_rectangles` if desired.
 #[cfg(feature = "execute")]
@@ -1884,7 +1884,7 @@ fn group_tables_by_header_similarity(
     out
 }
 
-/// ============================ De-dup helpers ============================
+// ============================ De-dup helpers ============================
 
 /// Drop columns that are identical in data and whose headers only differ by an automatic " (n)" suffix.
 #[cfg(feature = "execute")]

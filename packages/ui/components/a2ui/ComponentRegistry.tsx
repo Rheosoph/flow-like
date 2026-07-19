@@ -29,8 +29,11 @@ import {
 	A2UIAvatar,
 	A2UIBadge,
 	A2UIBoundingBoxOverlay,
+	A2UICalendar,
+	A2UIDiffView,
 	A2UIDivider,
 	A2UIFilePreview,
+	A2UIGantt,
 	A2UIGeoMap,
 	A2UIIcon,
 	A2UIIframe,
@@ -46,6 +49,7 @@ import {
 	A2UITableCell,
 	A2UITableRow,
 	A2UIText,
+	A2UIUserProfile,
 	A2UIVideo,
 } from "./display";
 
@@ -137,6 +141,7 @@ const registry: Record<string, ComponentRenderer> = {
 	divider: A2UIDivider as ComponentRenderer,
 	badge: A2UIBadge as ComponentRenderer,
 	avatar: A2UIAvatar as ComponentRenderer,
+	userProfile: A2UIUserProfile as ComponentRenderer,
 	progress: A2UIProgress as ComponentRenderer,
 	spinner: A2UISpinner as ComponentRenderer,
 	skeleton: A2UISkeleton as ComponentRenderer,
@@ -147,9 +152,12 @@ const registry: Record<string, ComponentRenderer> = {
 	tableRow: A2UITableRow as ComponentRenderer,
 	tableCell: A2UITableCell as ComponentRenderer,
 	filePreview: A2UIFilePreview as ComponentRenderer,
+	diffView: A2UIDiffView as ComponentRenderer,
 	nivoChart: A2UINivoChart as ComponentRenderer,
 	boundingBoxOverlay: A2UIBoundingBoxOverlay as ComponentRenderer,
 	geoMap: A2UIGeoMap as ComponentRenderer,
+	calendar: A2UICalendar as ComponentRenderer,
+	gantt: A2UIGantt as ComponentRenderer,
 
 	// Interactive
 	button: A2UIButton as ComponentRenderer,

@@ -181,6 +181,102 @@ pub async fn presign_db_access(
     }))
 }
 
+/// Presign access to the project-scoped LanceDB database
+///
+/// Like `presign_db_access`, but for the **project** database
+/// (`apps/{app_id}/storage/db`) instead of the per-user database. Access is
+/// gated by `ReadFiles` or `ReadDatabase` (read) / `WriteFiles` or
+/// `WriteDatabase` (write) on the app — this also covers connected apps
+/// calling with an app-connection token, whose permissions come from the
+/// role assigned to the connection.
+#[utoipa::path(
+    post,
+    path = "/apps/{app_id}/db/presign/project",
+    tag = "database",
+    description = "Get shared credentials for direct LanceDB access to the project app database.",
+    params(
+        ("app_id" = String, Path, description = "Application ID")
+    ),
+    request_body = PresignDbAccessRequest,
+    responses(
+        (status = 200, description = "Presigned database access credentials", body = PresignDbAccessResponse),
+        (status = 400, description = "Bad request - invalid access mode"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden - insufficient permissions"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("bearer_auth" = []),
+        ("api_key" = []),
+        ("pat" = [])
+    )
+)]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/db/presign/project",
+    skip(state, user),
+    fields(app_id = %app_id, table = %payload.table_name, mode = %payload.access_mode)
+)]
+pub async fn presign_project_db_access(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(app_id): Path<String>,
+    Json(payload): Json<PresignDbAccessRequest>,
+) -> Result<Json<PresignDbAccessResponse>, ApiError> {
+    let access_mode = payload.access_mode.to_lowercase();
+    if access_mode != "read" && access_mode != "write" {
+        return Err(ApiError::bad_request(
+            "access_mode must be either 'read' or 'write'".to_string(),
+        ));
+    }
+
+    use crate::permission::role_permission::RolePermissions;
+
+    let (file_permission, db_permission, credentials_access) = if access_mode == "write" {
+        (
+            RolePermissions::WriteFiles,
+            RolePermissions::WriteDatabase,
+            CredentialsAccess::EditAppDb,
+        )
+    } else {
+        (
+            RolePermissions::ReadFiles,
+            RolePermissions::ReadDatabase,
+            CredentialsAccess::ReadAppDb,
+        )
+    };
+
+    let permission =
+        crate::ensure_any_permission!(user, &app_id, &state, file_permission, db_permission);
+    let identifier = permission.identifier();
+
+    let scoped_credentials =
+        RuntimeCredentials::scoped(&identifier, &app_id, &state, credentials_access)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to generate scoped credentials: {}", e);
+                ApiError::internal("Failed to generate database access credentials")
+            })?;
+
+    let shared_credentials = serde_json::to_value(
+        scoped_credentials.clone().into_shared_credentials(),
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to serialize shared credentials: {}", e);
+        ApiError::internal("Failed to serialize shared credentials")
+    })?;
+
+    let db_path = format!("apps/{}/storage/db", app_id);
+    let expiration = get_credentials_expiration(&scoped_credentials);
+
+    Ok(Json(PresignDbAccessResponse {
+        shared_credentials,
+        db_path,
+        table_name: payload.table_name,
+        access_mode,
+        expiration,
+    }))
+}
+
 /// Get expiration time from credentials if available
 fn get_credentials_expiration(
     credentials: &RuntimeCredentials,

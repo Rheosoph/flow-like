@@ -1,13 +1,19 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	type ChatImage,
 	type CopilotScope,
+	type CopilotToolContext,
+	type FlowIrCommitDisposition,
+	type FlowIrCommitDispositionResult,
+	type FlowIrCommitToken,
+	type IApplyFlowIrCommitResponse,
+	type IApplyFlowScriptResponse,
 	type IBoard,
 	type IBoardState,
 	ICommentType,
 	IConnectionMode,
 	type IExecutionMode,
 	type IExecutionStage,
+	type IFlowScriptDiagnostic,
 	type IGenericCommand,
 	type IHub,
 	type IIntercomEvent,
@@ -35,6 +41,9 @@ import {
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
+import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
@@ -49,6 +58,18 @@ import {
 	requestRpaAutomationConsent,
 } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
+import {
+	getRemoteBoardSkipReason,
+	shouldApplyRemoteBoard,
+} from "./board-merge";
+import {
+	MAX_UNDO_REDO_SYNC_BODY_BYTES,
+	OFFLINE_SYNC_COMMAND_MAX_AGE_MS,
+	chunkCommandsForSync,
+	evaluateBoardLineage,
+	systemTimeToNanos,
+} from "./command-sync";
+import { mergeBoardOffThread } from "./board-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 interface DiffEntry {
@@ -57,12 +78,12 @@ interface DiffEntry {
 	remote: any;
 }
 
-interface SystemTimeLike {
-	secs_since_epoch?: number;
-	nanos_since_epoch?: number;
-}
-
 const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
+
+// A burst of queued batches (chunked pushes all failing against the same
+// outage) must surface as a single toast, not one per batch.
+const QUEUED_EDITS_TOAST_DEBOUNCE_MS = 15_000;
+let lastQueuedEditsToastAt = 0;
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -172,7 +193,18 @@ const getDeepDifferences = (
 	return differences;
 };
 
+// The full recursive diff below costs hundreds of ms on large boards — only
+// run it when explicitly enabled for debugging board sync issues.
+const isBoardSyncDebugEnabled = (): boolean => {
+	try {
+		return localStorage.getItem("flow-debug-board-sync") === "1";
+	} catch {
+		return false;
+	}
+};
+
 const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
+	if (!isBoardSyncDebugEnabled()) return;
 	const differences = getDeepDifferences(localBoard, remoteBoard);
 
 	if (differences.length === 0) {
@@ -204,88 +236,6 @@ const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
 		console.groupEnd();
 	});
 };
-const preserveSecretValues = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): IBoard => {
-	if (!localBoard) return remoteBoard;
-
-	for (const [varId, remoteVar] of Object.entries(remoteBoard.variables)) {
-		const localVar = localBoard.variables[varId];
-		if (
-			localVar?.secret &&
-			remoteVar.secret &&
-			remoteVar.default_value == null &&
-			localVar.default_value != null
-		) {
-			remoteVar.default_value = localVar.default_value;
-		}
-	}
-
-	return remoteBoard;
-};
-
-const comparableNodeWithoutRuntimeHash = (
-	node: INode,
-	localNode?: INode,
-): INode => {
-	const comparable = structuredClone(node);
-	comparable.hash = undefined;
-
-	if (comparable.wasm == null && localNode?.wasm != null) {
-		comparable.wasm = structuredClone(localNode.wasm);
-	}
-
-	return comparable;
-};
-
-const preserveNodeRuntimeFields = (
-	remoteNode: INode,
-	localNode?: INode,
-): INode => {
-	if (!localNode) return remoteNode;
-
-	const nodesMatchIgnoringRuntimeHash = isEqual(
-		comparableNodeWithoutRuntimeHash(remoteNode, localNode),
-		comparableNodeWithoutRuntimeHash(localNode),
-	);
-
-	if (
-		localNode.hash != null &&
-		(remoteNode.hash == null || nodesMatchIgnoringRuntimeHash)
-	) {
-		remoteNode.hash = localNode.hash;
-	}
-
-	if (remoteNode.wasm == null && localNode.wasm != null) {
-		remoteNode.wasm = structuredClone(localNode.wasm);
-	}
-
-	return remoteNode;
-};
-
-const preserveBoardRuntimeFields = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): IBoard => {
-	if (!localBoard) return remoteBoard;
-
-	for (const [nodeId, remoteNode] of Object.entries(remoteBoard.nodes)) {
-		preserveNodeRuntimeFields(remoteNode, localBoard.nodes[nodeId]);
-	}
-
-	for (const [layerId, remoteLayer] of Object.entries(remoteBoard.layers)) {
-		const localLayer = localBoard.layers[layerId];
-		if (!localLayer) continue;
-
-		for (const [nodeId, remoteNode] of Object.entries(remoteLayer.nodes)) {
-			preserveNodeRuntimeFields(remoteNode, localLayer.nodes[nodeId]);
-		}
-	}
-
-	return remoteBoard;
-};
-
 const getAppPackageCatalogNodes = (
 	catalogNodes: INode[] | undefined,
 ): INode[] | undefined => {
@@ -294,67 +244,6 @@ const getAppPackageCatalogNodes = (
 	);
 
 	return packageNodes?.length ? packageNodes : undefined;
-};
-
-const cloneBoard = (board: IBoard): IBoard => structuredClone(board);
-
-const systemTimeToNumber = (time?: SystemTimeLike): number => {
-	if (!time) return 0;
-	return (
-		(time.secs_since_epoch ?? 0) * 1_000_000_000 + (time.nanos_since_epoch ?? 0)
-	);
-};
-
-const hasIncompletePageIds = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): boolean =>
-	(remoteBoard.page_ids?.length ?? 0) === 0 &&
-	(localBoard?.page_ids?.length ?? 0) > 0;
-
-const shouldApplyRemoteBoard = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): boolean => {
-	if (!localBoard) return true;
-
-	if (hasIncompletePageIds(remoteBoard, localBoard)) {
-		return false;
-	}
-
-	const remoteUpdated = systemTimeToNumber(remoteBoard.updated_at);
-	const localUpdated = systemTimeToNumber(localBoard.updated_at);
-
-	if (remoteUpdated > 0 && localUpdated > 0 && remoteUpdated < localUpdated) {
-		return false;
-	}
-
-	return true;
-};
-
-const mergeRemoteBoard = (remoteBoard: IBoard, localBoard?: IBoard): IBoard => {
-	const merged = preserveBoardRuntimeFields(
-		preserveSecretValues(cloneBoard(remoteBoard), localBoard),
-		localBoard,
-	);
-
-	if (hasIncompletePageIds(merged, localBoard)) {
-		merged.page_ids = localBoard?.page_ids ?? merged.page_ids;
-	}
-
-	return merged;
-};
-
-const boardsDifferIgnoringUpdatedAt = (
-	incomingBoard: IBoard,
-	currentBoard?: IBoard,
-): boolean => {
-	if (!currentBoard) return true;
-
-	const comparableBoard = cloneBoard(incomingBoard);
-	comparableBoard.updated_at = currentBoard.updated_at;
-
-	return !isEqual(comparableBoard, currentBoard);
 };
 
 const decodePinDefaultValue = (defaultValue?: number[] | null): unknown => {
@@ -403,26 +292,6 @@ const summarizeBoardElementRefs = (board: IBoard) => {
 	}
 
 	return summaries;
-};
-
-const getRemoteBoardSkipReason = (
-	remoteBoard: IBoard,
-	localBoard?: IBoard,
-): string | null => {
-	if (!localBoard) return null;
-
-	if (hasIncompletePageIds(remoteBoard, localBoard)) {
-		return "remote page_ids empty while local board still has pages";
-	}
-
-	const remoteUpdated = systemTimeToNumber(remoteBoard.updated_at);
-	const localUpdated = systemTimeToNumber(localBoard.updated_at);
-
-	if (remoteUpdated > 0 && localUpdated > 0 && remoteUpdated < localUpdated) {
-		return "remote board updated_at is older than local board";
-	}
-
-	return null;
 };
 
 export class BoardState implements IBoardState {
@@ -589,40 +458,67 @@ export class BoardState implements IBoardState {
 
 				for (const board of remoteData) {
 					const localBoard = mergedBoards.get(board.id);
-					const skipReason = getRemoteBoardSkipReason(board, localBoard);
-					const nextBoard = shouldApplyRemoteBoard(board, localBoard)
-						? mergeRemoteBoard(board, localBoard)
-						: (localBoard ?? mergeRemoteBoard(board, localBoard));
 
-					if (localBoard && nextBoard === localBoard) {
+					if (localBoard && !shouldApplyRemoteBoard(board, localBoard)) {
 						console.warn(
 							"Skipping stale or incomplete remote board during board list sync:",
 							{
 								boardId: board.id,
-								skipReason,
+								skipReason: getRemoteBoardSkipReason(board, localBoard),
 								localPageIds: localBoard.page_ids,
 								remotePageIds: board.page_ids,
 								localUpdatedAt: localBoard.updated_at,
 								remoteUpdatedAt: board.updated_at,
 							},
 						);
+						continue;
 					}
 
-					if (boardsDifferIgnoringUpdatedAt(nextBoard, localBoard)) {
+					if (localBoard) {
+						const pendingSync = await this.backend.getOfflineSyncCommands(
+							appId,
+							board.id,
+						);
+						if (pendingSync.length > 0) {
+							// Local edits are still queued for the server; the remote snapshot
+							// predates them and applying it would clobber the local content.
+							console.warn(
+								"Skipping remote board with pending offline sync commands:",
+								{ boardId: board.id, pendingBatches: pendingSync.length },
+							);
+							continue;
+						}
+
+						if (
+							!(await this.lineageAllowsRemoteApply(appId, board.id, board))
+						) {
+							continue;
+						}
+					}
+
+					const { merged, changed } = await mergeBoardOffThread(
+						board,
+						localBoard,
+					);
+
+					if (changed) {
 						console.log("Board data changed, updating local state:");
 						await invoke("upsert_board", {
 							appId: appId,
-							boardId: nextBoard.id,
-							name: nextBoard.name,
-							description: nextBoard.description,
-							logLevel: nextBoard.log_level,
-							stage: nextBoard.stage,
-							executionMode: nextBoard.execution_mode,
-							boardData: nextBoard,
+							boardId: merged.id,
+							name: merged.name,
+							description: merged.description,
+							logLevel: merged.log_level,
+							stage: merged.stage,
+							executionMode: merged.execution_mode,
+							boardData: merged,
 						});
+						await this.recordAppliedRemoteLineage(appId, board.id, board);
 					}
 
-					mergedBoards.set(board.id, nextBoard);
+					// Keep the local reference when content is unchanged so downstream
+					// deep-equality checks short-circuit on identity.
+					mergedBoards.set(board.id, changed ? merged : (localBoard ?? merged));
 				}
 
 				return Array.from(mergedBoards.values());
@@ -702,10 +598,14 @@ export class BoardState implements IBoardState {
 					executionMode: remoteData.execution_mode,
 					boardData: remoteData,
 				}).catch((e: unknown) => {
-					console.warn("[BoardState] Failed to persist remote board locally:", e);
+					console.warn(
+						"[BoardState] Failed to persist remote board locally:",
+						e,
+					);
 				});
 			}
 			if (typeof version === "undefined") {
+				await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 				dispatchRemoteBoardApplied(appId, boardId);
 			}
 			return remoteData;
@@ -734,6 +634,20 @@ export class BoardState implements IBoardState {
 		// before execution begins (used on the /use page and execution paths).
 		if (forceFresh) {
 			try {
+				const pendingSync = await this.backend.getOfflineSyncCommands(
+					appId,
+					boardId,
+				);
+				if (pendingSync.length > 0) {
+					// Local edits are still queued for the server; the remote snapshot
+					// predates them, so the local board is the fresher one.
+					console.warn(
+						"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
+						{ boardId, pendingBatches: pendingSync.length },
+					);
+					return board;
+				}
+
 				const url = `apps/${appId}/board/${boardId}`;
 				const remoteData = await fetcher<IBoard>(
 					this.backend.profile,
@@ -743,11 +657,17 @@ export class BoardState implements IBoardState {
 				);
 
 				if (remoteData) {
-					const merged = mergeRemoteBoard(remoteData, board);
 					if (
-						boardsDifferIgnoringUpdatedAt(merged, board) &&
-						typeof version === "undefined"
+						!(await this.lineageAllowsRemoteApply(appId, boardId, remoteData))
 					) {
+						return board;
+					}
+
+					const { merged, changed } = await mergeBoardOffThread(
+						remoteData,
+						board,
+					);
+					if (changed && typeof version === "undefined") {
 						console.log("[BoardState] forceFresh: updating local board:", {
 							boardId,
 						});
@@ -761,6 +681,7 @@ export class BoardState implements IBoardState {
 							executionMode: merged.execution_mode,
 							boardData: merged,
 						});
+						await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 						dispatchRemoteBoardApplied(appId, boardId);
 
 						if (this.backend.queryClient) {
@@ -772,8 +693,9 @@ export class BoardState implements IBoardState {
 							].filter((arg) => typeof arg !== "undefined");
 							this.backend.queryClient.setQueryData(queryKey, merged);
 						}
+						return merged;
 					}
-					return merged;
+					return board;
 				}
 			} catch (e) {
 				console.warn(
@@ -784,44 +706,17 @@ export class BoardState implements IBoardState {
 			return board;
 		}
 
-		const getOfflineSyncCommands =
-			this.backend.getOfflineSyncCommands.bind(this);
-		const clearOfflineSyncCommands =
-			this.backend.clearOfflineSyncCommands.bind(this);
-
 		const promise = injectDataFunction(
 			async () => {
-				const unsyncedCommands = await getOfflineSyncCommands(appId, boardId);
-				for (const commandSync of unsyncedCommands) {
-					try {
-						// Only sync commands up to a week old
-						if (
-							commandSync.createdAt.getTime() <
-							Date.now() - 7 * 24 * 60 * 60 * 1000
-						)
-							await fetcher(
-								this.backend.profile!,
-								`apps/${appId}/board/${boardId}`,
-								{
-									method: "POST",
-									body: JSON.stringify({
-										commands: commandSync.commands,
-									}),
-								},
-								this.backend.auth,
-							);
-						console.log(
-							"Executed offline sync command:",
-							commandSync.commandId,
-						);
-						await clearOfflineSyncCommands(
-							commandSync.commandId,
-							appId,
-							boardId,
-						);
-					} catch (e) {
-						console.warn("Failed to execute offline sync command:", e);
-					}
+				const { failed: drainFailed } = await this.drainOfflineSyncQueue(
+					appId,
+					boardId,
+				);
+
+				if (drainFailed) {
+					// Local edits are not on the server yet. Applying the remote snapshot
+					// now would clobber them with a board that predates the queued batch.
+					return board;
 				}
 
 				const remoteData = await fetcher<IBoard>(
@@ -837,18 +732,12 @@ export class BoardState implements IBoardState {
 					throw new Error("Failed to fetch board data");
 				}
 
-				const shouldUseRemote = shouldApplyRemoteBoard(remoteData, board);
-				const skipReason = getRemoteBoardSkipReason(remoteData, board);
-				const merged = shouldUseRemote
-					? mergeRemoteBoard(remoteData, board)
-					: board;
-
-				if (!shouldUseRemote) {
+				if (!shouldApplyRemoteBoard(remoteData, board)) {
 					console.warn(
 						"Skipping stale or incomplete remote board during board sync:",
 						{
 							boardId,
-							skipReason,
+							skipReason: getRemoteBoardSkipReason(remoteData, board),
 							localPageIds: board.page_ids,
 							remotePageIds: remoteData.page_ids,
 							localUpdatedAt: board.updated_at,
@@ -861,9 +750,17 @@ export class BoardState implements IBoardState {
 				}
 
 				if (
-					boardsDifferIgnoringUpdatedAt(merged, board) &&
-					typeof version === "undefined"
+					!(await this.lineageAllowsRemoteApply(appId, boardId, remoteData))
 				) {
+					return board;
+				}
+
+				const { merged, changed } = await mergeBoardOffThread(
+					remoteData,
+					board,
+				);
+
+				if (changed && typeof version === "undefined") {
 					console.log("Board Missmatch, updating local state:");
 
 					logBoardDifferences(board, merged);
@@ -878,12 +775,15 @@ export class BoardState implements IBoardState {
 						executionMode: merged.execution_mode,
 						boardData: merged,
 					});
+					await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
 					dispatchRemoteBoardApplied(appId, boardId);
-				} else {
-					console.log("Board data is up to date, no update needed.");
+					return merged;
 				}
 
-				return merged;
+				console.log("Board data is up to date, no update needed.");
+				// Same reference → the caller's deep-equality check short-circuits and
+				// the query cache keeps identity, so the board is not re-parsed.
+				return board;
 			},
 			this,
 			this.backend.queryClient,
@@ -1196,7 +1096,12 @@ export class BoardState implements IBoardState {
 	): Promise<ILogMetadata | undefined> {
 		// Check if board requires local execution (computer automation)
 		// and verify RPA permissions before proceeding
-		const board = await this.getBoard(appId, boardId, undefined, true);
+		const board = await this.getBoard(
+			appId,
+			boardId,
+			normalizeBoardVersion(payload.version),
+			true,
+		);
 		await this.ensureAppPackagesInstalledForExecution(appId);
 		const { requires_local_execution } =
 			extractOAuthRequirementsFromBoard(board);
@@ -1372,6 +1277,7 @@ export class BoardState implements IBoardState {
 				appId: appId,
 				boardId: boardId,
 				payload: payload,
+				version: normalizeBoardVersion(payload.version),
 				events: channel,
 				streamState: streamState,
 				credentials,
@@ -1413,6 +1319,7 @@ export class BoardState implements IBoardState {
 				method: "POST",
 				body: JSON.stringify({
 					node_id: payload.id,
+					version: payload.version,
 					payload: payload.payload,
 					token: this.backend.auth.user?.access_token,
 					stream_state: streamState ?? true,
@@ -1481,6 +1388,7 @@ export class BoardState implements IBoardState {
 		lastMeta?: ILogMetadata,
 		offset?: number,
 		limit?: number,
+		includeNodes?: boolean,
 	): Promise<ILogMetadata[]> {
 		let localRuns: ILogMetadata[] = [];
 		// Fetch local runs
@@ -1519,6 +1427,7 @@ export class BoardState implements IBoardState {
 				if (status !== undefined) params.set("status", status.toString());
 				if (limit) params.set("limit", limit.toString());
 				if (offset) params.set("offset", offset.toString());
+				if (includeNodes) params.set("include_nodes", "true");
 
 				const queryString = params.toString();
 				const path = `apps/${appId}/board/${boardId}/runs${queryString ? `?${queryString}` : ""}`;
@@ -1619,14 +1528,22 @@ export class BoardState implements IBoardState {
 			);
 		}
 
+		// Undo must ship as a single request — a chunked/partial undo would
+		// diverge the board — so fail fast instead of hitting a raw HTTP 413.
+		const body = JSON.stringify({ commands: commands });
+		if (body.length > MAX_UNDO_REDO_SYNC_BODY_BYTES) {
+			toast.error("Undo batch too large to sync. Undo in smaller steps.");
+			throw new Error(
+				`Undo batch of ${commands.length} commands (${body.length} bytes) exceeds the ${MAX_UNDO_REDO_SYNC_BODY_BYTES} byte sync limit`,
+			);
+		}
+
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}/undo`,
 			{
 				method: "PATCH",
-				body: JSON.stringify({
-					commands: commands,
-				}),
+				body,
 			},
 			this.backend.auth,
 		);
@@ -1654,14 +1571,22 @@ export class BoardState implements IBoardState {
 			);
 		}
 
+		// Redo must ship as a single request — a chunked/partial redo would
+		// diverge the board — so fail fast instead of hitting a raw HTTP 413.
+		const body = JSON.stringify({ commands: commands });
+		if (body.length > MAX_UNDO_REDO_SYNC_BODY_BYTES) {
+			toast.error("Redo batch too large to sync. Redo in smaller steps.");
+			throw new Error(
+				`Redo batch of ${commands.length} commands (${body.length} bytes) exceeds the ${MAX_UNDO_REDO_SYNC_BODY_BYTES} byte sync limit`,
+			);
+		}
+
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}/redo`,
 			{
 				method: "PATCH",
-				body: JSON.stringify({
-					commands: commands,
-				}),
+				body,
 			},
 			this.backend.auth,
 		);
@@ -1703,7 +1628,10 @@ export class BoardState implements IBoardState {
 			);
 		}
 
-		const boardUpdate = await fetcher<{ id: string }>(
+		const boardUpdate = await fetcher<{
+			id: string;
+			updated_at?: IBoard["updated_at"];
+		}>(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}`,
 			{
@@ -1723,12 +1651,312 @@ export class BoardState implements IBoardState {
 		if (!boardUpdate?.id) {
 			throw new Error("Failed to update board");
 		}
+
+		// Keep the authoritative remote write immediately readable by desktop callers. Previously an
+		// online upsert never populated the local store; getBoards() therefore returned [] while its
+		// remote sync ran in the background. A create_app -> flowpilot_board sequence interpreted that
+		// empty snapshot as "no board", created a duplicate board, and could then hit a propagation 404.
+		try {
+			// Older deployed APIs return only `{ id }`. Use an intentionally old revision for that
+			// compatibility path so the transient readiness cache can never outrank the authoritative
+			// remote board during the next sync.
+			const authoritativeUpdatedAt = boardUpdate.updated_at ?? {
+				secs_since_epoch: 0,
+				nanos_since_epoch: 0,
+			};
+			await invoke("upsert_board", {
+				appId,
+				boardId,
+				name,
+				description,
+				logLevel,
+				stage,
+				executionMode,
+				template,
+				authoritativeUpdatedAt,
+			});
+			// Only advance the lineage once the local cache holds this revision;
+			// otherwise a refused remote echo could block cache recovery.
+			if (boardUpdate.updated_at) {
+				await this.recordAppliedRemoteLineage(appId, boardId, {
+					updated_at: boardUpdate.updated_at,
+				});
+			}
+		} catch (error) {
+			// The remote write already succeeded. Do not turn a cache failure into a failed
+			// create_app response (and a duplicate retry); the readiness path can still fetch it.
+			console.warn("Failed to cache the remote board locally:", error);
+		}
 	}
 
 	async closeBoard(boardId: string) {
 		await invoke("close_board", {
 			boardId: boardId,
 		});
+	}
+
+	/**
+	 * Lineage guard on top of the existing updated_at checks: refuse a remote
+	 * board that is not strictly newer than the last revision this client
+	 * applied or pushed past. A cache miss or lookup failure falls back to the
+	 * existing guards, so this can only add refusals.
+	 */
+	private async lineageAllowsRemoteApply(
+		appId: string,
+		boardId: string,
+		remoteBoard: IBoard,
+	): Promise<boolean> {
+		try {
+			const cachedLineageNs = await this.backend.getBoardLineage(
+				appId,
+				boardId,
+			);
+			const decision = evaluateBoardLineage(
+				systemTimeToNanos(remoteBoard.updated_at),
+				cachedLineageNs,
+			);
+			if (!decision.apply) {
+				console.warn("Skipping remote board due to sync lineage guard:", {
+					boardId,
+					skipReason: decision.refusalReason,
+					remoteUpdatedAt: remoteBoard.updated_at,
+					cachedLineageNs,
+				});
+			}
+			return decision.apply;
+		} catch (error) {
+			console.warn(
+				"Board lineage lookup failed; falling back to existing sync guards:",
+				error,
+			);
+			return true;
+		}
+	}
+
+	private async recordAppliedRemoteLineage(
+		appId: string,
+		boardId: string,
+		remoteBoard: Pick<IBoard, "updated_at">,
+	): Promise<void> {
+		try {
+			await this.backend.recordBoardLineage(
+				appId,
+				boardId,
+				systemTimeToNanos(remoteBoard.updated_at),
+			);
+		} catch (error) {
+			console.warn("Failed to record board sync lineage:", error);
+		}
+	}
+
+	/**
+	 * After a successful command push the server holds at least the revision of
+	 * the board snapshot this client is working on. The push response carries no
+	 * timestamp, so record the cached board's updated_at (max-merge — it never
+	 * moves the lineage backwards).
+	 */
+	private async recordLineageAfterPush(
+		appId: string,
+		boardId: string,
+	): Promise<void> {
+		const cachedBoard = this.backend.queryClient?.getQueryData<IBoard>([
+			this.getBoard.name || "backendFn",
+			appId,
+			boardId,
+		]);
+		if (!cachedBoard?.updated_at) return;
+		await this.recordAppliedRemoteLineage(appId, boardId, cachedBoard);
+	}
+
+	private notifyEditsQueued(appId: string, boardId: string): void {
+		const now = Date.now();
+		if (now - lastQueuedEditsToastAt < QUEUED_EDITS_TOAST_DEBOUNCE_MS) return;
+		lastQueuedEditsToastAt = now;
+
+		toast.warning(
+			"Server sync failed — your edits are queued and will retry on the next board load.",
+			{
+				action: {
+					label: "Retry now",
+					onClick: () => {
+						void this.retryOfflineSync(appId, boardId);
+					},
+				},
+			},
+		);
+	}
+
+	/**
+	 * Ordered, chunked drain of the offline sync queue. Stops on the first
+	 * failed batch so a later batch can never overtake an earlier one. Shared by
+	 * getBoard's background sync and manual retries so the two paths cannot
+	 * diverge.
+	 */
+	private async drainOfflineSyncQueue(
+		appId: string,
+		boardId: string,
+	): Promise<{ failed: boolean; pushedBatches: number }> {
+		const unsyncedCommands = await this.backend.getOfflineSyncCommands(
+			appId,
+			boardId,
+		);
+		let failed = false;
+		let pushedBatches = 0;
+
+		for (const commandSync of unsyncedCommands) {
+			// Replaying stale edits over a week of newer remote history does more
+			// harm than dropping them.
+			if (
+				commandSync.createdAt.getTime() <
+				Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS
+			) {
+				console.warn(
+					"Dropping expired offline sync command:",
+					commandSync.commandId,
+				);
+				await this.backend.clearOfflineSyncCommands(
+					commandSync.commandId,
+					appId,
+					boardId,
+				);
+				continue;
+			}
+
+			try {
+				for (const chunk of chunkCommandsForSync(commandSync.commands)) {
+					await fetcher(
+						this.backend.profile!,
+						`apps/${appId}/board/${boardId}`,
+						{
+							method: "POST",
+							body: JSON.stringify({
+								commands: chunk,
+							}),
+						},
+						this.backend.auth,
+					);
+				}
+				await this.backend.clearOfflineSyncCommands(
+					commandSync.commandId,
+					appId,
+					boardId,
+				);
+				pushedBatches += 1;
+				console.log("Executed offline sync command:", commandSync.commandId);
+			} catch (e) {
+				// Keep the batch queued and stop: later batches must not overtake it.
+				console.warn(
+					"Failed to push offline sync command; keeping it queued:",
+					e,
+				);
+				failed = true;
+				break;
+			}
+		}
+
+		if (!failed && pushedBatches > 0) {
+			await this.recordLineageAfterPush(appId, boardId);
+		}
+
+		return { failed, pushedBatches };
+	}
+
+	async retryOfflineSync(
+		appId: string,
+		boardId: string,
+	): Promise<{ pushedBatches: number; remainingBatches: number }> {
+		const countRemaining = async () =>
+			(await this.backend.getOfflineSyncCommands(appId, boardId)).length;
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			toast.error("Cannot sync queued edits while offline or signed out.");
+			return { pushedBatches: 0, remainingBatches: await countRemaining() };
+		}
+
+		const { failed, pushedBatches } = await this.drainOfflineSyncQueue(
+			appId,
+			boardId,
+		);
+		const remainingBatches = await countRemaining();
+
+		if (failed) {
+			toast.error(
+				`Sync retry failed — ${remainingBatches} edit ${remainingBatches === 1 ? "batch is" : "batches are"} still queued.`,
+			);
+		} else if (pushedBatches > 0) {
+			toast.success("Queued edits synced to the server.");
+		} else {
+			toast.info("No queued edits to sync.");
+		}
+
+		return { pushedBatches, remainingBatches };
+	}
+
+	/**
+	 * Push executed commands to the server in order-preserving, size-bounded chunks.
+	 *
+	 * Every failure path appends the undelivered tail to the offline sync queue, and a
+	 * non-empty queue forces queueing instead of a direct push: a later small command must
+	 * never overtake an earlier failed batch, otherwise the remote board becomes "newer"
+	 * while missing that batch and the next sync clobbers the local content with it.
+	 */
+	private async syncExecutedCommandsToServer(
+		appId: string,
+		boardId: string,
+		commands: IGenericCommand[],
+	): Promise<void> {
+		if (commands.length === 0) return;
+
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline) return;
+
+		if (
+			!this.backend.profile ||
+			!this.backend.auth ||
+			!this.backend.queryClient
+		) {
+			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
+			return;
+		}
+
+		const pending = await this.backend.getOfflineSyncCommands(appId, boardId);
+		if (pending.length > 0) {
+			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
+			this.notifyEditsQueued(appId, boardId);
+			return;
+		}
+
+		const chunks = chunkCommandsForSync(commands);
+		for (let index = 0; index < chunks.length; index++) {
+			try {
+				await fetcher(
+					this.backend.profile,
+					`apps/${appId}/board/${boardId}`,
+					{
+						method: "POST",
+						body: JSON.stringify({
+							commands: chunks[index],
+						}),
+					},
+					this.backend.auth,
+				);
+			} catch (error) {
+				console.error(
+					"Failed to push commands to server; queueing the remainder for ordered sync:",
+					error,
+				);
+				await this.backend.pushOfflineSyncCommand(
+					appId,
+					boardId,
+					chunks.slice(index).flat(),
+				);
+				this.notifyEditsQueued(appId, boardId);
+				return;
+			}
+		}
+
+		await this.recordLineageAfterPush(appId, boardId);
 	}
 
 	async executeCommand(
@@ -1742,40 +1970,7 @@ export class BoardState implements IBoardState {
 			command: command,
 		});
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
-			return executedCommand;
-		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			await this.backend.pushOfflineSyncCommand(appId, boardId, [
-				executedCommand,
-			]);
-			return executedCommand;
-		}
-
-		try {
-			await fetcher(
-				this.backend.profile,
-				`apps/${appId}/board/${boardId}`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						commands: [executedCommand],
-					}),
-				},
-				this.backend.auth,
-			);
-		} catch (error) {
-			console.error("Failed to push command to server:", error);
-			await this.backend.pushOfflineSyncCommand(appId, boardId, [
-				executedCommand,
-			]);
-		}
+		await this.syncExecutedCommandsToServer(appId, boardId, [executedCommand]);
 
 		return executedCommand;
 	}
@@ -1794,46 +1989,72 @@ export class BoardState implements IBoardState {
 			},
 		);
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
-			return executedCommands;
-		}
-
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			await this.backend.pushOfflineSyncCommand(
-				appId,
-				boardId,
-				executedCommands,
-			);
-			return executedCommands;
-		}
-
-		try {
-			await fetcher(
-				this.backend.profile,
-				`apps/${appId}/board/${boardId}`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						commands: executedCommands,
-					}),
-				},
-				this.backend.auth,
-			);
-		} catch (error) {
-			console.error("Failed to push commands to server:", error);
-			await this.backend.pushOfflineSyncCommand(
-				appId,
-				boardId,
-				executedCommands,
-			);
-		}
+		await this.syncExecutedCommandsToServer(appId, boardId, executedCommands);
 
 		return executedCommands;
+	}
+
+	async applyFlowScript(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+		currentLayer?: string,
+		catalogNodes?: INode[],
+		allowDeletions = false,
+	): Promise<IApplyFlowScriptResponse> {
+		const result = await invoke<IApplyFlowScriptResponse>("apply_flowscript", {
+			appId,
+			boardId,
+			flowscript,
+			currentLayer,
+			catalogNodes: getAppPackageCatalogNodes(catalogNodes),
+			allowDeletions,
+		});
+
+		if (result.commands.length === 0) {
+			return result;
+		}
+
+		await this.syncExecutedCommandsToServer(appId, boardId, result.commands);
+
+		return result;
+	}
+
+	async getFlowScript(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+		anchors = true,
+	): Promise<string> {
+		try {
+			return await invoke<string>("get_flowscript", {
+				appId,
+				boardId,
+				version,
+				anchors,
+			});
+		} catch {
+			const isOffline = await this.backend.isOffline(appId);
+			if (isOffline || !this.backend.profile || !this.backend.auth) {
+				throw new Error(`Board not found: ${boardId}`);
+			}
+			const params = new URLSearchParams();
+			if (version) params.set("version", version.join("_"));
+			params.set("anchors", String(anchors));
+			const response = await fetcher<{ flowscript: string }>(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/flowscript?${params}`,
+				{ method: "GET" },
+				this.backend.auth,
+			);
+			return response.flowscript;
+		}
+	}
+
+	async lintFlowScript(flowscript: string): Promise<IFlowScriptDiagnostic[]> {
+		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
+			flowscript,
+		});
 	}
 
 	async getExecutionElements(
@@ -1841,14 +2062,17 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		pageId: string,
 		wildcard = false,
+		version?: [number, number, number],
 	): Promise<Record<string, unknown>> {
 		// Try local execution first
 		const localElements = await invoke<Record<string, unknown>>(
 			"get_execution_elements",
 			{
+				appId,
 				boardId,
 				pageId,
 				wildcard,
+				version,
 			},
 		);
 
@@ -1871,6 +2095,7 @@ export class BoardState implements IBoardState {
 				const params = new URLSearchParams();
 				params.set("page_id", pageId);
 				if (wildcard) params.set("wildcard", "true");
+				if (version) params.set("version", version.join("_"));
 
 				const response = await fetcher<{ elements: Record<string, unknown> }>(
 					this.backend.profile,
@@ -1908,11 +2133,18 @@ export class BoardState implements IBoardState {
 		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
+		reasoningEffort?: string,
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
+		nested?: boolean,
+		readOnly?: boolean,
+		toolContext?: CopilotToolContext,
+		requestId?: string,
+		rawUserPrompt?: string,
+		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
-		console.log(
+		flowPilotDebugLog(
 			"[copilot_chat] Calling with scope:",
 			scope,
 			"runContext:",
@@ -1938,11 +2170,67 @@ export class BoardState implements IBoardState {
 			history,
 			currentImages: requestImages,
 			modelId,
+			reasoningEffort,
 			channel,
 			token: actualToken,
 			runContext,
 			actionContext,
+			nested,
+			readOnly,
+			toolContext,
+			requestId,
+			rawUserPrompt,
+			appId,
 		});
+	}
+
+	async cancelCopilotChat(requestId: string): Promise<void> {
+		await invoke<boolean>("cancel_copilot_chat", { requestId });
+	}
+
+	async flowIrCommitDisposition(
+		token: FlowIrCommitToken,
+		disposition: FlowIrCommitDisposition,
+	): Promise<FlowIrCommitDispositionResult> {
+		return await invoke<FlowIrCommitDispositionResult>(
+			"flowpilot_flow_ir_commit_disposition",
+			{ token, disposition },
+		);
+	}
+
+	async applyFlowIrCommit(
+		appId: string,
+		token: FlowIrCommitToken,
+	): Promise<IApplyFlowIrCommitResponse> {
+		const result = await invoke<IApplyFlowIrCommitResponse>(
+			"flowpilot_apply_flow_ir_commit",
+			{
+				appId,
+				token,
+			},
+		);
+		if (result.status !== "applied" || result.commands.length === 0) {
+			return result;
+		}
+
+		try {
+			await this.syncExecutedCommandsToServer(
+				appId,
+				token.board_id,
+				result.commands,
+			);
+		} catch (error) {
+			// Native apply has already committed and acknowledged the exact batch. A
+			// remote-sync bookkeeping failure is recoverable and must not make the caller
+			// retry or dismiss a commit that is already present locally.
+			const warning = `Typed workflow applied locally; remote synchronization must retry: ${getErrorMessage(error, "Unknown sync error")}`;
+			console.error(warning, error);
+			return {
+				...result,
+				diagnostics: [...result.diagnostics, warning],
+			};
+		}
+		return result;
 	}
 
 	async prerunBoard(

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
 	ArrowRight,
+	BarChart3,
 	CheckCircle,
 	Download,
 	Eye,
@@ -18,12 +19,15 @@ import {
 	XCircle,
 	Zap,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useFeatures } from "../../../hooks/use-features";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { presignCanvasSettings, presignPageAssets } from "../../../lib";
 import type { IBoard } from "../../../lib";
 import { useBackend } from "../../../state/backend-state";
+import type { IPage } from "../../../state/backend-state/page-state";
+import { A2UIRenderer, type Surface, type SurfaceComponent } from "../../a2ui";
 import { AdminBoardPreview } from "../../flow/admin-board-preview";
 import {
 	Avatar,
@@ -54,6 +58,55 @@ interface BoardScores {
 	governance: number;
 	reliability: number;
 	cost: number;
+}
+
+const SCORE_CATEGORIES = [
+	"security",
+	"privacy",
+	"performance",
+	"governance",
+	"reliability",
+	"cost",
+] as const;
+
+type ScoreCategory = (typeof SCORE_CATEGORIES)[number];
+
+const SCORE_LABELS: Record<ScoreCategory, string> = {
+	security: "Security",
+	privacy: "Privacy",
+	performance: "Performance",
+	governance: "Governance",
+	reliability: "Reliability",
+	cost: "Cost",
+};
+
+interface FlaggedPattern {
+	node: string;
+	category: string;
+	score: number;
+	count?: number;
+}
+
+interface BoardScoreItem {
+	boardId: string;
+	security: number;
+	privacy: number;
+	performance: number;
+	governance: number;
+	reliability: number;
+	cost: number;
+	worstScore: number;
+	nodeCount: number;
+	scoredNodeCount: number;
+	flaggedPatterns: FlaggedPattern[];
+	computedAt: string;
+	updatedAt: string;
+}
+
+interface AppScoreDetailResponse {
+	appId: string;
+	appName?: string | null;
+	boards: BoardScoreItem[];
 }
 
 interface PageInfo {
@@ -99,6 +152,56 @@ interface AppContentResponse {
 	boards: BoardSummary[];
 	events: EventSummary[];
 	pages: PageInfo[];
+}
+
+function buildPageSurface(page: IPage): Surface | null {
+	if (!page.components || page.components.length === 0) return null;
+
+	const components: Record<string, SurfaceComponent> = {};
+	for (const component of page.components) {
+		components[component.id] = component;
+	}
+
+	const rootComponentId = components.root ? "root" : page.components[0]?.id;
+	if (!rootComponentId) return null;
+
+	return {
+		id: page.id,
+		rootComponentId,
+		components,
+		canvasSettings: page.canvasSettings,
+	};
+}
+
+function AdminPagePreview({
+	page,
+	appId,
+}: {
+	page: IPage;
+	appId: string;
+}) {
+	const surface = useMemo(() => buildPageSurface(page), [page]);
+
+	if (!surface) {
+		return (
+			<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+				No page content to display.
+			</div>
+		);
+	}
+
+	return (
+		<div className="h-full w-full overflow-auto bg-background">
+			<A2UIRenderer
+				surface={surface}
+				widgetRefs={page.widgetRefs}
+				className="min-h-full w-full"
+				appId={appId}
+				boardId={page.boardId}
+				isPreviewMode={false}
+			/>
+		</div>
+	);
 }
 
 interface PublicationActor {
@@ -401,10 +504,163 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
 	);
 }
 
+function scoreTextColor(value: number): string {
+	if (value >= 7) return "text-green-600 dark:text-green-400";
+	if (value >= 4) return "text-yellow-600 dark:text-yellow-400";
+	return "text-red-600 dark:text-red-400";
+}
+
+function scoreBgColor(value: number): string {
+	if (value >= 7) return "bg-green-500";
+	if (value >= 4) return "bg-yellow-500";
+	return "bg-red-500";
+}
+
+function scoresFromDetail(detail?: BoardScoreItem): BoardScores | undefined {
+	if (!detail || detail.scoredNodeCount <= 0) return undefined;
+	return {
+		security: detail.security,
+		privacy: detail.privacy,
+		performance: detail.performance,
+		governance: detail.governance,
+		reliability: detail.reliability,
+		cost: detail.cost,
+	};
+}
+
+function worstScore(scores: BoardScores): number {
+	return Math.min(...SCORE_CATEGORIES.map((category) => scores[category] ?? 0));
+}
+
+function formatLogLevel(logLevel: number): string {
+	switch (logLevel) {
+		case 0:
+			return "Debug";
+		case 1:
+			return "Info";
+		case 2:
+			return "Warn";
+		case 3:
+			return "Error";
+		case 4:
+			return "Fatal";
+		default:
+			return `Level ${logLevel}`;
+	}
+}
+
+function BoardScoreOverview({
+	board,
+	scoreDetail,
+	scoresLoading,
+}: {
+	board: BoardSummary;
+	scoreDetail?: BoardScoreItem;
+	scoresLoading?: boolean;
+}) {
+	const scores = board.scores ?? scoresFromDetail(scoreDetail);
+	const scoredNodeCount = scoreDetail?.scoredNodeCount;
+	const effectiveNodeCount = scoreDetail?.nodeCount ?? board.nodeCount;
+
+	if (!scores) {
+		return (
+			<div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+				<div className="flex items-center gap-2">
+					<BarChart3 className="h-3.5 w-3.5" />
+					<span>
+						{scoresLoading
+							? "Loading governance scores..."
+							: "No governance scores recorded."}
+					</span>
+				</div>
+				{typeof scoredNodeCount === "number" && (
+					<p className="mt-1">
+						{scoredNodeCount}/{effectiveNodeCount} nodes scored
+					</p>
+				)}
+			</div>
+		);
+	}
+
+	const worst = scoreDetail?.worstScore ?? worstScore(scores);
+	const flagged = scoreDetail?.flaggedPatterns ?? [];
+
+	return (
+		<div className="space-y-3 rounded-md border bg-muted/10 p-3">
+			<div className="flex flex-wrap items-center justify-between gap-2">
+				<div className="flex items-center gap-2">
+					<BarChart3 className="h-3.5 w-3.5 text-muted-foreground" />
+					<span className="text-xs font-medium">Governance scores</span>
+					{typeof scoredNodeCount === "number" && (
+						<span className="text-[10px] text-muted-foreground">
+							{scoredNodeCount}/{effectiveNodeCount} nodes scored
+						</span>
+					)}
+				</div>
+				<div className="flex items-center gap-1.5">
+					<span className="text-[10px] text-muted-foreground">Worst</span>
+					<span
+						className={`inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums text-white ${scoreBgColor(
+							worst,
+						)}`}
+					>
+						{worst}
+					</span>
+				</div>
+			</div>
+
+			<div className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
+				{SCORE_CATEGORIES.map((category) => (
+					<ScoreBar
+						key={category}
+						label={SCORE_LABELS[category]}
+						value={scores[category]}
+					/>
+				))}
+			</div>
+
+			{flagged.length > 0 && (
+				<div className="flex flex-wrap gap-1.5 border-t pt-2">
+					{flagged.slice(0, 8).map((pattern, index) => (
+						<Badge
+							key={`${pattern.node}-${pattern.category}-${index}`}
+							variant="outline"
+							className="text-[10px]"
+						>
+							<span className="max-w-36 truncate">{pattern.node}</span>
+							<span className="text-muted-foreground">{pattern.category}</span>
+							<span className={scoreTextColor(pattern.score)}>
+								{pattern.score}
+							</span>
+							{(pattern.count ?? 1) > 1 && (
+								<span className="text-muted-foreground">x{pattern.count}</span>
+							)}
+						</Badge>
+					))}
+					{flagged.length > 8 && (
+						<Badge variant="secondary" className="text-[10px]">
+							+{flagged.length - 8} more
+						</Badge>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
 function BoardsSection({
 	boards,
 	onPreview,
-}: { boards: BoardSummary[]; onPreview: (boardId: string) => void }) {
+	onPreviewPage,
+	boardScoresById,
+	boardScoresLoading,
+}: {
+	boards: BoardSummary[];
+	onPreview: (boardId: string) => void;
+	onPreviewPage: (page: PageInfo) => void;
+	boardScoresById?: Record<string, BoardScoreItem>;
+	boardScoresLoading?: boolean;
+}) {
 	if (boards.length === 0) {
 		return (
 			<Card>
@@ -431,7 +687,7 @@ function BoardsSection({
 			</CardHeader>
 			<CardContent className="space-y-4">
 				{boards.map((board) => (
-					<div key={board.id} className="border rounded-lg p-4 space-y-3">
+					<div key={board.id} className="border rounded-lg p-4 space-y-4">
 						<div className="flex items-start justify-between gap-4">
 							<div className="min-w-0">
 								<div className="flex items-center gap-2">
@@ -473,43 +729,57 @@ function BoardsSection({
 							</div>
 						</div>
 
-						<div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-							<span>{board.nodeCount} nodes</span>
-							<span>{board.connectionCount} connections</span>
-							<span>{board.variableCount} variables</span>
-							<span>{board.layerCount} layers</span>
-							<span>{board.commentCount} comments</span>
+						<div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
+							<div className="rounded-md bg-muted/30 px-2 py-1.5">
+								<p className="text-[10px] text-muted-foreground">Nodes</p>
+								<p className="font-medium tabular-nums">{board.nodeCount}</p>
+							</div>
+							<div className="rounded-md bg-muted/30 px-2 py-1.5">
+								<p className="text-[10px] text-muted-foreground">Connections</p>
+								<p className="font-medium tabular-nums">
+									{board.connectionCount}
+								</p>
+							</div>
+							<div className="rounded-md bg-muted/30 px-2 py-1.5">
+								<p className="text-[10px] text-muted-foreground">Variables</p>
+								<p className="font-medium tabular-nums">
+									{board.variableCount}
+								</p>
+							</div>
+							<div className="rounded-md bg-muted/30 px-2 py-1.5">
+								<p className="text-[10px] text-muted-foreground">Layers</p>
+								<p className="font-medium tabular-nums">{board.layerCount}</p>
+							</div>
+							<div className="rounded-md bg-muted/30 px-2 py-1.5">
+								<p className="text-[10px] text-muted-foreground">Comments</p>
+								<p className="font-medium tabular-nums">{board.commentCount}</p>
+							</div>
+							<div className="rounded-md bg-muted/30 px-2 py-1.5">
+								<p className="text-[10px] text-muted-foreground">Log level</p>
+								<p className="font-medium">{formatLogLevel(board.logLevel)}</p>
+							</div>
 						</div>
 
-						{board.scores && (
-							<div className="grid grid-cols-2 gap-x-6 gap-y-1">
-								<ScoreBar label="Security" value={board.scores.security} />
-								<ScoreBar label="Privacy" value={board.scores.privacy} />
-								<ScoreBar
-									label="Performance"
-									value={board.scores.performance}
-								/>
-								<ScoreBar label="Governance" value={board.scores.governance} />
-								<ScoreBar
-									label="Reliability"
-									value={board.scores.reliability}
-								/>
-								<ScoreBar label="Cost" value={board.scores.cost} />
-							</div>
-						)}
+						<BoardScoreOverview
+							board={board}
+							scoreDetail={boardScoresById?.[board.id]}
+							scoresLoading={boardScoresLoading}
+						/>
 
 						{board.pages.length > 0 && (
-							<div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+							<div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
 								<FileText className="h-3 w-3" />
 								{board.pages.length} page{board.pages.length !== 1 ? "s" : ""}:
 								{board.pages.map((pg) => (
-									<Badge
+									<button
 										key={pg.pageId}
-										variant="outline"
-										className="text-[10px] px-1.5 py-0"
+										type="button"
+										onClick={() => onPreviewPage(pg)}
+										className="inline-flex h-5 items-center gap-1 rounded-md border px-1.5 text-[10px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 									>
+										<Eye className="h-2.5 w-2.5" />
 										{pg.name}
-									</Badge>
+									</button>
 								))}
 							</div>
 						)}
@@ -601,7 +871,13 @@ function EventsSection({ events }: { events: EventSummary[] }) {
 	);
 }
 
-function PagesSection({ pages }: { pages: PageInfo[] }) {
+function PagesSection({
+	pages,
+	onPreview,
+}: {
+	pages: PageInfo[];
+	onPreview: (page: PageInfo) => void;
+}) {
 	if (pages.length === 0) return null;
 
 	return (
@@ -633,6 +909,15 @@ function PagesSection({ pages }: { pages: PageInfo[] }) {
 									{page.boardId}
 								</span>
 							)}
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => onPreview(page)}
+								className="h-7 shrink-0 text-xs"
+							>
+								<Eye className="h-3 w-3 mr-1" />
+								Preview
+							</Button>
 						</div>
 					))}
 				</div>
@@ -664,9 +949,15 @@ function DetailView({
 	isPending,
 	content,
 	contentLoading,
+	boardScoresById,
+	boardScoresLoading,
 	onPreviewBoard,
+	onPreviewPage,
 	previewBoard,
 	previewBoardLoading,
+	previewPage,
+	previewPageInfo,
+	previewPageLoading,
 	onClosePreview,
 	approveBlockedReason,
 }: {
@@ -676,9 +967,15 @@ function DetailView({
 	isPending: boolean;
 	content?: AppContentResponse;
 	contentLoading: boolean;
+	boardScoresById?: Record<string, BoardScoreItem>;
+	boardScoresLoading?: boolean;
 	onPreviewBoard: (boardId: string) => void;
+	onPreviewPage: (page: PageInfo) => void;
 	previewBoard?: IBoard;
 	previewBoardLoading: boolean;
+	previewPage?: IPage;
+	previewPageInfo?: PageInfo | null;
+	previewPageLoading: boolean;
 	onClosePreview: () => void;
 	approveBlockedReason?: string | null;
 }) {
@@ -840,9 +1137,15 @@ function DetailView({
 			) : (
 				content && (
 					<>
-						<BoardsSection boards={content.boards} onPreview={onPreviewBoard} />
+						<BoardsSection
+							boards={content.boards}
+							onPreview={onPreviewBoard}
+							onPreviewPage={onPreviewPage}
+							boardScoresById={boardScoresById}
+							boardScoresLoading={boardScoresLoading}
+						/>
 						<EventsSection events={content.events} />
-						<PagesSection pages={content.pages} />
+						<PagesSection pages={content.pages} onPreview={onPreviewPage} />
 					</>
 				)
 			)}
@@ -915,17 +1218,27 @@ function DetailView({
 				</Card>
 			)}
 
-			{/* Board preview dialog */}
+			{/* Board/page preview dialog */}
 			<Dialog
-				open={!!previewBoard || previewBoardLoading}
+				open={
+					!!previewBoard ||
+					previewBoardLoading ||
+					!!previewPageInfo ||
+					previewPageLoading
+				}
 				onOpenChange={(open) => {
 					if (!open) onClosePreview();
 				}}
 			>
-				<DialogContent className="max-w-[100vw] w-[100vw] h-[100vh] max-h-[100vh] p-0 flex flex-col rounded-none border-none">
+				<DialogContent
+					showCloseButton={false}
+					className="!fixed !inset-0 !left-0 !top-0 !h-[100dvh] !max-h-[100dvh] !w-[100vw] !max-w-none !translate-x-0 !translate-y-0 !gap-0 !rounded-none !border-0 !p-0 shadow-none"
+				>
 					<div className="flex items-center justify-between px-4 py-2 border-b shrink-0">
 						<DialogTitle className="text-sm font-semibold">
-							Board Preview
+							{previewPageInfo
+								? `Page Preview: ${previewPageInfo.name}`
+								: "Board Preview"}
 						</DialogTitle>
 						<Button
 							variant="ghost"
@@ -937,7 +1250,26 @@ function DetailView({
 						</Button>
 					</div>
 					<div className="flex-1 min-h-0">
-						{previewBoardLoading ? (
+						{previewPageInfo ? (
+							previewPageLoading ? (
+								<div className="flex items-center justify-center h-full">
+									<div className="text-sm text-muted-foreground">
+										Loading page...
+									</div>
+								</div>
+							) : previewPage ? (
+								<AdminPagePreview
+									page={previewPage}
+									appId={previewPageInfo.appId}
+								/>
+							) : (
+								<div className="flex items-center justify-center h-full">
+									<div className="text-sm text-muted-foreground">
+										Page not found.
+									</div>
+								</div>
+							)
+						) : previewBoardLoading ? (
 							<div className="flex items-center justify-center h-full">
 								<div className="text-sm text-muted-foreground">
 									Loading board...
@@ -1011,7 +1343,31 @@ export function AdminAppRequestDetail({
 		enabled: !!profile.data && !!appId,
 	});
 
+	const governanceScoresQuery = useQuery<AppScoreDetailResponse>({
+		queryKey: ["admin", "governance", "scores", appId],
+		queryFn: async () => {
+			if (!profile.data || !appId) throw new Error("Not ready");
+			return backend.apiState.get<AppScoreDetailResponse>(
+				profile.data,
+				`admin/governance/scores/${encodeURIComponent(appId)}`,
+			);
+		},
+		enabled: !!profile.data && !!appId,
+	});
+
+	const boardScoresById = useMemo(
+		() =>
+			Object.fromEntries(
+				(governanceScoresQuery.data?.boards ?? []).map((board) => [
+					board.boardId,
+					board,
+				]),
+			) as Record<string, BoardScoreItem>,
+		[governanceScoresQuery.data?.boards],
+	);
+
 	const [previewBoardId, setPreviewBoardId] = useState<string | null>(null);
+	const [previewPageInfo, setPreviewPageInfo] = useState<PageInfo | null>(null);
 
 	const features = useFeatures();
 	const aiActEnabled = features.data?.ai_act === true;
@@ -1061,12 +1417,103 @@ export function AdminAppRequestDetail({
 		enabled: !!profile.data && !!appId && !!previewBoardId,
 	});
 
+	const pageQuery = useQuery<IPage>({
+		queryKey: [
+			"admin",
+			"publication",
+			"page",
+			appId,
+			previewPageInfo?.pageId,
+			previewPageInfo?.boardId,
+		],
+		queryFn: async () => {
+			if (!profile.data || !appId || !previewPageInfo?.pageId)
+				throw new Error("Not ready");
+
+			const params = new URLSearchParams();
+			if (previewPageInfo.boardId) {
+				params.set("boardId", previewPageInfo.boardId);
+			}
+
+			const page = await backend.apiState.get<IPage>(
+				profile.data,
+				`admin/publication/apps/${encodeURIComponent(appId)}/page/${encodeURIComponent(previewPageInfo.pageId)}${
+					params.size > 0 ? `?${params.toString()}` : ""
+				}`,
+			);
+
+			let previewPage = { ...page };
+
+			if (page.components && page.components.length > 0) {
+				try {
+					previewPage = {
+						...previewPage,
+						components: await presignPageAssets(
+							appId,
+							page.components,
+							backend.storageState,
+						),
+					};
+				} catch (error) {
+					console.warn(
+						"[AdminAppRequestDetail] Failed to presign page assets",
+						{
+							pageId: page.id,
+							error,
+						},
+					);
+				}
+			}
+
+			if (page.canvasSettings?.backgroundImage) {
+				try {
+					const canvasSettings = await presignCanvasSettings(
+						appId,
+						{
+							backgroundColor: page.canvasSettings.backgroundColor ?? "",
+							backgroundImage: page.canvasSettings.backgroundImage,
+							padding: page.canvasSettings.padding ?? "",
+							customCss: page.canvasSettings.customCss,
+						},
+						backend.storageState,
+					);
+
+					previewPage = {
+						...previewPage,
+						canvasSettings: {
+							...previewPage.canvasSettings,
+							backgroundImage: canvasSettings.backgroundImage,
+						},
+					};
+				} catch (error) {
+					console.warn(
+						"[AdminAppRequestDetail] Failed to presign page background",
+						{
+							pageId: page.id,
+							error,
+						},
+					);
+				}
+			}
+
+			return previewPage;
+		},
+		enabled: !!profile.data && !!appId && !!previewPageInfo?.pageId,
+	});
+
 	const handlePreviewBoard = useCallback((boardId: string) => {
+		setPreviewPageInfo(null);
 		setPreviewBoardId(boardId);
+	}, []);
+
+	const handlePreviewPage = useCallback((page: PageInfo) => {
+		setPreviewBoardId(null);
+		setPreviewPageInfo(page);
 	}, []);
 
 	const handleClosePreview = useCallback(() => {
 		setPreviewBoardId(null);
+		setPreviewPageInfo(null);
 	}, []);
 
 	const reviewMutation = useMutation({
@@ -1130,9 +1577,15 @@ export function AdminAppRequestDetail({
 			isPending={reviewMutation.isPending}
 			content={contentQuery.data}
 			contentLoading={contentQuery.isLoading}
+			boardScoresById={boardScoresById}
+			boardScoresLoading={governanceScoresQuery.isLoading}
 			onPreviewBoard={handlePreviewBoard}
+			onPreviewPage={handlePreviewPage}
 			previewBoard={boardQuery.data}
 			previewBoardLoading={boardQuery.isLoading && !!previewBoardId}
+			previewPage={pageQuery.data}
+			previewPageInfo={previewPageInfo}
+			previewPageLoading={pageQuery.isLoading && !!previewPageInfo}
 			onClosePreview={handleClosePreview}
 			approveBlockedReason={approveBlockedReason}
 		/>

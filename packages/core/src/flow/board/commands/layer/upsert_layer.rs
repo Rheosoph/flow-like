@@ -84,7 +84,7 @@ impl Command for UpsertLayerCommand {
             }
         }
 
-        if self.old_layer.is_none() {
+        if self.old_layer.is_none() && total_coordinates > 0 {
             let center_position = (
                 added_coordinates.0 / total_coordinates as f32,
                 added_coordinates.1 / total_coordinates as f32,

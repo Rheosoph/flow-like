@@ -21,6 +21,7 @@ export default defineConfig({
 				"Documentation for Flow-Like, the open source local-first workflow engine. Build type-safe, self-hosted automation with Rust performance.",
 			components: {
 				Hero: "./src/components/docs/Hero.astro",
+				Search: "./src/components/docs/Search.astro",
 				SiteTitle: "./src/components/docs/SiteTitle.astro",
 			},
 			head: [
@@ -133,6 +134,21 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 							],
 						},
 						{
+							label: "Data Studio",
+							collapsed: false,
+							items: [
+								{ label: "Overview", slug: "apps/data-studio" },
+								{
+									label: "Ontology & Knowledge Graph",
+									slug: "topics/ontology/overview",
+								},
+								{
+									label: "Shared & Remote Ontologies",
+									slug: "topics/ontology/remote",
+								},
+							],
+						},
+						{
 							label: "Apps",
 							collapsed: true,
 							items: [
@@ -213,6 +229,20 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 										{
 											label: "AI-Powered Analysis",
 											slug: "topics/datascience/ai-analysis",
+										},
+									],
+								},
+								{
+									label: "Ontology & Knowledge Graph",
+									collapsed: true,
+									items: [
+										{
+											label: "Overview",
+											slug: "topics/ontology/overview",
+										},
+										{
+											label: "Shared & Remote Ontologies",
+											slug: "topics/ontology/remote",
 										},
 									],
 								},

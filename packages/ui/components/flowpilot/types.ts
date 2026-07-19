@@ -1,13 +1,17 @@
 import type React from "react";
 import type { IBoard } from "../../lib";
 import type { A2UIPlanStep } from "../../lib/schema/a2ui/copilot";
-import type { CanvasSettings } from "../../lib/schema/copilot";
+import type {
+	CanvasSettings,
+	FlowIrCommitToken,
+} from "../../lib/schema/copilot";
 import type {
 	BoardCommand,
 	PlanStep,
 	Suggestion,
 } from "../../lib/schema/flow/copilot";
 import type { INode } from "../../lib/schema/flow/node";
+import type { IApplyFlowIrCommitResponse } from "../../state/backend-state/board-state";
 import type { SurfaceComponent } from "../a2ui/types";
 
 /**
@@ -83,11 +87,24 @@ export function flowPilotModelIdForProvider(
 /**
  * Copilot model information from the SDK
  */
+export interface CopilotReasoningEffort {
+	/** Provider-native value forwarded unchanged to the selected backend. */
+	id: string;
+	/** Human-readable label supplied or normalized by the backend. */
+	name: string;
+	/** Optional provider-supplied explanation of the trade-off. */
+	description?: string;
+}
+
 export interface CopilotModel {
 	/** Model ID */
 	id: string;
 	/** Model display name */
 	name: string;
+	/** Reasoning levels advertised dynamically for this exact model. */
+	supportedReasoningEfforts?: CopilotReasoningEffort[];
+	/** Provider-advertised default; omitting the request setting still defers to it. */
+	defaultReasoningEffort?: string;
 }
 
 /**
@@ -218,6 +235,18 @@ export interface FlowPilotProcessEvent {
 	updatedAt?: number;
 }
 
+export interface FlowScriptApplyResultLike {
+	commands?: unknown[];
+	board_commands?: BoardCommand[];
+	diagnostics?: string[];
+	final_board_node_count?: number;
+}
+
+export interface FlowScriptApplyOptions {
+	allowDeletions?: boolean;
+	suppressBlockedToast?: boolean;
+}
+
 /**
  * Unified message format for the copilot chat
  */
@@ -284,7 +313,21 @@ export interface FlowPilotProps {
 	onAcceptSuggestion?: (suggestion: Suggestion) => void;
 
 	/** Callback when commands should be executed (board mode) */
-	onExecuteCommands?: (commands: BoardCommand[]) => void;
+	onExecuteCommands?: (commands: BoardCommand[]) => void | Promise<void>;
+
+	/** Callback when the FlowScript workspace should be reconciled and applied server-side. */
+	onApplyFlowScript?: (
+		flowscript: string,
+		options?: FlowScriptApplyOptions,
+	) =>
+		| undefined
+		| FlowScriptApplyResultLike
+		| Promise<undefined | FlowScriptApplyResultLike>;
+
+	/** Atomically apply the exact retained compiled workflow batch and record undo/refetch state. */
+	onApplyFlowIrCommit?: (
+		token: FlowIrCommitToken,
+	) => Promise<IApplyFlowIrCommitResponse>;
 
 	/** Callback to focus on a specific node (board mode) */
 	onFocusNode?: (nodeId: string) => void;

@@ -3,7 +3,7 @@
  * System prompts and guidance for AI-assisted UI generation
  */
 
-import { normalizeComponents } from "../../components/builder/componentDefaults";
+import { validateComponents } from "../../components/flowpilot/validateComponents";
 
 export const A2UI_SYSTEM_PROMPT = `You are FlowPilot, an AI assistant specialized in generating A2UI (Adaptive Agentic UI) interfaces. A2UI is a declarative UI system that enables building dynamic, data-bound interfaces.
 
@@ -17,7 +17,9 @@ export const A2UI_SYSTEM_PROMPT = `You are FlowPilot, an AI assistant specialize
 
 ## BoundValue Format
 
-Data can be bound using either literal values or data paths:
+Every component prop except \`type\` and structural containers such as
+\`children.explicitList\` must use BoundValue, including static variants, sizes, booleans, and
+numbers. Data can be bound using either literal values or data paths:
 - Literal string: { "literalString": "Hello" }
 - Literal number: { "literalNumber": 42 }
 - Literal boolean: { "literalBool": true }
@@ -45,6 +47,7 @@ Data can be bound using either literal values or data paths:
 - **divider**: Horizontal/vertical separator
 - **badge**: Status indicator
 - **avatar**: User avatar
+- **userProfile**: User lookup display by sub, with avatar/chip/row/detailed/card variants
 - **progress**: Progress bar
 - **spinner**: Loading indicator
 - **skeleton**: Loading placeholder
@@ -110,7 +113,7 @@ Always respond with valid JSON matching the Surface structure:
       "style": { "className": "..." },
       "component": {
         "type": "column",
-        "gap": "16px",
+        "gap": { "literalString": "16px" },
         "children": { "explicitList": ["child-1", "child-2"] }
       }
     }
@@ -120,6 +123,14 @@ Always respond with valid JSON matching the Surface structure:
   ]
 }
 \`\`\`
+
+## Actions
+
+Interactive components trigger backend events via \`actions: [{ "name": "eventName", "context": {...} }]\`.
+An action only INVOKES the named event — the board handler reads live input values itself
+(Get Element Value / Get File Input Files on the element refs). Use \`context\` for static
+identity data only (which form, which row id); never try to forward what the user typed or
+selected through the action payload.
 
 ## Best Practices
 
@@ -137,35 +148,35 @@ export const COMPONENT_SELECTION_GUIDANCE = `## Component Selection Guide
 When building A2UI interfaces, choose components based on the use case:
 
 ### For Text Content
-- Single line label → text with variant="label"
-- Heading → text with variant="heading", size="xl"
-- Paragraph → text with variant="body"
-- Code snippet → text with variant="code"
+- Single line label → text with variant={"literalString":"label"}
+- Heading → text with variant={"literalString":"heading"}, size={"literalString":"xl"}
+- Paragraph → text with variant={"literalString":"body"}
+- Code snippet → text with variant={"literalString":"code"}
 - Rich text → markdown
 
 ### For User Input
 - Single-line text → textField
-- Multi-line text → textField with multiline=true
-- Number → textField with inputType="number"
-- Password → textField with inputType="password"
-- Email → textField with inputType="email"
+- Multi-line text → textField with multiline={"literalBool":true}
+- Number → textField with inputType={"literalString":"number"}
+- Password → textField with inputType={"literalString":"password"}
+- Email → textField with inputType={"literalString":"email"}
 - Single selection → select
-- Multiple selection → select with multiple=true
+- Multiple selection → select with multiple={"literalBool":true}
 - Yes/No → switch or checkbox
 - Range value → slider
 - Multiple options → radioGroup
 
 ### For Actions
-- Primary action → button with variant="default"
-- Secondary action → button with variant="secondary"
-- Destructive action → button with variant="destructive"
-- Icon-only button → button with size="icon"
+- Primary action → button with variant={"literalString":"default"}
+- Secondary action → button with variant={"literalString":"secondary"}
+- Destructive action → button with variant={"literalString":"destructive"}
+- Icon-only button → button with size={"literalString":"icon"}
 
 ### For Layout
 - Horizontal items → row
 - Vertical items → column
 - Complex grid → grid with columns
-- Overlapping content → stack (ALWAYS set width and height, e.g., width="400px" height="300px" or use className="w-full h-64")
+- Overlapping content → stack (ALWAYS set width and height as BoundValues, e.g., width={"literalString":"400px"} height={"literalString":"300px"}, or use className="w-full h-64")
 - Long content → scrollArea
 
 ### For Grouping
@@ -224,8 +235,8 @@ Use semantic tokens:
 
 ### Flexbox Alignment
 For row/column components, use props:
-- align: "start" | "center" | "end" | "stretch"
-- justify: "start" | "center" | "end" | "between" | "around"
+- align: {"literalString":"start"} (or center/end/stretch)
+- justify: {"literalString":"start"} (or center/end/between/around)
 
 ### Responsive Design
 Apply breakpoint-specific styles via responsiveOverrides:
@@ -745,7 +756,13 @@ export function buildA2UIPrompt(
 
 	prompt += "## Examples\n\n";
 	for (const example of FEW_SHOT_EXAMPLES.slice(0, 2)) {
-		prompt += `### ${example.name}\nUser: ${example.input}\nAssistant:\n\`\`\`json\n${JSON.stringify(example.output, null, 2)}\n\`\`\`\n\n`;
+		const normalizedOutput = {
+			...example.output,
+			components: validateComponents(
+				example.output.components as Parameters<typeof validateComponents>[0],
+			).components,
+		};
+		prompt += `### ${example.name}\nUser: ${example.input}\nAssistant:\n\`\`\`json\n${JSON.stringify(normalizedOutput, null, 2)}\n\`\`\`\n\n`;
 	}
 
 	if (context?.existingComponents?.length) {
@@ -777,8 +794,11 @@ export function parseA2UIResponse(response: string): {
 			return null;
 		}
 
-		// Normalize components to ensure all required props are present
-		const normalizedComponents = normalizeComponents(parsed.components);
+		// Apply the same validation/coercion used for AI-emitted surfaces, including converting
+		// bare primitive props into BoundValue literals.
+		const normalizedComponents = validateComponents(
+			parsed.components,
+		).components;
 
 		return {
 			rootComponentId: parsed.rootComponentId,

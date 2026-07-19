@@ -7,6 +7,18 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(
     rs_type = "String",
     db_type = "Enum",
+    enum_name = "AppConnectionStatus"
+)]
+pub enum AppConnectionStatus {
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
     enum_name = "AiActAssessmentStatus"
 )]
 pub enum AiActAssessmentStatus {
@@ -654,4 +666,24 @@ pub enum WasmReviewAction {
     Commented,
     #[sea_orm(string_value = "FLAGGED")]
     Flagged,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "Enum",
+    enum_name = "AppGroupMemberStatus"
+)]
+pub enum AppGroupMemberStatus {
+    #[sea_orm(string_value = "PENDING")]
+    Pending,
+    #[sea_orm(string_value = "ACTIVE")]
+    Active,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AppGroupMemberKind")]
+pub enum AppGroupMemberKind {
+    #[sea_orm(string_value = "PRIMARY")]
+    Primary,
+    #[sea_orm(string_value = "MEMBER")]
+    Member,
 }

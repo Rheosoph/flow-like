@@ -23,10 +23,18 @@ local-ml = [
     "flow-like-catalog-llm/local-ml",
     "flow-like-catalog-processing/local-ml",
 ]
+# NVIDIA ORT distributions are deployment-specific, so expose them as opt-ins.
+# Feature unification applies the provider to ONNX nodes and core FastEmbed sessions.
+local-ml-cuda = ["local-ml", "flow-like-catalog-onnx/cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like-catalog-onnx/tensorrt"]
 local-tts = ["flow-like-catalog-media/local-tts"]
 local-tts-metal = ["local-tts", "flow-like-catalog-media/local-tts-metal"]
 local-tts-cuda = ["local-tts", "flow-like-catalog-media/local-tts-cuda"]
 local-tts-accelerate = ["local-tts", "flow-like-catalog-media/local-tts-accelerate"]
+local-stt = ["flow-like-catalog-media/local-stt"]
+local-stt-metal = ["local-stt", "flow-like-catalog-media/local-stt-metal"]
+local-stt-cuda = ["local-stt", "flow-like-catalog-media/local-stt-cuda"]
+local-stt-accelerate = ["local-stt", "flow-like-catalog-media/local-stt-accelerate"]
 remote-ml = [
     "flow-like-catalog-core/remote-ml",
     "flow-like-catalog-llm/remote-ml",
@@ -40,6 +48,7 @@ mimalloc = ["dep:mimalloc"]
 # Execution feature - enables heavy dependencies for node execution
 # APIs that only serve catalog metadata should NOT enable this
 execute = [
+    "remote-ml",
     "flow-like-catalog-core/execute",
     "flow-like-catalog-std/execute",
     "flow-like-catalog-data/execute",
@@ -56,6 +65,7 @@ execute = [
 # Server execution - same as execute but without desktop/RPA automation nodes
 # Use this for headless server deployments (ECS, Lambda, etc.)
 server-execute = [
+    "remote-ml",
     "flow-like-catalog-core/execute",
     "flow-like-catalog-std/execute",
     "flow-like-catalog-data/execute",

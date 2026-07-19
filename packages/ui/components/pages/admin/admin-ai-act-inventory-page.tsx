@@ -31,6 +31,7 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 import { toast } from "sonner";
@@ -1243,7 +1244,9 @@ function InventoryDetail({
 			if (!profile.data) throw new Error("Profile not loaded");
 			return backend.apiState.post<{
 				suggestion?: { purpose?: string; notes?: string };
-			}>(profile.data, `admin/ai-act/assist/${encodeURIComponent(appId)}`, { profile: profile.data });
+			}>(profile.data, `admin/ai-act/assist/${encodeURIComponent(appId)}`, {
+				profile: profile.data,
+			});
 		},
 		onSuccess: (res) => {
 			toast.success(
@@ -2410,6 +2413,19 @@ const EMPTY_REGISTRY_FORM = {
 	note: "",
 };
 
+function registryFormFromItem(item: RegistryItem) {
+	return {
+		provider: item.provider,
+		modelId: item.modelId,
+		posture: item.posture,
+		hosted: item.hosted,
+		openLicence: item.openLicence,
+		systemicRisk: item.systemicRisk,
+		vetted: item.vetted,
+		note: item.note ?? "",
+	};
+}
+
 const REGISTRY_TOGGLES = [
 	["hosted", "Hosted", "Served by a provider's hosted endpoint."],
 	["openLicence", "Open licence", "Distributed under an open / free licence."],
@@ -2433,9 +2449,17 @@ function RegistryTab({
 	);
 
 	const [form, setForm] = useState({ ...EMPTY_REGISTRY_FORM });
+	const hydratedInitialKeyRef = useRef("");
+	const userEditedInitialFormRef = useRef(false);
+	const initialSelectionKey =
+		initialProvider && initialModelId
+			? `${initialProvider}\u0000${initialModelId}`
+			: "";
 
 	useEffect(() => {
 		if (!initialProvider || !initialModelId) return;
+		hydratedInitialKeyRef.current = "";
+		userEditedInitialFormRef.current = false;
 		setForm((current) => ({
 			...current,
 			provider: initialProvider,
@@ -2463,6 +2487,29 @@ function RegistryTab({
 			(item) => item.provider === provider && item.modelId === modelId,
 		);
 	}, [form.provider, form.modelId, models.data]);
+
+	useEffect(() => {
+		if (
+			!initialSelectionKey ||
+			!selectedModel ||
+			userEditedInitialFormRef.current ||
+			hydratedInitialKeyRef.current === initialSelectionKey ||
+			selectedModel.provider !== initialProvider ||
+			selectedModel.modelId !== initialModelId
+		) {
+			return;
+		}
+
+		hydratedInitialKeyRef.current = initialSelectionKey;
+		setForm(registryFormFromItem(selectedModel));
+	}, [initialModelId, initialProvider, initialSelectionKey, selectedModel]);
+	const updateRegistryForm = useCallback(
+		(update: Partial<typeof EMPTY_REGISTRY_FORM>) => {
+			userEditedInitialFormRef.current = true;
+			setForm((current) => ({ ...current, ...update }));
+		},
+		[],
+	);
 
 	const formTitle = selectedModel?.registered
 		? "Update model"
@@ -2494,16 +2541,8 @@ function RegistryTab({
 	});
 
 	const editEntry = useCallback((item: RegistryItem) => {
-		setForm({
-			provider: item.provider,
-			modelId: item.modelId,
-			posture: item.posture,
-			hosted: item.hosted,
-			openLicence: item.openLicence,
-			systemicRisk: item.systemicRisk,
-			vetted: item.vetted,
-			note: item.note ?? "",
-		});
+		userEditedInitialFormRef.current = true;
+		setForm(registryFormFromItem(item));
 	}, []);
 
 	return (
@@ -2532,7 +2571,7 @@ function RegistryTab({
 							<Input
 								value={form.provider}
 								onChange={(e) =>
-									setForm((f) => ({ ...f, provider: e.target.value }))
+									updateRegistryForm({ provider: e.target.value })
 								}
 								placeholder="openai"
 							/>
@@ -2542,7 +2581,7 @@ function RegistryTab({
 							<Input
 								value={form.modelId}
 								onChange={(e) =>
-									setForm((f) => ({ ...f, modelId: e.target.value }))
+									updateRegistryForm({ modelId: e.target.value })
 								}
 								placeholder="gpt-4o"
 							/>
@@ -2553,7 +2592,7 @@ function RegistryTab({
 							<Label className="text-xs">GPAI posture</Label>
 							<Select
 								value={form.posture}
-								onValueChange={(v) => setForm((f) => ({ ...f, posture: v }))}
+								onValueChange={(posture) => updateRegistryForm({ posture })}
 							>
 								<SelectTrigger>
 									<SelectValue />
@@ -2571,9 +2610,7 @@ function RegistryTab({
 							<Label className="text-xs">Note</Label>
 							<Input
 								value={form.note}
-								onChange={(e) =>
-									setForm((f) => ({ ...f, note: e.target.value }))
-								}
+								onChange={(e) => updateRegistryForm({ note: e.target.value })}
 								placeholder="Optional"
 							/>
 						</div>
@@ -2591,7 +2628,7 @@ function RegistryTab({
 								<Switch
 									checked={form[key] as boolean}
 									onCheckedChange={(checked) =>
-										setForm((f) => ({ ...f, [key]: checked }))
+										updateRegistryForm({ [key]: checked })
 									}
 								/>
 							</div>
@@ -2601,7 +2638,10 @@ function RegistryTab({
 						<Button
 							variant="ghost"
 							size="sm"
-							onClick={() => setForm({ ...EMPTY_REGISTRY_FORM })}
+							onClick={() => {
+								userEditedInitialFormRef.current = true;
+								setForm({ ...EMPTY_REGISTRY_FORM });
+							}}
 						>
 							Clear
 						</Button>

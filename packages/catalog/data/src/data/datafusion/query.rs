@@ -564,7 +564,7 @@ mod tests {
 
         assert_eq!(node.name, "df_sql_query");
         assert_eq!(node.friendly_name, "SQL Query");
-        assert_eq!(node.version, Some(1));
+        assert_eq!(node.version, Some(2));
 
         let input_pins: Vec<_> = node
             .pins

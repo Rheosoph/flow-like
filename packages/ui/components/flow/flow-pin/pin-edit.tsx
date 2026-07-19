@@ -1,9 +1,17 @@
 "use client";
 
 import { VariableIcon } from "lucide-react";
-import { type FC, memo, useCallback, useEffect, useState } from "react";
+import {
+	type FC,
+	type RefObject,
+	memo,
+	useCallback,
+	useEffect,
+	useState,
+} from "react";
 import { Button } from "../../../components/ui/button";
 import { IValueType } from "../../../lib";
+import type { IBoard } from "../../../lib/schema/flow/board";
 import {
 	type IPin,
 	IPinType,
@@ -17,19 +25,33 @@ import { VariableDescription } from "./variable-types/default-text";
 import { ElementSelect } from "./variable-types/element-select";
 import { EnumVariable } from "./variable-types/enum-variable";
 import { FnVariable } from "./variable-types/fn-select";
+import {
+	OntologyActionSelect,
+	OntologyObjectSelect,
+	OntologySelect,
+	RemoteOntologyActionSelect,
+	RemoteOntologyObjectSelect,
+	RemoteOntologySelect,
+} from "./variable-types/ontology-pin-selects";
 import { ProjectUserSelect } from "./variable-types/project-user-select";
+import { RemoteDatabaseSelect } from "./variable-types/remote-database-select";
+import { RemoteEventSelect } from "./variable-types/remote-event-select";
+import { RemoteProjectSelect } from "./variable-types/remote-project-select";
 import { VarVariable } from "./variable-types/var-select";
 import { WidgetVariable } from "./variable-types/widget-select";
+
+type PinDefaultValue = IPin["default_value"];
 
 interface PinEditProps {
 	readonly nodeId: string;
 	readonly nodeName?: string;
 	readonly pin: IPin;
-	readonly defaultValue: any;
+	readonly defaultValue: PinDefaultValue;
 	readonly appId: string;
-	readonly boardId: string;
-	readonly changeDefaultValue: (value: any) => void;
-	readonly saveDefaultValue: (value: any) => Promise<void>;
+	readonly boardId?: string;
+	readonly boardRef?: RefObject<IBoard | undefined>;
+	readonly changeDefaultValue: (value: PinDefaultValue) => void;
+	readonly saveDefaultValue: (value: PinDefaultValue) => Promise<void>;
 	readonly currentLayerId?: string;
 	readonly selectorDataRef?: FlowSelectorDataRef;
 	readonly selectorDataVersion?: number;
@@ -42,6 +64,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	defaultValue,
 	appId,
 	boardId,
+	boardRef,
 	changeDefaultValue,
 	saveDefaultValue,
 	currentLayerId,
@@ -55,12 +78,21 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	}, [defaultValue]);
 
 	const updateDefaultValue = useCallback(
-		async (value: any) => {
-			setCachedDefaultValue(value);
-			changeDefaultValue(value);
-			await saveDefaultValue(value);
+		async (value: unknown) => {
+			const nextValue = value as PinDefaultValue;
+			setCachedDefaultValue(nextValue);
+			changeDefaultValue(nextValue);
+			await saveDefaultValue(nextValue);
 		},
 		[changeDefaultValue, saveDefaultValue],
+	);
+
+	const previewDefaultValue = useCallback(
+		(value: PinDefaultValue) => {
+			setCachedDefaultValue(value);
+			changeDefaultValue(value);
+		},
+		[changeDefaultValue],
 	);
 
 	if (pin.pin_type === IPinType.Output)
@@ -79,6 +111,116 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 				setValue={updateDefaultValue}
 			/>
 		);
+	}
+
+	if (
+		pin.name === "_flow_remote_app_id" &&
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		return (
+			<RemoteProjectSelect
+				pin={pin}
+				value={cachedDefaultValue}
+				appId={appId}
+				setValue={updateDefaultValue}
+			/>
+		);
+	}
+
+	if (
+		pin.name === "_flow_remote_database" &&
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		return (
+			<RemoteDatabaseSelect
+				pin={pin}
+				value={cachedDefaultValue}
+				appId={appId}
+				nodeId={nodeId}
+				boardRef={boardRef}
+				setValue={updateDefaultValue}
+			/>
+		);
+	}
+
+	if (
+		pin.name === "_flow_remote_event" &&
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		return (
+			<RemoteEventSelect
+				pin={pin}
+				value={cachedDefaultValue}
+				appId={appId}
+				boardId={boardId}
+				nodeId={nodeId}
+				boardRef={boardRef}
+				setValue={updateDefaultValue}
+				onPreviewValue={previewDefaultValue}
+			/>
+		);
+	}
+
+	if (pin.name === "_flow_remote_event_meta") {
+		return <VariableDescription pin={pin} />;
+	}
+
+	if (
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		const ontologyProps = {
+			pin,
+			value: cachedDefaultValue,
+			appId,
+			boardId,
+			nodeId,
+			currentLayerId,
+			boardRef,
+			setValue: updateDefaultValue,
+		} as const;
+		if (
+			(nodeName === "ontology_query_objects" ||
+				nodeName === "ontology_action_request" ||
+				nodeName === "ontology_action_input") &&
+			pin.name === "ontology_id"
+		) {
+			return <OntologySelect {...ontologyProps} />;
+		}
+		if (nodeName === "ontology_query_objects" && pin.name === "object_type") {
+			return <OntologyObjectSelect {...ontologyProps} />;
+		}
+		if (
+			(nodeName === "ontology_action_request" ||
+				nodeName === "ontology_action_input") &&
+			pin.name === "action_id"
+		) {
+			return <OntologyActionSelect {...ontologyProps} />;
+		}
+		if (
+			(nodeName === "ontology_query_remote_objects" ||
+				nodeName === "ontology_query_remote_children" ||
+				nodeName === "ontology_action_request_remote") &&
+			pin.name === "binding_id"
+		) {
+			return <RemoteOntologySelect {...ontologyProps} />;
+		}
+		if (
+			(nodeName === "ontology_query_remote_objects" ||
+				nodeName === "ontology_query_remote_children") &&
+			pin.name === "object_type"
+		) {
+			return <RemoteOntologyObjectSelect {...ontologyProps} />;
+		}
+		if (
+			nodeName === "ontology_action_request_remote" &&
+			pin.name === "action_id"
+		) {
+			return <RemoteOntologyActionSelect {...ontologyProps} />;
+		}
 	}
 
 	if (
@@ -139,10 +281,9 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	) {
 		return (
 			<FnVariable
-				boardId={boardId}
+				boardRef={boardRef}
 				pin={pin}
 				value={cachedDefaultValue}
-				appId={appId}
 				setValue={updateDefaultValue}
 			/>
 		);
@@ -155,10 +296,9 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 	) {
 		return (
 			<VarVariable
-				boardId={boardId}
+				boardRef={boardRef}
 				pin={pin}
 				value={cachedDefaultValue}
-				appId={appId}
 				currentLayerId={currentLayerId}
 				setValue={updateDefaultValue}
 			/>

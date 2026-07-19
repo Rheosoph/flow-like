@@ -34,6 +34,8 @@ pub mod push_stat;
 pub mod push_stats;
 pub mod push_step;
 pub mod push_text_to_step;
+pub mod push_widget;
+pub mod push_widgets;
 pub mod remove_step;
 
 /// URL processing utilities for converting Tauri local file URLs to base64 data URLs
@@ -266,6 +268,15 @@ impl ChatEventNode {
         ChatEventNode {}
     }
 
+    fn create_chat_history(messages: Vec<HistoryMessage>) -> History {
+        let mut history = History::new("".to_string(), messages);
+        // Rig's streaming response contract has no media event. Chat histories therefore
+        // default to a non-stream request so generated images reach the UI; the invoke layer
+        // still replays the completed response through the normal chunk callback.
+        history.stream = Some(false);
+        history
+    }
+
     async fn process_history_messages(
         messages: Vec<HistoryMessage>,
         mut context: Option<&mut ExecutionContext>,
@@ -292,7 +303,63 @@ impl ChatEventNode {
                                     image_url: ImageUrl {
                                         url: processed_url,
                                         detail: image_url.detail.clone(),
+                                        media_type: image_url.media_type.clone(),
+                                        additional_params: image_url.additional_params.clone(),
                                     },
+                                });
+                            }
+                        }
+                        Content::Audio {
+                            content_type,
+                            audio_url,
+                            media_type,
+                            additional_params,
+                        } => {
+                            let processed_url =
+                                url_processing::process_url(audio_url, context.as_deref_mut())
+                                    .await;
+                            if !processed_url.is_empty() {
+                                processed_contents.push(Content::Audio {
+                                    content_type: content_type.clone(),
+                                    audio_url: processed_url,
+                                    media_type: media_type.clone(),
+                                    additional_params: additional_params.clone(),
+                                });
+                            }
+                        }
+                        Content::Video {
+                            content_type,
+                            video_url,
+                            media_type,
+                            additional_params,
+                        } => {
+                            let processed_url =
+                                url_processing::process_url(video_url, context.as_deref_mut())
+                                    .await;
+                            if !processed_url.is_empty() {
+                                processed_contents.push(Content::Video {
+                                    content_type: content_type.clone(),
+                                    video_url: processed_url,
+                                    media_type: media_type.clone(),
+                                    additional_params: additional_params.clone(),
+                                });
+                            }
+                        }
+                        Content::Document {
+                            content_type,
+                            document_url,
+                            media_type,
+                            additional_params,
+                        } => {
+                            let processed_url =
+                                url_processing::process_url(document_url, context.as_deref_mut())
+                                    .await;
+                            if !processed_url.is_empty() {
+                                processed_contents.push(Content::Document {
+                                    content_type: content_type.clone(),
+                                    document_url: processed_url,
+                                    media_type: media_type.clone(),
+                                    additional_params: additional_params.clone(),
                                 });
                             }
                         }
@@ -403,7 +470,7 @@ impl NodeLogic for ChatEventNode {
         context
             .set_pin_value(
                 "history",
-                json!(History::new("".to_string(), processed_messages)),
+                json!(Self::create_chat_history(processed_messages)),
             )
             .await?;
         context
@@ -566,6 +633,114 @@ pub struct Chat {
     pub attachments: Option<Vec<Attachment>>,
 }
 
+/// An a2ui widget instance embedded inside a chat message. `component` is the
+/// self-contained `widgetInstance` component (with `inlineWidgetDef` and
+/// `actionBindings`) produced by the Instantiate Widget node, so the chat can
+/// render it without touching the a2ui surface channel.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct ChatWidget {
+    pub instance_id: String,
+    pub widget_id: String,
+    pub surface_id: String,
+    pub component: Value,
+    /// Ordered a2ui update messages targeting this widget that were streamed
+    /// earlier in the run (before the push). The frontend replays them over the
+    /// snapshot so element nodes (Set Element Value, Update GeoMap, Push CSV To
+    /// Chart, …) work in the same run that pushes the widget.
+    #[serde(default)]
+    pub updates: Vec<Value>,
+}
+
+impl ChatWidget {
+    /// Build a `ChatWidget` from an `element_ref` produced by the Instantiate
+    /// Widget node. The ref carries the self-contained `widgetInstance` component
+    /// under `component`, which the chat renders directly.
+    pub fn from_element_ref(value: &Value) -> flow_like_types::Result<Self> {
+        let instance_id = value
+            .get("instanceId")
+            .or_else(|| value.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Widget reference is missing 'instanceId'"))?
+            .to_string();
+
+        let widget_id = value
+            .get("widgetId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let surface_id = value
+            .get("surfaceId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| instance_id.clone());
+
+        let component = value.get("component").cloned().ok_or_else(|| {
+            anyhow!(
+                "Widget reference is missing 'component'. Re-add the Instantiate Widget node (requires version 4 or newer)."
+            )
+        })?;
+
+        Ok(ChatWidget {
+            instance_id,
+            widget_id,
+            surface_id,
+            component,
+            updates: vec![],
+        })
+    }
+
+    fn inline_child_ids(&self) -> Vec<String> {
+        self.component
+            .get("inlineWidgetDef")
+            .and_then(|def| def.get("components"))
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("id").and_then(|id| id.as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Collects the run's a2ui updates that target this widget (its instance,
+    /// a `{instance}/{child}` qualified element, one of its inline children by
+    /// bare id, or its surface's data model) so the frontend can replay them
+    /// over the pushed snapshot. All matching entries are kept — including full
+    /// re-registrations of the instance — because the replay must end at
+    /// exactly the state the emission order produces.
+    pub fn attach_update_log(&mut self, log: &[flow_like::a2ui::A2UIServerMessage]) {
+        use flow_like::a2ui::A2UIServerMessage as Msg;
+
+        let child_ids = self.inline_child_ids();
+        let qualified_prefix = format!("{}/", self.instance_id);
+
+        for message in log {
+            let relevant = match message {
+                Msg::UpsertElement { element_id, .. } => {
+                    element_id == &self.instance_id
+                        || element_id.starts_with(&qualified_prefix)
+                        || (!element_id.contains('/') && {
+                            let suffix = format!("-{element_id}");
+                            child_ids
+                                .iter()
+                                .any(|c| c == element_id || c.ends_with(&suffix))
+                        })
+                }
+                Msg::DataModelUpdate { surface_id, .. }
+                | Msg::CreateElement { surface_id, .. }
+                | Msg::RemoveElement { surface_id, .. } => surface_id == &self.surface_id,
+                _ => false,
+            };
+
+            if relevant && let Ok(value) = flow_like_types::json::to_value(message) {
+                self.updates.push(value);
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct ChatResponse {
     pub response: Response,
@@ -574,6 +749,8 @@ pub struct ChatResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub model_id: Option<String>,
+    #[serde(default)]
+    pub widgets: Vec<ChatWidget>,
 }
 
 #[derive(Clone)]
@@ -596,6 +773,7 @@ impl CachedChatResponse {
             response: Response::new(),
             actions: vec![],
             attachments: vec![],
+            widgets: vec![],
             global_session: flow_like_types::json::from_str("{}")?,
             local_session: flow_like_types::json::from_str("{}")?,
             model_id: None,
@@ -641,6 +819,8 @@ pub struct ChatStreamingResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub plan: Option<Reasoning>,
+    #[serde(default)]
+    pub widgets: Vec<ChatWidget>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
@@ -679,6 +859,61 @@ mod tests {
         assert!(!is_tauri_asset_url("https://example.com/file.png"));
         assert!(!is_tauri_asset_url("http://example.com/file.png"));
         assert!(!is_tauri_asset_url("data:image/png;base64,iVBORw0KG..."));
+    }
+
+    #[tokio::test]
+    async fn process_history_keeps_every_remote_media_type() {
+        let message = HistoryMessage {
+            role: flow_like_model_provider::history::Role::User,
+            content: MessageContent::Contents(vec![
+                Content::Audio {
+                    content_type: flow_like_model_provider::history::ContentType::AudioUrl,
+                    audio_url: "https://example.com/input.mp3".to_string(),
+                    media_type: Some("audio/mpeg".to_string()),
+                    additional_params: None,
+                },
+                Content::Video {
+                    content_type: flow_like_model_provider::history::ContentType::VideoUrl,
+                    video_url: "https://example.com/input.mp4".to_string(),
+                    media_type: Some("video/mp4".to_string()),
+                    additional_params: None,
+                },
+                Content::Document {
+                    content_type: flow_like_model_provider::history::ContentType::DocumentUrl,
+                    document_url: "https://example.com/input.pdf".to_string(),
+                    media_type: Some("application/pdf".to_string()),
+                    additional_params: None,
+                },
+            ]),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            annotations: None,
+        };
+
+        let processed = ChatEventNode::process_history_messages(vec![message], None).await;
+        let MessageContent::Contents(parts) = &processed[0].content else {
+            panic!("expected content parts")
+        };
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            &parts[0],
+            Content::Audio { audio_url, .. } if audio_url.ends_with("input.mp3")
+        ));
+        assert!(matches!(
+            &parts[1],
+            Content::Video { video_url, .. } if video_url.ends_with("input.mp4")
+        ));
+        assert!(matches!(
+            &parts[2],
+            Content::Document { document_url, .. } if document_url.ends_with("input.pdf")
+        ));
+    }
+
+    #[test]
+    fn chat_history_defaults_to_media_safe_non_streaming() {
+        let history = ChatEventNode::create_chat_history(Vec::new());
+        assert_eq!(history.stream, Some(false));
     }
 
     #[test]

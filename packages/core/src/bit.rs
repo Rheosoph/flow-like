@@ -3,6 +3,7 @@ use crate::state::FlowLikeState;
 use crate::utils::compression::{compress_to_file_json, from_compressed_json};
 use crate::utils::download::download_bit;
 use flow_like_model_provider::history::History;
+use flow_like_model_provider::llm::{CompletionClientDyn, CompletionModelHandle};
 use flow_like_model_provider::provider::{
     EmbeddingModelProvider, ImageEmbeddingModelProvider, ModelProvider,
 };
@@ -13,7 +14,6 @@ use flow_like_types::Value;
 use flow_like_types::intercom::InterComCallback;
 
 use rig::agent::AgentBuilder;
-use rig::client::completion::{CompletionClientDyn, CompletionModelHandle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -72,10 +72,10 @@ impl Default for Metadata {
 
 impl Metadata {
     pub async fn presign(&mut self, prefix: Path, store: &FlowLikeStore) {
-        if let Some(icon) = &self.icon {
-            if icon.starts_with("http://") || icon.starts_with("https://") {
-                return;
-            }
+        if let Some(icon) = &self.icon
+            && !icon.starts_with("http://")
+            && !icon.starts_with("https://")
+        {
             let icon_path = prefix.child(format!("{icon}.webp"));
             if let Ok(url) = store
                 .sign(
@@ -89,10 +89,10 @@ impl Metadata {
             }
         }
 
-        if let Some(thumbnail) = &self.thumbnail {
-            if thumbnail.starts_with("http://") || thumbnail.starts_with("https://") {
-                return;
-            }
+        if let Some(thumbnail) = &self.thumbnail
+            && !thumbnail.starts_with("http://")
+            && !thumbnail.starts_with("https://")
+        {
             let thumbnail_path = prefix.child(format!("{thumbnail}.webp"));
             if let Ok(url) = store
                 .sign(
@@ -471,6 +471,99 @@ impl Default for TtsModelParameters {
     }
 }
 
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub enum SttModelType {
+    WhisperTiny,
+    WhisperTinyEn,
+    WhisperBase,
+    WhisperBaseEn,
+    WhisperSmall,
+    WhisperSmallEn,
+    WhisperMedium,
+    WhisperMediumEn,
+    WhisperLargeV3,
+    WhisperLargeV3Turbo,
+    DistilWhisperMediumEn,
+    DistilWhisperLargeV2,
+    DistilWhisperLargeV3,
+    OlmoAsrTinyEn,
+    OlmoAsrBaseEn,
+    OlmoAsrSmallEn,
+    OlmoAsrMediumEn,
+    OlmoAsrLargeEn,
+    OlmoAsrLargeEnV2,
+    Qwen3Asr17B,
+    MoonshineBaseEn,
+}
+
+impl Default for SttModelType {
+    fn default() -> Self {
+        Self::WhisperLargeV3Turbo
+    }
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum SttRuntimePreference {
+    #[default]
+    Auto,
+    Cpu,
+    Metal,
+    Cuda,
+    Accelerate,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
+pub enum SttDTypePreference {
+    #[default]
+    Auto,
+    F32,
+    F16,
+    BF16,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+pub struct SttAssetRef {
+    pub bit: String,
+    pub relative_path: String,
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct SttModelParameters {
+    pub model_type: SttModelType,
+    pub provider: ModelProvider,
+    pub default_language: Option<String>,
+    pub languages: Vec<String>,
+    pub runtime: Option<SttRuntimePreference>,
+    pub dtype: Option<SttDTypePreference>,
+    pub assets: Vec<SttAssetRef>,
+}
+
+impl Default for SttModelParameters {
+    fn default() -> Self {
+        Self {
+            model_type: SttModelType::default(),
+            provider: ModelProvider {
+                provider_name: STT_LOCAL_PROVIDER.to_string(),
+                model_id: None,
+                version: None,
+                params: None,
+            },
+            default_language: None,
+            languages: Vec::new(),
+            runtime: Some(SttRuntimePreference::Auto),
+            dtype: Some(SttDTypePreference::Auto),
+            assets: Vec::new(),
+        }
+    }
+}
+
+/// Provider name marking an `Stt` bit as a local any-speech-to-text model
+/// (as opposed to a hosted/API speech-to-text provider bit).
+pub const STT_LOCAL_PROVIDER: &str = "local:any-speech-to-text";
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct BitPack {
     pub bits: Vec<Bit>,
@@ -699,9 +792,28 @@ impl Bit {
         if self.bit_type == BitTypes::Stt {
             let parameters =
                 flow_like_types::json::from_value::<LLMParameters>(self.parameters.clone()).ok()?;
+            if parameters.provider.provider_name.starts_with("local:") {
+                return None;
+            }
             return Some(parameters.provider);
         }
         None
+    }
+
+    /// Parses an `Stt` bit as a local any-speech-to-text model. Returns `None`
+    /// for hosted/API speech-to-text provider bits (use [`Self::try_to_stt_provider`]).
+    pub fn try_to_stt(&self) -> Option<SttModelParameters> {
+        if self.bit_type != BitTypes::Stt {
+            return None;
+        }
+        let parameters =
+            flow_like_types::json::from_value::<SttModelParameters>(self.parameters.clone())
+                .ok()?;
+        if parameters.provider.provider_name == STT_LOCAL_PROVIDER {
+            Some(parameters)
+        } else {
+            None
+        }
     }
 
     pub fn score(&self, preference: &BitModelPreference) -> flow_like_types::Result<f32> {

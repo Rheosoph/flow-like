@@ -1,353 +1,657 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "History",
-	"type": "object",
-	"required": ["messages", "model"],
-	"properties": {
-		"model": {
-			"type": "string"
-		},
-		"messages": {
-			"type": "array",
-			"items": {
-				"$ref": "#/definitions/HistoryMessage"
-			}
-		},
-		"stream": {
-			"type": ["boolean", "null"]
-		},
-		"stream_options": {
-			"anyOf": [
-				{
-					"$ref": "#/definitions/StreamOptions"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"max_completion_tokens": {
-			"type": ["integer", "null"],
-			"format": "uint32",
-			"minimum": 0.0
-		},
-		"top_p": {
-			"type": ["number", "null"],
-			"format": "float"
-		},
-		"temperature": {
-			"type": ["number", "null"],
-			"format": "float"
-		},
-		"seed": {
-			"type": ["integer", "null"],
-			"format": "uint32",
-			"minimum": 0.0
-		},
-		"presence_penalty": {
-			"type": ["number", "null"],
-			"format": "float"
-		},
-		"frequency_penalty": {
-			"type": ["number", "null"],
-			"format": "float"
-		},
-		"user": {
-			"type": ["string", "null"]
-		},
-		"stop": {
-			"type": ["array", "null"],
-			"items": {
-				"type": "string"
-			}
-		},
-		"response_format": {
-			"anyOf": [
-				{
-					"$ref": "#/definitions/ResponseFormat"
-				},
-				{
-					"type": "null"
-				}
-			]
-		},
-		"n": {
-			"type": ["integer", "null"],
-			"format": "uint32",
-			"minimum": 0.0
-		},
-		"tools": {
-			"type": ["array", "null"],
-			"items": {
-				"$ref": "#/definitions/Tool"
-			}
-		},
-		"tool_choice": {
-			"anyOf": [
-				{
-					"$ref": "#/definitions/ToolChoice"
-				},
-				{
-					"type": "null"
-				}
-			]
-		}
-	},
-	"definitions": {
-		"HistoryMessage": {
-			"type": "object",
-			"required": ["content", "role"],
-			"properties": {
-				"role": {
-					"$ref": "#/definitions/Role"
-				},
-				"content": {
-					"$ref": "#/definitions/MessageContent"
-				},
-				"name": {
-					"type": ["string", "null"]
-				},
-				"tool_calls": {
-					"type": ["array", "null"],
-					"items": {
-						"$ref": "#/definitions/ToolCall"
-					}
-				},
-				"tool_call_id": {
-					"type": ["string", "null"]
-				}
-			}
-		},
-		"Role": {
-			"type": "string",
-			"enum": ["system", "user", "assistant", "function", "tool"]
-		},
-		"MessageContent": {
-			"anyOf": [
-				{
-					"type": "string"
-				},
-				{
-					"type": "array",
-					"items": {
-						"$ref": "#/definitions/Content"
-					}
-				}
-			]
-		},
-		"Content": {
-			"anyOf": [
-				{
-					"type": "object",
-					"required": ["text", "type"],
-					"properties": {
-						"type": {
-							"$ref": "#/definitions/ContentType"
-						},
-						"text": {
-							"type": "string"
-						}
-					}
-				},
-				{
-					"type": "object",
-					"required": ["image_url", "type"],
-					"properties": {
-						"type": {
-							"$ref": "#/definitions/ContentType"
-						},
-						"image_url": {
-							"$ref": "#/definitions/ImageUrl"
-						}
-					}
-				}
-			]
-		},
-		"ContentType": {
-			"type": "string",
-			"enum": ["text", "image_url"]
-		},
-		"ImageUrl": {
-			"type": "object",
-			"required": ["url"],
-			"properties": {
-				"url": {
-					"type": "string"
-				},
-				"detail": {
-					"type": ["string", "null"]
-				}
-			}
-		},
-		"ToolCall": {
-			"type": "object",
-			"required": ["function", "id", "type"],
-			"properties": {
-				"id": {
-					"type": "string"
-				},
-				"type": {
-					"type": "string"
-				},
-				"function": {
-					"$ref": "#/definitions/ToolCallFunction"
-				}
-			}
-		},
-		"ToolCallFunction": {
-			"type": "object",
-			"properties": {
-				"name": {
-					"type": ["string", "null"]
-				},
-				"arguments": {
-					"type": ["string", "null"]
-				}
-			}
-		},
-		"StreamOptions": {
-			"type": "object",
-			"required": ["include_usage"],
-			"properties": {
-				"include_usage": {
-					"type": "boolean"
-				}
-			}
-		},
-		"ResponseFormat": {
-			"anyOf": [
-				{
-					"type": "string"
-				},
-				true
-			]
-		},
-		"Tool": {
-			"type": "object",
-			"required": ["function", "type"],
-			"properties": {
-				"type": {
-					"$ref": "#/definitions/ToolType"
-				},
-				"function": {
-					"$ref": "#/definitions/HistoryFunction"
-				}
-			}
-		},
-		"ToolType": {
-			"type": "string",
-			"enum": ["function"]
-		},
-		"HistoryFunction": {
-			"type": "object",
-			"required": ["name", "parameters"],
-			"properties": {
-				"name": {
-					"type": "string"
-				},
-				"description": {
-					"type": ["string", "null"]
-				},
-				"parameters": {
-					"$ref": "#/definitions/HistoryFunctionParameters"
-				}
-			}
-		},
-		"HistoryFunctionParameters": {
-			"type": "object",
-			"required": ["type"],
-			"properties": {
-				"type": {
-					"$ref": "#/definitions/HistoryJSONSchemaType"
-				},
-				"properties": {
-					"type": ["object", "null"],
-					"additionalProperties": {
-						"$ref": "#/definitions/HistoryJSONSchemaDefine"
-					}
-				},
-				"required": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "string"
-					}
-				}
-			}
-		},
-		"HistoryJSONSchemaType": {
-			"type": "string",
-			"enum": ["object", "number", "string", "array", "null", "boolean"]
-		},
-		"HistoryJSONSchemaDefine": {
-			"type": "object",
-			"properties": {
-				"type": {
-					"anyOf": [
-						{
-							"$ref": "#/definitions/HistoryJSONSchemaType"
-						},
-						{
-							"type": "null"
-						}
-					]
-				},
-				"description": {
-					"type": ["string", "null"]
-				},
-				"enum_values": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "string"
-					}
-				},
-				"properties": {
-					"type": ["object", "null"],
-					"additionalProperties": {
-						"$ref": "#/definitions/HistoryJSONSchemaDefine"
-					}
-				},
-				"required": {
-					"type": ["array", "null"],
-					"items": {
-						"type": "string"
-					}
-				},
-				"items": {
-					"anyOf": [
-						{
-							"$ref": "#/definitions/HistoryJSONSchemaDefine"
-						},
-						{
-							"type": "null"
-						}
-					]
-				}
-			}
-		},
-		"ToolChoice": {
-			"anyOf": [
-				{
-					"type": "null"
-				},
-				{
-					"type": "null"
-				},
-				{
-					"type": "null"
-				},
-				{
-					"type": "object",
-					"required": ["function", "type"],
-					"properties": {
-						"type": {
-							"$ref": "#/definitions/ToolType"
-						},
-						"function": {
-							"$ref": "#/definitions/HistoryFunction"
-						}
-					}
-				}
-			]
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "History",
+  "type": "object",
+  "properties": {
+    "model": {
+      "type": "string"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HistoryMessage"
+      }
+    },
+    "preset": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stream": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "stream_options": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StreamOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "max_completion_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "top_p": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
+    },
+    "temperature": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
+    },
+    "thinking": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HistoryThinking"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "seed": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "presence_penalty": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
+    },
+    "frequency_penalty": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "float"
+    },
+    "user": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stop": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "response_format": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResponseFormat"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "n": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "tools": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Tool"
+      }
+    },
+    "tool_choice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolChoice"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "model",
+    "messages"
+  ],
+  "$defs": {
+    "HistoryMessage": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/Role"
+        },
+        "content": {
+          "$ref": "#/$defs/MessageContent"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_calls": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          }
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "annotations": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Annotation"
+          }
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "function",
+        "tool"
+      ]
+    },
+    "MessageContent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Content"
+          }
+        }
+      ]
+    },
+    "Content": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "image_url": {
+              "$ref": "#/$defs/ImageUrl"
+            }
+          },
+          "required": [
+            "type",
+            "image_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "audio_url": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
+          },
+          "required": [
+            "type",
+            "audio_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "video_url": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
+          },
+          "required": [
+            "type",
+            "video_url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ContentType"
+            },
+            "document_url": {
+              "type": "string"
+            },
+            "media_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "additional_params": true
+          },
+          "required": [
+            "type",
+            "document_url"
+          ]
+        }
+      ]
+    },
+    "ContentType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "image_url",
+        "audio_url",
+        "video_url",
+        "document_url"
+      ]
+    },
+    "ImageUrl": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "additional_params": true
+      },
+      "required": [
+        "url"
+      ]
+    },
+    "ToolCall": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "function": {
+          "$ref": "#/$defs/ToolCallFunction"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "function"
+      ]
+    },
+    "ToolCallFunction": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "arguments"
+      ]
+    },
+    "Annotation": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "url_citation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UrlCitation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "UrlCitation": {
+      "type": "object",
+      "properties": {
+        "end_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "start_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "end_index",
+        "start_index",
+        "title",
+        "url"
+      ]
+    },
+    "StreamOptions": {
+      "type": "object",
+      "properties": {
+        "include_usage": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "include_usage"
+      ]
+    },
+    "HistoryThinking": {
+      "type": "string",
+      "enum": [
+        "off",
+        "low",
+        "mid",
+        "high"
+      ]
+    },
+    "ResponseFormat": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        true
+      ]
+    },
+    "Tool": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/ToolType"
+        },
+        "function": {
+          "$ref": "#/$defs/HistoryFunction"
+        }
+      },
+      "required": [
+        "type",
+        "function"
+      ]
+    },
+    "ToolType": {
+      "type": "string",
+      "enum": [
+        "function"
+      ]
+    },
+    "HistoryFunction": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parameters": {
+          "$ref": "#/$defs/HistoryFunctionParameters"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ]
+    },
+    "HistoryFunctionParameters": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/HistoryJSONSchemaType"
+        },
+        "properties": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/HistoryJSONSchemaDefine"
+          }
+        },
+        "required": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "HistoryJSONSchemaType": {
+      "type": "string",
+      "enum": [
+        "object",
+        "number",
+        "string",
+        "array",
+        "null",
+        "boolean"
+      ]
+    },
+    "HistoryJSONSchemaDefine": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryJSONSchemaType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enum": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "properties": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/HistoryJSONSchemaDefine"
+          }
+        },
+        "required": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryJSONSchemaDefine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ToolChoice": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "$ref": "#/$defs/ToolType"
+            },
+            "function": {
+              "$ref": "#/$defs/HistoryFunction"
+            }
+          },
+          "required": [
+            "type",
+            "function"
+          ]
+        }
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "include": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "include"
+      ]
+    }
+  }
 }

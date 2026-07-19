@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use crate::{
-    entity::{membership, pat, prelude::*, role, sea_orm_active_enums, technical_user, user},
+    entity::{
+        app_connection, membership, pat, prelude::*, role, sea_orm_active_enums, technical_user,
+        user,
+    },
     error::{ApiError, AuthorizationError},
     permission::{
         global_permission::GlobalPermission,
@@ -162,6 +165,32 @@ pub struct ExecutorUser {
     pub app_id: String,
     pub run_id: String,
     pub technical_user_id: Option<String>,
+    /// If the run was triggered through an app connection: the chain of apps
+    /// that led to it (last element = the app that called this one). Threaded
+    /// into outgoing app-connection tokens so chains stay transparent.
+    pub app_chain: Option<Vec<String>>,
+    /// Process-mining correlation carried by the run, threaded into outgoing
+    /// app-connection tokens so downstream runs inherit the case.
+    pub correlation: Option<crate::correlation::CorrelationContext>,
+}
+
+/// Principal for app-to-app calls: a flow in `origin_app_id` acting on
+/// `target_app_id` through an accepted app connection. The token pins both
+/// app ids; permissions come from the role assigned to the connection.
+#[derive(Debug, Clone)]
+pub struct ConnectedAppUser {
+    /// The user that originally initiated the call chain, passed through
+    /// end-to-end even if they are not a member of the target app.
+    pub sub: Option<String>,
+    pub origin_app_id: String,
+    pub target_app_id: String,
+    /// Full chain of apps that led to this call (last element = origin).
+    pub app_chain: Vec<String>,
+    pub technical_user_id: Option<String>,
+    pub run_id: Option<String>,
+    /// Process-mining correlation inherited from the calling run (trace root +
+    /// business keys), so this run joins the same case.
+    pub correlation: Option<crate::correlation::CorrelationContext>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +199,7 @@ pub enum AppUser {
     PAT(PATUser),
     APIKey(ApiKey),
     Executor(ExecutorUser),
+    ConnectedApp(ConnectedAppUser),
     Unauthorized,
 }
 
@@ -241,6 +271,21 @@ impl AppPermissionResponse {
 }
 
 impl AppUser {
+    fn app_permission_denial(&self) -> ApiError {
+        match self {
+            AppUser::Unauthorized => ApiError::unauthorized("Authentication required"),
+            _ => ApiError::forbidden("User does not have app permissions"),
+        }
+    }
+
+    /// Whether this principal is another app acting through a connection token.
+    /// The single source of truth for the connected-app discrimination used by
+    /// the route-level guards, so a new connected-app-like variant only has to
+    /// be handled here.
+    pub fn is_connected_app(&self) -> bool {
+        matches!(self, AppUser::ConnectedApp(_))
+    }
+
     pub fn sub(&self) -> Result<String, AuthorizationError> {
         match self {
             AppUser::OpenID(user) => Ok(user.sub.clone()),
@@ -250,6 +295,9 @@ impl AppUser {
             )),
             AppUser::APIKey(_) => Err(ApiError::forbidden(
                 "APIKey user is not allowed on this endpoint",
+            )),
+            AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
+                "Connected app is not allowed on this endpoint",
             )),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
@@ -265,6 +313,9 @@ impl AppUser {
             AppUser::APIKey(_) => Err(ApiError::forbidden(
                 "APIKey user is not allowed on this endpoint",
             )),
+            AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
+                "Connected app is not allowed on this endpoint",
+            )),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -275,6 +326,7 @@ impl AppUser {
             AppUser::PAT(user) => Ok(AppUser::PAT(user.clone())),
             AppUser::APIKey(api_key) => Ok(AppUser::APIKey(api_key.clone())),
             AppUser::Executor(executor) => Ok(AppUser::Executor(executor.clone())),
+            AppUser::ConnectedApp(app) => Ok(AppUser::ConnectedApp(app.clone())),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -293,6 +345,7 @@ impl AppUser {
         match self {
             AppUser::APIKey(api_key) => Some(api_key.key_id.as_str()),
             AppUser::Executor(executor) => executor.technical_user_id.as_deref(),
+            AppUser::ConnectedApp(app) => app.technical_user_id.as_deref(),
             _ => None,
         }
     }
@@ -306,18 +359,33 @@ impl AppUser {
                 .creator_user_id
                 .clone()
                 .ok_or_else(|| ApiError::forbidden("API key is not linked to a creator user")),
+            // The passed-through sub is attribution metadata, not an identity
+            // this token can act as. Endpoints that authorize purely by the
+            // effective user id must not accept app-connection tokens; the
+            // sub is exposed via AppPermissionResponse after the connection
+            // role has been checked.
+            AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
+                "App connection tokens cannot act as the initiating user",
+            )),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
 
     // Adds the exact method of access (OpenID, PAT, API Key) to the audit log for better traceability
     pub async fn audit_id(&self) -> Result<String, AuthorizationError> {
-        let sub = self.effective_user_id()?;
+        let sub = match self {
+            AppUser::ConnectedApp(app) => app
+                .sub
+                .clone()
+                .unwrap_or_else(|| app_connection_cache_sub(&app.origin_app_id)),
+            _ => self.effective_user_id()?,
+        };
         let method = match self {
             AppUser::OpenID(_) => "openid",
             AppUser::PAT(_) => "pat",
             AppUser::APIKey(_) => "api_key",
             AppUser::Executor(_) => "executor",
+            AppUser::ConnectedApp(_) => "app_connection",
             AppUser::Unauthorized => "unauthorized",
         };
         let method_id = match self {
@@ -325,6 +393,7 @@ impl AppUser {
             AppUser::PAT(user) => Some(pat_id_from_token(&user.pat)?),
             AppUser::APIKey(api_key) => Some(api_key.key_id.clone()),
             AppUser::Executor(executor) => Some(executor.run_id.clone()),
+            AppUser::ConnectedApp(app) => Some(app.origin_app_id.clone()),
             AppUser::Unauthorized => None,
         };
         Ok(format!(
@@ -384,6 +453,9 @@ impl AppUser {
             AppUser::PAT(_) => return Err(anyhow!("PAT user does not have user info")),
             AppUser::APIKey(_) => return Err(anyhow!("APIKey user does not have user info")),
             AppUser::Executor(_) => return Err(anyhow!("Executor user does not have user info")),
+            AppUser::ConnectedApp(_) => {
+                return Err(anyhow!("Connected app does not have user info"));
+            }
             AppUser::Unauthorized => {
                 return Err(anyhow!("Unauthorized user does not have user info"));
             }
@@ -451,6 +523,14 @@ impl AppUser {
         app_id: &str,
         state: &AppState,
     ) -> Result<AppPermissionResponse, ApiError> {
+        // Keep anonymous principals available to public routes in the JWT
+        // middleware, but classify them as unauthenticated as soon as a route
+        // asks for app permissions. Previously this fell through to an
+        // anyhow-backed ApiError and was reported as a 500 INTERNAL_ERROR.
+        if matches!(self, AppUser::Unauthorized) {
+            return Err(self.app_permission_denial());
+        }
+
         let sub = self.sub();
         if let Ok(sub) = sub {
             let cached_permission = state.check_permission(&sub, app_id);
@@ -499,6 +579,10 @@ impl AppUser {
             });
         }
 
+        if let AppUser::ConnectedApp(connected_app) = self {
+            return connected_app_permission(connected_app, app_id, state).await;
+        }
+
         if let AppUser::APIKey(api_key) = self {
             if api_key.app_id != app_id {
                 return Err(ApiError::FORBIDDEN);
@@ -512,8 +596,11 @@ impl AppUser {
                         .and(technical_user::Column::Id.eq(&api_key.key_id)),
                 )
                 .one(&state.db)
-                .await?
-                .ok_or_else(|| ApiError::from(anyhow!("Technical user not found for API Key")))?;
+                .await?;
+            let Some(role_model) = role_model else {
+                state.auth_cache.invalidate(&hash_token(&api_key.api_key));
+                return Err(ApiError::unauthorized("API key is no longer valid"));
+            };
 
             let permissions = RolePermissions::from_bits(role_model.permissions)
                 .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
@@ -533,9 +620,7 @@ impl AppUser {
             });
         }
 
-        Err(ApiError::from(anyhow!(
-            "User does not have app permissions"
-        )))
+        Err(self.app_permission_denial())
     }
 
     pub async fn execution_app_permission(
@@ -552,6 +637,28 @@ impl AppUser {
                     "Executor token app_id does not match request path"
                 );
                 return Err(ApiError::FORBIDDEN);
+            }
+
+            // Runs initiated through an app connection are bounded by the
+            // connection role, not by the passed-through user's membership in
+            // this app: the user may not be a member at all, and even if they
+            // are, the calling app must not exceed the role it was granted.
+            // This also keeps multi-hop chains (A -> B -> C) working, since
+            // B's callbacks and token minting resolve against the A -> B
+            // connection instead of the original user's membership in B.
+            if let Some(app_chain) = &executor.app_chain
+                && let Some(calling_app_id) = app_chain.last()
+            {
+                let connected = ConnectedAppUser {
+                    sub: Some(executor.sub.clone()),
+                    origin_app_id: calling_app_id.clone(),
+                    target_app_id: app_id.to_string(),
+                    app_chain: app_chain.clone(),
+                    technical_user_id: executor.technical_user_id.clone(),
+                    run_id: Some(executor.run_id.clone()),
+                    correlation: executor.correlation.clone(),
+                };
+                return connected_app_permission(&connected, app_id, state).await;
             }
 
             if let Some(role_model) = state.check_permission(&executor.sub, app_id) {
@@ -611,6 +718,83 @@ fn hash_token(token: &str) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(token.as_bytes());
     hasher.finalize().to_hex().to_string()
+}
+
+/// Cache key used for app-connection permissions in the permission cache.
+/// Namespaced so it can never collide with a real user sub.
+pub fn app_connection_cache_sub(origin_app_id: &str) -> String {
+    format!("app-connection::{}", origin_app_id)
+}
+
+async fn connected_app_permission(
+    connected_app: &ConnectedAppUser,
+    app_id: &str,
+    state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    if connected_app.target_app_id != app_id {
+        tracing::warn!(
+            token_target_app_id = %connected_app.target_app_id,
+            path_app_id = %app_id,
+            origin_app_id = %connected_app.origin_app_id,
+            "App connection token target does not match request path"
+        );
+        return Err(ApiError::FORBIDDEN);
+    }
+
+    let cache_sub = app_connection_cache_sub(&connected_app.origin_app_id);
+
+    let role_model = if let Some(role_model) = state.check_permission(&cache_sub, app_id) {
+        role_model
+    } else {
+        let (connection, role) = app_connection::Entity::find()
+            .filter(
+                app_connection::Column::SourceAppId
+                    .eq(&connected_app.origin_app_id)
+                    .and(app_connection::Column::TargetAppId.eq(app_id))
+                    .and(
+                        app_connection::Column::Status
+                            .eq(sea_orm_active_enums::AppConnectionStatus::Active),
+                    ),
+            )
+            .find_also_related(role::Entity)
+            .one(&state.db)
+            .await?
+            .ok_or_else(|| {
+                tracing::debug!(
+                    origin_app_id = %connected_app.origin_app_id,
+                    target_app_id = %app_id,
+                    "No active app connection found"
+                );
+                ApiError::FORBIDDEN
+            })?;
+
+        let role_model = role
+            .filter(|role| role.app_id.as_deref() == Some(app_id))
+            .ok_or_else(|| {
+                tracing::warn!(
+                    connection_id = %connection.id,
+                    "App connection is active but has no valid role for this app"
+                );
+                ApiError::FORBIDDEN
+            })?;
+
+        let role_model = Arc::new(role_model);
+        state.put_permission(&cache_sub, app_id, role_model.clone());
+        role_model
+    };
+
+    let permissions = RolePermissions::from_bits(role_model.permissions)
+        .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
+
+    Ok(AppPermissionResponse {
+        state: state.clone(),
+        permissions,
+        role: role_model,
+        sub: None,
+        effective_user_id: connected_app.sub.clone(),
+        technical_user_id: connected_app.technical_user_id.clone(),
+        identifier: app_connection_cache_sub(&connected_app.origin_app_id),
+    })
 }
 
 async fn resolve_legacy_api_key_creator_user_id(
@@ -696,12 +880,46 @@ pub async fn jwt_middleware(
                     app_id,
                     run_id,
                     technical_user_id,
+                    app_chain,
+                    correlation,
                 } => {
                     let user = AppUser::Executor(ExecutorUser {
                         sub,
                         app_id,
                         run_id,
                         technical_user_id,
+                        app_chain,
+                        correlation,
+                    });
+                    request.extensions_mut().insert::<AppUser>(user);
+                    return Ok(next.run(request).await);
+                }
+                CachedAuth::AppConnection {
+                    sub,
+                    origin_app_id,
+                    target_app_id,
+                    app_chain,
+                    technical_user_id,
+                    run_id,
+                    correlation,
+                    exp,
+                } => {
+                    // App-connection tokens are short-lived; never honor a
+                    // cached entry beyond the token's own expiry.
+                    if exp <= chrono::Utc::now().timestamp() {
+                        request
+                            .extensions_mut()
+                            .insert::<AppUser>(AppUser::Unauthorized);
+                        return Ok(next.run(request).await);
+                    }
+                    let user = AppUser::ConnectedApp(ConnectedAppUser {
+                        sub,
+                        origin_app_id,
+                        target_app_id,
+                        app_chain,
+                        technical_user_id,
+                        run_id,
+                        correlation,
                     });
                     request.extensions_mut().insert::<AppUser>(user);
                     return Ok(next.run(request).await);
@@ -713,22 +931,27 @@ pub async fn jwt_middleware(
         // Cache miss - validate token
         let claims = state.validate_token(token);
         if let Ok(claims) = claims {
-            let sub = claims.get("sub").ok_or(anyhow!("sub not found"))?;
-            let sub = sub.as_str().ok_or(anyhow!("sub not a string"))?;
+            if let Some(sub) = claims.get("sub").and_then(|sub| sub.as_str()) {
+                state.auth_cache.insert(
+                    cache_key,
+                    CachedAuth::OpenID {
+                        sub: sub.to_string(),
+                    },
+                );
 
-            state.auth_cache.insert(
-                cache_key,
-                CachedAuth::OpenID {
+                let user = AppUser::OpenID(OpenIDUser {
                     sub: sub.to_string(),
-                },
-            );
+                    access_token: token.to_string(),
+                });
+                request.extensions_mut().insert::<AppUser>(user);
+                return Ok(next.run(request).await);
+            }
 
-            let user = AppUser::OpenID(OpenIDUser {
-                sub: sub.to_string(),
-                access_token: token.to_string(),
-            });
-            request.extensions_mut().insert::<AppUser>(user);
-            return Ok(next.run(request).await);
+            // A token that validates cryptographically but has no usable
+            // subject is not an internal server failure. Continue trying the
+            // other supported token formats; if none match, the request is
+            // passed to the route as anonymous below.
+            tracing::warn!("Validated OpenID token is missing a string sub claim");
         }
 
         // OpenID failed — try executor JWT
@@ -740,6 +963,8 @@ pub async fn jwt_middleware(
                     app_id: claims.app_id.clone(),
                     run_id: claims.run_id.clone(),
                     technical_user_id: claims.technical_user_id.clone(),
+                    app_chain: claims.app_chain.clone(),
+                    correlation: claims.correlation.clone(),
                 },
             );
             let user = AppUser::Executor(ExecutorUser {
@@ -747,6 +972,36 @@ pub async fn jwt_middleware(
                 app_id: claims.app_id,
                 run_id: claims.run_id,
                 technical_user_id: claims.technical_user_id,
+                app_chain: claims.app_chain,
+                correlation: claims.correlation,
+            });
+            request.extensions_mut().insert::<AppUser>(user);
+            return Ok(next.run(request).await);
+        }
+
+        // Executor failed — try app-connection JWT (app-to-app calls)
+        if let Ok(claims) = crate::app_connection_jwt::verify(token) {
+            state.auth_cache.insert(
+                cache_key,
+                CachedAuth::AppConnection {
+                    sub: claims.sub.clone(),
+                    origin_app_id: claims.origin_app_id.clone(),
+                    target_app_id: claims.target_app_id.clone(),
+                    app_chain: claims.app_chain.clone(),
+                    technical_user_id: claims.technical_user_id.clone(),
+                    run_id: claims.run_id.clone(),
+                    correlation: claims.correlation.clone(),
+                    exp: claims.exp,
+                },
+            );
+            let user = AppUser::ConnectedApp(ConnectedAppUser {
+                sub: claims.sub,
+                origin_app_id: claims.origin_app_id,
+                target_app_id: claims.target_app_id,
+                app_chain: claims.app_chain,
+                technical_user_id: claims.technical_user_id,
+                run_id: claims.run_id,
+                correlation: claims.correlation,
             });
             request.extensions_mut().insert::<AppUser>(user);
             return Ok(next.run(request).await);
@@ -791,14 +1046,16 @@ pub async fn jwt_middleware(
                 }
             }
 
-            // Cache miss - validate PAT
-            if !pat_str.starts_with("pat_") {
-                return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
-            }
+            // Cache miss - validate PAT. The surrounding branch has already
+            // established the `pat_` prefix.
             let pat_parts = &pat_str[4..];
             let parts: Vec<&str> = pat_parts.split('.').collect();
             if parts.len() != 2 {
-                return Err(AuthorizationError::from(anyhow!("Invalid PAT format")));
+                state.auth_cache.insert(cache_key, CachedAuth::Invalid);
+                request
+                    .extensions_mut()
+                    .insert::<AppUser>(AppUser::Unauthorized);
+                return Ok(next.run(request).await);
             }
             let pat_id = parts[0];
             let pat_secret = parts[1];
@@ -821,7 +1078,10 @@ pub async fn jwt_middleware(
                     let now = chrono::Utc::now().naive_utc();
                     if valid_until < now {
                         state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                        return Err(AuthorizationError::from(anyhow!("PAT is expired")));
+                        request
+                            .extensions_mut()
+                            .insert::<AppUser>(AppUser::Unauthorized);
+                        return Ok(next.run(request).await);
                     }
                 }
 
@@ -927,7 +1187,10 @@ pub async fn jwt_middleware(
                 let now = chrono::Utc::now().naive_utc();
                 if valid_until < now {
                     state.auth_cache.insert(cache_key, CachedAuth::Invalid);
-                    return Err(AuthorizationError::from(anyhow!("API Key is expired")));
+                    request
+                        .extensions_mut()
+                        .insert::<AppUser>(AppUser::Unauthorized);
+                    return Ok(next.run(request).await);
                 }
             }
 
@@ -961,4 +1224,36 @@ pub async fn jwt_middleware(
         .extensions_mut()
         .insert::<AppUser>(AppUser::Unauthorized);
     Ok(next.run(request).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{http::StatusCode, response::IntoResponse};
+
+    #[test]
+    fn anonymous_app_permission_denial_is_unauthorized() {
+        let response = AppUser::Unauthorized
+            .app_permission_denial()
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get("x-error-id").is_none());
+    }
+
+    #[test]
+    fn authenticated_app_permission_denial_is_forbidden() {
+        let user = AppUser::Executor(ExecutorUser {
+            sub: "user-id".to_string(),
+            app_id: "app-id".to_string(),
+            run_id: "run-id".to_string(),
+            technical_user_id: None,
+            app_chain: None,
+            correlation: None,
+        });
+        let response = user.app_permission_denial().into_response();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response.headers().get("x-error-id").is_none());
+    }
 }

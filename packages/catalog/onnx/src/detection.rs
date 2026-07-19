@@ -2015,15 +2015,15 @@ impl NodeLogic for ObjectDetectionNode {
 #[cfg(feature = "execute")]
 fn incompatible_object_detection_model_error(provider: &Provider, session: &Session) -> Error {
     let inputs = session
-        .inputs
+        .inputs()
         .iter()
-        .map(|input| format!("{}:{:?}", input.name, input.input_type))
+        .map(|input| format!("{}:{:?}", input.name(), input.dtype()))
         .collect::<Vec<_>>()
         .join(", ");
     let outputs = session
-        .outputs
+        .outputs()
         .iter()
-        .map(|output| format!("{}:{:?}", output.name, output.output_type))
+        .map(|output| format!("{}:{:?}", output.name(), output.dtype()))
         .collect::<Vec<_>>()
         .join(", ");
 

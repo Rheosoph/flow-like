@@ -25,6 +25,8 @@ pub mod detection;
 pub mod execution_providers;
 /// ONNX Face Detection and Recognition Nodes
 pub mod face;
+/// face_id-backed face analysis (detection + recognition + gender/age)
+pub mod face_id;
 /// ONNX Image Feature Extractor Nodes
 pub mod feature;
 /// ONNX Model Loader Nodes
@@ -69,9 +71,9 @@ pub struct NodeOnnxSession {
 pub struct SessionWithMeta {
     pub session: Session,
     pub provider: Provider,
-    /// The execution providers that are actually active
+    /// Execution providers configured in priority order, including CPU fallback
     pub ep_active: Vec<String>,
-    /// Whether GPU/NPU acceleration is active
+    /// Whether a GPU/NPU provider was configured
     pub accelerated: bool,
 }
 

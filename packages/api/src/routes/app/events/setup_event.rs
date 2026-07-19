@@ -221,6 +221,11 @@ pub(crate) async fn run_event_setup(
     let core_event = get_event_from_db(&state.db, &event_id, &app_id)
         .await
         .map_err(|e| ApiError::not_found(e.to_string()))?;
+    if !super::generic_event_endpoint_allowed(&core_event.event_type) {
+        return Err(ApiError::forbidden(
+            "Ontology action events are managed and invoked through Data Studio",
+        ));
+    }
 
     // Concurrent-setup guard. Setup writes are delete-then-insert by
     // `(app, event, version)` so two parallel calls race on the same
@@ -274,6 +279,8 @@ pub(crate) async fn run_event_setup(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
+        app_chain: None,
+        correlation: Some(crate::correlation::CorrelationContext::root(&run_id)),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(60 * 60),
@@ -316,6 +323,10 @@ pub(crate) async fn run_event_setup(
         expires_at: Set(Some(now + chrono::Duration::hours(2))),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(None),
+        caller_app_chain: Set(None),
+        trace_id: Set(Some(run_id.clone())),
+        parent_run_id: Set(None),
+        correlation_keys: Set(None),
         app_id: Set(app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),

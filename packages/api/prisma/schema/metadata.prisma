@@ -40,6 +40,9 @@ model Meta {
   wasmPackage   WasmPackage? @relation(fields: [wasmPackageId], references: [id], onDelete: Cascade)
   wasmPackageId String?
 
+  group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -50,6 +53,7 @@ model Meta {
   @@index([templateId, lang])
   @@index([widgetId, lang])
   @@index([wasmPackageId, lang])
+  @@index([groupId, lang])
   @@index([lang])
   @@index([tags])
 }

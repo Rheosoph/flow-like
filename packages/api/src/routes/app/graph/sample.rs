@@ -1,14 +1,13 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::db::resolve_connection,
-    state::AppState,
+    ensure_any_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
 use flow_like_catalog_core::DEFAULT_GRAPH_SAMPLE_SIZE;
-use flow_like_storage::databases::graph::{GraphStore, lancegraph};
+use flow_like_storage::databases::graph::lancegraph;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SampleParams {
@@ -64,15 +63,20 @@ pub async fn sample_nodes(
     Path((app_id, overlay_id)): Path<(String, String)>,
     Query(params): Query<SampleParams>,
 ) -> Result<Json<Vec<flow_like_types::Value>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
 
     let scope = params.scope_params();
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;
-    let store = lancegraph::LanceGraphStore::new(connection, overlay, None).await?;
-
-    let results = store.sample(&params.label, params.n).await?;
+    let (connection, overlay) =
+        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
+    let results =
+        lancegraph::sample_overlay(&connection, &overlay, &params.label, params.n.min(500)).await?;
 
     Ok(Json(results))
 }

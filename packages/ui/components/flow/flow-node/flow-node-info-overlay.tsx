@@ -2,7 +2,6 @@
 
 import {
 	ActivityIcon,
-	BookOpenIcon,
 	CheckIcon,
 	CircleCheckIcon,
 	CoinsIcon,
@@ -24,6 +23,7 @@ import {
 	useState,
 } from "react";
 import { type IBoard, cn } from "../../../lib";
+import { buildNodeDocsUrl } from "../../../lib/node-docs-url";
 import { NODE_PERMISSION_LABELS } from "../../../lib/permission/node-permission";
 import type { INode } from "../../../lib/schema/flow/node";
 import { type IPin, IPinType } from "../../../lib/schema/flow/pin";
@@ -50,18 +50,6 @@ type FlowNodeInfoOverlayProps = {
 	boardRef: RefObject<IBoard | undefined>;
 	onFocusNode: (nodeId: string) => void;
 };
-
-function buildDocsUrl(node: INode): string {
-	if (node.docs) {
-		return node.docs;
-	}
-	const categoryPath = node.category.toLowerCase().split("/").join("/");
-	const nodeName = node.name
-		.split("_")
-		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-		.join(" ");
-	return `https://docs.flow-like.com/nodes/${categoryPath}/${nodeName}`;
-}
 
 const HeroSection = memo(
 	({
@@ -226,43 +214,15 @@ const PermissionsSection = memo(({ node }: { node: INode }) => {
 PermissionsSection.displayName = "PermissionsSection";
 
 const DocsPreview = memo(({ url }: { url: string }) => {
-	const [showPreview, setShowPreview] = useState(true);
-	const togglePreview = useCallback(() => setShowPreview((prev) => !prev), []);
-
 	return (
-		<div className="flex flex-col h-full gap-2 md:gap-3">
-			<div className="flex items-center justify-between gap-2 md:gap-3 flex-wrap shrink-0">
-				<div>
-					<h3 className="text-xs md:text-sm font-semibold">Documentation</h3>
-					<p className="text-[10px] md:text-xs text-muted-foreground">
-						Preview docs inline without leaving the board.
-					</p>
-				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={togglePreview}
-					className="h-8 text-xs md:h-9 md:text-sm"
-				>
-					{showPreview ? "Hide preview" : "Show preview"}
-				</Button>
-			</div>
-			{showPreview ? (
-				<div className="rounded-xl md:rounded-2xl border bg-card overflow-hidden flex-1 min-h-[250px] md:min-h-[300px]">
-					<iframe
-						title="Node docs preview"
-						src={url}
-						className="w-full h-full"
-						loading="lazy"
-						sandbox="allow-same-origin allow-scripts"
-					/>
-				</div>
-			) : (
-				<div className="rounded-xl md:rounded-2xl border border-dashed p-3 md:p-4 text-[10px] md:text-xs text-muted-foreground flex items-center gap-2">
-					<BookOpenIcon className="w-3.5 h-3.5 md:w-4 md:h-4 shrink-0" />
-					Inline docs are loaded on demand to keep the board fast.
-				</div>
-			)}
+		<div className="h-[70vh] min-h-[360px] overflow-hidden rounded-xl border bg-card md:h-full md:min-h-0">
+			<iframe
+				title="Node docs preview"
+				src={url}
+				className="h-full w-full"
+				loading="lazy"
+				sandbox="allow-scripts"
+			/>
 		</div>
 	);
 });
@@ -713,7 +673,7 @@ export const FlowNodeInfoOverlay = forwardRef<
 	);
 
 	const docsUrl = useMemo(
-		() => (selectedNode ? buildDocsUrl(selectedNode) : ""),
+		() => (selectedNode ? buildNodeDocsUrl(selectedNode) : ""),
 		[selectedNode],
 	);
 
@@ -802,7 +762,7 @@ export const FlowNodeInfoOverlay = forwardRef<
 					)}
 				</div>
 
-				<div className="shrink-0 border-t pt-3 pb-3 px-4 md:pt-4 md:pb-2 md:px-6">
+				<div className="shrink-0 border-t pt-3 pb-3 px-4 md:hidden">
 					<Button variant="outline" size="sm" className="w-full" asChild>
 						<a
 							href={docsUrl}

@@ -11,6 +11,7 @@ export class WebAIState implements IAIState {
 
 	async streamChatComplete(
 		messages: IHistoryMessage[],
+		appId?: string,
 	): Promise<ReadableStream<IResponseChunk[]>> {
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
@@ -27,7 +28,7 @@ export class WebAIState implements IAIState {
 		const response = await fetch(url, {
 			method: "POST",
 			headers,
-			body: JSON.stringify({ messages }),
+			body: JSON.stringify({ messages, app_id: appId }),
 		});
 
 		if (!response.ok) {
@@ -71,7 +72,10 @@ export class WebAIState implements IAIState {
 		});
 	}
 
-	async chatComplete(messages: IHistoryMessage[]): Promise<IResponse> {
+	async chatComplete(
+		messages: IHistoryMessage[],
+		appId?: string,
+	): Promise<IResponse> {
 		const baseUrl = getApiBaseUrl();
 		const url = `${baseUrl}/api/v1/ai/copilot/chat`;
 
@@ -86,7 +90,7 @@ export class WebAIState implements IAIState {
 		const response = await fetch(url, {
 			method: "POST",
 			headers,
-			body: JSON.stringify({ messages }),
+			body: JSON.stringify({ messages, app_id: appId }),
 		});
 
 		if (!response.ok) {

@@ -9,13 +9,17 @@ use flow_like::{
         databases::vector::{
             VectorStore,
             lancedb::{IndexConfigDto, LanceDBVectorStore, record_batches_to_vec},
+            schema::{DatabaseSchemaField, database_fields_to_arrow_schema},
         },
         datafusion::prelude::SessionContext,
     },
 };
 use tauri::AppHandle;
 
-use crate::{functions::TauriFunctionError, state::TauriFlowLikeState};
+use crate::{
+    functions::{TauriFunctionError, flow::storage::current_user_sub},
+    state::TauriFlowLikeState,
+};
 
 /// Validates a table name: alphanumeric, hyphens, underscores, dots only; no path traversal.
 fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
@@ -37,6 +41,11 @@ fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
             "Table name contains invalid characters (allowed: alphanumeric, -, _, .)"
         ));
     }
+    if name.starts_with("__") && name.ends_with("__") && name.len() > 4 {
+        return Err(flow_like_types::anyhow!(
+            "Table name is reserved for internal use"
+        ));
+    }
     Ok(())
 }
 
@@ -54,7 +63,7 @@ async fn db_connection_inner(
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
     let table_name = table_name.unwrap_or("default".to_string());
     validate_table_name(&table_name)?;
-    let board_dir = Path::from("apps")
+    let project_db_dir = Path::from("apps")
         .child(app_id.clone())
         .child("storage")
         .child("db");
@@ -70,6 +79,17 @@ async fn db_connection_inner(
             credentials.to_db(&app_id).await?
         }
     } else if user_scoped {
+        let sub = match sub {
+            Some(sub) => sub,
+            None => current_user_sub(app_handle)
+                .await
+                .map_err(|e| flow_like_types::anyhow!(e.to_string()))?,
+        };
+        let user_db_dir = Path::from("users")
+            .child(sub)
+            .child("apps")
+            .child(app_id.clone())
+            .child("db");
         flow_like_state
             .config
             .read()
@@ -77,7 +97,7 @@ async fn db_connection_inner(
             .callbacks
             .build_user_database
             .clone()
-            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(board_dir)
+            .ok_or(flow_like_types::anyhow!("No user database builder found"))?(user_db_dir)
     } else {
         flow_like_state
             .config
@@ -86,7 +106,7 @@ async fn db_connection_inner(
             .callbacks
             .build_project_database
             .clone()
-            .ok_or(flow_like_types::anyhow!("No database builder found"))?(board_dir)
+            .ok_or(flow_like_types::anyhow!("No database builder found"))?(project_db_dir)
     };
 
     let db = db.execute().await?;
@@ -111,7 +131,12 @@ pub async fn db_table_names(
     credentials: Option<Arc<SharedCredentials>>,
 ) -> Result<Vec<String>, TauriFunctionError> {
     let db = db_connection_inner(&app_handle, app_id, table_name, credentials, false, None).await?;
-    let table_names = db.list_tables().await?;
+    let table_names = db
+        .list_tables()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog::is_reserved_table(name))
+        .collect();
     Ok(table_names)
 }
 
@@ -124,7 +149,12 @@ pub async fn db_table_names_user(
     sub: Option<String>,
 ) -> Result<Vec<String>, TauriFunctionError> {
     let db = db_connection_inner(&app_handle, app_id, table_name, credentials, true, sub).await?;
-    let table_names = db.list_tables().await?;
+    let table_names = db
+        .list_tables()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog::is_reserved_table(name))
+        .collect();
     Ok(table_names)
 }
 
@@ -170,6 +200,43 @@ pub async fn db_schema(
     .await?;
     let schema = db.schema().await?;
     Ok(schema)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CreateTableResponse {
+    pub table_name: String,
+    pub created: bool,
+    pub if_not_exists: bool,
+}
+
+#[tauri::command(async)]
+pub async fn db_create_table(
+    app_handle: AppHandle,
+    app_id: String,
+    table_name: String,
+    fields: Vec<DatabaseSchemaField>,
+    if_not_exists: Option<bool>,
+    credentials: Option<Arc<SharedCredentials>>,
+    user_scoped: Option<bool>,
+    sub: Option<String>,
+) -> Result<CreateTableResponse, TauriFunctionError> {
+    let schema = database_fields_to_arrow_schema(&fields)?;
+    let if_not_exists = if_not_exists.unwrap_or(true);
+    let mut db = db_connection_inner(
+        &app_handle,
+        app_id,
+        Some(table_name.clone()),
+        credentials,
+        user_scoped.unwrap_or(false),
+        sub,
+    )
+    .await?;
+    let created = db.create_empty_table(schema, if_not_exists).await?;
+    Ok(CreateTableResponse {
+        table_name,
+        created,
+        if_not_exists,
+    })
 }
 
 #[tauri::command(async)]

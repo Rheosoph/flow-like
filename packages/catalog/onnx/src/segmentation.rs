@@ -392,8 +392,8 @@ impl NodeLogic for SemanticSegmentationNode {
 
                 // Determine input shape from session
                 let (input_width, input_height) =
-                    if let Some(input) = session_guard.session.inputs.first() {
-                        if let Some(dims) = input.input_type.tensor_shape() {
+                    if let Some(input) = session_guard.session.inputs().first() {
+                        if let Some(dims) = input.dtype().tensor_shape() {
                             let d = dims.len();
                             if d >= 2 {
                                 (dims[d - 1] as u32, dims[d - 2] as u32)
@@ -410,15 +410,15 @@ impl NodeLogic for SemanticSegmentationNode {
                 // Determine input/output names
                 let input_name = session_guard
                     .session
-                    .inputs
+                    .inputs()
                     .first()
-                    .map(|i| i.name.clone())
+                    .map(|i| i.name().to_string())
                     .unwrap_or_else(|| "input".to_string());
                 let output_name = session_guard
                     .session
-                    .outputs
+                    .outputs()
                     .first()
-                    .map(|o| o.name.clone())
+                    .map(|o| o.name().to_string())
                     .unwrap_or_else(|| "output".to_string());
 
                 let provider = UNetLike {

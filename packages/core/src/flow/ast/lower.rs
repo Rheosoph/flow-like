@@ -27,6 +27,8 @@ const STRUCT_BREAK: &str = "struct_break";
 const STRUCT_SET: &str = "struct_set";
 const STRUCT_SET_IN_PIN: &str = "struct_in";
 const STRUCT_SET_OUT_PIN: &str = "struct_out";
+const STRUCT_SET_FIELD_PIN: &str = "field";
+const STRUCT_SET_VALUE_PIN: &str = "value";
 
 /// Array node types sugared to literals / index / member access.
 const MAKE_ARRAY: &str = "make_array";
@@ -41,8 +43,8 @@ const EVENT_RETURN_RESULT: &str = "events_generic_return_result";
 const EVENT_RESPONSE_PIN: &str = "response";
 
 /// Dynamic-pin prefixes used by the schema struct nodes.
-const MAKE_STRUCT_PREFIX: &str = "__make_struct_field__";
-const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
+pub(crate) const MAKE_STRUCT_PREFIX: &str = "__make_struct_field__";
+pub(crate) const BREAK_STRUCT_PREFIX: &str = "__break_struct_field__";
 
 /// Loop node types and their FlowScript keyword. Each loops its `exec_out` exec output as the
 /// body and continues the enclosing chain from `done`.
@@ -178,8 +180,67 @@ pub fn lower_board(board: &Board) -> BoardAst {
     lowering.run()
 }
 
+#[derive(Clone, Copy)]
+struct CanonicalBoardNode<'a> {
+    node: &'a Node,
+    /// Effective semantic scope. Canonical flat nodes carry it on `node.layer`; legacy
+    /// layer-local-only nodes inherit it from the map that contains them.
+    layer: Option<&'a str>,
+}
+
+/// Return one semantic node per id across the canonical flat store and the legacy layer-local
+/// compatibility maps. Flat `board.nodes` entries are authoritative when both representations are
+/// present; a layer-local entry only fills an id missing from the flat store.
+fn canonical_board_nodes<'a>(board: &'a Board) -> Vec<CanonicalBoardNode<'a>> {
+    let mut by_id: HashMap<&'a str, CanonicalBoardNode<'a>> = HashMap::new();
+
+    // A malformed/readback board can retain the same legacy-only identity in more than one
+    // layer-local map. Pick the first layer/node in stable id order so lowering does not depend on
+    // HashMap iteration order. Canonical flat entries below still replace every legacy fallback.
+    let mut legacy_layers = board.layers.iter().collect::<Vec<_>>();
+    legacy_layers.sort_by(|(left_key, left), (right_key, right)| {
+        left.id.cmp(&right.id).then_with(|| left_key.cmp(right_key))
+    });
+    for (_, layer) in legacy_layers {
+        let mut legacy_nodes = layer.nodes.iter().collect::<Vec<_>>();
+        legacy_nodes.sort_by(|(left_key, left), (right_key, right)| {
+            left.id.cmp(&right.id).then_with(|| left_key.cmp(right_key))
+        });
+        for (_, node) in legacy_nodes {
+            let effective_layer = node
+                .layer
+                .as_deref()
+                .filter(|layer_id| !layer_id.is_empty())
+                .or(Some(layer.id.as_str()));
+            by_id.entry(node.id.as_str()).or_insert(CanonicalBoardNode {
+                node,
+                layer: effective_layer,
+            });
+        }
+    }
+    for node in board.nodes.values() {
+        by_id.insert(
+            node.id.as_str(),
+            CanonicalBoardNode {
+                node,
+                layer: node
+                    .layer
+                    .as_deref()
+                    .filter(|layer_id| !layer_id.is_empty()),
+            },
+        );
+    }
+
+    let mut nodes = by_id.into_values().collect::<Vec<_>>();
+    nodes.sort_by(|left, right| left.node.id.cmp(&right.node.id));
+    nodes
+}
+
 struct Lowering<'a> {
     board: &'a Board,
+    /// Interfaces derived from every schema-bearing text surface (variables, Function boundary
+    /// pins, and event outputs), built before lowering so Params can use stable nominal names.
+    interfaces: Vec<InterfaceDecl>,
     /// pin id -> owning node (across the whole board, all scopes).
     pin_owner: HashMap<&'a str, &'a Node>,
     /// pin id -> pin (across the whole board).
@@ -211,6 +272,7 @@ struct Lowering<'a> {
 
 impl<'a> Lowering<'a> {
     fn new(board: &'a Board) -> Self {
+        let interfaces = interfaces_for_board_text_surfaces(board);
         let mut pin_owner = HashMap::new();
         let mut pins = HashMap::new();
         let mut nodes_by_id = HashMap::new();
@@ -221,13 +283,8 @@ impl<'a> Lowering<'a> {
                 pins.insert(pin.id.as_str(), pin);
             }
         };
-        for node in board.nodes.values() {
-            index(node);
-        }
-        for layer in board.layers.values() {
-            for node in layer.nodes.values() {
-                index(node);
-            }
+        for indexed in canonical_board_nodes(board) {
+            index(indexed.node);
         }
 
         // Map function-layer boundary input pins to their parameter names so nodes inside the
@@ -281,6 +338,7 @@ impl<'a> Lowering<'a> {
 
         Self {
             board,
+            interfaces,
             pin_owner,
             pins,
             nodes_by_id,
@@ -324,7 +382,13 @@ impl<'a> Lowering<'a> {
         let mut owning_function: HashMap<&str, &str> = HashMap::new();
         for layer in self.board.layers.values() {
             let mut cur = layer.id.as_str();
+            let mut seen = HashSet::new();
             loop {
+                // Corrupt/self-referential presentational ancestry must not hang FlowScript
+                // lowering (and therefore every reconcile, which lowers the existing board).
+                if !seen.insert(cur) {
+                    break;
+                }
                 if function_ids.contains(cur) {
                     owning_function.insert(layer.id.as_str(), cur);
                     break;
@@ -339,14 +403,13 @@ impl<'a> Lowering<'a> {
         // Group nodes by the function they ultimately belong to (or root).
         let mut function_nodes: HashMap<&str, Vec<&Node>> = HashMap::new();
         let mut root_nodes: Vec<&Node> = Vec::new();
-        for node in self.board.nodes.values() {
-            match node
+        for indexed in canonical_board_nodes(self.board) {
+            match indexed
                 .layer
-                .as_deref()
-                .and_then(|l| owning_function.get(l).copied())
+                .and_then(|layer_id| owning_function.get(layer_id).copied())
             {
-                Some(fid) => function_nodes.entry(fid).or_default().push(node),
-                None => root_nodes.push(node),
+                Some(fid) => function_nodes.entry(fid).or_default().push(indexed.node),
+                None => root_nodes.push(indexed.node),
             }
         }
 
@@ -368,14 +431,9 @@ impl<'a> Lowering<'a> {
 
         let events = self.lower_events(&root_nodes);
 
-        let mut schema_variables = variables.clone();
-        collect_local_schema_variables_from_functions(&functions, &mut schema_variables);
-        collect_local_schema_variables_from_events(&events, &mut schema_variables);
-        let interfaces = flow_like_ast::interfaces_for_variables(&schema_variables);
-
         BoardAst {
             board_id: self.board.id.clone(),
-            interfaces,
+            interfaces: self.interfaces.clone(),
             variables,
             functions,
             events,
@@ -538,7 +596,7 @@ impl<'a> Lowering<'a> {
         for pin in boundary {
             let param = Param {
                 name: util::to_camel_case(&pin.name),
-                ty: util::type_ref(&pin.data_type, &pin.value_type),
+                ty: self.type_ref_for_pin(pin),
             };
             match pin.pin_type {
                 PinType::Input => params.push(param),
@@ -548,23 +606,151 @@ impl<'a> Lowering<'a> {
 
         let mut body = self.lower_scope_body(nodes);
 
+        let fn_name = util::to_camel_case(&layer.name);
+        let (return_stmt, folded_return_variables) =
+            self.lower_function_return(layer, nodes, &fn_name);
+
         // Prepend the function's own (layer-local) variables as `let` declarations so the body
-        // can read/assign them without leaking an undeclared identifier.
-        let mut locals: Vec<&Variable> = layer.variables.values().collect();
+        // can read/assign them without leaking an undeclared identifier. Variables materialized
+        // for a literal `return` are folded into that statement instead of an inert decl.
+        let mut locals: Vec<&Variable> = layer
+            .variables
+            .values()
+            .filter(|v| !folded_return_variables.contains(v.id.as_str()))
+            .collect();
         locals.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         let local_stmts: Vec<Stmt> = locals
             .iter()
             .map(|v| Stmt::Local(var_decl_of(v, &self.board.refs)))
             .collect();
         body.stmts.splice(0..0, local_stmts);
+        body.stmts.extend(return_stmt);
 
         FnDecl {
-            name: util::to_camel_case(&layer.name),
+            name: fn_name,
             params,
             returns,
             body,
             anchor: Some(layer.id.clone()),
         }
+    }
+
+    /// Render the boundary return wiring as a trailing `return` statement when every (non-exec)
+    /// return pin has one resolvable data source, so the statement survives the lower→reconcile
+    /// round-trip instead of being re-added (and re-materialized) by the model on every turn.
+    /// A variable materialized for a literal return (`{fn}_{pin}` name, stored default, no other
+    /// consumers) renders as its literal and its id is returned for local-decl suppression; any
+    /// other variable renders as a bare reference; every other producer renders through the same
+    /// expression resolution the body uses (`hashed.hash`, `user.hasUser`, member chains).
+    /// Anything unresolvable keeps the status quo (no statement).
+    fn lower_function_return(
+        &mut self,
+        layer: &'a Layer,
+        nodes: &[&'a Node],
+        fn_name: &str,
+    ) -> (Option<Stmt>, HashSet<&'a str>) {
+        let mut return_pins: Vec<&Pin> = layer
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            .collect();
+        return_pins.sort_by_key(|p| p.index);
+        if return_pins.is_empty() {
+            return (None, HashSet::new());
+        }
+
+        let mut values = Vec::new();
+        let mut folded: HashSet<&'a str> = HashSet::new();
+        for pin in return_pins {
+            let mut sources = pin.depends_on.iter();
+            let (Some(source_pin_id), None) = (sources.next(), sources.next()) else {
+                return (None, HashSet::new());
+            };
+            let Some(owner) = self.pin_owner.get(source_pin_id.as_str()).copied() else {
+                return (None, HashSet::new());
+            };
+            if owner.name != VARIABLE_GET {
+                match self.resolve_source(source_pin_id) {
+                    Some(expr) => values.push(expr),
+                    None => return (None, HashSet::new()),
+                }
+                continue;
+            }
+            let Some(variable_id) = self.pin_literal_string(owner, "var_ref") else {
+                return (None, HashSet::new());
+            };
+
+            let variable = layer.variables.get(&variable_id);
+            let literal = variable
+                .filter(|v| is_materialized_return_name(&v.name, fn_name, &pin.name))
+                .filter(|v| self.variable_only_feeds_layer_boundary(v, nodes, layer))
+                .and_then(|v| v.default_value.as_deref().and_then(util::decode_default));
+            if let (Some(variable), Some(literal)) = (variable, literal) {
+                folded.insert(variable.id.as_str());
+                values.push(Expr::Literal(literal));
+                continue;
+            }
+            match self.var_names.get(variable_id.as_str()) {
+                Some(name) => values.push(Expr::Ref(name.clone())),
+                None => return (None, HashSet::new()),
+            }
+        }
+        (
+            Some(Stmt::Return {
+                values,
+                anchor: None,
+            }),
+            folded,
+        )
+    }
+
+    /// A materialized literal-return variable may be folded into its `return <literal>` rendering
+    /// only when nothing else consumes it: every node referencing it is a `variable_get` whose
+    /// data outputs feed this layer's boundary Output pins exclusively.
+    fn variable_only_feeds_layer_boundary(
+        &self,
+        variable: &Variable,
+        nodes: &[&'a Node],
+        layer: &'a Layer,
+    ) -> bool {
+        let boundary_output_ids: HashSet<&str> = layer
+            .pins
+            .values()
+            .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            .map(|p| p.id.as_str())
+            .collect();
+        for node in nodes {
+            let references_variable = self
+                .pin_literal_string(node, "var_ref")
+                .is_some_and(|id| id == variable.id);
+            if !references_variable {
+                continue;
+            }
+            if node.name != VARIABLE_GET {
+                return false;
+            }
+            for output in node
+                .pins
+                .values()
+                .filter(|p| p.pin_type == PinType::Output && !is_exec(p))
+            {
+                if !output
+                    .connected_to
+                    .iter()
+                    .all(|target| boundary_output_ids.contains(target.as_str()))
+                {
+                    return false;
+                }
+                if self
+                    .pins
+                    .values()
+                    .any(|pin| pin.depends_on.contains(output.id.as_str()))
+                {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn lower_events(&mut self, scope: &[&'a Node]) -> Vec<EventBlock> {
@@ -599,6 +785,7 @@ impl<'a> Lowering<'a> {
             events.push(EventBlock {
                 name: event_name(entry),
                 node_type: entry.name.clone(),
+                event_name: None,
                 params,
                 body,
                 anchor: Some(entry.id.clone()),
@@ -624,10 +811,40 @@ impl<'a> Lowering<'a> {
             self.event_params.insert(pin.id.as_str(), name.clone());
             params.push(Param {
                 name,
-                ty: util::type_ref(&pin.data_type, &pin.value_type),
+                ty: self.type_ref_for_pin(pin),
             });
         }
         params
+    }
+
+    fn type_ref_for_pin(&self, pin: &Pin) -> TypeRef {
+        let mut ty = util::type_ref(&pin.data_type, &pin.value_type);
+        if pin.data_type != VariableType::Struct {
+            return ty;
+        }
+        if pin
+            .options
+            .as_ref()
+            .and_then(|options| options.enforce_schema)
+            != Some(true)
+        {
+            return ty;
+        }
+        let Some(raw_schema) = pin.schema.as_deref() else {
+            return ty;
+        };
+        let schema = self
+            .board
+            .refs
+            .get(raw_schema)
+            .map(String::as_str)
+            .unwrap_or(raw_schema);
+        if let Some(interface_name) =
+            flow_like_ast::interface_name_for_schema(&self.interfaces, schema)
+        {
+            ty.base = interface_name.to_string();
+        }
+        ty
     }
 
     /// Lower a function-layer body: walk every entry, then return outputs.
@@ -664,6 +881,7 @@ impl<'a> Lowering<'a> {
                 block.stmts.push(Stmt::Handler(EventBlock {
                     name: event_name(entry),
                     node_type: entry.name.clone(),
+                    event_name: None,
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -698,7 +916,7 @@ impl<'a> Lowering<'a> {
                     None => Block::default(),
                 };
                 arms.push(BranchArm {
-                    label: pin.name.clone(),
+                    label: arm_label(entry, pin),
                     body,
                 });
             }
@@ -763,7 +981,7 @@ impl<'a> Lowering<'a> {
                         None => Block::default(),
                     };
                     arms.push(BranchArm {
-                        label: pin.name.clone(),
+                        label: arm_label(node, pin),
                         body,
                     });
                 }
@@ -793,7 +1011,7 @@ impl<'a> Lowering<'a> {
                         None => Block::default(),
                     };
                     arms.push(BranchArm {
-                        label: pin.name.clone(),
+                        label: arm_label(node, pin),
                         body,
                     });
                 }
@@ -819,6 +1037,20 @@ impl<'a> Lowering<'a> {
             && let Some(target) = self.struct_accumulators.get(&node.id)
             && let Some(output) = self.struct_set_output_pin(node)
         {
+            // A single-field accumulator reassignment (`struct_in` reads the same variable the node
+            // rebinds and `field` is a literal) is the readable `base.path = value` struct-field
+            // write. Dynamic-field or cross-source updates keep the explicit `structSet({…})` form.
+            if self.previous_struct_set(node).is_some()
+                && let Some((path, value)) = struct_set_field_assign(&call, target)
+            {
+                return Stmt::FieldAssign {
+                    base: target.clone(),
+                    path,
+                    value,
+                    anchor: Some(node.id.clone()),
+                };
+            }
+
             let value = Expr::Field {
                 base: Box::new(Expr::Call(call)),
                 pin: output.name.clone(),
@@ -850,11 +1082,13 @@ impl<'a> Lowering<'a> {
                 };
             }
         }
-        // `events_generic_return_result` sugars to a `return <response>` statement.
+        // `events_generic_return_result` sugars to a `return <response>` statement. Keep the node
+        // id as the anchor so reconcile matches the existing result node instead of duplicating it.
         if node.name == EVENT_RETURN_RESULT {
             let value = self.input_expr(node, EVENT_RESPONSE_PIN);
             return Stmt::Return {
                 values: value.into_iter().collect(),
+                anchor: Some(node.id.clone()),
             };
         }
         if let Some(name) = self.bindings.get(&node.id) {
@@ -1360,32 +1594,86 @@ impl<'a> Lowering<'a> {
     }
 }
 
-fn collect_local_schema_variables_from_functions(functions: &[FnDecl], out: &mut Vec<VarDecl>) {
-    for function in functions {
-        collect_local_schema_variables_from_block(&function.body, out);
-    }
-}
+fn interfaces_for_board_text_surfaces(board: &Board) -> Vec<InterfaceDecl> {
+    let mut schema_sources = lower_variables(board.variables.values(), &board.refs);
 
-fn collect_local_schema_variables_from_events(events: &[EventBlock], out: &mut Vec<VarDecl>) {
-    for event in events {
-        collect_local_schema_variables_from_block(&event.body, out);
-    }
-}
+    let mut layers = board.layers.values().collect::<Vec<_>>();
+    layers.sort_by(|left, right| left.id.cmp(&right.id));
+    for layer in &layers {
+        let mut variables = layer.variables.values().collect::<Vec<_>>();
+        variables.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+        schema_sources.extend(
+            variables
+                .into_iter()
+                .map(|variable| var_decl_of(variable, &board.refs)),
+        );
 
-fn collect_local_schema_variables_from_block(block: &Block, out: &mut Vec<VarDecl>) {
-    for stmt in &block.stmts {
-        match stmt {
-            Stmt::Local(var) if var.schema.is_some() => out.push(var.clone()),
-            Stmt::Branch { arms, .. } => {
-                for arm in arms {
-                    collect_local_schema_variables_from_block(&arm.body, out);
+        if matches!(layer.r#type, LayerType::Function) {
+            let mut pins = layer.pins.values().collect::<Vec<_>>();
+            pins.sort_by_key(|pin| (pin.index, pin.id.clone()));
+            for pin in pins {
+                if let Some(source) =
+                    schema_source_for_pin(&format!("{}_{}", layer.name, pin.name), pin, &board.refs)
+                {
+                    schema_sources.push(source);
                 }
             }
-            Stmt::Loop { body, .. } => collect_local_schema_variables_from_block(body, out),
-            Stmt::Handler(event) => collect_local_schema_variables_from_block(&event.body, out),
-            _ => {}
         }
     }
+
+    // Trigger payload outputs are the other pin contracts rendered as Params. Restrict this to
+    // actual start/handler nodes: including every catalog Struct output would emit unused
+    // interfaces, inflate the model prompt, and could rename an unrelated boundary interface.
+    for indexed in canonical_board_nodes(board) {
+        if indexed.node.start != Some(true) {
+            continue;
+        }
+        let mut pins = indexed.node.pins.values().collect::<Vec<_>>();
+        pins.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        for pin in pins {
+            if pin.pin_type != PinType::Output || is_exec(pin) {
+                continue;
+            }
+            if let Some(source) = schema_source_for_pin(
+                &format!("{}_{}", indexed.node.name, pin.name),
+                pin,
+                &board.refs,
+            ) {
+                schema_sources.push(source);
+            }
+        }
+    }
+
+    flow_like_ast::interfaces_for_variables(&schema_sources)
+}
+
+fn schema_source_for_pin(name: &str, pin: &Pin, refs: &HashMap<String, String>) -> Option<VarDecl> {
+    if pin
+        .options
+        .as_ref()
+        .and_then(|options| options.enforce_schema)
+        != Some(true)
+    {
+        return None;
+    }
+    let raw_schema = pin.schema.as_deref()?;
+    let schema = refs
+        .get(raw_schema)
+        .cloned()
+        .unwrap_or_else(|| raw_schema.to_string());
+    Some(VarDecl {
+        name: util::to_camel_case(name),
+        ty: util::type_ref(&pin.data_type, &pin.value_type),
+        default: None,
+        exposed: false,
+        secret: false,
+        editable: true,
+        runtime_configured: false,
+        category: None,
+        description: None,
+        schema: Some(schema),
+        anchor: None,
+    })
 }
 
 fn lower_variables<'a, I>(variables: I, refs: &HashMap<String, String>) -> Vec<VarDecl>
@@ -1414,10 +1702,17 @@ fn var_decl_of(v: &Variable, refs: &HashMap<String, String>) -> VarDecl {
     VarDecl {
         name: util::to_camel_case(&v.name),
         ty: util::type_ref(&v.data_type, &v.value_type),
-        default: v
-            .default_value
-            .as_ref()
-            .and_then(|b| util::decode_default(b)),
+        // Secret values must never enter the text domain: rendered FlowScript is shown in
+        // editors, copied, and sent to LLMs. Reconcile lowers the live board through this
+        // same path, so both sides agree the decl is value-free and round-trips can neither
+        // leak nor clear the stored value.
+        default: if v.secret {
+            None
+        } else {
+            v.default_value
+                .as_ref()
+                .and_then(|b| util::decode_default(b))
+        },
         exposed: v.exposed,
         secret: v.secret,
         editable: v.editable,
@@ -1465,6 +1760,46 @@ fn is_impure(node: &Node) -> bool {
     node.pins.values().any(is_exec)
 }
 
+/// If a `struct_set` call is a single-field accumulator update of `target` — its `struct_in`
+/// reads the same variable the node rebinds and its `field` is a literal string — return the
+/// `(field_path, value_expr)` backing the `target.field = value` struct-field write sugar.
+/// Returns `None` (keep the explicit `structSet({…})` form) when the field is wired/dynamic or
+/// `struct_in` comes from a different source than `target`.
+fn struct_set_field_assign(call: &Call, target: &str) -> Option<(String, Expr)> {
+    let mut struct_in = None;
+    let mut field = None;
+    let mut value = None;
+    for arg in &call.args {
+        match arg.name.as_str() {
+            STRUCT_SET_IN_PIN => struct_in = Some(&arg.value),
+            STRUCT_SET_FIELD_PIN => field = Some(&arg.value),
+            STRUCT_SET_VALUE_PIN => value = Some(&arg.value),
+            _ => {}
+        }
+    }
+    match struct_in {
+        Some(Expr::Ref(name)) if name == target => {}
+        _ => return None,
+    }
+    let Some(Expr::Literal(Literal::String(path))) = field else {
+        return None;
+    };
+    Some((path.clone(), value?.clone()))
+}
+
+/// Variables materialized by reconcile for a literal `return` are named `{fn}_{pin}`
+/// (historically with a `_N` uniqueness suffix from the pre-reuse planner).
+fn is_materialized_return_name(variable_name: &str, fn_name: &str, pin_name: &str) -> bool {
+    let base = format!("{fn_name}_{pin_name}");
+    variable_name == base
+        || variable_name
+            .strip_prefix(&base)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            })
+}
+
 /// A trigger entry is a `start` node — an independent entry point (e.g. a generic event used as
 /// an agent tool) whose data outputs are its payload. Unlike `event_callback` nodes (which run
 /// inline as steps of the surrounding flow), a trigger never has an incoming exec edge, so inside
@@ -1481,6 +1816,26 @@ fn exec_output_pins(node: &Node) -> Vec<&Pin> {
         .collect();
     pins.sort_by_key(|p| p.index);
     pins
+}
+
+/// Branch arm label for one exec output pin. Same-named siblings (repeatable exec pins such as
+/// `control_par_execution`'s `exec_out`) get the stable positional selector board commands use
+/// (`name[#N]`, occurrence among ALL same-named exec outputs sorted by index/id) so each arm
+/// addresses exactly one pin on the reverse path; the first occurrence keeps the plain name.
+fn arm_label(node: &Node, pin: &Pin) -> String {
+    let mut same_named: Vec<&Pin> = node
+        .pins
+        .values()
+        .filter(|p| p.pin_type == PinType::Output && is_exec(p) && p.name == pin.name)
+        .collect();
+    if same_named.len() <= 1 {
+        return pin.name.clone();
+    }
+    same_named.sort_by_key(|p| (p.index, p.id.clone()));
+    match same_named.iter().position(|p| p.id == pin.id) {
+        Some(0) | None => pin.name.clone(),
+        Some(occurrence) => super::pin_occurrence_ref(&pin.name, occurrence),
+    }
 }
 
 fn binding_base_name(node: &Node) -> String {

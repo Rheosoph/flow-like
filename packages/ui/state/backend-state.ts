@@ -14,7 +14,12 @@ import type {
 	UpsertAppCommentResponse,
 } from "./backend-state/app-state";
 import type { IBitState } from "./backend-state/bit-state";
-import type { IBoardState } from "./backend-state/board-state";
+import type {
+	IApplyFlowIrCommitResponse,
+	IApplyFlowScriptResponse,
+	IBoardState,
+	IFlowScriptDiagnostic,
+} from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
 	EmptyAIState,
@@ -27,6 +32,7 @@ import {
 	EmptyEventState,
 	EmptyGraphState,
 	EmptyHelperState,
+	EmptyQueryState,
 	EmptyRoleState,
 	EmptyRouteState,
 	EmptyStorageState,
@@ -40,9 +46,11 @@ import type { IGraphState } from "./backend-state/graph-state";
 import type {
 	IHelperState,
 	ITemporaryFlowPath,
+	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 } from "./backend-state/helper-state";
 import type { IPageState } from "./backend-state/page-state";
+import type { IQueryState } from "./backend-state/query-state";
 import type { IRegistryState } from "./backend-state/registry-state";
 import type { IRoleState } from "./backend-state/role-state";
 import type { IAppRouteState } from "./backend-state/route-state";
@@ -78,6 +86,9 @@ export type {
 	IAppRouteState,
 	IBitState,
 	IBoardState,
+	IApplyFlowIrCommitResponse,
+	IApplyFlowScriptResponse,
+	IFlowScriptDiagnostic,
 	IEventState,
 	IHelperState,
 	IPageState,
@@ -94,6 +105,7 @@ export type {
 	IAnalyticsState,
 	IGraphState,
 	ITemporaryFlowPath,
+	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 };
 
@@ -121,12 +133,44 @@ export type {
 	VersionType,
 } from "./backend-state/widget-state";
 
+export type { IMediaItem } from "./backend-state/app-state";
+
 export type {
+	IAccessibleApp,
+	IAppConnection,
+	IAppConnectionStatus,
+	IAppConnectionsResponse,
+	IAppContentStats,
+	IChangeGroupVisibilityResult,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMember,
+	IGroupMembershipRequest,
+	IGroupPublicationLog,
+	IGroupPublicationRequest,
+	IGroupPublicationStatus,
+	IMemberReadiness,
+	IUpdateGroupPayload,
 	IBackendRole,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
 	IMember,
+	IProcessCase,
+	IProcessCaseDetailResponse,
+	IProcessCaseRun,
+	IProcessCasesResponse,
+	IProcessFlow,
+	IProcessGraphEdge,
+	IProcessGraphNode,
+	IProcessGraphResponse,
+	IProcessNote,
+	IRemoteEvent,
+	IRemoteEventDetail,
+	IRemoteMcpResource,
+	IRemoteMcpTool,
+	IRemoteRestFile,
+	IRemoteRestRoute,
 	IStorageItemActionResult,
 	INotification,
 	INotificationsOverview,
@@ -140,7 +184,11 @@ export type {
 } from "./backend-state/types";
 export * from "./backend-state/db-state";
 export * from "./backend-state/graph-state";
+export * from "./backend-state/query-state";
 export type {
+	IPushTargetStatus,
+	IRegisterPushTargetRequest,
+	IRegisterPushTargetResponse,
 	IUserWidgetInfo,
 	IUserTemplateInfo,
 } from "./backend-state/user-state";
@@ -168,6 +216,7 @@ export interface IBackendState {
 	aiState: IAIState;
 	dbState: IDatabaseState;
 	graphState: IGraphState;
+	queryState: IQueryState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	routeState: IAppRouteState;
@@ -214,6 +263,7 @@ const serverBackend: IBackendState = {
 	aiState: new EmptyAIState(),
 	dbState: new EmptyDatabaseState(),
 	graphState: new EmptyGraphState(),
+	queryState: new EmptyQueryState(),
 	widgetState: new Proxy(
 		{},
 		{

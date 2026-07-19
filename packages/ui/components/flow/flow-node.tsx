@@ -7,7 +7,6 @@ import {
 	type NodeProps,
 	Position,
 	useReactFlow,
-	useStore,
 	useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
@@ -56,6 +55,7 @@ import {
 } from "../../lib";
 import type { INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
+import { isWebkitLite } from "../../lib/platform";
 import type { IBoard, IComment, ILayer } from "../../lib/schema/flow/board";
 import { ILayerType } from "../../lib/schema/flow/board/commands/upsert-layer";
 import { type IPin, IVariableType } from "../../lib/schema/flow/pin";
@@ -73,23 +73,15 @@ import {
 import { DynamicImage } from "../ui";
 import { AutoResizeText } from "./auto-resize-text";
 import { useUndoRedo } from "./flow-history";
-import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { EventPayloadForm } from "./flow-node/event-payload-form";
 import { FlowNodeCommentMenu } from "./flow-node/flow-node-comment-menu";
 import { FlowPinAction } from "./flow-node/flow-node-pin-action";
 import { FlowNodeRenameMenu } from "./flow-node/flow-node-rename-menu";
 import { FlowNodeToolbar } from "./flow-node/flow-node-toolbar";
 import { FlowPin } from "./flow-pin";
+import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
-
-const selectSelectedCount = (s: any) => {
-	let count = 0;
-	for (const n of s.nodeLookup.values()) {
-		if (n.selected) count++;
-	}
-	return count;
-};
 
 export interface RemoteSelectionParticipant {
 	clientId: number;
@@ -113,6 +105,7 @@ export type FlowNode = Node<
 		appId: string;
 		transparent?: boolean;
 		boardRef: RefObject<IBoard | undefined>;
+		boardDataVersion?: string;
 		fnRefsHash?: string;
 		version?: [number, number, number];
 		onExecute: (node: INode, payload?: object) => Promise<void>;
@@ -144,16 +137,18 @@ const FlowNodeInner = memo(
 		const { pushCommand } = useUndoRedo(props.data.appId, props.data.boardId);
 		const { resolvedTheme } = useTheme();
 		const invalidate = useInvalidateInvoke();
-		const { currentMetadata } = useLogAggregation();
+		// Field selectors: subscribing to the whole log store re-renders every
+		// node on currentLogs/isLoading churn during runs — with hundreds of
+		// nodes that bypasses the memo comparator on every log tick.
+		const currentMetadata = useLogAggregation((state) => state.currentMetadata);
+		const heatmapEnabled = useLogAggregation((state) => state.heatmapEnabled);
+		const heatmap = useLogAggregation((state) => state.heatmap);
 
 		const [payload, setPayload] = useState({
 			open: false,
 			payload: "",
 		});
 		const [executing, setExecuting] = useState(false);
-		const [isExec, setIsExec] = useState(false);
-		const [inputPins, setInputPins] = useState<(IPin | IPinAction)[]>([]);
-		const [outputPins, setOutputPins] = useState<(IPin | IPinAction)[]>([]);
 
 		// Use separate selectors returning primitives to avoid infinite re-renders
 		const executionStatus = useRunExecutionStore((state) => {
@@ -204,6 +199,17 @@ const FlowNodeInner = memo(
 			return [false, severity];
 		}, [props.data.node, currentMetadata]);
 
+		// Aggregated many-runs activity for the heatmap overlay: visit count,
+		// error count, and an intensity bucket relative to the busiest node.
+		const nodeHeat = useMemo(() => {
+			if (!heatmapEnabled || !heatmap) return undefined;
+			const heat = heatmap.nodes[props.data.node.id];
+			if (!heat) return undefined;
+			const intensity =
+				heatmap.maxVisits > 0 ? heat.visits / heatmap.maxVisits : 0;
+			return { ...heat, intensity };
+		}, [heatmapEnabled, heatmap, props.data.node.id]);
+
 		const isReroute = useMemo(() => {
 			return props.data.node.name === "reroute";
 		}, [props.data.node.name]);
@@ -213,22 +219,17 @@ const FlowNodeInner = memo(
 			[props.data.node.wasm],
 		);
 
+		const firstPinType =
+			Object.values(props.data.node.pins)?.[0]?.data_type ??
+			IVariableType.Generic;
 		const nodeStyle = useMemo(
 			() => ({
-				backgroundColor: props.selected
-					? typeToColor(
-							Object.values(props.data.node.pins)?.[0]?.data_type ??
-								IVariableType.Generic,
-						)
-					: undefined,
-				borderColor: typeToColor(
-					Object.values(props.data.node.pins)?.[0]?.data_type ??
-						IVariableType.Generic,
-				),
+				backgroundColor: props.selected ? typeToColor(firstPinType) : undefined,
+				borderColor: typeToColor(firstPinType),
 				borderWidth: "1px",
 				borderStyle: "solid",
 			}),
-			[isReroute, props.selected],
+			[props.selected, firstPinType],
 		);
 
 		const sortPins = useCallback((a: IPin, b: IPin) => {
@@ -239,15 +240,6 @@ const FlowNodeInner = memo(
 			// Step 2: If types are the same, compare by index
 			return a.index - b.index;
 		}, []);
-
-		useEffect(() => {
-			const height = Math.max(inputPins.length, outputPins.length);
-			if (isReroute) {
-				return;
-			}
-			if (div.current)
-				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
-		}, [isReroute, inputPins, outputPins]);
 
 		// Execution state is now computed directly from the selector above
 
@@ -327,7 +319,16 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[reactFlow, sortPins, pushCommand, invalidate, props.data.version],
+			[
+				reactFlow,
+				sortPins,
+				pushCommand,
+				invalidate,
+				props.id,
+				props.data.version,
+				props.data.appId,
+				props.data.boardId,
+			],
 		);
 		const pinRemoveCallback = useCallback(
 			async (pinToRemove: IPin) => {
@@ -382,7 +383,16 @@ const FlowNodeInner = memo(
 					props.data.boardId,
 				]);
 			},
-			[inputPins, outputPins, getNode, props.data.version],
+			[
+				getNode,
+				sortPins,
+				pushCommand,
+				invalidate,
+				props.id,
+				props.data.version,
+				props.data.appId,
+				props.data.boardId,
+			],
 		);
 
 		const parsePins = useCallback(
@@ -456,11 +466,9 @@ const FlowNodeInner = memo(
 					}
 				}
 
-				setInputPins(inputPins);
-				setOutputPins(outputPins);
-				setIsExec(isExec);
+				return { inputPins, outputPins, isExec };
 			},
-			[addPin, sortPins, props.data.node, props.data.node.hash],
+			[addPin, sortPins, props.data.node],
 		);
 
 		// Parse pins when node pins change
@@ -480,11 +488,23 @@ const FlowNodeInner = memo(
 				});
 		}, [props.data.node?.pins, props.data.node?.name]);
 
+		// Derive pins synchronously (avoids the extra render pass of effect+setState)
+		const { inputPins, outputPins, isExec } = useMemo(
+			() => parsePins(visiblePins),
+			[parsePins, visiblePins],
+		);
+
 		useEffect(() => {
-			parsePins(visiblePins);
 			// Update React Flow internals when pins change (handles may have changed)
 			updateNodeInternals(props.id);
-		}, [visiblePins, props.data.node.hash, props.id]);
+		}, [visiblePins, props.id, updateNodeInternals]);
+
+		useEffect(() => {
+			if (isReroute) return;
+			const height = Math.max(inputPins.length, outputPins.length);
+			if (div.current)
+				div.current.style.height = `calc(${height * 15}px + 1.25rem + 0.5rem)`;
+		}, [isReroute, inputPins, outputPins]);
 
 		function isPinAction(pin: IPin | IPinAction): pin is IPinAction {
 			return typeof (pin as IPinAction).onAction === "function";
@@ -509,6 +529,8 @@ const FlowNodeInner = memo(
 								key={pin.id}
 								node={props.data.node}
 								boardId={props.data.boardId}
+								boardRef={props.data.boardRef}
+								boardDataVersion={props.data.boardDataVersion}
 								pin={pin}
 								onPinRemove={pinRemoveCallback}
 								skipOffset={isReroute}
@@ -523,9 +545,11 @@ const FlowNodeInner = memo(
 				inputPins,
 				props.data.node,
 				props.data.boardId,
+				props.data.boardDataVersion,
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.currentLayerId,
 				props.data.selectorDataVersion,
 			],
 		);
@@ -545,6 +569,8 @@ const FlowNodeInner = memo(
 							appId={props.data.appId}
 							node={props.data.node}
 							boardId={props.data.boardId}
+							boardRef={props.data.boardRef}
+							boardDataVersion={props.data.boardDataVersion}
 							pin={pin}
 							key={pin.id}
 							onPinRemove={pinRemoveCallback}
@@ -560,9 +586,11 @@ const FlowNodeInner = memo(
 				outputPins,
 				props.data.node,
 				props.data.boardId,
+				props.data.boardDataVersion,
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.currentLayerId,
 				props.data.selectorDataVersion,
 			],
 		);
@@ -598,7 +626,9 @@ const FlowNodeInner = memo(
 						height: 12,
 						borderRadius: 2,
 						background: refInConnected
-							? `
+							? isWebkitLite()
+								? "var(--pin-fn-ref)"
+								: `
 				linear-gradient(
 					135deg,
 					var(--pin-fn-ref) 0%,
@@ -609,12 +639,13 @@ const FlowNodeInner = memo(
 							: "var(--background)",
 						border: "1px solid var(--pin-fn-ref)",
 						padding: 0,
-						boxShadow: refInConnected
-							? `
+						boxShadow:
+							refInConnected && !isWebkitLite()
+								? `
 		0 0 6px color-mix(in oklch, var(--pin-fn-ref) 30%, transparent),
 		inset 0 1px 1px color-mix(in oklch, white 15%, transparent)
 	`
-							: "none",
+								: "none",
 					}}
 				/>
 			);
@@ -639,7 +670,9 @@ const FlowNodeInner = memo(
 						height: 12,
 						borderRadius: 2,
 						background: refOutConnected
-							? `
+							? isWebkitLite()
+								? "var(--pin-fn-ref)"
+								: `
 			radial-gradient(
 				circle at 30% 30%,
 				color-mix(in oklch, var(--pin-fn-ref) 100%, white 20%),
@@ -649,13 +682,14 @@ const FlowNodeInner = memo(
 							: "var(--background)",
 						border: "1px solid var(--pin-fn-ref)",
 						padding: 0,
-						boxShadow: refOutConnected
-							? `
+						boxShadow:
+							refOutConnected && !isWebkitLite()
+								? `
 			0 0 8px color-mix(in oklch, var(--pin-fn-ref) 40%, transparent),
 			0 1px 2px color-mix(in oklch, black 20%, transparent),
 			inset 0 1px 1px color-mix(in oklch, white 20%, transparent)
 		`
-							: "none",
+								: "none",
 					}}
 				/>
 			);
@@ -907,6 +941,31 @@ const FlowNodeInner = memo(
 						)}
 					</div>
 				)}
+				{nodeHeat && !isReroute && (
+					<>
+						<div
+							className="pointer-events-none absolute inset-0 rounded-md"
+							style={{
+								boxShadow: `inset 0 0 0 2px color-mix(in srgb, var(--primary) ${Math.round(
+									20 + nodeHeat.intensity * 80,
+								)}%, transparent)`,
+							}}
+						/>
+						<div
+							className="absolute bottom-0 left-0 z-10 flex translate-y-[calc(50%)] translate-x-[calc(-30%)] items-center gap-1"
+							title={`${nodeHeat.visits} ${nodeHeat.visits === 1 ? "run" : "runs"} visited this node${nodeHeat.errors > 0 ? ` · ${nodeHeat.errors} with errors` : ""}`}
+						>
+							<span className="rounded-full bg-primary px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-primary-foreground">
+								{nodeHeat.visits}×
+							</span>
+							{nodeHeat.errors > 0 && (
+								<span className="rounded-full bg-destructive px-1.5 py-0.5 text-[8px] font-semibold leading-none tabular-nums text-destructive-foreground">
+									{nodeHeat.errors}!
+								</span>
+							)}
+						</div>
+					</>
+				)}
 				{props.data.node.comment && (
 					<div className="absolute top-0 translate-y-[calc(-100%-0.5rem)] left-3 right-3 mb-2 text-center bg-foreground/70 text-background p-1 rounded-md">
 						<small className="font-normal text-extra-small leading-extra-small">
@@ -996,6 +1055,8 @@ const FlowNodeInner = memo(
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
+		prev.props.data.remoteSelections === next.props.data.remoteSelections &&
+		prev.props.data.peerUsers === next.props.data.peerUsers &&
 		prev.props.data.selectorDataVersion === next.props.data.selectorDataVersion,
 );
 
@@ -1315,8 +1376,6 @@ function FlowNode(props: NodeProps<FlowNode>) {
 		[props.data.node, invalidate, pushCommands, flow],
 	);
 
-	const selectedCount = useStore(selectSelectedCount);
-
 	const isReadOnly = typeof props.data.version !== "undefined";
 
 	const handleOpenInfo = useCallback(() => {
@@ -1331,6 +1390,13 @@ function FlowNode(props: NodeProps<FlowNode>) {
 				: [props.data.node.id];
 		props.data.onExplain?.(nodeIds);
 	}, [flow, props.data.node.id, props.data.onExplain]);
+
+	// Stable callbacks for the toolbar so the memoized ToolbarButtons (and their
+	// Radix Tooltip/Popper subtrees, which measure the DOM on render) don't
+	// re-render every time this node re-renders (e.g. after a drag/drop).
+	const handleOpenComment = useCallback(() => setCommentMenu(true), []);
+	const handleOpenRename = useCallback(() => setRenameMenu(true), []);
+	const handleOpenEdit = useCallback(() => setEditingMenu(true), []);
 
 	return (
 		<>
@@ -1403,13 +1469,12 @@ function FlowNode(props: NodeProps<FlowNode>) {
 						node={props.data.node}
 						appId={props.data.appId}
 						boardId={props.data.boardId}
-						selectedCount={selectedCount}
 						isReadOnly={isReadOnly}
 						onCopy={copy}
 						onDelete={deleteNodes}
-						onComment={() => setCommentMenu(true)}
-						onRename={() => setRenameMenu(true)}
-						onEdit={() => setEditingMenu(true)}
+						onComment={handleOpenComment}
+						onRename={handleOpenRename}
+						onEdit={handleOpenEdit}
 						onInfo={handleOpenInfo}
 						onHandleError={handleError}
 						onCollapse={handleCollapse}
@@ -1435,6 +1500,7 @@ function flowNodeAreEqual(
 		prev.data.remoteSelections === next.data.remoteSelections &&
 		prev.data.peerUsers === next.data.peerUsers &&
 		prev.data.remoteExecuting === next.data.remoteExecuting &&
+		prev.data.currentLayerId === next.data.currentLayerId &&
 		prev.data.selectorDataVersion === next.data.selectorDataVersion
 	);
 }

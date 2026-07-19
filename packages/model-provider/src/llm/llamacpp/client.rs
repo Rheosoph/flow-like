@@ -1,3 +1,4 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like_types::Value;
 use flow_like_types::json::{self as serde_json, json};
 use flow_like_types::reqwest;
@@ -128,6 +129,8 @@ impl TryFrom<CompletionResponse> for completion::CompletionResponse<CompletionRe
                 total_tokens: resp.usage.total_tokens,
                 cache_creation_input_tokens: 0,
                 cached_input_tokens: 0,
+                tool_use_prompt_tokens: 0,
+                reasoning_tokens: 0,
             },
             raw_response: resp,
         })
@@ -1234,10 +1237,187 @@ impl CompletionModel {
         Ok(request_payload)
     }
 
+    fn merge_media_additional_params(target: &mut Value, additional_params: Option<&Value>) {
+        let Some(additional_params) = additional_params else {
+            return;
+        };
+        let Some(target) = target.as_object_mut() else {
+            return;
+        };
+
+        if let Some(additional_params) = additional_params.as_object() {
+            for (key, value) in additional_params {
+                target.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        } else {
+            target
+                .entry("additional_params".to_string())
+                .or_insert_with(|| additional_params.clone());
+        }
+    }
+
+    fn invalid_media_source(message: impl Into<String>) -> CompletionError {
+        CompletionError::RequestError(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            message.into(),
+        )))
+    }
+
+    fn image_url_payload(image: &message::Image) -> Result<Value, CompletionError> {
+        let mime = image
+            .media_type
+            .as_ref()
+            .map(|media_type| media_type.to_mime_type());
+        let url = match &image.data {
+            message::DocumentSourceKind::Url(url) => url.clone(),
+            message::DocumentSourceKind::Base64(data) => mime
+                .map(|mime| format!("data:{mime};base64,{data}"))
+                .unwrap_or_else(|| data.clone()),
+            message::DocumentSourceKind::Raw(bytes) => {
+                let data = BASE64_STANDARD.encode(bytes);
+                mime.map(|mime| format!("data:{mime};base64,{data}"))
+                    .unwrap_or(data)
+            }
+            message::DocumentSourceKind::String(_) => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp image input cannot use a literal string source; use Url for a URL/data URI or Base64/Raw for image bytes",
+                ));
+            }
+            message::DocumentSourceKind::FileId(_) => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp image input does not accept provider file IDs; resolve the file ID to a URL or bytes first",
+                ));
+            }
+            message::DocumentSourceKind::Unknown => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp image input has no source data",
+                ));
+            }
+            _ => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp image input uses an unsupported source kind",
+                ));
+            }
+        };
+
+        let mut payload = json!({});
+        Self::merge_media_additional_params(&mut payload, image.additional_params.as_ref());
+        payload["url"] = json!(url);
+        payload["detail"] = json!(
+            image
+                .detail
+                .as_ref()
+                .map(|detail| format!("{detail:?}").to_lowercase())
+                .unwrap_or_else(|| "auto".to_string())
+        );
+        Ok(payload)
+    }
+
+    fn audio_input_payload(audio: &message::Audio) -> Result<Value, CompletionError> {
+        let mut payload = json!({});
+        Self::merge_media_additional_params(&mut payload, audio.additional_params.as_ref());
+
+        match &audio.data {
+            message::DocumentSourceKind::Url(url) => payload["url"] = json!(url),
+            message::DocumentSourceKind::Base64(data) => payload["data"] = json!(data),
+            message::DocumentSourceKind::Raw(bytes) => {
+                payload["data"] = json!(BASE64_STANDARD.encode(bytes));
+            }
+            message::DocumentSourceKind::String(_) => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp audio input cannot use a literal string source; use Url for a URL/file path or Base64/Raw for audio bytes",
+                ));
+            }
+            message::DocumentSourceKind::FileId(_) => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp audio input does not accept provider file IDs; resolve the file ID to a URL or bytes first",
+                ));
+            }
+            message::DocumentSourceKind::Unknown => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp audio input has no source data",
+                ));
+            }
+            _ => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp audio input uses an unsupported source kind",
+                ));
+            }
+        }
+
+        if let Some(media_type) = audio.media_type.as_ref() {
+            let format = media_type
+                .to_mime_type()
+                .split_once('/')
+                .map(|(_, format)| format)
+                .unwrap_or_else(|| media_type.to_mime_type());
+            payload["format"] = json!(format);
+        }
+
+        Ok(payload)
+    }
+
+    fn video_input_payload(video: &message::Video) -> Result<Value, CompletionError> {
+        let mut payload = json!({});
+        Self::merge_media_additional_params(&mut payload, video.additional_params.as_ref());
+
+        match &video.data {
+            message::DocumentSourceKind::Url(url) => payload["url"] = json!(url),
+            message::DocumentSourceKind::Base64(data) => payload["data"] = json!(data),
+            message::DocumentSourceKind::Raw(bytes) => {
+                payload["data"] = json!(BASE64_STANDARD.encode(bytes));
+            }
+            message::DocumentSourceKind::String(_) => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp video input cannot use a literal string source; use Url for a URL/file path or Base64/Raw for video bytes",
+                ));
+            }
+            message::DocumentSourceKind::FileId(_) => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp video input does not accept provider file IDs; resolve the file ID to a URL or bytes first",
+                ));
+            }
+            message::DocumentSourceKind::Unknown => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp video input has no source data",
+                ));
+            }
+            _ => {
+                return Err(Self::invalid_media_source(
+                    "llama.cpp video input uses an unsupported source kind",
+                ));
+            }
+        }
+
+        Ok(payload)
+    }
+
+    fn document_text_part(document: &message::Document) -> Result<Value, CompletionError> {
+        let message::DocumentSourceKind::String(text) = &document.data else {
+            return Err(Self::invalid_media_source(
+                "llama.cpp chat completions do not accept document files, URLs, bytes, or file IDs; convert the document to literal text before invoking the model",
+            ));
+        };
+        if matches!(
+            document.media_type.as_ref(),
+            Some(message::DocumentMediaType::PDF)
+        ) {
+            return Err(Self::invalid_media_source(
+                "llama.cpp cannot losslessly send a PDF string as chat content; extract the PDF text first",
+            ));
+        }
+
+        let mut part = json!({});
+        Self::merge_media_additional_params(&mut part, document.additional_params.as_ref());
+        part["type"] = json!("text");
+        part["text"] = json!(text);
+        Ok(part)
+    }
+
     fn process_user_content(
         &self,
         content: &[&message::UserContent],
-    ) -> (Vec<Value>, Vec<Value>, bool) {
+    ) -> Result<(Vec<Value>, Vec<Value>, bool), CompletionError> {
         let mut content_parts = Vec::new();
         let mut tool_results = Vec::new();
         let mut has_multimodal = false;
@@ -1245,67 +1425,43 @@ impl CompletionModel {
         for c in content.iter() {
             match c {
                 message::UserContent::Text(t) => {
-                    if has_multimodal || content.len() > 1 {
-                        content_parts.push(json!({
+                    if has_multimodal || content.len() > 1 || t.additional_params.is_some() {
+                        let mut text_part = json!({
                             "type": "text",
                             "text": t.text
-                        }));
+                        });
+                        Self::merge_media_additional_params(
+                            &mut text_part,
+                            t.additional_params.as_ref(),
+                        );
+                        content_parts.push(text_part);
                     } else {
                         content_parts.push(json!(t.text.clone()));
                     }
                 }
                 message::UserContent::Image(img) => {
                     has_multimodal = true;
-                    let detail = img
-                        .detail
-                        .as_ref()
-                        .map(|d| format!("{:?}", d).to_lowercase())
-                        .unwrap_or_else(|| "auto".to_string());
-                    let url = match &img.data {
-                        message::DocumentSourceKind::Base64(data) => {
-                            let mime = img
-                                .media_type
-                                .as_ref()
-                                .map(|m| m.to_mime_type())
-                                .unwrap_or("image/png");
-                            format!("data:{mime};base64,{data}")
-                        }
-                        other => other.to_string(),
-                    };
                     content_parts.push(json!({
                         "type": "image_url",
-                        "image_url": {
-                            "url": url,
-                            "detail": detail
-                        }
+                        "image_url": Self::image_url_payload(img)?,
                     }));
                 }
                 message::UserContent::Audio(audio) => {
                     has_multimodal = true;
                     content_parts.push(json!({
-                        "type": "audio_url",
-                        "audio_url": {
-                            "url": audio.data.to_string()
-                        }
+                        "type": "input_audio",
+                        "input_audio": Self::audio_input_payload(audio)?,
                     }));
                 }
                 message::UserContent::Video(video) => {
                     has_multimodal = true;
                     content_parts.push(json!({
-                        "type": "video_url",
-                        "video_url": {
-                            "url": video.data.to_string()
-                        }
+                        "type": "input_video",
+                        "input_video": Self::video_input_payload(video)?,
                     }));
                 }
                 message::UserContent::Document(doc) => {
-                    has_multimodal = true;
-                    content_parts.push(json!({
-                        "type": "document_url",
-                        "document_url": {
-                            "url": doc.data.to_string()
-                        }
-                    }));
+                    content_parts.push(Self::document_text_part(doc)?);
                 }
                 message::UserContent::ToolResult(tr) => {
                     let result_texts: Vec<String> = tr
@@ -1339,7 +1495,7 @@ impl CompletionModel {
             }
         }
 
-        (content_parts, tool_results, has_multimodal)
+        Ok((content_parts, tool_results, has_multimodal))
     }
 
     fn build_user_message(
@@ -1369,7 +1525,8 @@ impl CompletionModel {
 
         let content_value = if content_parts.is_empty() {
             json!("[No content]")
-        } else if content_parts.len() == 1 && !has_multimodal {
+        } else if content_parts.len() == 1 && !has_multimodal && content_parts[0].as_str().is_some()
+        {
             content_parts.into_iter().next().unwrap()
         } else if !has_multimodal && content_parts.iter().all(|part| part.as_str().is_some()) {
             json!(
@@ -1393,7 +1550,7 @@ impl CompletionModel {
         match msg {
             message::Message::User { content, .. } => {
                 let (content_parts, tool_results, has_multimodal) =
-                    self.process_user_content(content.iter().collect::<Vec<_>>().as_slice());
+                    self.process_user_content(content.iter().collect::<Vec<_>>().as_slice())?;
                 self.build_user_message(content_parts, tool_results, has_multimodal)
             }
             message::Message::System { content, .. } => Ok(json!({
@@ -1459,6 +1616,8 @@ impl GetTokenUsage for StreamingCompletionResponse {
             total_tokens: self.total_tokens,
             cache_creation_input_tokens: 0,
             cached_input_tokens: 0,
+            tool_use_prompt_tokens: 0,
+            reasoning_tokens: 0,
         })
     }
 }
@@ -1773,6 +1932,118 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn test_convert_message_uses_llamacpp_multimodal_protocol_shapes() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let content = OneOrMany::many(vec![
+            message::UserContent::Image(message::Image {
+                data: message::DocumentSourceKind::Base64("aW1hZ2U=".to_string()),
+                media_type: Some(message::ImageMediaType::PNG),
+                detail: Some(message::ImageDetail::High),
+                additional_params: Some(json!({ "cache_control": "ephemeral" })),
+            }),
+            message::UserContent::Audio(message::Audio {
+                data: message::DocumentSourceKind::Url("https://example.com/input.wav".to_string()),
+                media_type: Some(message::AudioMediaType::WAV),
+                additional_params: Some(json!({ "transcription": "enabled" })),
+            }),
+            message::UserContent::Video(message::Video {
+                data: message::DocumentSourceKind::Raw(b"video".to_vec()),
+                media_type: Some(message::VideoMediaType::MP4),
+                additional_params: Some(json!({ "fps": 24 })),
+            }),
+            message::UserContent::Document(message::Document {
+                data: message::DocumentSourceKind::String("literal document text".to_string()),
+                media_type: Some(message::DocumentMediaType::TXT),
+                additional_params: Some(json!({ "filename": "notes.txt" })),
+            }),
+        ])
+        .unwrap();
+
+        let converted = model
+            .convert_message(message::Message::User { content })
+            .unwrap();
+        let parts = converted["content"].as_array().unwrap();
+
+        assert_eq!(
+            parts[0],
+            json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,aW1hZ2U=",
+                    "detail": "high",
+                    "cache_control": "ephemeral",
+                }
+            })
+        );
+        assert_eq!(
+            parts[1],
+            json!({
+                "type": "input_audio",
+                "input_audio": {
+                    "url": "https://example.com/input.wav",
+                    "format": "wav",
+                    "transcription": "enabled",
+                }
+            })
+        );
+        assert_eq!(
+            parts[2],
+            json!({
+                "type": "input_video",
+                "input_video": {
+                    "data": "dmlkZW8=",
+                    "fps": 24,
+                }
+            })
+        );
+        assert_eq!(
+            parts[3],
+            json!({
+                "type": "text",
+                "text": "literal document text",
+                "filename": "notes.txt",
+            })
+        );
+    }
+
+    #[test]
+    fn test_convert_message_rejects_llamacpp_file_ids_with_actionable_error() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let content = OneOrMany::one(message::UserContent::Image(message::Image {
+            data: message::DocumentSourceKind::FileId("image-123".to_string()),
+            media_type: Some(message::ImageMediaType::PNG),
+            detail: None,
+            additional_params: None,
+        }));
+
+        let error = model
+            .convert_message(message::Message::User { content })
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("does not accept provider file IDs"));
+        assert!(error.contains("resolve the file ID to a URL or bytes first"));
+    }
+
+    #[test]
+    fn test_convert_message_rejects_document_files_before_request() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let content = OneOrMany::one(message::UserContent::Document(message::Document {
+            data: message::DocumentSourceKind::Url("https://example.com/document.pdf".to_string()),
+            media_type: Some(message::DocumentMediaType::PDF),
+            additional_params: None,
+        }));
+
+        let error = model
+            .convert_message(message::Message::User { content })
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("do not accept document files, URLs, bytes, or file IDs"));
+        assert!(error.contains("convert the document to literal text"));
     }
 
     #[test]
@@ -2232,8 +2503,9 @@ mod tests {
         let client = LlamaCppClient::new(&test_base_url());
         let agent = client.agent(&test_model()).build();
 
+        let mut history = Vec::<Message>::new();
         let response: String = agent
-            .chat("Say hello in exactly 3 words.", Vec::<Message>::new())
+            .chat("Say hello in exactly 3 words.", &mut history)
             .await
             .unwrap();
         assert!(!response.is_empty(), "Expected non-empty response");
@@ -2252,8 +2524,9 @@ mod tests {
             .preamble("You are a pirate. Always respond in pirate speak.")
             .build();
 
+        let mut history = Vec::<Message>::new();
         let response: String = agent
-            .chat("What is your name?", Vec::<Message>::new())
+            .chat("What is your name?", &mut history)
             .await
             .unwrap();
         assert!(!response.is_empty());
@@ -2269,12 +2542,12 @@ mod tests {
         let client = LlamaCppClient::new(&test_base_url());
         let agent = client.agent(&test_model()).build();
 
-        let history = vec![
+        let mut history = vec![
             Message::user("My name is Alice."),
             Message::assistant("Nice to meet you, Alice!"),
         ];
 
-        let response: String = agent.chat("What is my name?", history).await.unwrap();
+        let response: String = agent.chat("What is my name?", &mut history).await.unwrap();
         assert!(!response.is_empty());
     }
 
@@ -2621,6 +2894,7 @@ mod tests {
         let client = LlamaCppClient::new(&test_base_url());
         let agent = client.agent(&test_model()).build();
 
+        let mut history = Vec::<Message>::new();
         let response: String = agent
             .chat(
                 Message::User {
@@ -2634,7 +2908,7 @@ mod tests {
                     ])
                     .unwrap(),
                 },
-                Vec::<Message>::new(),
+                &mut history,
             )
             .await
             .unwrap();

@@ -6,6 +6,7 @@ import {
 	getStraightPath,
 } from "@xyflow/react";
 import { memo, useMemo } from "react";
+import { isWebkitLite } from "../../lib/platform";
 
 export const FlowExecutionEdge = memo(function FlowExecutionEdge(
 	props: EdgeProps,
@@ -83,20 +84,24 @@ export const FlowExecutionEdge = memo(function FlowExecutionEdge(
 				}}
 			/>
 
-			{/* Animated energy pulse traveling along the edge */}
-			<BaseEdge
-				id={`${id}-energy`}
-				path={edgePath}
-				style={{
-					stroke: `color-mix(in oklch, ${baseColor} 70%, white 30%)`,
-					strokeWidth: isSelected ? 4 : 3,
-					opacity: 0,
-					strokeLinecap: "round",
-					strokeLinejoin: "round",
-					animation: "exec-energy 3s ease-in-out infinite",
-					transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
-				}}
-			/>
+			{/* Animated energy pulse traveling along the edge. Skipped on WebKit
+			    and on large boards (data.reduceMotion): an infinite per-edge SVG
+			    animation repaints continuously and tanks the canvas layer. */}
+			{!isWebkitLite() && data?.reduceMotion !== true && (
+				<BaseEdge
+					id={`${id}-energy`}
+					path={edgePath}
+					style={{
+						stroke: `color-mix(in oklch, ${baseColor} 70%, white 30%)`,
+						strokeWidth: isSelected ? 4 : 3,
+						opacity: 0,
+						strokeLinecap: "round",
+						strokeLinejoin: "round",
+						animation: "exec-energy 3s ease-in-out infinite",
+						transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+					}}
+				/>
+			)}
 		</>
 	);
 });

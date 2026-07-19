@@ -4,7 +4,7 @@ import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
 const primaryLinks = [
 	{
 		href: "/start/getting-started/",
-		label: "Start guide",
+		label: "Get started",
 		icon: "/flow/icons/play.svg",
 	},
 	{
@@ -25,28 +25,28 @@ const tracks = [
 		href: "/start/getting-started/",
 		kicker: "01",
 		title: "Get oriented",
-		desc: "Install Flow-Like, understand boards and flows, and get a first working automation running.",
+		desc: "Install Flow-Like, learn boards and flows, and run your first automation end to end.",
 		icon: "/flow/icons/route.svg",
 	},
 	{
 		href: "/studio/overview/",
 		kicker: "02",
 		title: "Build visually",
-		desc: "Work with the editor, nodes, layers, variables, local execution, logs, and FlowPilot.",
+		desc: "Work in the visual editor: nodes, layers, variables, local execution, logs, and the FlowPilot AI copilot.",
 		icon: "/flow/icons/shape.svg",
 	},
 	{
 		href: "/dev/wasm-nodes/overview/",
 		kicker: "03",
 		title: "Extend the engine",
-		desc: "Write custom nodes, ship WASM packages, use SDKs, and wire new sinks into the system.",
+		desc: "Write custom nodes in Rust, Python, TypeScript, or Go, ship them as WASM packages, and use the SDKs.",
 		icon: "/flow/icons/box.svg",
 	},
 	{
 		href: "/self-hosting/overview/",
 		kicker: "04",
-		title: "Run it yourself",
-		desc: "Deploy with Docker Compose or Kubernetes, configure storage, and operate execution backends.",
+		title: "Self-host",
+		desc: "Deploy with Docker Compose or Kubernetes, configure storage, and operate the execution backends.",
 		icon: "/flow/icons/shield.svg",
 	},
 ];
@@ -61,9 +61,9 @@ const references = [
 ];
 
 const routeStrip = [
-	{ href: "/studio/overview/", label: "Studio", detail: "Editor, nodes, logs" },
+	{ href: "/studio/overview/", label: "Studio", detail: "Editor, nodes, FlowPilot" },
 	{ href: "/apps/overview/", label: "Apps", detail: "Pages, widgets, routes" },
-	{ href: "/dev/wasm-nodes/overview/", label: "WASM", detail: "Custom node runtime" },
+	{ href: "/dev/wasm-nodes/overview/", label: "WASM", detail: "Custom nodes and SDKs" },
 	{ href: "/self-hosting/overview/", label: "Deploy", detail: "Docker and Kubernetes" },
 ];
 
@@ -78,30 +78,29 @@ const footerLinks = [
 
 <StarlightPage
 	frontmatter={{
-		title: "Flow-Like Docs: Open Source Workflow Engine Documentation",
+		title: "Open Source Workflow Engine Documentation | Flow-Like",
 		template: "splash",
 		description:
-			"Documentation for Flow-Like, the open source local-first workflow engine for type-safe, self-hosted automation.",
+			"Learn Flow-Like, the open source, local-first workflow engine. Build type-safe visual flows, extend with WASM nodes, and self-host on Docker or Kubernetes.",
 	}}
 >
 	<div class="docs-home-v3 not-content">
 		<header class="docs-hero">
 			<canvas id="docs-web-shader" class="hero-shader" aria-hidden="true"></canvas>
 			<div class="hero-fallback" aria-hidden="true"></div>
-			<div class="hero-grid" aria-hidden="true"></div>
 
 			<div class="hero-copy">
 				<a class="hero-badge" href="/start/getting-started/">
 					<span class="hero-badge-dot"></span>
-					Flow-Like Docs
+					Open source workflow engine
 					<svg viewBox="0 0 12 12" aria-hidden="true">
 						<path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 					</svg>
 				</a>
 				<img class="hero-logo" src="/icon.webp" alt="Flow Like" width="76" height="76" />
-				<h1 class="hero-title">Docs that move like the canvas.</h1>
+				<h1 class="hero-title">Flow-Like, documented.</h1>
 				<p class="hero-subtitle">
-					Trace concepts into nodes, app surfaces, and self-hosting routes through a map that mirrors how Flow-Like is built.
+					Flow-Like is a local-first engine for type-safe, node-based automation. Build flows on a visual canvas and run them on your laptop, cluster, or cloud.
 				</p>
 				<nav class="hero-actions" aria-label="Primary documentation links">
 					{primaryLinks.map((link) => (
@@ -138,8 +137,8 @@ const footerLinks = [
 		<main>
 			<section class="track-section" aria-labelledby="tracks-title">
 				<div class="section-copy">
-					<p>Docs paths</p>
-					<h2 id="tracks-title">The shortest route to the thing you are changing.</h2>
+					<p>Pick a track</p>
+					<h2 id="tracks-title">Start where you are: install, build, extend, operate.</h2>
 				</div>
 				<div class="track-grid">
 					{tracks.map((track) => (
@@ -158,9 +157,9 @@ const footerLinks = [
 			<section class="reference-section" aria-labelledby="reference-title">
 				<div class="section-copy">
 					<p>Reference shelf</p>
-					<h2 id="reference-title">High-frequency docs stay close to the top.</h2>
+					<h2 id="reference-title">Node catalog and topic hubs stay one click away.</h2>
 					<span>
-						Generated pages and implementation references are grouped for repeat visits, so the homepage stays useful after the first read.
+						Generated node docs, the security reference, and hubs for GenAI workflows, data pipelines, and API integrations are grouped here for repeat visits.
 					</span>
 				</div>
 				<nav class="reference-grid" aria-label="Reference links">
@@ -179,7 +178,7 @@ const footerLinks = [
 		<footer class="docs-footer">
 			<div>
 				<strong>Flow Like</strong>
-				<span>Open source workflow engine documentation.</span>
+				<span>Open source, local-first workflow engine documentation.</span>
 			</div>
 			<nav aria-label="Website and legal links">
 				{footerLinks.map((link) => (
@@ -271,8 +270,7 @@ const footerLinks = [
 	}
 
 	.hero-shader,
-	.hero-fallback,
-	.hero-grid {
+	.hero-fallback {
 		position: absolute;
 		inset: 0;
 		pointer-events: none;
@@ -282,30 +280,16 @@ const footerLinks = [
 		z-index: -4;
 		width: 100%;
 		height: 100%;
-		opacity: 0.96;
+		opacity: 1;
 	}
 
 	.hero-fallback {
 		z-index: -5;
 		background:
-			radial-gradient(44rem 28rem at 50% 14%, color-mix(in oklab, var(--sl-color-accent) 20%, transparent), transparent 72%),
-			radial-gradient(32rem 24rem at 12% 72%, color-mix(in oklab, var(--flx-emerald) 12%, transparent), transparent 72%),
+			radial-gradient(ellipse 48% 36% at 50% 48%, transparent 48%, color-mix(in oklab, var(--sl-color-accent) 15%, transparent) 50%, transparent 67%),
+			radial-gradient(ellipse 52% 42% at 50% 48%, transparent 58%, color-mix(in oklab, var(--flx-emerald) 7%, transparent) 62%, transparent 76%),
+			radial-gradient(42rem 26rem at 50% 34%, color-mix(in oklab, var(--sl-color-accent) 10%, transparent), transparent 76%),
 			linear-gradient(180deg, var(--hero-bg), color-mix(in oklab, var(--hero-bg) 88%, black));
-	}
-
-	.hero-grid {
-		z-index: -3;
-		background-image:
-			linear-gradient(color-mix(in oklab, var(--hero-text) 4%, transparent) 1px, transparent 1px),
-			linear-gradient(90deg, color-mix(in oklab, var(--hero-text) 4%, transparent) 1px, transparent 1px),
-			radial-gradient(color-mix(in oklab, var(--hero-text) 12%, transparent) 1px, transparent 1px);
-		background-size:
-			64px 64px,
-			64px 64px,
-			16px 16px;
-		mask-image: linear-gradient(180deg, black 0%, black 74%, transparent 100%);
-		-webkit-mask-image: linear-gradient(180deg, black 0%, black 74%, transparent 100%);
-		opacity: 0.76;
 	}
 
 	.hero-copy {
@@ -840,15 +824,19 @@ const footerLinks = [
 		const canvas = document.getElementById("docs-web-shader");
 		if (!(canvas instanceof HTMLCanvasElement)) return;
 
-		const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+		let reduceMotion = motionQuery.matches;
+		const saveData = Boolean(connection && connection.saveData);
 		const gl = canvas.getContext("webgl", {
-			alpha: true,
+			alpha: false,
 			antialias: false,
 			depth: false,
 			preserveDrawingBuffer: false,
+			powerPreference: "low-power",
 		});
 
-		if (!gl) {
+		if (!gl || !gl.getExtension("OES_standard_derivatives")) {
 			canvas.style.display = "none";
 			return;
 		}
@@ -860,118 +848,204 @@ void main() {
 }`;
 
 		const fragmentSource = `
+#extension GL_OES_standard_derivatives : enable
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
+
 uniform vec2 u_resolution;
 uniform float u_time;
+uniform vec2 u_pointer;
+uniform float u_pointer_strength;
 
-float hash(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+const float TAU = 6.28318530718;
+
+float hash21(vec2 p) {
+	p = fract(p * vec2(127.1, 311.7));
+	p += dot(p, p + 34.23);
+	return fract(p.x * p.y);
 }
 
-float noise(vec2 p) {
+float vnoise(vec2 p, float t) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
 	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(
-		mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
-		mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-		u.y
-	);
+	float a = sin(TAU * hash21(i) + t);
+	float b = sin(TAU * hash21(i + vec2(1.0, 0.0)) + t);
+	float c = sin(TAU * hash21(i + vec2(0.0, 1.0)) + t);
+	float d = sin(TAU * hash21(i + vec2(1.0, 1.0)) + t);
+	return 0.5 + 0.5 * mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float sdSegment(vec2 p, vec2 a, vec2 b) {
-	vec2 pa = p - a;
-	vec2 ba = b - a;
-	float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-	return length(pa - ba * h);
+const mat2 ROT = mat2(0.80, 0.60, -0.60, 0.80);
+
+float fbm5(vec2 p, float t) {
+	float s = 0.0;
+	float a = 0.5;
+	for (int i = 0; i < 5; i++) {
+		s += a * vnoise(p, t);
+		p = ROT * p * 2.02 + vec2(9.2, 3.1);
+		a *= 0.52;
+		t *= 1.19;
+	}
+	return s;
 }
 
-float segmentProgress(vec2 p, vec2 a, vec2 b) {
-	vec2 ba = b - a;
-	return clamp(dot(p - a, ba) / dot(ba, ba), 0.0, 1.0);
+float fbm3(vec2 p, float t) {
+	float s = 0.0;
+	float a = 0.5;
+	for (int i = 0; i < 3; i++) {
+		s += a * vnoise(p, t);
+		p = ROT * p * 2.02 + vec2(9.2, 3.1);
+		a *= 0.52;
+		t *= 1.19;
+	}
+	return s * 1.117;
 }
 
-float connection(vec2 p, vec2 a, vec2 b, float phase) {
-	float d = sdSegment(p, a, b);
-	float h = segmentProgress(p, a, b);
-	float core = smoothstep(0.010, 0.0008, d);
-	float glow = smoothstep(0.075, 0.0, d) * 0.36;
-	float runner = fract(u_time * 0.115 + phase);
-	float pulse = smoothstep(0.055, 0.0, abs(h - runner)) * smoothstep(0.04, 0.0, d);
-	return core * 0.7 + glow + pulse * 1.8;
-}
-
-float nodeGlow(vec2 p, vec2 c, float r) {
-	float d = distance(p, c);
-	return smoothstep(r, 0.0, d) + smoothstep(r * 6.0, 0.0, d) * 0.28;
+float bump(vec2 p, vec2 c, float r) {
+	vec2 d = p - c;
+	return exp(-dot(d, d) / r);
 }
 
 void main() {
-	vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+	vec2 fc = gl_FragCoord.xy;
+	vec2 uv = fc / u_resolution.xy;
 	float aspect = u_resolution.x / u_resolution.y;
-	vec2 p = vec2(uv.x * aspect, uv.y);
+	vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
 
-	float t = u_time * 0.08;
-	float grain = noise(uv * vec2(150.0, 90.0) + u_time * 0.02);
-	float drift = noise(vec2(uv.x * 2.0 + t, uv.y * 2.6 - t));
+	float T = u_time * 0.055;
+	vec2 drift = vec2(u_time * 0.0055, u_time * -0.0035);
+	vec2 pw = p + drift;
 
-	vec3 bg = vec3(0.018, 0.021, 0.030);
-	vec3 red = vec3(1.0, 0.105, 0.18);
-	vec3 orange = vec3(1.0, 0.42, 0.055);
-	vec3 amber = vec3(1.0, 0.72, 0.25);
-	vec3 cream = vec3(0.94, 0.90, 0.80);
-	vec3 teal = vec3(0.12, 0.72, 0.56);
+	// evolving warped terrain
+	vec2 w = vec2(
+		fbm3(pw * 0.75 + vec2(2.4, -1.3), T * 0.8),
+		fbm3(pw * 0.75 + vec2(-3.6, 4.2), T * 0.9)
+	);
+	vec2 wp = pw * 1.22 + 1.15 * (w - 0.5);
+	float h = fbm5(wp, T);
+	float hS = fbm3(wp, T);
 
-	vec2 n0 = vec2(0.12 * aspect, 0.66);
-	vec2 n1 = vec2(0.30 * aspect, 0.38);
-	vec2 n2 = vec2(0.49 * aspect, 0.62);
-	vec2 n3 = vec2(0.66 * aspect, 0.40);
-	vec2 n4 = vec2(0.86 * aspect, 0.64);
-	vec2 n5 = vec2(0.82 * aspect, 0.28);
+	// art-directed anchors: peaks off-center, one deep basin
+	float anchors = 0.11 * bump(p, vec2(-0.62, 0.30), 0.055)
+		+ 0.10 * bump(p, vec2(0.66, -0.16), 0.075)
+		- 0.10 * bump(p, vec2(-0.50, -0.34), 0.09);
 
-	n0 += vec2(sin(u_time * 0.33), cos(u_time * 0.21)) * 0.010;
-	n1 += vec2(cos(u_time * 0.25), sin(u_time * 0.31)) * 0.012;
-	n2 += vec2(sin(u_time * 0.19), cos(u_time * 0.28)) * 0.010;
-	n3 += vec2(cos(u_time * 0.22), sin(u_time * 0.24)) * 0.011;
-	n4 += vec2(sin(u_time * 0.27), cos(u_time * 0.18)) * 0.010;
-	n5 += vec2(cos(u_time * 0.17), sin(u_time * 0.29)) * 0.010;
+	// calm shelf behind headline copy
+	float shelfX = min(0.62, aspect * 0.62);
+	vec2 cb = (p - vec2(0.0, 0.06)) / vec2(shelfX, 0.34);
+	float cbl = length(cb);
+	float basin = 1.0 - smoothstep(0.55, 1.25, cbl);
 
-	float web = 0.0;
-	web += connection(p, n0, n1, 0.04);
-	web += connection(p, n1, n2, 0.18);
-	web += connection(p, n2, n3, 0.34);
-	web += connection(p, n3, n4, 0.50);
-	web += connection(p, n2, n5, 0.68);
-	web += connection(p, n5, n4, 0.82);
-	web += connection(p, n0, n2, 0.58) * 0.58;
-	web += connection(p, n1, n3, 0.77) * 0.48;
+	// pointer survey lens: lifts terrain, bends contours; strength fades on
+	// pointerleave so the lens never slides back through the copy zone.
+	vec2 lensPos = (u_pointer - 0.5) * vec2(aspect, 1.0);
+	vec2 dpt = p - lensPos;
+	float lens = exp(-dot(dpt, dpt) / 0.045);
+	float lensLift = lens * 0.13 * u_pointer_strength;
 
-	float nodes = 0.0;
-	nodes += nodeGlow(p, n0, 0.012);
-	nodes += nodeGlow(p, n1, 0.012);
-	nodes += nodeGlow(p, n2, 0.014);
-	nodes += nodeGlow(p, n3, 0.012);
-	nodes += nodeGlow(p, n4, 0.014);
-	nodes += nodeGlow(p, n5, 0.012);
+	h = 1.12 * h - 0.06 + anchors;
+	h = mix(h, 0.5033, basin * 0.52) + lensLift;
+	hS = 1.12 * hS - 0.06 + anchors;
+	hS = mix(hS, 0.5033, basin * 0.52) + lensLift;
 
-	float horizontal = sin((uv.x + drift * 0.06) * 10.0 + u_time * 0.18) * 0.5 + 0.5;
-	float wash = smoothstep(0.0, 1.0, 1.0 - distance(uv, vec2(0.5, 0.36)));
-	float bottomFade = smoothstep(1.0, 0.34, uv.y);
-	float vignette = smoothstep(0.96, 0.20, distance(uv, vec2(0.5, 0.48)));
+	float hn = clamp(h, 0.0, 1.0);
+	float hnS = clamp(hS, 0.0, 1.0);
 
-	vec3 color = bg;
-	color += mix(red, orange, uv.x) * web * 0.30;
-	color += amber * pow(max(web - 0.72, 0.0), 1.8) * 0.45;
-	color += cream * nodes * 0.30;
-	color += orange * wash * horizontal * 0.09;
-	color += teal * smoothstep(0.75, 0.05, distance(uv, vec2(0.14, 0.78))) * 0.045;
-	color += red * smoothstep(0.92, 0.0, distance(uv, vec2(0.86, 0.22))) * 0.055;
-	color += (grain - 0.5) * 0.025;
-	color *= 0.72 + vignette * 0.36;
-	color *= 0.82 + bottomFade * 0.2;
+	// contour bands
+	float L = 15.0;
+	float v = h * L;
+	float dv = max(fwidth(v), 1e-4);
+	float d1 = abs(fract(v + 0.5) - 0.5) / dv;
+	float v5 = v / 5.0;
+	float dv5 = max(fwidth(v5), 1e-4);
+	float d5 = abs(fract(v5 + 0.5) - 0.5) / dv5;
 
-	float alpha = 0.92;
-	gl_FragColor = vec4(color, alpha);
+	float aMinor = 1.0 - smoothstep(0.4, 1.3, d1);
+	float aIndex = 1.0 - smoothstep(0.8, 2.0, d5);
+	float density = 1.0 - smoothstep(0.13, 0.28, dv);
+	float density5 = 1.0 - smoothstep(0.13, 0.28, dv5);
+
+	// suppress contour speckle at flat critical points (summits/saddles)
+	float slope = dv * u_resolution.y / L;
+	float flatFade = smoothstep(0.05, 0.14, slope);
+	density *= flatFade;
+	density5 *= flatFade;
+
+	// survey sweep: a slowly rising highlighted elevation
+	float sw = fract(u_time * 0.016);
+	float sweepL = mix(0.18, 0.85, sw);
+	float swBand = exp(-pow((hn - sweepL) / 0.045, 2.0));
+	swBand *= smoothstep(0.0, 0.12, sw) * (1.0 - smoothstep(0.85, 1.0, sw));
+
+	// styling by elevation (fills keyed to the smooth field to avoid micro-dome speckle)
+	float peak = smoothstep(0.64, 0.88, hnS);
+	float peakCore = smoothstep(0.78, 0.96, hnS);
+	float deep = smoothstep(0.36, 0.14, hnS);
+
+	vec3 CORAL = vec3(1.0, 0.353, 0.235);
+	vec3 ORANGE = vec3(1.0, 0.405, 0.06);
+	vec3 AMBER = vec3(1.0, 0.72, 0.27);
+	vec3 CREAM = vec3(1.0, 0.925, 0.77);
+	vec3 EMERALD = vec3(0.075, 0.74, 0.545);
+
+	vec3 lineCol = CREAM;
+	lineCol = mix(lineCol, AMBER, smoothstep(0.55, 0.75, hn) * 0.75);
+	lineCol = mix(lineCol, CORAL, smoothstep(0.70, 0.92, hn) * 0.8);
+	lineCol = mix(lineCol, mix(CREAM, EMERALD, 0.55), deep * 0.5);
+
+	// legibility: keep copy region calm
+	float calm = 1.0 - 0.68 * basin;
+	calm *= 1.0 - 0.3 * (1.0 - smoothstep(0.3, 0.9, cbl));
+
+	float minorI = aMinor * density * 0.33;
+	float indexI = aIndex * density5 * 0.82 * mix(0.3, 1.0, density);
+	float heightBoost = 0.66 + 0.6 * smoothstep(0.45, 0.85, hn) + 0.95 * swBand;
+	float lensBoost = 1.0 + 0.55 * lens * u_pointer_strength;
+	float li = max(minorI, indexI) * calm * heightBoost * lensBoost;
+
+	// stepped hypsometric tint (atlas-style elevation bands, AA'd soft floor)
+	float fv = v + 0.5;
+	float aaw = clamp(fwidth(fv) * 1.5, 0.004, 1.0);
+	float bandLv = (floor(fv) + smoothstep(1.0 - aaw, 1.0, fract(fv))) / L;
+	float bandHi = smoothstep(0.52, 0.9, bandLv);
+	float bandLo = smoothstep(0.42, 0.12, bandLv);
+
+	vec3 glow = vec3(0.0);
+	glow += lineCol * li * 0.9;
+	glow += (0.075 * bandHi * smoothstep(0.45, 0.6, hnS)) * mix(ORANGE, CORAL, 0.5) * calm;
+	glow += (0.20 * peak * peak) * mix(ORANGE, CORAL, 0.7) * calm;
+	glow += (0.26 * peakCore) * mix(CORAL, AMBER, 0.4) * calm;
+	glow += 0.030 * bandLo * EMERALD * calm;
+	glow += 0.05 * deep * EMERALD * calm;
+	glow += 0.028 * swBand * AMBER * calm;
+
+	// whisper-faint graticule ticks along the edges
+	vec2 em = min(fc, u_resolution - fc);
+	float tick = 0.0;
+	float tx = step(mod(fc.x + 48.0, 96.0), 1.5);
+	float ty = step(mod(fc.y + 48.0, 96.0), 1.5);
+	tick = max(tick, tx * (1.0 - smoothstep(5.0, 12.0, em.y)));
+	tick = max(tick, ty * (1.0 - smoothstep(5.0, 12.0, em.x)));
+	glow += CREAM * tick * 0.05;
+
+	// ground: brand charcoal with a gentle hypsometric lift, deep pools darker
+	vec3 col = vec3(0.055, 0.059, 0.086) * (0.80 + 0.26 * hnS);
+	col *= 1.0 - 0.30 * deep;
+	col = mix(col, vec3(0.040, 0.043, 0.064), basin * 0.4);
+	col += 1.0 - exp(-glow * 1.65);
+
+	// mild corner vignette
+	col *= 1.0 - 0.20 * smoothstep(0.72, 1.3, length(p));
+
+	// interleaved gradient noise dither
+	float dn = fract(52.9829189 * fract(dot(fc, vec2(0.06711056, 0.00583715))));
+	col += (dn - 0.5) * (2.0 / 255.0);
+
+	gl_FragColor = vec4(col, 1.0);
 }`;
 
 		function compile(type, source) {
@@ -989,19 +1063,42 @@ void main() {
 
 		const vertexShader = compile(gl.VERTEX_SHADER, vertexSource);
 		const fragmentShader = compile(gl.FRAGMENT_SHADER, fragmentSource);
-		if (!vertexShader || !fragmentShader) return;
+		if (!vertexShader || !fragmentShader) {
+			if (vertexShader) gl.deleteShader(vertexShader);
+			if (fragmentShader) gl.deleteShader(fragmentShader);
+			canvas.style.display = "none";
+			return;
+		}
 
 		const program = gl.createProgram();
-		if (!program) return;
+		if (!program) {
+			gl.deleteShader(vertexShader);
+			gl.deleteShader(fragmentShader);
+			canvas.style.display = "none";
+			return;
+		}
 		gl.attachShader(program, vertexShader);
 		gl.attachShader(program, fragmentShader);
 		gl.linkProgram(program);
 		if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
 			console.warn(gl.getProgramInfoLog(program));
+			gl.deleteShader(vertexShader);
+			gl.deleteShader(fragmentShader);
+			gl.deleteProgram(program);
+			canvas.style.display = "none";
 			return;
 		}
+		gl.detachShader(program, vertexShader);
+		gl.detachShader(program, fragmentShader);
+		gl.deleteShader(vertexShader);
+		gl.deleteShader(fragmentShader);
 
 		const buffer = gl.createBuffer();
+		if (!buffer) {
+			gl.deleteProgram(program);
+			canvas.style.display = "none";
+			return;
+		}
 		gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
 		gl.bufferData(
 			gl.ARRAY_BUFFER,
@@ -1012,43 +1109,102 @@ void main() {
 		const position = gl.getAttribLocation(program, "a_position");
 		const resolution = gl.getUniformLocation(program, "u_resolution");
 		const time = gl.getUniformLocation(program, "u_time");
-		let frame = 0;
-		let visible = true;
-		const start = performance.now();
+		const pointer = gl.getUniformLocation(program, "u_pointer");
+		const pointerStrength = gl.getUniformLocation(program, "u_pointer_strength");
+		if (position < 0 || resolution === null || time === null || pointer === null || pointerStrength === null) {
+			gl.deleteBuffer(buffer);
+			gl.deleteProgram(program);
+			canvas.style.display = "none";
+			return;
+		}
 
-		function resize() {
-			const ratio = Math.min(window.devicePixelRatio || 1, 2);
-			const width = Math.max(1, Math.floor(canvas.clientWidth * ratio));
-			const height = Math.max(1, Math.floor(canvas.clientHeight * ratio));
+		gl.useProgram(program);
+		gl.enableVertexAttribArray(position);
+		gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+		const hero = canvas.closest(".docs-hero");
+		// Hand-picked frozen-map frame for reduced motion; animation starts inside
+		// the same fully-developed stretch of the field instead of at t=0.
+		const staticTime = 33.0;
+		const timeOffset = 26.0;
+		const start = performance.now();
+		let frame = 0;
+		let lastFrame = 0;
+		let frameInterval = 1000 / 45;
+		let needsResize = true;
+		let inViewport = true;
+		let pageVisible = document.visibilityState === "visible";
+		let contextLost = false;
+		let disposed = false;
+		let pointerX = 0.5;
+		let pointerY = 0.5;
+		let targetPointerX = 0.5;
+		let targetPointerY = 0.5;
+		let lensStrength = 0;
+		let targetLensStrength = 0;
+
+		function resizeCanvas() {
+			const cssWidth = Math.max(1, Math.round(canvas.clientWidth));
+			const cssHeight = Math.max(1, Math.round(canvas.clientHeight));
+			const compact = cssWidth < 720;
+			const ratioCap = compact ? 1 : 1.4;
+			const requestedRatio = Math.min(window.devicePixelRatio || 1, ratioCap);
+			const pixelBudget = compact ? 700000 : 1600000;
+			const requestedPixels = cssWidth * cssHeight * requestedRatio * requestedRatio;
+			const budgetScale = Math.min(1, Math.sqrt(pixelBudget / requestedPixels));
+			const ratio = requestedRatio * budgetScale;
+			const width = Math.max(1, Math.round(cssWidth * ratio));
+			const height = Math.max(1, Math.round(cssHeight * ratio));
+			frameInterval = 1000 / (compact ? 30 : 45);
 			if (canvas.width !== width || canvas.height !== height) {
 				canvas.width = width;
 				canvas.height = height;
 				gl.viewport(0, 0, width, height);
 			}
+			needsResize = false;
 		}
 
 		function draw(now) {
-			resize();
-			gl.useProgram(program);
-			gl.enableVertexAttribArray(position);
-			gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-			gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+			if (disposed || contextLost) return;
+			if (needsResize) resizeCanvas();
+			if (!reduceMotion && !saveData) {
+				pointerX += (targetPointerX - pointerX) * 0.075;
+				pointerY += (targetPointerY - pointerY) * 0.075;
+				lensStrength += (targetLensStrength - lensStrength) * 0.06;
+			}
 			gl.uniform2f(resolution, canvas.width, canvas.height);
-			gl.uniform1f(time, reduceMotion ? 0 : (now - start) / 1000);
+			gl.uniform1f(time, reduceMotion || saveData ? staticTime : timeOffset + (now - start) / 1000);
+			gl.uniform2f(pointer, pointerX, pointerY);
+			gl.uniform1f(pointerStrength, lensStrength);
 			gl.drawArrays(gl.TRIANGLES, 0, 6);
 		}
 
+		function canDraw() {
+			return !disposed && !contextLost && inViewport && pageVisible;
+		}
+
+		function shouldAnimate() {
+			return canDraw() && !reduceMotion && !saveData;
+		}
+
 		function render(now) {
-			if (!visible) {
-				frame = 0;
+			frame = 0;
+			if (!shouldAnimate()) {
 				return;
 			}
-			draw(now);
-			if (!reduceMotion) frame = window.requestAnimationFrame(render);
+			if (now - lastFrame >= frameInterval) {
+				draw(now);
+				lastFrame = now;
+			}
+			frame = window.requestAnimationFrame(render);
 		}
 
 		function startLoop() {
-			if (!frame) frame = window.requestAnimationFrame(render);
+			if (shouldAnimate()) {
+				if (!frame) frame = window.requestAnimationFrame(render);
+			} else if (canDraw()) {
+				draw(performance.now());
+			}
 		}
 
 		function stopLoop() {
@@ -1056,29 +1212,94 @@ void main() {
 			frame = 0;
 		}
 
+		function onPointerMove(event) {
+			if (reduceMotion || saveData) return;
+			const bounds = canvas.getBoundingClientRect();
+			if (!bounds.width || !bounds.height) return;
+			targetPointerX = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+			targetPointerY = 1 - Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height));
+			targetLensStrength = 1;
+		}
+
+		function onPointerLeave() {
+			targetLensStrength = 0;
+		}
+
+		function onResize() {
+			needsResize = true;
+			if (canDraw() && !shouldAnimate()) draw(performance.now());
+		}
+
+		function onVisibilityChange() {
+			pageVisible = document.visibilityState === "visible";
+			if (pageVisible) startLoop();
+			else stopLoop();
+		}
+
+		function onMotionChange(event) {
+			reduceMotion = event.matches;
+			if (reduceMotion) {
+				pointerX = 0.5;
+				pointerY = 0.5;
+				targetPointerX = 0.5;
+				targetPointerY = 0.5;
+				lensStrength = 0;
+				targetLensStrength = 0;
+				stopLoop();
+				if (canDraw()) draw(performance.now());
+			} else {
+				startLoop();
+			}
+		}
+
+		function onContextLost() {
+			contextLost = true;
+			stopLoop();
+			canvas.style.display = "none";
+		}
+
 		const observer = "IntersectionObserver" in window
 			? new IntersectionObserver((entries) => {
-				visible = entries.some((entry) => entry.isIntersecting);
-				if (visible) startLoop();
+				inViewport = entries.some((entry) => entry.isIntersecting && entry.intersectionRatio > 0);
+				if (inViewport) startLoop();
 				else stopLoop();
-			})
+			}, { rootMargin: "80px 0px" })
+			: null;
+		const resizeObserver = "ResizeObserver" in window
+			? new ResizeObserver(onResize)
 			: null;
 
-		window.addEventListener("resize", resize, { passive: true });
-		document.addEventListener("visibilitychange", () => {
-			visible = document.visibilityState === "visible";
-			if (visible) startLoop();
-			else stopLoop();
-		});
+		window.addEventListener("resize", onResize, { passive: true });
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		canvas.addEventListener("webglcontextlost", onContextLost);
+		if (hero) {
+			hero.addEventListener("pointermove", onPointerMove, { passive: true });
+			hero.addEventListener("pointerleave", onPointerLeave, { passive: true });
+		}
+		if (motionQuery.addEventListener) motionQuery.addEventListener("change", onMotionChange);
+		else motionQuery.addListener(onMotionChange);
 
 		if (observer) observer.observe(canvas);
+		if (resizeObserver) resizeObserver.observe(canvas);
 		draw(start);
-		if (!reduceMotion) startLoop();
+		startLoop();
 
 		document.addEventListener("astro:before-swap", () => {
+			disposed = true;
 			stopLoop();
-			window.removeEventListener("resize", resize);
+			window.removeEventListener("resize", onResize);
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+			canvas.removeEventListener("webglcontextlost", onContextLost);
+			if (hero) {
+				hero.removeEventListener("pointermove", onPointerMove);
+				hero.removeEventListener("pointerleave", onPointerLeave);
+			}
+			if (motionQuery.removeEventListener) motionQuery.removeEventListener("change", onMotionChange);
+			else motionQuery.removeListener(onMotionChange);
 			if (observer) observer.disconnect();
+			if (resizeObserver) resizeObserver.disconnect();
+			gl.deleteBuffer(buffer);
+			gl.deleteProgram(program);
 		}, { once: true });
 	})();
 </script>

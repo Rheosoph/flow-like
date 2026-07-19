@@ -13,6 +13,7 @@ use flow_like_types::{
     reqwest,
 };
 use schemars::JsonSchema;
+use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -173,6 +174,35 @@ fn sanitize_path_segment(value: &str) -> String {
     }
 }
 
+/// Decodes a desktop "local file" URL (Tauri `convertFileSrc`: `asset://localhost/…`
+/// or `http://asset.localhost/…`) back to its absolute on-disk path. Returns `None`
+/// for regular http(s) URLs, which are downloaded instead.
+fn decode_local_file_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let host = parsed.host_str().unwrap_or("");
+    let is_local = parsed.scheme() == "file"
+        || (parsed.scheme() == "asset" && host == "localhost")
+        || ((parsed.scheme() == "http" || parsed.scheme() == "https") && host == "asset.localhost");
+    if !is_local {
+        return None;
+    }
+
+    let decoded = urlencoding::decode(parsed.path().trim_start_matches('/'))
+        .ok()?
+        .into_owned();
+    if decoded.is_empty() {
+        return None;
+    }
+
+    // Windows drive paths (C:/…) are already absolute; POSIX paths need the slash back.
+    let is_windows_drive = decoded.as_bytes().get(1) == Some(&b':');
+    Some(if is_windows_drive {
+        decoded
+    } else {
+        format!("/{decoded}")
+    })
+}
+
 fn file_name_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segment = parsed
@@ -236,6 +266,22 @@ async fn download_file_input_url(
     Ok(response.bytes().await?.to_vec())
 }
 
+async fn flow_path_exists(
+    context: &mut ExecutionContext,
+    flow_path: &FlowPath,
+) -> flow_like_types::Result<bool> {
+    let runtime = flow_path.to_runtime(context).await?;
+    match runtime.store.as_generic().head(&runtime.path).await {
+        Ok(_) => Ok(true),
+        Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok(false),
+        Err(error) => Err(flow_like_types::anyhow!(
+            "Failed to check uploaded file at {}: {}",
+            flow_path.path,
+            error
+        )),
+    }
+}
+
 async fn materialize_missing_flow_paths(
     context: &mut ExecutionContext,
     element_id: &str,
@@ -254,34 +300,69 @@ async fn materialize_missing_flow_paths(
     let mut flow_paths = Vec::new();
 
     for (index, file) in files.iter_mut().enumerate() {
-        if let Some(flow_path) = file.flow_path.clone() {
-            flow_paths.push(flow_path);
-            continue;
-        }
+        let supplied_flow_path = file.flow_path.clone();
+        let target_flow_path = match supplied_flow_path {
+            Some(flow_path) if flow_path_exists(context, &flow_path).await? => {
+                flow_paths.push(flow_path);
+                continue;
+            }
+            Some(flow_path) => flow_path,
+            None => {
+                let file_name = flow_path_file_name(file, index);
+                let object_path = Path::from("files").child(file_name.as_str());
+                FlowPath::new(
+                    object_path.as_ref().to_string(),
+                    store_ref
+                        .as_ref()
+                        .expect("memory store exists when a file URL must be materialized")
+                        .clone(),
+                    None,
+                )
+            }
+        };
 
         let Some(url) = file.signed_url().map(str::to_string) else {
-            context.log_message(
-                "File input item did not contain a URL or FlowPath; skipping FlowPath creation",
-                LogLevel::Warn,
-            );
+            if file.flow_path.is_some() {
+                // Preserve the prior behavior for FlowPaths that cannot be checked or repaired
+                // because the frontend did not provide a signed/local source URL.
+                flow_paths.push(target_flow_path);
+            } else {
+                context.log_message(
+                    "File input item did not contain a URL or FlowPath; skipping FlowPath creation",
+                    LogLevel::Warn,
+                );
+            }
             continue;
         };
 
-        let file_name = flow_path_file_name(file, index);
-        let object_path = Path::from("files").child(file_name.as_str());
-        let flow_path = FlowPath::new(
-            object_path.as_ref().to_string(),
-            store_ref
-                .as_ref()
-                .expect("memory store exists when a file URL must be materialized")
-                .clone(),
-            None,
-        );
-        let bytes = download_file_input_url(&client, &url, &file_name).await?;
-        flow_path.put(context, bytes, true).await?;
+        // Desktop "local file" URLs (Tauri convertFileSrc) can't be HTTP-fetched by
+        // the engine. Resolve them to their on-disk path and register a store for
+        // that file instead of downloading.
+        if let Some(local_path) = decode_local_file_url(&url) {
+            let local_path = PathBuf::from(local_path);
+            if local_path.is_file() {
+                let flow_path = FlowPath::from_pathbuf(local_path, context).await?;
+                file.flow_path = Some(flow_path.clone());
+                flow_paths.push(flow_path);
+                continue;
+            }
+        }
 
-        file.flow_path = Some(flow_path.clone());
-        flow_paths.push(flow_path);
+        let file_name = flow_path_file_name(file, index);
+        if file.flow_path.is_some() {
+            context.log_message(
+                &format!(
+                    "Uploaded file \"{}\" was missing from its execution store; materializing it from the signed URL",
+                    file_name
+                ),
+                LogLevel::Info,
+            );
+        }
+        let bytes = download_file_input_url(&client, &url, &file_name).await?;
+        target_flow_path.put(context, bytes, true).await?;
+
+        file.flow_path = Some(target_flow_path.clone());
+        flow_paths.push(target_flow_path);
     }
 
     Ok(flow_paths)
@@ -293,7 +374,7 @@ impl NodeLogic for GetFileInputFiles {
         let mut node = Node::new(
             "a2ui_get_file_input_files",
             "Get File Input Files",
-            "Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput element",
+            "Gets uploaded files, signed URLs, and FlowPaths from an A2UI fileInput or voiceInput element",
             "UI/Elements/Files",
         );
         node.add_icon("/flow/icons/a2ui.svg");
@@ -301,7 +382,7 @@ impl NodeLogic for GetFileInputFiles {
         node.add_input_pin(
             "element_ref",
             "Element",
-            "File input element ID or element object from Get Element",
+            "File or voice input element ID or element object from Get Element",
             VariableType::Struct,
         )
         .set_options(PinOptions::new().set_enforce_schema(false).build());
@@ -380,5 +461,255 @@ impl NodeLogic for GetFileInputFiles {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ahash::AHashMap;
+    use flow_like::{
+        flow::{
+            board::ExecutionStage,
+            execution::{LogLevel, Run, internal_node::InternalNode, internal_pin::InternalPin},
+            variable::Variable,
+        },
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
+    };
+    use flow_like_storage::files::store::local_store::LocalObjectStore;
+    use flow_like_types::{
+        sync::{Mutex, RwLock},
+        tokio::io::{AsyncReadExt, AsyncWriteExt},
+    };
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Weak},
+    };
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("flow-like-file-input-test-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn internal_node() -> Arc<InternalNode> {
+        let logic: Arc<dyn NodeLogic> = Arc::new(GetFileInputFiles::new());
+        let node = logic.get_node();
+        let mut pins = AHashMap::new();
+        let mut name_cache: AHashMap<String, Vec<Arc<InternalPin>>> = AHashMap::new();
+
+        for pin in node.pins.values() {
+            let internal_pin = Arc::new(InternalPin::new(pin, false));
+            name_cache
+                .entry(pin.name.clone())
+                .or_default()
+                .push(internal_pin.clone());
+            pins.insert(pin.id.clone(), internal_pin);
+        }
+
+        let internal = Arc::new(InternalNode::new(node, pins, logic, name_cache));
+        for pin in internal.pins.values() {
+            pin.init_node(Arc::downgrade(&internal));
+            pin.init_connected_to(Vec::new());
+            pin.init_depends_on(Vec::new());
+        }
+        internal
+    }
+
+    async fn test_context() -> ExecutionContext {
+        let current = internal_node();
+        let mut node_map = AHashMap::new();
+        node_map.insert(current.node_id().to_string(), current.clone());
+
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let variables = Arc::new(Mutex::new(AHashMap::<String, Variable>::new()));
+        let cache = Arc::new(RwLock::new(AHashMap::<String, Arc<dyn Cacheable>>::new()));
+        let run: Weak<Mutex<Run>> = Weak::new();
+
+        ExecutionContext::new(
+            Arc::new(node_map),
+            &run,
+            &state,
+            &current,
+            &variables,
+            &cache,
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            Arc::new(Profile::default()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            Arc::new(AHashMap::new()),
+        )
+        .await
+    }
+
+    async fn serve_once(body: Vec<u8>) -> String {
+        let listener = flow_like_types::tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+
+        flow_like_types::tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = [0_u8; 2048];
+            let _ = socket.read(&mut request).await;
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket
+                .write_all(headers.as_bytes())
+                .await
+                .expect("write response headers");
+            socket.write_all(&body).await.expect("write response body");
+        });
+
+        format!("http://{address}/uploaded-file")
+    }
+
+    async fn register_local_store(
+        context: &ExecutionContext,
+        root: &TestDirectory,
+        store_ref: &str,
+    ) {
+        let store = LocalObjectStore::new(root.0.clone()).expect("create local store");
+        let store: Arc<dyn Cacheable> = Arc::new(FlowLikeStore::Local(Arc::new(store)));
+        context.set_cache(store_ref, store).await;
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn missing_supplied_flow_path_is_materialized_into_its_registered_store() {
+        let mut context = test_context().await;
+        let root = TestDirectory::new();
+        let store_ref = "request-files";
+        register_local_store(&context, &root, store_ref).await;
+
+        let expected = b"uploaded markdown".to_vec();
+        let url = serve_once(expected.clone()).await;
+        let flow_path = FlowPath::new(
+            "tmp/user/test/apps/app/file.md".to_string(),
+            store_ref.to_string(),
+            None,
+        );
+        let mut files = vec![A2UIFileInputFile {
+            name: Some("file.md".to_string()),
+            url: Some(url),
+            flow_path: Some(flow_path.clone()),
+            ..Default::default()
+        }];
+
+        let result = materialize_missing_flow_paths(&mut context, "file-input", &mut files)
+            .await
+            .expect("materialize missing uploaded file");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, flow_path.path);
+        assert_eq!(result[0].store_ref, flow_path.store_ref);
+        assert_eq!(
+            std::fs::read(root.0.join("tmp/user/test/apps/app/file.md"))
+                .expect("read materialized file"),
+            expected
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn existing_supplied_flow_path_does_not_fetch_its_url_again() {
+        let mut context = test_context().await;
+        let root = TestDirectory::new();
+        let store_ref = "request-files";
+        register_local_store(&context, &root, store_ref).await;
+
+        let flow_path = FlowPath::new(
+            "tmp/user/test/apps/app/file.md".to_string(),
+            store_ref.to_string(),
+            None,
+        );
+        flow_path
+            .put(&mut context, b"already present".to_vec(), true)
+            .await
+            .expect("seed uploaded file");
+        let mut files = vec![A2UIFileInputFile {
+            name: Some("file.md".to_string()),
+            url: Some("http://127.0.0.1:1/must-not-be-requested".to_string()),
+            flow_path: Some(flow_path.clone()),
+            ..Default::default()
+        }];
+
+        let result = materialize_missing_flow_paths(&mut context, "file-input", &mut files)
+            .await
+            .expect("reuse existing uploaded file");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, flow_path.path);
+        assert_eq!(
+            std::fs::read(root.0.join("tmp/user/test/apps/app/file.md"))
+                .expect("read existing file"),
+            b"already present"
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn local_asset_url_without_flow_path_registers_its_parent_store() {
+        let mut context = test_context().await;
+        let root = TestDirectory::new();
+        let file_path = root.0.join("local-upload.md");
+        let expected = b"local desktop upload";
+        std::fs::write(&file_path, expected).expect("write local upload");
+
+        let mut files = vec![A2UIFileInputFile {
+            name: Some("local-upload.md".to_string()),
+            url: Some(format!("asset://localhost{}", file_path.display())),
+            ..Default::default()
+        }];
+
+        let result = materialize_missing_flow_paths(&mut context, "file-input", &mut files)
+            .await
+            .expect("materialize local asset URL");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].path, "local-upload.md");
+        let runtime = result[0]
+            .to_runtime(&mut context)
+            .await
+            .expect("resolve registered local store");
+        let FlowLikeStore::Local(store) = runtime.store.as_ref() else {
+            panic!("local asset URL must register a LocalObjectStore");
+        };
+        let resolved_path = store
+            .path_to_filesystem(&runtime.path)
+            .expect("resolve local file path")
+            .canonicalize()
+            .expect("canonicalize resolved local file path");
+        assert_eq!(
+            resolved_path,
+            file_path
+                .canonicalize()
+                .expect("canonicalize expected local file path")
+        );
+        assert_eq!(
+            result[0]
+                .get(&mut context, true)
+                .await
+                .expect("read local upload through FlowPath"),
+            expected
+        );
     }
 }

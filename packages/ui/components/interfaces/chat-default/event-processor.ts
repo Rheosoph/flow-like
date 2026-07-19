@@ -1,9 +1,16 @@
 import { createId } from "@paralleldrive/cuid2";
-import { IRole, Response } from "../../../lib";
+import { Response } from "../../../lib/llm/response";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
+import {
+	IContentType,
+	type IContent,
+	IRole,
+} from "../../../lib/schema/llm/history";
+import type { IResponseMessage } from "../../../lib/schema/llm/response";
 import type {
 	IAttachment,
 	IChatUsageStat,
+	IChatWidget,
 	IMessage,
 	IPlanStep,
 } from "./chat-db";
@@ -17,6 +24,20 @@ export interface ProcessChatEventsResult {
 	done: boolean;
 	shouldUpdate: boolean;
 	interactions?: IInteractionRequest[];
+}
+
+function visibleResponseContent(
+	message: IResponseMessage,
+): string | IContent[] {
+	const parts = message.content_parts ?? [];
+	if (parts.length === 0) return message.content ?? "";
+	if (
+		message.content &&
+		!parts.some((part) => part.type === IContentType.Text)
+	) {
+		return [{ type: IContentType.Text, text: message.content }, ...parts];
+	}
+	return [...parts];
 }
 
 interface BackendReasoning {
@@ -92,9 +113,17 @@ function sanitizeReasoningForDisplay(reasoning: string): string {
 		: reasoning;
 }
 
+/**
+ * Messages whose plan is the single synthesized "Thinking" step rather than a real backend plan.
+ * Only those may be replaced wholesale with the run-wide accumulated reasoning — backend steps
+ * are scoped per step and would otherwise absorb every earlier step's text.
+ */
+const syntheticReasoningPlans = new WeakSet<IMessage>();
+
 function appendFallbackReasoningStep(
 	responseMessage: IMessage,
 	reasoning: string,
+	replace = false,
 ) {
 	const sanitizedReasoning = sanitizeReasoningForDisplay(reasoning);
 
@@ -115,6 +144,13 @@ function appendFallbackReasoningStep(
 			},
 		];
 		responseMessage.current_step_id = "step-0";
+		syntheticReasoningPlans.add(responseMessage);
+		return;
+	}
+
+	// The run-wide reasoning transcript may only overwrite the synthesized step. Real backend
+	// plans carry their own per-step text, which parseBackendPlan already keeps up to date.
+	if (replace && !syntheticReasoningPlans.has(responseMessage)) {
 		return;
 	}
 
@@ -136,10 +172,84 @@ function appendFallbackReasoningStep(
 		return;
 	}
 
-	currentStep.reasoning = sanitizeReasoningForDisplay(
-		(currentStep.reasoning || "") + sanitizedReasoning,
-	);
+	currentStep.reasoning = replace
+		? sanitizedReasoning
+		: sanitizeReasoningForDisplay(
+				(currentStep.reasoning || "") + sanitizedReasoning,
+			);
 	responseMessage.current_step_id = currentStep.id;
+}
+
+/**
+ * Upsert `incoming` widgets into `existing` by instance id. chat_out /
+ * chat_stream re-send each widget as snapshotted at push time, without updates
+ * that streamed live after the push. Both update arrays are prefixes of the
+ * same emission-ordered sequence, so the longer one is the more complete
+ * state — never regress it.
+ */
+export function mergeChatWidgets(
+	existing: IChatWidget[] | undefined,
+	incoming: IChatWidget[] | undefined,
+): IChatWidget[] {
+	const byId = new Map(
+		(existing ?? []).map((widget) => [widget.instance_id, widget]),
+	);
+	for (const widget of incoming ?? []) {
+		if (!widget?.instance_id) continue;
+		const prior = byId.get(widget.instance_id);
+		const priorUpdates = prior?.updates ?? [];
+		const incomingUpdates = widget.updates ?? [];
+		byId.set(
+			widget.instance_id,
+			priorUpdates.length > incomingUpdates.length
+				? { ...widget, updates: priorUpdates }
+				: widget,
+		);
+	}
+	return Array.from(byId.values());
+}
+
+function widgetContainsChild(widget: IChatWidget, childId: string): boolean {
+	const inlineDef = (widget.component as Record<string, unknown>)
+		?.inlineWidgetDef as { components?: Array<{ id?: string }> } | undefined;
+	const suffix = `-${childId}`;
+	return (
+		inlineDef?.components?.some(
+			(c) => c?.id === childId || (c?.id?.endsWith(suffix) ?? false),
+		) ?? false
+	);
+}
+
+function a2uiUpdateTargetsWidget(
+	widget: IChatWidget,
+	payload: Record<string, unknown>,
+): boolean {
+	switch (payload.type) {
+		case "upsertElement": {
+			const elementId = payload.element_id as string | undefined;
+			if (!elementId) return false;
+			if (elementId.includes("/")) {
+				const surfaceId = elementId.split("/", 2)[0];
+				return (
+					surfaceId === widget.surface_id || surfaceId === widget.instance_id
+				);
+			}
+			return (
+				elementId === widget.instance_id ||
+				widgetContainsChild(widget, elementId)
+			);
+		}
+		case "dataModelUpdate":
+		case "createElement":
+		case "removeElement": {
+			const surfaceId = (payload.surfaceId ?? payload.surface_id) as
+				| string
+				| undefined;
+			return !!surfaceId && surfaceId === widget.surface_id;
+		}
+		default:
+			return false;
+	}
 }
 
 function hasUsageStat(
@@ -237,7 +347,39 @@ export function processChatEvents(
 		responseMessage.files = Array.from(attachments.values());
 	};
 
+	const addWidgets = (newWidgets: IChatWidget[] | undefined) => {
+		if (!newWidgets?.length) return;
+		responseMessage.widgets = mergeChatWidgets(
+			responseMessage.widgets,
+			newWidgets,
+		);
+	};
+
+	// Appends a live a2ui update (streamed after the widget was pushed) to the
+	// matching widget so the render-time replay picks it up. Updates fired
+	// before the push are attached by the backend instead.
+	const attachA2UIUpdate = (payload: Record<string, unknown>): boolean => {
+		const widgets = responseMessage.widgets;
+		if (!widgets?.length) return false;
+		let changed = false;
+		const next = widgets.map((widget) => {
+			if (!a2uiUpdateTargetsWidget(widget, payload)) return widget;
+			changed = true;
+			return { ...widget, updates: [...(widget.updates ?? []), payload] };
+		});
+		if (changed) {
+			responseMessage.widgets = next;
+		}
+		return changed;
+	};
+
 	for (const ev of events) {
+		if (ev.event_type === "a2ui") {
+			if (attachA2UIUpdate(ev.payload as Record<string, unknown>)) {
+				shouldUpdate = true;
+			}
+			continue;
+		}
 		if (ev.event_type === "chat_stream_partial") {
 			if (done) continue;
 
@@ -259,7 +401,14 @@ export function processChatEvents(
 				IRole.Assistant,
 			);
 			if (lastMessage) {
-				responseMessage.inner.content = lastMessage.content ?? "";
+				responseMessage.inner.content = visibleResponseContent(lastMessage);
+				if (lastMessage.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(
+						responseMessage,
+						lastMessage.reasoning,
+						true,
+					);
+				}
 			}
 
 			// Handle plan updates
@@ -268,12 +417,19 @@ export function processChatEvents(
 				const { steps, currentStepId } = parseBackendPlan(planData);
 				responseMessage.plan_steps = steps;
 				responseMessage.current_step_id = currentStepId;
+				syntheticReasoningPlans.delete(responseMessage);
 				shouldUpdate = true;
 			}
 
 			// Handle attachments
 			if (ev.payload.attachments) {
 				addAttachments(ev.payload.attachments);
+				shouldUpdate = true;
+			}
+
+			// Handle embedded widgets
+			if (ev.payload.widgets) {
+				addWidgets(ev.payload.widgets);
 				shouldUpdate = true;
 			}
 			continue;
@@ -286,7 +442,14 @@ export function processChatEvents(
 					IRole.Assistant,
 				);
 				if (lastMessage) {
-					responseMessage.inner.content = lastMessage.content ?? "";
+					responseMessage.inner.content = visibleResponseContent(lastMessage);
+					if (lastMessage.reasoning && !ev.payload.plan) {
+						appendFallbackReasoningStep(
+							responseMessage,
+							lastMessage.reasoning,
+							true,
+						);
+					}
 					shouldUpdate = true;
 				}
 			}
@@ -296,6 +459,11 @@ export function processChatEvents(
 				const { steps, currentStepId } = parseBackendPlan(planData);
 				responseMessage.plan_steps = steps;
 				responseMessage.current_step_id = currentStepId;
+				syntheticReasoningPlans.delete(responseMessage);
+				shouldUpdate = true;
+			}
+			if (ev.payload.widgets) {
+				addWidgets(ev.payload.widgets);
 				shouldUpdate = true;
 			}
 			continue;
@@ -307,16 +475,30 @@ export function processChatEvents(
 				const lastMessage = intermediateResponse.lastMessageOfRole(
 					IRole.Assistant,
 				);
-				const finalContent =
-					lastMessage?.content ?? responseMessage.inner.content;
+				const finalContent = lastMessage
+					? visibleResponseContent(lastMessage)
+					: responseMessage.inner.content;
 				if (finalContent !== responseMessage.inner.content) {
 					responseMessage.inner.content = finalContent ?? "";
+					shouldUpdate = true;
+				}
+				if (lastMessage?.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(
+						responseMessage,
+						lastMessage.reasoning,
+						true,
+					);
 					shouldUpdate = true;
 				}
 			}
 
 			if (ev.payload.attachments) {
 				addAttachments(ev.payload.attachments);
+				shouldUpdate = true;
+			}
+
+			if (ev.payload.widgets) {
+				addWidgets(ev.payload.widgets);
 				shouldUpdate = true;
 			}
 

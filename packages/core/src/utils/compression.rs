@@ -1,5 +1,7 @@
 use flow_like_storage::Path;
-use flow_like_storage::object_store::{ObjectMeta, ObjectStore, PutPayload};
+use flow_like_storage::object_store::{
+    ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload, UpdateVersion,
+};
 use flow_like_types::Message;
 use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use serde::de::DeserializeOwned;
@@ -25,6 +27,61 @@ where
     input.encode(&mut data)?;
     let compressed = compress_prepend_size(&data);
     let _result = store.put(&file_path, PutPayload::from(compressed)).await?;
+    Ok(())
+}
+
+/// Compress and write a protobuf only when the destination does not already
+/// exist. Versioned artifacts use this to preserve immutability even when two
+/// publishers race.
+pub async fn compress_to_file_create<T>(
+    store: Arc<dyn ObjectStore>,
+    file_path: Path,
+    input: &T,
+) -> flow_like_types::Result<()>
+where
+    T: Message,
+{
+    let mut data = Vec::new();
+    input.encode(&mut data)?;
+    let compressed = compress_prepend_size(&data);
+    store
+        .put_opts(
+            &file_path,
+            PutPayload::from(compressed),
+            PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Compress and replace a protobuf only if the destination still has the
+/// version observed by the caller. This prevents a delayed two-phase commit
+/// from overwriting a concurrently saved floating board.
+pub async fn compress_to_file_update<T>(
+    store: Arc<dyn ObjectStore>,
+    file_path: Path,
+    input: &T,
+    expected: UpdateVersion,
+) -> flow_like_types::Result<()>
+where
+    T: Message,
+{
+    let mut data = Vec::new();
+    input.encode(&mut data)?;
+    let compressed = compress_prepend_size(&data);
+    store
+        .put_opts(
+            &file_path,
+            PutPayload::from(compressed),
+            PutOptions {
+                mode: PutMode::Update(expected),
+                ..Default::default()
+            },
+        )
+        .await?;
     Ok(())
 }
 

@@ -20,7 +20,7 @@ const ASSET_FIELDS_BY_COMPONENT: Record<string, string[]> = {
 	miniMap: ["mapImage"],
 };
 
-function isStoragePrefix(value: string): boolean {
+export function isStoragePrefix(value: string): boolean {
 	// Storage prefixes are paths without http(s) scheme
 	if (!value) return false;
 	if (value.startsWith("http://") || value.startsWith("https://")) return false;

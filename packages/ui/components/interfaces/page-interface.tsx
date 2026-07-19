@@ -20,6 +20,10 @@ import {
 	presignCanvasSettings,
 	presignPageAssets,
 } from "../../lib/presign-assets";
+import {
+	resolveEventBoardVersion,
+	withBoardVersion,
+} from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -32,9 +36,7 @@ import {
 	RouteDialogProvider,
 	useRouteDialog,
 } from "../a2ui";
-import { normalizeBoxes, resolveBoxesField } from "../a2ui/bbox-utils";
-import { applyMediaSourceUpdate } from "../a2ui/media-source";
-import { applyStyleUpdate } from "../a2ui/style-updates";
+import { applyA2UIMessage } from "../a2ui/apply-a2ui-message";
 import type {
 	A2UIServerMessage,
 	Surface,
@@ -88,657 +90,11 @@ function useManagedSurface(initialSurface: Surface | null, appId?: string) {
 		setSurface(initialSurface);
 	}
 
-	const handleServerMessage = useCallback(
-		(message: A2UIServerMessage) => {
-			if (message.type === "setCanvasSettings") {
-				setSurface((prevSurface) => {
-					if (!prevSurface || message.surfaceId !== prevSurface.id) {
-						return prevSurface;
-					}
-
-					// Filter null/undefined values to avoid overwriting existing settings
-					// (Rust serializes Option::None as null)
-					const filtered = Object.fromEntries(
-						Object.entries(message.canvasSettings).filter(([, v]) => v != null),
-					);
-
-					return {
-						...prevSurface,
-						canvasSettings: {
-							...prevSurface.canvasSettings,
-							...filtered,
-						},
-					};
-				});
-				return;
-			}
-
-			if (message.type === "surfaceUpdate") {
-				setSurface((prevSurface) => {
-					if (!prevSurface || message.surfaceId !== prevSurface.id)
-						return prevSurface;
-					const updatedComponents = { ...prevSurface.components };
-					for (const comp of message.components) {
-						updatedComponents[comp.id] = comp;
-					}
-					return { ...prevSurface, components: updatedComponents };
-				});
-				return;
-			}
-
-			if (message.type === "dataModelUpdate") {
-				setSurface((prevSurface) => {
-					if (!prevSurface || message.surfaceId !== prevSurface.id)
-						return prevSurface;
-
-					const entries = new Map(
-						(prevSurface.dataModel ?? []).map((entry) => [entry.path, entry]),
-					);
-					for (const entry of message.contents) {
-						entries.set(entry.path, entry);
-					}
-
-					return {
-						...prevSurface,
-						dataModel: Array.from(entries.values()),
-					};
-				});
-				return;
-			}
-
-			if (message.type === "createElement") {
-				setSurface((prevSurface) => {
-					if (!prevSurface || message.surfaceId !== prevSurface.id)
-						return prevSurface;
-					const updatedComponents = {
-						...prevSurface.components,
-						[message.component.id]: message.component,
-					};
-					const parent = prevSurface.components[message.parentId];
-					if (parent) {
-						const parentComp = parent.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const childrenData = parentComp.children as
-							| { explicitList?: string[] }
-							| undefined;
-						const existingChildren = childrenData?.explicitList || [];
-						const newChildren = [...existingChildren];
-						if (
-							message.index !== undefined &&
-							message.index >= 0 &&
-							message.index <= newChildren.length
-						) {
-							newChildren.splice(message.index, 0, message.component.id);
-						} else {
-							newChildren.push(message.component.id);
-						}
-						updatedComponents[message.parentId] = {
-							...parent,
-							component: {
-								...parentComp,
-								children: { explicitList: newChildren },
-							} as SurfaceComponent["component"],
-						};
-					}
-					return { ...prevSurface, components: updatedComponents };
-				});
-				return;
-			}
-
-			if (message.type === "removeElement") {
-				setSurface((prevSurface) => {
-					if (!prevSurface || message.surfaceId !== prevSurface.id)
-						return prevSurface;
-					const updatedComponents = { ...prevSurface.components };
-					for (const [componentId, component] of Object.entries(
-						updatedComponents,
-					)) {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const children = componentData.children as
-							| { explicitList?: string[] }
-							| undefined;
-						if (!children?.explicitList?.includes(message.elementId)) continue;
-						updatedComponents[componentId] = {
-							...component,
-							component: {
-								...component.component,
-								children: {
-									...children,
-									explicitList: children.explicitList.filter(
-										(id) => id !== message.elementId,
-									),
-								},
-							} as SurfaceComponent["component"],
-						};
-					}
-					delete updatedComponents[message.elementId];
-					return { ...prevSurface, components: updatedComponents };
-				});
-				return;
-			}
-
-			if (message.type !== "upsertElement") return;
-
-			setSurface((prevSurface) => {
-				if (!prevSurface) return prevSurface;
-
-				const { element_id: elementId, value } = message;
-				if (!elementId) return prevSurface;
-
-				const [surfaceId, componentId] = elementId.includes("/")
-					? elementId.split("/", 2)
-					: [prevSurface.id, elementId];
-
-				if (surfaceId !== prevSurface.id) return prevSurface;
-
-				const component = prevSurface.components[componentId];
-
-				// Create new component if it doesn't exist and value has createComponent type
-				if (!component) {
-					const updateValue = value as Record<string, unknown>;
-					if (updateValue?.type === "createComponent") {
-						const newComponent: SurfaceComponent = {
-							id: componentId,
-							component: updateValue.component as SurfaceComponent["component"],
-							style: updateValue.style as SurfaceComponent["style"],
-						};
-						return {
-							...prevSurface,
-							components: {
-								...prevSurface.components,
-								[componentId]: newComponent,
-							},
-						};
-					}
-					return prevSurface;
-				}
-
-				const updateValue = value as Record<string, unknown>;
-				const updateType = updateValue?.type as string;
-
-				if (updateType === "createComponent") {
-					const replacement: SurfaceComponent = {
-						id: componentId,
-						component: updateValue.component as SurfaceComponent["component"],
-						style:
-							(updateValue.style as SurfaceComponent["style"]) ??
-							component.style,
-					};
-					return {
-						...prevSurface,
-						components: {
-							...prevSurface.components,
-							[componentId]: replacement,
-						},
-					};
-				}
-
-				let updatedComponent: SurfaceComponent = { ...component };
-
-				switch (updateType) {
-					case "setText": {
-						const text = updateValue.text as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								content: text,
-								text: text,
-								label: text,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setValue": {
-						const val = updateValue.value;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						// Wrap value as BoundValue for components that expect it (TextField, Select, etc.)
-						const boundValue =
-							typeof val === "string"
-								? { literalString: val }
-								: typeof val === "number"
-									? { literalNumber: val }
-									: typeof val === "boolean"
-										? { literalBool: val }
-										: val;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								value: boundValue,
-								defaultValue: boundValue,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setStyle": {
-						updatedComponent = {
-							...component,
-							style: applyStyleUpdate(component.style, updateValue.style),
-						};
-						break;
-					}
-					case "setVisibility": {
-						const visible = updateValue.visible as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								hidden: { literalBool: !visible },
-							} as unknown as SurfaceComponent["component"],
-							style: visible
-								? applyStyleUpdate(component.style, { opacity: null })
-								: component.style,
-						};
-						break;
-					}
-					case "setDisabled": {
-						const disabled = updateValue.disabled as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								disabled,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setLoading": {
-						const loading = updateValue.loading as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								loading,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setAction": {
-						const action = updateValue.action as {
-							name: string;
-							context: Record<string, unknown>;
-						} | null;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								actions: action ? [action] : undefined,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setPlaceholder": {
-						const placeholder = updateValue.placeholder as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								placeholder,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setChecked": {
-						const checked = updateValue.checked as boolean;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								checked,
-								value: checked,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setGeoMapViewport": {
-						const viewport = updateValue.viewport as
-							| { literalJson?: string }
-							| undefined;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								viewport,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setChartData":
-					case "setNivoData": {
-						const data = updateValue.data;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								data: { literalJson: JSON.stringify(data) },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setChartLayout":
-					case "setNivoConfig": {
-						const configOrLayout = updateValue.layout ?? updateValue.config;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								...(updateValue.layout !== undefined && {
-									layout: { literalJson: JSON.stringify(configOrLayout) },
-								}),
-								...(updateValue.config !== undefined && {
-									config: { literalJson: JSON.stringify(configOrLayout) },
-								}),
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setProgress": {
-						const progressValue = updateValue.value as number;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								value: progressValue,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setImageSrc": {
-						const url = String(updateValue.src ?? updateValue.url ?? "");
-						const alt = updateValue.alt as string | undefined;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								url,
-								src: { literalString: url },
-								...(alt !== undefined && { alt: { literalString: alt } }),
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setMediaSource": {
-						updatedComponent = applyMediaSourceUpdate(component, updateValue);
-						break;
-					}
-					case "pushChild": {
-						const childId = updateValue.childId as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const childrenData = componentData.children as
-							| { explicitList?: string[] }
-							| undefined;
-						const existingChildren = childrenData?.explicitList || [];
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								children: { explicitList: [...existingChildren, childId] },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "insertChildAt": {
-						const childId = updateValue.childId as string;
-						const index = updateValue.index as number;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const childrenData = componentData.children as
-							| { explicitList?: string[] }
-							| undefined;
-						const existingChildren = [...(childrenData?.explicitList || [])];
-						const insertIndex = Math.max(
-							0,
-							Math.min(index, existingChildren.length),
-						);
-						existingChildren.splice(insertIndex, 0, childId);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								children: { explicitList: existingChildren },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "removeChildAt": {
-						const index = updateValue.index as number;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const childrenData = componentData.children as
-							| { explicitList?: string[] }
-							| undefined;
-						const existingChildren = [...(childrenData?.explicitList || [])];
-						if (index >= 0 && index < existingChildren.length) {
-							existingChildren.splice(index, 1);
-						}
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								children: { explicitList: existingChildren },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "clearChildren": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								children: { explicitList: [] },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setProps": {
-						const props = updateValue.props as Record<string, unknown>;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								...props,
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setOverlayBoxes":
-					case "setLabelerBoxes": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: normalizeBoxes(updateValue.boxes) },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "addOverlayBox":
-					case "addLabelerBox": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const existing = resolveBoxesField(componentData.boxes);
-						const added = normalizeBoxes([updateValue.box]);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: [...existing, ...added] },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "clearOverlayBoxes": {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: [] },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "removeLabelerBox": {
-						const boxId = updateValue.boxId as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const remaining = resolveBoxesField(componentData.boxes).filter(
-							(box) => box.id !== boxId,
-						);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: remaining },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "updateLabelerBoxLabel": {
-						const boxId = updateValue.boxId as string;
-						const label = updateValue.label as string;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						const updated = resolveBoxesField(componentData.boxes).map((box) =>
-							box.id === boxId ? { ...box, label } : box,
-						);
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								boxes: { literalOptions: updated },
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					case "setLabelerImage": {
-						const src = updateValue.src as string;
-						const alt = updateValue.alt as string | undefined;
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								src: { literalString: src },
-								...(alt !== undefined ? { alt: { literalString: alt } } : {}),
-							} as unknown as SurfaceComponent["component"],
-						};
-						break;
-					}
-					default: {
-						const componentData = component.component as unknown as Record<
-							string,
-							unknown
-						>;
-						updatedComponent = {
-							...component,
-							component: {
-								...componentData,
-								...updateValue,
-							} as unknown as SurfaceComponent["component"],
-						};
-					}
-				}
-
-				return {
-					...prevSurface,
-					components: {
-						...prevSurface.components,
-						[componentId]: updatedComponent,
-					},
-				};
-			});
-		},
-		[appId],
-	);
+	const handleServerMessage = useCallback((message: A2UIServerMessage) => {
+		setSurface((prevSurface) =>
+			prevSurface ? applyA2UIMessage(prevSurface, message) : prevSurface,
+		);
+	}, []);
 
 	return { surface, handleServerMessage };
 }
@@ -772,6 +128,21 @@ function PageInterfaceInner({
 
 	const pageRoute = route || (config?.route as string);
 	const cacheSource = providedPage ?? page;
+	const activePageEvent = event ?? routeEvent;
+	const pageExecutionBoardId = activePageEvent?.board_id || page?.boardId;
+	const pageExecutionVersion = useMemo(
+		() =>
+			resolveEventBoardVersion(
+				activePageEvent?.board_id,
+				activePageEvent?.board_version,
+				pageExecutionBoardId,
+			),
+		[
+			activePageEvent?.board_id,
+			activePageEvent?.board_version,
+			pageExecutionBoardId,
+		],
+	);
 
 	useEffect(() => {
 		if (providedPage) {
@@ -1182,7 +553,7 @@ function PageInterfaceInner({
 		) => {
 			if (!eventNodeId || !page) return;
 
-			const boardId = page.boardId || routeEvent?.board_id;
+			const boardId = pageExecutionBoardId;
 			if (!boardId) {
 				console.warn(`[PageInterface] No boardId for ${eventName} event`);
 				return;
@@ -1200,17 +571,20 @@ function PageInterfaceInner({
 					});
 				}
 
-				const payload = {
-					id: eventNodeId,
-					payload: {
-						_elements: surfaceElements,
-						_route: pageRoute || "/",
-						_query_params: queryParams,
-						_page_id: page.id,
-						_event_type: eventName,
-						...extraPayload,
+				const payload = withBoardVersion(
+					{
+						id: eventNodeId,
+						payload: {
+							_elements: surfaceElements,
+							_route: pageRoute || "/",
+							_query_params: queryParams,
+							_page_id: page.id,
+							_event_type: eventName,
+							...extraPayload,
+						},
 					},
-				};
+					pageExecutionVersion,
+				);
 
 				// Use execution service if available (checks runtime variables)
 				const execFn =
@@ -1233,7 +607,8 @@ function PageInterfaceInner({
 		[
 			appId,
 			page,
-			routeEvent,
+			pageExecutionBoardId,
+			pageExecutionVersion,
 			pageRoute,
 			backend.boardState,
 			executionService,
@@ -1248,11 +623,11 @@ function PageInterfaceInner({
 		const executeOnLoadEvent = async () => {
 			if (!page?.onLoadEventId) return;
 
-			const boardId = page.boardId || routeEvent?.board_id;
+			const boardId = pageExecutionBoardId;
 			if (!boardId) return;
 
 			// Prevent duplicate execution for the same page + event combination
-			const executionKey = `${page.id}:${page.onLoadEventId}:${boardId}`;
+			const executionKey = `${page.id}:${page.onLoadEventId}:${boardId}:${pageExecutionVersion?.join(".") ?? "latest"}`;
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
@@ -1270,7 +645,13 @@ function PageInterfaceInner({
 		};
 
 		executeOnLoadEvent();
-	}, [appId, page, routeEvent, executePageEvent]);
+	}, [
+		appId,
+		page,
+		pageExecutionBoardId,
+		pageExecutionVersion,
+		executePageEvent,
+	]);
 
 	// Execute onUnload event when page unmounts or user navigates away
 	useEffect(() => {
@@ -1423,8 +804,9 @@ function PageInterfaceInner({
 						widgetRefs={page?.widgetRefs}
 						className="w-full flex-1"
 						appId={appId}
-						boardId={page?.boardId || routeEvent?.board_id}
-						eventId={event?.id || routeEvent?.id}
+						boardId={pageExecutionBoardId}
+						boardVersion={pageExecutionVersion}
+						eventId={activePageEvent?.id}
 						onA2UIMessage={handleA2UIMessage}
 						isPreviewMode={true}
 						openDialog={openDialog}

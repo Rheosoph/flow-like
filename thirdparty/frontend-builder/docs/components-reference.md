@@ -204,6 +204,22 @@ User avatar display.
 | fallback | BoundValue | Fallback initials |
 | size | BoundValue | "sm", "md", "lg", "xl" |
 
+### userProfile
+Flow-Like user profile lookup and display by subject/sub ID.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| value | BoundValue | User subject/sub ID **(REQUIRED)** |
+| variant | BoundValue | "avatar", "chip", "row", "detailed", "card" |
+| avatarSize | BoundValue | "xs", "sm", "md", "lg", "xl", "2xl" |
+| showHover | BoundValue | boolean - show hover details |
+| showEmail | BoundValue | boolean |
+| showDescription | BoundValue | boolean |
+| showUserId | BoundValue | boolean |
+| showProfileLink | BoundValue | boolean |
+| fallbackLabel | BoundValue | Text to show when lookup is unavailable |
+| muted | BoundValue | boolean |
+
 ### progress
 Progress indicator.
 
@@ -275,6 +291,27 @@ Data table.
 | paginated | BoundValue | boolean |
 | pageSize | BoundValue | number |
 | selectable | BoundValue | boolean |
+| onRowClick | BoundValue | Row action config |
+
+### tableRow
+Manual table row. Prefer `table` for data-driven tables unless you need custom row composition.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| cells | BoundValue | Array of cell values **(REQUIRED)** |
+| selected | BoundValue | boolean |
+| disabled | BoundValue | boolean |
+
+### tableCell
+Manual table cell. Prefer `table` columns/data for normal data tables.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| content | BoundValue | Cell content **(REQUIRED)** |
+| isHeader | BoundValue | boolean |
+| colSpan | BoundValue | number |
+| rowSpan | BoundValue | number |
+| align | BoundValue | "left", "center", "right" |
 
 ### plotlyChart
 Interactive Plotly charts.
@@ -320,6 +357,30 @@ Generic file preview.
 | fit | BoundValue | "contain", "cover", "fill", "none", "scaleDown" |
 | fallbackText | BoundValue | Fallback text |
 
+### diffView
+Beautiful diff viewer for text, code, markdown and documents — split, unified or inline, with syntax highlighting and word-level changes.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| original | BoundValue | Left / old content, or a document URL **(REQUIRED)** |
+| modified | BoundValue | Right / new content, or a document URL **(REQUIRED)** |
+| mode | BoundValue | "split" \| "unified" \| "inline" (default "split") |
+| kind | BoundValue | "auto" \| "text" \| "code" \| "markdown" \| "json" \| "document" (default "auto") |
+| language | BoundValue | Syntax language for code/json (e.g. "typescript", "rust", "python"); default "plaintext" |
+| markdownMode | BoundValue | "source" (diff raw markdown) \| "rendered" (side-by-side preview); default "source" |
+| showLineNumbers | BoundValue | boolean (default true) |
+| wordWrap | BoundValue | boolean (default false) |
+| wordLevel | BoundValue | boolean — intra-line word-level highlighting (default true) |
+| collapseUnchanged | BoundValue | boolean — collapse long unchanged regions (default false) |
+| contextLines | BoundValue | number — context kept around changes when collapsing (default 3) |
+| showStats | BoundValue | boolean — show +adds/−dels header (default true) |
+| originalLabel | BoundValue | string (default "Original") |
+| modifiedLabel | BoundValue | string (default "Modified") |
+| ignoreWhitespace | BoundValue | boolean (default false) |
+| ignoreCase | BoundValue | boolean (default false) |
+| trimTrailingWhitespace | BoundValue | boolean (default false) |
+| swapSides | BoundValue | boolean (default false) |
+
 ### boundingBoxOverlay
 Display bounding boxes on an image.
 
@@ -353,6 +414,51 @@ Clickable button.
 | icon | BoundValue | Lucide icon name |
 | iconPosition | BoundValue | "left", "right" |
 | tooltip | BoundValue | Hover tooltip |
+
+### feedback
+Built-in user feedback control for thumbs up/down, segmented, rating, or comment feedback.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| mode | BoundValue | "icon", "compact", "segmented", "rating", "extended" |
+| size | BoundValue | "sm", "md", "lg" |
+| title | BoundValue | Feedback prompt title |
+| description | BoundValue | Supporting text |
+| positiveLabel | BoundValue | Positive option label |
+| negativeLabel | BoundValue | Negative option label |
+| positiveRating | BoundValue | Positive rating value |
+| negativeRating | BoundValue | Negative rating value |
+| showComment | BoundValue | boolean |
+| commentMode | BoundValue | "none", "inline", "modal" |
+| commentLabel | BoundValue | Comment field label |
+| commentPlaceholder | BoundValue | Comment field placeholder |
+| commentTitle | BoundValue | Modal/inline comment title |
+| commentDescription | BoundValue | Comment helper text |
+| commentSubmitLabel | BoundValue | Submit button label |
+| commentCancelLabel | BoundValue | Cancel button label |
+| feedbackId | BoundValue | Stable feedback ID |
+| includeState | BoundValue | boolean - include component/page state in feedback context |
+| pageContextMode | BoundValue | "none", "path", "query" |
+| pageContextQueryParamAllowlist | BoundValue | Comma-separated query parameter names |
+| pageContextQueryParamDenylist | BoundValue | Comma-separated query parameter names |
+| includePageHash | BoundValue | boolean |
+| successMessage | BoundValue | Message after submission |
+| disabled | BoundValue | boolean |
+
+### appLink
+Built-in link button to Flow-Like app shell screens.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| target | BoundValue | "config", "settings", "overview" |
+| label | BoundValue | Button label |
+| variant | BoundValue | "default", "secondary", "outline", "ghost", "destructive", "link" |
+| size | BoundValue | "sm", "md", "lg", "icon" |
+| icon | BoundValue | Lucide icon name |
+| iconPosition | BoundValue | "left", "right" |
+| appId | BoundValue | Target app ID |
+| eventId | BoundValue | Target event ID |
+| disabled | BoundValue | boolean |
 
 ### textField
 Text input field.
@@ -467,6 +573,22 @@ Image upload with preview.
 | aspectRatio | BoundValue | Crop ratio |
 | showPreview | BoundValue | boolean |
 | disabled | BoundValue | boolean |
+
+### voiceInput
+Voice recording input.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| value | BoundValue | Audio/file data **(REQUIRED)** |
+| label | BoundValue | Field label |
+| helperText | BoundValue | Helper text |
+| maxDuration | BoundValue | Maximum recording duration in seconds |
+| autoStop | BoundValue | boolean - stop automatically after silence |
+| silenceThreshold | BoundValue | Silence detection threshold |
+| silenceDuration | BoundValue | Silence duration before auto-stop |
+| disabled | BoundValue | boolean |
+| error | BoundValue | Error message |
+| visualizer | BoundValue | boolean - show audio visualizer |
 
 ### link
 Navigation link.
@@ -599,3 +721,204 @@ Click popover.
 | trigger | BoundValue | "click", "hover" |
 | closeOnClickOutside | BoundValue | boolean |
 | children | Children | Trigger element |
+
+---
+
+## GAME / VISUAL COMPONENTS
+
+### canvas2d
+2D drawing canvas container.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| width | BoundValue | Canvas width **(REQUIRED)** |
+| height | BoundValue | Canvas height **(REQUIRED)** |
+| backgroundColor | BoundValue | Background color |
+| pixelPerfect | BoundValue | boolean |
+| children | Children | Sprite/shape children |
+
+### sprite
+2D sprite for canvas.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| src | BoundValue | Image URL **(REQUIRED)** |
+| x | BoundValue | X position **(REQUIRED)** |
+| y | BoundValue | Y position **(REQUIRED)** |
+| width | BoundValue | Sprite width |
+| height | BoundValue | Sprite height |
+| rotation | BoundValue | Rotation in degrees |
+| scale | BoundValue | Scale factor |
+| opacity | BoundValue | 0-1 opacity |
+| flipX | BoundValue | boolean |
+| flipY | BoundValue | boolean |
+| zIndex | BoundValue | Layer order |
+
+### shape
+2D vector shape for canvas.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| shapeType | BoundValue | "rectangle", "circle", "ellipse", "line", "polygon" **(REQUIRED)** |
+| x | BoundValue | X position **(REQUIRED)** |
+| y | BoundValue | Y position **(REQUIRED)** |
+| width | BoundValue | Shape width |
+| height | BoundValue | Shape height |
+| radius | BoundValue | Circle/corner radius |
+| points | BoundValue | Polygon points array |
+| fill | BoundValue | Fill color |
+| stroke | BoundValue | Stroke color |
+| strokeWidth | BoundValue | Stroke width |
+
+### scene3d
+3D scene container (Three.js).
+
+| Property | Type | Description |
+|----------|------|-------------|
+| width | BoundValue | Scene width **(REQUIRED)** |
+| height | BoundValue | Scene height **(REQUIRED)** |
+| cameraType | BoundValue | "perspective", "orthographic" |
+| cameraPosition | BoundValue | `{x, y, z}` |
+| backgroundColor | BoundValue | Background color |
+| controlMode | BoundValue | "orbit", "fly", "firstPerson" |
+| fixedView | BoundValue | boolean |
+| autoRotateSpeed | BoundValue | number |
+| enableControls | BoundValue | boolean |
+| enableZoom | BoundValue | boolean |
+| enablePan | BoundValue | boolean |
+| fov | BoundValue | Field of view |
+| target | BoundValue | Look-at target `{x, y, z}` |
+| ambientLight | BoundValue | Ambient light config |
+| directionalLight | BoundValue | Directional light config |
+| showGrid | BoundValue | boolean |
+| showAxes | BoundValue | boolean |
+| children | Children | 3D model children |
+
+### model3d
+3D model viewer.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| src | BoundValue | GLTF/GLB URL **(REQUIRED)** |
+| position | BoundValue | `{x, y, z}` |
+| rotation | BoundValue | `{x, y, z}` |
+| scale | BoundValue | `{x, y, z}` or number |
+| castShadow | BoundValue | boolean |
+| receiveShadow | BoundValue | boolean |
+| animation | BoundValue | Animation name |
+| autoRotate | BoundValue | boolean |
+| rotateSpeed | BoundValue | number |
+| viewerHeight | BoundValue | string |
+| backgroundColor | BoundValue | Background color |
+| cameraDistance | BoundValue | number |
+| fov | BoundValue | Field of view |
+| enableControls | BoundValue | boolean |
+| enableZoom | BoundValue | boolean |
+| lightingPreset | BoundValue | "default", "studio", "outdoor", "dramatic" |
+| environment | BoundValue | Environment map |
+| showGround | BoundValue | boolean |
+
+### dialogue
+Visual novel dialogue box.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| text | BoundValue | Dialogue text **(REQUIRED)** |
+| speakerName | BoundValue | Speaker name |
+| typewriter | BoundValue | boolean - typewriter effect |
+| speed | BoundValue | Typing speed |
+| portrait | BoundValue | Speaker portrait URL |
+| children | Children | Additional content |
+
+### characterPortrait
+Character portrait display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| image | BoundValue | Image URL **(REQUIRED)** |
+| expression | BoundValue | Expression name |
+| position | BoundValue | "left", "center", "right" |
+| width | BoundValue | string |
+| height | BoundValue | string |
+| flip | BoundValue | boolean |
+
+### choiceMenu
+Interactive choice selection for games or visual novels.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| choices | BoundValue | Array of `{id, text, disabled?, icon?}` **(REQUIRED)** |
+| title | BoundValue | Menu title |
+| layout | BoundValue | "vertical", "horizontal", "grid" |
+| columns | BoundValue | Grid columns |
+
+### inventoryGrid
+Game-style item grid.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| items | BoundValue | Array of `{id, name, icon?, quantity?, description?}` **(REQUIRED)** |
+| columns | BoundValue | Grid columns |
+| rows | BoundValue | Grid rows |
+| cellSize | BoundValue | Cell size string |
+| showTooltips | BoundValue | boolean |
+
+### healthBar
+HP or resource bar display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| value | BoundValue | Current value **(REQUIRED)** |
+| maxValue | BoundValue | Maximum value **(REQUIRED)** |
+| label | BoundValue | Bar label |
+| fillColor | BoundValue | Fill color |
+| variant | BoundValue | "default", "danger", "warning", "success" |
+| showLabel | BoundValue | boolean |
+| size | BoundValue | "sm", "md", "lg" |
+| animated | BoundValue | boolean |
+
+### miniMap
+Game mini-map display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| mapImage | BoundValue | Map image URL **(REQUIRED)** |
+| width | BoundValue | Map width **(REQUIRED)** |
+| height | BoundValue | Map height **(REQUIRED)** |
+| markers | BoundValue | Array of `{id, x, y, icon?, color?, label?}` |
+| playerX | BoundValue | Player X position |
+| playerY | BoundValue | Player Y position |
+| viewportWidth | BoundValue | Viewport width |
+| viewportHeight | BoundValue | Viewport height |
+| zoom | BoundValue | Zoom level |
+
+---
+
+## GEO COMPONENTS
+
+### geoMap
+Interactive map display.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| center | BoundValue | `{lat, lng}` |
+| zoom | BoundValue | Zoom level |
+| markers | BoundValue | Array of `{id, lat, lng, label?, icon?, color?}` |
+| style | BoundValue | Map style config |
+| width | BoundValue | Map width |
+| height | BoundValue | Map height |
+| mapStyle | BoundValue | "streets", "satellite", "dark", "light" |
+| interactive | BoundValue | boolean |
+
+---
+
+## SPECIAL COMPONENTS
+
+### widgetInstance
+Embed a reusable widget defined in Flow-Like.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| widgetId | BoundValue | Widget ID **(REQUIRED)** |
+| widgetInputs | BoundValue | Input bindings |
+| bindOutputs | BoundValue | Output bindings |

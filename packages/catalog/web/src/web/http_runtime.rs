@@ -292,7 +292,6 @@ pub(crate) fn parse_body_value(request: &HttpRequest) -> Value {
 }
 
 #[cfg(feature = "execute")]
-#[cfg(feature = "execute")]
 pub(crate) type SharedFunctionContext = Arc<Mutex<ExecutionContext>>;
 
 #[cfg(feature = "execute")]

@@ -14,7 +14,14 @@ import {
 	SimpleChatConfig,
 	TelegramConfig,
 	UserMailConfig,
-} from "@flow-like/flow-like-ui";
+} from "../index";
+import { DEFAULT_CHAT_AI_DISCLOSURE } from "./chat-appearance";
+import { DEFAULT_CHAT_THEME_CSS } from "./chat-theme-presets";
+
+/** Whether an event renders the built-in chat interface. */
+export function isChatEventType(eventType: string): boolean {
+	return eventType === "simple_chat";
+}
 
 export const EVENT_CONFIG: IEventMapping = {
 	events_chat: {
@@ -30,6 +37,18 @@ export const EVENT_CONFIG: IEventMapping = {
 			simple_chat: {
 				allow_file_upload: true,
 				allow_voice_input: false,
+				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,
+				background_image: "",
+				custom_css: DEFAULT_CHAT_THEME_CSS,
+				voice: {
+					mode: "disabled",
+					invoke: "manual",
+					variant: "conservative",
+					size: "md",
+					playback: "text",
+					max_duration: 300,
+					auto_stop: false,
+				},
 				history_elements: 5,
 				tools: [],
 				default_tools: [],
@@ -60,7 +79,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 		},
 		defaultEventType: "simple_chat",
-		eventTypes: ["simple_chat", "advanced_chat", "discord", "telegram"],
+		eventTypes: ["simple_chat", "discord", "telegram"],
 		withSink: ["discord", "telegram"],
 		sinkAvailability: {
 			discord: {
@@ -177,8 +196,7 @@ export const EVENT_CONFIG: IEventMapping = {
 			},
 			rest: {
 				availability: "remote",
-				description:
-					"Multi-endpoint REST API server with auth - remote only",
+				description: "Multi-endpoint REST API server with auth - remote only",
 			},
 			mcp: {
 				availability: "remote",

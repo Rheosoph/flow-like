@@ -25,6 +25,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../hooks/use-invoke";
+import { addAppToProfile } from "../../lib/add-app-to-profile";
 import { formatRelativeTime } from "../../lib/date";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
@@ -179,6 +180,16 @@ export function NotificationsPageScreen() {
 			try {
 				if (action === "accept") {
 					await backend.teamState.acceptInvite(id);
+					const appId = invitationsQuery.data?.pages
+						.flat()
+						.find((invite) => invite.id === id)?.app_id;
+					if (appId) {
+						await addAppToProfile(backend, appId);
+						await Promise.all([
+							invalidate(backend.userState.getSettingsProfile, []),
+							invalidate(backend.appState.getApps, []),
+						]);
+					}
 				} else {
 					await backend.teamState.rejectInvite(id);
 				}
@@ -188,18 +199,31 @@ export function NotificationsPageScreen() {
 				toast.error(`Failed to ${action} invite. Please try again later.`);
 			}
 		},
-		[backend, invitationsQuery, syncOverview],
+		[backend, invalidate, invitationsQuery, syncOverview],
 	);
 
 	const handleMarkAsRead = useCallback(
-		async (id: string) => {
+		async (id: string, refresh = true) => {
 			try {
 				await backend.userState.markNotificationRead(id);
-				await Promise.all([notificationsQuery.refetch(), syncOverview()]);
 			} catch (error) {
 				console.error("Failed to mark notification as read:", error);
 				toast.error("Failed to mark notification as read");
+				return false;
 			}
+
+			if (refresh) {
+				await Promise.allSettled([
+					notificationsQuery.refetch(),
+					syncOverview(),
+				]);
+			} else {
+				void syncOverview().catch((error) => {
+					console.error("Failed to refresh notification overview:", error);
+				});
+			}
+
+			return true;
 		},
 		[backend, notificationsQuery, syncOverview],
 	);
@@ -735,7 +759,7 @@ function InvitationCard({
 type NotificationCardProps = {
 	notification: INotification;
 	index: number;
-	onMarkRead: (id: string) => void;
+	onMarkRead: (id: string, refresh?: boolean) => void;
 	onDelete: (id: string) => void;
 };
 
@@ -748,20 +772,20 @@ function NotificationCard({
 	const router = useRouter();
 
 	const handleLinkClick = useCallback(() => {
-		if (!notification.link) {
+		const link = notification.link;
+		if (!link) {
 			return;
 		}
 
 		if (!notification.read) {
-			void onMarkRead(notification.id);
+			void onMarkRead(notification.id, false);
 		}
 
-		if (notification.link.startsWith("http")) {
-			window.open(notification.link, "_blank", "noopener,noreferrer");
-			return;
+		if (link.startsWith("http")) {
+			window.open(link, "_blank", "noopener,noreferrer");
+		} else {
+			router.push(link);
 		}
-
-		router.push(notification.link);
 	}, [notification, onMarkRead, router]);
 
 	const hasLink = Boolean(notification.link);

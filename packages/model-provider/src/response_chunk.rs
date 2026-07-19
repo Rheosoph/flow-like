@@ -1,4 +1,5 @@
 use super::response::{LogProbs, Usage};
+use crate::history::Content;
 use flow_like_types::JsonSchema;
 use flow_like_types::json;
 use flow_like_types::serde::{Deserialize, Serialize};
@@ -83,6 +84,7 @@ impl ResponseChunk {
             delta: Some(Delta {
                 role: Some("assistant".to_string()),
                 content: Some(text.to_string()),
+                content_parts: None,
                 tool_calls: None,
                 refusal: None,
                 reasoning: None,
@@ -103,6 +105,7 @@ impl ResponseChunk {
             delta: Some(Delta {
                 role: Some("assistant".to_string()),
                 content: None,
+                content_parts: None,
                 tool_calls: Some(vec![DeltaFunctionCall {
                     index: None,
                     id: Some(tool_call.id.clone()),
@@ -130,6 +133,7 @@ impl ResponseChunk {
             delta: Some(Delta {
                 role: Some("assistant".to_string()),
                 content: None,
+                content_parts: None,
                 tool_calls: Some(vec![DeltaFunctionCall {
                     index: None,
                     id: Some(id.to_string()),
@@ -157,9 +161,30 @@ impl ResponseChunk {
             delta: Some(Delta {
                 role: Some("assistant".to_string()),
                 content: None,
+                content_parts: None,
                 tool_calls: None,
                 refusal: None,
                 reasoning: Some(reasoning.to_string()),
+            }),
+            finish_reason: None,
+            logprobs: None,
+        });
+        chunk
+    }
+
+    /// Creates a synthetic non-stream chunk for structured media returned by Rig.
+    pub fn from_content_part(content: Content, model_name: &str) -> Self {
+        let mut chunk = Self::default();
+        chunk.model = Some(model_name.to_string());
+        chunk.choices.push(ResponseChunkChoice {
+            index: 0,
+            delta: Some(Delta {
+                role: Some("assistant".to_string()),
+                content: None,
+                content_parts: Some(vec![content]),
+                tool_calls: None,
+                refusal: None,
+                reasoning: None,
             }),
             finish_reason: None,
             logprobs: None,
@@ -203,6 +228,8 @@ pub struct Delta {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_parts: Option<Vec<Content>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<DeltaFunctionCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]

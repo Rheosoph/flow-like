@@ -1,11 +1,13 @@
 import type React from "react";
 import type { IBoard, ILogMetadata } from "../../../lib";
+import type { FlowIrCommitToken } from "../../../lib/schema/copilot";
 import type {
 	BoardCommand,
 	PlanStep,
 	Suggestion,
 } from "../../../lib/schema/flow/copilot";
 import type { INode } from "../../../lib/schema/flow/node";
+import type { IApplyFlowIrCommitResponse } from "../../../state/backend-state/board-state";
 
 export type LoadingPhase =
 	| "initializing"
@@ -31,13 +33,35 @@ export interface CopilotMessage {
 	planSteps?: PlanStep[];
 }
 
+export interface FlowScriptApplyResultLike {
+	commands?: unknown[];
+	board_commands?: BoardCommand[];
+	diagnostics?: string[];
+	final_board_node_count?: number;
+}
+
+export interface FlowScriptApplyOptions {
+	allowDeletions?: boolean;
+	suppressBlockedToast?: boolean;
+}
+
 export interface FlowCopilotProps {
 	appId?: string;
 	board: IBoard | null | undefined;
 	catalogNodes?: INode[];
 	selectedNodeIds: string[];
 	onAcceptSuggestion: (suggestion: Suggestion) => void;
-	onExecuteCommands?: (commands: BoardCommand[]) => void;
+	onExecuteCommands?: (commands: BoardCommand[]) => void | Promise<void>;
+	onApplyFlowScript?: (
+		flowscript: string,
+		options?: FlowScriptApplyOptions,
+	) =>
+		| undefined
+		| FlowScriptApplyResultLike
+		| Promise<undefined | FlowScriptApplyResultLike>;
+	onApplyFlowIrCommit?: (
+		token: FlowIrCommitToken,
+	) => Promise<IApplyFlowIrCommitResponse>;
 	onGhostNodesChange?: (suggestions: Suggestion[]) => void;
 	onClearRunContext?: () => void;
 	onClose?: () => void;

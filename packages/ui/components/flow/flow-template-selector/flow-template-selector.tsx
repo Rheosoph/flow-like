@@ -611,6 +611,7 @@ function InlineTemplatePreview({
 						nodes={Object.values(templateBoard.data.nodes)}
 						comments={templateBoard.data.comments}
 						layers={templateBoard.data.layers}
+						variables={templateBoard.data.variables}
 					/>
 				) : (
 					<div className="w-full h-full flex items-center justify-center">
@@ -823,6 +824,7 @@ function BrowserPreviewPane({
 						nodes={Object.values(templateBoard.data.nodes)}
 						comments={templateBoard.data.comments}
 						layers={templateBoard.data.layers}
+						variables={templateBoard.data.variables}
 					/>
 				) : (
 					<div className="w-full h-full flex items-center justify-center">

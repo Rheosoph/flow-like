@@ -609,8 +609,15 @@ pub async fn suggest_assessment(
     Json(body): Json<SuggestBody>,
 ) -> Result<Json<SuggestResponse>, ApiError> {
     ensure_feature(&state)?;
+    // Hosted Bit models authenticate against this server's metered `/chat/completions` with the
+    // caller's token; capture it before the permission macro consumes `user`.
+    let token = crate::routes::ai::copilot::user_access_token(&user);
     let permission = crate::ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
     let sub = permission.sub()?;
+    let usage_context = Some(flow_like::models::llm::ModelUsageContext {
+        app_id: Some(app_id.clone()),
+        run_id: None,
+    });
 
     let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
         &state,
@@ -618,6 +625,8 @@ pub async fn suggest_assessment(
         &app_id,
         body.model_id,
         body.profile,
+        token,
+        usage_context,
     )
     .await?;
 

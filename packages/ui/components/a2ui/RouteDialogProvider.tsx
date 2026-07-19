@@ -6,6 +6,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -13,6 +14,10 @@ import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
 } from "../../lib/page-surface-cache";
+import {
+	resolveEventBoardVersion,
+	withBoardVersion,
+} from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useBackend } from "../../state/backend-state";
 import type { IPage } from "../../state/backend-state/page-state";
@@ -21,6 +26,7 @@ import { useExecutionServiceOptional } from "../../state/execution-service-conte
 import { PageLoadingSkeleton } from "../interfaces/page-loading-skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { A2UIRenderer } from "./A2UIRenderer";
+import { normalizeGeoMapViewport } from "./apply-a2ui-message";
 import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
 import { applyStyleUpdate } from "./style-updates";
@@ -165,6 +171,16 @@ function RouteDialogRenderer({
 	const [routeEvent, setRouteEvent] = useState<IEvent | null>(null);
 	const loadEventExecutedRef = useRef<string | null>(null);
 	const [cachedSurface, setCachedSurface] = useState<Surface | null>(null);
+	const pageExecutionBoardId = routeEvent?.board_id || page?.boardId;
+	const pageExecutionVersion = useMemo(
+		() =>
+			resolveEventBoardVersion(
+				routeEvent?.board_id,
+				routeEvent?.board_version,
+				pageExecutionBoardId,
+			),
+		[routeEvent?.board_id, routeEvent?.board_version, pageExecutionBoardId],
+	);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -232,7 +248,7 @@ function RouteDialogRenderer({
 					const pageResult = await backend.pageState.getPage(
 						appId,
 						event.default_page_id,
-						undefined,
+						event.board_id || undefined,
 					);
 
 					if (pageResult) {
@@ -372,9 +388,6 @@ function RouteDialogRenderer({
 			} else if (updateType === "setMediaSource") {
 				updatedComponent = applyMediaSourceUpdate(component, updateValue);
 			} else if (updateType === "setGeoMapViewport") {
-				const viewport = updateValue.viewport as
-					| { literalJson?: string }
-					| undefined;
 				const componentData = component.component as unknown as Record<
 					string,
 					unknown
@@ -383,7 +396,7 @@ function RouteDialogRenderer({
 					...component,
 					component: {
 						...componentData,
-						viewport,
+						viewport: normalizeGeoMapViewport(updateValue.viewport),
 					} as unknown as SurfaceComponent["component"],
 				};
 			} else if (updateType === "setProps") {
@@ -576,13 +589,13 @@ function RouteDialogRenderer({
 		const executeOnLoadEvent = async () => {
 			if (!page?.onLoadEventId || !appId) return;
 
-			const boardId = page.boardId || routeEvent?.board_id;
+			const boardId = pageExecutionBoardId;
 			if (!boardId) {
 				console.warn("[RouteDialog] No boardId available for onLoad event");
 				return;
 			}
 
-			const executionKey = `${dialog.id}:${page.id}:${page.onLoadEventId}`;
+			const executionKey = `${dialog.id}:${page.id}:${page.onLoadEventId}:${boardId}:${pageExecutionVersion?.join(".") ?? "latest"}`;
 			if (loadEventExecutedRef.current === executionKey) return;
 			loadEventExecutedRef.current = executionKey;
 
@@ -592,16 +605,19 @@ function RouteDialogRenderer({
 				// Get component data from surface (for GetElement to work)
 				const surfaceElements = getElementsFromSurface();
 
-				const payload = {
-					id: page.onLoadEventId,
-					payload: {
-						_elements: surfaceElements,
-						_route: dialog.route,
-						_query_params: dialog.queryParams || {},
-						_page_id: page.id,
-						_dialog_id: dialog.id,
+				const payload = withBoardVersion(
+					{
+						id: page.onLoadEventId,
+						payload: {
+							_elements: surfaceElements,
+							_route: dialog.route,
+							_query_params: dialog.queryParams || {},
+							_page_id: page.id,
+							_dialog_id: dialog.id,
+						},
 					},
-				};
+					pageExecutionVersion,
+				);
 
 				// Use execution service if available (checks runtime variables)
 				const execFn =
@@ -626,7 +642,8 @@ function RouteDialogRenderer({
 	}, [
 		appId,
 		page,
-		routeEvent,
+		pageExecutionBoardId,
+		pageExecutionVersion,
 		dialog,
 		isLoading,
 		backend.boardState,
@@ -665,7 +682,8 @@ function RouteDialogRenderer({
 							surface={activeSurface}
 							widgetRefs={page?.widgetRefs}
 							appId={appId}
-							boardId={page?.boardId || routeEvent?.board_id}
+							boardId={pageExecutionBoardId}
+							boardVersion={pageExecutionVersion}
 							eventId={routeEvent?.id}
 							onA2UIMessage={handleServerMessage}
 							isPreviewMode={true}

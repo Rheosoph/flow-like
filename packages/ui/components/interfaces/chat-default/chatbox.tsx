@@ -28,6 +28,7 @@ import {
 	PopoverTrigger,
 	Textarea,
 } from "../../ui";
+import type { VoiceInvokeMode, VoiceMode } from "../../voice";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 
 export type ISendMessageFunction = (
@@ -48,8 +49,12 @@ interface ChatBoxProps {
 	defaultActiveTools?: string[];
 	fileUpload: boolean;
 	audioInput: boolean;
+	voiceMode?: VoiceMode;
+	voiceInvoke?: VoiceInvokeMode;
 	sendDisabled?: boolean;
 	onVoiceModeToggle?: () => void;
+	/** Called when the user starts speaking/recording, to interrupt answer playback. */
+	onInterrupt?: () => void;
 }
 
 export interface ChatBoxRef {
@@ -75,10 +80,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onSendMessage,
 			fileUpload = true,
 			audioInput = false,
+			voiceMode = "record",
+			voiceInvoke = "manual",
 			availableTools = ["Reason"],
 			defaultActiveTools = ["Reason"],
 			sendDisabled = false,
 			onVoiceModeToggle,
+			onInterrupt,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -95,6 +103,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+		// Set when the user releases before getUserMedia resolves, so the
+		// in-flight startRecording aborts instead of leaving the mic recording.
+		const pendingStopRef = useRef(false);
 		const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 		const audioChunksRef = useRef<Blob[]>([]);
 		const recognitionRef = useRef<any>(null);
@@ -160,12 +171,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				return;
 			}
 
-			await onSendMessage(
-				input.trim(),
-				attachedFiles,
-				activeTools,
-				recordedAudio || undefined,
-			);
+			const message = input.trim();
+			const files = attachedFiles;
+			const audio = recordedAudio || undefined;
+
+			// Clear the composer immediately on send — onSendMessage may not resolve until the
+			// whole response has streamed back, and leaving the sent text sitting there reads as
+			// "nothing happened". Restore it if the send fails so the user can retry.
 			setInput("");
 			setAttachedFiles([]);
 			setRecordedAudio(null);
@@ -174,6 +186,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			try {
 				chatboxRef.current?.blur();
 			} catch {}
+
+			try {
+				await onSendMessage(message, files, activeTools, audio);
+			} catch (error) {
+				setInput(message);
+				setAttachedFiles(files);
+				setRecordedAudio(audio ?? null);
+				throw error;
+			}
 		};
 
 		useEffect(() => {
@@ -184,11 +205,19 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const startRecording = async () => {
 			if (!audioInput) return;
+			onInterrupt?.();
+			pendingStopRef.current = false;
 
 			try {
 				const stream = await navigator.mediaDevices.getUserMedia({
 					audio: true,
 				});
+				if (pendingStopRef.current) {
+					// Released before the mic was ready — don't start a recording.
+					for (const track of stream.getTracks()) track.stop();
+					pendingStopRef.current = false;
+					return;
+				}
 				mediaRecorderRef.current = new MediaRecorder(stream);
 				audioChunksRef.current = [];
 
@@ -237,6 +266,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					clearInterval(recordingIntervalRef.current);
 					recordingIntervalRef.current = null;
 				}
+			} else {
+				// Released before the recorder actually started — make the in-flight
+				// startRecording abort once getUserMedia resolves.
+				pendingStopRef.current = true;
 			}
 		};
 
@@ -261,6 +294,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const startTranscription = () => {
 			if (!audioInput) return;
+			onInterrupt?.();
 			const SpeechRecognitionApi =
 				typeof window !== "undefined"
 					? (window as any).SpeechRecognition ||
@@ -578,15 +612,24 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					onClearAll={() => setAttachedFiles([])}
 				/>
 
-				<form onSubmit={handleSubmit} className="relative">
+				<form
+					onSubmit={handleSubmit}
+					className="relative"
+					data-fl-chat-composer
+				>
 					<div
-						className="flex flex-col items-start bg-background border border-border rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
+						className="flex flex-col items-start overflow-hidden rounded-xl border border-border shadow-sm transition-all duration-200 focus-within:border-input focus-within:ring-2 focus-within:ring-ring"
 						onDrop={handleDrop}
 						onDragOver={handleDragOver}
+						style={{
+							backgroundColor:
+								"var(--fl-chat-composer-background, var(--background))",
+						}}
 					>
 						{/* Text Input */}
 						<div className="flex-1 py-2 w-full pr-2">
 							<Textarea
+								aria-label="Message"
 								ref={chatboxRef}
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
@@ -609,7 +652,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						</div>
 
 						{/* Tool bar and settings */}
-						<div className="flex items-center justify-between w-full bg-background rounded-b-2xl">
+						<div className="flex w-full items-center justify-between rounded-b-xl">
 							{/* Left side buttons */}
 							<div className="flex items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}
@@ -617,6 +660,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									<Popover>
 										<PopoverTrigger asChild>
 											<Button
+												aria-label="Add attachment"
 												type="button"
 												size="sm"
 												variant="ghost"
@@ -669,6 +713,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										<Popover>
 											<PopoverTrigger asChild>
 												<Button
+													aria-label="Choose tools"
 													type="button"
 													size="sm"
 													variant="ghost"
@@ -747,12 +792,18 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 							{/* Send Button & Audio Controls */}
 							<div className="p-2 pt-0 flex items-center gap-2">
-								{/* Voice-to-text transcription button */}
+								{/* Voice-to-text transcription button (STT mode) */}
 								{audioInput &&
+									voiceMode === "stt" &&
 									typeof window !== "undefined" &&
 									((window as any).SpeechRecognition ||
 										(window as any).webkitSpeechRecognition) && (
 										<Button
+											aria-label={
+												isTranscribing
+													? "Stop voice transcription"
+													: "Start voice transcription"
+											}
 											type="button"
 											size="sm"
 											variant={isTranscribing ? "destructive" : "ghost"}
@@ -769,10 +820,42 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										</Button>
 									)}
 
-								{/* Audio Recording Button */}
-								{audioInput && (
+								{/* Audio Recording Button (record mode) */}
+								{audioInput && voiceMode === "record" && (
 									<div className="flex items-center gap-1">
-										{isRecording ? (
+										{voiceInvoke === "hold" ? (
+											<>
+												<Button
+													aria-label="Hold to record"
+													type="button"
+													size="sm"
+													variant={isRecording ? "destructive" : "ghost"}
+													className={cn(
+														"h-8 w-8 p-0 rounded-full select-none transition-colors",
+														isRecording ? "animate-pulse" : "hover:bg-accent",
+													)}
+													disabled={
+														!!recordedAudio ||
+														sendDisabled ||
+														typeof navigator?.mediaDevices?.getUserMedia !==
+															"function"
+													}
+													onPointerDown={() => startRecording()}
+													onPointerUp={() => stopRecording()}
+													onPointerLeave={() => {
+														if (isRecording) stopRecording();
+													}}
+													onContextMenu={(e) => e.preventDefault()}
+												>
+													<MicIcon className="w-4 h-4" />
+												</Button>
+												{isRecording && (
+													<span className="text-xs text-muted-foreground font-mono">
+														{formatTime(recordingTime)}
+													</span>
+												)}
+											</>
+										) : isRecording ? (
 											<>
 												<Button
 													type="button"
@@ -832,6 +915,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								)}
 
 								<Button
+									aria-label="Send message"
 									type="submit"
 									size="sm"
 									disabled={sendDisabled || (!input.trim() && !recordedAudio)}

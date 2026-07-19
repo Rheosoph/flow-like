@@ -39,6 +39,14 @@ pub async fn delete_event(
 ) -> Result<Json<()>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     let sub = permission.sub()?;
+    if super::db::get_event_from_db_opt(&state.db, &event_id, &app_id)
+        .await?
+        .is_some_and(|event| event.event_type == "ontology_action")
+    {
+        return Err(ApiError::forbidden(
+            "Ontology action events are removed through Data Studio actions",
+        ));
+    }
 
     let mut app = state
         .scoped_app(

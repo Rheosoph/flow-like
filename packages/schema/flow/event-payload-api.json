@@ -1,16 +1,25 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "ApiEventParameters",
-	"type": "object",
-	"properties": {
-		"path_suffix": {
-			"type": ["string", "null"]
-		},
-		"method": {
-			"type": ["string", "null"]
-		},
-		"public_endpoint": {
-			"type": ["boolean", "null"]
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApiEventParameters",
+  "type": "object",
+  "properties": {
+    "path_suffix": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "method": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "public_endpoint": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  }
 }

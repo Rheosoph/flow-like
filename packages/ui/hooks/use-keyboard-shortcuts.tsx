@@ -2,6 +2,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { Redo2Icon, Undo2Icon, XIcon } from "lucide-react";
 import { type RefObject, useCallback, useEffect } from "react";
+import { boardFingerprint } from "../lib/flow-history-stacks";
 import { toastError, toastSuccess } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { IBoard } from "../lib/schema/flow/board";
@@ -20,10 +21,11 @@ interface UseKeyboardShortcutsProps {
 		node: INode,
 		position?: { x: number; y: number },
 	) => Promise<void>;
-	undo: () => Promise<IGenericCommand[] | null>;
-	redo: () => Promise<IGenericCommand[] | null>;
+	undo: (currentStamp?: string) => Promise<IGenericCommand[] | null>;
+	redo: (currentStamp?: string) => Promise<IGenericCommand[] | null>;
 	rollbackUndo: (commands: IGenericCommand[]) => Promise<void>;
 	rollbackRedo: (commands: IGenericCommand[]) => Promise<void>;
+	stampHistory: (stamp?: string) => Promise<void>;
 }
 
 export function useKeyboardShortcuts({
@@ -39,6 +41,7 @@ export function useKeyboardShortcuts({
 	redo,
 	rollbackUndo,
 	rollbackRedo,
+	stampHistory,
 }: UseKeyboardShortcutsProps) {
 	const backend = useBackend();
 	const queryClient = useQueryClient();
@@ -49,7 +52,8 @@ export function useKeyboardShortcuts({
 			(arg) => typeof arg !== "undefined",
 		);
 		await queryClient.invalidateQueries({ queryKey });
-		await board.refetch();
+		const refreshed = await board.refetch();
+		return refreshed.data;
 	}, [queryClient, appId, boardId, version, board]);
 
 	const placeNodeShortcut = useCallback(
@@ -104,11 +108,12 @@ export function useKeyboardShortcuts({
 					toastError("Cannot change old version", <XIcon />);
 					return;
 				}
-				const stack = await undo();
+				const stack = await undo(boardFingerprint(board.data));
 				if (stack) {
 					try {
 						await backend.boardState.undoBoard(appId, boardId, stack);
-						await invalidateBoard();
+						const refreshed = await invalidateBoard();
+						await stampHistory(boardFingerprint(refreshed));
 						toastSuccess("Undo", <Undo2Icon className="w-4 h-4" />);
 					} catch (error) {
 						console.error("Undo failed:", error);
@@ -132,11 +137,12 @@ export function useKeyboardShortcuts({
 					toastError("Cannot change old version", <XIcon />);
 					return;
 				}
-				const stack = await redo();
+				const stack = await redo(boardFingerprint(board.data));
 				if (stack) {
 					try {
 						await backend.boardState.redoBoard(appId, boardId, stack);
-						await invalidateBoard();
+						const refreshed = await invalidateBoard();
+						await stampHistory(boardFingerprint(refreshed));
 						toastSuccess("Redo", <Redo2Icon className="w-4 h-4" />);
 					} catch (error) {
 						console.error("Redo failed:", error);
@@ -238,6 +244,7 @@ export function useKeyboardShortcuts({
 			redo,
 			rollbackUndo,
 			rollbackRedo,
+			stampHistory,
 			appId,
 			invalidateBoard,
 			onDeleteSelection,

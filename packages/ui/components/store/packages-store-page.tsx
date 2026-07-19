@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useDebounce } from "@uidotdev/usehooks";
 import {
 	ChevronRight,
-	Download,
 	KeyRound,
 	Lock,
 	Package,
@@ -43,6 +42,8 @@ import {
 	SelectValue,
 } from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
+import { ExploreHubHeader } from "./explore-hub-header";
+import { getPackageOverviewHref } from "./package-navigation";
 
 type SortOption =
 	| "relevance"
@@ -86,41 +87,19 @@ function getPackageInitials(name: string): string {
 	return initials || "PK";
 }
 
-function PackageMark({
-	displayName,
-	icon,
-	thumbnail,
-	gradient,
-}: {
-	displayName: string;
-	icon?: string;
-	thumbnail?: string;
-	gradient: ReturnType<typeof hashToGradient>;
-}) {
-	const image = icon ?? thumbnail;
+function formatCompact(n: number): string {
+	if (n >= 1_000_000)
+		return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+	return `${n}`;
+}
 
-	return (
-		<div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-md border border-border/40 bg-muted/40 shadow-sm">
-			<div
-				className="absolute inset-0"
-				style={{
-					background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
-					opacity: gradient.opacity,
-				}}
-			/>
-			{image ? (
-				<img
-					src={image}
-					alt=""
-					className="relative h-full w-full bg-background/20 object-cover"
-				/>
-			) : (
-				<div className="relative flex h-full w-full items-center justify-center font-mono text-xs font-semibold text-foreground/80">
-					{getPackageInitials(displayName)}
-				</div>
-			)}
-		</div>
-	);
+function prettyCategory(category: string): string {
+	return category
+		.toLowerCase()
+		.split("_")
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join(" ");
 }
 
 export function PackageCard({ pkg }: { pkg: PackageSummary }) {
@@ -133,112 +112,131 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 	const displayDesc = pkg.metadata?.description ?? pkg.description;
 	const icon = pkg.metadata?.icon;
 	const thumbnail = pkg.metadata?.thumbnail;
+	const cover = icon ?? thumbnail;
+	const rated = (pkg.ratingCount ?? 0) > 0;
+	const category = pkg.primaryCategory ?? pkg.secondaryCategory;
 
 	return (
 		<Link
 			href={`/store/packages?id=${pkg.id}`}
-			className="group relative flex min-h-35 flex-col overflow-hidden rounded-lg border border-border/40 bg-card/70 p-4 backdrop-blur-sm transition-all hover:border-primary/40 hover:bg-card/90 hover:shadow-lg"
+			className="group relative flex h-56 w-full flex-col overflow-hidden rounded-2xl border border-border/50 shadow-sm transition-all hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl"
 		>
-			<div
-				className="absolute inset-0"
-				style={{
-					background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
-					opacity: isDark ? 0.1 : 0.08,
-				}}
-			/>
-			{thumbnail && (
-				<>
+			{/* cover image (or the deterministic aurora when there's none) */}
+			<div className="absolute inset-0 transition-transform duration-500 ease-out group-hover:scale-105">
+				{thumbnail ? (
 					<img
 						src={thumbnail}
 						alt=""
-						className="absolute inset-0 h-full w-full scale-[1.02] object-cover opacity-[0.14] saturate-125 transition-opacity group-hover:opacity-[0.18] dark:opacity-[0.18] dark:group-hover:opacity-[0.24]"
+						className="absolute inset-0 h-full w-full object-cover"
 					/>
-					<div className="absolute inset-0 bg-linear-to-r from-card/90 via-card/78 to-card/70" />
-				</>
-			)}
+				) : (
+					<>
+						<div
+							className="absolute inset-0"
+							style={{
+								background: `linear-gradient(${gradient.angle}deg, ${gradient.from}, ${gradient.to})`,
+							}}
+						/>
+						{icon && (
+							<img
+								src={icon}
+								alt=""
+								aria-hidden="true"
+								className="absolute left-1/2 top-1/3 h-[160%] w-[160%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-40 blur-2xl saturate-150"
+							/>
+						)}
+					</>
+				)}
+			</div>
+
+			{/* frosted glass for legibility — kept dark in both themes so any cover reads */}
+			<div className="absolute inset-0 bg-linear-to-b from-black/25 via-black/55 to-black/85 backdrop-blur-[2px]" />
 			<div
-				className="absolute inset-y-0 left-0 z-10 w-1"
-				style={{
-					background: `linear-gradient(180deg, ${gradient.from}, ${gradient.to})`,
-					opacity: gradient.opacity,
-				}}
+				className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+				style={{ boxShadow: `inset 0 0 0 1px ${gradient.from}66` }}
 			/>
 
-			<div className="relative z-10 flex flex-1 min-w-0 flex-col gap-3">
-				<div className="flex min-w-0 items-start gap-3">
-					<PackageMark
-						displayName={displayName}
-						icon={icon}
-						thumbnail={thumbnail}
-						gradient={gradient}
-					/>
+			<div className="relative z-10 flex h-full flex-col p-4">
+				<div className="flex items-center gap-3">
+					<div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl border border-white/20 bg-white/10 shadow-lg backdrop-blur-md">
+						{cover ? (
+							<img src={cover} alt="" className="h-full w-full object-cover" />
+						) : (
+							<div className="flex h-full w-full items-center justify-center font-mono text-xs font-semibold text-white">
+								{getPackageInitials(displayName)}
+							</div>
+						)}
+					</div>
 					<div className="min-w-0 flex-1">
-						<div className="flex items-center gap-1.5 min-w-0">
-							<h3 className="text-sm font-semibold font-mono truncate group-hover:text-primary transition-colors">
+						{category && (
+							<div className="truncate text-[10px] font-semibold uppercase tracking-wider text-white/60">
+								{prettyCategory(category)}
+							</div>
+						)}
+						<div className="flex items-center gap-1.5">
+							<h3 className="truncate font-mono text-sm font-semibold text-white">
 								{displayName}
 							</h3>
-							<span className="text-[10px] font-mono text-muted-foreground/50 shrink-0">
-								v{pkg.latestVersion}
-							</span>
-							<div className="flex items-center gap-1 ml-auto shrink-0">
-								{pkg.verified && (
-									<span className="inline-flex items-center rounded bg-background/80 border border-border/40 p-1">
-										<Shield className="h-3 w-3 text-blue-500" />
-									</span>
-								)}
-								{pkg.visibility !== "public" && (
-									<span className="inline-flex items-center gap-0.5 rounded bg-background/80 border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground font-mono">
-										{pkg.visibility === "private" ? (
-											<>
-												<Lock className="h-2.5 w-2.5" /> private
-											</>
-										) : (
-											<>
-												<KeyRound className="h-2.5 w-2.5" /> gated
-											</>
-										)}
-									</span>
-								)}
-							</div>
+							{pkg.verified && (
+								<Shield className="h-3.5 w-3.5 shrink-0 text-sky-400" />
+							)}
 						</div>
-
-						<p className="text-xs text-muted-foreground/80 line-clamp-2 leading-relaxed">
-							{displayDesc}
-						</p>
+					</div>
+					<div className="flex shrink-0 items-center gap-1.5 self-start">
+						{pkg.visibility !== "public" && (
+							<span
+								className="rounded-md border border-white/20 bg-white/12 p-1 text-white/80"
+								title={pkg.visibility}
+							>
+								{pkg.visibility === "private" ? (
+									<Lock className="h-3 w-3" />
+								) : (
+									<KeyRound className="h-3 w-3" />
+								)}
+							</span>
+						)}
+						<span className="rounded-md border border-white/20 bg-white/12 px-2 py-0.5 font-mono text-[10px] text-white/85">
+							v{pkg.latestVersion}
+						</span>
 					</div>
 				</div>
 
-				<div className="flex items-center gap-2 mt-auto pt-3 border-t border-border/20 text-[10px] text-muted-foreground/60 font-mono">
-					<span className="flex items-center gap-1">
-						<Download className="h-3 w-3" />
-						{pkg.downloadCount.toLocaleString()}
-					</span>
-					{(pkg.ratingCount ?? 0) > 0 && (
-						<span className="flex items-center gap-0.5 border-l border-border/30 pl-2">
-							<Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
-							{(pkg.avgRating ?? 0).toFixed(1)}
-						</span>
-					)}
-					{pkg.price > 0 && (
-						<span className="font-semibold text-primary">
-							€{(pkg.price / 100).toFixed(2)}
-						</span>
-					)}
-					{pkg.keywords.length > 0 && (
-						<span className="inline-flex min-w-0 items-center gap-1 border-l border-border/30 pl-2">
-							{pkg.keywords.slice(0, 2).map((kw) => (
-								<span
-									key={kw}
-									className="max-w-24 truncate rounded bg-muted/30 px-1.5 py-0.5"
-								>
-									{kw}
-								</span>
-							))}
-							{pkg.keywords.length > 2 && (
-								<span>+{pkg.keywords.length - 2}</span>
+				<p className="mt-3 line-clamp-2 text-xs leading-relaxed text-white/70">
+					{displayDesc}
+				</p>
+
+				<div className="mt-auto grid grid-cols-3 gap-2">
+					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
+						<div className="font-mono text-sm font-bold tabular-nums text-white">
+							{formatCompact(pkg.downloadCount)}
+						</div>
+						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
+							Installs
+						</div>
+					</div>
+					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
+						<div className="flex items-center justify-center gap-1 font-mono text-sm font-bold tabular-nums text-white">
+							{rated ? (
+								<>
+									<Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+									{(pkg.avgRating ?? 0).toFixed(1)}
+								</>
+							) : (
+								"New"
 							)}
-						</span>
-					)}
+						</div>
+						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
+							Rating
+						</div>
+					</div>
+					<div className="rounded-xl border border-white/12 bg-white/8 px-2 py-2 text-center backdrop-blur-sm">
+						<div className="font-mono text-sm font-bold text-white">
+							{pkg.price > 0 ? `€${(pkg.price / 100).toFixed(2)}` : "Free"}
+						</div>
+						<div className="mt-0.5 text-[9px] uppercase tracking-wider text-white/55">
+							Price
+						</div>
+					</div>
 				</div>
 			</div>
 		</Link>
@@ -247,7 +245,7 @@ export function PackageCard({ pkg }: { pkg: PackageSummary }) {
 
 function PackageCardSkeleton() {
 	return (
-		<div className="flex min-h-35 flex-col rounded-lg border border-border/40 bg-card/60 p-4">
+		<div className="flex h-56 flex-col rounded-2xl border border-border/40 bg-card/60 p-4">
 			<div className="flex items-start gap-3">
 				<Skeleton className="h-11 w-11 shrink-0 rounded-md" />
 				<div className="min-w-0 flex-1 space-y-2">
@@ -296,7 +294,11 @@ export function PackageDetailWrapper({
 		router.replace(url.pathname + url.search, { scroll: false });
 	}, [purchaseStatus, router]);
 
-	const handleBack = useCallback(() => router.back(), [router]);
+	const handleBack = useCallback(() => {
+		router.replace(getPackageOverviewHref(searchParams), {
+			scroll: false,
+		});
+	}, [router, searchParams]);
 	const compileStatus = getPackageStatus?.(packageId);
 
 	return (
@@ -630,12 +632,10 @@ function PageContent({
 	return (
 		<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 			<div className="mx-auto w-full max-w-7xl space-y-8">
-				<div className="space-y-2">
-					<h1 className="text-2xl font-semibold tracking-tight">Packages</h1>
-					<p className="text-sm text-muted-foreground">
-						Discover and install WASM node packages
-					</p>
-				</div>
+				<ExploreHubHeader
+					active="packages"
+					subtitle="Discover and install WASM node packages."
+				/>
 				<PackageListContent fetcher={fetcher} auth={auth} />
 			</div>
 		</main>

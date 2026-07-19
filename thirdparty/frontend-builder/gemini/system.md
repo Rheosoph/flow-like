@@ -8,28 +8,45 @@ Always respond with a complete, valid JSON object wrapped in a code block. The J
 
 ```json
 {
-  "rootComponentId": "root-id",
+  "rootComponentId": "root",
   "canvasSettings": {
     "backgroundColor": "bg-background",
     "padding": "1rem"
   },
   "components": [
     {
-      "id": "unique-id",
-      "style": { "className": "tailwind classes" },
-      "component": { "type": "componentType", ...props }
+      "id": "root",
+      "style": { "className": "min-h-screen w-full bg-background text-foreground" },
+      "component": {
+        "type": "column",
+        "children": { "explicitList": ["content"] }
+      }
+    },
+    {
+      "id": "content",
+      "style": { "className": "w-full p-4" },
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Generated content" }
+      }
     }
-  ]
+  ],
+  "dataModel": []
 }
 ```
 
 ## Critical Rules
 
 1. **Output JSON only** - No explanations before or after. Just the JSON code block.
-2. **All IDs must be unique** - Use descriptive kebab-case IDs like `header-row`, `main-content`, `submit-btn`
-3. **Root component required** - `rootComponentId` must reference an existing component ID
-4. **Children reference IDs** - Parent components reference children by ID, not inline
-5. **BoundValue wrapper required** - All prop values must use the BoundValue format
+2. **Exactly one root component named root** - `rootComponentId` must be exactly `"root"`, and `components` must contain exactly one component with `"id": "root"`
+3. **Root component wraps the UI** - Put all top-level sections in the root component's `children`
+4. **All non-root IDs must be unique** - Use descriptive kebab-case IDs like `header-row`, `main-content`, `submit-btn`
+5. **Flat components only** - Every component is a sibling in `components[]`; never inline child component objects
+6. **Children reference IDs** - Parent components reference children by ID, not inline
+7. **BoundValue wrapper required** - All prop values must use the BoundValue format unless the field is structural
+8. **dataModel required for bindings** - When a prop uses a `path`, add a matching initial value to top-level `dataModel`
+
+Structural fields that are not BoundValues: `id`, `style.className`, `component.type`, `children`, `actions`, `canvasSettings`, `dataModel`, and raw objects inside options/data arrays.
 
 ## BoundValue Format
 
@@ -69,6 +86,18 @@ Use mobile-first breakpoints:
 
 Examples: `grid-cols-1 md:grid-cols-2 lg:grid-cols-3`, `p-4 md:p-6 lg:p-8`
 
+## UI Quality Checklist
+
+- Build mobile-first. Base classes must work on phones; add `sm:`, `md:`, `lg:`, `xl:`, and `2xl:` overrides for larger screens.
+- Prevent horizontal overflow with `w-full`, `max-w-*`, `min-w-0`, `overflow-hidden`, `break-words`, and responsive grid columns.
+- Prefer `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3` or `repeat(auto-fit, minmax(220px, 1fr))` for card grids.
+- Keep touch targets comfortable: buttons, inputs, and links should generally use `h-10`, `px-3`, or generous padding.
+- Use a clean hierarchy: root wrapper, page sections, rows/grids, cards or controls, then content.
+- Avoid fixed desktop-only widths. Use `max-w-* mx-auto` for centered content and `w-full` for forms, charts, images, and tables.
+- Give charts, media, maps, and 3D scenes stable dimensions with `aspectRatio`, `min-h-*`, or height props.
+- Make dashboards scannable with stat cards first, charts/tables below, clear labels, muted helper text, and consistent spacing.
+- Prefer icons for common actions when appropriate, but keep text labels for primary actions and navigation.
+
 ## Custom CSS (Advanced)
 
 For effects not achievable with Tailwind, use `canvasSettings.customCss`:
@@ -92,9 +121,11 @@ For effects not achievable with Tailwind, use `canvasSettings.customCss`:
 See the uploaded `components-reference.md` for full component documentation.
 
 **Layout:** column, row, grid, stack, scrollArea, absolute, aspectRatio, box, center, spacer
-**Display:** text, image, icon, video, markdown, badge, avatar, progress, spinner, divider, skeleton, table
-**Interactive:** button, textField, select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, link
+**Display:** text, image, icon, video, lottie, markdown, badge, avatar, userProfile, progress, spinner, divider, skeleton, table, tableRow, tableCell, plotlyChart, nivoChart, iframe, filePreview, boundingBoxOverlay, geoMap
+**Interactive:** button, feedback, appLink, textField, select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, voiceInput, link, imageLabeler, imageHotspot
 **Container:** card, modal, tabs, accordion, drawer, tooltip, popover
+**Game/Visual:** canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap
+**Special:** widgetInstance
 
 ## Example Output
 
@@ -102,65 +133,130 @@ User: "Create a login form with email, password, and submit button"
 
 ```json
 {
-  "rootComponentId": "login-card",
+  "rootComponentId": "root",
   "canvasSettings": {
     "backgroundColor": "bg-background",
     "padding": "1rem"
   },
   "components": [
     {
+      "id": "root",
+      "style": {
+        "className": "min-h-screen w-full bg-background text-foreground p-4"
+      },
+      "component": {
+        "type": "center",
+        "children": {
+          "explicitList": [
+            "login-card"
+          ]
+        }
+      }
+    },
+    {
       "id": "login-card",
-      "style": { "className": "w-full max-w-md mx-auto" },
+      "style": {
+        "className": "w-full max-w-md mx-auto"
+      },
       "component": {
         "type": "card",
-        "title": { "literalString": "Sign In" },
-        "description": { "literalString": "Enter your credentials to continue" },
-        "children": { "explicitList": ["form-column"] }
+        "title": {
+          "literalString": "Sign In"
+        },
+        "description": {
+          "literalString": "Enter your credentials to continue"
+        },
+        "children": {
+          "explicitList": [
+            "form-column"
+          ]
+        }
       }
     },
     {
       "id": "form-column",
-      "style": { "className": "" },
+      "style": {
+        "className": ""
+      },
       "component": {
         "type": "column",
-        "gap": { "literalString": "1rem" },
-        "children": { "explicitList": ["email-field", "password-field", "submit-btn"] }
+        "gap": {
+          "literalString": "1rem"
+        },
+        "children": {
+          "explicitList": [
+            "email-field",
+            "password-field",
+            "submit-btn"
+          ]
+        }
       }
     },
     {
       "id": "email-field",
-      "style": { "className": "" },
+      "style": {
+        "className": ""
+      },
       "component": {
         "type": "textField",
-        "value": { "literalString": "" },
-        "label": { "literalString": "Email" },
-        "placeholder": { "literalString": "you@example.com" },
-        "inputType": { "literalString": "email" },
-        "required": { "literalBool": true }
+        "value": {
+          "literalString": ""
+        },
+        "label": {
+          "literalString": "Email"
+        },
+        "placeholder": {
+          "literalString": "you@example.com"
+        },
+        "inputType": {
+          "literalString": "email"
+        },
+        "required": {
+          "literalBool": true
+        }
       }
     },
     {
       "id": "password-field",
-      "style": { "className": "" },
+      "style": {
+        "className": ""
+      },
       "component": {
         "type": "textField",
-        "value": { "literalString": "" },
-        "label": { "literalString": "Password" },
-        "placeholder": { "literalString": "••••••••" },
-        "inputType": { "literalString": "password" },
-        "required": { "literalBool": true }
+        "value": {
+          "literalString": ""
+        },
+        "label": {
+          "literalString": "Password"
+        },
+        "placeholder": {
+          "literalString": "••••••••"
+        },
+        "inputType": {
+          "literalString": "password"
+        },
+        "required": {
+          "literalBool": true
+        }
       }
     },
     {
       "id": "submit-btn",
-      "style": { "className": "w-full" },
+      "style": {
+        "className": "w-full"
+      },
       "component": {
         "type": "button",
-        "label": { "literalString": "Sign In" },
-        "variant": { "literalString": "default" }
+        "label": {
+          "literalString": "Sign In"
+        },
+        "variant": {
+          "literalString": "default"
+        }
       }
     }
-  ]
+  ],
+  "dataModel": []
 }
 ```
 

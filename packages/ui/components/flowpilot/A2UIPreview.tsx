@@ -275,6 +275,7 @@ function PreviewRenderer({
 					const label = String(resolveValue(btnComp.label) ?? "Button");
 					return (
 						<button
+							type="button"
 							key={id}
 							className={cn(
 								"inline-flex items-center justify-center rounded-md text-sm font-medium px-4 py-2",
@@ -293,12 +294,16 @@ function PreviewRenderer({
 						label?: string;
 					};
 					const placeholder = String(resolveValue(tfComp.placeholder) ?? "");
+					const inputId = `${id}-preview-input`;
 					return (
 						<div key={id} className={cn("flex flex-col gap-1.5", className)}>
 							{tfComp.label && (
-								<label className="text-sm font-medium">{tfComp.label}</label>
+								<label className="text-sm font-medium" htmlFor={inputId}>
+									{tfComp.label}
+								</label>
 							)}
 							<input
+								id={inputId}
 								type="text"
 								placeholder={placeholder}
 								className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -363,9 +368,46 @@ function PreviewRenderer({
 					);
 				}
 
+				case "userProfile": {
+					const userProfileComp = component as {
+						value?: { literalString?: string; path?: string } | string;
+						fallbackLabel?: { literalString?: string; path?: string };
+					};
+					const resolvedProfileValue =
+						typeof userProfileComp.value === "string"
+							? userProfileComp.value
+							: resolveValue(userProfileComp.value);
+					const label = String(
+						resolvedProfileValue ??
+							resolveValue(userProfileComp.fallbackLabel) ??
+							"User",
+					);
+					const initials = label.slice(0, 2).toUpperCase();
+					return (
+						<div
+							key={id}
+							className={cn(
+								"inline-flex min-w-0 max-w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm",
+								className,
+							)}
+						>
+							<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">
+								{initials}
+							</div>
+							<div className="min-w-0">
+								<div className="truncate font-medium">{label}</div>
+								<div className="truncate text-xs text-muted-foreground">
+									User profile
+								</div>
+							</div>
+						</div>
+					);
+				}
+
 				case "switch":
 					return (
 						<button
+							type="button"
 							key={id}
 							className={cn(
 								"relative inline-flex h-6 w-11 items-center rounded-full bg-primary",

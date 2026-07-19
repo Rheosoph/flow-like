@@ -5,26 +5,21 @@ import {
 	Button,
 	type IBoard,
 	type IVariable,
-	Input,
 	Progress,
+	RuntimeVariableEditor,
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
 	cn,
+	seedRuntimeVariable,
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
-import {
-	convertJsonToUint8Array,
-	parseUint8ArrayToJson,
-} from "@flow-like/flow-like-ui/lib/uint8";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	CheckCircle2Icon,
 	ChevronDownIcon,
 	CircleDotIcon,
-	EyeIcon,
-	EyeOffIcon,
 	KeyRoundIcon,
 	SaveIcon,
 	ShieldCheckIcon,
@@ -265,6 +260,7 @@ function BoardSection({
 							boardId={board.id}
 							variable={variable}
 							savedValue={runtimeVarsMap.get(variable.id)}
+							refs={board.refs}
 						/>
 					))}
 				</div>
@@ -273,14 +269,15 @@ function BoardSection({
 	);
 }
 
-function decodeValue(data?: number[] | null): string {
-	if (!data) return "";
-	try {
-		const decoded = parseUint8ArrayToJson(data);
-		return typeof decoded === "string" ? decoded : JSON.stringify(decoded);
-	} catch {
-		return "";
+function bytesEqual(a?: number[] | null, b?: number[] | null): boolean {
+	if (a === b) return true;
+	const aLen = a?.length ?? 0;
+	const bLen = b?.length ?? 0;
+	if (aLen !== bLen) return false;
+	for (let i = 0; i < aLen; i++) {
+		if (a?.[i] !== b?.[i]) return false;
 	}
+	return true;
 }
 
 function VariableRow({
@@ -288,160 +285,162 @@ function VariableRow({
 	boardId,
 	variable,
 	savedValue,
+	refs,
 }: Readonly<{
 	appId: string;
 	boardId: string;
 	variable: IVariable;
 	savedValue?: IRuntimeVariableValue;
+	refs?: Record<string, string>;
 }>) {
-	const [value, setValue] = useState<string>(
-		() => decodeValue(savedValue?.value) || decodeValue(variable.default_value),
+	const resolvedBytes = useMemo(
+		() => seedRuntimeVariable(variable, savedValue?.value).default_value,
+		[variable, savedValue?.value],
 	);
-	const [showPassword, setShowPassword] = useState(false);
+	const [state, setState] = useState<IVariable>(() =>
+		seedRuntimeVariable(variable, savedValue?.value),
+	);
 	const [isSaving, setIsSaving] = useState(false);
 	const [hasChanges, setHasChanges] = useState(false);
+	// Bumped to re-seed the editor when the value changes from outside (Dexie).
+	const [editorKey, setEditorKey] = useState(0);
 
-	// Sync value when savedValue changes from Dexie
+	// Reconcile with Dexie. While a local edit is pending (hasChanges), the write
+	// has not necessarily propagated through useLiveQuery yet, so we hold the
+	// local value and only clear the dirty flag once the persisted value catches
+	// up — this avoids clobbering the just-saved value with a stale prop or
+	// double-remounting the editor. With no pending edit, reseed from Dexie.
 	useEffect(() => {
-		if (!hasChanges) {
-			const decoded =
-				decodeValue(savedValue?.value) || decodeValue(variable.default_value);
-			setValue(decoded);
+		if (hasChanges) {
+			if (bytesEqual(state.default_value, resolvedBytes)) setHasChanges(false);
+			return;
 		}
-	}, [savedValue?.value, variable.default_value, hasChanges]);
+		if (bytesEqual(state.default_value, resolvedBytes)) return;
+		setState((prev) => ({ ...prev, default_value: resolvedBytes }));
+		setEditorKey((key) => key + 1);
+	}, [hasChanges, resolvedBytes, state.default_value]);
+
+	const handleUpdate = useCallback(async (next: IVariable) => {
+		setState(next);
+		setHasChanges(true);
+	}, []);
 
 	const handleSave = useCallback(async () => {
+		const bytes = state.default_value;
+		if (!bytes || bytes.length === 0) return;
 		setIsSaving(true);
 		try {
-			const encodedValue = convertJsonToUint8Array(value);
-			if (!encodedValue) return;
 			await setRuntimeVar(
 				appId,
 				boardId,
 				variable.id,
 				variable.name,
-				encodedValue,
+				bytes,
 				variable.secret,
 			);
-			setHasChanges(false);
+			// Keep hasChanges set; the reconcile effect clears it once the saved
+			// value propagates back through useLiveQuery.
 		} finally {
 			setIsSaving(false);
 		}
-	}, [appId, boardId, variable, value]);
+	}, [appId, boardId, variable, state.default_value]);
 
 	const handleDelete = useCallback(async () => {
 		await deleteRuntimeVar(appId, variable.id);
-		setValue("");
-		setHasChanges(false);
+		// Let the reconcile effect reseed to the board default once the deletion
+		// propagates, rather than eagerly mutating against a stale savedValue.
 	}, [appId, variable.id]);
-
-	const handleChange = useCallback((newValue: string) => {
-		setValue(newValue);
-		setHasChanges(true);
-	}, []);
 
 	const isSecret = variable.secret;
 	const isConfigured = !!savedValue;
+	const hasValue = !!state.default_value && state.default_value.length > 0;
 
 	return (
-		<div className="flex items-center gap-4 p-4 hover:bg-muted/30 transition-colors">
-			{/* Status Indicator */}
-			<div
-				className={cn(
-					"w-2 h-2 rounded-full shrink-0",
-					isConfigured ? "bg-emerald-500" : "bg-muted-foreground/30",
-				)}
-			/>
-
-			{/* Variable Info */}
-			<div className="flex-1 min-w-0 space-y-1">
-				<div className="flex items-center gap-2">
-					<span className="font-medium truncate">{variable.name}</span>
-					{isSecret ? (
-						<Tooltip>
-							<TooltipTrigger>
-								<Badge variant="secondary" className="gap-1 text-xs shrink-0">
-									<KeyRoundIcon className="w-3 h-3" />
-									Secret
-								</Badge>
-							</TooltipTrigger>
-							<TooltipContent>
-								This value is encrypted and never sent to remote servers
-							</TooltipContent>
-						</Tooltip>
-					) : (
-						<Badge variant="outline" className="text-xs shrink-0">
-							Runtime
-						</Badge>
-					)}
-				</div>
-				{variable.description && (
-					<p className="text-xs text-muted-foreground truncate">
-						{variable.description}
-					</p>
-				)}
-			</div>
-
-			{/* Input */}
-			<div className="flex items-center gap-2 shrink-0">
-				<div className="relative w-64">
-					<Input
-						type={isSecret && !showPassword ? "password" : "text"}
-						value={value}
-						onChange={(e) => handleChange(e.target.value)}
-						placeholder={isSecret ? "••••••••" : "Enter value..."}
+		<div className="flex flex-col gap-3 p-4 hover:bg-muted/30 transition-colors">
+			<div className="flex items-start justify-between gap-4">
+				{/* Variable Info */}
+				<div className="flex items-start gap-3 min-w-0">
+					<div
 						className={cn(
-							"h-9 pr-9 text-sm",
-							isConfigured && !hasChanges && "border-emerald-500/50",
+							"w-2 h-2 mt-1.5 rounded-full shrink-0",
+							isConfigured ? "bg-emerald-500" : "bg-muted-foreground/30",
 						)}
 					/>
-					{isSecret && (
-						<Button
-							variant="ghost"
-							size="icon"
-							className="absolute right-0 top-0 h-9 w-9 hover:bg-transparent"
-							onClick={() => setShowPassword(!showPassword)}
-						>
-							{showPassword ? (
-								<EyeOffIcon className="w-4 h-4 text-muted-foreground" />
+					<div className="min-w-0 space-y-1">
+						<div className="flex items-center gap-2">
+							<span className="font-medium truncate">{variable.name}</span>
+							{isSecret ? (
+								<Tooltip>
+									<TooltipTrigger>
+										<Badge
+											variant="secondary"
+											className="gap-1 text-xs shrink-0"
+										>
+											<KeyRoundIcon className="w-3 h-3" />
+											Secret
+										</Badge>
+									</TooltipTrigger>
+									<TooltipContent>
+										This value is encrypted and never sent to remote servers
+									</TooltipContent>
+								</Tooltip>
 							) : (
-								<EyeIcon className="w-4 h-4 text-muted-foreground" />
+								<Badge variant="outline" className="text-xs shrink-0">
+									Runtime
+								</Badge>
 							)}
-						</Button>
-					)}
+						</div>
+						{variable.description && (
+							<p className="text-xs text-muted-foreground">
+								{variable.description}
+							</p>
+						)}
+					</div>
 				</div>
 
 				{/* Actions */}
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							variant={hasChanges ? "default" : "ghost"}
-							size="icon"
-							className="h-9 w-9"
-							onClick={handleSave}
-							disabled={isSaving || !value}
-						>
-							<SaveIcon className="w-4 h-4" />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>Save</TooltipContent>
-				</Tooltip>
-
-				{isConfigured && (
+				<div className="flex items-center gap-2 shrink-0">
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button
-								variant="ghost"
+								variant={hasChanges ? "default" : "ghost"}
 								size="icon"
-								className="h-9 w-9 text-destructive hover:text-destructive hover:bg-destructive/10"
-								onClick={handleDelete}
+								className="h-9 w-9"
+								onClick={handleSave}
+								disabled={isSaving || !hasValue}
 							>
-								<Trash2Icon className="w-4 h-4" />
+								<SaveIcon className="w-4 h-4" />
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Delete</TooltipContent>
+						<TooltipContent>Save</TooltipContent>
 					</Tooltip>
-				)}
+
+					{isConfigured && (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="h-9 w-9 text-destructive hover:text-destructive hover:bg-destructive/10"
+									onClick={handleDelete}
+								>
+									<Trash2Icon className="w-4 h-4" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>Delete</TooltipContent>
+						</Tooltip>
+					)}
+				</div>
+			</div>
+
+			{/* Type-correct editor (path picker, date picker, number field, …) */}
+			<div className="pl-5">
+				<RuntimeVariableEditor
+					key={editorKey}
+					variable={state}
+					updateVariable={handleUpdate}
+					refs={refs}
+				/>
 			</div>
 		</div>
 	);

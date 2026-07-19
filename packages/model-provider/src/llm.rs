@@ -2,14 +2,16 @@ use flow_like_types::async_trait;
 use flow_like_types::{Result, Value, anyhow};
 use futures::StreamExt;
 use http::{HeaderMap, HeaderName, HeaderValue};
-use rig::client::FinalCompletionResponse;
-#[allow(deprecated)]
-pub use rig::client::completion::{CompletionClientDyn, CompletionModelHandle};
+use rig::agent::AgentBuilder;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionRequestBuilder,
-    CompletionResponse, Message, Usage as RigUsage,
+    CompletionResponse, GetTokenUsage, Message, Usage as RigUsage,
 };
-use rig::streaming::{StreamedAssistantContent, StreamingCompletionResponse, ToolCallDeltaContent};
+use rig::streaming::{
+    RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent,
+    StreamingCompletionResponse, ToolCallDeltaContent,
+};
+use rig::wasm_compat::{WasmBoxedFuture, WasmCompatSend, WasmCompatSync};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -210,6 +212,10 @@ pub trait ModelLogic: Send + Sync {
         let mut history = history.clone();
         self.transform_history(&mut history);
         history.normalize_for_alternation();
+        let should_stream = lambda.is_some() && history.stream.unwrap_or(true);
+        // The transport method, rather than an additional provider parameter, is authoritative.
+        // Keeping this in sync also prevents a non-stream request from carrying `stream: true`.
+        history.stream = Some(should_stream);
 
         let model_name = self
             .default_model()
@@ -266,18 +272,247 @@ pub trait ModelLogic: Send + Sync {
         model_additional_params = apply_usage_reporting(
             model_additional_params,
             self.usage_reporting(),
-            lambda.is_some(),
+            should_stream,
         );
 
-        if let Some(callback) = lambda {
-            invoke_with_stream(builder, callback, &model_name, model_additional_params).await
+        if should_stream {
+            invoke_with_stream(
+                builder,
+                lambda.expect("streaming requires a callback"),
+                &model_name,
+                model_additional_params,
+            )
+            .await
         } else {
-            invoke_without_stream(builder, &model_name, model_additional_params).await
+            let response =
+                invoke_without_stream(builder, &model_name, model_additional_params).await?;
+            if let Some(callback) = lambda {
+                emit_response_to_callback(&response, callback, &model_name).await?;
+            }
+            Ok(response)
         }
     }
 }
 
-#[allow(deprecated)]
+pub trait CompletionModelDyn: WasmCompatSend + WasmCompatSync {
+    fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<'_, std::result::Result<CompletionResponse<()>, CompletionError>>;
+
+    fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<
+        '_,
+        std::result::Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
+    >;
+
+    fn completion_request(
+        &self,
+        prompt: Message,
+    ) -> CompletionRequestBuilder<CompletionModelHandle<'_>>;
+}
+
+impl<T, R> CompletionModelDyn for T
+where
+    T: CompletionModel<StreamingResponse = R> + Clone + 'static,
+    R: Clone
+        + Unpin
+        + GetTokenUsage
+        + Send
+        + Sync
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + 'static,
+{
+    fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<'_, std::result::Result<CompletionResponse<()>, CompletionError>> {
+        Box::pin(async move {
+            CompletionModel::completion(self, request)
+                .await
+                .map(|resp| CompletionResponse {
+                    choice: resp.choice,
+                    usage: resp.usage,
+                    raw_response: (),
+                    message_id: resp.message_id,
+                })
+        })
+    }
+
+    fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> WasmBoxedFuture<
+        '_,
+        std::result::Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
+    > {
+        Box::pin(async move {
+            let stream = CompletionModel::stream(self, request)
+                .await?
+                .flat_map(|item| {
+                    futures::stream::iter(match item {
+                        Ok(item) => dynamic_raw_stream_items(item)
+                            .into_iter()
+                            .map(Ok)
+                            .collect::<Vec<_>>(),
+                        Err(err) => vec![Err(err)],
+                    })
+                });
+
+            Ok(StreamingCompletionResponse::stream(Box::pin(stream)))
+        })
+    }
+
+    fn completion_request(
+        &self,
+        prompt: Message,
+    ) -> CompletionRequestBuilder<CompletionModelHandle<'_>> {
+        CompletionRequestBuilder::new(CompletionModelHandle::new(Arc::new(self.clone())), prompt)
+    }
+}
+
+pub trait CompletionClientDyn {
+    fn completion_model<'a>(&self, model: &str) -> Box<dyn CompletionModelDyn + 'a>;
+    fn agent<'a>(&self, model: &str) -> AgentBuilder<CompletionModelHandle<'a>>;
+}
+
+impl<T, M, R> CompletionClientDyn for T
+where
+    T: rig::client::CompletionClient<CompletionModel = M>,
+    M: CompletionModel<StreamingResponse = R> + Clone + 'static,
+    R: Clone
+        + Unpin
+        + GetTokenUsage
+        + Send
+        + Sync
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + 'static,
+{
+    fn completion_model<'a>(&self, model: &str) -> Box<dyn CompletionModelDyn + 'a> {
+        Box::new(rig::client::CompletionClient::completion_model(self, model))
+    }
+
+    fn agent<'a>(&self, model: &str) -> AgentBuilder<CompletionModelHandle<'a>> {
+        AgentBuilder::new(CompletionModelHandle::new(Arc::new(
+            rig::client::CompletionClient::completion_model(self, model),
+        )))
+    }
+}
+
+#[derive(Clone)]
+pub struct CompletionModelHandle<'a>(Arc<dyn CompletionModelDyn + 'a>);
+
+impl<'a> CompletionModelHandle<'a> {
+    pub fn new(handle: Arc<dyn CompletionModelDyn + 'a>) -> Self {
+        Self(handle)
+    }
+}
+
+impl CompletionModel for CompletionModelHandle<'_> {
+    type Response = ();
+    type StreamingResponse = DynamicStreamingResponse;
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        panic!("Cannot create a completion model handle from a client")
+    }
+
+    fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> impl std::future::Future<
+        Output = std::result::Result<CompletionResponse<Self::Response>, CompletionError>,
+    > + WasmCompatSend {
+        self.0.completion(request)
+    }
+
+    fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> impl std::future::Future<
+        Output = std::result::Result<
+            StreamingCompletionResponse<Self::StreamingResponse>,
+            CompletionError,
+        >,
+    > + WasmCompatSend {
+        self.0.stream(request)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DynamicStreamingResponse {
+    pub usage: Option<RigUsage>,
+}
+
+impl GetTokenUsage for DynamicStreamingResponse {
+    fn token_usage(&self) -> Option<RigUsage> {
+        self.usage.clone()
+    }
+}
+
+fn dynamic_raw_stream_items<R>(
+    item: StreamedAssistantContent<R>,
+) -> Vec<RawStreamingChoice<DynamicStreamingResponse>>
+where
+    R: Clone + Unpin + GetTokenUsage,
+{
+    match item {
+        StreamedAssistantContent::Text(text) => {
+            let mut items = Vec::new();
+            if let Some(additional_params) = text.additional_params {
+                items.push(RawStreamingChoice::TextStart {
+                    additional_params: Some(additional_params),
+                });
+            }
+            items.push(RawStreamingChoice::Message(text.text));
+            items
+        }
+        StreamedAssistantContent::ToolCall {
+            tool_call,
+            internal_call_id,
+        } => vec![RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: tool_call.id,
+            internal_call_id,
+            call_id: tool_call.call_id,
+            name: tool_call.function.name,
+            arguments: tool_call.function.arguments,
+            signature: tool_call.signature,
+            additional_params: tool_call.additional_params,
+        })],
+        StreamedAssistantContent::ToolCallDelta {
+            id,
+            internal_call_id,
+            content,
+        } => vec![RawStreamingChoice::ToolCallDelta {
+            id,
+            internal_call_id,
+            content,
+        }],
+        StreamedAssistantContent::Reasoning(reasoning) => reasoning
+            .content
+            .into_iter()
+            .map(|content| RawStreamingChoice::Reasoning {
+                id: reasoning.id.clone(),
+                content,
+            })
+            .collect(),
+        StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
+            vec![RawStreamingChoice::ReasoningDelta { id, reasoning }]
+        }
+        StreamedAssistantContent::Final(response) => {
+            vec![RawStreamingChoice::FinalResponse(
+                DynamicStreamingResponse {
+                    usage: response.token_usage(),
+                },
+            )]
+        }
+    }
+}
+
 pub struct ModelConstructor {
     pub inner: Box<dyn CompletionClientDyn + Send + Sync>,
 }
@@ -334,7 +569,7 @@ pub struct DynamicResponse;
 #[allow(deprecated)]
 impl CompletionModel for DynamicCompletionModel {
     type Response = DynamicResponse;
-    type StreamingResponse = FinalCompletionResponse;
+    type StreamingResponse = DynamicStreamingResponse;
     type Client = ();
 
     fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
@@ -398,6 +633,40 @@ async fn invoke_without_stream<'a>(
     response.model = Some(model_name.to_string());
     response.usage = ResponseUsage::from_rig(completion.usage);
     Ok(response)
+}
+
+/// Replays a structured non-stream response through the callback interface. Rig's stream API has
+/// no media event, so this is also how callers that explicitly disable streaming can still observe
+/// a generated image before the finish chunk.
+pub(crate) async fn emit_response_to_callback(
+    response: &Response,
+    callback: LLMCallback,
+    model_name: &str,
+) -> Result<()> {
+    if let Message::Assistant { content, .. } = response.to_rig_message()? {
+        for item in content.iter() {
+            let chunk = match item {
+                rig::message::AssistantContent::Text(text) => {
+                    ResponseChunk::from_text(&text.text, model_name)
+                }
+                rig::message::AssistantContent::ToolCall(tool_call) => {
+                    ResponseChunk::from_tool_call(tool_call, model_name)
+                }
+                rig::message::AssistantContent::Reasoning(reasoning) => {
+                    ResponseChunk::from_reasoning(&reasoning.display_text(), model_name)
+                }
+                rig::message::AssistantContent::Image(image) => ResponseChunk::from_content_part(
+                    super::history::Content::from_rig_image(image.clone()),
+                    model_name,
+                ),
+            };
+            callback(chunk).await?;
+        }
+    }
+
+    let mut finish = ResponseChunk::finish(model_name, None);
+    finish.usage = Some(response.usage.clone());
+    callback(finish).await
 }
 
 #[allow(deprecated)]

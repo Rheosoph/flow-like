@@ -1,12 +1,13 @@
 "use client";
 import { useStore } from "@xyflow/react";
 import { ArrowRight } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useMemo, useSyncExternalStore } from "react";
 import {
 	type PeerUserInfo,
 	colorFromSub,
 	truncateName,
 } from "../../hooks/use-peer-users";
+import type { CursorStore } from "../../hooks/use-realtime-collaboration";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 
 interface CursorPeer {
@@ -248,16 +249,16 @@ const RemoteCursor = memo(function RemoteCursor({
 }) {
 	return (
 		<div
-			className="absolute transition-transform duration-75 ease-out"
-			style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }}
+			className="absolute transition-transform duration-75 ease-out will-change-transform"
+			style={{ transform: `translate3d(${cursor.x}px, ${cursor.y}px, 0)` }}
 		>
 			<div className="flex items-start gap-0.5 select-none">
 				<CursorPointer color={cursor.color} />
 				<div
-					className="flex items-center gap-2 rounded-full border-2 bg-background/90 pl-1 pr-2.5 py-1 shadow-xl backdrop-blur-md ring-1 ring-white/20 transition-all duration-150"
+					className="flex items-center gap-2 rounded-full border-2 bg-background pl-1 pr-2.5 py-1 ring-1 ring-border"
 					style={{
 						borderColor: cursor.color,
-						boxShadow: `0 4px 20px -4px ${cursor.color}40, 0 8px 16px -8px rgba(0,0,0,0.3)`,
+						boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
 					}}
 				>
 					<Avatar
@@ -293,6 +294,37 @@ const RemoteCursor = memo(function RemoteCursor({
 	);
 });
 
+/**
+ * Subscribes to the high-frequency cursor store via useSyncExternalStore so that
+ * remote cursor motion re-renders only this overlay — never the parent FlowBoard.
+ */
+export function FlowCursorsLayer({
+	store,
+	currentLayerPath,
+	peerUsers,
+	className,
+}: {
+	store: CursorStore;
+	currentLayerPath: string;
+	peerUsers: Map<string, PeerUserInfo>;
+	className?: string;
+}) {
+	const peers = useSyncExternalStore(
+		store.subscribe,
+		store.getSnapshot,
+		store.getSnapshot,
+	);
+	if (peers.length === 0) return null;
+	return (
+		<FlowCursors
+			peers={peers}
+			currentLayerPath={currentLayerPath}
+			peerUsers={peerUsers}
+			className={className}
+		/>
+	);
+}
+
 const CursorPointer = memo(function CursorPointer({
 	color,
 }: { color: string }) {
@@ -303,8 +335,6 @@ const CursorPointer = memo(function CursorPointer({
 			viewBox="0 0 24 24"
 			fill="none"
 			xmlns="http://www.w3.org/2000/svg"
-			className="drop-shadow-lg"
-			style={{ filter: `drop-shadow(0 2px 4px ${color}50)` }}
 		>
 			<path
 				d="M4 3L19 12L11 13.5L7 21L4 3Z"

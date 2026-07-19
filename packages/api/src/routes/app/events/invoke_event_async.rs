@@ -55,6 +55,10 @@ pub struct InvokeEventAsyncRequest {
         Option<std::collections::HashMap<String, flow_like::flow::variable::Variable>>,
     /// Optional profile ID to select a specific user profile for execution
     pub profile_id: Option<String>,
+    /// Business/object correlation keys tagging the process case this run
+    /// belongs to (e.g. `{"order_id": "1234"}`).
+    #[serde(default)]
+    pub correlation: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Response from async event invocation
@@ -112,11 +116,28 @@ pub async fn invoke_event_async(
     Json(params): Json<InvokeEventAsyncRequest>,
 ) -> Result<Json<InvokeEventAsyncResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let sub = permission.effective_user_id()?;
+    let sub = permission.effective_user_id().map_err(|_| {
+        crate::error::ApiError::forbidden(
+            "Invoking requires a caller that is linked to a user account",
+        )
+    })?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
+    let caller_app_chain = match &user {
+        AppUser::ConnectedApp(connected) => Some(connected.app_chain.clone()),
+        _ => None,
+    };
+    let parent_run_id = match &user {
+        AppUser::ConnectedApp(connected) => connected.run_id.clone(),
+        _ => None,
+    };
+    let inherited_correlation = match &user {
+        AppUser::ConnectedApp(connected) => connected.correlation.clone(),
+        _ => None,
+    };
 
     // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
+    super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
     let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
@@ -160,6 +181,31 @@ pub async fn invoke_event_async(
         None
     };
 
+    // Resolve this run's correlation (inherit trace root & keys, else self).
+    let mut correlation = inherited_correlation.unwrap_or_default();
+    if correlation.trace_id.is_none() {
+        correlation.trace_id = parent_run_id.clone().or_else(|| Some(run_id.clone()));
+    }
+    // Auto-extract business keys via the event's correlation mappings, then
+    // let explicitly passed keys win on conflict.
+    if let (Some(mappings), Some(payload)) = (
+        event
+            .correlation_mappings
+            .as_ref()
+            .filter(|mappings| !mappings.is_empty()),
+        params.payload.as_ref(),
+    ) {
+        let extracted = crate::correlation::extract_mapped_keys(payload, mappings);
+        if !extracted.is_empty() {
+            correlation = correlation.with_keys(&extracted);
+        }
+    }
+    if let Some(keys) = params.correlation.as_ref().filter(|keys| !keys.is_empty()) {
+        crate::correlation::validate_business_keys(keys).map_err(ApiError::bad_request)?;
+        correlation = correlation.with_keys(keys);
+    }
+    let correlation_keys = correlation.keys_json();
+
     // Async always uses queue mode
     let run = execution_run::ActiveModel {
         id: Set(run_id.clone()),
@@ -181,6 +227,10 @@ pub async fn invoke_event_async(
         expires_at: Set(Some(expires_at)),
         user_id: Set(Some(sub.clone())),
         technical_user_id: Set(technical_user_id.clone()),
+        caller_app_chain: Set(caller_app_chain.clone()),
+        trace_id: Set(correlation.trace_id.clone()),
+        parent_run_id: Set(parent_run_id.clone()),
+        correlation_keys: Set(correlation_keys.clone()),
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(chrono::Utc::now().naive_utc()),
@@ -211,6 +261,8 @@ pub async fn invoke_event_async(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
+        app_chain: caller_app_chain.clone(),
+        correlation: None,
         callback_url: String::new(),
         token_type: TokenType::User,
         ttl_seconds: Some(60 * 60),
@@ -239,6 +291,8 @@ pub async fn invoke_event_async(
         app_id: app_id.clone(),
         board_id: board_id.clone(),
         event_id: Some(event_id.clone()),
+        app_chain: caller_app_chain.clone(),
+        correlation: correlation.clone().into_option(),
         callback_url: callback_url.clone(),
         token_type: TokenType::Executor,
         ttl_seconds: Some(24 * 60 * 60),

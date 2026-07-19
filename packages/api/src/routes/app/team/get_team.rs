@@ -1,5 +1,5 @@
 use crate::{
-    ensure_permission, entity::membership, error::ApiError, middleware::jwt::AppUser,
+    entity::membership, error::ApiError, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, routes::LanguageParams, state::AppState,
 };
 use axum::{
@@ -36,7 +36,13 @@ pub async fn get_team(
     Path(app_id): Path<String>,
     Query(params): Query<LanguageParams>,
 ) -> Result<Json<Vec<membership::Model>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadTeam);
+    let permission = user.execution_app_permission(&app_id, &state).await?;
+    if !permission.has_permission(RolePermissions::ReadTeam) {
+        if let Ok(user_id) = permission.sub() {
+            state.invalidate_permission(&user_id, &app_id);
+        }
+        return Err(ApiError::FORBIDDEN);
+    }
 
     let members = membership::Entity::find()
         .order_by_asc(membership::Column::CreatedAt)

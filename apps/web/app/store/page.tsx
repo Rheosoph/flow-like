@@ -12,7 +12,7 @@ import {
 	useStoreData,
 } from "@flow-like/flow-like-ui";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { EVENT_CONFIG } from "../../lib/event-config";
 
@@ -40,16 +40,31 @@ export default function Page() {
 		onBuy,
 		onJoinOrRequest,
 		refetchAppData,
+		registerAppInProfile,
 	} = useStoreData(id, router, EVENT_CONFIG);
+	const handledPurchaseRef = useRef<string | null>(null);
 
 	useEffect(() => {
-		if (!purchaseStatus) return;
+		if (id) return;
+		const sort = searchParams.get("sort");
+		router.replace(`/store/explore/apps${sort ? `?sort=${sort}` : ""}`);
+	}, [id, searchParams, router]);
+
+	useEffect(() => {
+		if (!purchaseStatus) {
+			handledPurchaseRef.current = null;
+			return;
+		}
+		if (handledPurchaseRef.current === purchaseStatus) return;
+		handledPurchaseRef.current = purchaseStatus;
 
 		if (purchaseStatus === "success") {
 			toast.success("Purchase successful! You now have access to this app.", {
 				duration: 5000,
 			});
-			refetchAppData();
+			void registerAppInProfile().finally(() => {
+				void refetchAppData();
+			});
 		} else if (purchaseStatus === "canceled") {
 			toast.info("Purchase was canceled. You can try again anytime.");
 		}
@@ -57,18 +72,9 @@ export default function Page() {
 		const url = new URL(window.location.href);
 		url.searchParams.delete("purchase");
 		router.replace(url.pathname + url.search, { scroll: false });
-	}, [purchaseStatus, refetchAppData, router]);
+	}, [purchaseStatus, refetchAppData, registerAppInProfile, router]);
 
-	if (!id) {
-		return (
-			<div className="flex-1 flex items-center justify-center p-6">
-				<StoreEmptyState
-					title="No app selected"
-					description="Choose an app from the store to view its details."
-				/>
-			</div>
-		);
-	}
+	if (!id) return null;
 
 	if (isLoading) {
 		return (
@@ -98,7 +104,10 @@ export default function Page() {
 	}
 
 	return (
-		<main className="flex-col flex grow max-h-full overflow-auto min-h-0 w-full">
+		<main
+			key={id}
+			className="flex-col flex grow max-h-full overflow-auto min-h-0 w-full"
+		>
 			<StoreHero
 				appId={id}
 				hasThumbnail={hasThumbnail}
@@ -142,7 +151,7 @@ export default function Page() {
 
 				<AppReviewsSection appId={id} onReviewChanged={refetchAppData} />
 
-				<StoreRecommendations />
+				<StoreRecommendations excludeAppId={id} />
 			</div>
 		</main>
 	);

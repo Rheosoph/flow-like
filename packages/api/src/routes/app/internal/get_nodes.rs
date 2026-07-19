@@ -1,6 +1,12 @@
 use crate::{
-    ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, routes::app::wasm_catalog::app_wasm_nodes,
+    ensure_permission,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::{
+        db::{ScopeParams, resolve_connection},
+        wasm_catalog::app_wasm_nodes,
+    },
     state::AppState,
 };
 use axum::{
@@ -49,9 +55,71 @@ pub async fn get_app_nodes(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<Vec<Node>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
 
     let mut nodes = state.registry.as_ref().get_nodes();
+    if permission.has_permission(RolePermissions::ReadDatabase)
+        || permission.has_permission(RolePermissions::ReadFiles)
+    {
+        match resolve_connection(&state, &user, &app_id, &ScopeParams { scope: None }).await {
+            Ok(connection) => {
+                let (ontologies, imports) = flow_like_types::tokio::join!(
+                    flow_like_storage::databases::graph::lancegraph::list_overlays(&connection),
+                    flow_like_storage::databases::graph::lancegraph::list_ontology_imports(
+                        &connection
+                    )
+                );
+                match ontologies {
+                    Ok(ontologies) => {
+                        let ontologies = ontologies
+                            .into_iter()
+                            .map(crate::routes::app::graph::list_overlays::def_to_overlay)
+                            .collect::<Vec<_>>();
+                        let bindings =
+                            flow_like_catalog_core::ontology_binding_nodes(&ontologies, &nodes);
+                        nodes.extend(bindings);
+                    }
+                    Err(error) => tracing::warn!(
+                        app_id,
+                        %error,
+                        "Could not load Data Studio bindings; returning the base catalog"
+                    ),
+                }
+                match imports {
+                    Ok(imports) => {
+                        let imports = imports
+                            .into_iter()
+                            .map(crate::routes::app::graph::list_imports::def_to_import)
+                            .collect::<Result<Vec<_>, _>>();
+                        match imports {
+                            Ok(imports) => {
+                                let bindings =
+                                    flow_like_catalog_core::remote_ontology_binding_nodes(
+                                        &imports, &nodes,
+                                    );
+                                nodes.extend(bindings);
+                            }
+                            Err(error) => tracing::warn!(
+                                app_id,
+                                %error,
+                                "Could not decode remote Data Studio bindings"
+                            ),
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        app_id,
+                        %error,
+                        "Could not load remote Data Studio bindings"
+                    ),
+                }
+            }
+            Err(error) => tracing::warn!(
+                app_id,
+                %error,
+                "Could not open the project database for Data Studio bindings"
+            ),
+        }
+    }
     nodes.extend(app_wasm_nodes(&state, &app_id).await?);
 
     Ok(Json(nodes))

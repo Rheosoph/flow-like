@@ -5,6 +5,7 @@
 use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::WasmCapabilities;
+use crate::llm_message::sdk_message_content;
 use crate::memory::WasmAllocator;
 use flow_like_storage::object_store::path::Path;
 use std::sync::Arc;
@@ -971,11 +972,7 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         &write_id,
                         &data,
                     );
-                    if ok {
-                        0
-                    } else {
-                        -1
-                    }
+                    if ok { 0 } else { -1 }
                 })
             },
         )
@@ -1421,7 +1418,7 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
                         Err(_) => return 0,
                     };
 
-                    let _texts: Vec<String> = match serde_json::from_str(&texts_json) {
+                    let texts: Vec<String> = match serde_json::from_str(&texts_json) {
                         Ok(t) => t,
                         Err(_) => return 0,
                     };
@@ -1432,14 +1429,33 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
                     };
 
                     let app_state = model_ctx.app_state.clone();
-                    {
-                        let _ = app_state;
-                        let _ = bit;
-                        return 0u64;
-                    };
+                    let access_token = model_ctx.token.clone();
+                    let usage_context = caller.data().host_state.model_usage_context.clone();
 
                     #[cfg(feature = "model")]
                     {
+                        let mut factory = app_state.embedding_factory.lock().await;
+                        let embedding_provider = bit.try_to_embedding();
+                        let use_proxy = access_token.is_some()
+                            && embedding_provider
+                                .as_ref()
+                                .is_some_and(|provider| provider.supports_remote());
+                        let model_result = if use_proxy {
+                            factory
+                                .build_text_proxy(
+                                    &bit,
+                                    access_token.expect("proxy mode requires an access token"),
+                                    usage_context,
+                                )
+                                .await
+                        } else {
+                            factory.build_text(&bit, app_state.clone()).await
+                        };
+                        let model = match model_result {
+                            Ok(model) => model,
+                            Err(_) => return 0,
+                        };
+
                         match model.text_embed_query(&texts).await {
                             Ok(embeddings) => match serde_json::to_vec(&embeddings) {
                                 Ok(json) => {
@@ -1450,6 +1466,11 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
                             },
                             Err(_) => 0,
                         }
+                    }
+                    #[cfg(not(feature = "model"))]
+                    {
+                        let _ = (app_state, access_token, usage_context, bit, texts);
+                        0u64
                     }
                 })
             },
@@ -1647,8 +1668,51 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     {
                         return 0u64;
                     }
-                    let _ = (model_ptr, model_len, texts_ptr, texts_len);
-                    0u64
+                    let model_json = match read_string_from_caller(&caller, model_ptr, model_len) {
+                        Ok(model) => model,
+                        Err(_) => return 0,
+                    };
+                    let texts_json = match read_string_from_caller(&caller, texts_ptr, texts_len) {
+                        Ok(texts) => texts,
+                        Err(_) => return 0,
+                    };
+
+                    #[cfg(feature = "model")]
+                    {
+                        let model_ctx = match caller.data().host_state.model_context.clone() {
+                            Some(context) => context,
+                            None => return 0,
+                        };
+                        let texts: Vec<String> = match serde_json::from_str(&texts_json) {
+                            Ok(texts) => texts,
+                            Err(_) => return 0,
+                        };
+                        let model =
+                            match crate::host_functions::resolve_cached_text_embedding_model(
+                                &model_ctx,
+                                &model_json,
+                            )
+                            .await
+                            {
+                                Some(model) => model,
+                                None => return 0,
+                            };
+                        match model.text_embed_query(&texts).await {
+                            Ok(embeddings) => match serde_json::to_vec(&embeddings) {
+                                Ok(json) => {
+                                    let (ptr, len) = caller.data().host_state.store_result(&json);
+                                    pack_ptr_len(ptr, len)
+                                }
+                                Err(_) => 0,
+                            },
+                            Err(_) => 0,
+                        }
+                    }
+                    #[cfg(not(feature = "model"))]
+                    {
+                        let _ = (model_json, texts_json);
+                        0u64
+                    }
                 })
             },
         )
@@ -1671,8 +1735,51 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     {
                         return 0u64;
                     }
-                    let _ = (model_ptr, model_len, texts_ptr, texts_len);
-                    0u64
+                    let model_json = match read_string_from_caller(&caller, model_ptr, model_len) {
+                        Ok(model) => model,
+                        Err(_) => return 0,
+                    };
+                    let texts_json = match read_string_from_caller(&caller, texts_ptr, texts_len) {
+                        Ok(texts) => texts,
+                        Err(_) => return 0,
+                    };
+
+                    #[cfg(feature = "model")]
+                    {
+                        let model_ctx = match caller.data().host_state.model_context.clone() {
+                            Some(context) => context,
+                            None => return 0,
+                        };
+                        let texts: Vec<String> = match serde_json::from_str(&texts_json) {
+                            Ok(texts) => texts,
+                            Err(_) => return 0,
+                        };
+                        let model =
+                            match crate::host_functions::resolve_cached_text_embedding_model(
+                                &model_ctx,
+                                &model_json,
+                            )
+                            .await
+                            {
+                                Some(model) => model,
+                                None => return 0,
+                            };
+                        match model.text_embed_document(&texts).await {
+                            Ok(embeddings) => match serde_json::to_vec(&embeddings) {
+                                Ok(json) => {
+                                    let (ptr, len) = caller.data().host_state.store_result(&json);
+                                    pack_ptr_len(ptr, len)
+                                }
+                                Err(_) => 0,
+                            },
+                            Err(_) => 0,
+                        }
+                    }
+                    #[cfg(not(feature = "model"))]
+                    {
+                        let _ = (model_json, texts_json);
+                        0u64
+                    }
                 })
             },
         )
@@ -1768,6 +1875,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     };
                     let app_state = model_ctx.app_state.clone();
                     let access_token = model_ctx.token.clone();
+                    let usage_context = caller.data().host_state.model_usage_context.clone();
 
                     // Parse messages_json: either {messages, tools, ...params} or a plain array
                     #[derive(serde::Deserialize)]
@@ -1835,55 +1943,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             _ => flow_like_model_provider::history::Role::User,
                         };
 
-                        let content =
-                            if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                                flow_like_model_provider::history::MessageContent::String(
-                                    c.to_string(),
-                                )
-                            } else if let Some(parts) =
-                                msg.get("parts").and_then(|v| v.as_array())
-                            {
-                                let mut contents = Vec::new();
-                                for part in parts {
-                                    if let Some(text) =
-                                        part.get("text").and_then(|t| t.as_str())
-                                    {
-                                        contents.push(
-                                            flow_like_model_provider::history::Content::Text {
-                                                content_type:
-                                                    flow_like_model_provider::history::ContentType::Text,
-                                                text: text.to_string(),
-                                            },
-                                        );
-                                    } else if let Some(reasoning) = part
-                                        .get("reasoning")
-                                        .and_then(|reasoning| reasoning.get("text"))
-                                        .and_then(|text| text.as_array())
-                                    {
-                                        let text = reasoning
-                                            .iter()
-                                            .filter_map(|entry| entry.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join("\n");
-                                        if !text.is_empty() {
-                                            contents.push(
-                                                flow_like_model_provider::history::Content::Text {
-                                                    content_type:
-                                                        flow_like_model_provider::history::ContentType::Text,
-                                                    text,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                flow_like_model_provider::history::MessageContent::Contents(
-                                    contents,
-                                )
-                            } else {
-                                flow_like_model_provider::history::MessageContent::String(
-                                    String::new(),
-                                )
-                            };
+                        let content = sdk_message_content(msg);
 
                         let tool_calls = msg
                             .get("tool_calls")
@@ -2005,7 +2065,12 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
                         match factory
-                            .build(&bit, app_state.clone(), access_token.clone(), None)
+                            .build(
+                                &bit,
+                                app_state.clone(),
+                                access_token.clone(),
+                                usage_context,
+                            )
                             .await
                         {
                             Ok(m) => m,
@@ -2172,6 +2237,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     };
                     let app_state = model_ctx.app_state.clone();
                     let access_token = model_ctx.token.clone();
+                    let usage_context = caller.data().host_state.model_usage_context.clone();
 
                     #[derive(serde::Deserialize)]
                     struct StreamRequest {
@@ -2209,37 +2275,7 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                             "tool" => flow_like_model_provider::history::Role::Tool,
                             _ => flow_like_model_provider::history::Role::User,
                         };
-                        let content = if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                            flow_like_model_provider::history::MessageContent::String(c.to_string())
-                        } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
-                            let contents = parts.iter().filter_map(|part| {
-                                part
-                                    .get("text")
-                                    .and_then(|t| t.as_str())
-                                    .map(|text| text.to_string())
-                                    .or_else(|| {
-                                        part
-                                            .get("reasoning")
-                                            .and_then(|reasoning| reasoning.get("text"))
-                                            .and_then(|text| text.as_array())
-                                            .map(|entries| {
-                                                entries
-                                                    .iter()
-                                                    .filter_map(|entry| entry.as_str())
-                                                    .collect::<Vec<_>>()
-                                                    .join("\n")
-                                            })
-                                    })
-                                    .filter(|text| !text.is_empty())
-                                    .map(|text| flow_like_model_provider::history::Content::Text {
-                                        content_type: flow_like_model_provider::history::ContentType::Text,
-                                        text,
-                                    })
-                            }).collect();
-                            flow_like_model_provider::history::MessageContent::Contents(contents)
-                        } else {
-                            flow_like_model_provider::history::MessageContent::String(String::new())
-                        };
+                        let content = sdk_message_content(msg);
                         let tool_calls = msg.get("tool_calls").and_then(|v| v.as_array()).map(|tcs| {
                             tcs.iter().filter_map(|tc| {
                                 let id = tc.get("id")?.as_str()?.to_string();
@@ -2295,7 +2331,12 @@ fn register_additional_model_functions(linker: &mut Linker<StoreData>) -> WasmRe
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
                         match factory
-                            .build(&bit, app_state.clone(), access_token.clone(), None)
+                            .build(
+                                &bit,
+                                app_state.clone(),
+                                access_token.clone(),
+                                usage_context,
+                            )
                             .await
                         {
                             Ok(m) => m,

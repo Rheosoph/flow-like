@@ -43,6 +43,8 @@ pub async fn version_board(
 ) -> Result<Json<(u32, u32, u32)>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
+    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
+    let _mutation_guard = mutation_lock.lock().await;
 
     let mut board = state
         .master_board(&sub, &app_id, &board_id, &state, None)

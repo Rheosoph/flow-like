@@ -4,6 +4,8 @@
  * used to validate and sanitize AI-generated components.
  */
 
+import { SEMANTIC_BOX_TAGS } from "../a2ui/semantic-box-tags";
+
 export type PropType =
 	| "string"
 	| "number"
@@ -106,16 +108,7 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		type: { type: "string", required: true },
 		as: {
 			type: "boundValue",
-			enum: [
-				"div",
-				"section",
-				"article",
-				"main",
-				"aside",
-				"header",
-				"footer",
-				"nav",
-			],
+			enum: [...SEMANTIC_BOX_TAGS],
 		},
 		children: { type: "children", required: false },
 	},
@@ -211,6 +204,29 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		src: { type: "boundValue" },
 		fallback: { type: "boundValue" },
 		size: { type: "boundValue", enum: ["xs", "sm", "md", "lg", "xl"] },
+	},
+	userProfile: {
+		type: { type: "string", required: true },
+		value: {
+			type: "boundValue",
+			required: true,
+			description: "User subject/sub ID",
+		},
+		variant: {
+			type: "boundValue",
+			enum: ["avatar", "chip", "row", "detailed", "card"],
+		},
+		avatarSize: {
+			type: "boundValue",
+			enum: ["xs", "sm", "md", "lg", "xl", "2xl"],
+		},
+		showHover: { type: "boundValue" },
+		showEmail: { type: "boundValue" },
+		showDescription: { type: "boundValue" },
+		showUserId: { type: "boundValue" },
+		showProfileLink: { type: "boundValue" },
+		fallbackLabel: { type: "boundValue" },
+		muted: { type: "boundValue" },
 	},
 	progress: {
 		type: { type: "string", required: true },
@@ -325,13 +341,72 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		height: { type: "boundValue" },
 		showDownload: { type: "boundValue" },
 		loading: { type: "boundValue", enum: ["lazy", "eager"] },
+		variant: {
+			type: "boundValue",
+			enum: [
+				"conservative",
+				"waveform",
+				"orb",
+				"vortex",
+				"shader",
+				"aurora",
+				"pulse",
+			],
+		},
+		autoPlay: { type: "boundValue" },
+	},
+	diffView: {
+		type: { type: "string", required: true },
+		original: { type: "boundValue", required: true },
+		modified: { type: "boundValue", required: true },
+		mode: { type: "boundValue", enum: ["split", "unified", "inline"] },
+		kind: {
+			type: "boundValue",
+			enum: ["auto", "text", "code", "markdown", "json", "document"],
+		},
+		language: {
+			type: "boundValue",
+			enum: [
+				"plaintext",
+				"typescript",
+				"javascript",
+				"json",
+				"python",
+				"rust",
+				"markdown",
+				"html",
+				"css",
+				"bash",
+				"yaml",
+				"sql",
+			],
+		},
+		markdownMode: { type: "boundValue", enum: ["source", "rendered"] },
+		showLineNumbers: { type: "boundValue" },
+		wordWrap: { type: "boundValue" },
+		wordLevel: { type: "boundValue" },
+		collapseUnchanged: { type: "boundValue" },
+		contextLines: { type: "boundValue" },
+		showStats: { type: "boundValue" },
+		originalLabel: { type: "boundValue" },
+		modifiedLabel: { type: "boundValue" },
+		ignoreWhitespace: { type: "boundValue" },
+		ignoreCase: { type: "boundValue" },
+		trimTrailingWhitespace: { type: "boundValue" },
+		swapSides: { type: "boundValue" },
 	},
 	boundingBoxOverlay: {
 		type: { type: "string", required: true },
 		src: { type: "boundValue", required: true },
+		alt: { type: "boundValue" },
 		boxes: { type: "boundValue" },
-		editable: { type: "boundValue" },
 		showLabels: { type: "boundValue" },
+		showConfidence: { type: "boundValue" },
+		strokeWidth: { type: "boundValue" },
+		fontSize: { type: "boundValue" },
+		fit: { type: "boundValue", enum: ["contain", "cover", "fill"] },
+		normalized: { type: "boundValue" },
+		interactive: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
 
@@ -493,6 +568,27 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		value: { type: "boundValue" },
 		label: { type: "boundValue" },
 		helperText: { type: "boundValue" },
+		mode: { type: "boundValue", enum: ["record", "stt"] },
+		invoke: { type: "boundValue", enum: ["manual", "hold", "auto"] },
+		variant: {
+			type: "boundValue",
+			enum: [
+				"conservative",
+				"waveform",
+				"orb",
+				"vortex",
+				"shader",
+				"aurora",
+				"pulse",
+			],
+		},
+		size: { type: "boundValue", enum: ["sm", "md", "lg"] },
+		color: { type: "boundValue" },
+		recordingColor: { type: "boundValue" },
+		resultMode: {
+			type: "boundValue",
+			enum: ["player", "autoplay", "summary"],
+		},
 		maxDuration: { type: "boundValue" },
 		autoStop: { type: "boundValue" },
 		silenceThreshold: { type: "boundValue" },
@@ -790,6 +886,64 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		clusterMaxZoom: { type: "boundValue" },
 		actions: { type: "actions" },
 	},
+	calendar: {
+		type: { type: "string", required: true },
+		events: { type: "boundValue", required: true },
+		view: {
+			type: "boundValue",
+			enum: ["month", "week", "day", "agenda"],
+		},
+		date: { type: "boundValue" },
+		title: { type: "boundValue" },
+		density: {
+			type: "boundValue",
+			enum: ["compact", "default", "comfortable"],
+		},
+		editable: { type: "boundValue" },
+		selectable: { type: "boundValue" },
+		firstDayOfWeek: { type: "boundValue" },
+		minTime: { type: "boundValue" },
+		maxTime: { type: "boundValue" },
+		slotDuration: { type: "boundValue" },
+		showWeekends: { type: "boundValue" },
+		showNowIndicator: { type: "boundValue" },
+		showAllDay: { type: "boundValue" },
+		showViewSwitcher: { type: "boundValue" },
+		locale: { type: "boundValue" },
+		height: { type: "boundValue" },
+		responsive: { type: "boundValue" },
+		compactBreakpoint: { type: "boundValue" },
+		actions: { type: "actions" },
+	},
+	gantt: {
+		type: { type: "string", required: true },
+		tasks: { type: "boundValue", required: true },
+		view: {
+			type: "boundValue",
+			enum: ["day", "week", "month", "quarter", "compact"],
+		},
+		title: { type: "boundValue" },
+		density: {
+			type: "boundValue",
+			enum: ["compact", "default", "comfortable"],
+		},
+		editable: { type: "boundValue" },
+		draggable: { type: "boundValue" },
+		resizable: { type: "boundValue" },
+		showDependencies: { type: "boundValue" },
+		showProgress: { type: "boundValue" },
+		showToday: { type: "boundValue" },
+		showViewSwitcher: { type: "boundValue" },
+		showTaskList: { type: "boundValue" },
+		taskListWidth: { type: "boundValue" },
+		shadeWeekends: { type: "boundValue" },
+		rowHeight: { type: "boundValue" },
+		columns: { type: "boundValue" },
+		height: { type: "boundValue" },
+		responsive: { type: "boundValue" },
+		compactBreakpoint: { type: "boundValue" },
+		actions: { type: "actions" },
+	},
 };
 
 /**
@@ -834,5 +988,7 @@ export function getValidProperties(type: string): string[] {
  */
 export function isValidProperty(type: string, propName: string): boolean {
 	const schema = COMPONENT_SCHEMAS[type];
-	return schema ? propName in schema || propName in COMMON_COMPONENT_SCHEMA : false;
+	return schema
+		? propName in schema || propName in COMMON_COMPONENT_SCHEMA
+		: false;
 }

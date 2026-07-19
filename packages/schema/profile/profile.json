@@ -1,120 +1,209 @@
 {
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "Profile",
-	"type": "object",
-	"required": ["bits", "created", "name", "updated"],
-	"properties": {
-		"id": {
-			"default": "pth324nzyianeq2tecovpz6d",
-			"type": "string"
-		},
-		"name": {
-			"type": "string"
-		},
-		"description": {
-			"type": ["string", "null"]
-		},
-		"icon": {
-			"default": null,
-			"type": ["string", "null"]
-		},
-		"thumbnail": {
-			"type": ["string", "null"]
-		},
-		"interests": {
-			"default": [],
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"tags": {
-			"default": [],
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"hub": {
-			"default": "",
-			"type": "string"
-		},
-		"hubs": {
-			"default": [],
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"apps": {
-			"default": null,
-			"type": ["array", "null"],
-			"items": {
-				"$ref": "#/definitions/ProfileApp"
-			}
-		},
-		"theme": {
-			"default": null
-		},
-		"bits": {
-			"type": "array",
-			"items": {
-				"type": "string"
-			}
-		},
-		"settings": {
-			"default": {
-				"connection_mode": "simplebezier"
-			},
-			"allOf": [
-				{
-					"$ref": "#/definitions/Settings"
-				}
-			]
-		},
-		"updated": {
-			"type": "string"
-		},
-		"created": {
-			"type": "string"
-		}
-	},
-	"definitions": {
-		"ProfileApp": {
-			"type": "object",
-			"required": ["app_id", "favorite", "pinned"],
-			"properties": {
-				"app_id": {
-					"type": "string"
-				},
-				"favorite": {
-					"type": "boolean"
-				},
-				"favorite_order": {
-					"type": ["integer", "null"],
-					"format": "int32"
-				},
-				"pinned": {
-					"type": "boolean"
-				},
-				"pinned_order": {
-					"type": ["integer", "null"],
-					"format": "int32"
-				}
-			}
-		},
-		"Settings": {
-			"type": "object",
-			"required": ["connection_mode"],
-			"properties": {
-				"connection_mode": {
-					"$ref": "#/definitions/ConnectionMode"
-				}
-			}
-		},
-		"ConnectionMode": {
-			"type": "string",
-			"enum": ["default", "straight", "step", "smoothstep", "simplebezier"]
-		}
-	}
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Profile",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "default": "e4mg7l699tcqpnochgpav2ba"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "icon": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "thumbnail": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "interests": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "hub": {
+      "type": "string",
+      "default": ""
+    },
+    "secure": {
+      "type": "boolean",
+      "default": true
+    },
+    "hubs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "apps": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/ProfileApp"
+      },
+      "default": null
+    },
+    "shortcuts": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/ProfileShortcut"
+      },
+      "default": null
+    },
+    "theme": {
+      "default": null
+    },
+    "bits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "settings": {
+      "$ref": "#/$defs/Settings",
+      "default": {
+        "connection_mode": "simplebezier"
+      }
+    },
+    "updated": {
+      "type": "string"
+    },
+    "created": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "bits",
+    "updated",
+    "created"
+  ],
+  "$defs": {
+    "ProfileApp": {
+      "type": "object",
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "favorite": {
+          "type": "boolean"
+        },
+        "favorite_order": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "pinned_order": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      },
+      "required": [
+        "app_id",
+        "favorite",
+        "pinned"
+      ]
+    },
+    "ProfileShortcut": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "profileId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "appId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "order": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "profileId",
+        "label",
+        "path",
+        "order",
+        "createdAt"
+      ]
+    },
+    "Settings": {
+      "type": "object",
+      "properties": {
+        "connection_mode": {
+          "$ref": "#/$defs/ConnectionMode"
+        }
+      },
+      "required": [
+        "connection_mode"
+      ]
+    },
+    "ConnectionMode": {
+      "type": "string",
+      "enum": [
+        "default",
+        "straight",
+        "step",
+        "smoothstep",
+        "simplebezier"
+      ]
+    }
+  }
 }

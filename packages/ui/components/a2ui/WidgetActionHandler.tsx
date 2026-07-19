@@ -7,9 +7,14 @@ import {
 	useContext,
 	useState,
 } from "react";
+import {
+	resolveEventBoardVersion,
+	withBoardVersion,
+} from "../../lib/schema/flow/board-version";
 import { useBackend } from "../../state/backend-state";
 import {
 	compactWorkflowPayload,
+	useActionContext,
 	useCollectEventElements,
 	useEventRelevantValues,
 	useMarkComponentTriggering,
@@ -94,6 +99,7 @@ export function WidgetActionProvider({
 	onA2UIEvents,
 }: WidgetActionProviderProps) {
 	const backend = useBackend();
+	const runtimeActionContext = useActionContext();
 	const collectInputValues = useEventRelevantValues();
 	const collectElements = useCollectEventElements();
 	const markComponentTriggering = useMarkComponentTriggering();
@@ -167,13 +173,22 @@ export function WidgetActionProvider({
 							unknown
 						>;
 
-						await backend.boardState.executeBoard(
-							appId,
-							flowId,
+						const runPayload = withBoardVersion(
 							{
 								id: "widget_action",
 								payload: compactPayload,
 							},
+							resolveEventBoardVersion(
+								runtimeActionContext.boardId,
+								runtimeActionContext.boardVersion,
+								flowId,
+							),
+						);
+
+						await backend.boardState.executeBoard(
+							appId,
+							flowId,
+							runPayload,
 							false,
 							undefined,
 							onA2UIEvents,
@@ -218,6 +233,8 @@ export function WidgetActionProvider({
 			collectInputValues,
 			collectElements,
 			markComponentTriggering,
+			runtimeActionContext.boardId,
+			runtimeActionContext.boardVersion,
 		],
 	);
 

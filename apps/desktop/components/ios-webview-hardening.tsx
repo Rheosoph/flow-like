@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { isMobileDevice, isTauriRuntime } from "../lib/platform";
 
 const MOBILE_VIEWPORT_CONTENT =
 	"width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content";
@@ -8,33 +9,6 @@ const MAX_SAFE_TOP_PX = 96;
 const MAX_SAFE_BOTTOM_PX = 64;
 const POLL_MAX_RETRIES = 40;
 const POLL_INTERVAL_MS = 50;
-
-function isTauriRuntime(): boolean {
-	if (typeof window === "undefined") return false;
-	const w = window as Window & {
-		__TAURI__?: unknown;
-		__TAURI_IPC__?: unknown;
-		__TAURI_INTERNALS__?: unknown;
-	};
-	return Boolean(w.__TAURI__ || w.__TAURI_IPC__ || w.__TAURI_INTERNALS__);
-}
-
-function isIOSDevice(): boolean {
-	if (typeof navigator === "undefined") return false;
-	return (
-		/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-		(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-	);
-}
-
-function isAndroidDevice(): boolean {
-	if (typeof navigator === "undefined") return false;
-	return /Android/i.test(navigator.userAgent);
-}
-
-function isMobileDevice(): boolean {
-	return isIOSDevice() || isAndroidDevice();
-}
 
 function upsertViewportMeta(content: string) {
 	let meta = document.querySelector(

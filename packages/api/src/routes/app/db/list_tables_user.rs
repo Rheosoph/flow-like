@@ -1,6 +1,6 @@
 use crate::{
-    credentials::CredentialsAccess, ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    credentials::CredentialsAccess, ensure_any_permission, error::ApiError,
+    middleware::jwt::AppUser, permission::role_permission::RolePermissions, state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -32,7 +32,13 @@ pub async fn list_tables_user(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<Vec<String>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ReadFiles);
+    ensure_any_permission!(
+        user,
+        &app_id,
+        &state,
+        RolePermissions::ReadFiles,
+        RolePermissions::ReadDatabase
+    );
 
     let sub = user.sub()?;
     let credentials = state
@@ -40,7 +46,13 @@ pub async fn list_tables_user(
         .await?;
     let builder = credentials.to_db_scoped(&sub, &app_id).await?;
     let connection = builder.execute().await?;
-    let tables = connection.table_names().execute().await?;
+    let tables = connection
+        .table_names()
+        .execute()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog_core::is_reserved_table(name))
+        .collect();
 
     Ok(Json(tables))
 }

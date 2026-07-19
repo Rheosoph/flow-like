@@ -29,16 +29,8 @@ pub async fn delete_page(
     Extension(user): Extension<AppUser>,
     Path((app_id, page_id)): Path<(String, String)>,
 ) -> Result<Json<()>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
-
-    let app = state
-        .scoped_app(
-            &user.sub()?,
-            &app_id,
-            &state,
-            crate::credentials::CredentialsAccess::EditApp,
-        )
-        .await?;
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
+    let sub = permission.sub()?;
 
     // Delete the storage object via the owning board so legacy
     // app-level copies are evicted alongside the canonical board-scoped
@@ -50,7 +42,25 @@ pub async fn delete_page(
         .filter(page::Column::AppId.eq(&app_id))
         .one(&state.db)
         .await?;
-    if let Some(board_id) = row.and_then(|r| r.board_id) {
+    let board_id = row.and_then(|row| row.board_id);
+    let mutation_lock = board_id
+        .as_deref()
+        .map(|board_id| state.board_mutation_lock(&app_id, board_id));
+    let _mutation_guard = match mutation_lock.as_ref() {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
+
+    let app = state
+        .scoped_app(
+            &sub,
+            &app_id,
+            &state,
+            crate::credentials::CredentialsAccess::EditApp,
+        )
+        .await?;
+
+    if let Some(board_id) = board_id {
         if let Ok(board) = app.open_board(board_id.clone(), None, None).await {
             let mut board_guard = board.lock().await;
             if let Err(e) = board_guard.delete_page(&page_id, None).await {

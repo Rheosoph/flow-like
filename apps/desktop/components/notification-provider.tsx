@@ -4,11 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { useBackend, useHub } from "@flow-like/flow-like-ui";
-import type {
-	IIntercomEvent,
-	INotificationEvent,
-	IPushNotificationsConfig,
-} from "@flow-like/flow-like-ui";
+import type { IIntercomEvent, INotificationEvent } from "@flow-like/flow-like-ui";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "react-oidc-context";
@@ -19,6 +15,18 @@ import {
 	type FlowNotificationBatchDetail,
 } from "../lib/flow-notification-events";
 import { addLocalNotification } from "../lib/notifications-db";
+import {
+	REMOTE_PUSH_PREFERENCE_EVENT,
+	canUseRemotePushForPlatform,
+	detectPushPlatform,
+	getPushDeviceId,
+	isRemotePushPreferenceEnabled,
+	loadRemotePushPlugin,
+	type PushTargetPlatform,
+	type RemotePushApi,
+	type RemotePushListener,
+	type RemotePushPayload,
+} from "../lib/remote-push";
 import type { TauriBackend } from "./tauri-provider";
 
 type NotificationPermission = "granted" | "denied" | "default";
@@ -26,36 +34,6 @@ type NotificationApi = {
 	isPermissionGranted: () => Promise<boolean>;
 	requestPermission: () => Promise<NotificationPermission>;
 	sendNotification: (options: { title: string; body?: string }) => void;
-};
-
-type PushTargetPlatform = "IOS" | "ANDROID" | "DESKTOP";
-
-type RemotePushPayload = {
-	title?: string;
-	body?: string;
-	data: Record<string, unknown>;
-	badge?: number;
-	sound?: string;
-	channelId?: string;
-	category?: string;
-};
-
-type RemotePushListener = {
-	unregister: () => Promise<void> | void;
-};
-
-type RemotePushApi = {
-	getToken: () => Promise<string>;
-	requestPermission: () => Promise<{ granted: boolean }>;
-	onNotificationReceived: (
-		handler: (notification: RemotePushPayload) => void,
-	) => Promise<RemotePushListener>;
-	onNotificationTapped: (
-		handler: (notification: RemotePushPayload) => void,
-	) => Promise<RemotePushListener>;
-	onTokenRefresh: (
-		handler: (token: string) => void,
-	) => Promise<RemotePushListener>;
 };
 
 type RemotePushPluginState = "loading" | "available" | "unavailable";
@@ -73,151 +51,6 @@ async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 	} catch {
 		return null;
 	}
-}
-
-async function loadRemotePushPlugin(): Promise<RemotePushApi | null> {
-	try {
-		const mod = await import("tauri-plugin-remote-push-api");
-		return {
-			getToken: mod.getToken,
-			requestPermission: mod.requestPermission,
-			onNotificationReceived: mod.onNotificationReceived,
-			onNotificationTapped: mod.onNotificationTapped,
-			onTokenRefresh: mod.onTokenRefresh,
-		};
-	} catch {
-		return null;
-	}
-}
-
-const DEVICE_ID_STORAGE_KEY = "flow-like-push-device-id";
-const DEVICE_ID_FILE = "push-device-id.txt";
-
-async function loadPersistentDeviceId(): Promise<string | null> {
-	try {
-		const { readTextFile, BaseDirectory } = await import(
-			"@tauri-apps/plugin-fs"
-		);
-		const id = await readTextFile(DEVICE_ID_FILE, {
-			baseDir: BaseDirectory.AppData,
-		});
-		return id?.trim() || null;
-	} catch {
-		return null;
-	}
-}
-
-async function savePersistentDeviceId(id: string): Promise<void> {
-	try {
-		const { writeTextFile, mkdir, BaseDirectory } = await import(
-			"@tauri-apps/plugin-fs"
-		);
-		await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(
-			() => {},
-		);
-		await writeTextFile(DEVICE_ID_FILE, id, {
-			baseDir: BaseDirectory.AppData,
-		});
-	} catch {
-		// FS not available - fall through to localStorage only
-	}
-}
-
-function getPushDeviceIdSync(): string {
-	if (typeof window === "undefined") {
-		return "server-device";
-	}
-
-	const existing = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
-	if (existing) {
-		return existing;
-	}
-
-	const created = crypto.randomUUID();
-	window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
-	return created;
-}
-
-async function loadNativeDeviceId(): Promise<string | null> {
-	try {
-		const id = await invoke<string | null>("get_stable_device_id");
-		return typeof id === "string" && id.trim().length > 0 ? id.trim() : null;
-	} catch {
-		return null;
-	}
-}
-
-async function getPushDeviceId(): Promise<string> {
-	if (typeof window === "undefined") {
-		return "server-device";
-	}
-
-	// Native platform-stable id (iOS Keychain / Android ANDROID_ID). Survives
-	// uninstall/reinstall, so the backend reuses the existing PushNotificationTarget
-	// row instead of marking it superseded.
-	const native = await loadNativeDeviceId();
-	if (native) {
-		window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, native);
-		await savePersistentDeviceId(native);
-		return native;
-	}
-
-	// Desktop fallback: persistent FS (AppData survives reinstall on
-	// macOS/Windows/Linux), then localStorage, then a fresh UUID.
-	const persisted = await loadPersistentDeviceId();
-	if (persisted) {
-		window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, persisted);
-		return persisted;
-	}
-
-	const existing = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
-	if (existing) {
-		await savePersistentDeviceId(existing);
-		return existing;
-	}
-
-	const created = crypto.randomUUID();
-	window.localStorage.setItem(DEVICE_ID_STORAGE_KEY, created);
-	await savePersistentDeviceId(created);
-	return created;
-}
-
-function detectPushPlatform(): PushTargetPlatform | null {
-	if (typeof navigator === "undefined") {
-		return null;
-	}
-
-	const userAgent = navigator.userAgent.toLowerCase();
-	if (userAgent.includes("android")) {
-		return "ANDROID";
-	}
-	if (
-		userAgent.includes("iphone") ||
-		userAgent.includes("ipad") ||
-		userAgent.includes("ipod")
-	) {
-		return "IOS";
-	}
-	if ("__TAURI_INTERNALS__" in window) {
-		return "DESKTOP";
-	}
-
-	return null;
-}
-
-function canUseRemotePushForPlatform(
-	pushConfig: IPushNotificationsConfig | undefined,
-	platform: PushTargetPlatform | null,
-): boolean {
-	if (!pushConfig?.enabled || pushConfig.provider !== "fcm" || !platform) {
-		return false;
-	}
-
-	if (platform === "DESKTOP") {
-		return pushConfig.allow_desktop === true;
-	}
-
-	return pushConfig.allow_mobile === true;
 }
 
 function dataString(
@@ -320,6 +153,8 @@ export default function NotificationProvider({
 	const [pushDeviceId, setPushDeviceId] = useState<string | null>(null);
 	const [remotePushPluginState, setRemotePushPluginState] =
 		useState<RemotePushPluginState>("loading");
+	const [remotePushPreferenceEnabled, setRemotePushPreferenceEnabled] =
+		useState(isRemotePushPreferenceEnabled);
 	const pushConfig = hub.hub?.push_notifications;
 	const handleTapRef = useRef<(notification: RemotePushPayload) => void>(
 		() => {},
@@ -579,12 +414,34 @@ export default function NotificationProvider({
 	}, []);
 
 	useEffect(() => {
+		if (typeof window === "undefined") {
+			return;
+		}
+
+		const handlePreferenceChange = () => {
+			setRemotePushPreferenceEnabled(isRemotePushPreferenceEnabled());
+		};
+
+		window.addEventListener(
+			REMOTE_PUSH_PREFERENCE_EVENT,
+			handlePreferenceChange,
+		);
+		return () => {
+			window.removeEventListener(
+				REMOTE_PUSH_PREFERENCE_EVENT,
+				handlePreferenceChange,
+			);
+		};
+	}, []);
+
+	useEffect(() => {
 		const platform = detectPushPlatform();
 		if (
 			!isAuthenticated ||
 			!backend?.profile ||
 			!currentUser ||
 			!pushDeviceId ||
+			!remotePushPreferenceEnabled ||
 			remotePushPluginState === "loading"
 		) {
 			return;
@@ -700,6 +557,7 @@ export default function NotificationProvider({
 		pushConfig,
 		appId,
 		pushDeviceId,
+		remotePushPreferenceEnabled,
 		remotePushPluginState,
 	]);
 

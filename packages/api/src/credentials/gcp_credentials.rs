@@ -149,6 +149,7 @@ impl GcpRuntimeCredentials {
             .ok_or_else(|| anyhow!("Service account key not set"))?;
 
         let apps_prefix = format!("apps/{}", app_id);
+        let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let log_prefix = format!("runs/{}", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
@@ -168,6 +169,8 @@ impl GcpRuntimeCredentials {
             // bucket. Same scope as `ReadApp` / `EditApp`.
             CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
             CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
+            CredentialsAccess::ReadAppDb => (vec![db_prefix.clone()], false),
+            CredentialsAccess::EditAppDb => (vec![db_prefix.clone()], true),
             CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
             CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
             CredentialsAccess::InvokeNone => (
@@ -279,6 +282,7 @@ impl GcpRuntimeCredentials {
             .ok_or_else(|| anyhow!("GOOGLE_APPLICATION_CREDENTIALS_JSON is not set"))?;
 
         let apps_prefix = format!("apps/{}", app_id);
+        let db_prefix = format!("{}/storage/db", apps_prefix);
         let user_prefix = format!("users/{}/apps/{}", sub, app_id);
         let log_prefix = format!("runs/{}", app_id);
         let temporary_user_prefix = format!("tmp/user/{}/apps/{}", sub, app_id);
@@ -298,6 +302,8 @@ impl GcpRuntimeCredentials {
             // bucket. Same scope as `ReadApp` / `EditApp`.
             CredentialsAccess::ReadAppContent => (vec![apps_prefix.clone()], false),
             CredentialsAccess::EditAppContent => (vec![apps_prefix.clone()], true),
+            CredentialsAccess::ReadAppDb => (vec![db_prefix.clone()], false),
+            CredentialsAccess::EditAppDb => (vec![db_prefix.clone()], true),
             CredentialsAccess::EditUser => (vec![user_prefix.clone()], true),
             CredentialsAccess::ReadUser => (vec![user_prefix.clone()], false),
             CredentialsAccess::InvokeNone => (
@@ -400,6 +406,8 @@ fn scoped_content_path_prefixes(
             | CredentialsAccess::ReadApp
             | CredentialsAccess::ReadAppContent
             | CredentialsAccess::EditAppContent
+            | CredentialsAccess::ReadAppDb
+            | CredentialsAccess::EditAppDb
             | CredentialsAccess::InvokeRead
             | CredentialsAccess::InvokeWrite
             | CredentialsAccess::ServerExecute

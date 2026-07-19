@@ -72,6 +72,7 @@ impl NodeLogic for PushAttachmentsNode {
             attachments,
             chunk: None,
             plan: None,
+            widgets: vec![],
         };
 
         context

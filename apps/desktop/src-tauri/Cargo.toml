@@ -23,17 +23,22 @@ plist = "1.8.0"
 
 [features]
 default = []
+local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
 local-tts-accelerate = ["flow-like/local-tts-accelerate", "flow-like-catalog/local-tts-accelerate"]
 local-tts-cuda = ["flow-like/local-tts-cuda", "flow-like-catalog/local-tts-cuda"]
 local-tts-metal = ["flow-like/local-tts-metal", "flow-like-catalog/local-tts-metal"]
+local-stt-accelerate = ["flow-like/local-stt-accelerate", "flow-like-catalog/local-stt-accelerate"]
+local-stt-cuda = ["flow-like/local-stt-cuda", "flow-like-catalog/local-stt-cuda"]
+local-stt-metal = ["flow-like/local-stt-metal", "flow-like-catalog/local-stt-metal"]
 
 [dependencies]
-flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts"] }
-flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts", "local"] }
+flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts", "local-stt"] }
+flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local"] }
 flow-like-types.workspace = true
-flow-like-wasm.workspace = true
+flow-like-wasm = { workspace = true, features = ["model"] }
 
-tauri = { version = "2.9.5", features = [
+tauri = { version = "2.11.1", features = [
     "protocol-asset",
     "macos-private-api",
     "tray-icon",
@@ -110,8 +115,8 @@ enigo = "0.6.1"
 rdev.workspace = true
 
 [target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies]
-flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts-metal", "local-tts-accelerate"] }
-flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local"] }
+flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local-stt-metal", "local-stt-accelerate"] }
+flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local-stt-metal", "local-stt-accelerate", "local"] }
 
 [target."cfg(target_os = \"linux\")".dependencies]
 rdev = { workspace = true, features = ["x11", "wayland"] }
