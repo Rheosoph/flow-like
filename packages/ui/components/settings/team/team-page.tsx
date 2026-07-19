@@ -1,6 +1,6 @@
 "use client";
 
-import { Blocks, Clock, Key, Layers, UserPlus, Users } from "lucide-react";
+import { Blocks, Clock, Key, UserPlus, Users } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import {
@@ -13,7 +13,6 @@ import {
 	useInvoke,
 } from "../../../";
 import { AppConnectionManagement } from "./app-connection-management";
-import { GroupManagement } from "./group-management";
 import { InviteManagement } from "./invite-managment";
 import { TeamJoinManagement } from "./join-management";
 import { TechnicalUserManagement } from "./technical-user-management";
@@ -43,14 +42,6 @@ export function TeamManagementPage() {
 		connections.data?.incoming.filter(
 			(connection) => connection.status === "PENDING",
 		).length ?? 0;
-	const groupRequests = useInvoke(
-		backend.teamState.listGroupRequests,
-		backend.teamState,
-		[appId ?? ""],
-		typeof appId === "string",
-	);
-	const pendingGroupRequests = groupRequests.data?.length ?? 0;
-
 	return (
 		<div className="container mx-auto p-6 space-y-8 flex flex-col overflow-hidden h-full grow">
 			{/* Header */}
@@ -60,8 +51,7 @@ export function TeamManagementPage() {
 						Access &amp; Relationships
 					</h1>
 					<p className="text-muted-foreground mt-2">
-						People, connected apps, and the suites this app belongs to — in one
-						place
+						People and connected apps — in one place
 					</p>
 				</div>
 				<div className="flex items-center gap-3">
@@ -75,7 +65,11 @@ export function TeamManagementPage() {
 				defaultValue="members"
 				className="space-y-6 flex flex-col flex-1 min-h-0"
 			>
-				<TabsList className="grid w-full grid-cols-6 shrink-0">
+				<TabsList
+					className={`grid w-full shrink-0 ${
+						showRequestQueue ? "grid-cols-5" : "grid-cols-4"
+					}`}
+				>
 					<TabsTrigger value="members" className="flex items-center gap-2">
 						<Users className="w-4 h-4" />
 						Team Members
@@ -100,15 +94,6 @@ export function TeamManagementPage() {
 						{pendingAppRequests > 0 && (
 							<Badge variant="secondary" className="px-1.5">
 								{pendingAppRequests}
-							</Badge>
-						)}
-					</TabsTrigger>
-					<TabsTrigger value="groups" className="flex items-center gap-2">
-						<Layers className="w-4 h-4" />
-						Groups
-						{pendingGroupRequests > 0 && (
-							<Badge variant="secondary" className="px-1.5">
-								{pendingGroupRequests}
 							</Badge>
 						)}
 					</TabsTrigger>
@@ -153,15 +138,6 @@ export function TeamManagementPage() {
 					<TabsContent value="apps" className="flex-1 min-h-0">
 						<div className="h-full overflow-y-auto">
 							<AppConnectionManagement appId={appId} />
-						</div>
-					</TabsContent>
-				)}
-
-				{/* Groups Tab */}
-				{appId && (
-					<TabsContent value="groups" className="flex-1 min-h-0">
-						<div className="h-full overflow-y-auto">
-							<GroupManagement appId={appId} />
 						</div>
 					</TabsContent>
 				)}

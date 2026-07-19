@@ -15,7 +15,9 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::{
-        connection::{app_display_name, deny_connected_app, graph::presign_media, notify_app_admins},
+        connection::{
+            app_display_name, deny_connected_app, graph::presign_media_under, notify_app_admins,
+        },
         groups::{group_meta_as_app_meta, group_meta_lookup},
     },
     state::AppState,
@@ -73,7 +75,7 @@ pub async fn list_group_requests(
         .map(|g| (g.id, g.owner_app_id))
         .collect();
     let group_meta = group_meta_lookup(&state, &group_ids).await?;
-    let media = presign_media(&state, &group_meta_as_app_meta(&group_meta)).await;
+    let media = presign_media_under(&state, "groups", &group_meta_as_app_meta(&group_meta)).await;
 
     let requests = pending
         .into_iter()
@@ -83,7 +85,9 @@ pub async fn list_group_requests(
                 .get(&member.group_id)
                 .cloned()
                 .unwrap_or_default(),
-            group_name: group_meta.get(&member.group_id).and_then(|p| p.name.clone()),
+            group_name: group_meta
+                .get(&member.group_id)
+                .and_then(|p| p.name.clone()),
             group_icon: media
                 .get(&member.group_id)
                 .and_then(|(icon, _)| icon.clone()),
@@ -111,7 +115,10 @@ pub async fn list_group_requests(
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/groups/requests/{member_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/groups/requests/{member_id}",
+    skip(state, user)
+)]
 pub async fn accept_group_request(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -134,7 +141,10 @@ pub async fn accept_group_request(
     active.updated_at = Set(chrono::Utc::now().naive_utc());
     active.update(&state.db).await?;
 
-    if let Some(group) = app_group::Entity::find_by_id(&group_id).one(&state.db).await? {
+    if let Some(group) = app_group::Entity::find_by_id(&group_id)
+        .one(&state.db)
+        .await?
+    {
         let member_name = app_display_name(&state, &app_id).await;
         notify_app_admins(
             &state,
@@ -197,7 +207,10 @@ pub async fn decline_group_request(
     let active: app_group_member::ActiveModel = member.into();
     active.delete(&state.db).await?;
 
-    if let Some(group) = app_group::Entity::find_by_id(&group_id).one(&state.db).await? {
+    if let Some(group) = app_group::Entity::find_by_id(&group_id)
+        .one(&state.db)
+        .await?
+    {
         let member_name = app_display_name(&state, &app_id).await;
         notify_app_admins(
             &state,

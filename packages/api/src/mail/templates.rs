@@ -801,28 +801,50 @@ pub fn app_publication_update(
     target_visibility: &str,
     reviewer_message: Option<&str>,
 ) -> (String, String) {
+    publication_update(
+        "App",
+        app_name,
+        app_url,
+        action,
+        target_visibility,
+        reviewer_message,
+    )
+}
+
+/// Publication decision email. `entity_label` is the capitalised noun for the
+/// reviewed thing ("App" or "Suite") so apps and suites share one template.
+pub fn publication_update(
+    entity_label: &str,
+    app_name: &str,
+    app_url: &str,
+    action: &str,
+    target_visibility: &str,
+    reviewer_message: Option<&str>,
+) -> (String, String) {
+    let entity_lower = entity_label.to_lowercase();
     let (emoji, headline, description) = match action.to_lowercase().as_str() {
         "approve" | "accept" => (
             "🚀",
-            "Your App Is Now Published!",
+            format!("Your {} Is Now Published!", entity_label),
             format!(
-                "Your app has been approved and is now visible as <strong style=\"color: #ffffff;\">{}</strong>. Users can discover it in the store.",
+                "Your {} has been approved and is now visible as <strong style=\"color: #ffffff;\">{}</strong>. Users can discover it in the store.",
+                entity_lower,
                 target_visibility.replace('_', " ")
             ),
         ),
         "reject" => (
             "❌",
-            "Publication Request Rejected",
+            "Publication Request Rejected".to_string(),
             "Your publication request was not approved. Please review the feedback and try again when ready.".to_string(),
         ),
         "hold" => (
             "⏸",
-            "Publication Request On Hold",
+            "Publication Request On Hold".to_string(),
             "Your publication request has been placed on hold. The review team will follow up with more details.".to_string(),
         ),
         _ => (
             "📬",
-            "Publication Request Update",
+            "Publication Request Update".to_string(),
             "There's an update on your publication request.".to_string(),
         ),
     };
@@ -881,23 +903,26 @@ pub fn app_publication_update(
             "Details",
             vec![("Target Visibility", target_visibility.replace('_', " "))]
         ),
-        cta_button = cta_button("View App →", app_url)
+        cta_button = cta_button(&format!("View {} →", entity_label), app_url)
     );
 
     let html = base_template(
         &content,
-        "You're receiving this because you requested publication for your app on Flow-Like.",
+        &format!(
+            "You're receiving this because you requested publication for your {} on Flow-Like.",
+            entity_lower
+        ),
     );
 
     let text = format!(
         r#"{emoji} {headline}
 
-App: {app_name}
+{entity_label}: {app_name}
 Target Visibility: {visibility}
 
 {description}
 {message_section}
-View your app: {app_url}
+View your {entity_lower}: {app_url}
 
 Questions? Contact us at help@great-co.de
 
@@ -905,6 +930,8 @@ Questions? Contact us at help@great-co.de
 "#,
         emoji = emoji,
         headline = headline,
+        entity_label = entity_label,
+        entity_lower = entity_lower,
         app_name = app_name,
         visibility = target_visibility.replace('_', " "),
         description = description

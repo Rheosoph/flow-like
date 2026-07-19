@@ -264,6 +264,10 @@ model AppGroup {
 
   members AppGroupMember[]
 
+  /// Suites go through the same review pipeline as apps to reach a public
+  /// visibility; see `PublicationRequest`.
+  publicationRequests PublicationRequest[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

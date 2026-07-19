@@ -112,8 +112,11 @@ pub async fn get_requests(
     let limit = query.limit.unwrap_or(25).min(100);
     let offset = (page - 1) * limit;
 
-    let mut select =
-        publication_request::Entity::find().order_by_desc(publication_request::Column::CreatedAt);
+    // Suites are reviewed in their own, lighter queue — see
+    // `get_group_requests` — so this one stays strictly app-scoped.
+    let mut select = publication_request::Entity::find()
+        .filter(publication_request::Column::GroupId.is_null())
+        .order_by_desc(publication_request::Column::CreatedAt);
 
     if let Some(ref id_filter) = query.id {
         select = select.filter(publication_request::Column::Id.eq(id_filter.clone()));
@@ -147,7 +150,7 @@ pub async fn get_requests(
         }));
     }
 
-    let app_ids: Vec<String> = requests.iter().map(|r| r.app_id.clone()).collect();
+    let app_ids: Vec<String> = requests.iter().filter_map(|r| r.app_id.clone()).collect();
     let request_ids: Vec<String> = requests.iter().map(|r| r.id.clone()).collect();
 
     // Batch-fetch app records
@@ -266,8 +269,13 @@ pub async fn get_requests(
 
     let mut items = Vec::with_capacity(requests.len());
     for r in requests {
-        let app_record = apps.get(&r.app_id);
-        let meta_record = metas.get(&r.app_id);
+        // Suite requests are served by their own admin queue; the filter above
+        // already excludes them, so a missing app id is a malformed row.
+        let Some(app_id) = r.app_id.clone() else {
+            continue;
+        };
+        let app_record = apps.get(&app_id);
+        let meta_record = metas.get(&app_id);
 
         let mut app_icon = meta_record.and_then(|m| m.icon.clone());
         let mut app_thumbnail = meta_record.and_then(|m| m.thumbnail.clone());
@@ -275,7 +283,7 @@ pub async fn get_requests(
         // Presign icon/thumbnail if they are storage keys (not already URLs)
         let prefix = flow_like_storage::Path::from("media")
             .child("apps")
-            .child(r.app_id.clone());
+            .child(app_id.clone());
         if let Some(ref icon) = app_icon
             && !icon.starts_with("http://")
             && !icon.starts_with("https://")
@@ -303,7 +311,7 @@ pub async fn get_requests(
 
         items.push(PublicationRequestItem {
             id: r.id.clone(),
-            app_id: r.app_id.clone(),
+            app_id: app_id.clone(),
             target_visibility: format!("{:?}", r.target_visibility).to_uppercase(),
             status: format!("{:?}", r.status).to_uppercase(),
             approver_id: r.approver_id,
@@ -318,8 +326,8 @@ pub async fn get_requests(
             download_count: app_record.map(|a| a.download_count),
             rating_count: app_record.map(|a| a.rating_count),
             avg_rating: app_record.and_then(|a| a.avg_rating),
-            board_count: board_counts.get(&r.app_id).copied(),
-            package_count: package_counts.get(&r.app_id).copied(),
+            board_count: board_counts.get(&app_id).copied(),
+            package_count: package_counts.get(&app_id).copied(),
             logs: logs_by_request.remove(&r.id).unwrap_or_default(),
         });
     }

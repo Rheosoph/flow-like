@@ -11,11 +11,8 @@
 //! "unknown" nodes instead of leaking raw app ids.
 
 use crate::{
-    ensure_permission,
-    error::ApiError,
-    middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions,
-    routes::app::connection::graph::mask_app_id,
+    ensure_permission, error::ApiError, middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions, routes::app::connection::graph::mask_app_id,
     state::AppState,
 };
 use axum::{
@@ -23,8 +20,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QuerySelect,
-    Statement,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QuerySelect, Statement,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

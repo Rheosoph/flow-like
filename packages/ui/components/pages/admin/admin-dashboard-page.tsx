@@ -223,7 +223,8 @@ const ADMIN_SECTIONS: AdminSection[] = [
 	},
 	{
 		title: "Governance",
-		description: "Review publication requests and manage app submissions.",
+		description:
+			"Review app and suite publication requests and manage submissions.",
 		icon: BookOpen,
 		href: "/admin/governance",
 		permission: GlobalPermission.ReadPublishing,
@@ -232,6 +233,7 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Overview", href: "/admin/governance" },
 			{ label: "Review Queue", href: "/admin/governance/requests" },
+			{ label: "Suites", href: "/admin/governance/suites" },
 			{ label: "Scores", href: "/admin/governance/scores" },
 		],
 	},

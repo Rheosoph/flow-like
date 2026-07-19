@@ -4,7 +4,7 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
 };
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -19,7 +19,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::app::{
-        connection::deny_connected_app,
+        connection::{deny_connected_app, notify_app_admins},
         groups::{
             GroupInfo, crud::single_group, group_app_ids, group_display_name, notify_member_app,
             resolve_member_status,
@@ -52,7 +52,10 @@ pub struct AddMemberRequest {
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/groups/{group_id}/members", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/groups/{group_id}/members",
+    skip(state, user)
+)]
 pub async fn add_member(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -91,10 +94,15 @@ pub async fn add_member(
     let ids = group_app_ids(&state, &group).await?;
     let status = resolve_member_status(&state, &user, &ids, &payload.member_app_id).await?;
     let actor = permission.effective_user_id().ok();
+    // Append after the current highest position. Counting rows instead would
+    // reuse a position after any removal, making the curated order ambiguous.
     let position = app_group_member::Entity::find()
         .filter(app_group_member::Column::GroupId.eq(&group_id))
-        .count(&state.db)
-        .await? as i32;
+        .order_by_desc(app_group_member::Column::Position)
+        .one(&state.db)
+        .await?
+        .map(|m| m.position + 1)
+        .unwrap_or(0);
     let now = chrono::Utc::now().naive_utc();
 
     app_group_member::ActiveModel {
@@ -198,6 +206,78 @@ pub async fn remove_member(
         "AppGroup",
         group_id,
         "App group member removed"
+    );
+
+    Ok(Json(()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/apps/{app_id}/groups/{group_id}/membership",
+    tag = "groups",
+    description = "Leave a suite. An app's own admins decide whether it stays listed as part of a suite, at any time — a suite is a presentation grant, never a permission grant.",
+    params(
+        ("app_id" = String, Path, description = "The app leaving the suite"),
+        ("group_id" = String, Path, description = "Suite ID")
+    ),
+    responses(
+        (status = 200, description = "Left the suite", body = ()),
+        (status = 400, description = "The anchor app cannot leave its own suite"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Suite or membership not found")
+    ),
+    security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
+)]
+#[tracing::instrument(
+    name = "DELETE /apps/{app_id}/groups/{group_id}/membership",
+    skip(state, user)
+)]
+pub async fn leave_group(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((app_id, group_id)): Path<(String, String)>,
+) -> Result<Json<()>, ApiError> {
+    deny_connected_app(&user)?;
+    ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
+
+    let group = app_group::Entity::find_by_id(&group_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+
+    if group.owner_app_id == app_id {
+        return Err(ApiError::bad_request(
+            "The anchor app cannot leave its own suite; delete the suite instead.",
+        ));
+    }
+
+    let member = app_group_member::Entity::find()
+        .filter(app_group_member::Column::GroupId.eq(&group_id))
+        .filter(app_group_member::Column::AppId.eq(&app_id))
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+
+    let active: app_group_member::ActiveModel = member.into();
+    active.delete(&state.db).await?;
+
+    let group_name = group_display_name(&state, &group_id).await;
+    notify_app_admins(
+        &state,
+        &group.owner_app_id,
+        format!("An app left the “{}” suite", group_name),
+        "It no longer appears as part of this suite in the store.".to_string(),
+    )
+    .await;
+
+    audit_branch!(
+        state,
+        user,
+        app_id,
+        "app_group.member.leave",
+        "AppGroup",
+        group_id,
+        "App left a suite"
     );
 
     Ok(Json(()))

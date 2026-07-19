@@ -4070,7 +4070,11 @@ fn codex_binary_name() -> &'static str {
 }
 
 fn claude_binary_name() -> &'static str {
-    if cfg!(windows) { "claude.exe" } else { "claude" }
+    if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    }
 }
 
 fn codex_target() -> Option<(&'static str, &'static str)> {
@@ -4287,9 +4291,8 @@ fn claude_ide_extension_binaries(home: &Path) -> Vec<PathBuf> {
             .collect();
         // Sort by parsed version (numeric, newest first) — a lexical sort would
         // rank "2.1.9" above "2.1.204".
-        extension_dirs.sort_by(|a, b| {
-            claude_extension_version_key(b).cmp(&claude_extension_version_key(a))
-        });
+        extension_dirs
+            .sort_by(|a, b| claude_extension_version_key(b).cmp(&claude_extension_version_key(a)));
         for dir in extension_dirs {
             let candidate = dir
                 .join("resources")
@@ -4986,7 +4989,10 @@ fn parse_claude_model_catalog(entries: &[serde_json::Value]) -> Vec<CopilotModel
         else {
             continue;
         };
-        if models.iter().any(|existing: &CopilotModelInfo| existing.id == id) {
+        if models
+            .iter()
+            .any(|existing: &CopilotModelInfo| existing.id == id)
+        {
             continue;
         }
         let name = entry
@@ -5713,7 +5719,11 @@ mod tests {
 
         let models = parse_claude_model_catalog(&entries);
 
-        assert_eq!(models.len(), 3, "duplicate value and value-less entries drop");
+        assert_eq!(
+            models.len(),
+            3,
+            "duplicate value and value-less entries drop"
+        );
         assert_eq!(models[0].id, "default");
         assert_eq!(models[0].name, "Default (recommended)");
         assert_eq!(models[1].id, "sonnet");
@@ -5761,7 +5771,9 @@ mod tests {
         );
         assert!(invocation.args.contains(&"sonnet".to_string()));
         assert!(
-            invocation.args.contains(&"--include-partial-messages".to_string()),
+            invocation
+                .args
+                .contains(&"--include-partial-messages".to_string()),
             "claude invocation must stream partial messages for live tokens: {:?}",
             invocation.args
         );
@@ -5996,7 +6008,8 @@ mod tests {
             "type": "assistant",
             "message": { "content": [{ "type": "text", "text": "hello there" }] }
         });
-        let result = serde_json::json!({ "type": "result", "subtype": "success", "result": "hello there" });
+        let result =
+            serde_json::json!({ "type": "result", "subtype": "success", "result": "hello there" });
         assert_eq!(claude_agent_message_delta(&thinking, &mut state), None);
         assert_eq!(claude_agent_message_delta(&assistant, &mut state), None);
         assert_eq!(claude_agent_message_delta(&result, &mut state), None);
@@ -6035,7 +6048,11 @@ mod tests {
         });
 
         let starts = claude_agent_tool_events(&tool_use, &mut state);
-        assert_eq!(starts.len(), 1, "only the tool_use block frames a tool_start");
+        assert_eq!(
+            starts.len(),
+            1,
+            "only the tool_use block frames a tool_start"
+        );
         assert!(
             starts[0].contains("tool_start")
                 && starts[0].contains("\"tool\":\"edit_flowscript\"")
@@ -6176,7 +6193,11 @@ mod tests {
             "flowpilot-claude-ext-test-{}",
             uuid::Uuid::new_v4()
         ));
-        let binary_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+        let binary_name = if cfg!(windows) {
+            "claude.exe"
+        } else {
+            "claude"
+        };
         let make = |version: &str| -> std::io::Result<PathBuf> {
             let dir = temp_home
                 .join(".vscode/extensions")

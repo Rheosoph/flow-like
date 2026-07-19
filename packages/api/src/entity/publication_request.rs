@@ -14,8 +14,10 @@ pub struct Model {
     pub target_visibility: Visibility,
     #[sea_orm(column_name = "approverId", column_type = "Text", nullable)]
     pub approver_id: Option<String>,
-    #[sea_orm(column_name = "appId", column_type = "Text")]
-    pub app_id: String,
+    #[sea_orm(column_name = "appId", column_type = "Text", nullable)]
+    pub app_id: Option<String>,
+    #[sea_orm(column_name = "groupId", column_type = "Text", nullable)]
+    pub group_id: Option<String>,
     pub status: PublicationRequestStatus,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
@@ -35,6 +37,14 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     App,
+    #[sea_orm(
+        belongs_to = "super::app_group::Entity",
+        from = "Column::GroupId",
+        to = "super::app_group::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    AppGroup,
     #[sea_orm(has_many = "super::publication_log::Entity")]
     PublicationLog,
     #[sea_orm(
@@ -50,6 +60,12 @@ pub enum Relation {
 impl Related<super::app::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::App.def()
+    }
+}
+
+impl Related<super::app_group::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppGroup.def()
     }
 }
 

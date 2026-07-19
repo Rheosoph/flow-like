@@ -37,10 +37,15 @@ function ListContent() {
 		[router],
 	);
 
+	const handleNavigateToSuites = useCallback(() => {
+		router.push("/admin/governance/suites");
+	}, [router]);
+
 	return (
 		<AdminPublicationsPage
 			onNavigateToPackage={handleNavigateToPackage}
 			onSelectRequest={handleSelectRequest}
+			onNavigateToSuites={handleNavigateToSuites}
 		/>
 	);
 }

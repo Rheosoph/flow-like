@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
@@ -16,12 +16,17 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::connection::{AppMetaPreview, app_meta_lookup, graph::presign_media, notify_app_admins},
+    routes::app::connection::{
+        AppMetaPreview, app_meta_lookup,
+        graph::{presign_media, presign_media_under},
+        notify_app_admins,
+    },
     state::AppState,
 };
 
 pub mod crud;
 pub mod members;
+pub mod publication;
 pub mod requests;
 
 pub fn routes() -> Router<AppState> {
@@ -38,11 +43,20 @@ pub fn routes() -> Router<AppState> {
                 .put(crud::update_group)
                 .delete(crud::delete_group),
         )
+        .route(
+            "/{group_id}/visibility",
+            patch(publication::change_group_visibility),
+        )
+        .route(
+            "/{group_id}/publication",
+            get(publication::get_group_publication),
+        )
         .route("/{group_id}/members", post(members::add_member))
         .route(
             "/{group_id}/members/{member_app_id}",
             delete(members::remove_member),
         )
+        .route("/{group_id}/membership", delete(members::leave_group))
 }
 
 /// One app's curated membership in a group, plus the app's display metadata.
@@ -114,13 +128,19 @@ pub(crate) fn visibility_to_string(visibility: &Visibility) -> String {
     .to_string()
 }
 
-pub(crate) fn parse_visibility(value: &str) -> Visibility {
+/// Strict parse — an unrecognised value used to silently fall back to
+/// `PRIVATE`, which meant a typo could unpublish a live suite.
+pub(crate) fn parse_visibility(value: &str) -> Result<Visibility, ApiError> {
     match value.to_uppercase().as_str() {
-        "PUBLIC" => Visibility::Public,
-        "PUBLIC_REQUEST_ACCESS" => Visibility::PublicRequestAccess,
-        "PROTOTYPE" => Visibility::Prototype,
-        "OFFLINE" => Visibility::Offline,
-        _ => Visibility::Private,
+        "PUBLIC" => Ok(Visibility::Public),
+        "PUBLIC_REQUEST_ACCESS" => Ok(Visibility::PublicRequestAccess),
+        "PROTOTYPE" => Ok(Visibility::Prototype),
+        "PRIVATE" => Ok(Visibility::Private),
+        "OFFLINE" => Ok(Visibility::Offline),
+        other => Err(ApiError::bad_request(format!(
+            "Unknown visibility '{}'. Expected PUBLIC, PUBLIC_REQUEST_ACCESS, PROTOTYPE, PRIVATE or OFFLINE.",
+            other
+        ))),
     }
 }
 
@@ -225,7 +245,8 @@ pub(crate) async fn assemble_groups(
 ) -> Result<Vec<GroupInfo>, ApiError> {
     let group_ids: Vec<String> = groups.iter().map(|g| g.id.clone()).collect();
     let group_meta = group_meta_lookup(state, &group_ids).await?;
-    let group_media = presign_media(state, &group_meta_as_app_meta(&group_meta)).await;
+    let group_media =
+        presign_media_under(state, "groups", &group_meta_as_app_meta(&group_meta)).await;
 
     let member_app_ids: Vec<String> = members.iter().map(|m| m.app_id.clone()).collect();
     let member_meta = app_meta_lookup(state, &member_app_ids).await?;
@@ -366,6 +387,49 @@ pub(crate) async fn group_display_name(state: &AppState, group_id: &str) -> Stri
         .flatten()
         .map(|m| m.name)
         .unwrap_or_else(|| "a suite".to_string())
+}
+
+/// Tells every active member app's admins that the suite they belong to
+/// changed how publicly it is listed. Members keep authority over their own
+/// membership, so this is the signal to reconsider and — if they want — leave.
+pub(crate) async fn notify_group_members_of_visibility(
+    state: &AppState,
+    group_id: &str,
+    group_name: &str,
+    visibility: &Visibility,
+) {
+    let members = match app_group_member::Entity::find()
+        .filter(app_group_member::Column::GroupId.eq(group_id))
+        .filter(app_group_member::Column::Status.eq(AppGroupMemberStatus::Active))
+        .all(&state.db)
+        .await
+    {
+        Ok(members) => members,
+        Err(err) => {
+            tracing::warn!(error = %err, group_id, "Could not load suite members to notify");
+            return;
+        }
+    };
+
+    let title = format!("The “{}” suite is now {}", group_name, {
+        let raw = visibility_to_string(visibility);
+        raw.replace('_', " ").to_lowercase()
+    });
+    let body = if matches!(
+        visibility,
+        Visibility::Public | Visibility::PublicRequestAccess
+    ) {
+        "Your app is listed as part of it. You can leave the suite at any time from Team Management under Groups."
+    } else {
+        "It is no longer listed publicly. Your app's own visibility is unchanged."
+    };
+
+    for member in members {
+        if member.kind == AppGroupMemberKind::Primary {
+            continue;
+        }
+        notify_app_admins(state, &member.app_id, title.clone(), body.to_string()).await;
+    }
 }
 
 /// Notifies a member app's admins about a group membership event.

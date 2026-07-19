@@ -1,12 +1,16 @@
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	IAppVisibility,
+	IChangeGroupVisibilityResult,
 	ICreateGroupPayload,
 	IGroup,
 	IGroupMembershipRequest,
+	IGroupPublicationStatus,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
+	IMediaItem,
 	IMember,
 	IProcessCaseDetailResponse,
 	IProcessCasesResponse,
@@ -196,6 +200,32 @@ export class EmptyTeamState implements ITeamState {
 		throw new Error("Method not implemented.");
 	}
 	declineGroupRequest(appId: string, memberId: string): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	pushGroupMedia(
+		appId: string,
+		groupId: string,
+		item: IMediaItem,
+		file: File,
+		language?: string,
+	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	changeGroupVisibility(
+		appId: string,
+		groupId: string,
+		visibility: IAppVisibility,
+		message?: string,
+	): Promise<IChangeGroupVisibilityResult> {
+		throw new Error("Method not implemented.");
+	}
+	getGroupPublication(
+		appId: string,
+		groupId: string,
+	): Promise<IGroupPublicationStatus> {
+		throw new Error("Method not implemented.");
+	}
+	leaveGroup(appId: string, groupId: string): Promise<void> {
 		throw new Error("Method not implemented.");
 	}
 }

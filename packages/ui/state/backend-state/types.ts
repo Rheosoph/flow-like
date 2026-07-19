@@ -235,15 +235,16 @@ export interface IGroupMembershipRequest {
 	created_at: number;
 }
 
+/**
+ * Suites always start PRIVATE — visibility moves only through the reviewed
+ * `changeGroupVisibility` endpoint. Artwork is uploaded via `pushGroupMedia`,
+ * never passed as a raw string.
+ */
 export interface ICreateGroupPayload {
 	name: string;
 	description?: string;
 	use_case?: string;
-	icon?: string;
-	banner?: string;
 	tags?: string[];
-	/** "PUBLIC" | "PRIVATE" | … (defaults to PRIVATE) */
-	visibility?: string;
 	member_app_ids?: string[];
 }
 
@@ -251,11 +252,49 @@ export interface IUpdateGroupPayload {
 	name?: string;
 	description?: string;
 	use_case?: string;
-	icon?: string;
-	banner?: string;
 	tags?: string[];
-	visibility?: string;
+	/** "ACTIVE" | "INACTIVE" | "ARCHIVED" */
 	status?: string;
+}
+
+export interface IGroupPublicationLog {
+	id: string;
+	authorId?: string | null;
+	message?: string | null;
+	visibility?: string | null;
+	createdAt: string;
+}
+
+export interface IGroupPublicationRequest {
+	id: string;
+	groupId: string;
+	targetVisibility: string;
+	status: string;
+	createdAt: string;
+	updatedAt: string;
+	logs: IGroupPublicationLog[];
+}
+
+/** Why a member app does or doesn't clear the suite's publish gate. */
+export interface IMemberReadiness {
+	appId: string;
+	aiActStatus?: string | null;
+	ready: boolean;
+}
+
+export interface IGroupPublicationStatus {
+	currentVisibility: string;
+	requests: IGroupPublicationRequest[];
+	memberReadiness: IMemberReadiness[];
+	canRequestPublication: boolean;
+}
+
+export interface IChangeGroupVisibilityResult {
+	/** True when the change needed review rather than taking effect now. */
+	reviewRequested: boolean;
+	visibility: string;
+	requestId?: string | null;
+	group: IGroup;
 }
 
 /** An end-to-end process case: a causal execution tree across apps/events. */

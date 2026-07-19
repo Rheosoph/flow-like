@@ -33,6 +33,8 @@ pub enum Relation {
     AppGroupMember,
     #[sea_orm(has_many = "super::meta::Entity")]
     Meta,
+    #[sea_orm(has_many = "super::publication_request::Entity")]
+    PublicationRequest,
 }
 
 impl Related<super::app::Entity> for Entity {
@@ -50,6 +52,12 @@ impl Related<super::app_group_member::Entity> for Entity {
 impl Related<super::meta::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Meta.def()
+    }
+}
+
+impl Related<super::publication_request::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::PublicationRequest.def()
     }
 }
 

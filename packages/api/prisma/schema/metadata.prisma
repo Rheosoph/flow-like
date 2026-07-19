@@ -53,6 +53,7 @@ model Meta {
   @@index([templateId, lang])
   @@index([widgetId, lang])
   @@index([wasmPackageId, lang])
+  @@index([groupId, lang])
   @@index([lang])
   @@index([tags])
 }

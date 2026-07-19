@@ -7,7 +7,6 @@ import {
 	Eye,
 	EyeOff,
 	FilesIcon,
-	Layers,
 	LayoutGridIcon,
 	Plus,
 	Search,
@@ -40,6 +39,7 @@ import {
 	SearchResults,
 	Section,
 } from "./library-sub-components";
+import { SuiteShelf } from "./library-suite-shelf";
 import type { LibraryItem, SortMode } from "./library-types";
 import { CATEGORY_COLORS, sortItems } from "./library-types";
 
@@ -91,15 +91,6 @@ export function LibraryPage({
 		if (typeof window === "undefined") return;
 		window.localStorage.setItem("library.sortMode", sortMode);
 	}, [sortMode]);
-	const [groupMode, setGroupMode] = useState<"category" | "suite">(() => {
-		if (typeof window === "undefined") return "category";
-		const stored = window.localStorage.getItem("library.groupMode");
-		return stored === "suite" ? "suite" : "category";
-	});
-	useEffect(() => {
-		if (typeof window === "undefined") return;
-		window.localStorage.setItem("library.groupMode", groupMode);
-	}, [groupMode]);
 	const isMobile = useIsMobile();
 
 	const handleAppClick = useCallback(
@@ -241,9 +232,44 @@ export function LibraryPage({
 		[itemsForDisplay],
 	);
 
+	// Suites own their member apps in the grid below: an app that belongs to a
+	// suite is shown inside that suite's element, never twice.
+	const suiteGroups = useMemo(() => {
+		const byId = new Map(itemsForDisplay.map((item) => [item.id, item]));
+		return (myGroups.data ?? [])
+			.map((group) => ({
+				group,
+				items: sortItems(
+					group.members
+						.map((member) => byId.get(member.app_id))
+						.filter((item): item is LibraryItem => item !== undefined),
+					sortMode,
+				),
+			}))
+			.filter((suite) => suite.items.length > 0)
+			.sort((a, b) =>
+				(a.group.use_case || a.group.name || "").localeCompare(
+					b.group.use_case || b.group.name || "",
+				),
+			);
+	}, [myGroups.data, itemsForDisplay, sortMode]);
+
+	const suiteAppIds = useMemo(() => {
+		const claimed = new Set<string>();
+		for (const suite of suiteGroups) {
+			for (const item of suite.items) claimed.add(item.id);
+		}
+		return claimed;
+	}, [suiteGroups]);
+
+	const ungroupedItems = useMemo(
+		() => itemsForDisplay.filter((item) => !suiteAppIds.has(item.id)),
+		[itemsForDisplay, suiteAppIds],
+	);
+
 	const categorizedItems = useMemo(() => {
 		const groups = new Map<string, LibraryItem[]>();
-		for (const item of itemsForDisplay) {
+		for (const item of ungroupedItems) {
 			const label = formatAppCategory(item.app.primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(item);
@@ -255,45 +281,7 @@ export function LibraryPage({
 				items: sortItems(sectionItems, sortMode),
 			}))
 			.sort((a, b) => a.label.localeCompare(b.label));
-	}, [itemsForDisplay, sortMode]);
-
-	const suiteSections = useMemo(() => {
-		const groups = myGroups.data ?? [];
-		if (groups.length === 0) return [];
-		const byId = new Map(
-			itemsForDisplay.map((item): [string, LibraryItem] => [item.id, item]),
-		);
-		const claimed = new Set<string>();
-		const sections = groups
-			.map((group) => {
-				const items: LibraryItem[] = [];
-				for (const member of group.members) {
-					const item = byId.get(member.app_id);
-					if (item) {
-						items.push(item);
-						claimed.add(item.id);
-					}
-				}
-				return {
-					label: group.use_case || group.name || "Suite",
-					items: sortItems(items, sortMode),
-				};
-			})
-			.filter((section) => section.items.length > 0)
-			.sort((a, b) => a.label.localeCompare(b.label));
-		const ungrouped = itemsForDisplay.filter((item) => !claimed.has(item.id));
-		if (ungrouped.length > 0) {
-			sections.push({
-				label: "Not in a suite",
-				items: sortItems(ungrouped, sortMode),
-			});
-		}
-		return sections;
-	}, [myGroups.data, itemsForDisplay, sortMode]);
-
-	const hasSuites = (myGroups.data?.length ?? 0) > 0;
-	const sectionsToRender =
-		groupMode === "suite" && hasSuites ? suiteSections : categorizedItems;
+	}, [ungroupedItems, sortMode]);
 
 	const { addAll, removeAll, clearSearch, search, searchResults } =
 		useMiniSearch(itemsForDisplay, {
@@ -518,31 +506,6 @@ export function LibraryPage({
 							</TooltipContent>
 						</Tooltip>
 
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant="ghost"
-									size="icon"
-									disabled={!hasSuites}
-									className={`h-8 w-8 rounded-full ${
-										groupMode === "suite"
-											? "text-primary bg-primary/10"
-											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
-									}`}
-									onClick={() =>
-										setGroupMode((m) => (m === "suite" ? "category" : "suite"))
-									}
-								>
-									<Layers className="h-4 w-4" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{groupMode === "suite"
-									? "Grouped by suite · click for category"
-									: "Group by suite"}
-							</TooltipContent>
-						</Tooltip>
-
 						<JoinInline />
 
 						{extraToolbarActions}
@@ -661,11 +624,25 @@ export function LibraryPage({
 							/>
 						)}
 
+						{suiteGroups.length > 0 && (
+							<SuiteShelf
+								suites={suiteGroups}
+								onAppClick={handleAppClick}
+								onSettingsClick={handleSettingsClick}
+								settingsHref={appSettingsHref}
+								appHref={appHref}
+								visibilityMode={visibilityMode}
+								activeAppIds={activeAppIds}
+								onToggleVisibility={handleToggleVisibility}
+								isMobile={isMobile}
+							/>
+						)}
+
 						{recentItems.length > 0 &&
-							sectionsToRender.length > 0 &&
+							categorizedItems.length > 0 &&
 							!isMobile && <div className="border-t border-border/10" />}
 
-						{sectionsToRender.map(({ label, items }) => (
+						{categorizedItems.map(({ label, items }) => (
 							<Section
 								key={label}
 								title={label}

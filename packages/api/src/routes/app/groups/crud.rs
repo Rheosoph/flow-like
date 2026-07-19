@@ -21,8 +21,7 @@ use crate::{
     routes::app::{
         connection::deny_connected_app,
         groups::{
-            GroupInfo, assemble_groups, notify_member_app, parse_status, parse_visibility,
-            resolve_member_status,
+            GroupInfo, assemble_groups, notify_member_app, parse_status, resolve_member_status,
         },
     },
     state::AppState,
@@ -35,11 +34,7 @@ pub struct CreateGroupRequest {
     pub description: Option<String>,
     /// Optional suite label distinct from the anchor app name.
     pub use_case: Option<String>,
-    pub icon: Option<String>,
-    pub banner: Option<String>,
     pub tags: Option<Vec<String>>,
-    /// "PUBLIC" | "PRIVATE" | … (defaults to PRIVATE).
-    pub visibility: Option<String>,
     /// Optional initial member app ids to curate into the group.
     pub member_app_ids: Option<Vec<String>>,
 }
@@ -76,16 +71,13 @@ pub async fn create_group(
     let now = chrono::Utc::now().naive_utc();
     let group_id = create_id();
     let actor = permission.effective_user_id().ok();
-    let visibility = payload
-        .visibility
-        .as_deref()
-        .map(parse_visibility)
-        .unwrap_or(Visibility::Private);
 
+    // Suites always start private; publishing goes through the same review
+    // pipeline as apps via PATCH /apps/{app_id}/groups/{group_id}/visibility.
     app_group::ActiveModel {
         id: Set(group_id.clone()),
         status: Set(Status::Active),
-        visibility: Set(visibility),
+        visibility: Set(Visibility::Private),
         owner_app_id: Set(app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -99,8 +91,6 @@ pub async fn create_group(
         name: Set(name.clone()),
         description: Set(payload.description.clone()),
         use_case: Set(payload.use_case.clone()),
-        icon: Set(payload.icon.clone()),
-        thumbnail: Set(payload.banner.clone()),
         tags: Set(payload.tags.clone()),
         group_id: Set(Some(group_id.clone())),
         created_at: Set(now),
@@ -272,9 +262,12 @@ pub async fn get_group(
         .ok_or(ApiError::NOT_FOUND)?;
 
     let is_owner = group.owner_app_id == app_id;
+    // A pending invitation is not membership — it must not grant read access
+    // to the suite's other members.
     let is_member = app_group_member::Entity::find()
         .filter(app_group_member::Column::GroupId.eq(&group_id))
         .filter(app_group_member::Column::AppId.eq(&app_id))
+        .filter(app_group_member::Column::Status.eq(AppGroupMemberStatus::Active))
         .one(&state.db)
         .await?
         .is_some();
@@ -290,10 +283,9 @@ pub struct UpdateGroupRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub use_case: Option<String>,
-    pub icon: Option<String>,
-    pub banner: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub visibility: Option<String>,
+    /// "ACTIVE" | "INACTIVE" | "ARCHIVED". Visibility is deliberately absent —
+    /// it moves only through the reviewed visibility endpoint.
     pub status: Option<String>,
 }
 
@@ -332,42 +324,59 @@ pub async fn update_group(
 
     let now = chrono::Utc::now().naive_utc();
     let mut active: app_group::ActiveModel = group.into();
-    if let Some(visibility) = &payload.visibility {
-        active.visibility = Set(parse_visibility(visibility));
-    }
     if let Some(status) = &payload.status {
         active.status = Set(parse_status(status));
     }
     active.updated_at = Set(now);
     active.update(&state.db).await?;
 
-    if let Some(meta_model) = meta::Entity::find()
+    match meta::Entity::find()
         .filter(meta::Column::GroupId.eq(&group_id))
         .filter(meta::Column::Lang.eq("en"))
         .one(&state.db)
         .await?
     {
-        let mut meta_active: meta::ActiveModel = meta_model.into();
-        if let Some(name) = &payload.name {
-            meta_active.name = Set(name.trim().to_string());
+        Some(meta_model) => {
+            let mut meta_active: meta::ActiveModel = meta_model.into();
+            if let Some(name) = &payload.name {
+                meta_active.name = Set(name.trim().to_string());
+            }
+            if payload.description.is_some() {
+                meta_active.description = Set(payload.description.clone());
+            }
+            if payload.use_case.is_some() {
+                meta_active.use_case = Set(payload.use_case.clone());
+            }
+            if payload.tags.is_some() {
+                meta_active.tags = Set(payload.tags.clone());
+            }
+            meta_active.updated_at = Set(now);
+            meta_active.update(&state.db).await?;
         }
-        if payload.description.is_some() {
-            meta_active.description = Set(payload.description.clone());
+        // A suite created before it had branding (or whose Meta row was lost
+        // with its owner app's locale) must still be editable.
+        None => {
+            meta::ActiveModel {
+                id: Set(create_id()),
+                lang: Set("en".to_string()),
+                name: Set(payload
+                    .name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or("Untitled suite")
+                    .to_string()),
+                description: Set(payload.description.clone()),
+                use_case: Set(payload.use_case.clone()),
+                tags: Set(payload.tags.clone()),
+                group_id: Set(Some(group_id.clone())),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&state.db)
+            .await?;
         }
-        if payload.use_case.is_some() {
-            meta_active.use_case = Set(payload.use_case.clone());
-        }
-        if payload.icon.is_some() {
-            meta_active.icon = Set(payload.icon.clone());
-        }
-        if payload.banner.is_some() {
-            meta_active.thumbnail = Set(payload.banner.clone());
-        }
-        if payload.tags.is_some() {
-            meta_active.tags = Set(payload.tags.clone());
-        }
-        meta_active.updated_at = Set(now);
-        meta_active.update(&state.db).await?;
     }
 
     audit_branch!(

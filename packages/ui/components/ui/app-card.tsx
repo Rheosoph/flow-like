@@ -18,6 +18,7 @@ import { categoryColor } from "../../lib/category-meta";
 import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
+import { VISIBILITY_META } from "../settings/visibility-status/visibility-meta";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 
 const MotionLink = motion.create(Link);
@@ -130,7 +131,7 @@ export function VisibilityIcon({
 				<div className="flex items-center gap-2 text-red-700 dark:text-red-300">
 					<div className="w-2 h-2 bg-red-500/70 rounded-full shadow-sm" />
 					<p className="text-xs font-medium whitespace-nowrap">
-						App is currently offline
+						{VISIBILITY_META[IAppVisibility.Offline].tooltip}
 					</p>
 				</div>,
 				<div className="relative bg-white/15 dark:bg-white/8 backdrop-blur-md rounded-full p-2 border border-white/25 dark:border-white/15 shadow-lg group-hover:shadow-xl transition-all duration-300">
@@ -144,7 +145,7 @@ export function VisibilityIcon({
 				<div className="flex items-center gap-2 text-purple-700 dark:text-purple-300">
 					<div className="w-2 h-2 bg-linear-to-r from-purple-500/70 to-pink-500/70 rounded-full shadow-sm" />
 					<p className="text-xs font-medium whitespace-nowrap">
-						Private access only
+						{VISIBILITY_META[IAppVisibility.Private].tooltip}
 					</p>
 				</div>,
 				<div className="relative bg-white/15 dark:bg-white/8 backdrop-blur-md rounded-full p-2 border border-white/25 dark:border-white/15 shadow-lg group-hover:shadow-xl transition-all duration-300">
@@ -158,7 +159,7 @@ export function VisibilityIcon({
 				<div className="flex items-center gap-2 text-orange-700 dark:text-orange-300">
 					<div className="w-2 h-2 bg-linear-to-r from-orange-500/70 to-yellow-500/70 rounded-full shadow-sm" />
 					<p className="text-xs font-medium whitespace-nowrap">
-						Experimental prototype
+						{VISIBILITY_META[IAppVisibility.Prototype].tooltip}
 					</p>
 				</div>,
 				<div className="relative group cursor-pointer">
@@ -179,7 +180,7 @@ export function VisibilityIcon({
 				<div className="flex items-center gap-2 text-blue-700 dark:text-blue-300">
 					<div className="w-2 h-2 bg-linear-to-r from-blue-500/70 to-cyan-500/70 rounded-full shadow-sm" />
 					<p className="text-xs font-medium whitespace-nowrap">
-						Public with access request
+						{VISIBILITY_META[IAppVisibility.PublicRequestAccess].tooltip}
 					</p>
 				</div>,
 				<div className="relative group cursor-pointer">

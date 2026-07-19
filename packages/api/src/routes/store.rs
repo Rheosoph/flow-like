@@ -83,7 +83,11 @@ pub async fn list_public_groups(
     let offset = query.offset.unwrap_or(0);
 
     let groups = app_group::Entity::find()
-        .filter(app_group::Column::Visibility.eq(Visibility::Public))
+        .filter(
+            app_group::Column::Visibility
+                .eq(Visibility::Public)
+                .or(app_group::Column::Visibility.eq(Visibility::PublicRequestAccess)),
+        )
         .filter(app_group::Column::Status.eq(Status::Active))
         .order_by_desc(app_group::Column::CreatedAt)
         .offset(offset)
@@ -123,11 +127,16 @@ pub async fn get_public_group(
 ) -> Result<Json<GroupInfo>, ApiError> {
     use crate::entity::{
         app_group, app_group_member,
-        sea_orm_active_enums::{AppGroupMemberStatus, Visibility},
+        sea_orm_active_enums::{AppGroupMemberStatus, Status, Visibility},
     };
 
     let group = app_group::Entity::find_by_id(&group_id)
-        .filter(app_group::Column::Visibility.eq(Visibility::Public))
+        .filter(
+            app_group::Column::Visibility
+                .eq(Visibility::Public)
+                .or(app_group::Column::Visibility.eq(Visibility::PublicRequestAccess)),
+        )
+        .filter(app_group::Column::Status.eq(Status::Active))
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;

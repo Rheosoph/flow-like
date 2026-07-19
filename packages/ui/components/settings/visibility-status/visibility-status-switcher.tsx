@@ -6,7 +6,6 @@ import {
 	ExternalLinkIcon,
 	EyeIcon,
 	InfoIcon,
-	SettingsIcon,
 	ShieldIcon,
 	UsersIcon,
 } from "lucide-react";
@@ -34,158 +33,69 @@ import {
 	CardHeader,
 	CardTitle,
 } from "../../ui/card";
+import {
+	type IVisibilityEntityNoun,
+	VISIBILITY_META,
+	getVisibilityTransitionWarning,
+	getVisibilityTransitions,
+} from "./visibility-meta";
 
-export interface VisibilityStatusSwitcherProps {
-	localApp: IApp;
+/** Result shape of a reviewed change; anything falsy means "applied now". */
+export interface VisibilityChangeOutcome {
+	reviewRequested?: boolean;
+}
+
+export interface EntityVisibilitySwitcherProps {
+	entityId: string;
+	visibility: IAppVisibility;
 	canEdit: boolean;
+	entityNoun: IVisibilityEntityNoun;
 	onVisibilityChange: (
-		appId: string,
+		entityId: string,
 		newVisibility: IAppVisibility,
-	) => Promise<void>;
+	) => Promise<VisibilityChangeOutcome> | Promise<void>;
+	availableTransitions?: IAppVisibility[];
 	docsUrl?: string;
 }
 
-export function VisibilityStatusSwitcher({
-	localApp,
+export function EntityVisibilitySwitcher({
+	entityId,
+	visibility,
 	canEdit,
+	entityNoun,
 	onVisibilityChange,
+	availableTransitions,
 	docsUrl = "https://docs.flow-like.com/guides/Apps/visibility/",
-}: Readonly<VisibilityStatusSwitcherProps>) {
-	const switchVisibility = useCallback(
+}: Readonly<EntityVisibilitySwitcherProps>) {
+	const currentConfig = VISIBILITY_META[visibility];
+	const transitions =
+		availableTransitions ?? getVisibilityTransitions(visibility);
+
+	const confirmVisibilityChange = useCallback(
 		async (newVisibility: IAppVisibility) => {
-			if (localApp.visibility === newVisibility) {
-				return;
+			if (visibility === newVisibility) return;
+			const config = VISIBILITY_META[newVisibility];
+			try {
+				const outcome = await onVisibilityChange(entityId, newVisibility);
+				if (outcome?.reviewRequested) {
+					toast.success("Submitted for review", {
+						description: `Your ${entityNoun} stays ${VISIBILITY_META[visibility].title} until the review is complete.`,
+					});
+					return;
+				}
+				toast.success(`Visibility changed to ${config.title}`, {
+					icon: <config.Icon className="w-4 h-4" />,
+				});
+			} catch (error) {
+				toast.error(
+					error instanceof Error
+						? error.message
+						: "Could not change the visibility",
+				);
 			}
-			await onVisibilityChange(localApp.id, newVisibility);
 		},
-		[localApp.visibility, localApp.id, onVisibilityChange],
+		[entityId, entityNoun, onVisibilityChange, visibility],
 	);
-
-	const getVisibilityConfig = (visibility: IAppVisibility) => {
-		switch (visibility) {
-			case IAppVisibility.Offline:
-				return {
-					icon: <ShieldIcon className="w-4 h-4" />,
-					title: "Offline",
-					color: "bg-slate-500",
-					description: "Only local, no syncing across devices",
-				};
-			case IAppVisibility.Private:
-				return {
-					icon: <EyeIcon className="w-4 h-4" />,
-					title: "Private",
-					color: "bg-blue-500",
-					description: "Synced for your account only",
-				};
-			case IAppVisibility.Prototype:
-				return {
-					icon: <SettingsIcon className="w-4 h-4" />,
-					title: "Prototype",
-					color: "bg-yellow-500",
-					description: "Development phase, invite collaborators",
-				};
-			case IAppVisibility.PublicRequestAccess:
-				return {
-					icon: <InfoIcon className="w-4 h-4" />,
-					title: "Public Request",
-					color: "bg-orange-500",
-					description: "Visible, people can request to join",
-				};
-			case IAppVisibility.Public:
-				return {
-					icon: <ExternalLinkIcon className="w-4 h-4" />,
-					title: "Public",
-					color: "bg-emerald-500",
-					description: "Everyone can join, visible in store",
-				};
-		}
-	};
-
-	const getAvailableTransitions = (
-		currentVisibility: IAppVisibility,
-	): IAppVisibility[] => {
-		switch (currentVisibility) {
-			case IAppVisibility.Offline:
-				return [];
-			case IAppVisibility.Private:
-				return [IAppVisibility.Prototype];
-			case IAppVisibility.Prototype:
-				return [
-					IAppVisibility.Private,
-					IAppVisibility.PublicRequestAccess,
-					IAppVisibility.Public,
-				];
-			case IAppVisibility.PublicRequestAccess:
-				return [IAppVisibility.Prototype];
-			case IAppVisibility.Public:
-				return [IAppVisibility.Prototype];
-			default:
-				return [];
-		}
-	};
-
-	const getTransitionWarning = (
-		from: IAppVisibility,
-		to: IAppVisibility,
-	): {
-		title: string;
-		message: string;
-		severity: "warning" | "danger" | "info";
-	} => {
-		if (from === IAppVisibility.Prototype && to === IAppVisibility.Private) {
-			return {
-				title: "Remove All Collaborators",
-				message:
-					"Switching to Private will remove all collaborators from your project. They will lose access immediately.",
-				severity: "warning",
-			};
-		}
-
-		if (
-			from === IAppVisibility.Prototype &&
-			(to === IAppVisibility.Public ||
-				to === IAppVisibility.PublicRequestAccess)
-		) {
-			return {
-				title: "Submit for Review",
-				message:
-					"Your app will be submitted for central revision. This process may take 1-3 business days. You'll be notified once the review is complete.",
-				severity: "info",
-			};
-		}
-
-		if (
-			(from === IAppVisibility.Public ||
-				from === IAppVisibility.PublicRequestAccess) &&
-			to === IAppVisibility.Prototype
-		) {
-			return {
-				title: "Return to Development",
-				message:
-					"Your app will be removed from public visibility and submitted for central revision to return to prototype status. This may take 1-3 business days.",
-				severity: "warning",
-			};
-		}
-
-		return {
-			title: "Change Visibility",
-			message: "Are you sure you want to change the visibility status?",
-			severity: "info",
-		};
-	};
-
-	const confirmVisibilityChange = (newVisibility: IAppVisibility) => {
-		switchVisibility(newVisibility);
-
-		const config = getVisibilityConfig(newVisibility);
-		toast.success(`Visibility changed to ${config.title}`, {
-			icon: config.icon,
-		});
-	};
-
-	const currentVisibility = localApp.visibility ?? IAppVisibility.Offline;
-	const availableTransitions = getAvailableTransitions(currentVisibility);
-	const currentConfig = getVisibilityConfig(currentVisibility);
 
 	if (!canEdit) {
 		return null;
@@ -199,7 +109,7 @@ export function VisibilityStatusSwitcher({
 					Visibility Status
 				</CardTitle>
 				<CardDescription>
-					Control who can access your app and how it&apos;s shared.{" "}
+					Control who can access your {entityNoun} and how it&apos;s shared.{" "}
 					<a href={docsUrl} target="_blank" rel="noreferrer">
 						<Button
 							variant="link"
@@ -224,27 +134,28 @@ export function VisibilityStatusSwitcher({
 				</div>
 
 				{/* Available Transitions */}
-				{availableTransitions.length > 0 ? (
+				{transitions.length > 0 ? (
 					<div className="space-y-3">
 						<div className="text-sm font-medium text-muted-foreground">
 							Available transitions:
 						</div>
 						<div className="grid gap-2">
-							{availableTransitions.map((visibility) => {
-								const config = getVisibilityConfig(visibility);
-								const warning = getTransitionWarning(
-									currentVisibility,
+							{transitions.map((target) => {
+								const config = VISIBILITY_META[target];
+								const warning = getVisibilityTransitionWarning(
 									visibility,
+									target,
+									entityNoun,
 								);
 
 								return (
 									<CustomVerificationDialog
-										key={visibility}
+										key={target}
 										title={warning.title}
 										description={warning.message}
 										severity={warning.severity}
 										confirmText="Change Visibility"
-										onConfirm={() => confirmVisibilityChange(visibility)}
+										onConfirm={() => confirmVisibilityChange(target)}
 										content={
 											<div className="flex items-center justify-center gap-2 p-3 bg-muted rounded-lg">
 												<div
@@ -290,7 +201,7 @@ export function VisibilityStatusSwitcher({
 						<div className="flex items-center gap-2 text-muted-foreground">
 							<InfoIcon className="w-4 h-4" />
 							<span className="text-sm">
-								{currentVisibility === IAppVisibility.Offline
+								{visibility === IAppVisibility.Offline
 									? "No transitions available from Offline status"
 									: "No transitions available from current status"}
 							</span>
@@ -300,10 +211,12 @@ export function VisibilityStatusSwitcher({
 
 				{/* Info about restrictions */}
 				<div className="text-xs text-muted-foreground space-y-1 border-t pt-3">
-					<div className="flex items-center gap-1">
-						<ShieldIcon className="w-3 h-3" />
-						<span>Offline apps cannot change visibility status</span>
-					</div>
+					{entityNoun === "app" && (
+						<div className="flex items-center gap-1">
+							<ShieldIcon className="w-3 h-3" />
+							<span>Offline apps cannot change visibility status</span>
+						</div>
+					)}
 					<div className="flex items-center gap-1">
 						<UsersIcon className="w-3 h-3" />
 						<span>Public transitions require central review (1-3 days)</span>
@@ -314,6 +227,34 @@ export function VisibilityStatusSwitcher({
 	);
 }
 
+export interface VisibilityStatusSwitcherProps {
+	localApp: IApp;
+	canEdit: boolean;
+	onVisibilityChange: (
+		appId: string,
+		newVisibility: IAppVisibility,
+	) => Promise<void>;
+	docsUrl?: string;
+}
+
+export function VisibilityStatusSwitcher({
+	localApp,
+	canEdit,
+	onVisibilityChange,
+	docsUrl,
+}: Readonly<VisibilityStatusSwitcherProps>) {
+	return (
+		<EntityVisibilitySwitcher
+			entityId={localApp.id}
+			visibility={localApp.visibility ?? IAppVisibility.Offline}
+			canEdit={canEdit}
+			entityNoun="app"
+			onVisibilityChange={onVisibilityChange}
+			docsUrl={docsUrl}
+		/>
+	);
+}
+
 interface CustomVerificationDialogProps {
 	children: ReactNode;
 	title: string;
@@ -321,7 +262,7 @@ interface CustomVerificationDialogProps {
 	severity: "warning" | "danger" | "info";
 	confirmText?: string;
 	cancelText?: string;
-	onConfirm: () => void;
+	onConfirm: () => void | Promise<void>;
 	content?: ReactNode;
 }
 
@@ -349,7 +290,6 @@ function CustomVerificationDialog({
 					iconBg: "bg-orange-50 dark:bg-orange-950",
 					buttonVariant: "default" as const,
 				};
-			case "info":
 			default:
 				return {
 					icon: <InfoIcon className="h-5 w-5 text-blue-500" />,

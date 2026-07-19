@@ -1,9 +1,13 @@
+import type { IAppVisibility } from "../../types";
+import type { IMediaItem } from "./app-state";
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	IChangeGroupVisibilityResult,
 	ICreateGroupPayload,
 	IGroup,
 	IGroupMembershipRequest,
+	IGroupPublicationStatus,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -107,4 +111,32 @@ export interface ITeamState {
 	listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]>;
 	acceptGroupRequest(appId: string, memberId: string): Promise<void>;
 	declineGroupRequest(appId: string, memberId: string): Promise<void>;
+	/**
+	 * Uploads suite artwork through a signed URL, exactly like app media.
+	 * `appId` must be the suite's anchor app — the backend rejects anything else.
+	 */
+	pushGroupMedia(
+		appId: string,
+		groupId: string,
+		item: IMediaItem,
+		file: File,
+		language?: string,
+	): Promise<void>;
+	/**
+	 * Moves a suite between visibility levels. Becoming publicly reachable
+	 * submits it for review instead of taking effect immediately — check
+	 * `reviewRequested` on the result.
+	 */
+	changeGroupVisibility(
+		appId: string,
+		groupId: string,
+		visibility: IAppVisibility,
+		message?: string,
+	): Promise<IChangeGroupVisibilityResult>;
+	getGroupPublication(
+		appId: string,
+		groupId: string,
+	): Promise<IGroupPublicationStatus>;
+	/** An app's own admins decide whether it stays listed inside a suite. */
+	leaveGroup(appId: string, groupId: string): Promise<void>;
 }

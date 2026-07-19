@@ -3,28 +3,16 @@
 import {
 	Boxes,
 	Check,
-	ChevronDown,
-	Globe,
 	Layers,
-	Lock,
 	Plus,
+	Settings2,
 	Sparkles,
-	Trash2,
 	X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import type { IGroup, IGroupMember, IGroupMembershipRequest } from "../../..";
+import type { IGroup, IGroupMembershipRequest } from "../../..";
 import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-	AlertDialogTrigger,
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -39,35 +27,21 @@ import {
 	EmptyState,
 	Input,
 	Label,
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
 	Textarea,
+	initials,
+	seedGradient,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../..";
+import {
+	VISIBILITY_META,
+	fromWireVisibility,
+} from "../visibility-status/visibility-meta";
+import { GroupConsole } from "./group-console";
 
 interface GroupManagementProps {
 	appId: string;
-}
-
-function initials(value?: string | null): string {
-	const cleaned = (value ?? "").replace(/[^A-Za-z0-9 ]/g, "").trim();
-	if (!cleaned) return "?";
-	const parts = cleaned.split(/\s+/);
-	return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
-}
-
-/** Deterministic soft gradient for suites/apps without their own artwork. */
-function seedGradient(seed: string): string {
-	let hash = 0;
-	for (let i = 0; i < seed.length; i++)
-		hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-	const hue = ((hash % 360) + 360) % 360;
-	return `linear-gradient(135deg, hsl(${hue} 62% 52%), hsl(${(hue + 42) % 360} 58% 44%))`;
 }
 
 export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
@@ -118,7 +92,6 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 	const [name, setName] = useState("");
 	const [useCase, setUseCase] = useState("");
 	const [description, setDescription] = useState("");
-	const [visibility, setVisibility] = useState("PRIVATE");
 
 	const refresh = () => {
 		invalidate(backend.teamState.listGroups, [appId]);
@@ -129,7 +102,6 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 		setName("");
 		setUseCase("");
 		setDescription("");
-		setVisibility("PRIVATE");
 	};
 
 	const handleCreate = async () => {
@@ -140,14 +112,15 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 				name: name.trim(),
 				description: description.trim() || undefined,
 				use_case: useCase.trim() || undefined,
-				visibility,
 			});
 			toast.success("Suite created");
 			setCreateOpen(false);
 			resetForm();
 			refresh();
-		} catch {
-			toast.error("Could not create the suite");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Could not create the suite",
+			);
 		} finally {
 			setBusy(false);
 		}
@@ -178,7 +151,8 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 						<DialogHeader>
 							<DialogTitle>Create a suite</DialogTitle>
 							<DialogDescription>
-								Branding is borrowed from this app; you can refine it later.
+								Suites start private. Add artwork, apps and publish it from the
+								suite console.
 							</DialogDescription>
 						</DialogHeader>
 						<div className="space-y-4 py-2">
@@ -214,22 +188,6 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 									placeholder="What this suite of apps does together."
 									rows={3}
 								/>
-							</div>
-							<div className="space-y-1.5">
-								<Label>Visibility</Label>
-								<Select value={visibility} onValueChange={setVisibility}>
-									<SelectTrigger>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="PRIVATE">
-											Private — only your team
-										</SelectItem>
-										<SelectItem value="PUBLIC">
-											Public — listed in the store
-										</SelectItem>
-									</SelectContent>
-								</Select>
 							</div>
 						</div>
 						<DialogFooter>
@@ -372,58 +330,9 @@ function GroupCard({
 	onChange: () => void;
 	suggestions: { id: string; name: string }[];
 }>) {
-	const backend = useBackend();
-	const [expanded, setExpanded] = useState(false);
-	const [memberInput, setMemberInput] = useState("");
-	const [busy, setBusy] = useState(false);
-
-	const isOwner = group.owner_app_id === appId;
-	const isPublic = group.visibility === "PUBLIC";
+	const [consoleOpen, setConsoleOpen] = useState(false);
 	const label = group.use_case || group.name || "Untitled suite";
-	const memberIds = new Set(group.members.map((member) => member.app_id));
-	const addable = suggestions.filter((app) => !memberIds.has(app.id));
-
-	const addMember = async (targetId?: string) => {
-		const target = (targetId ?? memberInput).trim();
-		if (!target) return;
-		setBusy(true);
-		try {
-			await backend.teamState.addGroupMember(appId, group.id, target);
-			toast.success("App added to the suite");
-			setMemberInput("");
-			onChange();
-		} catch {
-			toast.error("Could not add the app");
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const removeMember = async (memberAppId: string) => {
-		setBusy(true);
-		try {
-			await backend.teamState.removeGroupMember(appId, group.id, memberAppId);
-			toast.success("App removed from the suite");
-			onChange();
-		} catch {
-			toast.error("Could not remove the app");
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const deleteGroup = async () => {
-		setBusy(true);
-		try {
-			await backend.teamState.deleteGroup(appId, group.id);
-			toast.success("Suite deleted");
-			onChange();
-		} catch {
-			toast.error("Could not delete the suite");
-		} finally {
-			setBusy(false);
-		}
-	};
+	const meta = VISIBILITY_META[fromWireVisibility(group.visibility)];
 
 	return (
 		<div className="rounded-xl border bg-card overflow-hidden flex flex-col">
@@ -455,14 +364,10 @@ function GroupCard({
 					</Avatar>
 					<Badge
 						variant="secondary"
-						className="mb-1 gap-1 text-[11px] font-medium"
+						className="mb-1 gap-1.5 text-[11px] font-medium"
 					>
-						{isPublic ? (
-							<Globe className="w-3 h-3" />
-						) : (
-							<Lock className="w-3 h-3" />
-						)}
-						{isPublic ? "Public" : "Private"}
+						<span className={`w-2 h-2 rounded-full ${meta.color}`} />
+						{meta.title}
 					</Badge>
 				</div>
 
@@ -500,156 +405,25 @@ function GroupCard({
 							{group.member_count} app{group.member_count === 1 ? "" : "s"}
 						</span>
 					</div>
-					<button
-						type="button"
-						onClick={() => setExpanded((value) => !value)}
-						className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => setConsoleOpen(true)}
 					>
+						<Settings2 className="w-3.5 h-3.5 mr-1.5" />
 						Manage
-						<ChevronDown
-							className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-180" : ""}`}
-						/>
-					</button>
+					</Button>
 				</div>
-
-				{expanded && (
-					<div className="mt-2 pt-3 border-t space-y-3">
-						<div className="space-y-1.5">
-							{group.members.map((member) => (
-								<MemberRow
-									key={member.id}
-									member={member}
-									canRemove={isOwner && member.kind !== "PRIMARY"}
-									disabled={busy}
-									onRemove={() => removeMember(member.app_id)}
-								/>
-							))}
-						</div>
-
-						{isOwner && (
-							<div className="space-y-2">
-								{addable.length > 0 && (
-									<div className="flex flex-wrap gap-1.5">
-										<span className="text-[11px] text-muted-foreground w-full">
-											Connected apps — join instantly:
-										</span>
-										{addable.map((app) => (
-											<button
-												key={app.id}
-												type="button"
-												disabled={busy}
-												onClick={() => addMember(app.id)}
-												className="inline-flex items-center gap-1 rounded-full border bg-background px-2.5 py-1 text-[11px] transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:opacity-50"
-											>
-												<Plus className="w-3 h-3" />
-												{app.name}
-											</button>
-										))}
-									</div>
-								)}
-								<div className="flex items-center gap-2">
-									<Input
-										value={memberInput}
-										onChange={(event) => setMemberInput(event.target.value)}
-										placeholder="App ID to add…"
-										className="h-8 text-xs"
-									/>
-									<Button
-										size="sm"
-										variant="secondary"
-										disabled={busy || !memberInput.trim()}
-										onClick={() => addMember()}
-									>
-										<Plus className="w-3.5 h-3.5" />
-									</Button>
-								</div>
-							</div>
-						)}
-
-						{isOwner && (
-							<AlertDialog>
-								<AlertDialogTrigger asChild>
-									<Button
-										variant="ghost"
-										size="sm"
-										className="text-destructive hover:text-destructive w-full justify-start"
-									>
-										<Trash2 className="w-3.5 h-3.5 mr-1.5" />
-										Delete suite
-									</Button>
-								</AlertDialogTrigger>
-								<AlertDialogContent>
-									<AlertDialogHeader>
-										<AlertDialogTitle>Delete this suite?</AlertDialogTitle>
-										<AlertDialogDescription>
-											The suite and its curation are removed. The member apps
-											themselves are not affected.
-										</AlertDialogDescription>
-									</AlertDialogHeader>
-									<AlertDialogFooter>
-										<AlertDialogCancel>Cancel</AlertDialogCancel>
-										<AlertDialogAction onClick={deleteGroup}>
-											Delete
-										</AlertDialogAction>
-									</AlertDialogFooter>
-								</AlertDialogContent>
-							</AlertDialog>
-						)}
-					</div>
-				)}
 			</div>
-		</div>
-	);
-}
 
-function MemberRow({
-	member,
-	canRemove,
-	disabled,
-	onRemove,
-}: Readonly<{
-	member: IGroupMember;
-	canRemove: boolean;
-	disabled: boolean;
-	onRemove: () => void;
-}>) {
-	const isPrimary = member.kind === "PRIMARY";
-	const isPending = member.status === "PENDING";
-	return (
-		<div className="flex items-center gap-2.5">
-			<Avatar className="h-7 w-7 rounded-md">
-				{member.app_icon ? <AvatarImage src={member.app_icon} alt="" /> : null}
-				<AvatarFallback
-					className="rounded-md text-white text-[10px] font-bold"
-					style={{ backgroundImage: seedGradient(member.app_id) }}
-				>
-					{initials(member.app_name)}
-				</AvatarFallback>
-			</Avatar>
-			<span className="text-sm truncate flex-1">
-				{member.app_name ?? member.app_id}
-			</span>
-			{isPrimary && (
-				<Badge variant="outline" className="text-[10px]">
-					Anchor
-				</Badge>
-			)}
-			{isPending && (
-				<Badge variant="secondary" className="text-[10px]">
-					Pending
-				</Badge>
-			)}
-			{canRemove && (
-				<Button
-					size="icon"
-					variant="ghost"
-					className="h-6 w-6"
-					disabled={disabled}
-					onClick={onRemove}
-				>
-					<X className="w-3.5 h-3.5" />
-				</Button>
-			)}
+			<GroupConsole
+				appId={appId}
+				group={group}
+				open={consoleOpen}
+				onOpenChange={setConsoleOpen}
+				onChange={onChange}
+				suggestions={suggestions}
+			/>
 		</div>
 	);
 }

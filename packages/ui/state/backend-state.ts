@@ -127,16 +127,23 @@ export type {
 	VersionType,
 } from "./backend-state/widget-state";
 
+export type { IMediaItem } from "./backend-state/app-state";
+
 export type {
 	IAccessibleApp,
 	IAppConnection,
 	IAppConnectionStatus,
 	IAppConnectionsResponse,
 	IAppContentStats,
+	IChangeGroupVisibilityResult,
 	ICreateGroupPayload,
 	IGroup,
 	IGroupMember,
 	IGroupMembershipRequest,
+	IGroupPublicationLog,
+	IGroupPublicationRequest,
+	IGroupPublicationStatus,
+	IMemberReadiness,
 	IUpdateGroupPayload,
 	IBackendRole,
 	IInvite,

@@ -1,15 +1,14 @@
 use crate::{
-    entity::{app_group, app_group_member, membership},
+    entity::{app_group, app_group_member, membership, role},
     error::ApiError,
     middleware::jwt::AppUser,
+    permission::role_permission::{RolePermissions, has_role_permission},
     routes::app::groups::{GroupInfo, assemble_groups},
     state::AppState,
 };
-use axum::{
-    Extension, Json,
-    extract::State,
-};
+use axum::{Extension, Json, extract::State};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use std::collections::HashSet;
 
 #[utoipa::path(
     get,
@@ -29,11 +28,36 @@ pub async fn get_user_groups(
 ) -> Result<Json<Vec<GroupInfo>>, ApiError> {
     let user_id = user.sub()?;
 
-    let app_ids: Vec<String> = membership::Entity::find()
+    // Suites expose sibling apps' names, descriptions and artwork, so only
+    // apps where the caller may actually see the team are considered. A bare
+    // membership is not enough.
+    let memberships = membership::Entity::find()
         .filter(membership::Column::UserId.eq(user_id))
+        .all(&state.db)
+        .await?;
+
+    if memberships.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    let role_ids: Vec<String> = memberships.iter().map(|m| m.role_id.clone()).collect();
+    let readable_roles: HashSet<String> = role::Entity::find()
+        .filter(role::Column::Id.is_in(role_ids))
         .all(&state.db)
         .await?
         .into_iter()
+        .filter(|r| {
+            has_role_permission(
+                &RolePermissions::from_bits_truncate(r.permissions),
+                RolePermissions::ReadTeam,
+            )
+        })
+        .map(|r| r.id)
+        .collect();
+
+    let app_ids: Vec<String> = memberships
+        .into_iter()
+        .filter(|m| readable_roles.contains(&m.role_id))
         .map(|m| m.app_id)
         .collect();
 
