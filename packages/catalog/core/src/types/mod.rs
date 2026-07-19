@@ -6,4 +6,7 @@ pub mod flow_path;
 pub mod graph_overlay;
 pub mod keypoint;
 pub mod node_image;
+pub mod ontology_action_schema;
+pub mod ontology_bindings;
+pub mod remote_ontology;
 pub mod segmentation_mask;

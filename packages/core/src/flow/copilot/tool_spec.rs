@@ -96,6 +96,22 @@ pub fn resolve_tool_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedT
     if spec.name == "flowpilot_board" && spec_arg_str(args, "mode", "mode") == "explain" {
         return ResolvedToolApproval::none();
     }
+    // Data Studio multiplexed tools carry a single approval policy, but their inspection operations
+    // are read-only and must never surface a prompt — only mutating/execute operations do.
+    if matches!(spec.name, "graph_overlay_tool" | "ontology_action_tool") {
+        const DATA_STUDIO_READONLY_OPS: &[&str] = &[
+            "list_overlays",
+            "get_overlay",
+            "get_schema",
+            "validate_overlay",
+            "list_actions",
+            "describe_action",
+            "prerun_action",
+        ];
+        if DATA_STUDIO_READONLY_OPS.contains(&spec_arg_str(args, "operation", "operation")) {
+            return ResolvedToolApproval::none();
+        }
+    }
     match spec.approval {
         ToolApprovalSpec::None => ResolvedToolApproval::none(),
         ToolApprovalSpec::Mutating { title, message } => ResolvedToolApproval {
@@ -196,6 +212,43 @@ fn call_app_chat_message(args: &Value) -> String {
         "FlowPilot wants to message an app's chat.".to_string()
     } else {
         format!("FlowPilot wants to message the chat of app '{app_id}'.")
+    }
+}
+
+fn graph_overlay_message(args: &Value) -> String {
+    let operation = spec_arg_str(args, "operation", "operation");
+    match operation {
+        "create_overlay" => {
+            "The Data Studio agent wants to create an ontology/overlay.".to_string()
+        }
+        "delete_overlay" => {
+            "The Data Studio agent wants to delete an ontology/overlay.".to_string()
+        }
+        _ => "The Data Studio agent wants to update an ontology/overlay.".to_string(),
+    }
+}
+
+fn graph_element_message(args: &Value) -> String {
+    let operation = spec_arg_str(args, "operation", "operation");
+    let label = spec_arg_str(args, "label", "label");
+    let what = if operation == "add_edges" {
+        "edges"
+    } else {
+        "nodes"
+    };
+    if label.is_empty() {
+        format!("The Data Studio agent wants to add graph {what}.")
+    } else {
+        format!("The Data Studio agent wants to add {what} to '{label}'.")
+    }
+}
+
+fn ontology_action_message(args: &Value) -> String {
+    let action_id = spec_arg_str(args, "action_id", "actionId");
+    if action_id.is_empty() {
+        "The Data Studio agent wants to execute an ontology action.".to_string()
+    } else {
+        format!("The Data Studio agent wants to execute ontology action '{action_id}'.")
     }
 }
 
@@ -810,6 +863,32 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             },
             timeout_secs: 120,
         },
+        PlatformToolSpec {
+            name: "data_studio_agent",
+            description: r#"The single entry point for ANYTHING about an app's DATA — its databases/tables, ontologies (graph overlays), objects, graph queries, analytics, and ontology actions. Delegates to the Data Studio specialist, a data agent with full access to the app's graph/data tools.
+
+Use this for: setting up or updating databases/tables, creating/editing ontologies and overlays, writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths/neighbors, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects.
+
+Give a complete, self-contained instruction of what the user wants to know or change about the data. If a Data Studio page is currently open (see your context), its app and overlay are the default target — pass them here so the specialist starts there; it can still reach OTHER apps' data when asked. The specialist reports back transparently: the queries it ran, a step log, links, and inline charts — relay its answer (including any chart/query blocks) to the user verbatim.
+
+The specialist inspects with read-only tools freely; mutating operations (create/update tables or overlays, add nodes/edges, execute actions) ask the user for approval individually. SCOPE: data only — it does NOT edit workflow boards (use flowpilot_board) or UI (use flowpilot_widget)."#,
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations)." },
+                        "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
+                    },
+                    "required": ["instruction"]
+                })
+            },
+            approval: ToolApprovalSpec::None,
+            // Data investigations can chain many read/query/analytics steps and validator-driven
+            // overlay edits; match the flowpilot_board dispatch bound (30 minutes). Individual
+            // mutating operations inside still ask for their own approval.
+            timeout_secs: 1800,
+        },
     ];
 
     // Global FlowPilot can execute a persisted board node directly and inspect any resulting run.
@@ -857,6 +936,165 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
 /// Look up one global-assistant tool spec by name (memory tools included).
 pub fn find_global_tool_spec(name: &str) -> Option<PlatformToolSpec> {
     global_assistant_tool_specs(true)
+        .into_iter()
+        .find(|spec| spec.name == name)
+}
+
+/// Platform tools offered inside the nested Data Studio specialist session. Every operation routes
+/// through the frontend bridge to `backend.graphState`; `app_id`/`overlay_id` are injected from the
+/// current Data Studio page context but may be overridden per call to reach another app. Shared by
+/// every desktop SDK/MCP provider so all backends advertise identical tools.
+pub fn data_studio_tool_specs() -> Vec<PlatformToolSpec> {
+    vec![
+        PlatformToolSpec {
+            name: "graph_overlay_tool",
+            description: r#"Inspect and manage ONTOLOGIES (graph overlays) for an app. An overlay maps node/edge labels onto database tables via id/display/property columns.
+
+Operations: `list_overlays`, `get_overlay`, `get_schema`, `validate_overlay` (read-only); `create_overlay`, `update_overlay`, `delete_overlay` (mutating, ask for approval). Always `get_schema` before writing queries, and `validate_overlay` a draft before `update_overlay`; pass `expected_updated_at` on update for optimistic concurrency. NEVER set governed `actions` or cross-project `exposed` here — those are ignored."#,
+            schema: graph_overlay_tool_schema,
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve ontology change",
+                message: graph_overlay_message,
+            },
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "graph_query_tool",
+            description: r#"Query, traverse and analyze an app's graph/ontology. All operations are READ-ONLY (no approval).
+
+Operations: `cypher` (Cypher query, depth<=5, auto-LIMITed), `sql` (single read-only SELECT), `neighbors`, `subgraph`, `paths`, `analytics`, `search_nodes`, `sample`. Prefer `get_schema` (graph_overlay_tool) first so labels/columns are correct. Return compact results and, when quantitative, render them as a ```plotly chart in your reply."#,
+            schema: graph_query_tool_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "graph_element_tool",
+            description: r#"Add graph ELEMENTS (nodes or edges) to an overlay's underlying tables. Mutating — asks for approval.
+
+Operations: `add_nodes`, `add_edges`. Read `get_schema` first: node rows must include the node type's id column; edge rows must include the edge's source and target id columns plus any properties. Rows are upserted (merge on the key columns), so re-adding an existing id updates it."#,
+            schema: graph_element_tool_schema,
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve graph write",
+                message: graph_element_message,
+            },
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "ontology_action_tool",
+            description: r#"List, describe and EXECUTE ontology actions against objects. You cannot author or edit actions — only run the ones defined in the overlay.
+
+Operations: `list_actions`, `describe_action`, `prerun_action` (read-only); `invoke_action` (execute, asks for approval). ALWAYS `describe_action` (and `prerun_action` when it needs OAuth/parameters) before `invoke_action`. `invoke_action` is IDENTITY-ONLY: pass `object_refs: [{object_type, id}]` — never full rows. If it returns a 409 binding-currency error, surface it verbatim and stop."#,
+            schema: ontology_action_tool_schema,
+            approval: ToolApprovalSpec::Execute {
+                title: "Approve ontology action",
+                message: ontology_action_message,
+            },
+            timeout_secs: 600,
+        },
+    ]
+}
+
+fn graph_overlay_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list_overlays", "get_overlay", "get_schema", "validate_overlay", "create_overlay", "update_overlay", "delete_overlay"], "description": "Overlay operation to perform." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Overlay/ontology id. Omit for the current overlay; required for get/update/delete of a specific overlay." },
+            "name": { "type": "string", "description": "Overlay display name (create/update)." },
+            "description": { "type": "string", "description": "Overlay description (create/update)." },
+            "nodes": { "type": "array", "items": { "type": "object" }, "description": "Node-type mappings (label + table + id/display/property columns) for create/update." },
+            "edges": { "type": "array", "items": { "type": "object" }, "description": "Edge-type mappings (label + table + source/target columns) for create/update." },
+            "object_views": { "type": "array", "items": { "type": "object" }, "description": "Optional object view definitions for create/update." },
+            "bindings_enabled": { "type": "boolean", "description": "Whether object/action query bindings are enabled." },
+            "default_limit": { "type": "integer", "description": "Default query result limit for the overlay." },
+            "expected_updated_at": { "type": "string", "description": "The overlay's current updated_at, sent on update for optimistic concurrency." },
+            "draft": { "type": "object", "description": "Full overlay draft to check with validate_overlay." },
+            "user_scoped": { "type": "boolean", "description": "Operate on the user-scoped store instead of the project store." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn graph_query_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["cypher", "sql", "neighbors", "subgraph", "paths", "analytics", "search_nodes", "sample"], "description": "Query operation to perform." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Overlay/ontology id. Omit to use the current overlay." },
+            "query": { "type": "string", "description": "Cypher text (cypher), SQL SELECT (sql), or search text (search_nodes)." },
+            "params": { "type": "object", "description": "Cypher query parameters." },
+            "limit": { "type": "integer", "description": "Maximum rows/nodes to return." },
+            "label": { "type": "string", "description": "Node label (neighbors, sample)." },
+            "node_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Anchor node id (neighbors). Accepts the scalar type used by the mapped id column."
+            },
+            "direction": { "type": "string", "enum": ["in", "out", "both"], "description": "Traversal direction (neighbors)." },
+            "depth": { "type": "integer", "description": "Traversal depth 1-5 (neighbors, subgraph)." },
+            "seeds": { "type": "array", "items": { "type": "object" }, "description": "Seed nodes for subgraph as [{label, id}]." },
+            "from_label": { "type": "string", "description": "Path source label (paths)." },
+            "from_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Path source id (paths). Accepts the scalar type used by the mapped id column."
+            },
+            "to_label": { "type": "string", "description": "Path target label (paths)." },
+            "to_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Path target id (paths). Accepts the scalar type used by the mapped id column."
+            },
+            "max_depth": { "type": "integer", "description": "Maximum path length (paths)." },
+            "n": { "type": "integer", "description": "Sample size (sample)." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn graph_element_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["add_nodes", "add_edges"], "description": "Whether to add nodes or edges." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Overlay/ontology id. Omit to use the current overlay." },
+            "label": { "type": "string", "description": "Node or edge label to write to (must exist in the overlay schema)." },
+            "rows": { "type": "array", "items": { "type": "object" }, "description": "Rows to upsert. Nodes must include the id column; edges must include the source and target id columns. Use get_schema to learn the exact column names." }
+        },
+        "required": ["operation", "label", "rows"]
+    })
+}
+
+fn ontology_action_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list_actions", "describe_action", "prerun_action", "invoke_action"], "description": "Action operation to perform." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Ontology/overlay id owning the action. Omit to use the current overlay." },
+            "action_id": { "type": "string", "description": "Action id (from list_actions). Required for describe/prerun/invoke." },
+            "object_refs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "object_type": { "type": "string", "description": "Node label / object type." },
+                        "id": { "description": "Object id (string or number)." }
+                    },
+                    "required": ["object_type", "id"]
+                },
+                "description": "Objects to run the action against, identity only. Never include full row payloads."
+            },
+            "parameters": { "type": "object", "description": "Optional action parameters (from describe_action/prerun_action)." },
+            "idempotency_key": { "type": "string", "description": "Optional idempotency key for invoke_action." }
+        },
+        "required": ["operation"]
+    })
+}
+
+/// Look up one Data Studio specialist tool spec by name.
+pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
+    data_studio_tool_specs()
         .into_iter()
         .find(|spec| spec.name == name)
 }
@@ -990,6 +1228,21 @@ mod tests {
         assert_eq!(schema["required"], json!(["app_id", "board_id", "run_id"]));
         for field in ["filter", "limit", "offset", "run_metadata"] {
             assert!(schema["properties"].get(field).is_some(), "missing {field}");
+        }
+    }
+
+    #[test]
+    fn graph_query_ids_accept_non_string_scalars() {
+        let schema = graph_query_tool_schema();
+        for field in ["node_id", "from_id", "to_id"] {
+            let variants = schema["properties"][field]["oneOf"]
+                .as_array()
+                .expect("scalar id union");
+            let types = variants
+                .iter()
+                .filter_map(|variant| variant["type"].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(types, vec!["string", "number", "boolean"]);
         }
     }
 }

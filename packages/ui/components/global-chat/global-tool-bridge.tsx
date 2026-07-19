@@ -1166,6 +1166,10 @@ export function GlobalToolBridge() {
 				case "execute_event":
 				case "execute_node":
 				case "query_execution_logs":
+				case "graph_overlay_tool":
+				case "graph_query_tool":
+				case "graph_element_tool":
+				case "ontology_action_tool":
 					return executeRuntimeTool(request.toolName, args);
 				case "list_apps": {
 					// Selection is driven by app + EVENT metadata only (no board loading): each app's
@@ -1907,6 +1911,136 @@ export function GlobalToolBridge() {
 							? "Page onLoad event wired — it runs when the page opens."
 							: "Page onLoad event cleared.",
 					};
+				}
+				case "data_studio_agent": {
+					const instruction = argString(args, "instruction");
+					if (!instruction)
+						return {
+							status: "error",
+							message: "data_studio_agent requires an instruction.",
+						};
+					const appId = argString(args, "app_id") || argString(args, "appId");
+					if (!appId)
+						return {
+							status: "error",
+							message:
+								"data_studio_agent requires an app_id. Use list_apps to find one, or open a Data Studio page.",
+						};
+					const overlayId =
+						argString(args, "overlay_id") || argString(args, "overlayId");
+
+					const chat = useGlobalChatStore.getState();
+					const owningUserPrompt = sourceUserPrompt(request);
+					const owningConversationId = conversationScopeId(request);
+					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
+						owningUserPrompt,
+						instruction,
+					);
+					const modelId = flowPilotModelIdForProvider(
+						normalizeAIProvider(chat.provider),
+						chat.selectedModelId,
+					);
+
+					const nestedRunRequestId = `${request.requestId}:agent`;
+					const {
+						pushSubRunChunk,
+						flushSubRunStream,
+						subAcc,
+						publishSubSteps,
+						failProgressSteps,
+					} = createSubRunStream({
+						requestId: nestedRunRequestId,
+						parentRequestId: request.requestId,
+						recordDebugEvent: (event) => recordNestedDebug(request, event),
+					});
+					const consumeSubRunEvents = (
+						events: ReturnType<typeof pushSubRunChunk>,
+					) => {
+						let stepsChanged = false;
+						for (const event of events) {
+							if (event.type === "usage_stat") {
+								const stat = readUsageStat(event.data);
+								if (stat)
+									useGlobalChatStore.getState().addSubUsageStats([stat]);
+								continue;
+							}
+							if (event.type === "text") continue;
+							applyStreamEvent(subAcc, event);
+							stepsChanged = true;
+						}
+						if (stepsChanged) publishSubSteps();
+					};
+					const onToken = (chunk: string) =>
+						consumeSubRunEvents(pushSubRunChunk(chunk));
+					let subRunFlushed = false;
+					const flushSubRun = () => {
+						if (subRunFlushed) return;
+						subRunFlushed = true;
+						consumeSubRunEvents(flushSubRunStream());
+					};
+
+					recordNestedDebug(
+						request,
+						nestedAgentRunEvent({
+							requestId: nestedRunRequestId,
+							parentRequestId: request.requestId,
+							toolName: "data_studio_agent",
+							stage: "started",
+							input: {
+								scope: "DataStudio",
+								app_id: appId,
+								overlay_id: overlayId,
+								instruction,
+							},
+							summary: "Delegated Data Studio sub-agent started.",
+						}),
+					);
+
+					try {
+						const response = await backend.boardState.copilot_chat(
+							"DataStudio",
+							null /* board */,
+							undefined /* catalog */,
+							[] /* selectedNodeIds */,
+							null /* currentSurface */,
+							[] /* selectedComponentIds */,
+							instruction,
+							[] /* history */,
+							undefined /* images */,
+							onToken,
+							modelId,
+							chat.reasoningEffort || undefined,
+							undefined /* token */,
+							undefined /* runContext */,
+							undefined /* actionContext */,
+							true /* nested: isolate from the pending parent session */,
+							false /* readOnly */,
+							{
+								appId,
+								overlayId,
+								parentRequestId: request.requestId,
+								conversationId: owningConversationId,
+								sourceUserPrompt: owningUserPrompt,
+							},
+							nestedRunRequestId,
+							rawSpecialistPrompt,
+							appId,
+						);
+						flushSubRun();
+						return {
+							status: "ok",
+							app_id: appId,
+							overlay_id: overlayId,
+							response: response.message,
+						};
+					} catch (error) {
+						failProgressSteps();
+						flushSubRun();
+						return {
+							status: "error",
+							message: error instanceof Error ? error.message : String(error),
+						};
+					}
 				}
 				case "flowpilot_board": {
 					const instruction = argString(args, "instruction");

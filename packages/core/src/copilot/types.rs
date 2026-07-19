@@ -19,6 +19,9 @@ pub enum CopilotScope {
     Frontend,
     /// Both board and UI modifications
     Both,
+    /// Only data-layer work (databases, ontologies/overlays, graph queries,
+    /// analytics and ontology actions). No board or UI modifications.
+    DataStudio,
 }
 
 /// A unified chat message that can contain both text and images

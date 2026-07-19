@@ -53,7 +53,9 @@ pub async fn get_events(
 
         for event in events {
             if let Ok(loaded_event) = Event::load(event, &app, None).await {
-                loaded_events.push(loaded_event);
+                if loaded_event.event_type != "ontology_action" {
+                    loaded_events.push(loaded_event);
+                }
             } else {
                 tracing::warn!("Failed to load event: {} in app {}", event, app_id.clone());
             }
@@ -79,6 +81,16 @@ pub async fn upsert_event(
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
     if let Ok(mut app) = App::load(app_id.clone(), flow_like_state).await {
+        if event.event_type == "ontology_action"
+            || app
+                .get_event(&event.id, None)
+                .await
+                .is_ok_and(|saved| saved.event_type == "ontology_action")
+        {
+            return Err(TauriFunctionError::new(
+                "Ontology action events are managed through Data Studio actions",
+            ));
+        }
         let event = app.upsert_event(event, version_type, enforce_id).await?;
 
         // Automatically register/update the event with the sink manager if applicable
@@ -132,6 +144,15 @@ pub async fn delete_event(
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
     if let Ok(mut app) = App::load(app_id.clone(), flow_like_state).await {
+        if app
+            .get_event(&event_id, None)
+            .await
+            .is_ok_and(|event| event.event_type == "ontology_action")
+        {
+            return Err(TauriFunctionError::new(
+                "Ontology action events are removed through Data Studio actions",
+            ));
+        }
         // Unregister from sink manager first if registered
         if let Ok(event_sink_manager) =
             crate::state::TauriEventSinkManagerState::construct(&handler).await

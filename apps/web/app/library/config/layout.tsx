@@ -160,9 +160,9 @@ const navigationItems: {
 	},
 	{
 		href: "/library/config/explore",
-		label: "Explore Data",
+		label: "Data Studio",
 		icon: DatabaseIcon,
-		description: "Browse and query your data",
+		description: "Model, explore, operate, and share project data",
 		group: "Data",
 	},
 	{

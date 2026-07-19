@@ -25,4 +25,4 @@ serde = { workspace = true, features = ["derive", "rc"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 uuid.workspace = true
 async-trait.workspace = true
-
+jsonschema.workspace = true

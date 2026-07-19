@@ -1,12 +1,10 @@
-use crate::remote_util::{RemoteAppSession, error_for_status, http_client};
-use flow_like::{
-    credentials::SharedCredentials,
-    flow::{
-        execution::{LogLevel, context::ExecutionContext},
-        node::{Node, NodeLogic},
-        variable::VariableType,
-    },
+use crate::remote_util::open_remote_project_database_lease;
+use flow_like::flow::{
+    execution::{LogLevel, context::ExecutionContext},
+    node::{Node, NodeLogic},
+    variable::VariableType,
 };
+use flow_like_catalog_core::{CachedDBRefreshHook, CachedDBRefresher};
 use flow_like_storage::databases::vector::{
     VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
@@ -21,14 +19,115 @@ use super::{CachedDB, NodeDBConnection};
 const PIN_REMOTE_APP_ID: &str = "_flow_remote_app_id";
 const PIN_REMOTE_DATABASE: &str = "_flow_remote_database";
 
-#[derive(Debug, flow_like_types::json::Deserialize)]
-struct PresignProjectDbResponse {
-    shared_credentials: Value,
-}
-
 #[crate::register_node]
 #[derive(Default)]
 pub struct OpenRemoteDatabaseNode {}
+
+#[derive(Clone)]
+struct RemoteDatabaseInitializationSlot {
+    lock: Arc<flow_like_types::tokio::sync::Mutex<()>>,
+}
+
+impl Cacheable for RemoteDatabaseInitializationSlot {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+struct RemoteDatabaseRefresher {
+    cache_key: String,
+    remote_app_id: String,
+    table: String,
+    write_access: bool,
+    refresh_at: std::sync::Mutex<std::time::Instant>,
+    refresh_lock: flow_like_types::tokio::sync::Mutex<()>,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl RemoteDatabaseRefresher {
+    fn is_fresh(&self) -> bool {
+        *self
+            .refresh_at
+            .lock()
+            .expect("remote database refresh deadline lock poisoned")
+            > std::time::Instant::now()
+    }
+}
+
+#[async_trait]
+impl CachedDBRefresher for RemoteDatabaseRefresher {
+    async fn refresh(&self, context: &ExecutionContext) -> flow_like_types::Result<()> {
+        if self.is_fresh() {
+            return Ok(());
+        }
+
+        // One table-level refresh at a time. Different tables may arrive here
+        // concurrently; the raw project-connection cache performs the second
+        // level of single-flight across all of them.
+        let _refresh = self.refresh_lock.lock().await;
+        if self.is_fresh() {
+            return Ok(());
+        }
+
+        let cached = context
+            .cache
+            .read()
+            .await
+            .get(&self.cache_key)
+            .cloned()
+            .ok_or_else(|| flow_like_types::anyhow!("Remote database cache disappeared"))?;
+        let cached = cached
+            .as_any()
+            .downcast_ref::<CachedDB>()
+            .ok_or_else(|| {
+                flow_like_types::anyhow!("Remote database cache has an unexpected type")
+            })?
+            .clone();
+
+        // Replace only the credential-bearing inner store. The surrounding
+        // BufferedVectorStore (including any pending writes) stays intact, so
+        // a run that was idle past credential expiry never tries to flush with
+        // stale credentials or drops records after a failed stale flush.
+        // Holding this lock also prevents operations from using the old store
+        // while the replacement is being constructed.
+        let mut store = cached.db.write().await;
+        let lease = open_remote_project_database_lease(
+            context,
+            &self.remote_app_id,
+            &self.table,
+            self.write_access,
+        )
+        .await?;
+        let mut lance_store =
+            LanceDBVectorStore::from_connection(lease.connection, self.table.clone()).await;
+        if let Some(options) = &context
+            .app_state
+            .config
+            .read()
+            .await
+            .callbacks
+            .lance_write_options
+        {
+            lance_store.set_write_options(options.clone());
+        }
+        *store.inner_mut() = lance_store;
+        *self
+            .refresh_at
+            .lock()
+            .expect("remote database refresh deadline lock poisoned") = lease.refresh_at;
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
 
 impl OpenRemoteDatabaseNode {
     pub fn new() -> Self {
@@ -42,7 +141,7 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         let mut node = Node::new(
             "open_remote_db",
             "Open Remote Database",
-            "Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. Storage credentials are valid for about an hour — long-running flows with many writes should flush regularly (Flush node).",
+            "Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. The run reuses the connection and refreshes its scoped credentials automatically.",
             "Data/Database",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -117,42 +216,50 @@ impl NodeLogic for OpenRemoteDatabaseNode {
         // "::" cannot appear in table names, so this key can never collide
         // with the local Open Database keys (db_{table} / db_user_{table}).
         let cache_key = format!("db::remote::{}::{}::{}", remote_app_id, access_mode, table);
-        let cache_set = context.cache.read().await.contains_key(&cache_key);
+        let initialization_key = format!("{cache_key}::initialize");
+        let initialization_slot = {
+            let existing = context.cache.read().await.get(&initialization_key).cloned();
+            if let Some(existing) = existing {
+                existing
+                    .as_any()
+                    .downcast_ref::<RemoteDatabaseInitializationSlot>()
+                    .ok_or_else(|| {
+                        flow_like_types::anyhow!(
+                            "Remote database initialization cache has an unexpected type"
+                        )
+                    })?
+                    .clone()
+            } else {
+                let mut cache = context.cache.write().await;
+                if let Some(existing) = cache.get(&initialization_key) {
+                    existing
+                        .as_any()
+                        .downcast_ref::<RemoteDatabaseInitializationSlot>()
+                        .ok_or_else(|| {
+                            flow_like_types::anyhow!(
+                                "Remote database initialization cache has an unexpected type"
+                            )
+                        })?
+                        .clone()
+                } else {
+                    let slot = RemoteDatabaseInitializationSlot {
+                        lock: Arc::new(flow_like_types::tokio::sync::Mutex::new(())),
+                    };
+                    cache.insert(initialization_key, Arc::new(slot.clone()));
+                    slot
+                }
+            }
+        };
 
-        if !cache_set {
-            // Exchange the runtime token for a short-lived app-to-app token
-            // bound to this app (origin) and the remote app (target).
-            let session = RemoteAppSession::open(context, &remote_app_id)
-                .await
-                .map_err(|err| {
-                    flow_like_types::anyhow!("Failed to open remote database session: {}", err)
-                })?;
-
-            // Use the app token to get storage credentials scoped to the
-            // remote app's project database.
-            let presign_url = session.url("db/presign/project");
-            let response = http_client()
-                .post(&presign_url)
-                .bearer_auth(&session.token)
-                .json(&json!({
-                    "table_name": table,
-                    "access_mode": access_mode,
-                }))
-                .send()
-                .await
-                .map_err(|err| {
-                    flow_like_types::anyhow!("Failed to presign remote database access: {}", err)
-                })?;
-            let response = error_for_status(response, "Remote database presign").await?;
-            let presigned: PresignProjectDbResponse = response.json().await?;
-            let credentials: SharedCredentials =
-                flow_like_types::json::from_value(presigned.shared_credentials)?;
-
-            // 3. Open the remote LanceDB exactly like the local Open Database
-            //    node, so the output stays fully compatible.
-            let db = credentials.to_db(&remote_app_id).await?;
-            let db = context.app_state.with_lance_session(db).execute().await?;
-            let mut lance_store = LanceDBVectorStore::from_connection(db, table.clone()).await;
+        let _initializing = initialization_slot.lock.lock().await;
+        if !context.cache.read().await.contains_key(&cache_key) {
+            // Reuse a run-scoped raw connection across every table opened
+            // from this connected project.
+            let lease =
+                open_remote_project_database_lease(context, &remote_app_id, &table, write_access)
+                    .await?;
+            let mut lance_store =
+                LanceDBVectorStore::from_connection(lease.connection, table.clone()).await;
             if let Some(opts) = &context
                 .app_state
                 .config
@@ -168,11 +275,30 @@ impl NodeLogic for OpenRemoteDatabaseNode {
                 db: Arc::new(RwLock::new(buffered)),
             };
 
+            let refresher = Arc::new(RemoteDatabaseRefresher {
+                cache_key: cache_key.clone(),
+                remote_app_id: remote_app_id.clone(),
+                table: table.clone(),
+                write_access,
+                refresh_at: std::sync::Mutex::new(lease.refresh_at),
+                refresh_lock: flow_like_types::tokio::sync::Mutex::new(()),
+                generation: std::sync::atomic::AtomicU64::new(0),
+            });
+
+            // Completion callbacks outlive this node context. Keep the pieces
+            // needed to renew credentials, but detach the callback registry so
+            // the callback cannot retain itself through the cloned context.
+            let mut refresh_context = context.clone();
+            refresh_context.completion_callbacks = Arc::new(RwLock::new(Vec::new()));
             let db_ref = cached.db.clone();
+            let completion_refresher = refresher.clone();
             context
                 .hook_completion_event(Arc::new(move |_run| {
                     let db = db_ref.clone();
+                    let refresher = completion_refresher.clone();
+                    let context = refresh_context.clone();
                     Box::pin(async move {
+                        refresher.refresh(&context).await?;
                         let mut guard = db.write().await;
                         if guard.is_dirty() {
                             guard.flush().await?;
@@ -183,11 +309,14 @@ impl NodeLogic for OpenRemoteDatabaseNode {
                 .await;
 
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached.clone());
-            context
-                .cache
-                .write()
-                .await
-                .insert(cache_key.clone(), cacheable);
+            let refresh_hook: Arc<dyn Cacheable> = Arc::new(CachedDBRefreshHook::new(refresher));
+            let mut cache = context.cache.write().await;
+            cache.insert(cache_key.clone(), cacheable);
+            cache.insert(
+                NodeDBConnection::refresh_cache_key(&cache_key),
+                refresh_hook,
+            );
+            drop(cache);
 
             context.log_message(
                 &format!(

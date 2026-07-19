@@ -131,7 +131,12 @@ pub async fn db_table_names(
     credentials: Option<Arc<SharedCredentials>>,
 ) -> Result<Vec<String>, TauriFunctionError> {
     let db = db_connection_inner(&app_handle, app_id, table_name, credentials, false, None).await?;
-    let table_names = db.list_tables().await?;
+    let table_names = db
+        .list_tables()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog::is_reserved_table(name))
+        .collect();
     Ok(table_names)
 }
 
@@ -144,7 +149,12 @@ pub async fn db_table_names_user(
     sub: Option<String>,
 ) -> Result<Vec<String>, TauriFunctionError> {
     let db = db_connection_inner(&app_handle, app_id, table_name, credentials, true, sub).await?;
-    let table_names = db.list_tables().await?;
+    let table_names = db
+        .list_tables()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog::is_reserved_table(name))
+        .collect();
     Ok(table_names)
 }
 

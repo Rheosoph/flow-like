@@ -19,11 +19,11 @@ use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
     AttachmentManifestEntry, BoardCommand, CatalogProvider, EmitCommandsArgs,
     FlowScriptCandidateRegression, FlowScriptPendingDelivery, FlowScriptRepairTracker,
-    GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata, PlatformContextInput,
-    RunContext, build_platform_context, emit_validation_requires_flowscript, enrich_node_metadata,
-    flowscript_workspace_envelope, global_assistant_system_prompt, profile_flowscript_candidate,
-    render_flowscript_modular_partial_result, run_platform_chat, score_catalog_metadata,
-    validate_model_facing_emit_commands_scope,
+    GlobalDataStudioContext, GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata,
+    PlatformContextInput, RunContext, build_platform_context, emit_validation_requires_flowscript,
+    enrich_node_metadata, flowscript_workspace_envelope, global_assistant_system_prompt,
+    profile_flowscript_candidate, render_flowscript_modular_partial_result, run_platform_chat,
+    score_catalog_metadata, validate_model_facing_emit_commands_scope,
 };
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
@@ -1442,6 +1442,25 @@ pub async fn copilot_chat(
         };
     }
 
+    // The Bits/rig backend drives the specialized board/UI copilots, which have no data-layer
+    // toolset. The Data Studio agent needs a tool-calling agent backend (Claude Code / Codex /
+    // GitHub Copilot). Return a clear message rather than falling through to the board copilot.
+    if matches!(scope, CopilotScope::DataStudio) {
+        let message = "The Data Studio agent needs a tool-capable model (Claude Code, Codex, or GitHub Copilot). Select one of those FlowPilot models to work with your data, then ask again.".to_string();
+        let _ = channel.send(message.clone());
+        return Ok(UnifiedCopilotResponse {
+            message,
+            commands: Vec::new(),
+            components: Vec::new(),
+            canvas_settings: None,
+            root_component_id: None,
+            flowscript_workspace: None,
+            flow_ir_commit: None,
+            suggestions: Vec::new(),
+            active_scope: scope,
+        });
+    }
+
     flowpilot_debug_log!(
         "[copilot_chat] Called with scope: {:?}, run_context: {:?}",
         scope,
@@ -1621,6 +1640,7 @@ async fn build_global_agent_context(
     app_handle: &AppHandle,
     user_context: Option<&str>,
     open_board: Option<&GlobalOpenBoardContext>,
+    open_data_studio: Option<&GlobalDataStudioContext>,
     attachments: &[AttachmentManifestEntry],
 ) -> String {
     let active = TauriSettingsState::current_profile(app_handle)
@@ -1654,6 +1674,7 @@ async fn build_global_agent_context(
             .map(|(name, id)| (name.as_str(), id.as_str())),
         switchable_profiles: &switchable,
         open_board,
+        open_data_studio,
         attachments,
     })
 }
@@ -1922,6 +1943,8 @@ pub async fn global_chat(
     // cannot read itself — surfaced so it can hand the relevant ones to apps it calls.
     attachments_manifest: Option<Vec<AttachmentManifestEntry>>,
     board_context: Option<GlobalOpenBoardContext>,
+    // The Data Studio page the user currently has open, so the assistant defaults data work to it.
+    data_studio_context: Option<GlobalDataStudioContext>,
     // Frontend-generated id (the assistant message id) under which this run is registered so a
     // reloaded webview can re-attach via `global_chat_resume`. `None` disables resumability.
     run_id: Option<String>,
@@ -1934,6 +1957,7 @@ pub async fn global_chat(
         &app_handle,
         user_context.as_deref(),
         board_context.as_ref(),
+        data_studio_context.as_ref(),
         &attachments_manifest,
     )
     .await;
@@ -3910,6 +3934,7 @@ async fn copilot_sdk_chat_internal(
                 CopilotScope::Board => "Board copilot",
                 CopilotScope::Frontend => "UI copilot",
                 CopilotScope::Both => "Copilot",
+                CopilotScope::DataStudio => "Data Studio agent",
             }
         };
         send_correlated_stream_json_event(
@@ -4781,8 +4806,8 @@ fn build_flowpilot_sdk_tools(
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
         copilot_sdk_tools::{
-            create_board_tools, create_frontend_tools, create_global_assistant_tools,
-            create_runtime_tools,
+            create_board_tools, create_data_studio_tools, create_frontend_tools,
+            create_global_assistant_tools, create_runtime_tools,
         },
         frontend_tool_bridge::{FrontendToolBridge, GLOBAL_FRONTEND_TOOL_EVENT},
     };
@@ -4820,6 +4845,8 @@ fn build_flowpilot_sdk_tools(
             )));
             all_tools
         }
+        // Data Studio is a data-only specialist: no board/UI tools, just its graph/data tool set.
+        CopilotScope::DataStudio => Vec::new(),
     };
     let runtime_bridge = if nested {
         FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT)
@@ -4827,7 +4854,11 @@ fn build_flowpilot_sdk_tools(
         FrontendToolBridge::new(app_handle)
     }
     .with_context(tool_context);
-    tools.extend(create_runtime_tools(runtime_bridge));
+    if matches!(scope, CopilotScope::DataStudio) {
+        tools.extend(create_data_studio_tools(runtime_bridge));
+    } else {
+        tools.extend(create_runtime_tools(runtime_bridge));
+    }
     tools
 }
 
@@ -11575,26 +11606,26 @@ fn build_flowpilot_agent_surface(
         CopilotScope::Board | CopilotScope::Both => board
             .and_then(|board| prepare_context(board, selected_node_ids).ok())
             .map(Arc::new),
-        CopilotScope::Frontend => None,
+        CopilotScope::Frontend | CopilotScope::DataStudio => None,
     };
 
     let board_arc: Option<Arc<Board>> = match scope {
         CopilotScope::Board | CopilotScope::Both => board.map(|b| Arc::new(b.clone())),
-        CopilotScope::Frontend => None,
+        CopilotScope::Frontend | CopilotScope::DataStudio => None,
     };
 
     let desktop_catalog_provider = match scope {
         CopilotScope::Board | CopilotScope::Both => {
             Some(Arc::new(DesktopCatalogProvider::new(catalog_nodes)))
         }
-        CopilotScope::Frontend => None,
+        CopilotScope::Frontend | CopilotScope::DataStudio => None,
     };
 
     let catalog_provider: Option<Arc<dyn CatalogProvider>> = match scope {
         CopilotScope::Board | CopilotScope::Both => desktop_catalog_provider
             .as_ref()
             .map(|provider| provider.clone() as Arc<dyn CatalogProvider>),
-        CopilotScope::Frontend => None,
+        CopilotScope::Frontend | CopilotScope::DataStudio => None,
     };
 
     let board_flowscript = board_arc.as_ref().map(|board| {
@@ -11631,6 +11662,7 @@ fn build_flowpilot_agent_surface(
                 None => flow_like::copilot::prompts::board_sdk_system_prompt(),
             },
             CopilotScope::Frontend => flow_like::copilot::prompts::frontend_sdk_system_prompt(),
+            CopilotScope::DataStudio => flow_like::copilot::prompts::data_studio_system_prompt(""),
             CopilotScope::Both => match board_flowscript.as_deref() {
                 // flowscript_board_context embeds the shared guidance blocks itself; the lean
                 // header avoids duplicating them (~3.5k tokens).

@@ -316,13 +316,13 @@ export function SpotlightProvider({
 					project.links.explore && {
 						id: `project-${project.id}-explore`,
 						type: "project" as const,
-						label: "Explore",
-						description: `Explore data for ${project.name}`,
+						label: "Data Studio",
+						description: `Open Data Studio for ${project.name}`,
 						icon: Database,
 						iconUrl: project.icon,
 						group: "projects",
 						priority: 146,
-						keywords: ["explore", "data", "database"],
+						keywords: ["data studio", "ontology", "objects", "database"],
 						action: () => navigate(project.links.explore!),
 					},
 					project.links.settings && {

@@ -1,17 +1,19 @@
+use crate::data::db::vector::NodeDBConnection;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
+use flow_like_storage::datafusion::common::TableReference;
 #[cfg(feature = "federation")]
 use flow_like_storage::datafusion::execution::session_state::SessionStateBuilder;
 use flow_like_storage::datafusion::prelude::{SessionConfig, SessionContext};
 #[cfg(feature = "federation")]
 use flow_like_storage::datafusion_federation::{FederatedQueryPlanner, default_optimizer_rules};
 use flow_like_storage::num_cpus;
-use flow_like_types::{Cacheable, JsonSchema, async_trait, json::json};
+use flow_like_types::{Cacheable, JsonSchema, async_trait, json::json, sync::Mutex};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Default, Serialize, Deserialize, JsonSchema, Clone)]
 pub struct DataFusionSession {
@@ -21,6 +23,13 @@ pub struct DataFusionSession {
 #[derive(Clone)]
 pub struct CachedDataFusionSession {
     pub ctx: Arc<SessionContext>,
+    lance_tables: Arc<Mutex<HashMap<String, LanceTableRegistration>>>,
+}
+
+#[derive(Clone)]
+struct LanceTableRegistration {
+    database: NodeDBConnection,
+    generation: u64,
 }
 
 impl Cacheable for CachedDataFusionSession {
@@ -53,7 +62,51 @@ impl DataFusionSession {
             .ok_or(flow_like_types::anyhow!(
                 "Could not downcast to DataFusion session"
             ))?;
-        Ok(session.clone())
+        let session = session.clone();
+        session.refresh_lance_tables(context).await?;
+        Ok(session)
+    }
+}
+
+impl CachedDataFusionSession {
+    /// Remembers a Lance registration so derived DataFusion providers can be
+    /// replaced when a remote database rotates its scoped credentials.
+    pub async fn track_lance_table(
+        &self,
+        table_name: String,
+        database: NodeDBConnection,
+        generation: u64,
+    ) {
+        self.lance_tables.lock().await.insert(
+            table_name,
+            LanceTableRegistration {
+                database,
+                generation,
+            },
+        );
+    }
+
+    async fn refresh_lance_tables(
+        &self,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        let mut registrations = self.lance_tables.lock().await;
+        for (table_name, registration) in registrations.iter_mut() {
+            let (cached_db, generation) =
+                registration.database.load_with_generation(context).await?;
+            if generation == registration.generation {
+                continue;
+            }
+
+            cached_db.ensure_flushed().await?;
+            let db_guard = cached_db.db.read().await;
+            let adapter = db_guard.inner().to_datafusion().await?;
+            drop(db_guard);
+            self.ctx
+                .register_table(TableReference::bare(table_name.clone()), Arc::new(adapter))?;
+            registration.generation = generation;
+        }
+        Ok(())
     }
 }
 
@@ -263,7 +316,10 @@ impl NodeLogic for CreateDataFusionSessionNode {
 
             let ctx = create_session_context(config);
 
-            let cached = CachedDataFusionSession { ctx: Arc::new(ctx) };
+            let cached = CachedDataFusionSession {
+                ctx: Arc::new(ctx),
+                lance_tables: Arc::new(Mutex::new(HashMap::new())),
+            };
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached);
             context
                 .cache

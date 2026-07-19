@@ -2,7 +2,7 @@ import type { SurfaceComponent } from "../../../components/a2ui/types";
 import type { BoardCommand } from "../flow/copilot";
 
 /** The scope of what the copilot agent can modify */
-export type CopilotScope = "Board" | "Frontend" | "Both";
+export type CopilotScope = "Board" | "Frontend" | "Both" | "DataStudio";
 
 /** Role in the chat conversation */
 export type ChatRole = "User" | "Assistant";
@@ -54,6 +54,11 @@ export interface UIActionContext {
 export interface CopilotToolContext {
 	appId: string;
 	boardId?: string;
+	/**
+	 * The overlay/ontology the current Data Studio page has selected. Injected as a DEFAULT into
+	 * data-studio tool calls (the model can override it to reach another overlay/app).
+	 */
+	overlayId?: string;
 	/** Correlates tools called inside a delegated run with its outer frontend request. */
 	parentRequestId?: string;
 	/**

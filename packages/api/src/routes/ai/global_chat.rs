@@ -52,8 +52,8 @@ use flow_like::flow::copilot::tool_spec::{
     resolve_tool_approval,
 };
 use flow_like::flow::copilot::{
-    AttachmentManifestEntry, ChatMessage, GlobalOpenBoardContext, PlatformContextInput,
-    build_platform_context, run_platform_chat,
+    AttachmentManifestEntry, ChatMessage, GlobalDataStudioContext, GlobalOpenBoardContext,
+    PlatformContextInput, build_platform_context, run_platform_chat,
 };
 use flow_like::profile::Profile;
 use flow_like_types::tokio::{
@@ -294,6 +294,9 @@ pub struct GlobalChatRequest {
     /// The board the user currently has open, if any.
     #[serde(default)]
     pub board_context: Option<GlobalOpenBoardContext>,
+    /// The Data Studio page the user currently has open, if any.
+    #[serde(default)]
+    pub data_studio_context: Option<GlobalDataStudioContext>,
     /// Reported back in the response's `active_scope`. Defaults to `Board`.
     #[serde(default)]
     pub scope: CopilotScope,
@@ -640,6 +643,7 @@ pub async fn global_chat(
         active_profile: Some((profile.name.as_str(), profile.id.as_str())),
         switchable_profiles: &[],
         open_board: payload.board_context.as_ref(),
+        open_data_studio: payload.data_studio_context.as_ref(),
         attachments: &attachments_manifest,
     });
 

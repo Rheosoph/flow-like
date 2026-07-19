@@ -1,4 +1,3 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	type IBoard,
 	type IEvent,
@@ -14,6 +13,7 @@ import {
 	type IVersionType,
 	type ProgressToastData,
 	checkOAuthTokens,
+	checkOAuthTokensFromPrerun,
 	extractOAuthRequirementsFromBoard,
 	finishAllProgressToasts,
 	getCurrentPageContext,
@@ -25,6 +25,7 @@ import type {
 	IListRegistrationsResponse,
 	ISetupEventResponse,
 } from "@flow-like/flow-like-ui/state/backend-state/event-state";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
 import {
@@ -960,6 +961,42 @@ export class EventState implements IEventState {
 			};
 		}
 
+		return {
+			tokens:
+				Object.keys(oauthResult.tokens).length > 0
+					? oauthResult.tokens
+					: undefined,
+			missingProviders: [],
+		};
+	}
+
+	async checkOAuthRequirements(
+		appId: string,
+		requirements: Array<{ provider_id: string; scopes: string[] }>,
+	): Promise<{
+		tokens?: Record<string, IOAuthToken>;
+		missingProviders: IOAuthProvider[];
+	}> {
+		const hub = await getHubConfig(this.backend.profile);
+		const oauthResult = await checkOAuthTokensFromPrerun(
+			requirements,
+			oauthTokenStore,
+			hub,
+			{ refreshToken: oauthService.refreshToken.bind(oauthService) },
+		);
+		const consentedIds = await oauthConsentStore.getConsentedProviderIds(appId);
+		const missingProviders = [...oauthResult.missingProviders];
+		for (const provider of oauthResult.requiredProviders) {
+			if (
+				oauthResult.tokens[provider.id] !== undefined &&
+				!consentedIds.has(provider.id)
+			) {
+				missingProviders.push(provider);
+			}
+		}
+		if (missingProviders.length > 0) {
+			return { tokens: undefined, missingProviders };
+		}
 		return {
 			tokens:
 				Object.keys(oauthResult.tokens).length > 0

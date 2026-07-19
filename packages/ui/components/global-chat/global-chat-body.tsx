@@ -526,6 +526,23 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					}
 				: undefined;
 
+			// Forward the open Data Studio page (if any) so the assistant defaults data questions to
+			// its app/overlay via data_studio_agent without asking which project.
+			const dataStudio = useAssistantSurface.getState().dataStudioSurface;
+			const dataStudioContext = dataStudio
+				? {
+						app_id: dataStudio.appId,
+						app_name: dataStudio.appName || undefined,
+						overlay_id: dataStudio.overlayId || undefined,
+						overlay_name: dataStudio.overlayName || undefined,
+						selected_table: dataStudio.selectedTable || undefined,
+						overlay_names:
+							dataStudio.overlayNames && dataStudio.overlayNames.length > 0
+								? dataStudio.overlayNames
+								: undefined,
+					}
+				: undefined;
+
 			// The stream is driven OUTSIDE this component (global-chat-stream.ts) so it keeps
 			// rendering + finalizing even if this surface unmounts mid-response (the page↔overlay
 			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
@@ -560,6 +577,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							token: authUser?.access_token ?? undefined,
 							userContext: userContext ?? undefined,
 							boardContext,
+							dataStudioContext,
 							runId: responseMessage.id,
 						})
 					: webGlobalChatStart({
@@ -586,6 +604,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								embedding_model_id: state.embeddingModelId || undefined,
 								user_context: userContext ?? undefined,
 								board_context: boardContext,
+								data_studio_context: dataStudioContext,
 								// Signed tmp-upload URLs (from fileToAttachment) for image vision only; the
 								// server fetches them.
 								attachment_urls:

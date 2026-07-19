@@ -16,6 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # Pull-request workflows check out GitHub's synthetic merge commit. That
+      # revision is not covered by the dev-branch scan, and `fossa test` only
+      # evaluates revisions that have already been analyzed.
+      - name: Run FOSSA Analysis
+        uses: fossas/fossa-action@c414b9ad82eaad041e47a7cf62a4f02411f427a0 # v1.8.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+
       - name: Run FOSSA Test
         uses: fossas/fossa-action@c414b9ad82eaad041e47a7cf62a4f02411f427a0 # v1.8.0
         with:

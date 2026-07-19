@@ -20,6 +20,7 @@ pub mod graph;
 pub mod manage_connection;
 pub mod notes;
 pub mod remote_events;
+pub mod remote_ontologies;
 pub mod remote_tables;
 pub mod remove_connection;
 pub mod request_connection;
@@ -58,6 +59,15 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{target_app_id}/events",
             get(remote_events::get_remote_events),
+        )
+        .route(
+            "/{target_app_id}/ontologies",
+            get(remote_ontologies::get_remote_ontologies),
+        )
+        .route(
+            "/{target_app_id}/ontologies/{ontology_id}/install",
+            put(remote_ontologies::install_remote_ontology)
+                .delete(remote_ontologies::uninstall_remote_ontology),
         )
         .route(
             "/{target_app_id}/events/{event_id}/detail",

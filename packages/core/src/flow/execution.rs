@@ -1639,7 +1639,12 @@ impl InternalRun {
         flush_cancel.store(true, Ordering::Relaxed);
         let _ = flush_task.await;
 
-        self.trigger_completion_callbacks().await;
+        if self.trigger_completion_callbacks().await {
+            // Completion callbacks persist buffered data and other final
+            // side-effects. Reporting Success after one fails hides data loss
+            // from callers, so include callback failures in final run status.
+            errored = true;
+        }
         self.drop_nodes().await;
 
         let meta = {
@@ -1776,13 +1781,20 @@ impl InternalRun {
         self.run.lock().await.status.clone()
     }
 
-    async fn trigger_completion_callbacks(&self) {
-        let callbacks = self.completion_callbacks.read().await;
-        for callback in callbacks.iter() {
+    /// Runs every completion callback and reports whether any failed.
+    ///
+    /// Callbacks are cloned out of the registry before awaiting them so a
+    /// callback cannot deadlock by interacting with the registry itself.
+    async fn trigger_completion_callbacks(&self) -> bool {
+        let callbacks = self.completion_callbacks.read().await.clone();
+        let mut failed = false;
+        for callback in callbacks {
             if let Err(err) = callback(self).await {
+                failed = true;
                 eprintln!("[Error] executing completion callback: {:?}", err);
             }
         }
+        failed
     }
 
     async fn drop_nodes(&self) {

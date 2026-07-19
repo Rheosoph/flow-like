@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    routes::app::db::{ScopeParams, resolve_write_connection, validate_table_name},
     state::AppState,
 };
 use axum::{
@@ -105,7 +105,7 @@ pub async fn create_table(
     let schema = database_fields_to_arrow_schema(&fields)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
     let mut db = LanceDBVectorStore::from_connection(connection, table.clone()).await;
     let created = db
         .create_empty_table(schema, if_not_exists)

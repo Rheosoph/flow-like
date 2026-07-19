@@ -7283,9 +7283,9 @@ dependencies = [
 
 [[package]]
 name = "ethnum"
-version = "1.5.2"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca81e6b4777c89fd810c25a4be2b1bd93ea034fbe58e6a75216a34c6b82c539b"
+checksum = "40404c3f5f511ec4da6fe866ddf6a717c309fdbb69fbbad7b0f3edab8f2e835f"
 
 [[package]]
 name = "euclid"
@@ -8000,6 +8000,7 @@ dependencies = [
  "flow-like-storage",
  "flow-like-types",
  "futures 0.3.32",
+ "jsonschema",
  "schemars 1.2.1",
  "serde",
  "tokio",
@@ -8032,7 +8033,6 @@ dependencies = [
  "futures 0.3.32",
  "gcp-bigquery-client",
  "iana-time-zone",
- "jsonschema",
  "once_cell",
  "rand 0.8.6",
  "rayon",
@@ -8556,6 +8556,7 @@ dependencies = [
  "num_cpus",
  "object_store",
  "percent-encoding",
+ "petgraph 0.8.3",
  "polars",
  "polars-arrow",
  "rig-core",
@@ -8566,6 +8567,7 @@ dependencies = [
  "serde_json",
  "smb2",
  "tokio",
+ "tracing",
  "urlencoding",
 ]
 
@@ -13064,7 +13066,7 @@ dependencies = [
 [[package]]
 name = "lance-graph"
 version = "0.5.4"
-source = "git+https://github.com/Rheosoph/lance-graph?branch=main#f7e96af88a0a991a2604e09567be55d7b1867eac"
+source = "git+https://github.com/Rheosoph/lance-graph?rev=f7e96af88a0a991a2604e09567be55d7b1867eac#f7e96af88a0a991a2604e09567be55d7b1867eac"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -13089,7 +13091,7 @@ dependencies = [
 [[package]]
 name = "lance-graph-catalog"
 version = "0.5.4"
-source = "git+https://github.com/Rheosoph/lance-graph?branch=main#f7e96af88a0a991a2604e09567be55d7b1867eac"
+source = "git+https://github.com/Rheosoph/lance-graph?rev=f7e96af88a0a991a2604e09567be55d7b1867eac#f7e96af88a0a991a2604e09567be55d7b1867eac"
 dependencies = [
  "arrow-schema",
  "async-trait",

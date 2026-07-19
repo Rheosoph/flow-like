@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection, validate_table_name},
+    routes::app::db::{ScopeParams, resolve_write_connection, validate_table_name},
     state::AppState,
 };
 use axum::{
@@ -55,7 +55,7 @@ pub async fn add_to_table(
     );
     validate_table_name(&table)?;
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
     let mut db = LanceDBVectorStore::from_connection(connection, table).await;
 
     db.insert(payload.items).await?;

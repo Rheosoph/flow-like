@@ -22,7 +22,6 @@ execute = [
     "dep:umya-spreadsheet",
     "dep:csv-async",
     "dep:csv",
-    "dep:jsonschema",
     "dep:rayon",
     "dep:rig",
     "dep:bincode",
@@ -93,7 +92,6 @@ csv-async = { version = "1.3.0", features = ["tokio"], optional = true }
 csv = { version = "1.3", optional = true }
 rig = { workspace = true, optional = true }
 bincode = { version = "1.3.3", optional = true }
-jsonschema = { workspace = true, optional = true }
 rayon = { version = "1.11.0", optional = true }
 tdms-rs = { git = "https://github.com/Rheosoph/tdms-rs", rev = "620318f", optional = true }
 tempfile = { version = "3", optional = true }
