@@ -113,6 +113,13 @@ function sanitizeReasoningForDisplay(reasoning: string): string {
 		: reasoning;
 }
 
+/**
+ * Messages whose plan is the single synthesized "Thinking" step rather than a real backend plan.
+ * Only those may be replaced wholesale with the run-wide accumulated reasoning — backend steps
+ * are scoped per step and would otherwise absorb every earlier step's text.
+ */
+const syntheticReasoningPlans = new WeakSet<IMessage>();
+
 function appendFallbackReasoningStep(
 	responseMessage: IMessage,
 	reasoning: string,
@@ -137,6 +144,13 @@ function appendFallbackReasoningStep(
 			},
 		];
 		responseMessage.current_step_id = "step-0";
+		syntheticReasoningPlans.add(responseMessage);
+		return;
+	}
+
+	// The run-wide reasoning transcript may only overwrite the synthesized step. Real backend
+	// plans carry their own per-step text, which parseBackendPlan already keeps up to date.
+	if (replace && !syntheticReasoningPlans.has(responseMessage)) {
 		return;
 	}
 
@@ -403,6 +417,7 @@ export function processChatEvents(
 				const { steps, currentStepId } = parseBackendPlan(planData);
 				responseMessage.plan_steps = steps;
 				responseMessage.current_step_id = currentStepId;
+				syntheticReasoningPlans.delete(responseMessage);
 				shouldUpdate = true;
 			}
 
@@ -444,6 +459,7 @@ export function processChatEvents(
 				const { steps, currentStepId } = parseBackendPlan(planData);
 				responseMessage.plan_steps = steps;
 				responseMessage.current_step_id = currentStepId;
+				syntheticReasoningPlans.delete(responseMessage);
 				shouldUpdate = true;
 			}
 			if (ev.payload.widgets) {

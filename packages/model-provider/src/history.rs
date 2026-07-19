@@ -732,16 +732,17 @@ impl From<Content> for RigUserContent {
                 ..
             } => {
                 let (data, wire_media_type) = source_from_wire_value(&document_url);
+                let media_type = wire_media_type
+                    .and_then(document_media_type_from_mime)
+                    .or_else(|| {
+                        media_type
+                            .as_deref()
+                            .and_then(document_media_type_from_mime)
+                    })
+                    .or_else(|| detect_document_media_type(&document_url));
                 RigUserContent::Document(RigDocument {
-                    data,
-                    media_type: wire_media_type
-                        .and_then(document_media_type_from_mime)
-                        .or_else(|| {
-                            media_type
-                                .as_deref()
-                                .and_then(document_media_type_from_mime)
-                        })
-                        .or_else(|| detect_document_media_type(&document_url)),
+                    data: decode_textual_document_source(data, media_type.as_ref()),
+                    media_type,
                     additional_params,
                 })
             }
@@ -793,7 +794,8 @@ fn source_from_wire_value(value: &str) -> (DocumentSourceKind, Option<&str>) {
     }
 
     if let Some(data_uri) = value.strip_prefix("data:")
-        && let Some((metadata, payload)) = data_uri.split_once(";base64,")
+        && let Some((metadata, payload)) = data_uri.split_once(',')
+        && let Some(metadata) = metadata.strip_suffix(";base64")
     {
         let mut metadata_parts = metadata.split(';');
         let mime_type = metadata_parts.next().filter(|mime| !mime.is_empty());
@@ -822,6 +824,27 @@ fn source_from_wire_value(value: &str) -> (DocumentSourceKind, Option<&str>) {
     }
 
     (DocumentSourceKind::url(value), None)
+}
+
+/// Every [`DocumentMediaType`] except PDF is text-based, and providers forward such documents as
+/// plain text. A base64 payload would reach the model verbatim, so decode it back into a string.
+fn decode_textual_document_source(
+    source: DocumentSourceKind,
+    media_type: Option<&DocumentMediaType>,
+) -> DocumentSourceKind {
+    if matches!(media_type, None | Some(DocumentMediaType::PDF)) {
+        return source;
+    }
+
+    let DocumentSourceKind::Base64(payload) = &source else {
+        return source;
+    };
+
+    BASE64_STANDARD
+        .decode(payload)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map_or(source, DocumentSourceKind::String)
 }
 
 fn extension(value: &str) -> Option<&str> {
@@ -1718,6 +1741,62 @@ mod tests {
         assert_eq!(
             round_trip.data,
             DocumentSourceKind::String("literal document text".to_string())
+        );
+    }
+
+    #[test]
+    fn textual_documents_are_decoded_instead_of_reaching_the_model_as_base64() {
+        let document = Content::Document {
+            content_type: ContentType::DocumentUrl,
+            document_url: "data:text/markdown;base64,SGVsbG8gd29ybGQ=".to_string(),
+            media_type: None,
+            additional_params: None,
+        };
+        let RigUserContent::Document(converted) = document.into() else {
+            panic!("expected document")
+        };
+        assert_eq!(converted.media_type, Some(DocumentMediaType::MARKDOWN));
+        assert_eq!(
+            converted.data,
+            DocumentSourceKind::String("Hello world".to_string())
+        );
+
+        let pdf = Content::Document {
+            content_type: ContentType::DocumentUrl,
+            document_url: "data:application/pdf;base64,SGVsbG8gd29ybGQ=".to_string(),
+            media_type: None,
+            additional_params: None,
+        };
+        let RigUserContent::Document(converted) = pdf.into() else {
+            panic!("expected document")
+        };
+        assert_eq!(
+            converted.data,
+            DocumentSourceKind::Base64("SGVsbG8gd29ybGQ=".to_string()),
+            "binary documents must stay base64"
+        );
+    }
+
+    #[test]
+    fn non_base64_data_urls_are_not_split_on_an_embedded_base64_marker() {
+        let svg =
+            "data:image/svg+xml,<svg><image href=\"data:image/png;base64,iVBORw0KGgo=\"/></svg>";
+        let image = Content::Image {
+            content_type: ContentType::ImageUrl,
+            image_url: ImageUrl {
+                url: svg.to_string(),
+                detail: None,
+                media_type: None,
+                additional_params: None,
+            },
+        };
+        let RigUserContent::Image(converted) = image.into() else {
+            panic!("expected image")
+        };
+        assert_eq!(
+            converted.data,
+            DocumentSourceKind::Url(svg.to_string()),
+            "an inline SVG carrying a nested base64 image must survive intact"
         );
     }
 

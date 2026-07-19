@@ -276,6 +276,34 @@ function createHistoryMessage(content: string, attachments: IAttachment[]) {
 				document_url: url,
 				media_type: mime || undefined,
 			});
+			continue;
+		}
+
+		// Unrecognized media types must still reach the model: fall back to the MIME's top-level
+		// type so an attachment is never silently dropped from the outgoing message.
+		if (mime.startsWith("image/")) {
+			parts.push({
+				type: IContentType.IImageURL,
+				image_url: { url, media_type: mime },
+			});
+		} else if (mime.startsWith("audio/")) {
+			parts.push({
+				type: IContentType.AudioURL,
+				audio_url: url,
+				media_type: mime,
+			});
+		} else if (mime.startsWith("video/")) {
+			parts.push({
+				type: IContentType.VideoURL,
+				video_url: url,
+				media_type: mime,
+			});
+		} else {
+			parts.push({
+				type: IContentType.DocumentURL,
+				document_url: url,
+				media_type: mime || undefined,
+			});
 		}
 	}
 	return historyMessage;

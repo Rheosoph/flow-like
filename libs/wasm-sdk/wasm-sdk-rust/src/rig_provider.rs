@@ -16,8 +16,8 @@ use rig::completion::{
     Message, Usage,
 };
 use rig::message::{
-    AssistantContent, Audio, Document, DocumentSourceKind, Image, MimeType, Reasoning, Text,
-    ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent, Video,
+    AssistantContent, Audio, Document, DocumentMediaType, DocumentSourceKind, Image, MimeType,
+    Reasoning, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent, Video,
 };
 use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse, StreamingResult,
@@ -62,7 +62,10 @@ fn source_from_sdk_url(value: &str) -> (DocumentSourceKind, Option<&str>) {
     }
 
     if let Some(data_uri) = value.strip_prefix("data:") {
-        if let Some((metadata, payload)) = data_uri.split_once(";base64,") {
+        if let Some((metadata, payload)) = data_uri
+            .split_once(',')
+            .and_then(|(metadata, payload)| Some((metadata.strip_suffix(";base64")?, payload)))
+        {
             let mut metadata_parts = metadata.split(';');
             let media_type = metadata_parts.next().filter(|mime| !mime.is_empty());
             let source_kind = metadata_parts.find_map(|part| {
@@ -91,6 +94,27 @@ fn source_from_sdk_url(value: &str) -> (DocumentSourceKind, Option<&str>) {
     }
 
     (DocumentSourceKind::Url(value.to_string()), None)
+}
+
+/// Every [`DocumentMediaType`] except PDF is text-based, and providers forward such documents as
+/// plain text. A base64 payload would reach the model verbatim, so decode it back into a string.
+fn decode_textual_document_source(
+    source: DocumentSourceKind,
+    media_type: Option<&DocumentMediaType>,
+) -> DocumentSourceKind {
+    if matches!(media_type, None | Some(DocumentMediaType::PDF)) {
+        return source;
+    }
+
+    let DocumentSourceKind::Base64(payload) = &source else {
+        return source;
+    };
+
+    BASE64_STANDARD
+        .decode(payload)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map_or(source, DocumentSourceKind::String)
 }
 
 fn media_type_from_sdk<T: MimeType>(
@@ -540,9 +564,11 @@ fn content_part_to_user_content(part: &ContentPart) -> UserContent {
         }
         ContentPart::Document { document } => {
             let (data, wire_media_type) = source_from_sdk_url(&document.url);
+            let media_type: Option<DocumentMediaType> =
+                media_type_from_sdk(wire_media_type, document.media_type.as_deref());
             UserContent::Document(Document {
-                data,
-                media_type: media_type_from_sdk(wire_media_type, document.media_type.as_deref()),
+                data: decode_textual_document_source(data, media_type.as_ref()),
+                media_type,
                 additional_params: None,
             })
         }
