@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-use wasmtime_wasi_http::WasiHttpCtx;
 use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
+use wasmtime_wasi_http::WasiHttpCtx;
 
 pub struct ComponentStoreData {
     pub host_state: HostState,
@@ -799,6 +799,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         let mut factory = app_state.embedding_factory.lock().await;
                         let embedding_provider = bit.try_to_embedding();
                         let use_proxy = access_token.is_some()
+                            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
                             && embedding_provider
                                 .as_ref()
                                 .is_some_and(|provider| provider.supports_remote());

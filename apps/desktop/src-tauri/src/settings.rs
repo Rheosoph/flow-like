@@ -271,21 +271,21 @@ impl Settings {
     }
 
     pub fn get_current_profile(&self) -> anyhow::Result<UserProfile> {
-        let profile = self.profiles.get(&self.current_profile);
-        if let Some(profile) = profile {
-            return Ok(profile.clone());
-        }
+        let profile = self
+            .profiles
+            .get(&self.current_profile)
+            .or_else(|| self.profiles.values().next())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No profiles found"))?;
 
-        let first_profile = self.profiles.iter().next();
+        // Proxied model calls resolve their endpoint from a process-wide base
+        // URL. The desktop only learns it from the active profile, and the
+        // profile can change at runtime.
+        flow_like::flow_like_model_provider::embedding::proxy_config::set_api_base_url(
+            &profile.hub_profile.hub,
+        );
 
-        if first_profile.is_none() {
-            return Err(anyhow::anyhow!("No profiles found"));
-        }
-
-        let first_profile = first_profile.unwrap();
-        let first_profile = first_profile.1;
-
-        Ok(first_profile.clone())
+        Ok(profile)
     }
 
     pub async fn set_current_profile(

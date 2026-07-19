@@ -972,7 +972,11 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                         &write_id,
                         &data,
                     );
-                    if ok { 0 } else { -1 }
+                    if ok {
+                        0
+                    } else {
+                        -1
+                    }
                 })
             },
         )
@@ -1437,6 +1441,7 @@ fn register_model_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> {
                         let mut factory = app_state.embedding_factory.lock().await;
                         let embedding_provider = bit.try_to_embedding();
                         let use_proxy = access_token.is_some()
+                            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
                             && embedding_provider
                                 .as_ref()
                                 .is_some_and(|provider| provider.supports_remote());

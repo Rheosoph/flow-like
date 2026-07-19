@@ -68,8 +68,14 @@ pub enum Relation {
     AppBoardScore,
     #[sea_orm(has_many = "super::app_discount::Entity")]
     AppDiscount,
+    #[sea_orm(has_many = "super::app_group::Entity")]
+    AppGroup,
+    #[sea_orm(has_many = "super::app_group_member::Entity")]
+    AppGroupMember,
     #[sea_orm(has_many = "super::app_package::Entity")]
     AppPackage,
+    #[sea_orm(has_many = "super::app_process_note::Entity")]
+    AppProcessNote,
     #[sea_orm(has_many = "super::app_purchase::Entity")]
     AppPurchase,
     #[sea_orm(has_many = "super::app_sales_daily::Entity")]
@@ -174,9 +180,27 @@ impl Related<super::app_discount::Entity> for Entity {
     }
 }
 
+impl Related<super::app_group::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppGroup.def()
+    }
+}
+
+impl Related<super::app_group_member::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppGroupMember.def()
+    }
+}
+
 impl Related<super::app_package::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::AppPackage.def()
+    }
+}
+
+impl Related<super::app_process_note::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppProcessNote.def()
     }
 }
 

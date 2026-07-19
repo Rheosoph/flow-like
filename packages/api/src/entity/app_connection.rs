@@ -37,7 +37,7 @@ pub enum Relation {
         on_update = "Cascade",
         on_delete = "Cascade"
     )]
-    SourceApp,
+    App2,
     #[sea_orm(
         belongs_to = "super::app::Entity",
         from = "Column::TargetAppId",
@@ -45,7 +45,7 @@ pub enum Relation {
         on_update = "Cascade",
         on_delete = "Cascade"
     )]
-    TargetApp,
+    App1,
     #[sea_orm(
         belongs_to = "super::role::Entity",
         from = "Column::RoleId",
