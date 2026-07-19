@@ -5,9 +5,11 @@ import type {
 	FlowScriptApplyResultLike,
 } from "../components/flow/flow-copilot/types";
 import type { ILogMetadata } from "../lib";
+import type { FlowIrCommitToken } from "../lib/schema/copilot";
 import type { IBoard } from "../lib/schema/flow/board";
 import type { BoardCommand } from "../lib/schema/flow/copilot";
 import type { INode } from "../lib/schema/flow/node";
+import type { IApplyFlowIrCommitResponse } from "./backend-state/board-state";
 
 /**
  * Live context published by an open flow board while it is mounted, so the global
@@ -34,6 +36,10 @@ export interface AssistantBoardSurface {
 		flowscript: string,
 		options?: FlowScriptApplyOptions,
 	) => Promise<FlowScriptApplyResultLike | undefined>;
+	/** Atomically applies the exact retained compiled workflow batch under a live-board CAS. */
+	applyFlowIrCommit: (
+		token: FlowIrCommitToken,
+	) => Promise<IApplyFlowIrCommitResponse>;
 	/** Executes board copilot commands through the board's command pipeline. */
 	executeCommands: (commands: BoardCommand[]) => Promise<void>;
 	/** Pans/zooms the canvas to the given node. */
@@ -72,11 +78,32 @@ export interface AssistantWidgetSurface {
 	componentsGenerated: (components: SurfaceComponent[]) => void;
 }
 
+/**
+ * Live context published by an open Data Studio page while it is mounted, so the global assistant
+ * knows which app's data / ontology the user is looking at and defaults `data_studio_agent` there.
+ */
+export interface AssistantDataStudioSurface {
+	/** App whose Data Studio is open. */
+	appId: string;
+	/** Human name of the app, when known. */
+	appName?: string;
+	/** Overlay/ontology currently selected on the page, if any. */
+	overlayId?: string;
+	/** Human name of the selected overlay, when known. */
+	overlayName?: string;
+	/** Table currently selected in the explorer, if any. */
+	selectedTable?: string;
+	/** Names of the overlays available in the app, for grounding. */
+	overlayNames?: string[];
+}
+
 export interface AssistantSurfaceState {
 	/** Board surface currently mounted and editable, or null when no board is open. */
 	boardSurface: AssistantBoardSurface | null;
 	/** Widget builder surface currently mounted, or null when no builder is open. */
 	widgetSurface: AssistantWidgetSurface | null;
+	/** Data Studio page currently open, or null when the user is not on one. */
+	dataStudioSurface: AssistantDataStudioSurface | null;
 	/** Monotonic counter bumped each time a surface asks the assistant UI to open. */
 	openAssistantRequested: number;
 	/**
@@ -88,6 +115,8 @@ export interface AssistantSurfaceState {
 	setBoardSurface: (surface: AssistantBoardSurface | null) => void;
 	/** Registers the live widget surface (null to clear on unmount). */
 	setWidgetSurface: (surface: AssistantWidgetSurface | null) => void;
+	/** Registers the open Data Studio page (null to clear on unmount). */
+	setDataStudioSurface: (surface: AssistantDataStudioSurface | null) => void;
 	/** Asks the host app to open the global assistant (consumers watch openAssistantRequested). */
 	requestOpenAssistant: (prompt?: string) => void;
 	/** Returns the pending prompt once and clears it, so it is only turned into a draft a single time. */
@@ -98,10 +127,12 @@ export const useAssistantSurface = create<AssistantSurfaceState>(
 	(set, get) => ({
 		boardSurface: null,
 		widgetSurface: null,
+		dataStudioSurface: null,
 		openAssistantRequested: 0,
 		pendingAssistantPrompt: null,
 		setBoardSurface: (surface) => set({ boardSurface: surface }),
 		setWidgetSurface: (surface) => set({ widgetSurface: surface }),
+		setDataStudioSurface: (surface) => set({ dataStudioSurface: surface }),
 		requestOpenAssistant: (prompt) =>
 			set((state) => ({
 				openAssistantRequested: state.openAssistantRequested + 1,

@@ -1,9 +1,27 @@
 "use client";
 
-import { Check, Copy, Expand, Eye, EyeOff, Filter, X } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	ChevronsDownUp,
+	Copy,
+	Expand,
+	Eye,
+	EyeOff,
+	Filter,
+	ListTree,
+	Route,
+	Workflow,
+	X,
+} from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { SubgraphNode } from "../../../state/backend-state/graph-state";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+	GraphOverlay,
+	NodeLabelMapping,
+	OntologyActionDefinition,
+	SubgraphNode,
+} from "../../../state/backend-state/graph-state";
 import { Badge } from "../badge";
 import { Button } from "../button";
 import { Checkbox } from "../checkbox";
@@ -20,10 +38,28 @@ export interface ConnectionInfo {
 
 export interface GraphNodeInspectorProps {
 	node: SubgraphNode | null;
+	overlay?: GraphOverlay;
 	connections?: ConnectionInfo[];
 	onClose: () => void;
-	onExpand?: () => void;
+	onExpand?: (depth: number) => void;
+	hasChildren?: boolean;
+	childrenExpanded?: boolean;
+	onExpandChildren?: () => void;
+	onCollapseChildren?: () => void;
 	onConnectionClick?: (nodeId: string) => void;
+	onFindPath?: (node: SubgraphNode) => void;
+	onRunAction?: (action: OntologyActionDefinition, node: SubgraphNode) => void;
+}
+
+function objectTypeMatches(
+	mapping: NodeLabelMapping,
+	objectType: string,
+): boolean {
+	return (
+		objectType === mapping.id ||
+		objectType === mapping.api_name ||
+		objectType === mapping.label
+	);
 }
 
 export type ValueKind =
@@ -302,14 +338,71 @@ function FieldFilter({
 	);
 }
 
+function PropertyRow({ propKey, value }: { propKey: string; value: unknown }) {
+	return (
+		<div className="rounded-md bg-muted/50 px-3 py-2">
+			<div className="flex items-center justify-between mb-0.5">
+				<p className="text-[10px] font-medium text-muted-foreground">
+					{propKey}
+				</p>
+				<span className="text-[9px] text-muted-foreground/60">
+					{inferValueKind(value).kind}
+				</span>
+			</div>
+			<PropertyValue value={value} propKey={propKey} />
+		</div>
+	);
+}
+
 export function GraphNodeInspector({
 	node,
+	overlay,
 	connections,
 	onClose,
 	onExpand,
+	hasChildren,
+	childrenExpanded,
+	onExpandChildren,
+	onCollapseChildren,
 	onConnectionClick,
+	onFindPath,
+	onRunAction,
 }: GraphNodeInspectorProps) {
 	const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
+	const [showAllProps, setShowAllProps] = useState(false);
+
+	const mapping = useMemo(
+		() => overlay?.nodes.find((candidate) => candidate.label === node?.label),
+		[overlay, node?.label],
+	);
+	const objectView = useMemo(
+		() =>
+			mapping
+				? overlay?.object_views?.find((view) =>
+						objectTypeMatches(mapping, view.object_type),
+					)
+				: undefined,
+		[overlay, mapping],
+	);
+	const actions = useMemo(
+		() =>
+			mapping
+				? (overlay?.actions?.filter(
+						(action) =>
+							action.enabled && objectTypeMatches(mapping, action.object_type),
+					) ?? [])
+				: [],
+		[overlay, mapping],
+	);
+
+	const handleToggleField = useCallback((field: string) => {
+		setHiddenFields((prev) => {
+			const next = new Set(prev);
+			if (next.has(field)) next.delete(field);
+			else next.add(field);
+			return next;
+		});
+	}, []);
 
 	if (!node) return null;
 
@@ -322,14 +415,27 @@ export function GraphNodeInspector({
 	const allFields = propEntries.map(([k]) => k);
 	const visibleEntries = propEntries.filter(([k]) => !hiddenFields.has(k));
 
-	const handleToggleField = useCallback((field: string) => {
-		setHiddenFields((prev) => {
-			const next = new Set(prev);
-			if (next.has(field)) next.delete(field);
-			else next.add(field);
-			return next;
-		});
-	}, []);
+	const titleValue = objectView?.title_property
+		? node.props?.[objectView.title_property]
+		: undefined;
+	const headerTitle =
+		titleValue !== undefined && titleValue !== null && titleValue !== ""
+			? String(titleValue)
+			: (node.caption ?? node.id);
+
+	const prominent = objectView?.prominent_properties ?? [];
+	const prominentSet = new Set(prominent);
+	const prominentEntries =
+		prominent.length > 0
+			? prominent
+					.map((key) => visibleEntries.find(([entryKey]) => entryKey === key))
+					.filter((entry): entry is [string, unknown] => entry !== undefined)
+			: [];
+	const otherEntries =
+		prominent.length > 0
+			? visibleEntries.filter(([key]) => !prominentSet.has(key))
+			: visibleEntries;
+	const collapsedOthers = prominent.length > 0 && !showAllProps;
 
 	return (
 		<div className="w-80 shrink-0 bg-background border-l flex flex-col h-full min-h-0 overflow-hidden animate-in slide-in-from-right-5 duration-200">
@@ -342,9 +448,7 @@ export function GraphNodeInspector({
 						<Icon className="h-3.5 w-3.5 text-white" />
 					</div>
 					<div className="min-w-0">
-						<h3 className="font-semibold text-sm truncate">
-							{node.caption ?? node.id}
-						</h3>
+						<h3 className="font-semibold text-sm truncate">{headerTitle}</h3>
 						<p className="text-xs text-muted-foreground">{node.label}</p>
 					</div>
 				</div>
@@ -355,17 +459,6 @@ export function GraphNodeInspector({
 							hiddenFields={hiddenFields}
 							onToggle={handleToggleField}
 						/>
-					)}
-					{onExpand && (
-						<Button
-							variant="ghost"
-							size="icon"
-							className="h-7 w-7"
-							onClick={onExpand}
-							title="Expand neighbors (Shift+Click)"
-						>
-							<Expand className="h-4 w-4" />
-						</Button>
 					)}
 					<Button
 						variant="ghost"
@@ -379,6 +472,97 @@ export function GraphNodeInspector({
 			</div>
 			<ScrollArea className="flex-1 min-h-0">
 				<div className="space-y-4 p-4">
+					{/* Explore actions */}
+					{(onExpand ||
+						onFindPath ||
+						(hasChildren && (onExpandChildren || onCollapseChildren))) && (
+						<div className="flex flex-wrap gap-1.5">
+							{onExpand && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onExpand(1)}
+									title="Expand neighbors (Shift+Click)"
+								>
+									<Expand className="h-3.5 w-3.5" />
+									Expand
+								</Button>
+							)}
+							{onExpand && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onExpand(2)}
+									title="Expand neighbors up to 2 hops away"
+								>
+									<Expand className="h-3.5 w-3.5" />2 hops
+								</Button>
+							)}
+							{hasChildren && onExpandChildren && !childrenExpanded && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={onExpandChildren}
+									title="Expand containment children"
+								>
+									<ListTree className="h-3.5 w-3.5" />
+									Expand children
+								</Button>
+							)}
+							{hasChildren && onCollapseChildren && childrenExpanded && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={onCollapseChildren}
+									title="Collapse containment children"
+								>
+									<ChevronsDownUp className="h-3.5 w-3.5" />
+									Collapse
+								</Button>
+							)}
+							{onFindPath && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="h-7 gap-1.5 text-xs"
+									onClick={() => onFindPath(node)}
+									title="Find a path from this object to another"
+								>
+									<Route className="h-3.5 w-3.5" />
+									Find path from here
+								</Button>
+							)}
+						</div>
+					)}
+
+					{/* Ontology actions */}
+					{onRunAction && actions.length > 0 && (
+						<div>
+							<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
+								Actions
+							</p>
+							<div className="flex flex-wrap gap-1.5">
+								{actions.map((action) => (
+									<Button
+										key={action.id}
+										variant="outline"
+										size="sm"
+										className="h-7 gap-1.5 text-xs"
+										onClick={() => onRunAction(action, node)}
+										title={action.description ?? action.name}
+									>
+										<Workflow className="h-3.5 w-3.5" />
+										{action.name}
+									</Button>
+								))}
+							</div>
+						</div>
+					)}
+
 					<div>
 						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
 							ID
@@ -400,20 +584,24 @@ export function GraphNodeInspector({
 								)}
 							</div>
 							<div className="space-y-2">
-								{visibleEntries.map(([key, value]) => (
-									<div key={key} className="rounded-md bg-muted/50 px-3 py-2">
-										<div className="flex items-center justify-between mb-0.5">
-											<p className="text-[10px] font-medium text-muted-foreground">
-												{key}
-											</p>
-											<span className="text-[9px] text-muted-foreground/60">
-												{inferValueKind(value).kind}
-											</span>
-										</div>
-										<PropertyValue value={value} propKey={key} />
-									</div>
+								{prominentEntries.map(([key, value]) => (
+									<PropertyRow key={key} propKey={key} value={value} />
 								))}
+								{!collapsedOthers &&
+									otherEntries.map(([key, value]) => (
+										<PropertyRow key={key} propKey={key} value={value} />
+									))}
 							</div>
+							{collapsedOthers && otherEntries.length > 0 && (
+								<button
+									type="button"
+									className="mt-2 flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+									onClick={() => setShowAllProps(true)}
+								>
+									<ChevronDown className="h-3.5 w-3.5" />
+									Show all properties ({otherEntries.length})
+								</button>
+							)}
 						</div>
 					)}
 					{propEntries.length === 0 && (

@@ -4,7 +4,6 @@ use flow_like::flow::{
     pin::ValueType,
     variable::VariableType,
 };
-use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 use flow_like_types::{async_trait, json::json};
 
 /// Lists all table names in a database location
@@ -104,18 +103,11 @@ impl NodeLogic for ListTablesNode {
         };
 
         let db = context.app_state.with_lance_session(db).execute().await?;
-        let mut intermediate = LanceDBVectorStore::from_connection(db, "".to_string()).await;
-        if let Some(opts) = &context
-            .app_state
-            .config
-            .read()
-            .await
-            .callbacks
-            .lance_write_options
-        {
-            intermediate.set_write_options(opts.clone());
-        }
-        let tables = intermediate.list_tables().await?;
+        // Listing is a connection-level metadata operation. Do not construct a
+        // table-bound store with an empty sentinel name: LanceDB 0.27 validates
+        // that name while opening the table and panics internally on the error.
+        // `table_names` correctly returns an empty Vec when no tables exist.
+        let tables = db.table_names().execute().await?;
 
         context.set_pin_value("tables", json!(tables)).await?;
         context.activate_exec_pin("exec_out").await?;

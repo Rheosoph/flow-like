@@ -11,7 +11,6 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_storage::Path as FlowPath;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
 use utoipa::ToSchema;
@@ -32,6 +31,7 @@ pub struct PushMediaResponse {
         ("template_id" = Option<String>, Query, description = "Template ID"),
         ("course_id" = Option<String>, Query, description = "Course ID"),
         ("widget_id" = Option<String>, Query, description = "Widget ID"),
+        ("group_id" = Option<String>, Query, description = "Suite (app group) ID"),
         ("item" = String, Query, description = "Media item: icon, thumbnail, preview"),
         ("extension" = String, Query, description = "File extension (e.g. png, webp)")
     ),
@@ -57,6 +57,7 @@ pub async fn push_media(
     let mode = MetaMode::from_media_query(&query, &app_id);
     mode.ensure_write_permission(&user, &app_id, &state).await?;
     let language = query.language.as_deref().unwrap_or("en");
+    let media_prefix = mode.media_prefix(&app_id);
 
     let txn = state.db.begin().await?;
 
@@ -79,10 +80,7 @@ pub async fn push_media(
         MediaItem::Icon => {
             if let Some(icon) = &existing_meta.icon {
                 let file_name = format!("{}.webp", icon);
-                let path = FlowPath::from("media")
-                    .child("apps")
-                    .child(app_id.clone())
-                    .child(file_name);
+                let path = media_prefix.child(file_name);
                 if let Err(err) = master_store.as_generic().delete(&path).await {
                     tracing::error!("Failed to delete existing icon at {}: {:?}", path, err);
                 }
@@ -92,10 +90,7 @@ pub async fn push_media(
         MediaItem::Thumbnail => {
             if let Some(thumbnail) = &existing_meta.thumbnail {
                 let file_name = format!("{}.webp", thumbnail);
-                let path = FlowPath::from("media")
-                    .child("apps")
-                    .child(app_id.clone())
-                    .child(file_name);
+                let path = media_prefix.child(file_name);
                 if let Err(err) = master_store.as_generic().delete(&path).await {
                     tracing::error!("Failed to delete existing thumbnail at {}: {:?}", path, err);
                 }
@@ -109,10 +104,7 @@ pub async fn push_media(
     }
 
     model.update(&txn).await?;
-    let path = FlowPath::from("media")
-        .child("apps")
-        .child(app_id)
-        .child(item_name.clone());
+    let path = media_prefix.child(item_name.clone());
     let signed_url = master_store
         .sign("PUT", &path, Duration::from_secs(60 * 60 * 24))
         .await

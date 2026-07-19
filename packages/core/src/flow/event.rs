@@ -196,6 +196,14 @@ pub struct ChatEventParameters {
     /// to the outgoing user turn so vision-capable models see the rendered UI.
     /// Defaults to enabled.
     pub attach_widget_snapshots: Option<bool>,
+    /// Custom CSS scoped to the chat interface.
+    pub custom_css: Option<String>,
+    /// Background image URL or app storage path for the chat interface.
+    pub background_image: Option<String>,
+    /// Preferred chat color scheme: "system" | "light" | "dark".
+    pub color_scheme: Option<String>,
+    /// User-facing disclosure that the conversation is with an AI.
+    pub ai_disclosure: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
@@ -227,6 +235,65 @@ pub enum EventPayload {
     ApiEvent(ApiEventParameters),
     AnyEvent(HashMap<String, flow_like_types::Value>),
     QuickAction,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChatEventParameters, EventPayload};
+    use serde_json::json;
+
+    #[test]
+    fn chat_event_parameters_default_presentation_fields_to_none() {
+        let parameters: ChatEventParameters = serde_json::from_value(json!({})).unwrap();
+
+        assert!(parameters.custom_css.is_none());
+        assert!(parameters.background_image.is_none());
+        assert!(parameters.color_scheme.is_none());
+        assert!(parameters.ai_disclosure.is_none());
+    }
+
+    #[test]
+    fn chat_event_payload_round_trips_presentation_fields() {
+        let payload: EventPayload = serde_json::from_value(json!({
+            "custom_css": ".message { border-radius: 1rem; }",
+            "background_image": "https://example.com/chat-background.webp",
+            "color_scheme": "dark",
+            "ai_disclosure": "Plot twist: you're chatting with an AI."
+        }))
+        .unwrap();
+
+        let EventPayload::ChatEvent(parameters) = &payload else {
+            panic!("presentation fields should deserialize as chat event parameters");
+        };
+        assert_eq!(
+            parameters.custom_css.as_deref(),
+            Some(".message { border-radius: 1rem; }")
+        );
+        assert_eq!(
+            parameters.background_image.as_deref(),
+            Some("https://example.com/chat-background.webp")
+        );
+        assert_eq!(parameters.color_scheme.as_deref(), Some("dark"));
+        assert_eq!(
+            parameters.ai_disclosure.as_deref(),
+            Some("Plot twist: you're chatting with an AI.")
+        );
+
+        let serialized = serde_json::to_value(payload).unwrap();
+        assert_eq!(
+            serialized["custom_css"],
+            json!(".message { border-radius: 1rem; }")
+        );
+        assert_eq!(
+            serialized["background_image"],
+            json!("https://example.com/chat-background.webp")
+        );
+        assert_eq!(serialized["color_scheme"], json!("dark"));
+        assert_eq!(
+            serialized["ai_disclosure"],
+            json!("Plot twist: you're chatting with an AI.")
+        );
+    }
 }
 
 pub fn canary_equal(a: &Option<CanaryEvent>, b: &Option<CanaryEvent>) -> bool {

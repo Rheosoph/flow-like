@@ -36,6 +36,18 @@ pub struct McpServerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_header: Option<String>,
 
+    /// Connected app whose short-lived bearer should be resolved immediately
+    /// before opening the MCP transport. Keeping identity instead of a token in
+    /// the serialized agent avoids freezing an expiring credential in a pin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_app_id: Option<String>,
+
+    /// MCP event hosted by `remote_app_id`. Remote transports reconstruct
+    /// their URI from this validated identity and the freshly minted session;
+    /// the serialized `uri` is never trusted as a bearer-token destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_event_id: Option<String>,
+
     /// Additional headers included with every MCP request. Connected-app MCP
     /// proxies use this for registration auth while `auth_header` remains the
     /// app-connection bearer token.
@@ -81,6 +93,60 @@ pub(crate) fn mcp_transport_config(
         })
         .collect();
     transport_config
+}
+
+/// Builds an MCP transport and resolves a connected-app bearer at the last
+/// responsible moment. The underlying session helper is run-scoped,
+/// expiry-aware, and single-flight, so this is cheap for repeated agents.
+#[cfg(feature = "execute")]
+pub(crate) async fn mcp_transport_config_for_execution(
+    config: &McpServerConfig,
+    context: &flow_like::flow::execution::context::ExecutionContext,
+) -> flow_like_types::Result<
+    rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig,
+> {
+    match (
+        config.remote_app_id.as_deref(),
+        config.remote_event_id.as_deref(),
+    ) {
+        (None, None) => Ok(mcp_transport_config(config)),
+        (Some(remote_app_id), Some(remote_event_id)) => {
+            let remote_app_id = flow_like_catalog_data::remote_util::validate_path_id(
+                remote_app_id,
+                "remote project",
+            )?;
+            let remote_event_id = flow_like_catalog_data::remote_util::validate_path_id(
+                remote_event_id,
+                "remote event",
+            )?;
+            let session = flow_like_catalog_data::remote_util::remote_app_session_for_mcp(
+                context,
+                &remote_app_id,
+            )
+            .await?;
+            let trusted_uri = session.url(&format!("events/{remote_event_id}/mcp"));
+            Ok(mcp_transport_config_with_remote_credentials(
+                config,
+                trusted_uri,
+                session.token,
+            ))
+        }
+        _ => Err(flow_like_types::anyhow!(
+            "Remote MCP configuration requires both a remote project and event"
+        )),
+    }
+}
+
+#[cfg(feature = "execute")]
+fn mcp_transport_config_with_remote_credentials(
+    config: &McpServerConfig,
+    trusted_uri: String,
+    token: String,
+) -> rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig {
+    let mut trusted = config.clone();
+    trusted.uri = trusted_uri;
+    trusted.auth_header = Some(token);
+    mcp_transport_config(&trusted)
 }
 
 /// DataFusion session context for SQL-based data analysis
@@ -452,6 +518,68 @@ mod tests {
         assert!(agent.get_system_prompt().is_none());
     }
 
+    #[test]
+    fn remote_mcp_config_serializes_identity_without_a_bearer() {
+        let config = McpServerConfig {
+            uri: "https://example.invalid/mcp".to_string(),
+            tool_filter: None,
+            auth_header: None,
+            remote_app_id: Some("remote-app".to_string()),
+            remote_event_id: Some("remote-event".to_string()),
+            custom_headers: HashMap::new(),
+        };
+
+        let serialized = flow_like_types::json::to_value(&config).unwrap();
+        assert_eq!(
+            serialized
+                .get("remote_app_id")
+                .and_then(|value| value.as_str()),
+            Some("remote-app")
+        );
+        assert_eq!(
+            serialized
+                .get("remote_event_id")
+                .and_then(|value| value.as_str()),
+            Some("remote-event")
+        );
+        assert!(serialized.get("auth_header").is_none());
+
+        let legacy: McpServerConfig = flow_like_types::json::from_value(
+            flow_like_types::json::json!({ "uri": "https://example.invalid/mcp" }),
+        )
+        .unwrap();
+        assert!(legacy.remote_app_id.is_none());
+        assert!(legacy.remote_event_id.is_none());
+    }
+
+    #[cfg(feature = "execute")]
+    #[test]
+    fn remote_mcp_bearer_ignores_a_serialized_untrusted_uri() {
+        let crafted = McpServerConfig {
+            uri: "https://attacker.invalid/collect".to_string(),
+            tool_filter: None,
+            auth_header: Some("attacker-controlled".to_string()),
+            remote_app_id: Some("remote-app".to_string()),
+            remote_event_id: Some("remote-event".to_string()),
+            custom_headers: HashMap::new(),
+        };
+
+        let transport = mcp_transport_config_with_remote_credentials(
+            &crafted,
+            "https://hub.invalid/api/v1/apps/remote-app/events/remote-event/mcp".to_string(),
+            "fresh-connection-token".to_string(),
+        );
+
+        assert_eq!(
+            transport.uri.as_ref(),
+            "https://hub.invalid/api/v1/apps/remote-app/events/remote-event/mcp"
+        );
+        assert_eq!(
+            transport.auth_header.as_deref(),
+            Some("fresh-connection-token")
+        );
+    }
+
     #[cfg(feature = "execute")]
     #[test]
     fn mcp_transport_keeps_connection_bearer_and_registration_headers_separate() {
@@ -459,6 +587,8 @@ mod tests {
             uri: "https://example.invalid/mcp".to_string(),
             tool_filter: None,
             auth_header: Some("connection-token".to_string()),
+            remote_app_id: None,
+            remote_event_id: None,
             custom_headers: HashMap::from([
                 (
                     "x-flow-like-event-authorization".to_string(),

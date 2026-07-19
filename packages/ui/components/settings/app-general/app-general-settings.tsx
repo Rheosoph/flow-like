@@ -561,9 +561,7 @@ export function AppGeneralSettings({
 						<SettingsIcon className="w-5 h-5" />
 						Application Settings
 					</CardTitle>
-					<CardDescription>
-						Configure application behavior
-					</CardDescription>
+					<CardDescription>Configure application behavior</CardDescription>
 				</CardHeader>
 				<CardContent className="space-y-4">
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -798,6 +796,7 @@ export function AppGeneralSettings({
 								}}
 							>
 								<TextEditor
+									appId={app.id}
 									editable={canEdit}
 									isMarkdown
 									initialContent={

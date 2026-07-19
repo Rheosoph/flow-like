@@ -58,41 +58,48 @@ fn insert_usage_headers(
     params: &mut HashMap<String, flow_like_types::Value>,
     usage_context: Option<&ModelUsageContext>,
 ) {
-    let Some(usage_context) = usage_context else {
-        return;
-    };
-
     let mut headers = params
         .get("headers")
         .and_then(|value| value.as_object())
         .cloned()
         .unwrap_or_else(json::Map::new);
 
-    if let Some(app_id) = usage_context
-        .app_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|app_id| !app_id.is_empty())
-    {
-        headers.insert(
-            "x-flow-like-app-id".to_string(),
-            flow_like_types::Value::String(app_id.to_string()),
-        );
+    // Internal attribution headers must come only from the trusted execution
+    // context, never from stale or user-configured Bit provider parameters.
+    headers.retain(|name, _| {
+        !name.eq_ignore_ascii_case("x-flow-like-app-id")
+            && !name.eq_ignore_ascii_case("x-flow-like-run-id")
+    });
+
+    if let Some(usage_context) = usage_context {
+        if let Some(app_id) = usage_context
+            .app_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|app_id| !app_id.is_empty())
+        {
+            headers.insert(
+                "x-flow-like-app-id".to_string(),
+                flow_like_types::Value::String(app_id.to_string()),
+            );
+        }
+
+        if let Some(run_id) = usage_context
+            .run_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|run_id| !run_id.is_empty())
+        {
+            headers.insert(
+                "x-flow-like-run-id".to_string(),
+                flow_like_types::Value::String(run_id.to_string()),
+            );
+        }
     }
 
-    if let Some(run_id) = usage_context
-        .run_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|run_id| !run_id.is_empty())
-    {
-        headers.insert(
-            "x-flow-like-run-id".to_string(),
-            flow_like_types::Value::String(run_id.to_string()),
-        );
-    }
-
-    if !headers.is_empty() {
+    if headers.is_empty() {
+        params.remove("headers");
+    } else {
         params.insert(
             "headers".to_string(),
             flow_like_types::Value::Object(headers),
@@ -392,5 +399,64 @@ pub async fn start_gc(state: Arc<Mutex<ModelFactory>>) {
                 state.gc();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage_headers(
+        usage_context: Option<ModelUsageContext>,
+    ) -> HashMap<String, flow_like_types::Value> {
+        let mut params = HashMap::from([(
+            "headers".to_string(),
+            flow_like_types::json::json!({
+                "x-existing-header": "preserved",
+                "X-Flow-Like-App-Id": "stale-app",
+                "X-FLOW-LIKE-RUN-ID": "stale-run"
+            }),
+        )]);
+        insert_usage_headers(&mut params, usage_context.as_ref());
+        params
+    }
+
+    #[test]
+    fn offline_usage_context_omits_app_header_but_keeps_run_header() {
+        let params = usage_headers(Some(ModelUsageContext {
+            app_id: None,
+            run_id: Some("run-1".to_string()),
+        }));
+        let headers = params["headers"].as_object().expect("headers object");
+
+        assert!(
+            !headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("x-flow-like-app-id"))
+        );
+        assert_eq!(headers["x-flow-like-run-id"], "run-1");
+        assert_eq!(headers["x-existing-header"], "preserved");
+    }
+
+    #[test]
+    fn server_backed_usage_context_includes_app_and_run_headers() {
+        let params = usage_headers(Some(ModelUsageContext {
+            app_id: Some("app-1".to_string()),
+            run_id: Some("run-1".to_string()),
+        }));
+        let headers = params["headers"].as_object().expect("headers object");
+
+        assert_eq!(headers["x-flow-like-app-id"], "app-1");
+        assert_eq!(headers["x-flow-like-run-id"], "run-1");
+        assert_eq!(headers["x-existing-header"], "preserved");
+    }
+
+    #[test]
+    fn missing_usage_context_scrubs_internal_headers() {
+        let params = usage_headers(None);
+        let headers = params["headers"].as_object().expect("headers object");
+
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers["x-existing-header"], "preserved");
     }
 }

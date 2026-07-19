@@ -12,10 +12,10 @@ pub fn get_component_schema(component_type: &str) -> String {
         "column" => r#"Column - Vertical flex container
 Properties:
 - type: "column" (required)
-- gap: string (e.g., "16px", "1rem") - Space between children
-- align: "start" | "center" | "end" | "stretch" | "baseline"
-- justify: "start" | "center" | "end" | "between" | "around" | "evenly"
-- wrap: boolean - Whether children can wrap
+- gap: BoundValue string (e.g., { "literalString": "16px" }) - Space between children
+- align: BoundValue string - "start" | "center" | "end" | "stretch" | "baseline"
+- justify: BoundValue string - "start" | "center" | "end" | "between" | "around" | "evenly"
+- wrap: BoundValue boolean - Whether children can wrap
 - children: { explicitList: ["child-id-1", "child-id-2"] }
 
 Example:
@@ -24,7 +24,7 @@ Example:
   "style": { "className": "p-4 gap-4" },
   "component": {
     "type": "column",
-    "gap": "16px",
+    "gap": { "literalString": "16px" },
     "children": { "explicitList": ["header", "content", "footer"] }
   }
 }"#
@@ -33,10 +33,10 @@ Example:
         "row" => r#"Row - Horizontal flex container
 Properties:
 - type: "row" (required)
-- gap: string - Space between children
-- align: "start" | "center" | "end" | "stretch" | "baseline"
-- justify: "start" | "center" | "end" | "between" | "around" | "evenly"
-- wrap: boolean
+- gap: BoundValue string - Space between children
+- align: BoundValue string - "start" | "center" | "end" | "stretch" | "baseline"
+- justify: BoundValue string - "start" | "center" | "end" | "between" | "around" | "evenly"
+- wrap: BoundValue boolean
 - children: { explicitList: [...] }
 
 Example:
@@ -45,8 +45,8 @@ Example:
   "style": { "className": "gap-2" },
   "component": {
     "type": "row",
-    "gap": "8px",
-    "justify": "end",
+    "gap": { "literalString": "8px" },
+    "justify": { "literalString": "end" },
     "children": { "explicitList": ["cancel-btn", "submit-btn"] }
   }
 }"#
@@ -55,10 +55,10 @@ Example:
         "grid" => r#"Grid - CSS Grid container
 Properties:
 - type: "grid" (required)
-- columns: string (e.g., "repeat(3, 1fr)", "1fr 2fr")
-- rows: string (optional)
-- gap: string
-- autoFlow: "row" | "column" | "dense"
+- columns: BoundValue string (e.g., { "literalString": "repeat(3, 1fr)" })
+- rows: BoundValue string (optional)
+- gap: BoundValue string
+- autoFlow: BoundValue string - "row" | "column" | "dense"
 - children: { explicitList: [...] }
 
 Example:
@@ -67,8 +67,8 @@ Example:
   "style": { "className": "gap-4" },
   "component": {
     "type": "grid",
-    "columns": "repeat(auto-fill, minmax(250px, 1fr))",
-    "gap": "16px",
+    "columns": { "literalString": "repeat(auto-fill, minmax(250px, 1fr))" },
+    "gap": { "literalString": "16px" },
     "children": { "explicitList": ["card-1", "card-2", "card-3"] }
   }
 }"#
@@ -78,11 +78,11 @@ Example:
 Properties:
 - type: "text" (required)
 - content: BoundValue - { literalString: "..." } or { path: "$.data.title" }
-- variant: "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "body" | "caption" | "code" | "label"
-- size: "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl"
-- weight: "normal" | "medium" | "semibold" | "bold"
-- color: string (Tailwind color like "text-primary")
-- align: "left" | "center" | "right"
+- variant: BoundValue string - "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "body" | "caption" | "code" | "label"
+- size: BoundValue string - "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl"
+- weight: BoundValue string - "normal" | "medium" | "semibold" | "bold"
+- color: BoundValue string (Tailwind color like "text-primary")
+- align: BoundValue string - "left" | "center" | "right"
 
 Example:
 {
@@ -91,7 +91,7 @@ Example:
   "component": {
     "type": "text",
     "content": { "literalString": "Welcome" },
-    "variant": "h1"
+    "variant": { "literalString": "h1" }
   }
 }"#
         .to_string(),
@@ -100,14 +100,20 @@ Example:
 Properties:
 - type: "button" (required)
 - label: BoundValue - Button text
-- variant: "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
-- size: "sm" | "md" | "lg" | "icon"
+- variant: BoundValue string - "default" | "secondary" | "outline" | "ghost" | "destructive" | "link"
+- size: BoundValue string - "sm" | "md" | "lg" | "icon"
 - disabled: BoundValue (boolean)
 - loading: BoundValue (boolean) - Shows loading spinner when true
 - icon: BoundValue (string) - Lucide icon name (e.g., "send", "plus", "trash")
 - iconPosition: BoundValue - "left" | "right" (default: "left")
 - tooltip: BoundValue (string) - Tooltip text on hover
-- actions: { onClick: { type: "emit", event: "..." } }
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - actions[0] fires on click (inside the component object)
+
+Action wiring (same contract for every interactive component):
+- "workflow_event" invokes ONE named board event; context carries routing ids ONLY (nodeId, optional boardId/appId)
+- NEVER copy element/dashboard values into the context - the event body reads current element state itself at runtime (Get Element -> Get Element Value / Get File Input Files)
+- Other built-in names: "navigate_page" (context.route, optional context.queryParams) and "external_link" (context.url)
+- A board can set or re-point this later with Set Element Action (a2uiSetElementAction)
 
 Example:
 {
@@ -115,12 +121,10 @@ Example:
   "component": {
     "type": "button",
     "label": { "literalString": "Submit" },
-    "variant": "default",
+    "variant": { "literalString": "default" },
     "icon": { "literalString": "send" },
-    "iconPosition": { "literalString": "left" }
-  },
-  "actions": {
-    "onClick": { "type": "emit", "event": "form_submit" }
+    "iconPosition": { "literalString": "left" },
+    "actions": [{ "name": "workflow_event", "context": { "nodeId": "evt-submit-form" } }]
   }
 }"#
         .to_string(),
@@ -179,8 +183,10 @@ Properties:
 - type: "card" (required)
 - title: BoundValue (optional)
 - description: BoundValue (optional)
-- footer: { explicitList: [...] } (optional)
-- headerActions: { explicitList: [...] } (optional)
+- footer: BoundValue (optional footer text)
+- variant: BoundValue - "default" | "bordered" | "elevated"
+- hoverable / clickable: BoundValue (boolean)
+- headerImage / headerIcon: BoundValue
 - children: { explicitList: [...] }
 
 Example:
@@ -224,14 +230,14 @@ Example:
 Properties:
 - type: "textField" (required)
 - value: BoundValue - Current value
-- placeholder: string
-- inputType: "text" | "email" | "password" | "number" | "tel" | "url"
-- multiline: boolean
-- rows: number (for multiline)
+- placeholder: BoundValue string
+- inputType: BoundValue string - "text" | "email" | "password" | "number" | "tel" | "url"
+- multiline: BoundValue boolean
+- rows: BoundValue number (for multiline)
 - disabled: BoundValue (boolean)
 - error: BoundValue (string, error message)
-- label: string
-- actions: { onChange: { type: "update", path: "..." } }
+- label: BoundValue string
+- Bind value with { "path": "$.form.email" } to persist edits. Optional on-change actions use the button's workflow_event contract; the event reads the current value with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -239,12 +245,9 @@ Example:
   "component": {
     "type": "textField",
     "value": { "path": "$.form.email" },
-    "placeholder": "Enter email",
-    "inputType": "email",
-    "label": "Email Address"
-  },
-  "actions": {
-    "onChange": { "type": "update", "path": "$.form.email" }
+    "placeholder": { "literalString": "Enter email" },
+    "inputType": { "literalString": "email" },
+    "label": { "literalString": "Email Address" }
   }
 }"#
         .to_string(),
@@ -253,11 +256,13 @@ Example:
 Properties:
 - type: "select" (required)
 - value: BoundValue - Selected value
-- options: [{ value: string, label: string }]
-- placeholder: string
+- options: BoundValue - { "literalOptions": [{ "value": "...", "label": "..." }] } or { "path": "$.data.options" }
+- placeholder: BoundValue (string)
+- label: BoundValue (string)
 - disabled: BoundValue (boolean)
-- multiple: boolean
-- actions: { onChange: { type: "update", path: "..." } }
+- multiple: BoundValue (boolean)
+- searchable: BoundValue (boolean)
+- Bind value with a path to persist the selection. Optional on-change actions use the button's workflow_event contract; the event reads the current selection with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -265,11 +270,11 @@ Example:
   "component": {
     "type": "select",
     "value": { "path": "$.form.country" },
-    "placeholder": "Select country",
-    "options": [
+    "placeholder": { "literalString": "Select country" },
+    "options": { "literalOptions": [
       { "value": "us", "label": "United States" },
       { "value": "uk", "label": "United Kingdom" }
-    ]
+    ] }
   }
 }"#
         .to_string(),
@@ -278,10 +283,11 @@ Example:
 Properties:
 - type: "image" (required)
 - src: BoundValue - Image URL
-- alt: string - Alt text (required for accessibility)
-- fit: "cover" | "contain" | "fill" | "none" | "scale-down"
-- loading: "lazy" | "eager"
-- fallback: string - Fallback image URL
+- alt: BoundValue (string) - Alt text (recommended for accessibility)
+- fit: BoundValue - "contain" | "cover" | "fill" | "none" | "scaleDown"
+- loading: BoundValue - "lazy" | "eager"
+- fallback: BoundValue (string) - Fallback image URL
+- aspectRatio: BoundValue
 
 Example:
 {
@@ -290,8 +296,8 @@ Example:
   "component": {
     "type": "image",
     "src": { "path": "$.user.avatar" },
-    "alt": "User avatar",
-    "fit": "cover"
+    "alt": { "literalString": "User avatar" },
+    "fit": { "literalString": "cover" }
   }
 }"#
         .to_string(),
@@ -299,9 +305,10 @@ Example:
         "icon" => r#"Icon - Lucide icon
 Properties:
 - type: "icon" (required)
-- name: string - Lucide icon name (e.g., "user", "settings", "chevron-right")
-- size: "xs" | "sm" | "md" | "lg" | "xl" or number
-- color: string - Tailwind color class
+- name: BoundValue (string) - Lucide icon name (e.g., "user", "settings", "chevron-right")
+- size: BoundValue - "xs" | "sm" | "md" | "lg" | "xl" or number
+- color: BoundValue (string) - Tailwind color class
+- strokeWidth: BoundValue (number)
 
 Example:
 {
@@ -309,8 +316,8 @@ Example:
   "style": { "className": "text-muted-foreground" },
   "component": {
     "type": "icon",
-    "name": "settings",
-    "size": "md"
+    "name": { "literalString": "settings" },
+    "size": { "literalString": "md" }
   }
 }"#
         .to_string(),
@@ -371,7 +378,7 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto agenda on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: bind a workflow_event action; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
 
 Example:
 {
@@ -406,7 +413,7 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto compact on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: bind a workflow_event action; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
 
 Example:
 {
@@ -424,9 +431,10 @@ Example:
 Properties:
 - type: "checkbox" (required)
 - checked: BoundValue (boolean)
-- label: string
+- label: BoundValue (string)
 - disabled: BoundValue (boolean)
-- actions: { onChange: { type: "update", path: "..." } }
+- indeterminate: BoundValue (boolean)
+- Bind checked with a path to persist toggles. Optional on-change actions use the button's workflow_event contract; the event reads the current state with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -434,7 +442,7 @@ Example:
   "component": {
     "type": "checkbox",
     "checked": { "path": "$.form.acceptTerms" },
-    "label": "I accept the terms and conditions"
+    "label": { "literalString": "I accept the terms and conditions" }
   }
 }"#
         .to_string(),
@@ -443,8 +451,9 @@ Example:
 Properties:
 - type: "switch" (required)
 - checked: BoundValue (boolean)
-- label: string
+- label: BoundValue (string)
 - disabled: BoundValue (boolean)
+- Bind checked with a path to persist toggles. Optional on-change actions use the button's workflow_event contract; the event reads the current state with Get Element Value instead of a pushed payload
 
 Example:
 {
@@ -452,7 +461,7 @@ Example:
   "component": {
     "type": "switch",
     "checked": { "path": "$.settings.notifications" },
-    "label": "Enable notifications"
+    "label": { "literalString": "Enable notifications" }
   }
 }"#
         .to_string(),
@@ -460,21 +469,22 @@ Example:
         "tabs" => r#"Tabs - Tabbed content container
 Properties:
 - type: "tabs" (required)
-- value: BoundValue - Active tab value
-- tabs: [{ value: string, label: string, icon?: string }]
-- children: { explicitList: [...] } - Tab content panels
+- value: BoundValue - Active tab id
+- tabs: raw array of { id: string, label: BoundValue, icon?: BoundValue, disabled?: BoundValue, contentComponentId: string }
+  contentComponentId references the component rendered as that tab's panel — without it the tab is empty
+- orientation: BoundValue - "horizontal" | "vertical"
+- variant: BoundValue - "default" | "pills" | "underline"
 
 Example:
 {
   "id": "settings-tabs",
   "component": {
     "type": "tabs",
-    "value": { "path": "$.ui.activeTab" },
+    "value": { "path": "$.ui.activeTab", "defaultValue": "general" },
     "tabs": [
-      { "value": "general", "label": "General", "icon": "settings" },
-      { "value": "security", "label": "Security", "icon": "shield" }
-    ],
-    "children": { "explicitList": ["general-panel", "security-panel"] }
+      { "id": "general", "label": { "literalString": "General" }, "icon": { "literalString": "settings" }, "contentComponentId": "general-panel" },
+      { "id": "security", "label": { "literalString": "Security" }, "icon": { "literalString": "shield" }, "contentComponentId": "security-panel" }
+    ]
   }
 }"#
         .to_string(),
@@ -482,11 +492,13 @@ Example:
         "modal" => r#"Modal - Dialog overlay
 Properties:
 - type: "modal" (required)
-- open: BoundValue (boolean)
+- open: BoundValue (boolean) - bind with { "path": "$.ui.showConfirm" } so closing persists
 - title: BoundValue
 - description: BoundValue (optional)
+- closeOnOverlay / closeOnEscape / showCloseButton / centered: BoundValue (boolean)
+- size: BoundValue - "sm" | "md" | "lg" | "xl" | "full"
 - children: { explicitList: [...] }
-- actions: { onClose: { type: "update", path: "...", value: false } }
+- Optional actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] fire when the modal closes
 
 Example:
 {
@@ -501,7 +513,7 @@ Example:
         .to_string(),
 
         _ => format!(
-            "Unknown component type: {}. Available types: column, row, grid, stack, text, image, icon, button, textField, select, checkbox, switch, slider, card, modal, tabs, accordion, divider, badge, avatar, userProfile, progress, spinner, skeleton",
+            "No detailed schema page for component type: {}. Detailed pages exist for: column, row, grid, text, button, feedback, appLink, card, userProfile, textField, select, image, icon, diffView, calendar, gantt, checkbox, switch, tabs, modal (plus style categories spacing, colors, effects, layout, responsive, typography). For every other component, use the component documentation embedded in your system prompt — it is the authoritative reference.",
             component_type
         ),
     }
@@ -643,5 +655,316 @@ Common patterns:
             "Unknown style category: {}. Available: spacing, colors, effects, layout, responsive, typography",
             category
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Component types with a detailed schema page (must match the fallback
+    /// message in `get_component_schema`).
+    const DETAILED_PAGE_TYPES: &[&str] = &[
+        "column",
+        "row",
+        "grid",
+        "text",
+        "button",
+        "feedback",
+        "appLink",
+        "card",
+        "userProfile",
+        "textField",
+        "select",
+        "image",
+        "icon",
+        "diffView",
+        "calendar",
+        "gantt",
+        "checkbox",
+        "switch",
+        "tabs",
+        "modal",
+    ];
+
+    const STYLE_CATEGORIES: &[&str] = &[
+        "spacing",
+        "colors",
+        "effects",
+        "layout",
+        "responsive",
+        "typography",
+    ];
+
+    /// Extract the trailing `Example:` JSON object from a schema page.
+    fn example_json(page: &str) -> serde_json::Value {
+        let example = page
+            .split("Example:")
+            .nth(1)
+            .expect("page must contain an Example section");
+        let start = example.find('{').expect("example must contain JSON");
+        serde_json::from_str(example[start..].trim())
+            .expect("example JSON must parse — the model copies it verbatim")
+    }
+
+    /// Props whose runtime contract is a raw (non-BoundValue) structure.
+    fn raw_struct_prop(component_type: &str, key: &str) -> bool {
+        matches!((component_type, key), ("tabs", "tabs"))
+    }
+
+    #[test]
+    fn every_detailed_page_exists_and_fallback_lists_them_all() {
+        let fallback = get_component_schema("definitely-not-a-component");
+        assert!(fallback.starts_with("No detailed schema page"));
+        for component_type in DETAILED_PAGE_TYPES {
+            let page = get_component_schema(component_type);
+            assert!(
+                !page.starts_with("No detailed schema page"),
+                "{component_type} must have a detailed page"
+            );
+            assert!(
+                fallback.contains(component_type),
+                "fallback message must list {component_type}"
+            );
+        }
+        for category in STYLE_CATEGORIES {
+            let doc = get_style_examples(category);
+            assert!(
+                !doc.starts_with("Unknown style category"),
+                "{category} must have style examples"
+            );
+        }
+    }
+
+    #[test]
+    fn pages_document_actions_as_name_context_arrays() {
+        // The runtime contract is `component.actions: [{ "name": ..., "context": {...} }]`
+        // (ComponentBase in packages/ui/components/a2ui/types.ts). The legacy
+        // event-keyed object shape is silently dropped by serde and rejected by
+        // the emit_ui validator.
+        for component_type in DETAILED_PAGE_TYPES {
+            let page = get_component_schema(component_type);
+            for legacy in ["onClick", "onChange", "onClose", "\"emit\"", "\"update\""] {
+                assert!(
+                    !page.contains(legacy),
+                    "{component_type} page still documents the legacy '{legacy}' action shape"
+                );
+            }
+            if page.contains("actions:") {
+                assert!(
+                    page.contains(r#"[{ "name""#),
+                    "{component_type} page must document actions as an array of {{name, context}}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn example_component_props_are_bound_values() {
+        // The emit_ui validator rejects bare string/number/bool values for
+        // known props; every example must model the BoundValue discipline.
+        for component_type in DETAILED_PAGE_TYPES {
+            let page = get_component_schema(component_type);
+            let example = example_json(&page);
+            let component = example
+                .get("component")
+                .and_then(|c| c.as_object())
+                .unwrap_or_else(|| panic!("{component_type} example must have a component object"));
+            for (key, value) in component {
+                if key == "type" || raw_struct_prop(component_type, key) {
+                    continue;
+                }
+                if key == "actions" {
+                    let actions = value
+                        .as_array()
+                        .unwrap_or_else(|| panic!("{component_type}: actions must be an array"));
+                    for action in actions {
+                        assert!(
+                            action.get("name").and_then(|n| n.as_str()).is_some(),
+                            "{component_type}: every example action needs a name"
+                        );
+                        assert!(
+                            action.get("context").map(|c| c.is_object()) == Some(true),
+                            "{component_type}: every example action needs a context object"
+                        );
+                    }
+                    continue;
+                }
+                assert!(
+                    value.is_object() || value.is_array(),
+                    "{component_type}: example prop '{key}' is a bare value — wrap it as a BoundValue"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn example_actions_live_inside_the_component_object() {
+        // SurfaceComponent (Rust + TS) has no top-level `actions` field; an
+        // example placing actions next to `component` teaches a shape that
+        // serde silently drops.
+        for component_type in DETAILED_PAGE_TYPES {
+            let page = get_component_schema(component_type);
+            let example = example_json(&page);
+            assert!(
+                example.get("actions").is_none(),
+                "{component_type}: example puts 'actions' outside 'component' where it is silently dropped"
+            );
+        }
+    }
+
+    #[test]
+    fn card_page_matches_component_contract() {
+        // CardComponent (types.ts) has no headerActions, and footer is a
+        // BoundValue, not a child-id list.
+        let page = get_component_schema("card");
+        assert!(
+            !page.contains("headerActions"),
+            "card page advertises 'headerActions', which the renderer and validators reject"
+        );
+        assert!(
+            !page.contains("footer: { explicitList"),
+            "card.footer is a BoundValue, not an explicitList"
+        );
+    }
+
+    #[test]
+    fn tabs_page_matches_tab_definition_contract() {
+        // TabDefinition (types.ts) is { id, label: BoundValue, icon?, disabled?,
+        // contentComponentId } — tab content is referenced per tab, not matched
+        // by children order, and tabs have `id`, not `value`.
+        let page = get_component_schema("tabs");
+        assert!(
+            page.contains("contentComponentId"),
+            "tabs page must document contentComponentId — without it tabs render empty"
+        );
+        let example = example_json(&page);
+        let tabs = example["component"]["tabs"]
+            .as_array()
+            .expect("tabs example must include a tabs array");
+        for tab in tabs {
+            assert!(tab.get("id").is_some(), "each example tab needs an id");
+            assert!(
+                tab.get("contentComponentId")
+                    .and_then(|v| v.as_str())
+                    .is_some(),
+                "each example tab needs a contentComponentId"
+            );
+            assert!(
+                tab.get("label").map(|l| l.is_object()) == Some(true),
+                "tab labels are BoundValues"
+            );
+        }
+    }
+
+    #[test]
+    fn action_examples_use_the_workflow_event_contract() {
+        // ActionHandler.tsx only wires "workflow_event" (context.nodeId),
+        // "navigate_page" (context.route) and "external_link" (context.url) to
+        // real behavior; any other name falls through to a no-op userAction.
+        // The event body must fetch element state itself (Get Element Value /
+        // Get File Input Files), so a workflow_event context carries routing
+        // ids only — never element values or payloads.
+        const BUILTIN_ACTIONS: &[&str] = &["workflow_event", "navigate_page", "external_link"];
+        const WORKFLOW_EVENT_CONTEXT_KEYS: &[&str] = &["nodeId", "boardId", "appId"];
+        for component_type in DETAILED_PAGE_TYPES {
+            let page = get_component_schema(component_type);
+            if page.contains("actions:") {
+                assert!(
+                    page.contains("workflow_event"),
+                    "{component_type} page documents actions without the workflow_event contract"
+                );
+            }
+            let example = example_json(&page);
+            let Some(actions) = example["component"]["actions"].as_array() else {
+                continue;
+            };
+            for action in actions {
+                let name = action["name"].as_str().unwrap_or_default();
+                assert!(
+                    BUILTIN_ACTIONS.contains(&name),
+                    "{component_type}: example action '{name}' is not a built-in action name"
+                );
+                if name == "workflow_event" {
+                    let context = action["context"].as_object().unwrap_or_else(|| {
+                        panic!("{component_type}: workflow_event needs a context object")
+                    });
+                    assert!(
+                        context.get("nodeId").and_then(|v| v.as_str()).is_some(),
+                        "{component_type}: workflow_event context must carry nodeId"
+                    );
+                    for key in context.keys() {
+                        assert!(
+                            WORKFLOW_EVENT_CONTEXT_KEYS.contains(&key.as_str()),
+                            "{component_type}: workflow_event context key '{key}' pushes payload data — events fetch element state themselves"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn catalog_points_display_updates_at_element_setters_not_data_update() {
+        // The product contract: workflow-driven display changes go through
+        // element-level setters; Data Update is a last resort for `$.data.*`
+        // bindings. Every doc mention of a2uiDataUpdate must carry that warning.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        for alias in [
+            "a2uiSetElementText",
+            "a2uiSetElementValue",
+            "a2uiWriteCsvToTable",
+            "a2uiUpdateTable",
+            "a2uiPushCsvToChart",
+            "a2uiGetElement",
+            "a2uiGetElementValue",
+            "a2uiGetFileInputFiles",
+            "a2uiSetElementAction",
+        ] {
+            assert!(
+                docs.contains(alias),
+                "component docs must reference the element-level node {alias}"
+            );
+        }
+        let mentions = docs
+            .lines()
+            .filter(|line| line.contains("a2uiDataUpdate"))
+            .collect::<Vec<_>>();
+        assert!(
+            !mentions.is_empty(),
+            "docs must warn about a2uiDataUpdate explicitly"
+        );
+        for line in mentions {
+            assert!(
+                line.contains("never") || line.contains("not "),
+                "a2uiDataUpdate may only appear in a discouraging context, found: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn docs_contain_no_email_addresses_or_private_hosts() {
+        let mut all_docs = crate::a2ui::copilot::get_full_documentation();
+        for component_type in DETAILED_PAGE_TYPES {
+            all_docs.push_str(&get_component_schema(component_type));
+        }
+        for category in STYLE_CATEGORIES {
+            all_docs.push_str(&get_style_examples(category));
+        }
+        for token in all_docs.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')')) {
+            let Some(at) = token.find('@') else { continue };
+            if at == 0 {
+                continue; // CSS at-rules (@keyframes, @media) and decorators
+            }
+            let domain = &token[at + 1..];
+            let looks_like_email = domain.contains('.')
+                && domain
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+            assert!(
+                !looks_like_email || domain.ends_with("example.com"),
+                "docs contain a non-example email/host: {token}"
+            );
+        }
     }
 }

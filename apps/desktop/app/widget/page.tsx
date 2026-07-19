@@ -363,6 +363,7 @@ export default function WidgetEditorPage() {
 						className="h-full"
 						externalAssistant
 						actionContext={{
+							appId,
 							widgetActions: (widget.actions ?? []).map((a) => ({
 								id: a.id,
 								label: a.label,

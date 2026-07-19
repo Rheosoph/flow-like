@@ -1,7 +1,18 @@
-import type { ITeamState } from "@flow-like/flow-like-ui";
+import {
+	type IAppVisibility,
+	type IMediaItem,
+	type ITeamState,
+	isAzureBlobStorageUrl,
+	toWireVisibility,
+} from "@flow-like/flow-like-ui";
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	IChangeGroupVisibilityResult,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMembershipRequest,
+	IGroupPublicationStatus,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -12,6 +23,7 @@ import type {
 	IProcessNote,
 	IRemoteEvent,
 	IRemoteEventDetail,
+	IUpdateGroupPayload,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
@@ -603,6 +615,236 @@ export class TeamState implements ITeamState {
 			{
 				method: "DELETE",
 			},
+			this.backend.auth,
+		);
+	}
+
+	async createGroup(
+		appId: string,
+		payload: ICreateGroupPayload,
+	): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups`,
+			{ method: "POST", body: JSON.stringify(payload) },
+			this.backend.auth,
+		);
+	}
+
+	async listGroups(appId: string): Promise<IGroup[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async getGroup(appId: string, groupId: string): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async updateGroup(
+		appId: string,
+		groupId: string,
+		payload: IUpdateGroupPayload,
+	): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}`,
+			{ method: "PUT", body: JSON.stringify(payload) },
+			this.backend.auth,
+		);
+	}
+
+	async deleteGroup(appId: string, groupId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async addGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/members`,
+			{ method: "POST", body: JSON.stringify({ member_app_id: memberAppId }) },
+			this.backend.auth,
+		);
+	}
+
+	async removeGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/members/${memberAppId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/requests`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async acceptGroupRequest(appId: string, memberId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/requests/${memberId}`,
+			{ method: "POST" },
+			this.backend.auth,
+		);
+	}
+
+	async declineGroupRequest(appId: string, memberId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/requests/${memberId}`,
+			{ method: "DELETE" },
+			this.backend.auth,
+		);
+	}
+
+	async pushGroupMedia(
+		appId: string,
+		groupId: string,
+		item: IMediaItem,
+		file: File,
+		language?: string,
+	): Promise<void> {
+		// Suites exist only online — there is no Tauri command backing them, so
+		// this deliberately has no offline branch.
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Suites require an online app");
+		}
+
+		const params = new URLSearchParams();
+		params.set("group_id", groupId);
+		params.set("item", item);
+		params.set(
+			"extension",
+			file.name.includes(".") ? (file.name.split(".").pop() ?? "") : "",
+		);
+		params.set("language", language ?? "en");
+
+		const { signed_url } = await fetcher<{ signed_url: string }>(
+			this.backend.profile,
+			`apps/${appId}/meta/media?${params}`,
+			{ method: "PUT" },
+			this.backend.auth,
+		);
+
+		const headers: HeadersInit = { "Content-Type": file.type };
+		// Azure Blob Storage rejects a PUT without this header.
+		if (isAzureBlobStorageUrl(signed_url)) {
+			headers["x-ms-blob-type"] = "BlockBlob";
+		}
+
+		const response = await fetch(signed_url, {
+			method: "PUT",
+			body: file,
+			headers,
+		});
+		if (!response.ok) {
+			throw new Error(`Failed to upload media: ${response.statusText}`);
+		}
+	}
+
+	async changeGroupVisibility(
+		appId: string,
+		groupId: string,
+		visibility: IAppVisibility,
+		message?: string,
+	): Promise<IChangeGroupVisibilityResult> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/visibility`,
+			{
+				method: "PATCH",
+				body: JSON.stringify({
+					visibility: toWireVisibility(visibility),
+					message,
+				}),
+			},
+			this.backend.auth,
+		);
+	}
+
+	async getGroupPublication(
+		appId: string,
+		groupId: string,
+	): Promise<IGroupPublicationStatus> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/publication`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async leaveGroup(appId: string, groupId: string): Promise<void> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		await fetcher(
+			this.backend.profile,
+			`apps/${appId}/groups/${groupId}/membership`,
+			{ method: "DELETE" },
 			this.backend.auth,
 		);
 	}

@@ -50,7 +50,13 @@ pub async fn get_overlay(
     );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let def = lancegraph::load_overlay(&connection, &overlay_id).await?;
+    let mut def = lancegraph::load_overlay(&connection, &overlay_id).await?;
+    if user.is_connected_app() {
+        if !def.exposed {
+            return Err(ApiError::not_found("Ontology not found"));
+        }
+        def = crate::routes::app::connection::remote_ontologies::sanitize_remote_contract(def);
+    }
 
     Ok(Json(super::list_overlays::def_to_overlay(def)))
 }

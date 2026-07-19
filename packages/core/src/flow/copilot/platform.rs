@@ -23,14 +23,19 @@ use rig::{
         AssistantContent, DocumentSourceKind, Image, ImageDetail, ImageMediaType,
         ToolResult as RigToolResult, ToolResultContent, UserContent,
     },
-    streaming::StreamedAssistantContent,
+    streaming::{StreamedAssistantContent, ToolCallDeltaContent},
 };
 use serde_json::{Value, json};
 
 use super::memory::AssistantMemory;
-use super::stream::{plan_step_frame, tool_end_frame, tool_start_frame, usage_stat_frame};
+use super::stream::{
+    FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
+    plan_step_frame, safe_tool_result_preview, tool_result_stream_status, tool_result_summary,
+    tool_result_terminal_status, usage_stat_frame,
+};
 use super::tool_spec::{
-    MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, global_assistant_tool_specs, spec_arg_str,
+    MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, find_global_tool_spec, global_assistant_tool_specs,
+    resolve_tool_approval, spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
@@ -42,6 +47,62 @@ use crate::state::FlowLikeState;
 #[async_trait]
 pub trait PlatformToolBridge: Send + Sync {
     async fn call(&self, tool_name: &str, arguments: Value) -> String;
+}
+
+/// Whether a platform tool must preserve the model's declared call order within its round.
+///
+/// Read-only calls can run concurrently, but approval-requiring actions must not race each other:
+/// for example, `flowpilot_board` has to finish persisting its entry node before a later
+/// `upsert_event` can validate and register that node. Unknown tools are kept ordered as the safe
+/// default because their side-effect policy is not available here.
+fn platform_tool_requires_ordered_execution(name: &str, arguments: &Value) -> bool {
+    let Some(spec) = find_global_tool_spec(name) else {
+        return true;
+    };
+    resolve_tool_approval(&spec, arguments).kind != "none"
+}
+
+fn platform_tool_round_requires_ordered_execution<'a>(
+    calls: impl IntoIterator<Item = (&'a str, &'a Value)>,
+) -> bool {
+    calls
+        .into_iter()
+        .any(|(name, arguments)| platform_tool_requires_ordered_execution(name, arguments))
+}
+
+fn is_editing_flowpilot_board_call(name: &str, arguments: &Value) -> bool {
+    name == "flowpilot_board" && spec_arg_str(arguments, "mode", "mode") != "explain"
+}
+
+fn is_workflow_event_upsert_call(name: &str, arguments: &Value) -> bool {
+    name == "upsert_event"
+        && !spec_arg_str(arguments, "board_id", "boardId")
+            .trim()
+            .is_empty()
+        && !spec_arg_str(arguments, "node_id", "nodeId")
+            .trim()
+            .is_empty()
+}
+
+/// A workflow Event cannot be registered from the same model round that creates its board entry.
+/// The upsert arguments were authored before the model saw `flowpilot_board.event_nodes`, so even
+/// sequential execution cannot make those arguments reliable. Return a retryable tool result and
+/// let the next assistant round use the exact persisted ids from the board result.
+fn same_round_workflow_event_guard_result(
+    name: &str,
+    arguments: &Value,
+    round_has_editing_board_call: bool,
+) -> Option<String> {
+    (round_has_editing_board_call && is_workflow_event_upsert_call(name, arguments)).then(|| {
+        json!({
+            "status": "error",
+            "code": "workflow_event_dependency_pending",
+            "retryable": true,
+            "next_action": "wait_for_flowpilot_board_event_nodes_then_retry",
+            "message": "A workflow upsert_event cannot run in the same assistant round as flowpilot_board. Wait for flowpilot_board to succeed, read the exact board_id and node id from its event_nodes result, then call upsert_event in the next assistant round. The Event was not registered."
+        })
+        .to_string()
+    })
 }
 
 /// Global platform assistant. Holds just the state + profile needed to resolve a model; the tools and
@@ -233,6 +294,7 @@ impl PlatformCopilot {
             let mut iteration_text = String::new();
             let mut current_reasoning = String::new();
             let mut reasoning_step_id: Option<String> = None;
+            let mut flowscript_preview = FlowScriptToolCallPreviewTracker::default();
 
             while let Some(item) = stream.next().await {
                 let content =
@@ -245,10 +307,38 @@ impl PlatformCopilot {
                         }
                         response_contents.push(AssistantContent::Text(text));
                     }
-                    StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                    StreamedAssistantContent::ToolCall {
+                        tool_call,
+                        internal_call_id,
+                    } => {
+                        if let Some(ref callback) = on_token
+                            && let Some(frame) = flowscript_preview.complete(
+                                &internal_call_id,
+                                &tool_call.function.name,
+                                &tool_call.function.arguments,
+                            )
+                        {
+                            callback(frame);
+                        }
                         response_contents.push(AssistantContent::ToolCall(tool_call));
                     }
-                    StreamedAssistantContent::ToolCallDelta { .. } => {}
+                    StreamedAssistantContent::ToolCallDelta {
+                        internal_call_id,
+                        content,
+                        ..
+                    } => {
+                        let frame = match content {
+                            ToolCallDeltaContent::Name(name) => {
+                                flowscript_preview.observe_name(&internal_call_id, &name);
+                                None
+                            }
+                            ToolCallDeltaContent::Delta(delta) => flowscript_preview
+                                .observe_arguments_delta(&internal_call_id, &delta),
+                        };
+                        if let (Some(callback), Some(frame)) = (&on_token, frame) {
+                            callback(frame);
+                        }
+                    }
                     StreamedAssistantContent::Reasoning(reasoning) => {
                         let reasoning_text = reasoning
                             .content
@@ -347,32 +437,87 @@ impl PlatformCopilot {
                     tool_call.id.clone()
                 };
                 if let Some(ref callback) = on_token {
-                    callback(tool_start_frame(&frame_id, &tool_call.function.name, None));
+                    callback(detailed_tool_start_frame(
+                        &frame_id,
+                        &tool_call.function.name,
+                        None,
+                        Some(&tool_call.function.arguments),
+                    ));
                 }
                 frame_ids.push(frame_id);
             }
 
-            let tool_futures: Vec<_> = tool_calls
-                .iter()
-                .map(|tool_call| {
+            let round_has_editing_board_call = tool_calls.iter().any(|tool_call| {
+                is_editing_flowpilot_board_call(
+                    &tool_call.function.name,
+                    &tool_call.function.arguments,
+                )
+            });
+            let ordered_round = round_has_editing_board_call
+                || platform_tool_round_requires_ordered_execution(tool_calls.iter().map(
+                    |tool_call| {
+                        (
+                            tool_call.function.name.as_str(),
+                            &tool_call.function.arguments,
+                        )
+                    },
+                ));
+            let tool_results: Vec<(String, String, String)> = if ordered_round {
+                let mut results = Vec::with_capacity(tool_calls.len());
+                for tool_call in &tool_calls {
                     let name = tool_call.function.name.clone();
-                    let arguments = tool_call.function.arguments.clone();
-                    let id = tool_call.id.clone();
-                    let bridge = bridge.clone();
-                    let memory = memory.clone();
-                    async move {
-                        let output =
-                            execute_platform_tool(&name, arguments, &bridge, memory.as_ref()).await;
-                        (id, name, output)
+                    if let Some(output) = same_round_workflow_event_guard_result(
+                        &name,
+                        &tool_call.function.arguments,
+                        round_has_editing_board_call,
+                    ) {
+                        results.push((tool_call.id.clone(), name, output));
+                        continue;
                     }
-                })
-                .collect();
-            let tool_results: Vec<(String, String, String)> =
-                futures::future::join_all(tool_futures).await;
+                    let output = execute_platform_tool(
+                        &name,
+                        tool_call.function.arguments.clone(),
+                        &bridge,
+                        memory.as_ref(),
+                    )
+                    .await;
+                    results.push((tool_call.id.clone(), name, output));
+                }
+                results
+            } else {
+                let tool_futures: Vec<_> = tool_calls
+                    .iter()
+                    .map(|tool_call| {
+                        let name = tool_call.function.name.clone();
+                        let arguments = tool_call.function.arguments.clone();
+                        let id = tool_call.id.clone();
+                        let bridge = bridge.clone();
+                        let memory = memory.clone();
+                        async move {
+                            let output =
+                                execute_platform_tool(&name, arguments, &bridge, memory.as_ref())
+                                    .await;
+                            (id, name, output)
+                        }
+                    })
+                    .collect();
+                futures::future::join_all(tool_futures).await
+            };
 
             for (i, (_id, name, output)) in tool_results.iter().enumerate() {
                 if let (Some(callback), Some(frame_id)) = (&on_token, frame_ids.get(i)) {
-                    callback(tool_end_frame(frame_id, name, tool_output_status(output)));
+                    let terminal_status = tool_result_terminal_status(output);
+                    let result_summary = tool_result_summary(output);
+                    let result_preview =
+                        safe_tool_result_preview(output, super::stream::TOOL_RESULT_PREVIEW_CHARS);
+                    callback(detailed_tool_end_frame(
+                        frame_id,
+                        name,
+                        tool_result_stream_status(output),
+                        terminal_status.as_deref(),
+                        Some(&result_summary),
+                        Some(&result_preview),
+                    ));
                 }
             }
 
@@ -597,16 +742,192 @@ fn compact_search_result(result: &Value) -> Value {
     })
 }
 
-/// Map a tool's JSON output to the stream status the frontend renders ("error" → failed step).
-fn tool_output_status(output: &str) -> &'static str {
-    let is_error = serde_json::from_str::<Value>(output)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("status")
-                .and_then(Value::as_str)
-                .map(|status| status == "error")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_platform_rounds_can_run_in_parallel() {
+        let list_args = json!({});
+        let describe_args = json!({ "app_id": "app", "event_id": "event" });
+
+        assert!(!platform_tool_round_requires_ordered_execution([
+            ("list_apps", &list_args),
+            ("describe_app_interface", &describe_args),
+        ]));
+    }
+
+    #[test]
+    fn approval_requiring_platform_rounds_preserve_model_order() {
+        let list_args = json!({});
+        let board_args = json!({
+            "app_id": "app",
+            "instruction": "Build the workflow",
+        });
+        let event_args = json!({
+            "app_id": "app",
+            "name": "Scheduled poll",
+            "board_id": "board",
+            "node_id": "entry",
+        });
+
+        assert!(platform_tool_round_requires_ordered_execution([
+            ("list_apps", &list_args),
+            ("flowpilot_board", &board_args),
+            ("upsert_event", &event_args),
+        ]));
+    }
+
+    #[test]
+    fn read_only_board_explanations_do_not_force_ordered_execution() {
+        let explain_args = json!({
+            "app_id": "app",
+            "board_id": "board",
+            "instruction": "Explain this workflow",
+            "mode": "explain",
+        });
+
+        assert!(!platform_tool_requires_ordered_execution(
+            "flowpilot_board",
+            &explain_args,
+        ));
+    }
+
+    #[test]
+    fn unknown_platform_tools_default_to_ordered_execution() {
+        assert!(platform_tool_requires_ordered_execution(
+            "future_side_effecting_tool",
+            &json!({}),
+        ));
+    }
+
+    #[test]
+    fn runtime_execution_is_ordered_but_log_queries_are_read_only() {
+        let execute_args = json!({
+            "app_id": "app",
+            "board_id": "board",
+            "node_id": "node",
+        });
+        let log_args = json!({
+            "app_id": "app",
+            "board_id": "board",
+            "run_id": "run",
+        });
+
+        assert!(platform_tool_requires_ordered_execution(
+            "execute_node",
+            &execute_args,
+        ));
+        assert!(!platform_tool_requires_ordered_execution(
+            "query_execution_logs",
+            &log_args,
+        ));
+    }
+
+    #[test]
+    fn workflow_event_upsert_is_deferred_when_board_is_edited_in_same_round() {
+        let event_args = json!({
+            "app_id": "app",
+            "name": "Scheduled poll",
+            "board_id": "board",
+            "node_id": "guessed-entry",
+        });
+        let output = same_round_workflow_event_guard_result("upsert_event", &event_args, true)
+            .expect("workflow upsert must be deferred");
+        let payload: Value = serde_json::from_str(&output).expect("structured guard result");
+
+        assert_eq!(payload["status"], "error");
+        assert_eq!(payload["code"], "workflow_event_dependency_pending");
+        assert_eq!(payload["retryable"], true);
+        assert_eq!(
+            payload["next_action"],
+            "wait_for_flowpilot_board_event_nodes_then_retry"
+        );
+    }
+
+    #[test]
+    fn page_only_event_upsert_is_allowed_in_board_edit_round() {
+        let page_event_args = json!({
+            "app_id": "app",
+            "name": "Dashboard",
+            "page_id": "page",
+            "route": "/dashboard",
+        });
+
+        assert!(
+            same_round_workflow_event_guard_result("upsert_event", &page_event_args, true,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn workflow_event_upsert_is_allowed_without_same_round_board_edit() {
+        let event_args = json!({
+            "app_id": "app",
+            "name": "Scheduled poll",
+            "board_id": "board",
+            "node_id": "persisted-entry",
+        });
+
+        assert!(
+            same_round_workflow_event_guard_result("upsert_event", &event_args, false,).is_none()
+        );
+    }
+
+    #[test]
+    fn explain_board_call_does_not_trigger_workflow_event_guard() {
+        assert!(!is_editing_flowpilot_board_call(
+            "flowpilot_board",
+            &json!({ "mode": "explain" }),
+        ));
+        assert!(is_editing_flowpilot_board_call(
+            "flowpilot_board",
+            &json!({}),
+        ));
+    }
+
+    #[test]
+    fn terminal_bridge_failures_never_render_as_done() {
+        for status in [
+            "error",
+            "failed",
+            "timeout",
+            "timed_out",
+            "denied",
+            "cancelled",
+            "validation_errors",
+        ] {
+            let output = json!({ "status": status }).to_string();
+            assert_eq!(
+                tool_result_stream_status(&output),
+                "error",
+                "{status} must render as failed"
+            );
+            assert_eq!(
+                tool_result_terminal_status(&output).as_deref(),
+                Some(status)
+            );
+        }
+        for status in ["ok", "done", "queued", "applied", "completed"] {
+            assert_eq!(
+                tool_result_stream_status(&json!({ "status": status }).to_string()),
+                "done"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_summary_is_bounded_to_status_and_counts() {
+        let output = json!({
+            "status": "timeout",
+            "error": "must not appear in summary",
+            "commands": [{}, {}],
+            "diagnostics": [{}],
         })
-        .unwrap_or(false);
-    if is_error { "error" } else { "done" }
+        .to_string();
+        let summary = tool_result_summary(&output);
+
+        assert_eq!(summary, "timeout · 2 command(s) · 1 diagnostic(s)");
+        assert!(!summary.contains("must not appear"));
+    }
 }

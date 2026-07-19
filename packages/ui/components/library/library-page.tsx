@@ -39,6 +39,7 @@ import {
 	SearchResults,
 	Section,
 } from "./library-sub-components";
+import { SuiteShelf } from "./library-suite-shelf";
 import type { LibraryItem, SortMode } from "./library-types";
 import { CATEGORY_COLORS, sortItems } from "./library-types";
 
@@ -67,6 +68,11 @@ export function LibraryPage({
 		[],
 	);
 	const apps = useInvoke(backend.appState.getApps, backend.appState, []);
+	const myGroups = useInvoke(
+		backend.appState.getMyGroups,
+		backend.appState,
+		[],
+	);
 	const bits = useInvoke(backend.bitState.searchBits, backend.bitState, [
 		{
 			bit_types: [IBitTypes.Embedding, IBitTypes.ImageEmbedding],
@@ -226,9 +232,44 @@ export function LibraryPage({
 		[itemsForDisplay],
 	);
 
+	// Suites own their member apps in the grid below: an app that belongs to a
+	// suite is shown inside that suite's element, never twice.
+	const suiteGroups = useMemo(() => {
+		const byId = new Map(itemsForDisplay.map((item) => [item.id, item]));
+		return (myGroups.data ?? [])
+			.map((group) => ({
+				group,
+				items: sortItems(
+					group.members
+						.map((member) => byId.get(member.app_id))
+						.filter((item): item is LibraryItem => item !== undefined),
+					sortMode,
+				),
+			}))
+			.filter((suite) => suite.items.length > 0)
+			.sort((a, b) =>
+				(a.group.use_case || a.group.name || "").localeCompare(
+					b.group.use_case || b.group.name || "",
+				),
+			);
+	}, [myGroups.data, itemsForDisplay, sortMode]);
+
+	const suiteAppIds = useMemo(() => {
+		const claimed = new Set<string>();
+		for (const suite of suiteGroups) {
+			for (const item of suite.items) claimed.add(item.id);
+		}
+		return claimed;
+	}, [suiteGroups]);
+
+	const ungroupedItems = useMemo(
+		() => itemsForDisplay.filter((item) => !suiteAppIds.has(item.id)),
+		[itemsForDisplay, suiteAppIds],
+	);
+
 	const categorizedItems = useMemo(() => {
 		const groups = new Map<string, LibraryItem[]>();
-		for (const item of itemsForDisplay) {
+		for (const item of ungroupedItems) {
 			const label = formatAppCategory(item.app.primary_category);
 			const existing = groups.get(label) ?? [];
 			existing.push(item);
@@ -240,7 +281,7 @@ export function LibraryPage({
 				items: sortItems(sectionItems, sortMode),
 			}))
 			.sort((a, b) => a.label.localeCompare(b.label));
-	}, [itemsForDisplay, sortMode]);
+	}, [ungroupedItems, sortMode]);
 
 	const { addAll, removeAll, clearSearch, search, searchResults } =
 		useMiniSearch(itemsForDisplay, {
@@ -284,6 +325,19 @@ export function LibraryPage({
 	}, []);
 	const handleCreateProject = useCallback(
 		async (projectName: string, isOnline: boolean) => {
+			if (!currentProfile.data) {
+				throw new Error("Profile is not ready yet");
+			}
+
+			let embeddingBits = bits.data;
+			if (!embeddingBits) {
+				const refreshedBits = await bits.refetch();
+				if (!refreshedBits.data) {
+					throw new Error("Embedding models could not be loaded");
+				}
+				embeddingBits = refreshedBits.data;
+			}
+
 			const meta = {
 				name: projectName,
 				description: `Coding project: ${projectName}`,
@@ -294,8 +348,8 @@ export function LibraryPage({
 				preview_media: [],
 			};
 
-			const profileBits = new Set(currentProfile.data?.hub_profile.bits ?? []);
-			const allBits = bits.data?.filter((bit) => profileBits.has(bit.id)) ?? [];
+			const profileBits = new Set(currentProfile.data.hub_profile.bits ?? []);
+			const allBits = embeddingBits.filter((bit) => profileBits.has(bit.id));
 
 			const app = await backend.appState.createApp(
 				meta,
@@ -332,7 +386,7 @@ export function LibraryPage({
 			backend.appState,
 			backend.boardState,
 			backend.userState,
-			bits.data,
+			bits,
 			currentProfile,
 			queryClient,
 			router,
@@ -580,6 +634,20 @@ export function LibraryPage({
 								appHref={appHref}
 								isMobile={isMobile}
 								showSeeAll={isMobile}
+							/>
+						)}
+
+						{suiteGroups.length > 0 && (
+							<SuiteShelf
+								suites={suiteGroups}
+								onAppClick={handleAppClick}
+								onSettingsClick={handleSettingsClick}
+								settingsHref={appSettingsHref}
+								appHref={appHref}
+								visibilityMode={visibilityMode}
+								activeAppIds={activeAppIds}
+								onToggleVisibility={handleToggleVisibility}
+								isMobile={isMobile}
 							/>
 						)}
 

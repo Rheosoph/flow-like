@@ -206,9 +206,24 @@ export function applyStreamEvent(
 			const existing = id ? acc.steps.get(id) : undefined;
 			const record = (event.data ?? {}) as Record<string, unknown>;
 			if (existing) {
+				const terminalStatus = String(
+					record.status ?? record.terminal_status ?? "done",
+				).toLowerCase();
+				const failed = [
+					"error",
+					"failed",
+					"failure",
+					"timeout",
+					"timed_out",
+					"cancelled",
+					"canceled",
+					"denied",
+					"validation_error",
+					"validation_errors",
+				].includes(terminalStatus);
 				acc.steps.set(id, {
 					...existing,
-					status: record.status === "error" ? "failed" : "done",
+					status: failed ? "failed" : "done",
 				});
 			}
 			acc.currentStepId = undefined;

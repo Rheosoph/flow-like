@@ -72,7 +72,9 @@ export function CreateFlowDialog({
 			setIsOnline(defaultOnline && isAuthenticated);
 		} catch (error) {
 			console.error("Failed to create project:", error);
-			toast.error("Failed to create project");
+			toast.error(
+				error instanceof Error ? error.message : "Failed to create project",
+			);
 		} finally {
 			setIsCreating(false);
 		}

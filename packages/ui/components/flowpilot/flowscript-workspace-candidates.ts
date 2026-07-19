@@ -1,0 +1,438 @@
+export interface FlowScriptWorkspaceCandidate {
+	source: string;
+	status?: string;
+	completion?: string;
+	retained_full_source?: string;
+	regression?: Record<string, unknown>;
+}
+
+export interface FlowScriptCandidateProfile {
+	callSites: number;
+	meaningfulStatements: number;
+	eventEntries: number;
+	helperFunctions: string[];
+	nonEmptyHelperFunctions: string[];
+	topLevelVariables: string[];
+	interfaces: string[];
+	callNames: string[];
+	eventsCallingHelpers: number;
+	helperDomainCallSites: number;
+}
+
+export interface FlowScriptCandidateRegression {
+	previous_call_sites: number;
+	candidate_call_sites: number;
+	previous_statements: number;
+	candidate_statements: number;
+	previous_scope_symbols: number;
+	retained_scope_symbols: number;
+}
+
+const TRIVIAL_SMOKE_CALLS = new Set([
+	"log",
+	"loginfo",
+	"logdebug",
+	"logwarn",
+	"logerror",
+	"printinfo",
+	"printdebug",
+	"printwarn",
+	"printerror",
+	"stringformat",
+	"structmake",
+	"structget",
+	"structset",
+	"arraypush",
+	"arrayget",
+	"arraylength",
+	"variableget",
+]);
+
+function normalizedSymbol(value: string) {
+	return value.trim().toLowerCase();
+}
+
+function braceDelta(line: string) {
+	return (line.match(/{/g)?.length ?? 0) - (line.match(/}/g)?.length ?? 0);
+}
+
+function callNamesInLine(line: string) {
+	return [...line.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)]
+		.map((match) => normalizedSymbol(match[1] ?? ""))
+		.filter((name) => name && !["if", "for", "while", "switch"].includes(name));
+}
+
+/** Lightweight structural profile used as a frontend safety net across provider implementations. */
+export function profileFlowScriptCandidate(
+	source: string,
+): FlowScriptCandidateProfile {
+	const helperFunctions = new Set<string>();
+	for (const match of source.matchAll(/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+		helperFunctions.add(normalizedSymbol(match[1] ?? ""));
+	}
+
+	const nonEmptyHelperFunctions = new Set<string>();
+	const topLevelVariables = new Set<string>();
+	const interfaces = new Set<string>();
+	const callNames = new Set<string>();
+	let callSites = 0;
+	let meaningfulStatements = 0;
+	let eventEntries = 0;
+	let eventsCallingHelpers = 0;
+	let helperDomainCallSites = 0;
+	let depth = 0;
+	let activeHelper: { name: string; depth: number } | undefined;
+	let activeEvent: { calledHelper: boolean; depth: number } | undefined;
+
+	for (const rawLine of source.replace(/\r\n/g, "\n").split("\n")) {
+		const line = rawLine.trim();
+		if (!line || line === "{" || line === "}" || line.startsWith("//") || line.startsWith("@")) {
+			depth += braceDelta(rawLine);
+			if (activeHelper && depth < activeHelper.depth) activeHelper = undefined;
+			if (activeEvent && depth < activeEvent.depth) activeEvent = undefined;
+			continue;
+		}
+		meaningfulStatements += 1;
+
+		const helperDeclaration = line.match(
+			/^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/,
+		);
+		const eventDeclaration = line.match(/^(events[A-Za-z0-9_]*)\s*\(/);
+		const interfaceDeclaration = line.match(
+			/^interface\s+([A-Za-z_][A-Za-z0-9_]*)/,
+		);
+		if (depth === 0) {
+			const variable = line.match(
+				/^(?:const|let)\s+([A-Za-z_][A-Za-z0-9_]*)/,
+			);
+			if (variable?.[1]) topLevelVariables.add(normalizedSymbol(variable[1]));
+		}
+		if (interfaceDeclaration?.[1]) {
+			interfaces.add(normalizedSymbol(interfaceDeclaration[1]));
+		}
+		if (helperDeclaration?.[1]) {
+			activeHelper = {
+				name: normalizedSymbol(helperDeclaration[1]),
+				depth: depth + Math.max(1, braceDelta(rawLine)),
+			};
+		}
+		if (eventDeclaration?.[1]) {
+			eventEntries += 1;
+			activeEvent = {
+				calledHelper: false,
+				depth: depth + Math.max(1, braceDelta(rawLine)),
+			};
+		}
+
+		const calls = callNamesInLine(line).filter(
+			(name) =>
+				name !== normalizedSymbol(helperDeclaration?.[1] ?? "") &&
+				name !== normalizedSymbol(eventDeclaration?.[1] ?? ""),
+		);
+		for (const name of calls) {
+			callSites += 1;
+			callNames.add(name);
+			if (activeHelper) {
+				nonEmptyHelperFunctions.add(activeHelper.name);
+				if (!helperFunctions.has(name) && !TRIVIAL_SMOKE_CALLS.has(name)) {
+					helperDomainCallSites += 1;
+				}
+			}
+			if (activeEvent && helperFunctions.has(name) && !activeEvent.calledHelper) {
+				activeEvent.calledHelper = true;
+				eventsCallingHelpers += 1;
+			}
+		}
+
+		depth += braceDelta(rawLine);
+		if (activeHelper && depth < activeHelper.depth) activeHelper = undefined;
+		if (activeEvent && depth < activeEvent.depth) activeEvent = undefined;
+	}
+
+	return {
+		callSites,
+		meaningfulStatements,
+		eventEntries,
+		helperFunctions: [...helperFunctions].sort(),
+		nonEmptyHelperFunctions: [...nonEmptyHelperFunctions].sort(),
+		topLevelVariables: [...topLevelVariables].sort(),
+		interfaces: [...interfaces].sort(),
+		callNames: [...callNames].sort(),
+		eventsCallingHelpers,
+		helperDomainCallSites,
+	};
+}
+
+function profileScore(profile: FlowScriptCandidateProfile) {
+	return (
+		profile.callSites * 8 +
+		profile.meaningfulStatements * 2 +
+		profile.helperFunctions.length * 12 +
+		profile.eventEntries * 6 +
+		profile.topLevelVariables.length * 4 +
+		profile.interfaces.length * 4 +
+		profile.callNames.length * 2
+	);
+}
+
+function stableScopeSymbols(profile: FlowScriptCandidateProfile) {
+	return new Set([
+		...profile.helperFunctions.map((name) => `function:${name}`),
+		...profile.topLevelVariables.map((name) => `variable:${name}`),
+		...profile.interfaces.map((name) => `interface:${name}`),
+		...(profile.eventEntries > 0 ? ["event:present"] : []),
+	]);
+}
+
+export function detectFlowScriptCandidateRegression(
+	previous: FlowScriptCandidateProfile,
+	candidate: FlowScriptCandidateProfile,
+): FlowScriptCandidateRegression | undefined {
+	const previousIsSubstantial =
+		previous.callSites >= 5 &&
+		(previous.meaningfulStatements >= 6 ||
+			previous.helperFunctions.length + previous.eventEntries >= 3);
+	const severeCallShrink = candidate.callSites * 3 < previous.callSites;
+	const severeStatementShrink =
+		candidate.meaningfulStatements * 2 < previous.meaningfulStatements;
+	if (!(previousIsSubstantial && severeCallShrink && severeStatementShrink)) {
+		return undefined;
+	}
+
+	const previousSymbols = stableScopeSymbols(previous);
+	const candidateSymbols = stableScopeSymbols(candidate);
+	const retainedScopeSymbols = [...previousSymbols].filter((symbol) =>
+		candidateSymbols.has(symbol),
+	).length;
+	const identityWasLost =
+		previousSymbols.size >= 2 && retainedScopeSymbols * 2 < previousSymbols.size;
+	const multipleEventScopeWasLost =
+		previous.eventEntries >= 2 && candidate.eventEntries * 2 < previous.eventEntries;
+	if (!(identityWasLost || multipleEventScopeWasLost)) return undefined;
+
+	return {
+		previous_call_sites: previous.callSites,
+		candidate_call_sites: candidate.callSites,
+		previous_statements: previous.meaningfulStatements,
+		candidate_statements: candidate.meaningfulStatements,
+		previous_scope_symbols: previousSymbols.size,
+		retained_scope_symbols: retainedScopeSymbols,
+	};
+}
+
+function isModularWorkingSlice(profile: FlowScriptCandidateProfile) {
+	return (
+		profile.nonEmptyHelperFunctions.length > 0 &&
+		profile.eventsCallingHelpers > 0 &&
+		profile.helperDomainCallSites > 0
+	);
+}
+
+function sourceKey(source: string): string {
+	return source.replace(/\r\n/g, "\n").trim();
+}
+
+/** Parse either a raw FlowScript document or the streamed `{source,status}` envelope. */
+export function parseFlowScriptWorkspaceCandidate(
+	workspace: string | undefined,
+): FlowScriptWorkspaceCandidate | undefined {
+	const trimmed = workspace?.trim();
+	if (!trimmed) return undefined;
+	try {
+		const parsed = JSON.parse(trimmed);
+		if (typeof parsed === "string" && parsed.trim()) {
+			return { source: parsed };
+		}
+		if (
+			parsed &&
+			typeof parsed === "object" &&
+			typeof parsed.source === "string" &&
+			parsed.source.trim()
+		) {
+			const candidate: FlowScriptWorkspaceCandidate = {
+				source: parsed.source,
+			};
+			if (typeof parsed.status === "string") candidate.status = parsed.status;
+			if (typeof parsed.completion === "string")
+				candidate.completion = parsed.completion;
+			if (typeof parsed.retained_full_source === "string")
+				candidate.retained_full_source = parsed.retained_full_source;
+			if (
+				parsed.regression &&
+				typeof parsed.regression === "object" &&
+				!Array.isArray(parsed.regression)
+			) {
+				candidate.regression = parsed.regression as Record<string, unknown>;
+			}
+			return candidate;
+		}
+	} catch {
+		// A plain FlowScript document is the common final-response shape.
+	}
+	return { source: trimmed };
+}
+
+/** Extract every workspace frame from one transport chunk, preserving order. */
+export function extractFlowScriptWorkspaceCandidates(text: string): {
+	candidates: FlowScriptWorkspaceCandidate[];
+	remainder: string;
+} {
+	const pattern = /<flowscript_workspace>([\s\S]*?)<\/flowscript_workspace>/g;
+	const candidates: FlowScriptWorkspaceCandidate[] = [];
+	for (const match of text.matchAll(pattern)) {
+		const candidate = parseFlowScriptWorkspaceCandidate(match[1]);
+		if (candidate) candidates.push(candidate);
+	}
+	return {
+		candidates,
+		remainder: text.replace(pattern, ""),
+	};
+}
+
+/** Keep a bounded per-turn history so source and validation status remain an atomic pair. */
+export function rememberFlowScriptWorkspaceCandidate(
+	history: readonly FlowScriptWorkspaceCandidate[],
+	candidate: FlowScriptWorkspaceCandidate,
+): FlowScriptWorkspaceCandidate[] {
+	if (!candidate.source.trim()) return [...history];
+	const next = [...history, candidate];
+	if (next.length <= 30) return next;
+	const best = selectBestRecoverableFlowScriptCandidate(next);
+	const recent = next.slice(-29);
+	return best && !recent.some((entry) => entry === best)
+		? [best, ...recent]
+		: next.slice(-30);
+}
+
+/** Select the structurally closest retained draft, preferring the latest candidate on score ties. */
+export function selectBestRecoverableFlowScriptCandidate(
+	history: readonly FlowScriptWorkspaceCandidate[],
+): FlowScriptWorkspaceCandidate | undefined {
+	let best: FlowScriptWorkspaceCandidate | undefined;
+	let bestScore = -1;
+	for (const candidate of history) {
+		if (!candidate.source.trim()) continue;
+		const score = profileScore(profileFlowScriptCandidate(candidate.source));
+		if (score >= bestScore) {
+			best = candidate;
+			bestScore = score;
+		}
+	}
+	return best;
+}
+
+/**
+ * Frontend backstop for providers that do not run the core repair tracker. A queued smoke-test
+ * replacement is downgraded to the retained repair draft. A genuine modular working slice stays
+ * applicable, but is explicitly marked partial and keeps the fuller source for continuation.
+ */
+export function protectFlowScriptCandidateCompleteness(
+	history: readonly FlowScriptWorkspaceCandidate[],
+	candidate: FlowScriptWorkspaceCandidate | undefined,
+): FlowScriptWorkspaceCandidate | undefined {
+	if (!candidate || candidate.status !== "queued") return candidate;
+	const candidateKey = sourceKey(candidate.source);
+	const previous = selectBestRecoverableFlowScriptCandidate(
+		history.filter((entry) => sourceKey(entry.source) !== candidateKey),
+	);
+	if (!previous) return candidate;
+	const previousProfile = profileFlowScriptCandidate(previous.source);
+	const candidateProfile = profileFlowScriptCandidate(candidate.source);
+	const regression = detectFlowScriptCandidateRegression(
+		previousProfile,
+		candidateProfile,
+	);
+	if (!regression) return candidate;
+	if (
+		candidate.completion === "partial_working_slice" ||
+		isModularWorkingSlice(candidateProfile)
+	) {
+		return {
+			...candidate,
+			completion: "partial_working_slice",
+			retained_full_source:
+				candidate.retained_full_source ?? previous.source,
+			regression: candidate.regression ?? { ...regression },
+		};
+	}
+	return {
+		...previous,
+		status: "validation_errors",
+		completion: "regression_blocked",
+		retained_full_source: previous.source,
+		regression: {
+			...regression,
+			code: "candidate_regression",
+			submitted_status: candidate.status,
+		},
+	};
+}
+
+/**
+ * Resolve a final raw workspace against the status last reported for that exact
+ * source. Never borrow a status from a different candidate.
+ */
+export function resolveFlowScriptWorkspaceCandidate(
+	history: readonly FlowScriptWorkspaceCandidate[],
+	finalCandidate?: FlowScriptWorkspaceCandidate,
+): FlowScriptWorkspaceCandidate | undefined {
+	if (!finalCandidate) return history.at(-1);
+	if (finalCandidate.status) return finalCandidate;
+
+	const key = sourceKey(finalCandidate.source);
+	for (let index = history.length - 1; index >= 0; index--) {
+		const candidate = history[index];
+		if (sourceKey(candidate.source) === key && candidate.status) {
+			return {
+				...candidate,
+				...finalCandidate,
+				source: finalCandidate.source,
+				status: candidate.status,
+			};
+		}
+	}
+	return finalCandidate;
+}
+
+/**
+ * Resolve the final backend field. Some external-agent transports return the
+ * validated source as a raw string and no workspace stream frames; a non-empty
+ * validated command batch is the only safe evidence that this raw source was
+ * actually queued.
+ */
+export function resolveFinalFlowScriptWorkspaceCandidate(
+	history: readonly FlowScriptWorkspaceCandidate[],
+	workspace: string | undefined,
+	hasValidatedCommands: boolean,
+): FlowScriptWorkspaceCandidate | undefined {
+	const parsed = parseFlowScriptWorkspaceCandidate(workspace);
+	const resolved = resolveFlowScriptWorkspaceCandidate(history, parsed);
+	const validated = resolved && parsed && !parsed.status && hasValidatedCommands
+		? { ...resolved, status: "queued" }
+		: resolved;
+	return protectFlowScriptCandidateCompleteness(history, validated);
+}
+
+/** Only an explicitly queued, non-empty candidate can enter the apply path. */
+export function isFlowScriptWorkspaceApplicable(
+	candidate: FlowScriptWorkspaceCandidate | undefined,
+): boolean {
+	return candidate?.status === "queued" && Boolean(candidate.source.trim());
+}
+
+export function isPartialFlowScriptWorkspace(
+	candidate: FlowScriptWorkspaceCandidate | undefined,
+): boolean {
+	return candidate?.completion === "partial_working_slice";
+}
+
+/** Partial slices may run on the board, but must never become app-level Events. */
+export function shouldPromoteFlowScriptWorkspaceEvents(
+	candidate: FlowScriptWorkspaceCandidate | undefined,
+	applyFailed: boolean,
+	hasAppliedWork: boolean,
+): boolean {
+	return (
+		!applyFailed && hasAppliedWork && !isPartialFlowScriptWorkspace(candidate)
+	);
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import {
 	type A2UIClientMessage,
 	A2UIRenderer,
@@ -76,6 +77,8 @@ export function A2UIInterface({
 					onMessage={handleClientMessage}
 					className="w-full min-h-full"
 					appId={appId}
+					boardId={event.board_id}
+					boardVersion={normalizeBoardVersion(event.board_version)}
 					eventId={event.id}
 					isPreviewMode={true}
 				/>

@@ -1,6 +1,7 @@
 pub mod apply_flowscript;
 pub mod delete_board;
 pub mod execute_commands;
+pub mod flow_ir_commit;
 pub mod get_board;
 pub mod get_board_versions;
 pub mod get_boards;
@@ -23,10 +24,16 @@ pub mod workspace;
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, patch, post},
 };
 
 use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
+
+/// Board command batches (bulk FlowScript applies, large undo/redo stacks) can
+/// exceed axum's 2MB default body limit. Clients cap their payloads well below
+/// this value and fail fast instead of hitting a raw 413.
+const BOARD_COMMAND_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Board invocation, prerun, and realtime access all take an arbitrary board
 /// id and either execute it or disclose its full definition. Human/API
@@ -53,7 +60,8 @@ pub fn routes() -> Router<AppState> {
                 .post(execute_commands::execute_commands)
                 .patch(version_board::version_board)
                 .put(upsert_board::upsert_board)
-                .delete(delete_board::delete_board),
+                .delete(delete_board::delete_board)
+                .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
         )
         .route(
             "/{board_id}/version",
@@ -68,6 +76,14 @@ pub fn routes() -> Router<AppState> {
             post(apply_flowscript::apply_flowscript),
         )
         .route(
+            "/{board_id}/flow-ir-commit/disposition",
+            post(flow_ir_commit::flow_ir_commit_disposition),
+        )
+        .route(
+            "/{board_id}/flow-ir-commit/apply",
+            post(flow_ir_commit::apply_flow_ir_commit),
+        )
+        .route(
             "/{board_id}/realtime",
             get(realtime::jwks).post(realtime::access),
         )
@@ -79,8 +95,16 @@ pub fn routes() -> Router<AppState> {
             get(get_execution_elements::get_execution_elements),
         )
         .route("/{board_id}/prerun", get(prerun_board::prerun_board))
-        .route("/{board_id}/undo", patch(undo_redo_board::undo_board))
-        .route("/{board_id}/redo", patch(undo_redo_board::redo_board))
+        .route(
+            "/{board_id}/undo",
+            patch(undo_redo_board::undo_board)
+                .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/{board_id}/redo",
+            patch(undo_redo_board::redo_board)
+                .layer(DefaultBodyLimit::max(BOARD_COMMAND_BODY_LIMIT_BYTES)),
+        )
         .route("/{board_id}/invoke", post(invoke_board::invoke_board))
         .route(
             "/{board_id}/invoke/async",

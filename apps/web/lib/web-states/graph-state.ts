@@ -1,18 +1,33 @@
 import type {
 	CreateOverlayPayload,
 	CypherPayload,
+	ExecuteSqlResult,
+	GraphAnalyticsResult,
 	GraphOverlay,
+	GraphPathsResult,
 	GraphSchema,
 	GraphSearchPayload,
 	IGraphState,
+	InvokeOntologyActionPayload,
 	NeighborsPayload,
+	OntologyActionPrerun,
+	OntologyActionRun,
+	OntologyActionStreamEvent,
+	OverlayChildrenPayload,
+	PathsPayload,
+	RemoteImportQueryPayload,
+	RemoteOntologyImport,
 	SqlPayload,
 	SubgraphNode,
 	SubgraphPayload,
 	SubgraphResult,
 	UpdateOverlayPayload,
+	UpsertGraphElementsPayload,
+	UpsertGraphElementsResult,
 	ValidationResult,
 } from "@flow-like/flow-like-ui";
+import { applyOntologyActionStreamEvent } from "@flow-like/flow-like-ui";
+import { WebApiState } from "./api-state";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -34,6 +49,105 @@ export class WebGraphState implements IGraphState {
 	): Promise<GraphOverlay[]> {
 		return apiGet<GraphOverlay[]>(
 			`apps/${appId}/graph${scopeQuery(userScoped)}`,
+			this.backend.auth,
+		);
+	}
+
+	async listRemoteOntologies(
+		appId: string,
+		targetAppId: string,
+	): Promise<GraphOverlay[]> {
+		return apiGet<GraphOverlay[]>(
+			`apps/${appId}/connections/${targetAppId}/ontologies`,
+			this.backend.auth,
+		);
+	}
+
+	async listRemoteOntologyImports(
+		appId: string,
+	): Promise<RemoteOntologyImport[]> {
+		return apiGet<RemoteOntologyImport[]>(
+			`apps/${appId}/graph/imports`,
+			this.backend.auth,
+		);
+	}
+
+	async installRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<RemoteOntologyImport> {
+		return apiPut<RemoteOntologyImport>(
+			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async uninstallRemoteOntology(
+		appId: string,
+		targetAppId: string,
+		ontologyId: string,
+	): Promise<void> {
+		await apiDelete<void>(
+			`apps/${appId}/connections/${targetAppId}/ontologies/${ontologyId}/install`,
+			this.backend.auth,
+		);
+	}
+
+	async invokeOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+		payload: InvokeOntologyActionPayload,
+		onStatus?: (run: OntologyActionRun) => void,
+	): Promise<OntologyActionRun> {
+		if (!this.backend.profile) {
+			throw new Error("An active profile is required to invoke an action.");
+		}
+		const run: OntologyActionRun = { run_id: "", status: "Submitting" };
+		onStatus?.({ ...run });
+		try {
+			const requestPayload = {
+				...payload,
+				token: this.backend.auth?.user?.access_token,
+				profile_id: this.backend.profile.id,
+			};
+			await new WebApiState(this.backend).stream<OntologyActionStreamEvent>(
+				this.backend.profile,
+				`apps/${appId}/graph/${ontologyId}/actions/${actionId}/invoke`,
+				{
+					method: "POST",
+					body: JSON.stringify(requestPayload),
+					headers: { Accept: "text/event-stream" },
+				},
+				(event) => {
+					applyOntologyActionStreamEvent(run, event);
+					onStatus?.({ ...run });
+				},
+			);
+		} catch (error) {
+			if (!run.run_id) throw error;
+			run.status = "Failed";
+			run.error_message ??=
+				error instanceof Error ? error.message : "The ontology action failed.";
+		}
+		if (run.status === "Submitting" || run.status === "Running") {
+			run.status = "Interrupted";
+			run.error_message =
+				"The action stream ended before a terminal status was received. Check the run before retrying.";
+		}
+		onStatus?.({ ...run });
+		return run;
+	}
+
+	async prerunOntologyAction(
+		appId: string,
+		ontologyId: string,
+		actionId: string,
+	): Promise<OntologyActionPrerun> {
+		return apiGet<OntologyActionPrerun>(
+			`apps/${appId}/graph/${ontologyId}/actions/${actionId}/prerun`,
 			this.backend.auth,
 		);
 	}
@@ -100,10 +214,11 @@ export class WebGraphState implements IGraphState {
 		appId: string,
 		overlayId: string,
 		userScoped?: boolean,
+		draft?: GraphOverlay,
 	): Promise<ValidationResult> {
 		return apiPost<ValidationResult>(
 			`apps/${appId}/graph/${overlayId}/validate${scopeQuery(userScoped)}`,
-			undefined,
+			draft,
 			this.backend.auth,
 		);
 	}
@@ -147,6 +262,19 @@ export class WebGraphState implements IGraphState {
 		);
 	}
 
+	async children(
+		appId: string,
+		overlayId: string,
+		payload: OverlayChildrenPayload,
+		userScoped?: boolean,
+	): Promise<SubgraphResult> {
+		return apiPost<SubgraphResult>(
+			`apps/${appId}/graph/${overlayId}/children${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
 	async subgraph(
 		appId: string,
 		overlayId: string,
@@ -156,6 +284,35 @@ export class WebGraphState implements IGraphState {
 		return apiPost<SubgraphResult>(
 			`apps/${appId}/graph/${overlayId}/subgraph${scopeQuery(userScoped)}`,
 			payload,
+			this.backend.auth,
+		);
+	}
+
+	async paths(
+		appId: string,
+		overlayId: string,
+		payload: PathsPayload,
+		userScoped?: boolean,
+	): Promise<GraphPathsResult> {
+		return apiPost<GraphPathsResult>(
+			`apps/${appId}/graph/${overlayId}/paths${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async analytics(
+		appId: string,
+		overlayId: string,
+		limit?: number,
+		userScoped?: boolean,
+	): Promise<GraphAnalyticsResult> {
+		const params = new URLSearchParams();
+		if (userScoped) params.set("scope", "user");
+		if (limit !== undefined) params.set("limit", String(limit));
+		const qs = params.toString();
+		return apiGet<GraphAnalyticsResult>(
+			`apps/${appId}/graph/${overlayId}/analytics${qs ? `?${qs}` : ""}`,
 			this.backend.auth,
 		);
 	}
@@ -187,6 +344,58 @@ export class WebGraphState implements IGraphState {
 		const qs = params.toString();
 		return apiGet<unknown[]>(
 			`apps/${appId}/graph/${overlayId}/sample${qs ? `?${qs}` : ""}`,
+			this.backend.auth,
+		);
+	}
+
+	async upsertNodes(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult> {
+		return apiPost<UpsertGraphElementsResult>(
+			`apps/${appId}/graph/${overlayId}/nodes${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async upsertEdges(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult> {
+		return apiPost<UpsertGraphElementsResult>(
+			`apps/${appId}/graph/${overlayId}/edges${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async sampleRemoteImport(
+		appId: string,
+		importId: string,
+		label: string,
+		n?: number,
+	): Promise<unknown[]> {
+		const params = new URLSearchParams({ label });
+		if (n !== undefined) params.set("n", String(n));
+		return apiGet<unknown[]>(
+			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/sample?${params.toString()}`,
+			this.backend.auth,
+		);
+	}
+
+	async queryRemoteImport(
+		appId: string,
+		importId: string,
+		payload: RemoteImportQueryPayload,
+	): Promise<ExecuteSqlResult> {
+		return apiPost<ExecuteSqlResult>(
+			`apps/${appId}/graph/imports/${encodeURIComponent(importId)}/query`,
+			payload,
 			this.backend.auth,
 		);
 	}

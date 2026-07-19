@@ -56,6 +56,7 @@ import {
 	SelectValue,
 } from "../../index";
 import { getApiOrigin } from "../../lib/api-url";
+import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import {
@@ -97,6 +98,7 @@ import { submitInteractionResponse } from "../interfaces/chat-default/respond-in
 import { GlobalChatHistory } from "./global-chat-history";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
+import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
 import { PendingComponentsCard } from "./pending-components-card";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
@@ -138,6 +140,10 @@ const EMPTY_SUGGESTIONS: Array<{
 
 // Radix Select disallows an empty value, so "memory off" uses a sentinel mapped back to "".
 const MEMORY_OFF = "__off__";
+const GLOBAL_CHAT_CONFIG = {
+	allow_file_upload: true,
+	tools: [] as string[],
+};
 
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
@@ -158,8 +164,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
 	const provider = useGlobalChatStore((s) => s.provider);
 	const selectedModelId = useGlobalChatStore((s) => s.selectedModelId);
+	const reasoningEffort = useGlobalChatStore((s) => s.reasoningEffort);
 	const setProvider = useGlobalChatStore((s) => s.setProvider);
 	const setSelectedModelId = useGlobalChatStore((s) => s.setSelectedModelId);
+	const setReasoningEffort = useGlobalChatStore((s) => s.setReasoningEffort);
 	const embeddingModelId = useGlobalChatStore((s) => s.embeddingModelId);
 	const setEmbeddingModelId = useGlobalChatStore((s) => s.setEmbeddingModelId);
 	const appendMessage = useGlobalChatStore((s) => s.appendMessage);
@@ -169,6 +177,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const removeInlineAppChat = useGlobalChatStore((s) => s.removeInlineAppChat);
 	const inlineAppPages = useGlobalChatStore((s) => s.inlineAppPages);
 	const removeInlineAppPage = useGlobalChatStore((s) => s.removeInlineAppPage);
+	const inlineAppSurfaces = useGlobalChatStore((s) => s.inlineAppSurfaces);
+	const removeInlineAppSurface = useGlobalChatStore(
+		(s) => s.removeInlineAppSurface,
+	);
 	const toolPrompt = useGlobalChatStore((s) => s.toolPrompt);
 	const activeInteractions = useGlobalChatStore((s) => s.activeInteractions);
 	const setInteractionResponded = useGlobalChatStore(
@@ -352,33 +364,77 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		setSelectedModelId,
 	]);
 
+	const selectedAgentModel = isAgent
+		? copilotSDK.models.find((model) => model.id === selectedModelId)
+		: undefined;
+	const reasoningEffortOptions =
+		selectedAgentModel?.supportedReasoningEfforts ?? [];
+
+	// Do not validate against the hook's metadata-free static fallback. Once the
+	// backend has returned a real catalog (`[]` or populated), stale persisted
+	// values are reset to Auto instead of being sent to an incompatible model.
+	useEffect(() => {
+		if (!reasoningEffort) return;
+		if (!isAgent) {
+			setReasoningEffort("");
+			return;
+		}
+		if (
+			!selectedAgentModel ||
+			selectedAgentModel.supportedReasoningEfforts === undefined
+		) {
+			return;
+		}
+		if (
+			!selectedAgentModel.supportedReasoningEfforts.some(
+				(option) => option.id === reasoningEffort,
+			)
+		) {
+			setReasoningEffort("");
+		}
+	}, [isAgent, reasoningEffort, selectedAgentModel, setReasoningEffort]);
+
 	const handleSendMessage: ISendMessageFunction = useCallback(
 		async (content, filesAttached) => {
 			const trimmed = content.trim();
 			const state = useGlobalChatStore.getState();
 			if (state.isStreaming) return;
 
-			// Same attachment handling as the simple chat: files become local tmp files (Tauri) or
-			// presigned tmp uploads — only URLs travel through IPC and land in IndexedDB, no blobs.
-			const imageFiles = (filesAttached ?? []).filter((file) =>
-				file.type.startsWith("image/"),
-			);
-			const skipped = (filesAttached?.length ?? 0) - imageFiles.length;
-			if (skipped > 0) {
-				toast.warning(
-					"Only image attachments are supported in the global chat right now.",
-				);
-			}
+			// Any file type is accepted: files become local tmp files (Tauri) or presigned tmp
+			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. FlowPilot
+			// itself only reads images (vision); every attachment is also listed in a manifest so
+			// it can hand the relevant files to apps it calls (call_app_chat `forward_files`).
+			const allFiles = filesAttached ?? [];
 			let attachments: Awaited<ReturnType<typeof fileToAttachment>> = [];
-			if (imageFiles.length > 0) {
+			if (allFiles.length > 0) {
 				try {
-					attachments = await fileToAttachment(imageFiles, backend, true);
+					attachments = await fileToAttachment(allFiles, backend, true);
 				} catch (error) {
 					toast.error(
 						`Failed to prepare attachments: ${error instanceof Error ? error.message : String(error)}`,
 					);
 				}
 			}
+			// Only image attachments feed the vision model; other files travel as a name/type
+			// manifest the assistant reasons over when deciding which files to forward downstream.
+			const imageAttachmentUrls = attachments
+				.map((attachment) =>
+					typeof attachment === "string"
+						? { url: attachment, type: undefined as string | undefined }
+						: { url: attachment.url, type: attachment.type },
+				)
+				.filter((attachment) => (attachment.type ?? "").startsWith("image/"))
+				.map((attachment) => attachment.url);
+			const attachmentManifest = attachments.map((attachment) =>
+				typeof attachment === "string"
+					? { url: attachment }
+					: {
+							name: attachment.name,
+							type: attachment.type,
+							size: attachment.size,
+							url: attachment.url,
+						},
+			);
 			if (!trimmed && attachments.length === 0) return;
 			setStreaming(true);
 			useGlobalChatStore.getState().clearPendingAppRefs();
@@ -470,11 +526,36 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					}
 				: undefined;
 
+			// Forward the open Data Studio page (if any) so the assistant defaults data questions to
+			// its app/overlay via data_studio_agent without asking which project.
+			const dataStudio = useAssistantSurface.getState().dataStudioSurface;
+			const dataStudioContext = dataStudio
+				? {
+						app_id: dataStudio.appId,
+						app_name: dataStudio.appName || undefined,
+						overlay_id: dataStudio.overlayId || undefined,
+						overlay_name: dataStudio.overlayName || undefined,
+						selected_table: dataStudio.selectedTable || undefined,
+						overlay_names:
+							dataStudio.overlayNames && dataStudio.overlayNames.length > 0
+								? dataStudio.overlayNames
+								: undefined,
+					}
+				: undefined;
+
 			// The stream is driven OUTSIDE this component (global-chat-stream.ts) so it keeps
 			// rendering + finalizing even if this surface unmounts mid-response (the page↔overlay
 			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
 			await driveGlobalChatStream({
 				responseMessage,
+				inputPreview: {
+					prompt: trimmed,
+					attachments: allFiles.map((file) => ({
+						name: file.name,
+						type: file.type,
+						size: file.size,
+					})),
+				},
 				// Desktop drives the run over a Tauri Channel (resumable via the Rust registry); the
 				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
 				// tool bridge via the registry. Both feed the shared parser identically.
@@ -483,26 +564,36 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							scope: "Frontend",
 							userPrompt: trimmed,
 							attachmentUrls:
-								attachments.length > 0
-									? attachments.map((attachment) =>
-											typeof attachment === "string"
-												? attachment
-												: attachment.url,
-										)
+								imageAttachmentUrls.length > 0
+									? imageAttachmentUrls
 									: undefined,
+							attachmentsManifest:
+								attachmentManifest.length > 0 ? attachmentManifest : undefined,
 							history: historyPayload,
 							currentImages: widgetImages.length > 0 ? widgetImages : undefined,
 							modelId: effectiveModelId,
+							reasoningEffort: state.reasoningEffort || undefined,
 							embeddingModelId: state.embeddingModelId || undefined,
 							token: authUser?.access_token ?? undefined,
 							userContext: userContext ?? undefined,
 							boardContext,
+							dataStudioContext,
 							runId: responseMessage.id,
 						})
 					: webGlobalChatStart({
 							baseUrl: getApiOrigin(),
 							token: authUser?.access_token ?? undefined,
 							onToolRequest: runGlobalChatTool,
+							onLifecycle: FLOWPILOT_DEBUG_ENABLED
+								? (event) => {
+										useGlobalChatStore
+											.getState()
+											.recordDebugEvent(responseMessage.id, {
+												...event,
+												id: `${responseMessage.id}:${event.id}`,
+											});
+									}
+								: undefined,
 							body: {
 								scope: "Frontend",
 								user_prompt: trimmed,
@@ -513,14 +604,18 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								embedding_model_id: state.embeddingModelId || undefined,
 								user_context: userContext ?? undefined,
 								board_context: boardContext,
-								// Signed tmp-upload URLs (from fileToAttachment); the server fetches them.
+								data_studio_context: dataStudioContext,
+								// Signed tmp-upload URLs (from fileToAttachment) for image vision only; the
+								// server fetches them.
 								attachment_urls:
-									attachments.length > 0
-										? attachments.map((attachment) =>
-												typeof attachment === "string"
-													? attachment
-													: attachment.url,
-											)
+									imageAttachmentUrls.length > 0
+										? imageAttachmentUrls
+										: undefined,
+								// Every attachment (name/type/size) so the assistant knows what files it
+								// can hand to apps it calls, even non-image files it cannot itself read.
+								attachments_manifest:
+									attachmentManifest.length > 0
+										? attachmentManifest
 										: undefined,
 							},
 						}),
@@ -611,9 +706,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
 
-	// Provider + model live in ONE combined popover selector (see providerModelPicker below) to keep
-	// the toolbar compact: the trigger shows the active provider icon + model name, and the popover
-	// hosts the provider switch and that provider's model list.
+	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo(
 		() =>
 			isAgent
@@ -723,11 +816,22 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			) : null,
 		[memoryModels, embeddingModelId, handleEmbeddingChange],
 	);
+	const defaultReasoningEffortName = reasoningEffortOptions.find(
+		(option) => option.id === selectedAgentModel?.defaultReasoningEffort,
+	)?.name;
+	const autoReasoningEffortName = defaultReasoningEffortName
+		? `Auto (${defaultReasoningEffortName} default)`
+		: "Auto (provider default)";
+	const currentReasoningEffortName = reasoningEffort
+		? (reasoningEffortOptions.find((option) => option.id === reasoningEffort)
+				?.name ?? reasoningEffort)
+		: autoReasoningEffortName;
 
 	const showEmptyState =
 		messages.length === 0 &&
 		inlineAppChats.length === 0 &&
 		inlineAppPages.length === 0 &&
+		inlineAppSurfaces.length === 0 &&
 		!isStreaming &&
 		// A queued draft is about to send — don't flash the empty state under it.
 		!pendingDraft;
@@ -756,26 +860,37 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		(option) => option.id === selectedModelId,
 	)?.label;
 
-	// Combined provider + model selector — one compact trigger instead of a provider pill row plus a
-	// separate model dropdown. The popover switches provider (which reloads its model list) and picks
-	// the model; picking a model closes it, switching provider keeps it open.
+	// Provider, model, and model-specific reasoning effort live in one compact picker. A model with
+	// configurable reasoning keeps the popover open so the next section can be selected immediately;
+	// models without that capability close it as before.
 	const providerModelPicker = (
 		<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 			<PopoverTrigger asChild>
 				<Button
 					variant="outline"
 					size="sm"
-					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}`}
+					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}`}
 					className="h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
-					<span className="max-w-32 truncate">
+					<span className="max-w-28 truncate">
 						{currentModelLabel ?? "Model"}
 					</span>
+					{reasoningEffortOptions.length > 0 && (
+						<>
+							<span className="text-border" aria-hidden="true">
+								·
+							</span>
+							<BrainIcon className="size-3.5 shrink-0 text-muted-foreground" />
+							<span className="max-w-32 truncate text-muted-foreground">
+								{currentReasoningEffortName}
+							</span>
+						</>
+					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</Button>
 			</PopoverTrigger>
-			<PopoverContent align="start" className="z-10000 w-64 p-2">
+			<PopoverContent align="start" className="z-10000 w-72 p-2">
 				<p className="px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
 					Provider
 				</p>
@@ -798,7 +913,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
 					Model
 				</p>
-				<div className="max-h-56 space-y-0.5 overflow-y-auto">
+				<div className="max-h-48 space-y-0.5 overflow-y-auto">
 					{modelOptions.length === 0 ? (
 						<p className="px-2 py-4 text-center text-xs text-muted-foreground">
 							{isAgent ? "Starting backend…" : "No models available"}
@@ -812,7 +927,15 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									type="button"
 									onClick={() => {
 										setSelectedModelId(option.id);
-										setPickerOpen(false);
+										const nextModel = copilotSDK.models.find(
+											(model) => model.id === option.id,
+										);
+										if (
+											!isAgent ||
+											(nextModel?.supportedReasoningEfforts?.length ?? 0) === 0
+										) {
+											setPickerOpen(false);
+										}
 									}}
 									className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
 								>
@@ -823,6 +946,49 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						})
 					)}
 				</div>
+				{reasoningEffortOptions.length > 0 && (
+					<>
+						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+							Reasoning
+						</p>
+						<div className="grid grid-cols-2 gap-1">
+							<button
+								type="button"
+								onClick={() => {
+									setReasoningEffort("");
+									setPickerOpen(false);
+								}}
+								className={`col-span-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${!reasoningEffort ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+							>
+								<BrainIcon className="size-3.5 shrink-0" />
+								<span className="flex-1 truncate">
+									{autoReasoningEffortName}
+								</span>
+								{!reasoningEffort && (
+									<CheckIcon className="size-3.5 shrink-0" />
+								)}
+							</button>
+							{reasoningEffortOptions.map((option) => {
+								const active = option.id === reasoningEffort;
+								return (
+									<button
+										key={option.id}
+										type="button"
+										title={option.description}
+										onClick={() => {
+											setReasoningEffort(option.id);
+											setPickerOpen(false);
+										}}
+										className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+									>
+										<span className="flex-1 truncate">{option.name}</span>
+										{active && <CheckIcon className="size-3.5 shrink-0" />}
+									</button>
+								);
+							})}
+						</div>
+					</>
+				)}
 			</PopoverContent>
 		</Popover>
 	);
@@ -889,6 +1055,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 			{(inlineAppChats.length > 0 ||
 				inlineAppPages.length > 0 ||
+				inlineAppSurfaces.length > 0 ||
 				pendingComponents !== null) && (
 				<div className="shrink-0 max-h-[60vh] overflow-y-auto pt-2">
 					<PendingComponentsCard />
@@ -897,6 +1064,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							key={page.id}
 							page={page}
 							onClose={removeInlineAppPage}
+							compact={compact}
+						/>
+					))}
+					{inlineAppSurfaces.map((surface) => (
+						<InlineAppSurfaceCard
+							key={surface.id}
+							surface={surface}
+							onClose={removeInlineAppSurface}
 							compact={compact}
 						/>
 					))}
@@ -963,7 +1138,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							messages={messages}
 							onSendMessage={handleSendMessage}
 							isStreamActive={isStreaming}
-							config={{ allow_file_upload: true, tools: [] }}
+							config={GLOBAL_CHAT_CONFIG}
 							activeInteractions={activeInteractions}
 							onRespondToInteraction={handleRespondToInteraction}
 							inlinePrompt={

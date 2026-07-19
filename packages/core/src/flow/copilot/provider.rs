@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use flow_like_ast::model::{Container, TypeRef};
 use flow_like_ast::{SigParam, Signature, to_camel_case};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::declarations::{render_declaration_matches, search_declarations};
 use super::search::score_catalog_metadata;
@@ -9,6 +9,17 @@ use super::types::{NodeMetadata, PinMetadata};
 use crate::flow::node::Node;
 use crate::flow::pin::{Pin, PinType};
 use crate::flow::variable::VariableType;
+
+const MAX_DECLARATION_USAGE_NOTE_BYTES: usize = 6_000;
+const MAX_DECLARATION_USAGE_SCHEMA_PINS: usize = 4;
+const MAX_DECLARATION_USAGE_SCHEMA_FIELDS: usize = 16;
+const MAX_DECLARATION_USAGE_COMPANIONS: usize = 8;
+pub(crate) const MAX_DECLARATION_PRIORITY_BLOCK_BYTES: usize = 630;
+
+pub(crate) const DECLARATION_PRIORITY_BEGIN: &str = "// <flowpilot-declaration-priority>\n";
+pub(crate) const DECLARATION_PRIORITY_END: &str = "// </flowpilot-declaration-priority>\n";
+
+const IMAP_CHAIN_NOTE: &str = "// IMAP: `mailImapInbox({ connection: connection, inbox: \"INBOX\" })` -> `mailImapList({ inbox: inbox, filter: \"UNSEEN\" })`; loop `controlForEach({ array: refs })`, then `emailImapInboxFetchMail({ emailRef: item.value })`; read with `emailGetContent`, `emailGetHeaders`, and `mailAddressFields`; after success use `emailImapMarkSeen({ email: item.value, markAsSeen: true })`.";
 
 /// Trait for providing catalog search functionality
 #[async_trait]
@@ -42,81 +53,793 @@ pub trait CatalogProvider: Send + Sync {
     /// provider — including ones that inject third-party packages into the catalog — supports it
     /// without extra wiring.
     async fn get_declarations(&self, query: &str) -> String {
-        let declaration_matches = search_declarations(query);
         if query.trim().is_empty() {
-            return render_declaration_matches(query, &declaration_matches);
+            return render_declaration_matches(query, &search_declarations(query));
         }
-
-        let embedded_function_names: HashSet<String> = declaration_matches
-            .iter()
-            .map(|matched| matched.function_name.clone())
-            .collect();
-        let mut live_matches: Vec<(i32, NodeMetadata)> = self
-            .get_all_metadata()
-            .await
-            .into_iter()
-            .filter_map(|meta| {
-                let signature = metadata_to_signature(&meta);
-                if embedded_function_names.contains(&signature.display) {
-                    return None;
-                }
-                let score = score_catalog_metadata(&meta, query);
-                (score > 0).then_some((score, meta))
-            })
-            .collect();
-        live_matches.sort_by(|left, right| right.0.cmp(&left.0));
-        let live_matches: Vec<NodeMetadata> = live_matches
-            .into_iter()
-            .take(12)
-            .map(|(_, meta)| meta)
-            .collect();
-
-        if declaration_matches.is_empty() && live_matches.is_empty() {
-            return render_declaration_matches(query, &[]);
-        }
-
-        let mut out = if declaration_matches.is_empty() {
-            format!(
-                "// FlowScript declarations matched {query:?} from the live app catalog provider.\n\
-                 // The embedded .flow.d index had no direct hit, so these compact signatures were rendered from metadata.\n\n",
-            )
-        } else {
-            render_declaration_matches(query, &declaration_matches)
-        };
-
-        if !live_matches.is_empty() && !declaration_matches.is_empty() {
-            out.push_str("\n// Additional live app catalog declarations, including installed package nodes:\n\n");
-        }
-
-        let start_idx = if declaration_matches.is_empty() {
-            0
-        } else {
-            declaration_matches.len()
-        };
-        for (idx, meta) in live_matches.iter().enumerate() {
-            let signature = metadata_to_signature(meta);
-            out.push_str(&format!(
-                "{}. {} — {} [{}]\n",
-                start_idx + idx + 1,
-                signature.display,
-                signature
-                    .doc
-                    .as_deref()
-                    .map(compact_doc_line)
-                    .unwrap_or_else(|| signature
-                        .friendly
-                        .clone()
-                        .unwrap_or_else(|| signature.display.clone())),
-                meta.category
-                    .clone()
-                    .unwrap_or_else(|| "catalog".to_string())
-            ));
-            out.push_str("   ");
-            out.push_str(&metadata_signature_line(&signature));
-            out.push_str("\n\n");
-        }
-        out
+        let snapshot = DeclarationCatalogSnapshot::new(self.get_all_metadata().await);
+        render_declarations_from_snapshot(query, &snapshot)
     }
+
+    /// Render several declaration queries against one immutable catalog snapshot.
+    ///
+    /// Catalog enumeration can involve package discovery and metadata I/O. Sharing both the
+    /// metadata and its function-name index keeps a multi-query lookup coherent and avoids doing
+    /// that work once per query. Providers that override declaration rendering should override
+    /// this method as well if they need semantics other than the metadata-backed default.
+    async fn get_declarations_batch(&self, queries: &[String]) -> Vec<String> {
+        if queries.iter().all(|query| query.trim().is_empty()) {
+            return queries
+                .iter()
+                .map(|query| render_declaration_matches(query, &search_declarations(query)))
+                .collect();
+        }
+        let snapshot = DeclarationCatalogSnapshot::new(self.get_all_metadata().await);
+        queries
+            .iter()
+            .map(|query| render_declarations_from_snapshot(query, &snapshot))
+            .collect()
+    }
+}
+
+struct DeclarationCatalogSnapshot {
+    all_metadata: Vec<NodeMetadata>,
+    function_names: Vec<String>,
+    metadata_by_function: BTreeMap<String, Vec<usize>>,
+    available_functions: BTreeMap<String, String>,
+    imap_chain_compatible: bool,
+}
+
+impl DeclarationCatalogSnapshot {
+    fn new(mut all_metadata: Vec<NodeMetadata>) -> Self {
+        all_metadata.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut function_names = Vec::with_capacity(all_metadata.len());
+        let mut metadata_by_function: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, metadata) in all_metadata.iter().enumerate() {
+            let function_name = metadata_to_signature(metadata).display;
+            metadata_by_function
+                .entry(function_name.clone())
+                .or_default()
+                .push(index);
+            function_names.push(function_name);
+        }
+        // Companion hints must obey the same ambiguity rule as declarations. Otherwise a direct
+        // declaration can be correctly suppressed while a usage note still recommends the same
+        // unresolvable FlowScript display name.
+        let available_functions = all_metadata
+            .iter()
+            .zip(function_names.iter())
+            .filter(|(_, function_name)| {
+                metadata_by_function
+                    .get(*function_name)
+                    .is_some_and(|indices| indices.len() == 1)
+            })
+            .map(|(metadata, function_name)| (metadata.name.clone(), function_name.clone()))
+            .collect();
+        let imap_chain_compatible = imap_chain_is_compatible(&all_metadata);
+        Self {
+            all_metadata,
+            function_names,
+            metadata_by_function,
+            available_functions,
+            imap_chain_compatible,
+        }
+    }
+}
+
+fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogSnapshot) -> String {
+    let embedded_matches = search_declarations(query);
+    if query.trim().is_empty() {
+        return render_declaration_matches(query, &embedded_matches);
+    }
+
+    let embedded_function_names: HashSet<String> = embedded_matches
+        .iter()
+        .map(|matched| matched.function_name.clone())
+        .collect();
+    let mut unavailable_function_names = Vec::new();
+    let mut ambiguous_function_names = Vec::new();
+    let mut live_signature_override_count = 0usize;
+    let declaration_matches = embedded_matches
+        .into_iter()
+        .filter_map(
+            |mut matched| match snapshot.metadata_by_function.get(&matched.function_name) {
+                None => {
+                    unavailable_function_names.push(matched.function_name);
+                    None
+                }
+                Some(indices) if indices.len() == 1 => {
+                    let metadata = &snapshot.all_metadata[indices[0]];
+                    let signature = metadata_to_signature(metadata);
+                    matched.signature_line = signature
+                        .render_declaration()
+                        .lines()
+                        .find(|line| line.trim_start().starts_with("declare function "))
+                        .map(str::trim)
+                        .unwrap_or("")
+                        .to_string();
+                    matched.impure = signature.impure;
+                    live_signature_override_count += 1;
+                    Some(matched)
+                }
+                Some(_) => {
+                    ambiguous_function_names.push(matched.function_name);
+                    None
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+    unavailable_function_names.sort();
+    unavailable_function_names.dedup();
+    ambiguous_function_names.sort();
+    ambiguous_function_names.dedup();
+
+    let mut live_matches: Vec<(i32, usize)> = snapshot
+        .all_metadata
+        .iter()
+        .enumerate()
+        .filter_map(|(index, meta)| {
+            let function_name = &snapshot.function_names[index];
+            if embedded_function_names.contains(function_name)
+                || snapshot
+                    .metadata_by_function
+                    .get(function_name)
+                    .is_some_and(|metadata| metadata.len() != 1)
+            {
+                return None;
+            }
+            let score = score_catalog_metadata(meta, query);
+            (score > 0).then_some((score, index))
+        })
+        .collect();
+    live_matches.sort_by(|left, right| {
+        right.0.cmp(&left.0).then_with(|| {
+            snapshot.all_metadata[left.1]
+                .name
+                .cmp(&snapshot.all_metadata[right.1].name)
+        })
+    });
+    let live_matches: Vec<NodeMetadata> = live_matches
+        .into_iter()
+        .take(12)
+        .map(|(_, index)| snapshot.all_metadata[index].clone())
+        .collect();
+
+    if declaration_matches.is_empty() && live_matches.is_empty() {
+        let mut out = render_declaration_matches(query, &[]);
+        append_unavailable_declaration_note(&mut out, &unavailable_function_names);
+        append_ambiguous_declaration_note(&mut out, &ambiguous_function_names);
+        return out;
+    }
+
+    let mut out = if declaration_matches.is_empty() {
+        format!(
+            "// FlowScript declarations matched {query:?} from the live app catalog provider.\n\
+                 // The embedded .flow.d index had no direct hit, so these compact signatures were rendered from metadata.\n\n",
+        )
+    } else {
+        render_declaration_matches(query, &declaration_matches)
+    };
+    if live_signature_override_count > 0 {
+        out.push_str(
+            "// Same-name signatures above were verified against unique live catalog metadata; the live pin contract is authoritative.\n",
+        );
+    }
+    append_unavailable_declaration_note(&mut out, &unavailable_function_names);
+    append_ambiguous_declaration_note(&mut out, &ambiguous_function_names);
+
+    if !live_matches.is_empty() && !declaration_matches.is_empty() {
+        out.push_str(
+            "\n// Additional live app catalog declarations, including installed package nodes:\n\n",
+        );
+    }
+
+    let start_idx = if declaration_matches.is_empty() {
+        0
+    } else {
+        declaration_matches.len()
+    };
+    for (idx, meta) in live_matches.iter().enumerate() {
+        let signature = metadata_to_signature(meta);
+        out.push_str(&format!(
+            "{}. {} — {} [{}]\n",
+            start_idx + idx + 1,
+            signature.display,
+            signature
+                .doc
+                .as_deref()
+                .map(compact_doc_line)
+                .unwrap_or_else(|| signature
+                    .friendly
+                    .clone()
+                    .unwrap_or_else(|| signature.display.clone())),
+            meta.category
+                .clone()
+                .unwrap_or_else(|| "catalog".to_string())
+        ));
+        out.push_str("   ");
+        out.push_str(&metadata_signature_line(&signature));
+        out.push_str("\n\n");
+    }
+
+    let mut usage_metadata = Vec::new();
+    let mut seen_usage = HashSet::new();
+    for matched in &declaration_matches {
+        let Some(metadata) = snapshot
+            .metadata_by_function
+            .get(&matched.function_name)
+            .and_then(|indices| {
+                (indices.len() == 1).then(|| snapshot.all_metadata[indices[0]].clone())
+            })
+        else {
+            continue;
+        };
+        if seen_usage.insert(matched.function_name.clone()) {
+            usage_metadata.push(metadata);
+        }
+    }
+    for metadata in &live_matches {
+        let function_name = metadata_to_signature(metadata).display;
+        if seen_usage.insert(function_name) {
+            usage_metadata.push(metadata.clone());
+        }
+    }
+
+    let top_signature = declaration_matches
+        .first()
+        .map(|matched| {
+            if matched.impure {
+                format!("{}  // impure", matched.signature_line)
+            } else {
+                matched.signature_line.clone()
+            }
+        })
+        .or_else(|| {
+            live_matches
+                .first()
+                .map(metadata_to_signature)
+                .map(|signature| metadata_signature_line(&signature))
+        });
+    let top_function_name = declaration_matches
+        .first()
+        .map(|matched| matched.function_name.clone())
+        .or_else(|| {
+            live_matches
+                .first()
+                .map(|metadata| metadata_to_signature(metadata).display)
+        });
+    let priority_metadata_index = top_function_name.as_ref().and_then(|top_function_name| {
+        usage_metadata
+            .iter()
+            .position(|metadata| metadata_to_signature(metadata).display == *top_function_name)
+    });
+    let priority_metadata = priority_metadata_index.and_then(|index| usage_metadata.get(index));
+    let priority_block = top_signature
+        .as_deref()
+        .map(|signature| {
+            render_declaration_priority_block(
+                signature,
+                priority_metadata,
+                &snapshot.available_functions,
+                snapshot.imap_chain_compatible,
+            )
+        })
+        .unwrap_or_default();
+    let usage_notes = render_catalog_usage_notes_to(
+        &usage_metadata,
+        &snapshot.available_functions,
+        MAX_DECLARATION_USAGE_NOTE_BYTES,
+        snapshot.imap_chain_compatible
+            && !priority_metadata.is_some_and(|metadata| is_imap_chain_node(&metadata.name)),
+    );
+
+    if !priority_block.is_empty() {
+        out.insert_str(0, &priority_block);
+    }
+    if !usage_notes.is_empty() {
+        out.push('\n');
+        out.push_str(&usage_notes);
+    }
+    out
+}
+
+fn append_unavailable_declaration_note(out: &mut String, function_names: &[String]) {
+    if function_names.is_empty() {
+        return;
+    }
+    out.push_str(&format!(
+        "\n// Embedded declaration candidates unavailable in the live catalog were omitted: {}. Install or load the providing catalog package before using these calls.\n",
+        function_names.join(", ")
+    ));
+}
+
+fn append_ambiguous_declaration_note(out: &mut String, function_names: &[String]) {
+    if function_names.is_empty() {
+        return;
+    }
+    out.push_str(&format!(
+        "\n// Ambiguous live catalog declarations omitted (multiple nodes map to the same FlowScript function): {}. Resolve the catalog collision before using these calls.\n",
+        function_names.join(", ")
+    ));
+}
+
+fn render_declaration_priority_block(
+    exact_signature: &str,
+    metadata: Option<&NodeMetadata>,
+    available_functions: &BTreeMap<String, String>,
+    include_imap_chain: bool,
+) -> String {
+    let fixed_bytes = DECLARATION_PRIORITY_BEGIN
+        .len()
+        .saturating_add(exact_signature.len())
+        .saturating_add(1)
+        .saturating_add(DECLARATION_PRIORITY_END.len());
+    let mut remaining_usage_bytes =
+        MAX_DECLARATION_PRIORITY_BLOCK_BYTES.saturating_sub(fixed_bytes);
+
+    let mut block = String::from(DECLARATION_PRIORITY_BEGIN);
+    block.push_str(exact_signature);
+    block.push('\n');
+    if let Some(metadata) = metadata {
+        for line in catalog_usage_note_lines(
+            std::slice::from_ref(metadata),
+            available_functions,
+            include_imap_chain,
+        ) {
+            let required_bytes = line.len().saturating_add(1);
+            if required_bytes > remaining_usage_bytes {
+                continue;
+            }
+            block.push_str(&line);
+            block.push('\n');
+            remaining_usage_bytes -= required_bytes;
+        }
+    }
+    block.push_str(DECLARATION_PRIORITY_END);
+    block
+}
+
+#[cfg(test)]
+fn render_catalog_usage_notes(
+    metadata: &[NodeMetadata],
+    available_functions: &BTreeMap<String, String>,
+) -> String {
+    render_catalog_usage_notes_to(
+        metadata,
+        available_functions,
+        MAX_DECLARATION_USAGE_NOTE_BYTES,
+        true,
+    )
+}
+
+fn catalog_usage_note_lines(
+    metadata: &[NodeMetadata],
+    available_functions: &BTreeMap<String, String>,
+    include_imap_chain: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if include_imap_chain
+        && metadata
+            .iter()
+            .any(|metadata| is_imap_chain_node(&metadata.name))
+    {
+        lines.push(IMAP_CHAIN_NOTE.to_string());
+    }
+
+    for metadata in metadata {
+        let function_name = metadata_to_signature(metadata).display;
+        let required_inputs = required_input_names(metadata);
+        if !required_inputs.is_empty() {
+            lines.push(format!(
+                "// {function_name} required inputs: {}.",
+                summarize_repeated_names(&required_inputs)
+            ));
+        }
+
+        for (name, count) in repeated_input_names(metadata) {
+            let arguments = (1..=count)
+                .map(|index| format!("{name}: value{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!(
+                "// {function_name} repeats input `{name}` {count} times: {function_name}({{ {arguments} }}). Repeat the exact key in declaration order; do not rename it or add [#N]."
+            ));
+        }
+
+        let mut schema_pin_count = 0usize;
+        for (direction, pin) in metadata
+            .inputs
+            .iter()
+            .map(|pin| ("input", pin))
+            .chain(metadata.outputs.iter().map(|pin| ("output", pin)))
+        {
+            if schema_pin_count >= MAX_DECLARATION_USAGE_SCHEMA_PINS || pin.data_type != "Struct" {
+                continue;
+            }
+            let Some(summary) = compact_schema_summary(pin.schema.as_deref()) else {
+                continue;
+            };
+            lines.push(format!(
+                "// {function_name} {direction} `{}` ({}) schema: {summary}.",
+                to_camel_case(&pin.name),
+                pin_type_label(pin)
+            ));
+            schema_pin_count += 1;
+        }
+
+        let mut companions = metadata
+            .companion_nodes
+            .iter()
+            .filter_map(|node_name| available_functions.get(node_name))
+            .cloned()
+            .collect::<Vec<_>>();
+        companions.sort();
+        companions.dedup();
+        companions.truncate(MAX_DECLARATION_USAGE_COMPANIONS);
+        if !companions.is_empty() {
+            lines.push(format!(
+                "// {function_name} companion calls: {}.",
+                companions.join(", ")
+            ));
+        }
+    }
+    lines
+}
+
+fn render_catalog_usage_notes_to(
+    metadata: &[NodeMetadata],
+    available_functions: &BTreeMap<String, String>,
+    max_bytes: usize,
+    include_imap_chain: bool,
+) -> String {
+    let lines = catalog_usage_note_lines(metadata, available_functions, include_imap_chain);
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let header = "// Live catalog usage notes (authoritative for the matched declarations):\n";
+    const NOTICE: &str = "// [Additional live catalog usage notes omitted for size.]\n";
+    if max_bytes < header.len().saturating_add(NOTICE.len()) {
+        return String::new();
+    }
+    let line_budget = max_bytes.saturating_sub(NOTICE.len());
+    let mut output = String::from(header);
+    let mut omitted = false;
+    for line in lines {
+        let required_bytes = line.len().saturating_add(1);
+        if output.len().saturating_add(required_bytes) > line_budget {
+            omitted = true;
+            continue;
+        }
+        output.push_str(&line);
+        output.push('\n');
+    }
+    if omitted {
+        output.push_str(NOTICE);
+    }
+    output
+}
+
+fn is_imap_chain_node(node_name: &str) -> bool {
+    matches!(
+        node_name,
+        "email_imap_connect"
+            | "mail_imap_inbox"
+            | "mail_imap_list"
+            | "email_imap_inbox_fetch_mail"
+            | "email_imap_mark_seen"
+    )
+}
+
+fn imap_chain_is_compatible(metadata: &[NodeMetadata]) -> bool {
+    let Some(connect) = unique_catalog_node(metadata, "email_imap_connect") else {
+        return false;
+    };
+    let Some(inbox) = unique_catalog_node(metadata, "mail_imap_inbox") else {
+        return false;
+    };
+    let Some(list) = unique_catalog_node(metadata, "mail_imap_list") else {
+        return false;
+    };
+    let Some(for_each) = unique_catalog_node(metadata, "control_for_each") else {
+        return false;
+    };
+    let Some(fetch) = unique_catalog_node(metadata, "email_imap_inbox_fetch_mail") else {
+        return false;
+    };
+    let Some(content) = unique_catalog_node(metadata, "email_get_content") else {
+        return false;
+    };
+    let Some(headers) = unique_catalog_node(metadata, "email_get_headers") else {
+        return false;
+    };
+    let Some(address_fields) = unique_catalog_node(metadata, "mail_address_fields") else {
+        return false;
+    };
+    let Some(mark_seen) = unique_catalog_node(metadata, "email_imap_mark_seen") else {
+        return false;
+    };
+
+    has_output_shape(connect, "Struct", "Normal")
+        && has_input_shape(inbox, "connection", "Struct", "Normal")
+        && has_input_shape(inbox, "inbox", "String", "Normal")
+        && has_output_shape(inbox, "Struct", "Normal")
+        && has_input_shape(list, "inbox", "Struct", "Normal")
+        && has_input_shape(list, "filter", "String", "Normal")
+        && has_output_shape(list, "Struct", "Array")
+        && has_input_container(for_each, "array", "Array")
+        && has_output_container(for_each, "Normal")
+        && has_input_shape(fetch, "emailRef", "Struct", "Normal")
+        && has_output_shape(fetch, "Struct", "Normal")
+        && has_input_shape(content, "email", "Struct", "Normal")
+        && has_input_shape(headers, "email", "Struct", "Normal")
+        && has_output_shape(headers, "Struct", "Normal")
+        && has_input_shape(address_fields, "address", "Struct", "Normal")
+        && has_input_shape(mark_seen, "email", "Struct", "Normal")
+        && has_input_shape(mark_seen, "markAsSeen", "Boolean", "Normal")
+}
+
+fn unique_catalog_node<'a>(metadata: &'a [NodeMetadata], name: &str) -> Option<&'a NodeMetadata> {
+    let mut matches = metadata.iter().filter(|metadata| metadata.name == name);
+    let matched = matches.next()?;
+    matches.next().is_none().then_some(matched)
+}
+
+fn has_input_shape(metadata: &NodeMetadata, name: &str, data_type: &str, value_type: &str) -> bool {
+    metadata.inputs.iter().any(|pin| {
+        pin.data_type != "Execution"
+            && to_camel_case(&pin.name) == name
+            && pin.data_type == data_type
+            && pin.value_type == value_type
+    })
+}
+
+fn has_input_container(metadata: &NodeMetadata, name: &str, value_type: &str) -> bool {
+    metadata.inputs.iter().any(|pin| {
+        pin.data_type != "Execution"
+            && to_camel_case(&pin.name) == name
+            && pin.value_type == value_type
+    })
+}
+
+fn has_output_shape(metadata: &NodeMetadata, data_type: &str, value_type: &str) -> bool {
+    metadata
+        .outputs
+        .iter()
+        .any(|pin| pin.data_type == data_type && pin.value_type == value_type)
+}
+
+fn has_output_container(metadata: &NodeMetadata, value_type: &str) -> bool {
+    metadata
+        .outputs
+        .iter()
+        .any(|pin| pin.data_type != "Execution" && pin.value_type == value_type)
+}
+
+fn required_input_names(metadata: &NodeMetadata) -> Vec<String> {
+    if !metadata.required_inputs.is_empty() {
+        return metadata
+            .required_inputs
+            .iter()
+            .map(|name| to_camel_case(name))
+            .collect();
+    }
+    metadata
+        .inputs
+        .iter()
+        .filter(|pin| pin.data_type != "Execution" && pin.default_value.is_none())
+        .map(|pin| to_camel_case(&pin.name))
+        .collect()
+}
+
+fn repeated_input_names(metadata: &NodeMetadata) -> Vec<(String, usize)> {
+    let mut order = Vec::new();
+    let mut counts = HashMap::new();
+    for pin in metadata
+        .inputs
+        .iter()
+        .filter(|pin| pin.data_type != "Execution")
+    {
+        let name = to_camel_case(&pin.name);
+        if !counts.contains_key(&name) {
+            order.push(name.clone());
+        }
+        *counts.entry(name).or_insert(0usize) += 1;
+    }
+    order
+        .into_iter()
+        .filter_map(|name| {
+            let count = counts.get(&name).copied().unwrap_or_default();
+            (count > 1).then_some((name, count))
+        })
+        .collect()
+}
+
+fn summarize_repeated_names(names: &[String]) -> String {
+    let mut order = Vec::new();
+    let mut counts = HashMap::new();
+    for name in names {
+        if !counts.contains_key(name) {
+            order.push(name.clone());
+        }
+        *counts.entry(name.clone()).or_insert(0usize) += 1;
+    }
+    order
+        .into_iter()
+        .map(
+            |name| match counts.get(&name).copied().unwrap_or_default() {
+                0 | 1 => name,
+                count => format!("{name} x{count}"),
+            },
+        )
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn pin_type_label(pin: &PinMetadata) -> String {
+    let base = base_type(&pin.data_type);
+    match container(&pin.value_type) {
+        Container::Normal => base.to_string(),
+        Container::Array => format!("{base}[]"),
+        Container::Map => format!("Map<string, {base}>"),
+        Container::Set => format!("Set<{base}>"),
+    }
+}
+
+fn compact_schema_summary(schema: Option<&str>) -> Option<String> {
+    let root = flow_like_types::json::from_str::<flow_like_types::Value>(schema?).ok()?;
+    let object = resolve_schema_node(&root, &root);
+    let properties = object.get("properties")?.as_object()?;
+    if properties.is_empty() {
+        return None;
+    }
+    let required = object
+        .get("required")
+        .and_then(flow_like_types::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(flow_like_types::Value::as_str)
+        .collect::<HashSet<_>>();
+    let mut fields = properties
+        .iter()
+        .map(|(name, field_schema)| {
+            let optional = if required.contains(name.as_str()) {
+                ""
+            } else {
+                "?"
+            };
+            format!(
+                "{name}{optional}: {}",
+                schema_type_label(&root, field_schema)
+            )
+        })
+        .collect::<Vec<_>>();
+    fields.sort();
+    let omitted = fields
+        .len()
+        .saturating_sub(MAX_DECLARATION_USAGE_SCHEMA_FIELDS);
+    fields.truncate(MAX_DECLARATION_USAGE_SCHEMA_FIELDS);
+    if omitted > 0 {
+        fields.push(format!("... +{omitted} fields"));
+    }
+    let title = object
+        .get("title")
+        .or_else(|| root.get("title"))
+        .and_then(flow_like_types::Value::as_str)
+        .map(|title| format!("{title} "))
+        .unwrap_or_default();
+    Some(format!("{title}{{ {} }}", fields.join(", ")))
+}
+
+fn resolve_schema_node<'a>(
+    root: &'a flow_like_types::Value,
+    schema: &'a flow_like_types::Value,
+) -> &'a flow_like_types::Value {
+    let mut current = schema;
+    for _ in 0..8 {
+        if let Some(reference) = current
+            .get("$ref")
+            .and_then(flow_like_types::Value::as_str)
+            .and_then(|reference| reference.strip_prefix('#'))
+            && let Some(resolved) = root.pointer(reference)
+        {
+            current = resolved;
+            continue;
+        }
+        if let Some(variants) = current
+            .get("anyOf")
+            .or_else(|| current.get("oneOf"))
+            .and_then(flow_like_types::Value::as_array)
+            && let Some(resolved) = variants.iter().find(|variant| !schema_is_null(variant))
+        {
+            current = resolved;
+            continue;
+        }
+        break;
+    }
+    current
+}
+
+fn schema_is_null(schema: &flow_like_types::Value) -> bool {
+    match schema.get("type") {
+        Some(flow_like_types::Value::String(value)) => value == "null",
+        Some(flow_like_types::Value::Array(values)) => values
+            .iter()
+            .all(|value| value.as_str().is_some_and(|value| value == "null")),
+        _ => false,
+    }
+}
+
+fn schema_type_label(root: &flow_like_types::Value, schema: &flow_like_types::Value) -> String {
+    if let Some(reference) = schema.get("$ref").and_then(flow_like_types::Value::as_str) {
+        return reference
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Struct")
+            .to_string();
+    }
+    if let Some(variants) = schema
+        .get("anyOf")
+        .or_else(|| schema.get("oneOf"))
+        .and_then(flow_like_types::Value::as_array)
+    {
+        let mut labels = variants
+            .iter()
+            .filter(|variant| !schema_is_null(variant))
+            .map(|variant| schema_type_label(root, variant))
+            .collect::<Vec<_>>();
+        labels.sort();
+        labels.dedup();
+        if !labels.is_empty() {
+            return labels.join(" | ");
+        }
+    }
+    if let Some(types) = schema
+        .get("type")
+        .and_then(flow_like_types::Value::as_array)
+    {
+        let mut labels = types
+            .iter()
+            .filter_map(flow_like_types::Value::as_str)
+            .filter(|kind| *kind != "null")
+            .map(schema_scalar_type_label)
+            .collect::<Vec<_>>();
+        labels.sort();
+        labels.dedup();
+        if !labels.is_empty() {
+            return labels.join(" | ");
+        }
+    }
+    let resolved = resolve_schema_node(root, schema);
+    match resolved
+        .get("type")
+        .and_then(flow_like_types::Value::as_str)
+    {
+        Some("array") => {
+            let item = resolved
+                .get("items")
+                .map(|items| schema_type_label(root, items))
+                .unwrap_or_else(|| "any".to_string());
+            format!("{item}[]")
+        }
+        Some(kind) => schema_scalar_type_label(kind),
+        None if resolved.get("properties").is_some() => "Struct".to_string(),
+        None => "any".to_string(),
+    }
+}
+
+fn schema_scalar_type_label(kind: &str) -> String {
+    match kind {
+        "integer" => "int",
+        "number" => "float",
+        "boolean" => "bool",
+        "object" => "Struct",
+        "string" => "string",
+        "null" => "null",
+        other => other,
+    }
+    .to_string()
 }
 
 fn compact_doc_line(doc: &str) -> String {
@@ -134,13 +857,18 @@ fn compact_doc_line(doc: &str) -> String {
 }
 
 fn metadata_signature_line(signature: &crate::flow::ast::Signature) -> String {
-    signature
+    let line = signature
         .render_declaration()
         .lines()
         .find(|line| line.trim_start().starts_with("declare function "))
         .map(str::trim)
         .unwrap_or("")
-        .to_string()
+        .to_string();
+    if signature.impure && !line.is_empty() {
+        format!("{line}  // impure")
+    } else {
+        line
+    }
 }
 
 /// FlowScript base type for a metadata pin's `data_type` string (the `Debug` spelling of the
@@ -318,9 +1046,53 @@ pub fn metadata_to_signature(meta: &NodeMetadata) -> Signature {
 mod tests {
     use super::*;
     use flow_like_types::tokio;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn pin(
+        name: &str,
+        data_type: &str,
+        value_type: &str,
+        default_value: Option<&str>,
+        schema: Option<&str>,
+    ) -> PinMetadata {
+        PinMetadata {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: String::new(),
+            data_type: data_type.to_string(),
+            value_type: value_type.to_string(),
+            default_value: default_value.map(str::to_string),
+            schema: schema.map(str::to_string),
+            is_generic: data_type == "Generic",
+            valid_values: None,
+            enforce_schema: schema.is_some(),
+        }
+    }
+
+    fn metadata(name: &str, inputs: Vec<PinMetadata>, outputs: Vec<PinMetadata>) -> NodeMetadata {
+        NodeMetadata {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            description: format!("Catalog metadata for {name}"),
+            inputs,
+            outputs,
+            category: Some("test".to_string()),
+            required_inputs: Vec::new(),
+            companion_nodes: Vec::new(),
+            capability_tags: Vec::new(),
+        }
+    }
 
     struct LiveOnlyProvider {
         nodes: Vec<NodeMetadata>,
+    }
+
+    struct CountingLiveProvider {
+        nodes: Vec<NodeMetadata>,
+        metadata_reads: Arc<AtomicUsize>,
     }
 
     #[async_trait]
@@ -353,8 +1125,94 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl CatalogProvider for CountingLiveProvider {
+        async fn search(&self, _query: &str) -> Vec<NodeMetadata> {
+            self.nodes.clone()
+        }
+
+        async fn search_by_pin_type(&self, _pin_type: &str, _is_input: bool) -> Vec<NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn filter_by_category(&self, _category_prefix: &str) -> Vec<NodeMetadata> {
+            Vec::new()
+        }
+
+        async fn get_node_metadata(&self, node_type: &str) -> Option<NodeMetadata> {
+            self.nodes
+                .iter()
+                .find(|node| node.name == node_type)
+                .cloned()
+        }
+
+        async fn get_all_nodes(&self) -> Vec<String> {
+            self.nodes.iter().map(|node| node.name.clone()).collect()
+        }
+
+        async fn get_all_metadata(&self) -> Vec<NodeMetadata> {
+            self.metadata_reads.fetch_add(1, Ordering::SeqCst);
+            self.nodes.clone()
+        }
+    }
+
     #[tokio::test]
-    async fn declarations_append_live_catalog_nodes_when_embedded_index_matches() {
+    async fn declaration_batch_reuses_one_live_catalog_snapshot_and_index() {
+        let metadata_reads = Arc::new(AtomicUsize::new(0));
+        let provider = CountingLiveProvider {
+            nodes: vec![
+                metadata(
+                    "bool_or",
+                    vec![
+                        pin("left", "Boolean", "Normal", None, None),
+                        pin("right", "Boolean", "Normal", None, None),
+                    ],
+                    vec![pin("result", "Boolean", "Normal", None, None)],
+                ),
+                metadata(
+                    "custom_package_database_export",
+                    Vec::new(),
+                    vec![pin("rows", "Struct", "Array", None, None)],
+                ),
+                metadata(
+                    "string_replace",
+                    vec![pin("left", "String", "Normal", None, None)],
+                    Vec::new(),
+                ),
+                metadata(
+                    "string_replace",
+                    vec![pin("right", "Integer", "Normal", None, None)],
+                    Vec::new(),
+                ),
+            ],
+            metadata_reads: metadata_reads.clone(),
+        };
+        let queries = vec![
+            "boolean or".to_string(),
+            "database export".to_string(),
+            "string replace".to_string(),
+        ];
+
+        let declarations = provider.get_declarations_batch(&queries).await;
+
+        assert_eq!(metadata_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(declarations.len(), queries.len());
+        assert!(
+            declarations[0].contains("declare function boolOr({ left: bool, right: bool }): bool;")
+        );
+        assert!(declarations[0].contains("live pin contract is authoritative"));
+        assert!(declarations[1].contains("declare function customPackageDatabaseExport("));
+        assert!(!declarations[2].contains("declare function stringReplace("));
+        assert!(declarations[2].contains("Ambiguous live catalog declarations omitted"));
+    }
+
+    #[tokio::test]
+    async fn declarations_filter_stale_embedded_availability_while_keeping_live_matches() {
+        let stale_embedded_function = search_declarations("database")
+            .into_iter()
+            .next()
+            .expect("database query should have an embedded declaration")
+            .function_name;
         let provider = LiveOnlyProvider {
             nodes: vec![NodeMetadata {
                 name: "custom_package_database_export".to_string(),
@@ -372,7 +1230,348 @@ mod tests {
         let declarations = provider.get_declarations("database").await;
 
         assert!(declarations.contains("embedded .flow.d index"));
-        assert!(declarations.contains("Additional live app catalog declarations"));
         assert!(declarations.contains("customPackageDatabaseExport"));
+        assert!(declarations.contains("unavailable in the live catalog were omitted"));
+        assert!(declarations.contains(&stale_embedded_function));
+        assert!(!declarations.contains(&format!("declare function {stale_embedded_function}(")));
+        assert!(declarations.contains("declare function customPackageDatabaseExport("));
+    }
+
+    #[tokio::test]
+    async fn declarations_explain_repeated_same_name_arguments_in_order() {
+        let mut boolean_or = metadata(
+            "bool_or",
+            vec![
+                pin("boolean", "Boolean", "Normal", Some("false"), None),
+                pin("boolean", "Boolean", "Normal", Some("false"), None),
+            ],
+            vec![pin("result", "Boolean", "Normal", None, None)],
+        );
+        boolean_or.description = "Boolean OR operation".to_string();
+        let provider = LiveOnlyProvider {
+            nodes: vec![boolean_or],
+        };
+
+        let declarations = provider.get_declarations("boolean or").await;
+
+        assert!(declarations.contains("declare function boolOr("));
+        assert!(declarations.contains("boolOr({ boolean: value1, boolean: value2 })"));
+        assert!(declarations.contains("Repeat the exact key in declaration order"));
+        assert!(declarations.contains("do not rename it or add [#N]"));
+    }
+
+    #[tokio::test]
+    async fn unique_live_metadata_overrides_a_same_name_embedded_signature() {
+        let provider = LiveOnlyProvider {
+            nodes: vec![metadata(
+                "bool_or",
+                vec![
+                    pin("left", "Boolean", "Normal", None, None),
+                    pin("right", "Boolean", "Normal", None, None),
+                ],
+                vec![pin("result", "Boolean", "Normal", None, None)],
+            )],
+        };
+
+        let declarations = provider.get_declarations("boolean or").await;
+
+        assert!(
+            declarations.contains("declare function boolOr({ left: bool, right: bool }): bool;"),
+            "{declarations}"
+        );
+        assert!(!declarations.contains("boolOr({ boolean?: bool, boolean?: bool })"));
+        assert!(declarations.contains("live pin contract is authoritative"));
+        let priority = declarations
+            .split_once(DECLARATION_PRIORITY_BEGIN)
+            .and_then(|(_, rest)| rest.split_once(DECLARATION_PRIORITY_END))
+            .map(|(priority, _)| priority)
+            .unwrap();
+        assert!(priority.contains("left: bool, right: bool"));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_same_name_live_metadata_is_not_paired_or_declared() {
+        let provider = LiveOnlyProvider {
+            nodes: vec![
+                metadata(
+                    "bool_or",
+                    vec![pin("left", "Boolean", "Normal", None, None)],
+                    vec![pin("result", "Boolean", "Normal", None, None)],
+                ),
+                metadata(
+                    "bool_or",
+                    vec![pin("operand", "String", "Normal", None, None)],
+                    vec![pin("result", "String", "Normal", None, None)],
+                ),
+            ],
+        };
+
+        let declarations = provider.get_declarations("boolean or").await;
+
+        assert!(!declarations.contains("declare function boolOr("));
+        assert!(declarations.contains("Ambiguous live catalog declarations omitted"));
+        assert!(declarations.contains("boolOr"));
+        assert!(!declarations.contains("boolOr required inputs"));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_live_function_is_not_recommended_as_a_companion() {
+        let mut gate = metadata(
+            "logic_gate",
+            vec![pin("value", "Boolean", "Normal", None, None)],
+            vec![pin("result", "Boolean", "Normal", None, None)],
+        );
+        gate.companion_nodes = vec!["bool_or".to_string()];
+        let provider = LiveOnlyProvider {
+            nodes: vec![
+                gate,
+                metadata(
+                    "bool_or",
+                    vec![pin("left", "Boolean", "Normal", None, None)],
+                    vec![pin("result", "Boolean", "Normal", None, None)],
+                ),
+                metadata(
+                    "bool_or",
+                    vec![pin("operand", "String", "Normal", None, None)],
+                    vec![pin("result", "String", "Normal", None, None)],
+                ),
+            ],
+        };
+
+        let declarations = provider.get_declarations("logic gate").await;
+
+        assert!(declarations.contains("declare function logicGate("));
+        assert!(!declarations.contains("logicGate companion calls: boolOr"));
+    }
+
+    #[tokio::test]
+    async fn declarations_include_required_schema_companions_and_one_imap_chain() {
+        let email_schema = r##"{
+            "title":"Email",
+            "type":"object",
+            "properties":{
+                "from":{"$ref":"#/$defs/MailAddress"},
+                "plain":{"type":["string","null"]},
+                "subject":{"type":"string"},
+                "uid":{"type":"integer"}
+            },
+            "required":["subject","uid"],
+            "$defs":{"MailAddress":{"type":"object","properties":{"email":{"type":"string"}},"required":["email"]}}
+        }"##;
+        let mut fetch = metadata(
+            "email_imap_inbox_fetch_mail",
+            vec![
+                pin("exec_in", "Execution", "Normal", None, None),
+                pin("email_ref", "Struct", "Normal", None, None),
+            ],
+            vec![
+                pin("exec_out", "Execution", "Normal", None, None),
+                pin("email", "Struct", "Normal", None, Some(email_schema)),
+            ],
+        );
+        fetch.required_inputs = vec!["email_ref".to_string()];
+        fetch.companion_nodes = vec![
+            "email_imap_connect".to_string(),
+            "mail_imap_inbox".to_string(),
+            "mail_imap_list".to_string(),
+            "email_imap_mark_seen".to_string(),
+        ];
+        let provider = LiveOnlyProvider {
+            nodes: vec![
+                fetch,
+                metadata(
+                    "email_imap_connect",
+                    Vec::new(),
+                    vec![pin("connection", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "mail_imap_inbox",
+                    vec![
+                        pin("connection", "Struct", "Normal", None, None),
+                        pin("inbox", "String", "Normal", Some("INBOX"), None),
+                    ],
+                    vec![pin("inbox_struct", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "mail_imap_list",
+                    vec![
+                        pin("inbox", "Struct", "Normal", None, None),
+                        pin("filter", "String", "Normal", Some("ALL"), None),
+                    ],
+                    vec![pin("emails", "Struct", "Array", None, None)],
+                ),
+                metadata(
+                    "control_for_each",
+                    vec![pin("array", "Generic", "Array", None, None)],
+                    vec![pin("value", "Generic", "Normal", None, None)],
+                ),
+                metadata(
+                    "email_get_content",
+                    vec![pin("email", "Struct", "Normal", None, None)],
+                    vec![pin("plain", "String", "Normal", None, None)],
+                ),
+                metadata(
+                    "email_get_headers",
+                    vec![pin("email", "Struct", "Normal", None, None)],
+                    vec![pin("from", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "mail_address_fields",
+                    vec![pin("address", "Struct", "Normal", None, None)],
+                    vec![pin("email", "String", "Normal", None, None)],
+                ),
+                metadata(
+                    "email_imap_mark_seen",
+                    vec![
+                        pin("email", "Struct", "Normal", None, None),
+                        pin("mark_as_seen", "Boolean", "Normal", Some("true"), None),
+                    ],
+                    vec![pin("email_ref", "Struct", "Normal", None, None)],
+                ),
+            ],
+        };
+
+        let declarations = provider.get_declarations("imap fetch mail").await;
+
+        assert!(declarations.contains("emailImapInboxFetchMail required inputs: emailRef"));
+        assert!(declarations.contains("schema: Email {"));
+        assert!(declarations.contains("from?: MailAddress"));
+        assert!(declarations.contains("plain?: string"));
+        assert!(declarations.contains("subject: string"));
+        assert!(declarations.contains("uid: int"));
+        assert!(
+            declarations.contains("mailImapInbox({ connection: connection, inbox: \"INBOX\" })")
+        );
+        assert!(declarations.contains("mailImapList({ inbox: inbox, filter: \"UNSEEN\" })"));
+        assert!(declarations.contains("filter: \"UNSEEN\""));
+        assert!(declarations.contains("controlForEach({ array: refs })"));
+        assert!(declarations.contains("emailImapInboxFetchMail({ emailRef: item.value })"));
+        assert!(declarations.contains("emailGetContent"));
+        assert!(declarations.contains("emailGetHeaders"));
+        assert!(declarations.contains("mailAddressFields"));
+        assert!(
+            declarations.contains("emailImapMarkSeen({ email: item.value, markAsSeen: true })")
+        );
+        assert!(declarations.contains(DECLARATION_PRIORITY_BEGIN));
+        assert!(declarations.contains(DECLARATION_PRIORITY_END));
+        let priority_start = declarations.find(DECLARATION_PRIORITY_BEGIN).unwrap()
+            + DECLARATION_PRIORITY_BEGIN.len();
+        assert!(declarations[priority_start..].starts_with("declare function "));
+        for companion in [
+            "emailImapConnect",
+            "mailImapInbox",
+            "mailImapList",
+            "emailImapMarkSeen",
+        ] {
+            assert!(
+                declarations.contains(companion),
+                "missing {companion}: {declarations}"
+            );
+        }
+        assert_eq!(declarations.matches("// IMAP:").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn declarations_suppress_imap_recipe_when_live_pin_contract_is_incompatible() {
+        let provider = LiveOnlyProvider {
+            nodes: vec![
+                metadata(
+                    "email_imap_connect",
+                    Vec::new(),
+                    vec![pin("connection", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "mail_imap_inbox",
+                    vec![
+                        pin("connection", "Struct", "Normal", None, None),
+                        pin("inbox", "String", "Normal", Some("INBOX"), None),
+                    ],
+                    vec![pin("inbox_struct", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "mail_imap_list",
+                    vec![
+                        pin("inbox", "Struct", "Normal", None, None),
+                        pin("query", "String", "Normal", Some("ALL"), None),
+                    ],
+                    vec![pin("emails", "Struct", "Array", None, None)],
+                ),
+                metadata(
+                    "control_for_each",
+                    vec![pin("array", "Generic", "Array", None, None)],
+                    vec![pin("value", "Generic", "Normal", None, None)],
+                ),
+                metadata(
+                    "email_imap_inbox_fetch_mail",
+                    vec![pin("email_ref", "Struct", "Normal", None, None)],
+                    vec![pin("email", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "email_get_content",
+                    vec![pin("email", "Struct", "Normal", None, None)],
+                    Vec::new(),
+                ),
+                metadata(
+                    "email_get_headers",
+                    vec![pin("email", "Struct", "Normal", None, None)],
+                    vec![pin("from", "Struct", "Normal", None, None)],
+                ),
+                metadata(
+                    "mail_address_fields",
+                    vec![pin("address", "Struct", "Normal", None, None)],
+                    Vec::new(),
+                ),
+                metadata(
+                    "email_imap_mark_seen",
+                    vec![
+                        pin("email", "Struct", "Normal", None, None),
+                        pin("mark_as_seen", "Boolean", "Normal", Some("true"), None),
+                    ],
+                    Vec::new(),
+                ),
+            ],
+        };
+
+        let declarations = provider.get_declarations("imap fetch mail").await;
+
+        assert!(declarations.contains("declare function emailImapInboxFetchMail"));
+        assert!(!declarations.contains("// IMAP:"));
+        assert!(!declarations.contains("filter: \"UNSEEN\""));
+    }
+
+    #[test]
+    fn catalog_usage_notes_are_bounded_and_deterministic() {
+        let schema = format!(
+            r#"{{"title":"Large","type":"object","properties":{{{}}}}}"#,
+            (0..40)
+                .map(|index| format!(r#""field_{index}":{{"type":"string"}}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let metadata = (0..40)
+            .map(|index| {
+                metadata(
+                    &format!("custom_schema_node_{index:02}"),
+                    vec![pin("payload", "Struct", "Normal", None, Some(&schema))],
+                    Vec::new(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let available = metadata
+            .iter()
+            .map(|metadata| {
+                (
+                    metadata.name.clone(),
+                    metadata_to_signature(metadata).display,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let first = render_catalog_usage_notes(&metadata, &available);
+        let second = render_catalog_usage_notes(&metadata, &available);
+
+        assert_eq!(first, second);
+        assert!(first.len() <= MAX_DECLARATION_USAGE_NOTE_BYTES);
+        assert!(first.contains("Additional live catalog usage notes omitted for size"));
     }
 }

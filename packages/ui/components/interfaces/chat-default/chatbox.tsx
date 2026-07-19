@@ -612,15 +612,24 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					onClearAll={() => setAttachedFiles([])}
 				/>
 
-				<form onSubmit={handleSubmit} className="relative">
+				<form
+					onSubmit={handleSubmit}
+					className="relative"
+					data-fl-chat-composer
+				>
 					<div
-						className="flex flex-col items-start bg-background border border-border rounded-xl shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:border-input transition-all duration-200"
+						className="flex flex-col items-start overflow-hidden rounded-xl border border-border shadow-sm transition-all duration-200 focus-within:border-input focus-within:ring-2 focus-within:ring-ring"
 						onDrop={handleDrop}
 						onDragOver={handleDragOver}
+						style={{
+							backgroundColor:
+								"var(--fl-chat-composer-background, var(--background))",
+						}}
 					>
 						{/* Text Input */}
 						<div className="flex-1 py-2 w-full pr-2">
 							<Textarea
+								aria-label="Message"
 								ref={chatboxRef}
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
@@ -643,7 +652,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						</div>
 
 						{/* Tool bar and settings */}
-						<div className="flex items-center justify-between w-full bg-background rounded-b-xl">
+						<div className="flex w-full items-center justify-between rounded-b-xl">
 							{/* Left side buttons */}
 							<div className="flex items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}
@@ -651,6 +660,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									<Popover>
 										<PopoverTrigger asChild>
 											<Button
+												aria-label="Add attachment"
 												type="button"
 												size="sm"
 												variant="ghost"
@@ -703,6 +713,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										<Popover>
 											<PopoverTrigger asChild>
 												<Button
+													aria-label="Choose tools"
 													type="button"
 													size="sm"
 													variant="ghost"
@@ -788,6 +799,11 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									((window as any).SpeechRecognition ||
 										(window as any).webkitSpeechRecognition) && (
 										<Button
+											aria-label={
+												isTranscribing
+													? "Stop voice transcription"
+													: "Start voice transcription"
+											}
 											type="button"
 											size="sm"
 											variant={isTranscribing ? "destructive" : "ghost"}
@@ -810,6 +826,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										{voiceInvoke === "hold" ? (
 											<>
 												<Button
+													aria-label="Hold to record"
 													type="button"
 													size="sm"
 													variant={isRecording ? "destructive" : "ghost"}
@@ -898,6 +915,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								)}
 
 								<Button
+									aria-label="Send message"
 									type="submit"
 									size="sm"
 									disabled={sendDisabled || (!input.trim() && !recordedAudio)}

@@ -42,17 +42,16 @@ export function TeamManagementPage() {
 		connections.data?.incoming.filter(
 			(connection) => connection.status === "PENDING",
 		).length ?? 0;
-
 	return (
 		<div className="container mx-auto p-6 space-y-8 flex flex-col overflow-hidden h-full grow">
 			{/* Header */}
 			<div className="flex items-center justify-between">
 				<div>
 					<h1 className="text-4xl font-bold bg-linear-to-r from-primary to-tertiary bg-clip-text text-transparent">
-						Team Management
+						Access &amp; Relationships
 					</h1>
 					<p className="text-muted-foreground mt-2">
-						Manage your team members, roles, and collaboration settings
+						People and connected apps — in one place
 					</p>
 				</div>
 				<div className="flex items-center gap-3">
@@ -66,7 +65,11 @@ export function TeamManagementPage() {
 				defaultValue="members"
 				className="space-y-6 flex flex-col flex-1 min-h-0"
 			>
-				<TabsList className="grid w-full grid-cols-5 shrink-0">
+				<TabsList
+					className={`grid w-full shrink-0 ${
+						showRequestQueue ? "grid-cols-5" : "grid-cols-4"
+					}`}
+				>
 					<TabsTrigger value="members" className="flex items-center gap-2">
 						<Users className="w-4 h-4" />
 						Team Members
@@ -87,7 +90,7 @@ export function TeamManagementPage() {
 					)}
 					<TabsTrigger value="apps" className="flex items-center gap-2">
 						<Blocks className="w-4 h-4" />
-						Apps
+						Connections
 						{pendingAppRequests > 0 && (
 							<Badge variant="secondary" className="px-1.5">
 								{pendingAppRequests}
@@ -130,7 +133,7 @@ export function TeamManagementPage() {
 					</TabsContent>
 				)}
 
-				{/* Apps Tab */}
+				{/* Connections Tab */}
 				{appId && (
 					<TabsContent value="apps" className="flex-1 min-h-0">
 						<div className="h-full overflow-y-auto">

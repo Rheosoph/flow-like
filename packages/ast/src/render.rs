@@ -205,6 +205,14 @@ impl Writer<'_> {
     fn event_block(&mut self, event: &EventBlock) {
         self.indent();
         self.out.push_str(&event.name);
+        if let Some(event_name) = event
+            .event_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
+            self.out.push(' ');
+            self.out.push_str(event_name);
+        }
         self.out.push('(');
         self.params(&event.params);
         self.out.push_str(") {");

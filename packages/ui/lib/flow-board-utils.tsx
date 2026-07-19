@@ -48,18 +48,46 @@ export function normalizeSelectionNodes(value: unknown): string[] {
 	);
 }
 
+const identityTokenCache = new WeakMap<object, number>();
+let identityTokenSeq = 0;
+
+function identityToken(value: object | null | undefined): string {
+	if (!value) return "-";
+	let token = identityTokenCache.get(value);
+	if (token === undefined) {
+		token = ++identityTokenSeq;
+		identityTokenCache.set(value, token);
+	}
+	return String(token);
+}
+
+function stringHash(value: string): number {
+	let hash = 0;
+	for (let i = 0; i < value.length; i++) {
+		hash = (hash * 31 + value.charCodeAt(i)) | 0;
+	}
+	return hash;
+}
+
+// Identity-based instead of updated_at-based: react-query structural sharing
+// keeps unchanged sub-objects referentially stable across refetches, so this
+// token only changes when variables/refs/layers content or node membership
+// actually changes — letting parseBoard reuse rendered nodes by reference
+// across unrelated board edits. The membership hash is order-independent
+// because serde HashMap serialization does not guarantee key order.
 function boardDataVersion(board: IBoard): string {
-	const updatedAt = board.updated_at
-		? `${board.updated_at.secs_since_epoch}.${board.updated_at.nanos_since_epoch}`
-		: "";
+	let membershipHash = 0;
+	for (const node of Object.values(board.nodes ?? {})) {
+		membershipHash =
+			(membershipHash + stringHash(`${node.id}:${node.layer ?? ""}`)) | 0;
+	}
 	return [
 		board.id,
 		board.version?.join(".") ?? "",
-		updatedAt,
-		Object.keys(board.nodes ?? {}).length,
-		Object.keys(board.layers ?? {}).length,
-		Object.keys(board.variables ?? {}).length,
-		Object.keys(board.refs ?? {}).length,
+		identityToken(board.variables),
+		identityToken(board.refs),
+		identityToken(board.layers),
+		membershipHash,
 	].join(":");
 }
 
@@ -434,10 +462,23 @@ export function parseBoard(
 	const addedNodeIds = new Set<string>(); // Track which node IDs have been added
 	const boardVersionToken = boardDataVersion(board);
 
-	// Compute a hash of all fn_refs to detect changes
-	const fnRefsHash = Object.values(board.nodes)
-		.map((n) => `${n.id}:${n.fn_refs?.fn_refs?.join(",") ?? ""}`)
-		.join(";");
+	// Hash only nodes that actually reference functions (sorted — serde HashMap
+	// order is unstable), so adding/removing unrelated nodes doesn't force every
+	// FlowNode to re-render. Also count connections in the same pass: above the
+	// threshold, continuous edge animations are disabled — hundreds of endlessly
+	// animating SVG paths repaint the whole canvas layer every frame.
+	const fnRefEntries: string[] = [];
+	let connectionCount = 0;
+	for (const node of Object.values(board.nodes)) {
+		if ((node.fn_refs?.fn_refs?.length ?? 0) > 0) {
+			fnRefEntries.push(`${node.id}:${node.fn_refs?.fn_refs?.join(",") ?? ""}`);
+		}
+		for (const pin of Object.values(node.pins)) {
+			connectionCount += pin.connected_to.length;
+		}
+	}
+	const fnRefsHash = fnRefEntries.sort().join(";");
+	const reduceEdgeMotion = isWebkitLite() || connectionCount > 150;
 
 	for (const oldNode of oldNodes ?? []) {
 		const hash = oldNode.data?.hash;
@@ -817,7 +858,8 @@ export function parseBoard(
 				oldEdge.source === sourceNodeId &&
 				oldEdge.target === targetNodeId &&
 				oldEdge.selected === sel &&
-				oldEdge.data?.pathType === connectionMode
+				oldEdge.data?.pathType === connectionMode &&
+				oldEdge.data?.reduceMotion === reduceEdgeMotion
 			) {
 				edges.push(oldEdge);
 				continue;
@@ -834,8 +876,9 @@ export function parseBoard(
 						toLayer: (connectedNode as any).layer,
 						pathType: connectionMode,
 						data_type: pin.data_type,
+						reduceMotion: reduceEdgeMotion,
 					},
-					animated: !isWebkitLite() && pin.data_type !== "Execution",
+					animated: !reduceEdgeMotion && pin.data_type !== "Execution",
 					reconnectable: true,
 					target: targetNodeId,
 					targetHandle: conntectedPin.id,
@@ -870,7 +913,10 @@ export function parseBoard(
 
 				const existingEdge = oldEdgesMap.get(edgeId);
 
-				if (existingEdge) {
+				if (
+					existingEdge &&
+					existingEdge.data?.reduceMotion === reduceEdgeMotion
+				) {
 					edges.push(existingEdge);
 				} else {
 					edges.push({
@@ -885,8 +931,9 @@ export function parseBoard(
 							toLayer: targetLayer,
 							isFnRef: true,
 							pathType: connectionMode,
+							reduceMotion: reduceEdgeMotion,
 						},
-						animated: !isWebkitLite(),
+						animated: !reduceEdgeMotion,
 						reconnectable: true,
 						style: {
 							stroke: "var(--pin-fn-ref)",

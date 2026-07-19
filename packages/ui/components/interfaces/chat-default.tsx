@@ -55,6 +55,7 @@ import {
 	HoverCardTrigger,
 } from "../ui";
 import { fileToAttachment } from "./chat-default/attachment";
+import { ChatAppearance } from "./chat-default/appearance";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
@@ -1738,38 +1739,41 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	return (
 		<>
-			{!messagesLoaded ? (
-				<div className="flex flex-col items-center justify-center h-full gap-3">
-					<Loader2Icon className="w-6 h-6 animate-spin text-muted-foreground" />
-					<p className="text-sm text-muted-foreground">
-						Loading conversation...
-					</p>
-				</div>
-			) : showWelcome ? (
-				<ChatWelcome
-					onSendMessage={handleSendMessage}
-					event={event}
-					config={config}
-					isSending={isSendingFromWelcome}
-				/>
-			) : (
-				<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-					<Chat
-						ref={chatRef}
-						sessionId={sessionIdParameter}
-						messages={messages}
+			<ChatAppearance appId={appId} eventId={event.id} config={config}>
+				{!messagesLoaded ? (
+					<div className="flex h-full flex-col items-center justify-center gap-3">
+						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
+						<p className="text-sm text-muted-foreground">
+							Loading conversation...
+						</p>
+					</div>
+				) : showWelcome ? (
+					<ChatWelcome
 						onSendMessage={handleSendMessage}
-						onMessageUpdate={onMessageUpdate}
+						event={event}
 						config={config}
-						isStreamActive={isStreamActive}
-						activeInteractions={activeInteractions}
-						onRespondToInteraction={handleRespondToInteraction}
-						appId={appId}
-						boardId={event.board_id}
-						eventId={event.id}
+						isSending={isSendingFromWelcome}
 					/>
-				</ChatWidgetExecutionProvider>
-			)}
+				) : (
+					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+						<Chat
+							ref={chatRef}
+							sessionId={sessionIdParameter}
+							messages={messages}
+							onSendMessage={handleSendMessage}
+							onMessageUpdate={onMessageUpdate}
+							config={config}
+							isStreamActive={isStreamActive}
+							activeInteractions={activeInteractions}
+							onRespondToInteraction={handleRespondToInteraction}
+							appId={appId}
+							boardId={event.board_id}
+							eventId={event.id}
+							showAiDisclosure
+						/>
+					</ChatWidgetExecutionProvider>
+				)}
+			</ChatAppearance>
 			<AlertDialog
 				open={showPrefilledConfirm}
 				onOpenChange={(open) => {

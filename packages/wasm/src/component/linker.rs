@@ -792,10 +792,28 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                         None => return Ok((None,)),
                     };
                     let app_state = model_ctx.app_state.clone();
+                    let access_token = model_ctx.token.clone();
+                    let usage_context = store.data().host_state.model_usage_context.clone();
                     #[cfg(feature = "model")]
                     {
                         let mut factory = app_state.embedding_factory.lock().await;
-                        let model = match factory.build_text(&bit, app_state.clone()).await {
+                        let embedding_provider = bit.try_to_embedding();
+                        let use_proxy = access_token.is_some()
+                            && embedding_provider
+                                .as_ref()
+                                .is_some_and(|provider| provider.supports_remote());
+                        let model_result = if use_proxy {
+                            factory
+                                .build_text_proxy(
+                                    &bit,
+                                    access_token.expect("proxy mode requires an access token"),
+                                    usage_context,
+                                )
+                                .await
+                        } else {
+                            factory.build_text(&bit, app_state.clone()).await
+                        };
+                        let model = match model_result {
                             Ok(m) => m,
                             Err(_) => return Ok((None,)),
                         };
@@ -809,7 +827,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     }
                     #[cfg(not(feature = "model"))]
                     {
-                        let _ = (app_state, bit, texts);
+                        let _ = (app_state, access_token, usage_context, bit, texts);
                         Ok((None::<String>,))
                     }
                 })
@@ -831,9 +849,36 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     {
                         return Ok((None::<String>,));
                     }
-                    let _ = (model_json, texts_json);
-                    // Stub — embedding model resolution via CachedEmbeddingModel
-                    Ok((None::<String>,))
+                    #[cfg(feature = "model")]
+                    {
+                        let model_ctx = match store.data().host_state.model_context.clone() {
+                            Some(context) => context,
+                            None => return Ok((None,)),
+                        };
+                        let texts: Vec<String> = match serde_json::from_str(&texts_json) {
+                            Ok(texts) => texts,
+                            Err(_) => return Ok((None,)),
+                        };
+                        let model =
+                            match crate::host_functions::resolve_cached_text_embedding_model(
+                                &model_ctx,
+                                &model_json,
+                            )
+                            .await
+                            {
+                                Some(model) => model,
+                                None => return Ok((None,)),
+                            };
+                        match model.text_embed_query(&texts).await {
+                            Ok(embeddings) => Ok((serde_json::to_string(&embeddings).ok(),)),
+                            Err(_) => Ok((None,)),
+                        }
+                    }
+                    #[cfg(not(feature = "model"))]
+                    {
+                        let _ = (model_json, texts_json);
+                        Ok((None::<String>,))
+                    }
                 })
             },
         )
@@ -853,8 +898,36 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     {
                         return Ok((None::<String>,));
                     }
-                    let _ = (model_json, texts_json);
-                    Ok((None::<String>,))
+                    #[cfg(feature = "model")]
+                    {
+                        let model_ctx = match store.data().host_state.model_context.clone() {
+                            Some(context) => context,
+                            None => return Ok((None,)),
+                        };
+                        let texts: Vec<String> = match serde_json::from_str(&texts_json) {
+                            Ok(texts) => texts,
+                            Err(_) => return Ok((None,)),
+                        };
+                        let model =
+                            match crate::host_functions::resolve_cached_text_embedding_model(
+                                &model_ctx,
+                                &model_json,
+                            )
+                            .await
+                            {
+                                Some(model) => model,
+                                None => return Ok((None,)),
+                            };
+                        match model.text_embed_document(&texts).await {
+                            Ok(embeddings) => Ok((serde_json::to_string(&embeddings).ok(),)),
+                            Err(_) => Ok((None,)),
+                        }
+                    }
+                    #[cfg(not(feature = "model"))]
+                    {
+                        let _ = (model_json, texts_json);
+                        Ok((None::<String>,))
+                    }
                 })
             },
         )
@@ -916,6 +989,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     };
                     let app_state = model_ctx.app_state.clone();
                     let access_token = model_ctx.token.clone();
+                    let usage_context = store.data().host_state.model_usage_context.clone();
 
                     // Parse messages_json: either a wrapper {messages, tools, ...params} or a plain array
                     #[derive(serde::Deserialize)]
@@ -1097,7 +1171,12 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
                         match factory
-                            .build(&bit, app_state.clone(), access_token.clone(), None)
+                            .build(
+                                &bit,
+                                app_state.clone(),
+                                access_token.clone(),
+                                usage_context,
+                            )
                             .await
                         {
                             Ok(m) => m,
@@ -1240,6 +1319,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     };
                     let app_state = model_ctx.app_state.clone();
                     let access_token = model_ctx.token.clone();
+                    let usage_context = store.data().host_state.model_usage_context.clone();
 
                     #[derive(serde::Deserialize)]
                     struct StreamRequest {
@@ -1331,7 +1411,12 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                     let model = {
                         let mut factory = app_state.model_factory.lock().await;
                         match factory
-                            .build(&bit, app_state.clone(), access_token.clone(), None)
+                            .build(
+                                &bit,
+                                app_state.clone(),
+                                access_token.clone(),
+                                usage_context,
+                            )
                             .await
                         {
                             Ok(m) => m,

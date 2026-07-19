@@ -16,14 +16,14 @@ export interface FlowSelectorData {
 	elementsLoaded: boolean;
 	elementsLoading: boolean;
 	elementsError?: unknown;
-	loadElements: () => Promise<FlowElementOption[]>;
+	loadElements: (force?: boolean) => Promise<FlowElementOption[]>;
 
 	bitOptions: IBit[];
 	bitsByRef: Map<string, IBit>;
 	bitsLoaded: boolean;
 	bitsLoading: boolean;
 	bitsError?: unknown;
-	loadBits: () => Promise<IBit[]>;
+	loadBits: (force?: boolean) => Promise<IBit[]>;
 }
 
 export type FlowSelectorDataRef = MutableRefObject<FlowSelectorData>;

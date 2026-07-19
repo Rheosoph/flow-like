@@ -473,8 +473,7 @@ mod tests {
 
     // Small static Identity graph encoded as ONNX IR 8/opset 13. Keeping it inline makes
     // the runtime smoke test hermetic on desktop and mobile CI targets.
-    const SMOKE_MODEL_BASE64: &str =
-        "CAgSDmZsb3ctbGlrZS10ZXN0OlgKGQoFaW5wdXQSBm91dHB1dCIISWRlbnRpdHkSCGlkZW50aXR5WhcKBWlucHV0Eg4KDAgBEggKAggBCgIIAWIYCgZvdXRwdXQSDgoMCAESCAoCCAEKAggBQgIQDQ==";
+    const SMOKE_MODEL_BASE64: &str = "CAgSDmZsb3ctbGlrZS10ZXN0OlgKGQoFaW5wdXQSBm91dHB1dCIISWRlbnRpdHkSCGlkZW50aXR5WhcKBWlucHV0Eg4KDAgBEggKAggBCgIIAWIYCgZvdXRwdXQSDgoMCAESCAoCCAEKAggBQgIQDQ==";
 
     #[test]
     fn initialize_is_idempotent() {

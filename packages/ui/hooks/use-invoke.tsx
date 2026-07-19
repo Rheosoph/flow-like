@@ -306,7 +306,6 @@ export async function injectDataFunction<T, Args extends any[]>(
 			refetch: () => Promise.resolve({ data: result, error: null }),
 		} as UseQueryResult<T, Error>;
 	} catch (error) {
-		console.error("Error invoking lambda function:", error);
 		if (error instanceof Error) {
 			throw error;
 		}

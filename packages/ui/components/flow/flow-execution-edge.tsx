@@ -84,10 +84,10 @@ export const FlowExecutionEdge = memo(function FlowExecutionEdge(
 				}}
 			/>
 
-			{/* Animated energy pulse traveling along the edge. Skipped on WebKit:
-			    an infinite per-edge SVG animation repaints continuously and tanks
-			    WKWebView on large boards (Chromium keeps the effect). */}
-			{!isWebkitLite() && (
+			{/* Animated energy pulse traveling along the edge. Skipped on WebKit
+			    and on large boards (data.reduceMotion): an infinite per-edge SVG
+			    animation repaints continuously and tanks the canvas layer. */}
+			{!isWebkitLite() && data?.reduceMotion !== true && (
 				<BaseEdge
 					id={`${id}-energy`}
 					path={edgePath}

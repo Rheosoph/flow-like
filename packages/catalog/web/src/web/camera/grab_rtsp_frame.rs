@@ -911,6 +911,7 @@ mod platform_hevc {
         decompression_output_ref_con: *mut c_void,
     }
 
+    #[allow(clippy::duplicated_attributes)]
     #[link(name = "CoreFoundation", kind = "framework")]
     #[link(name = "CoreMedia", kind = "framework")]
     #[link(name = "CoreVideo", kind = "framework")]

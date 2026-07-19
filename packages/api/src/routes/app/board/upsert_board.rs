@@ -11,6 +11,7 @@ use flow_like::flow::{
     execution::LogLevel,
 };
 use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 use utoipa::ToSchema;
 
 #[derive(Clone, Deserialize, ToSchema)]
@@ -30,6 +31,8 @@ pub struct UpsertBoard {
 #[derive(Deserialize, Serialize, ToSchema)]
 pub struct UpsertBoardResponse {
     pub id: String,
+    #[schema(value_type = Object)]
+    pub updated_at: SystemTime,
 }
 
 #[utoipa::path(
@@ -59,6 +62,8 @@ pub async fn upsert_board(
 ) -> Result<Json<UpsertBoardResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
+    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
+    let _mutation_guard = mutation_lock.lock().await;
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
     let mut id = board_id.clone();
@@ -118,5 +123,6 @@ pub async fn upsert_board(
     );
     Ok(Json(UpsertBoardResponse {
         id: board.id.clone(),
+        updated_at: board.updated_at,
     }))
 }

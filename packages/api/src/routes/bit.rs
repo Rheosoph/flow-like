@@ -206,6 +206,7 @@ impl From<Metadata> for Model {
             course_id: None,
             widget_id: None,
             wasm_package_id: None,
+            group_id: None,
             id: "".to_string(),
             lang: "".to_string(),
             organization_specific_values: metadata

@@ -59,6 +59,7 @@ import {
 	FolderClosedIcon,
 	GlobeIcon,
 	KeyIcon,
+	LayersIcon,
 	LayoutGridIcon,
 	LockIcon,
 	Maximize2Icon,
@@ -160,9 +161,9 @@ const navigationItems: {
 	},
 	{
 		href: "/library/config/explore",
-		label: "Explore Data",
+		label: "Data Studio",
 		icon: DatabaseIcon,
-		description: "Browse and query your data",
+		description: "Model, explore, operate, and share project data",
 		group: "Data",
 	},
 	{
@@ -181,6 +182,20 @@ const navigationItems: {
 			IAppVisibility.Public,
 			IAppVisibility.Prototype,
 			IAppVisibility.PublicRequestAccess,
+		],
+		group: "Collaborate",
+	},
+	{
+		href: "/library/config/suites",
+		label: "Suites",
+		icon: LayersIcon,
+		description: "Bundle this app with related apps into one store listing",
+		// A suite is presentation, not membership — private apps curate them too.
+		visibilities: [
+			IAppVisibility.Public,
+			IAppVisibility.Prototype,
+			IAppVisibility.PublicRequestAccess,
+			IAppVisibility.Private,
 		],
 		group: "Collaborate",
 	},

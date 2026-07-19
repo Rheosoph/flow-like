@@ -105,6 +105,9 @@ model App {
   incomingAppConnections AppConnection[] @relation("incomingAppConnections")
   processNotes           AppProcessNote[]
 
+  ownedGroups      AppGroup[]       @relation("ownedGroups")
+  groupMemberships AppGroupMember[] @relation("appGroupMemberships")
+
   llmUsage       LLMUsageTracking[]
   usageLimits    AppUsageLimit[]
   executionUsage ExecutionUsageTracking[]

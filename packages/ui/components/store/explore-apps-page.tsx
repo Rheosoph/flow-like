@@ -48,6 +48,7 @@ import {
 } from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
 import { ExploreHubHeader } from "./explore-hub-header";
+import { SuitesRail } from "./suites";
 
 type SortOption = "popular" | "newest" | "rated" | "updated";
 
@@ -366,6 +367,7 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 			<div
 				className={`flex-1 overflow-auto pb-10 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 			>
+				{!isFiltered && <SuitesRail />}
 				{error ? (
 					<Alert variant="destructive" className="mb-4">
 						<AlertCircle className="h-4 w-4" />

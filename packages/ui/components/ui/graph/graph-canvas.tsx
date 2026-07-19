@@ -32,6 +32,7 @@ import {
 import { NodeCircleProgram, createNodeCompoundProgram } from "sigma/rendering";
 import type {
 	LabelStyle,
+	SubgraphNode,
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
 import { getIconDataUri } from "./icon-svg";
@@ -61,7 +62,7 @@ const NODE_PROGRESS_WEIGHT = 0.3;
 const EDGE_PROGRESS_WEIGHT = 0.3;
 const SIZE_PROGRESS_WEIGHT = 0.1;
 const LAYOUT_PROGRESS_WEIGHT = 0.3;
-const PREPARING_OVERLAY_DELAY_MS = 120;
+const EXPANSION_OVERLAY_DELAY_MS = 400;
 const LOADING_BAR_DELAYS_MS = [0, 120, 240] as const;
 
 type GraphPosition = {
@@ -89,6 +90,7 @@ export interface GraphCanvasProps {
 	selectedNodeId?: string | null;
 	selectedEdgeKey?: string | null;
 	highlightedNodeIds?: Set<string>;
+	highlightedEdgeIds?: Set<string>;
 	hiddenLabels?: Set<string>;
 	onNodeClick?: (nodeId: string) => void;
 	onNodeShiftClick?: (nodeId: string, label: string) => void;
@@ -129,15 +131,71 @@ function colorToHex(color: string): string {
 	return colorToHex(getDefaultEdgeColor());
 }
 
-function styleToNodeSize(style?: LabelStyle, degree?: number): number {
+interface ColumnRange {
+	min: number;
+	max: number;
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+	const num = typeof value === "number" ? value : Number(value);
+	return Number.isFinite(num) ? num : undefined;
+}
+
+function computeColumnRanges(
+	nodes: readonly SubgraphNode[],
+): Map<string, ColumnRange> {
+	const ranges = new Map<string, ColumnRange>();
+	for (const node of nodes) {
+		const size = node.style?.size;
+		if (size?.mode !== "by-column" || !size.column) continue;
+		const value = toFiniteNumber(node.props?.[size.column]);
+		if (value === undefined) continue;
+		const existing = ranges.get(size.column);
+		if (!existing) {
+			ranges.set(size.column, { min: value, max: value });
+		} else {
+			existing.min = Math.min(existing.min, value);
+			existing.max = Math.max(existing.max, value);
+		}
+	}
+	return ranges;
+}
+
+function styleToNodeSize(
+	style?: LabelStyle,
+	degree?: number,
+	columnRanges?: ReadonlyMap<string, ColumnRange>,
+	props?: Record<string, unknown>,
+): number {
 	if (!style?.size) return 10;
-	if (style.size.mode === "fixed") return Math.max(8, style.size.value ?? 10);
-	if (style.size.mode === "by-degree" && degree !== undefined) {
+	const { mode } = style.size;
+	if (mode === "fixed") return Math.max(8, style.size.value ?? 10);
+	if (mode === "by-degree" && degree !== undefined) {
 		const min = style.size.min ?? 8;
 		const max = style.size.max ?? 28;
 		return Math.min(max, min + degree * 1.5);
 	}
+	if (mode === "by-column" && style.size.column) {
+		const min = style.size.min ?? 8;
+		const max = style.size.max ?? 28;
+		const value = toFiniteNumber(props?.[style.size.column]);
+		const range = columnRanges?.get(style.size.column);
+		if (value === undefined || !range || range.max <= range.min) {
+			return (min + max) / 2;
+		}
+		const ratio = (value - range.min) / (range.max - range.min);
+		return min + ratio * (max - min);
+	}
 	return 10;
+}
+
+function getParallelCurvature(index: number, maxIndex: number): number {
+	if (maxIndex <= 0) return 0;
+	if (index < 0) return -getParallelCurvature(-index, maxIndex);
+	const amplitude = 3.5;
+	const maxCurvature =
+		(amplitude * (1 - Math.exp(-maxIndex / amplitude))) / maxIndex;
+	return (maxCurvature * index) / maxIndex;
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -154,6 +212,20 @@ function getBaseEdgeAlpha(nodeCount: number): number {
 }
 
 const CONTEXT_DIM_EDGE_SIZE = 0.75;
+const CONTEXT_DIM_EDGE_ALPHA = 0.08;
+const CONTEXT_DIM_NODE_AMOUNT = 0.82;
+
+function dimTowardBackground(color: string): string {
+	const theme = getGraphTheme();
+	const [bgR, bgG, bgB] = theme.bgRgb;
+	const hex = colorToHex(color);
+	const r = Number.parseInt(hex.slice(1, 3), 16);
+	const g = Number.parseInt(hex.slice(3, 5), 16);
+	const b = Number.parseInt(hex.slice(5, 7), 16);
+	const mix = (channel: number, target: number) =>
+		Math.round(channel + (target - channel) * CONTEXT_DIM_NODE_AMOUNT);
+	return `rgb(${mix(r, bgR)},${mix(g, bgG)},${mix(b, bgB)})`;
+}
 
 function getNodeChunkSize(nodeCount: number): number {
 	if (nodeCount >= HUGE_THRESHOLD) return 300;
@@ -495,6 +567,7 @@ async function buildGraphAsync(
 	const degreeMap = new Map<string, number>();
 	const assignedPositions = new Map<string, GraphPosition>();
 	const neighborLookup = buildNeighborLookup(data);
+	const columnRanges = computeColumnRanges(data.nodes);
 
 	const publish = (
 		progress: number,
@@ -575,9 +648,10 @@ async function buildGraphAsync(
 			if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) return;
 
 			const edgeHex = colorToHex(styleToEdgeColor(edge.style));
+			const edgeWidth = edge.style?.width ?? 1;
 			graph.addEdge(edge.source, edge.target, {
 				label: edge.label,
-				size: isHuge ? 0.3 : isLarge ? 0.6 : 1,
+				size: (isHuge ? 0.3 : isLarge ? 0.6 : 1) * edgeWidth,
 				color: hexToRgba(edgeHex, getBaseEdgeAlpha(nodeCount)),
 				originalColor: edgeHex,
 				type: "curvedArrow",
@@ -608,6 +682,22 @@ async function buildGraphAsync(
 			"Resolving parallel edges for clearer paths.",
 		);
 		indexParallelEdgesIndex(graph);
+		graph.forEachEdge((edge, edgeAttrs) => {
+			const parallelIndex = edgeAttrs.parallelIndex as
+				| number
+				| null
+				| undefined;
+			const parallelMaxIndex = edgeAttrs.parallelMaxIndex as
+				| number
+				| null
+				| undefined;
+			const curvature =
+				typeof parallelIndex === "number" &&
+				typeof parallelMaxIndex === "number"
+					? getParallelCurvature(parallelIndex, parallelMaxIndex)
+					: 0;
+			graph.setEdgeAttribute(edge, "curvature", curvature);
+		});
 		if (isCancelled()) return null;
 		await waitForNextFrame();
 	}
@@ -619,7 +709,12 @@ async function buildGraphAsync(
 		(node) => {
 			if (!graph.hasNode(node.id)) return;
 
-			const baseSize = styleToNodeSize(node.style, degreeMap.get(node.id));
+			const baseSize = styleToNodeSize(
+				node.style,
+				degreeMap.get(node.id),
+				columnRanges,
+				node.props,
+			);
 			let scaledSize = baseSize;
 			if (isHuge) scaledSize = Math.max(3, baseSize * 0.4);
 			else if (density > 4) scaledSize = baseSize * 0.85;
@@ -696,6 +791,7 @@ interface HighlightState {
 	selectedNodeId: string | null;
 	selectedEdgeKey: string | null;
 	highlightedNodeIds: Set<string> | undefined;
+	highlightedEdgeIds: Set<string> | undefined;
 	hiddenLabels: Set<string> | undefined;
 	neighborSet: Set<string> | null;
 	connectedEdgeSet: Set<string> | null;
@@ -1096,6 +1192,7 @@ export function GraphCanvas({
 	selectedNodeId,
 	selectedEdgeKey,
 	highlightedNodeIds,
+	highlightedEdgeIds,
 	hiddenLabels,
 	onNodeClick,
 	onNodeShiftClick,
@@ -1117,14 +1214,25 @@ export function GraphCanvas({
 	const loadingRef = useRef(loading);
 	const selectedNodeIdRef = useRef<string | null>(selectedNodeId ?? null);
 	const forceLayoutRef = useRef(false);
+	const lastPaletteKeyRef = useRef<string>("");
 
 	graphRef.current = graph;
 	loadingRef.current = loading;
 	selectedNodeIdRef.current = selectedNodeId ?? null;
 
 	useEffect(() => {
+		const paletteKey = () => {
+			const t = getGraphTheme();
+			return `${t.bgRgb.join(",")}|${t.fgRgb.join(",")}|${t.isDark}`;
+		};
+
+		lastPaletteKeyRef.current = paletteKey();
+
 		const observer = new MutationObserver(() => {
 			invalidateGraphTheme();
+			const nextKey = paletteKey();
+			if (nextKey === lastPaletteKeyRef.current) return;
+			lastPaletteKeyRef.current = nextKey;
 			setThemeTick((current) => current + 1);
 		});
 
@@ -1292,7 +1400,10 @@ export function GraphCanvas({
 	]);
 
 	const isBusy = overlayState !== null;
-	const shouldDelayOverlay = isBusy && Boolean(graph) && !loading;
+	const hasExistingGraph = Boolean(graph);
+	// While a graph is already on screen, expansions and rebuilds must not dim
+	// the whole canvas immediately — only after sustained loading.
+	const shouldDelayOverlay = isBusy && hasExistingGraph;
 
 	useEffect(() => {
 		if (!isBusy) {
@@ -1307,7 +1418,7 @@ export function GraphCanvas({
 
 		const timeoutId = window.setTimeout(() => {
 			setShowOverlay(true);
-		}, PREPARING_OVERLAY_DELAY_MS);
+		}, EXPANSION_OVERLAY_DELAY_MS);
 
 		return () => {
 			window.clearTimeout(timeoutId);
@@ -1360,6 +1471,7 @@ export function GraphCanvas({
 		selectedNodeId: selectedNodeId ?? null,
 		selectedEdgeKey: selectedEdgeKey ?? null,
 		highlightedNodeIds,
+		highlightedEdgeIds,
 		hiddenLabels,
 		neighborSet: null,
 		connectedEdgeSet: null,
@@ -1369,6 +1481,7 @@ export function GraphCanvas({
 	highlightRef.current.selectedNodeId = selectedNodeId ?? null;
 	highlightRef.current.selectedEdgeKey = selectedEdgeKey ?? null;
 	highlightRef.current.highlightedNodeIds = highlightedNodeIds;
+	highlightRef.current.highlightedEdgeIds = highlightedEdgeIds;
 	highlightRef.current.hiddenLabels = hiddenLabels;
 
 	// Recompute neighbor sets when selectedNodeId changes
@@ -1386,7 +1499,7 @@ export function GraphCanvas({
 	}, [selectedNodeId, graph]);
 
 	// Force sigma refresh when visibility/highlight props change
-	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
+	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
 
 	// Stable reducers — read all dynamic state from ref
 	const nodeReducer = useCallback(
@@ -1406,7 +1519,9 @@ export function GraphCanvas({
 
 			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
 				if (!hl.highlightedNodeIds.has(node)) {
-					res.hidden = true;
+					const dim = dimTowardBackground(origColor);
+					res.color = dim;
+					res.borderColor = dim;
 					res.label = "";
 					res.zIndex = 0;
 					return res;
@@ -1432,7 +1547,9 @@ export function GraphCanvas({
 					res.color = origColor;
 					res.borderColor = origColor;
 				} else {
-					res.hidden = true;
+					const dim = dimTowardBackground(origColor);
+					res.color = dim;
+					res.borderColor = dim;
 					res.label = "";
 					res.zIndex = 0;
 				}
@@ -1466,11 +1583,16 @@ export function GraphCanvas({
 			const isHoveredEdge = hl.hoveredEdge === edge;
 
 			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
-				if (
-					!hl.highlightedNodeIds.has(src) &&
-					!hl.highlightedNodeIds.has(tgt)
-				) {
-					res.hidden = true;
+				const edgeId = graph.getEdgeAttribute(edge, "edgeId") as
+					| string
+					| undefined;
+				const isHighlighted = hl.highlightedEdgeIds
+					? Boolean(edgeId && hl.highlightedEdgeIds.has(edgeId))
+					: hl.highlightedNodeIds.has(src) || hl.highlightedNodeIds.has(tgt);
+				if (!isHighlighted) {
+					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
+					res.size = CONTEXT_DIM_EDGE_SIZE;
+					res.zIndex = 0;
 					res.label = undefined;
 					res.forceLabel = false;
 					return res;
@@ -1493,7 +1615,8 @@ export function GraphCanvas({
 					res.label = undefined;
 					res.forceLabel = false;
 				} else {
-					res.hidden = true;
+					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
+					res.size = CONTEXT_DIM_EDGE_SIZE;
 					res.zIndex = 0;
 					res.label = undefined;
 					res.forceLabel = false;
@@ -1627,6 +1750,13 @@ export function GraphCanvas({
 				<div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-full border bg-background/80 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
 					<LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
 					<span>Refining layout</span>
+				</div>
+			) : null}
+
+			{isBusy && hasExistingGraph && !showOverlay ? (
+				<div className="absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded-full border bg-background/80 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+					<LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
+					<span>{overlayState?.title ?? "Updating graph"}</span>
 				</div>
 			) : null}
 

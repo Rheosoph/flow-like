@@ -45,8 +45,15 @@ export interface PlaceholderPinDef {
 		| "Boolean"
 		| "Struct"
 		| "Generic"
-		| "Execution";
+		| "Execution"
+		| "Date"
+		| "PathBuf"
+		| "Byte";
 	value_type?: "Normal" | "Array" | "HashMap" | "HashSet";
+	/** JSON Schema carried by a typed Struct boundary. */
+	schema?: string;
+	/** Require connected pins to agree with schema. */
+	enforce_schema?: boolean;
 }
 
 /// Commands that can be executed on the board
@@ -57,6 +64,8 @@ export type BoardCommand =
 			ref_id?: string; // Reference ID for this node (e.g., "$0", "$1") used in connections
 			position?: { x: number; y: number };
 			friendly_name?: string;
+			/** Extra pins appended to a new catalog node; supported only for events_generic outputs. */
+			additional_pins?: PlaceholderPinDef[];
 			/** Target layer ID to place the node in. If undefined, uses current layer. */
 			target_layer?: string;
 			summary?: string;
@@ -93,6 +102,12 @@ export type BoardCommand =
 			node_id: string;
 			pin_id: string;
 			value: unknown;
+			summary?: string;
+	  }
+	| {
+			command_type: "RenameNode";
+			node_id: string;
+			friendly_name: string;
 			summary?: string;
 	  }
 	| {

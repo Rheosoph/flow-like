@@ -9,7 +9,6 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use flow_like_storage::Path as FlowPath;
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
 
@@ -25,6 +24,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
         ("template_id" = Option<String>, Query, description = "Template ID"),
         ("course_id" = Option<String>, Query, description = "Course ID"),
         ("widget_id" = Option<String>, Query, description = "Widget ID"),
+        ("group_id" = Option<String>, Query, description = "Suite (app group) ID"),
         ("item" = String, Query, description = "Media item: icon, thumbnail, preview"),
         ("extension" = String, Query, description = "File extension")
     ),
@@ -87,10 +87,7 @@ pub async fn remove_media(
     let item_name = format!("{}.webp", media_id);
     let master_store = state.master_credentials().await?;
     let master_store = master_store.to_store(false).await?;
-    let path = FlowPath::from("media")
-        .child("apps")
-        .child(app_id)
-        .child(item_name.clone());
+    let path = mode.media_prefix(&app_id).child(item_name.clone());
     if let Err(e) = master_store.as_generic().delete(&path).await {
         tracing::error!("Failed to delete media file at {}: {:?}", path, e);
         return Err(ApiError::internal_error(anyhow!(

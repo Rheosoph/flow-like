@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use flow_like::{
+    app::{App, AppVisibility},
     bit::{Bit, BitModelPreference},
     flow_like_model_provider::{
         history::{History, HistoryMessage},
@@ -8,6 +9,7 @@ use flow_like::{
         response::Response,
     },
     flow_like_types::intercom::{BufferedInterComHandler, InterComEvent},
+    models::llm::ModelUsageContext,
 };
 use tauri::{AppHandle, ipc::Channel};
 
@@ -15,6 +17,29 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
+
+fn model_usage_app_id(app_id: &str, visibility: &AppVisibility) -> Option<String> {
+    if matches!(visibility, AppVisibility::Offline) {
+        None
+    } else {
+        Some(app_id.to_string())
+    }
+}
+
+async fn resolve_model_usage_context(
+    app_id: Option<&str>,
+    flow_like_state: Arc<flow_like::state::FlowLikeState>,
+) -> Result<Option<ModelUsageContext>, TauriFunctionError> {
+    let Some(app_id) = app_id.map(str::trim).filter(|app_id| !app_id.is_empty()) else {
+        return Ok(None);
+    };
+
+    let app = App::load(app_id.to_string(), flow_like_state).await?;
+    Ok(Some(ModelUsageContext {
+        app_id: model_usage_app_id(app_id, &app.visibility),
+        run_id: None,
+    }))
+}
 
 #[tauri::command(async)]
 pub async fn find_best_model(
@@ -39,6 +64,7 @@ pub async fn chat_completion(
     app_handle: AppHandle,
     messages: Vec<HistoryMessage>,
     token: Option<String>,
+    app_id: Option<String>,
 ) -> Result<Response, TauriFunctionError> {
     let current_profile = TauriSettingsState::current_profile(&app_handle).await?;
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
@@ -52,11 +78,13 @@ pub async fn chat_completion(
 
     let model = {
         let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+        let usage_context =
+            resolve_model_usage_context(app_id.as_deref(), flow_like_state.clone()).await?;
         let model_factory = flow_like_state.model_factory.clone();
         let mut model_factory = model_factory.lock().await;
 
         match model_factory
-            .build(&best_model, flow_like_state, token, None)
+            .build(&best_model, flow_like_state, token, usage_context)
             .await
         {
             Ok(model) => model,
@@ -85,6 +113,7 @@ pub async fn stream_chat_completion(
     messages: Vec<HistoryMessage>,
     on_chunk: Channel<Vec<InterComEvent>>,
     token: Option<String>,
+    app_id: Option<String>,
 ) -> Result<Response, TauriFunctionError> {
     let current_profile = TauriSettingsState::current_profile(&app_handle).await?;
     let http_client = TauriFlowLikeState::http_client(&app_handle).await?;
@@ -98,11 +127,13 @@ pub async fn stream_chat_completion(
 
     let model = {
         let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+        let usage_context =
+            resolve_model_usage_context(app_id.as_deref(), flow_like_state.clone()).await?;
         let model_factory = flow_like_state.model_factory.clone();
         let mut model_factory = model_factory.lock().await;
 
         match model_factory
-            .build(&best_model, flow_like_state, token, None)
+            .build(&best_model, flow_like_state, token, usage_context)
             .await
         {
             Ok(model) => model,
@@ -150,4 +181,25 @@ pub async fn stream_chat_completion(
     finalized.flush().await?;
 
     Ok(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_editor_usage_is_not_app_attributed() {
+        assert_eq!(
+            model_usage_app_id("local-app", &AppVisibility::Offline),
+            None
+        );
+    }
+
+    #[test]
+    fn online_editor_usage_is_app_attributed() {
+        assert_eq!(
+            model_usage_app_id("online-app", &AppVisibility::Private),
+            Some("online-app".to_string())
+        );
+    }
 }

@@ -45,7 +45,11 @@ pub async fn get_events(
     let events = get_events_for_app(&state.db, &app_id).await?;
 
     // Filter out secret variable values from all events
-    let mut events: Vec<Event> = events.into_iter().map(filter_event_secrets).collect();
+    let mut events: Vec<Event> = events
+        .into_iter()
+        .filter(|event| event.event_type != "ontology_action")
+        .map(filter_event_secrets)
+        .collect();
 
     if !permission.has_permission(RolePermissions::ReadEvents) {
         events = events

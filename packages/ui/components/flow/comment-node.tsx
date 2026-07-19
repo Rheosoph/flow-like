@@ -197,6 +197,7 @@ export function CommentNode(props: NodeProps<CommentNode>) {
 							</DialogHeader>
 							<div className="flex flex-col grow max-h-full overflow-auto relative">
 								<TextEditor
+									appId={props.data.appId}
 									initialContent={
 										props.data.comment.content === ""
 											? "Empty Comment"

@@ -2,6 +2,7 @@
 
 import { useCallback, useId, useMemo } from "react";
 import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
+import type { BoardVersion } from "../../lib/schema/flow/board-version";
 import { cn } from "../../lib/utils";
 import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
@@ -87,6 +88,7 @@ export interface A2UIRendererProps {
 	className?: string;
 	appId?: string;
 	boardId?: string;
+	boardVersion?: BoardVersion;
 	eventId?: string;
 	isPreviewMode?: boolean;
 	openDialog?: (
@@ -106,6 +108,7 @@ export function A2UIRenderer({
 	className,
 	appId,
 	boardId,
+	boardVersion,
 	eventId,
 	isPreviewMode = false,
 	openDialog,
@@ -197,6 +200,7 @@ export function A2UIRenderer({
 					surfaceId={surface.id}
 					appId={appId}
 					boardId={boardId}
+					boardVersion={boardVersion}
 					eventId={eventId}
 					components={components}
 					isPreviewMode={isPreviewMode}

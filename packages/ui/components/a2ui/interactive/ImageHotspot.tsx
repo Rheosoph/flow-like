@@ -184,6 +184,7 @@ export function A2UIImageHotspot({
 
 	return (
 		<div
+			data-card-action-stop
 			ref={containerRef}
 			className={cn("relative", resolveStyle(style))}
 			style={resolveInlineStyle(style)}

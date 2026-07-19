@@ -93,6 +93,12 @@ import {
 	TableHeader,
 	TableRow,
 } from "./table";
+import {
+	ColumnTypeSelect,
+	EDIT_COLUMN_TYPE_GROUPS,
+	IndexTypeSelect,
+	buildAddColumnExpression,
+} from "./table-schema";
 
 export type LanceFieldKind =
 	| "string"
@@ -1570,9 +1576,10 @@ const SchemaDialog: React.FC<{
 	const [indices, setIndices] = useState<IIndexConfig[]>([]);
 	const [loadingIndices, setLoadingIndices] = useState(false);
 	const [newColumnName, setNewColumnName] = useState("");
-	const [newColumnExpression, setNewColumnExpression] = useState("");
+	const [newColumnType, setNewColumnType] = useState("string");
+	const [newColumnDefault, setNewColumnDefault] = useState("");
 	const [indexColumn, setIndexColumn] = useState("");
-	const [indexType, setIndexType] = useState("AUTO");
+	const [indexType, setIndexType] = useState("auto");
 	const [processing, setProcessing] = useState(false);
 
 	const loadIndices = useCallback(async () => {
@@ -1614,12 +1621,14 @@ const SchemaDialog: React.FC<{
 	};
 
 	const handleAddColumn = async () => {
-		if (!onAddColumn || !newColumnName || !newColumnExpression) return;
+		if (!onAddColumn || !newColumnName) return;
+		const expression = buildAddColumnExpression(newColumnType, newColumnDefault);
+		if (!expression) return;
 		setProcessing(true);
 		try {
-			await onAddColumn(newColumnName, newColumnExpression);
+			await onAddColumn(newColumnName, expression);
 			setNewColumnName("");
-			setNewColumnExpression("");
+			setNewColumnDefault("");
 		} finally {
 			setProcessing(false);
 		}
@@ -1787,18 +1796,11 @@ const SchemaDialog: React.FC<{
 												))}
 											</SelectContent>
 										</Select>
-										<Select value={indexType} onValueChange={setIndexType}>
-											<SelectTrigger className="w-32">
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectItem value="AUTO">Auto</SelectItem>
-												<SelectItem value="FULL TEXT">Full Text</SelectItem>
-												<SelectItem value="BTREE">BTree</SelectItem>
-												<SelectItem value="BITMAP">Bitmap</SelectItem>
-												<SelectItem value="LABEL LIST">Label List</SelectItem>
-											</SelectContent>
-										</Select>
+										<IndexTypeSelect
+											value={indexType}
+											onChange={setIndexType}
+											className="w-32"
+										/>
 										<Button
 											onClick={handleBuildIndex}
 											disabled={!indexColumn || processing}
@@ -1816,32 +1818,31 @@ const SchemaDialog: React.FC<{
 							{onAddColumn && (
 								<div className="space-y-3 flex-shrink-0">
 									<Label>Add New Column</Label>
+									<div className="grid gap-2 sm:grid-cols-[1fr_150px]">
+										<Input
+											placeholder="Column name"
+											value={newColumnName}
+											onChange={(e) => setNewColumnName(e.target.value)}
+										/>
+										<ColumnTypeSelect
+											value={newColumnType}
+											onChange={setNewColumnType}
+											groups={EDIT_COLUMN_TYPE_GROUPS}
+										/>
+									</div>
 									<Input
-										placeholder="Column name"
-										value={newColumnName}
-										onChange={(e) => setNewColumnName(e.target.value)}
-									/>
-									<Input
-										placeholder="SQL expression (e.g. 0, 'text', CAST(NULL AS STRING))"
-										value={newColumnExpression}
-										onChange={(e) => setNewColumnExpression(e.target.value)}
+										placeholder="Default value (optional — leave empty for NULL)"
+										value={newColumnDefault}
+										onChange={(e) => setNewColumnDefault(e.target.value)}
 									/>
 									<div className="text-xs text-muted-foreground">
-										LanceDB needs a typed expression. For NULL columns use{" "}
-										<code className="text-[10px]">CAST(NULL AS STRING)</code>.
-										Supported types:{" "}
-										<code className="text-[10px]">
-											int, bigint, float, double, string, binary, boolean,
-											date, timestamp
-										</code>
-										. Bare <code className="text-[10px]">NULL</code> is
-										rejected.
+										New columns are added as nullable. Leave the default empty
+										to backfill existing rows with NULL, or provide a typed
+										default value.
 									</div>
 									<Button
 										onClick={handleAddColumn}
-										disabled={
-											!newColumnName || !newColumnExpression || processing
-										}
+										disabled={!newColumnName || processing}
 										className="w-full"
 									>
 										{processing ? "Adding..." : "Add Column"}

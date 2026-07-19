@@ -36,7 +36,7 @@ local-stt-metal = ["flow-like/local-stt-metal", "flow-like-catalog/local-stt-met
 flow-like = { workspace = true, features = ["tauri", "local-ml", "local-tts", "local-stt"] }
 flow-like-catalog = { workspace = true, features = ["all-execute", "tauri", "local-ml", "local-tts", "local-stt", "local"] }
 flow-like-types.workspace = true
-flow-like-wasm.workspace = true
+flow-like-wasm = { workspace = true, features = ["model"] }
 
 tauri = { version = "2.11.1", features = [
     "protocol-asset",

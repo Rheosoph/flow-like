@@ -96,6 +96,22 @@ pub fn resolve_tool_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedT
     if spec.name == "flowpilot_board" && spec_arg_str(args, "mode", "mode") == "explain" {
         return ResolvedToolApproval::none();
     }
+    // Data Studio multiplexed tools carry a single approval policy, but their inspection operations
+    // are read-only and must never surface a prompt — only mutating/execute operations do.
+    if matches!(spec.name, "graph_overlay_tool" | "ontology_action_tool") {
+        const DATA_STUDIO_READONLY_OPS: &[&str] = &[
+            "list_overlays",
+            "get_overlay",
+            "get_schema",
+            "validate_overlay",
+            "list_actions",
+            "describe_action",
+            "prerun_action",
+        ];
+        if DATA_STUDIO_READONLY_OPS.contains(&spec_arg_str(args, "operation", "operation")) {
+            return ResolvedToolApproval::none();
+        }
+    }
     match spec.approval {
         ToolApprovalSpec::None => ResolvedToolApproval::none(),
         ToolApprovalSpec::Mutating { title, message } => ResolvedToolApproval {
@@ -199,12 +215,69 @@ fn call_app_chat_message(args: &Value) -> String {
     }
 }
 
+fn graph_overlay_message(args: &Value) -> String {
+    let operation = spec_arg_str(args, "operation", "operation");
+    match operation {
+        "create_overlay" => {
+            "The Data Studio agent wants to create an ontology/overlay.".to_string()
+        }
+        "delete_overlay" => {
+            "The Data Studio agent wants to delete an ontology/overlay.".to_string()
+        }
+        _ => "The Data Studio agent wants to update an ontology/overlay.".to_string(),
+    }
+}
+
+fn graph_element_message(args: &Value) -> String {
+    let operation = spec_arg_str(args, "operation", "operation");
+    let label = spec_arg_str(args, "label", "label");
+    let what = if operation == "add_edges" {
+        "edges"
+    } else {
+        "nodes"
+    };
+    if label.is_empty() {
+        format!("The Data Studio agent wants to add graph {what}.")
+    } else {
+        format!("The Data Studio agent wants to add {what} to '{label}'.")
+    }
+}
+
+fn ontology_action_message(args: &Value) -> String {
+    let action_id = spec_arg_str(args, "action_id", "actionId");
+    if action_id.is_empty() {
+        "The Data Studio agent wants to execute an ontology action.".to_string()
+    } else {
+        format!("The Data Studio agent wants to execute ontology action '{action_id}'.")
+    }
+}
+
 fn call_app_event_message(args: &Value) -> String {
     let app_id = spec_arg_str(args, "app_id", "appId");
     if app_id.is_empty() {
         "FlowPilot wants to execute an app event.".to_string()
     } else {
         format!("FlowPilot wants to execute an event of app '{app_id}'.")
+    }
+}
+
+fn execute_event_message(args: &Value) -> String {
+    let event_id = spec_arg_str(args, "event_id", "eventId");
+    if event_id.is_empty() {
+        "FlowPilot wants to execute a workflow event and inspect its logs.".to_string()
+    } else {
+        format!("FlowPilot wants to execute workflow event '{event_id}' and inspect its logs.")
+    }
+}
+
+fn execute_node_message(args: &Value) -> String {
+    let node_id = spec_arg_str(args, "node_id", "nodeId");
+    if node_id.is_empty() {
+        "FlowPilot wants to execute a workflow from a board node and inspect its logs.".to_string()
+    } else {
+        format!(
+            "FlowPilot wants to execute the workflow from node '{node_id}' and inspect its logs."
+        )
     }
 }
 
@@ -228,6 +301,141 @@ fn delete_event_message(args: &Value) -> String {
 
 fn set_page_load_event_message(_args: &Value) -> String {
     "FlowPilot wants to set the page's onLoad event.".to_string()
+}
+
+fn execute_event_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "app_id": { "type": "string", "description": "App id. Optional only when the current board runtime already supplies it." },
+            "event_id": { "type": "string", "description": "Persisted app Event id to execute." },
+            "payload": { "type": "object", "description": "JSON payload passed to the Event. Optional for payload-free Simple Events." },
+            "stream_state": { "type": "boolean", "description": "Collect state/log events while the run executes. Defaults to true." }
+        },
+        "required": ["event_id"]
+    })
+}
+
+fn scoped_execute_node_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "app_id": { "type": "string", "description": "App id. Optional when the current board runtime already supplies it." },
+            "board_id": { "type": "string", "description": "Persisted board id containing the node." },
+            "node_id": { "type": "string", "description": "Persisted node id to use as the execution entry. The run follows its connected downstream graph." },
+            "payload": { "type": "object", "description": "Optional payload supplied to the node execution." },
+            "stream_state": { "type": "boolean", "description": "Collect state/log events while the run executes. Defaults to true." }
+        },
+        "required": ["board_id", "node_id"]
+    })
+}
+
+fn global_execute_node_schema() -> Value {
+    let mut schema = scoped_execute_node_schema();
+    schema["required"] = json!(["app_id", "board_id", "node_id"]);
+    schema
+}
+
+fn scoped_query_execution_logs_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "app_id": { "type": "string", "description": "App id. Optional when the current board runtime already supplies it." },
+            "board_id": { "type": "string", "description": "Board id that produced the run." },
+            "run_id": { "type": "string", "description": "Exact run id returned by execute_node/execute_event or the run inspector." },
+            "filter": { "type": "string", "description": "Optional SQL-like log filter, for example `log_level >= 3` or `node_id = \"...\"`." },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum logs to return. Defaults to 100 and is capped at 100." },
+            "offset": { "type": "integer", "minimum": 0, "description": "Pagination offset. Defaults to 0." },
+            "run_metadata": { "type": "object", "description": "Optional run metadata returned by execution/list-runs. Supplying it avoids an extra run lookup and preserves local/remote routing." }
+        },
+        "required": ["board_id", "run_id"]
+    })
+}
+
+fn global_query_execution_logs_schema() -> Value {
+    let mut schema = scoped_query_execution_logs_schema();
+    schema["required"] = json!(["app_id", "board_id", "run_id"]);
+    schema
+}
+
+/// Runtime verification tools offered inside a board-scoped FlowPilot session. The host supplies
+/// the current app, but callers must still identify the persisted board/node or Event they want to
+/// run. These definitions are shared by every desktop SDK/MCP provider.
+pub fn runtime_execution_tool_specs() -> Vec<PlatformToolSpec> {
+    vec![
+        PlatformToolSpec {
+            name: "execute_event",
+            description: r#"Execute a persisted app Event through Flow-Like's normal execution service and return the
+run id, outputs/metadata, and bounded live logs. Use this to verify an already persisted Event-backed
+workflow. A FlowScript edit with status `queued` is not persisted until the current board-agent turn
+finishes; do not execute it in the same board-agent turn and claim the new draft was tested."#,
+            schema: execute_event_schema,
+            approval: ToolApprovalSpec::Execute {
+                title: "Approve workflow execution",
+                message: execute_event_message,
+            },
+            timeout_secs: 600,
+        },
+        PlatformToolSpec {
+            name: "execute_node",
+            description: r#"Execute a persisted board starting at one exact node and return the run id,
+outputs/metadata, and bounded live logs. Execution follows the node's connected downstream graph;
+this is not an isolated catalog-node sandbox. Use it after a board edit has actually been applied, or
+to reproduce/debug an existing graph. A merely `queued` FlowScript draft is not yet executable."#,
+            schema: scoped_execute_node_schema,
+            approval: ToolApprovalSpec::Execute {
+                title: "Approve node execution",
+                message: execute_node_message,
+            },
+            timeout_secs: 600,
+        },
+        PlatformToolSpec {
+            name: "query_execution_logs",
+            description: r#"Read persisted logs for one exact workflow run. Pass the run_id returned by
+execute_node/execute_event plus its board_id. Filter by log level, message, or node id and paginate
+with limit/offset. Read-only. Use this after execution when the bounded live events are incomplete or
+when diagnosing a prior run. Successful reconciliation alone is structural evidence, not proof that
+the workflow ran correctly."#,
+            schema: scoped_query_execution_logs_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+    ]
+}
+
+/// Look up one board-scoped runtime execution tool spec by name.
+pub fn find_runtime_execution_tool_spec(name: &str) -> Option<PlatformToolSpec> {
+    runtime_execution_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+}
+
+fn global_runtime_verification_tool_specs() -> Vec<PlatformToolSpec> {
+    vec![
+        PlatformToolSpec {
+            name: "execute_node",
+            description: r#"Execute a persisted board starting at one exact node and return the run id,
+outputs/metadata, and bounded live logs. Execution follows the connected downstream graph. Use the
+exact app_id, board_id and node_id returned by board inspection/edit results, and run only after the
+board edit has been applied."#,
+            schema: global_execute_node_schema,
+            approval: ToolApprovalSpec::Execute {
+                title: "Approve node execution",
+                message: execute_node_message,
+            },
+            timeout_secs: 600,
+        },
+        PlatformToolSpec {
+            name: "query_execution_logs",
+            description: r#"Read persisted logs for one exact workflow run. Pass app_id, board_id and
+the run_id returned by call_app_event/execute_node. Optional filter, limit, offset and run_metadata
+narrow or paginate the result. Read-only. Use the evidence to verify or repair a workflow; never
+claim runtime correctness from a successful board edit alone."#,
+            schema: global_query_execution_logs_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+    ]
 }
 
 /// The complete tool set of the global FlowPilot assistant. `memory_enabled` appends the
@@ -384,6 +592,32 @@ Two modes (set `mode`):
 - mode="explain" (read-only): answer the user's question about the board — "explain this workflow", "what does this do", "why is this failing". Nothing is modified and no approval is asked. Relay the returned answer to the user.
 - mode="edit" (default): build or modify the board's WORKFLOW LOGIC (add/connect/configure nodes and events). This is NOT for UI — pages, widgets and components go to flowpilot_widget. If the app has no board yet, one is created automatically — never ask the user to create a board manually. Give a complete, self-contained instruction (trigger/event, the processing steps, and where results go). Side-effecting; asks for approval unless the user selected "don't ask again this session".
 
+For edit mode, the complete user-requested behavior is the acceptance contract. Do not replace a
+failed/timeout full build with a reduced smoke test or a sequence of partial board calls unless the
+user explicitly asked for a partial prototype. Never overlap mutations. A timeout or transport
+drop is an unknown outcome, not proof that the board is empty; inspect the same board after the
+request is terminal, then retry the full scope with diagnostics if necessary.
+
+When the user's request includes both UI and behavior, building AND applying the workflow board is
+MANDATORY before the turn ends — a page without its board is not a deliverable. Never spend the
+remaining turn narrating that a board call is "still running": wait for its terminal result, and
+when that result is a failure or timeout, continue the pipeline in the same turn with the retained
+draft and its diagnostics instead of only reporting status.
+
+The delegated board specialist owns the FlowScript draft and its edit/validate/repair loop. The
+platform caller must not turn a validation problem into a new implementation request such as a
+"minimal diagnostic", empty Event, one-node log/notify test, or ask_user choice to downgrade the
+workflow. If any result reports `retained_candidate`, `retained_flowscript`, or a retained draft,
+that document remains the active recovery workspace even if the persisted board is still empty.
+Retained drafts are bound to THIS conversation plus the ORIGINAL user request: a follow-up
+repair call resumes them only within the same conversation, never from a different one. Include
+that original user request text verbatim in the instruction, name the retained draft_id and its
+expected_revision, and direct the specialist to repair that draft in place — same draft_id, same
+revision chain, never "start a new draft" or a from-scratch rewrite. Retry on the SAME app/board
+with the original acceptance contract and observed diagnostics, and explicitly instruct the
+specialist to repair and queue the retained production candidate. Only an
+explicit NEW end-user request may discard or reduce it.
+
 When a board is already open (see CURRENTLY OPEN BOARD in your context), pass its app_id/board_id and route the user's board question here directly — do NOT ask which app or board, and do NOT answer board questions yourself.
 
 SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use create_app), rename apps, or change app metadata/settings — do not put such requests in the instruction."#,
@@ -391,7 +625,7 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
                 json!({
                     "type": "object",
                     "properties": {
-                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question for the board copilot. For mode=edit: trigger, steps, outputs. For mode=explain: the user's question about the board." },
+                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question for the board copilot. For mode=edit: preserve the original full acceptance contract across retries; when a prior result retained a draft, include the original user request text verbatim, name the retained draft_id + expected_revision, and request repair of that same retained production candidate with its diagnostics — never a minimal replacement or a new draft id. For mode=explain: the user's question about the board." },
                         "mode": { "type": "string", "enum": ["edit", "explain"], "description": "\"explain\" to answer a question about the board (read-only, no changes, no approval); \"edit\" to build/modify it. Defaults to \"edit\"." },
                         "app_id": { "type": "string", "description": "App id (from list_apps, create_app, or the CURRENTLY OPEN BOARD context)." },
                         "board_id": { "type": "string", "description": "Target board id within the app. Optional; defaults to the app's first board (or the open board), creating one if none exists." },
@@ -404,7 +638,11 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
                 title: "Approve board edit",
                 message: flowpilot_board_message,
             },
-            timeout_secs: 600,
+            // Full production FlowScripts can require several validator-driven repair passes in
+            // the nested specialist. Keep the frontend dispatch bound aligned with the external
+            // MCP call bound (30 minutes); explicit cancellation and request-ownership fences
+            // still stop abandoned runs and reject late mutations.
+            timeout_secs: 1800,
         },
         PlatformToolSpec {
             name: "flowpilot_widget",
@@ -472,14 +710,31 @@ possible."#,
 
 Use this to interact with an app's own chat agent on the user's behalf (e.g. ask a knowledge-base app
 a question). Running the app's chat is side-effecting, so it asks for approval unless the user selected
-"don't ask again this session". Returns the app chat's text response."#,
+"don't ask again this session".
+
+Returns the app chat's TEXT response — interpret it and answer the user in your own words, don't just
+paste it. The app is automatically shown to the user as a linked chip on your message, so you can refer
+to it by name (e.g. "According to the Knowledge Base app, …"). Any UI the app pushes and any files it
+produces are shown to the user directly; you receive only the text and a short list of returned files.
+
+Independent calls run in parallel: to consult several apps for one request, emit their `call_app_chat`
+tool calls together in one turn instead of waiting for each.
+
+Hand over the user's attached files with `forward_files` (see the FILES ATTACHED THIS TURN context):
+pass the exact names of the files this specific app needs. Choose by file type and what the app does —
+don't blindly forward everything — but when unsure whether a file is relevant, include it."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "app_id": { "type": "string", "description": "Id of the app whose chat event to call (from list_apps)." },
                         "event_id": { "type": "string", "description": "Id of the specific chat event to call (from list_apps). Optional; defaults to the app's first chat event." },
-                        "message": { "type": "string", "description": "Message to send to the app's chat." }
+                        "message": { "type": "string", "description": "Message to send to the app's chat." },
+                        "forward_files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Exact names (from the FILES ATTACHED THIS TURN context) of the user's attached files to hand to this app. Omit to forward all attached files; pass an empty array to forward none. Pick the files whose type/content fit this app; when unsure, include the file."
+                        }
                     },
                     "required": ["app_id", "message"]
                 })
@@ -518,9 +773,16 @@ title/url/snippet/date results."#,
         },
         PlatformToolSpec {
             name: "upsert_event",
-            description: r#"Create or update an EVENT on an app — a deliberate choice. Two kinds:
+            description: r#"Create or update an app-level EVENT — the interface/sink setup attached to a board entry node. A board entry node and an Event type are separate layers:
+- events_simple entry: quick_action (default), api, cron, daemon, deeplink, rest, mcp. Cron is configured HERE on an events_simple node; it is not a catalog node.
+- events_generic entry: generic_form (default), api, deeplink. Its payload and typed output pins carry request/form values; a new FlowScript `eventsGeneric(payload: Struct, field: type, ...)` entry materializes those field pins.
+- events_chat entry: simple_chat (default), advanced_chat, discord, telegram.
+
+`flowpilot_board` returns compatible entries under `event_nodes`. For a WORKFLOW event, this tool must run in a separate, later assistant turn: first wait for `flowpilot_board` to succeed and persist the board, then pass the exact returned board_id and node id here. Never call `flowpilot_board` and workflow `upsert_event` in the same response/tool batch, and do not call this tool when the board result failed or contained no compatible `event_nodes`. This tool checks node/Event compatibility and fills the Event type's default config. Pass `config` for sink/interface-specific overrides. For cron pass `cron_expression` (recurring) OR `scheduled_for` (one-time), plus an explicit IANA `timezone` when known.
+
+Two target forms:
 - PAGE event (shows a page at a URL): pass page_id (the page to render) and route (e.g. "/weather"). board_id/node_id are not needed.
-- NORMAL event (a workflow trigger): pass board_id and node_id (an events_* node the workflow was built around), plus an optional route.
+- WORKFLOW event: pass board_id and node_id (an events_simple/events_generic/events_chat entry node), plus a compatible event_type and optional route.
 Omit event_id to create; pass it to update. Side-effecting; asks for approval."#,
             schema: || {
                 json!({
@@ -529,11 +791,24 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
                         "app_id": { "type": "string", "description": "App id." },
                         "event_id": { "type": "string", "description": "Existing event id to UPDATE. Omit to create a new event." },
                         "name": { "type": "string", "description": "Event name." },
-                        "event_type": { "type": "string", "description": "Event type, e.g. \"quick_action\", \"generic_form\", \"simple_chat\", \"api\", \"cron\". Defaults to a page/quick-action type." },
+                        "event_type": { "type": "string", "description": "Interface/sink type compatible with the referenced entry node: simple -> quick_action/api/cron/daemon/deeplink/rest/mcp; generic -> generic_form/api/deeplink; chat -> simple_chat/advanced_chat/discord/telegram. Omit to use that node kind's default." },
                         "page_id": { "type": "string", "description": "PAGE event: the page id to render (sets default_page_id)." },
                         "route": { "type": "string", "description": "URL path the event/page is reachable at, e.g. \"/weather\". Optional." },
                         "board_id": { "type": "string", "description": "NORMAL event: the board holding the entry node." },
-                        "node_id": { "type": "string", "description": "NORMAL event: the events_* node id in the board." },
+                        "node_id": { "type": "string", "description": "WORKFLOW event: an events_simple/events_generic/events_chat entry-node id, normally from flowpilot_board.event_nodes." },
+                        "config": { "type": "object", "description": "Optional sink/interface config overrides merged over the selected Event type's defaults." },
+                        "cron_expression": { "type": "string", "description": "Recurring cron setup for an events_simple entry, using a 5- or 6-field expression. Mutually exclusive with scheduled_for." },
+                        "scheduled_for": {
+                            "type": "object",
+                            "description": "One-time cron setup in local wall time. Mutually exclusive with cron_expression.",
+                            "properties": {
+                                "date": { "type": "string", "description": "YYYY-MM-DD" },
+                                "time": { "type": "string", "description": "HH:mm" }
+                            },
+                            "required": ["date", "time"]
+                        },
+                        "timezone": { "type": "string", "description": "IANA timezone for cron/scheduled setup, e.g. Europe/Berlin. Defaults to UTC when omitted." },
+                        "execution_mode": { "type": "string", "enum": ["Local", "Remote"], "description": "Where this Event runs. A Local/Remote board forces the matching mode; Hybrid boards use this choice." },
                         "description": { "type": "string", "description": "Short description." },
                         "active": { "type": "boolean", "description": "Whether the event is active. Defaults to true." }
                     },
@@ -588,7 +863,38 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             },
             timeout_secs: 120,
         },
+        PlatformToolSpec {
+            name: "data_studio_agent",
+            description: r#"The single entry point for ANYTHING about an app's DATA — its databases/tables, ontologies (graph overlays), objects, graph queries, analytics, and ontology actions. Delegates to the Data Studio specialist, a data agent with full access to the app's graph/data tools.
+
+Use this for: setting up or updating databases/tables, creating/editing ontologies and overlays, writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths/neighbors, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects.
+
+Give a complete, self-contained instruction of what the user wants to know or change about the data. If a Data Studio page is currently open (see your context), its app and overlay are the default target — pass them here so the specialist starts there; it can still reach OTHER apps' data when asked. The specialist reports back transparently: the queries it ran, a step log, links, and inline charts — relay its answer (including any chart/query blocks) to the user verbatim.
+
+The specialist inspects with read-only tools freely; mutating operations (create/update tables or overlays, add nodes/edges, execute actions) ask the user for approval individually. SCOPE: data only — it does NOT edit workflow boards (use flowpilot_board) or UI (use flowpilot_widget)."#,
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "instruction": { "type": "string", "description": "Complete natural-language instruction or question about the app's data (databases, ontologies, queries, analytics, actions, visualizations)." },
+                        "app_id": { "type": "string", "description": "Target app id (from list_apps or the currently open Data Studio page). Defaults to the open Data Studio app when omitted." },
+                        "overlay_id": { "type": "string", "description": "Target ontology/overlay id to start from. Defaults to the overlay selected on the open Data Studio page when omitted." }
+                    },
+                    "required": ["instruction"]
+                })
+            },
+            approval: ToolApprovalSpec::None,
+            // Data investigations can chain many read/query/analytics steps and validator-driven
+            // overlay edits; match the flowpilot_board dispatch bound (30 minutes). Individual
+            // mutating operations inside still ask for their own approval.
+            timeout_secs: 1800,
+        },
     ];
+
+    // Global FlowPilot can execute a persisted board node directly and inspect any resulting run.
+    // Event execution remains `call_app_event` at platform scope because that tool also performs
+    // interface discovery/validation; board-scoped agents use `execute_event` from the runtime set.
+    specs.extend(global_runtime_verification_tool_specs());
 
     if memory_enabled {
         specs.push(PlatformToolSpec {
@@ -632,4 +938,311 @@ pub fn find_global_tool_spec(name: &str) -> Option<PlatformToolSpec> {
     global_assistant_tool_specs(true)
         .into_iter()
         .find(|spec| spec.name == name)
+}
+
+/// Platform tools offered inside the nested Data Studio specialist session. Every operation routes
+/// through the frontend bridge to `backend.graphState`; `app_id`/`overlay_id` are injected from the
+/// current Data Studio page context but may be overridden per call to reach another app. Shared by
+/// every desktop SDK/MCP provider so all backends advertise identical tools.
+pub fn data_studio_tool_specs() -> Vec<PlatformToolSpec> {
+    vec![
+        PlatformToolSpec {
+            name: "graph_overlay_tool",
+            description: r#"Inspect and manage ONTOLOGIES (graph overlays) for an app. An overlay maps node/edge labels onto database tables via id/display/property columns.
+
+Operations: `list_overlays`, `get_overlay`, `get_schema`, `validate_overlay` (read-only); `create_overlay`, `update_overlay`, `delete_overlay` (mutating, ask for approval). Always `get_schema` before writing queries, and `validate_overlay` a draft before `update_overlay`; pass `expected_updated_at` on update for optimistic concurrency. NEVER set governed `actions` or cross-project `exposed` here — those are ignored."#,
+            schema: graph_overlay_tool_schema,
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve ontology change",
+                message: graph_overlay_message,
+            },
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "graph_query_tool",
+            description: r#"Query, traverse and analyze an app's graph/ontology. All operations are READ-ONLY (no approval).
+
+Operations: `cypher` (Cypher query, depth<=5, auto-LIMITed), `sql` (single read-only SELECT), `neighbors`, `subgraph`, `paths`, `analytics`, `search_nodes`, `sample`. Prefer `get_schema` (graph_overlay_tool) first so labels/columns are correct. Return compact results and, when quantitative, render them as a ```plotly chart in your reply."#,
+            schema: graph_query_tool_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "graph_element_tool",
+            description: r#"Add graph ELEMENTS (nodes or edges) to an overlay's underlying tables. Mutating — asks for approval.
+
+Operations: `add_nodes`, `add_edges`. Read `get_schema` first: node rows must include the node type's id column; edge rows must include the edge's source and target id columns plus any properties. Rows are upserted (merge on the key columns), so re-adding an existing id updates it."#,
+            schema: graph_element_tool_schema,
+            approval: ToolApprovalSpec::Mutating {
+                title: "Approve graph write",
+                message: graph_element_message,
+            },
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "ontology_action_tool",
+            description: r#"List, describe and EXECUTE ontology actions against objects. You cannot author or edit actions — only run the ones defined in the overlay.
+
+Operations: `list_actions`, `describe_action`, `prerun_action` (read-only); `invoke_action` (execute, asks for approval). ALWAYS `describe_action` (and `prerun_action` when it needs OAuth/parameters) before `invoke_action`. `invoke_action` is IDENTITY-ONLY: pass `object_refs: [{object_type, id}]` — never full rows. If it returns a 409 binding-currency error, surface it verbatim and stop."#,
+            schema: ontology_action_tool_schema,
+            approval: ToolApprovalSpec::Execute {
+                title: "Approve ontology action",
+                message: ontology_action_message,
+            },
+            timeout_secs: 600,
+        },
+    ]
+}
+
+fn graph_overlay_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list_overlays", "get_overlay", "get_schema", "validate_overlay", "create_overlay", "update_overlay", "delete_overlay"], "description": "Overlay operation to perform." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Overlay/ontology id. Omit for the current overlay; required for get/update/delete of a specific overlay." },
+            "name": { "type": "string", "description": "Overlay display name (create/update)." },
+            "description": { "type": "string", "description": "Overlay description (create/update)." },
+            "nodes": { "type": "array", "items": { "type": "object" }, "description": "Node-type mappings (label + table + id/display/property columns) for create/update." },
+            "edges": { "type": "array", "items": { "type": "object" }, "description": "Edge-type mappings (label + table + source/target columns) for create/update." },
+            "object_views": { "type": "array", "items": { "type": "object" }, "description": "Optional object view definitions for create/update." },
+            "bindings_enabled": { "type": "boolean", "description": "Whether object/action query bindings are enabled." },
+            "default_limit": { "type": "integer", "description": "Default query result limit for the overlay." },
+            "expected_updated_at": { "type": "string", "description": "The overlay's current updated_at, sent on update for optimistic concurrency." },
+            "draft": { "type": "object", "description": "Full overlay draft to check with validate_overlay." },
+            "user_scoped": { "type": "boolean", "description": "Operate on the user-scoped store instead of the project store." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn graph_query_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["cypher", "sql", "neighbors", "subgraph", "paths", "analytics", "search_nodes", "sample"], "description": "Query operation to perform." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Overlay/ontology id. Omit to use the current overlay." },
+            "query": { "type": "string", "description": "Cypher text (cypher), SQL SELECT (sql), or search text (search_nodes)." },
+            "params": { "type": "object", "description": "Cypher query parameters." },
+            "limit": { "type": "integer", "description": "Maximum rows/nodes to return." },
+            "label": { "type": "string", "description": "Node label (neighbors, sample)." },
+            "node_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Anchor node id (neighbors). Accepts the scalar type used by the mapped id column."
+            },
+            "direction": { "type": "string", "enum": ["in", "out", "both"], "description": "Traversal direction (neighbors)." },
+            "depth": { "type": "integer", "description": "Traversal depth 1-5 (neighbors, subgraph)." },
+            "seeds": { "type": "array", "items": { "type": "object" }, "description": "Seed nodes for subgraph as [{label, id}]." },
+            "from_label": { "type": "string", "description": "Path source label (paths)." },
+            "from_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Path source id (paths). Accepts the scalar type used by the mapped id column."
+            },
+            "to_label": { "type": "string", "description": "Path target label (paths)." },
+            "to_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Path target id (paths). Accepts the scalar type used by the mapped id column."
+            },
+            "max_depth": { "type": "integer", "description": "Maximum path length (paths)." },
+            "n": { "type": "integer", "description": "Sample size (sample)." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn graph_element_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["add_nodes", "add_edges"], "description": "Whether to add nodes or edges." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Overlay/ontology id. Omit to use the current overlay." },
+            "label": { "type": "string", "description": "Node or edge label to write to (must exist in the overlay schema)." },
+            "rows": { "type": "array", "items": { "type": "object" }, "description": "Rows to upsert. Nodes must include the id column; edges must include the source and target id columns. Use get_schema to learn the exact column names." }
+        },
+        "required": ["operation", "label", "rows"]
+    })
+}
+
+fn ontology_action_tool_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list_actions", "describe_action", "prerun_action", "invoke_action"], "description": "Action operation to perform." },
+            "app_id": { "type": "string", "description": "Target app id. Omit to use the current Data Studio app." },
+            "overlay_id": { "type": "string", "description": "Ontology/overlay id owning the action. Omit to use the current overlay." },
+            "action_id": { "type": "string", "description": "Action id (from list_actions). Required for describe/prerun/invoke." },
+            "object_refs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "object_type": { "type": "string", "description": "Node label / object type." },
+                        "id": { "description": "Object id (string or number)." }
+                    },
+                    "required": ["object_type", "id"]
+                },
+                "description": "Objects to run the action against, identity only. Never include full row payloads."
+            },
+            "parameters": { "type": "object", "description": "Optional action parameters (from describe_action/prerun_action)." },
+            "idempotency_key": { "type": "string", "description": "Optional idempotency key for invoke_action." }
+        },
+        "required": ["operation"]
+    })
+}
+
+/// Look up one Data Studio specialist tool spec by name.
+pub fn find_data_studio_tool_spec(name: &str) -> Option<PlatformToolSpec> {
+    data_studio_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upsert_event_schema_exposes_typed_cron_setup() {
+        let spec = find_global_tool_spec("upsert_event").expect("upsert_event spec");
+        let schema = (spec.schema)();
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("upsert_event properties");
+
+        for field in [
+            "config",
+            "cron_expression",
+            "scheduled_for",
+            "timezone",
+            "execution_mode",
+        ] {
+            assert!(properties.contains_key(field), "missing {field}: {schema}");
+        }
+        assert!(spec.description.contains("events_simple"));
+        assert!(spec.description.contains("events_generic"));
+        assert!(spec.description.contains("events_chat"));
+        assert!(spec.description.contains("not a catalog node"));
+        assert!(spec.description.contains("separate, later assistant turn"));
+        assert!(
+            spec.description
+                .contains("Never call `flowpilot_board` and workflow `upsert_event`")
+        );
+    }
+
+    #[test]
+    fn board_edit_spec_forbids_timeout_scope_regressions() {
+        let spec = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
+        assert!(
+            spec.description
+                .contains("complete user-requested behavior")
+        );
+        assert!(spec.description.contains("reduced smoke test"));
+        assert!(spec.description.contains("Never overlap mutations"));
+        assert!(spec.description.contains("unknown outcome"));
+        assert!(
+            spec.description
+                .contains("specialist owns the FlowScript draft")
+        );
+        assert!(spec.description.contains("retained_flowscript"));
+        assert!(spec.description.contains("active recovery workspace"));
+        assert!(spec.description.contains("minimal diagnostic"));
+        assert!(spec.description.contains("explicit NEW end-user request"));
+        assert!(
+            spec.description
+                .contains("original user request text verbatim")
+        );
+        assert!(
+            spec.description
+                .contains("only within the same conversation")
+        );
+        assert!(
+            spec.description
+                .contains("retained draft_id and its\nexpected_revision")
+        );
+        assert!(spec.description.contains("never \"start a new draft\""));
+        assert!(
+            spec.description
+                .contains("applying the workflow board is\nMANDATORY before the turn ends")
+        );
+        assert!(spec.description.contains("still running"));
+        assert!(
+            spec.description
+                .contains("continue the pipeline in the same turn with the retained\ndraft")
+        );
+        assert_eq!(spec.timeout_secs, 1800);
+
+        let schema = (spec.schema)();
+        let instruction = schema["properties"]["instruction"]["description"]
+            .as_str()
+            .expect("flowpilot_board instruction description");
+        assert!(instruction.contains("same retained production candidate"));
+        assert!(instruction.contains("original user request text verbatim"));
+        assert!(instruction.contains("retained draft_id + expected_revision"));
+        assert!(instruction.contains("never a minimal replacement or a new draft id"));
+    }
+
+    #[test]
+    fn scoped_runtime_specs_require_persisted_execution_targets() {
+        let specs = runtime_execution_tool_specs();
+        let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["execute_event", "execute_node", "query_execution_logs"]
+        );
+
+        let execute_node = find_runtime_execution_tool_spec("execute_node").unwrap();
+        assert_eq!(
+            (execute_node.schema)()["required"],
+            json!(["board_id", "node_id"])
+        );
+        assert_eq!(
+            resolve_tool_approval(
+                &execute_node,
+                &json!({"board_id":"board", "node_id":"node"})
+            )
+            .kind,
+            "execute"
+        );
+
+        let query = find_runtime_execution_tool_spec("query_execution_logs").unwrap();
+        assert_eq!((query.schema)()["required"], json!(["board_id", "run_id"]));
+        assert_eq!(
+            resolve_tool_approval(&query, &json!({"board_id":"board", "run_id":"run"})).kind,
+            "none"
+        );
+    }
+
+    #[test]
+    fn global_runtime_specs_require_explicit_app_scope() {
+        let execute_node = find_global_tool_spec("execute_node").unwrap();
+        assert_eq!(
+            (execute_node.schema)()["required"],
+            json!(["app_id", "board_id", "node_id"])
+        );
+
+        let query = find_global_tool_spec("query_execution_logs").unwrap();
+        let schema = (query.schema)();
+        assert_eq!(schema["required"], json!(["app_id", "board_id", "run_id"]));
+        for field in ["filter", "limit", "offset", "run_metadata"] {
+            assert!(schema["properties"].get(field).is_some(), "missing {field}");
+        }
+    }
+
+    #[test]
+    fn graph_query_ids_accept_non_string_scalars() {
+        let schema = graph_query_tool_schema();
+        for field in ["node_id", "from_id", "to_id"] {
+            let variants = schema["properties"][field]["oneOf"]
+                .as_array()
+                .expect("scalar id union");
+            let types = variants
+                .iter()
+                .filter_map(|variant| variant["type"].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(types, vec!["string", "number", "boolean"]);
+        }
+    }
 }

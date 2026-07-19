@@ -91,6 +91,7 @@ impl NodeLogic for UpsertGraphEdgeNode {
 
         let table_name = edge_def.table.clone();
         let src_column = edge_def.src_column.clone();
+        let dst_column = edge_def.dst_column.clone();
 
         // Open underlying table and upsert via merge_insert
         let connection = store.connection();
@@ -113,8 +114,9 @@ impl NodeLogic for UpsertGraphEdgeNode {
                     schema,
                 ),
             );
-        // Use src column as merge key for edges
-        let mut merger = table.merge_insert(&[&src_column]);
+        // An edge's identity is its (source, target) pair; merging on the
+        // source alone would overwrite every other edge leaving that node.
+        let mut merger = table.merge_insert(&[src_column.as_str(), dst_column.as_str()]);
         merger
             .when_matched_update_all(None)
             .when_not_matched_insert_all();

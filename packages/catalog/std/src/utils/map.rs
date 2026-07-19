@@ -38,7 +38,12 @@ pub fn validate_value_type(value: &Value, expected: &VariableType) -> flow_like_
         // A single byte value is an integer in 0..=255.
         VariableType::Byte => value
             .as_i64()
-            .or_else(|| value.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))
+            .or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|f| f.fract() == 0.0)
+                    .map(|f| f as i64)
+            })
             .is_some_and(|n| (0..=255).contains(&n)),
     };
 

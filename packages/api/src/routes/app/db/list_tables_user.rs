@@ -46,7 +46,13 @@ pub async fn list_tables_user(
         .await?;
     let builder = credentials.to_db_scoped(&sub, &app_id).await?;
     let connection = builder.execute().await?;
-    let tables = connection.table_names().execute().await?;
+    let tables = connection
+        .table_names()
+        .execute()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog_core::is_reserved_table(name))
+        .collect();
 
     Ok(Json(tables))
 }

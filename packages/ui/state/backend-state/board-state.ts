@@ -18,6 +18,10 @@ import type { IJwks, IRealtimeAccess } from "../../lib";
 import type {
 	ChatImage,
 	CopilotScope,
+	CopilotToolContext,
+	FlowIrCommitDisposition,
+	FlowIrCommitDispositionResult,
+	FlowIrCommitToken,
 	UIActionContext,
 	UnifiedChatMessage,
 	UnifiedCopilotResponse,
@@ -29,6 +33,14 @@ export interface IApplyFlowScriptResponse {
 	commands: IGenericCommand[];
 	board_commands: BoardCommand[];
 	diagnostics: string[];
+	/** Aggregate-only authoritative count after the host refreshes the applied board. */
+	final_board_node_count?: number;
+}
+
+export interface IApplyFlowIrCommitResponse extends IApplyFlowScriptResponse {
+	status: "applied" | "stale" | "error";
+	code?: string;
+	message: string;
 }
 
 export interface IFlowScriptDiagnostic {
@@ -173,6 +185,7 @@ export interface IBoardState {
 		boardId: string,
 		pageId: string,
 		wildcard?: boolean,
+		version?: [number, number, number],
 	): Promise<Record<string, unknown>>;
 
 	/** Unified copilot chat that can handle board, UI, or both */
@@ -188,6 +201,7 @@ export interface IBoardState {
 		requestImages?: ChatImage[],
 		onToken?: (token: string) => void,
 		modelId?: string,
+		reasoningEffort?: string,
 		token?: string,
 		runContext?: IRunContext,
 		actionContext?: UIActionContext,
@@ -203,7 +217,30 @@ export interface IBoardState {
 		 * and returned instead of being coerced into producing (and failing to produce) an edit.
 		 */
 		readOnly?: boolean,
+		/** Scope nested runtime tools to the delegated app/board. */
+		toolContext?: CopilotToolContext,
+		/** Stable invocation id used for cooperative cancellation of a long-running native chat. */
+		requestId?: string,
+		/** Immutable user-authored request, excluding host mode/run-context wrappers. */
+		rawUserPrompt?: string,
+		/** App owning this copilot surface; omitted for global/user-only chat. */
+		appId?: string,
 	): Promise<UnifiedCopilotResponse>;
+
+	/** Best-effort cooperative cancellation; desktop providers may terminate their child process. */
+	cancelCopilotChat?(requestId: string): Promise<void>;
+
+	/** Resolve the native compiled workflow review reservation around Apply/Dismiss. */
+	flowIrCommitDisposition?(
+		token: FlowIrCommitToken,
+		disposition: FlowIrCommitDisposition,
+	): Promise<FlowIrCommitDispositionResult>;
+
+	/** Atomically CAS-check and apply the exact batch retained by a compiled workflow token. */
+	applyFlowIrCommit?(
+		appId: string,
+		token: FlowIrCommitToken,
+	): Promise<IApplyFlowIrCommitResponse>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for a board */
 	prerunBoard?(

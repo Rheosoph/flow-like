@@ -138,6 +138,45 @@ pub async fn invoke_event(
     Query(query): Query<InvokeEventQuery>,
     Json(params): Json<InvokeEventRequest>,
 ) -> Result<Response, ApiError> {
+    invoke_event_impl(state, user, app_id, event_id, query, params, None, false).await
+}
+
+/// Invokes an event that has already been resolved through another governed
+/// contract (for example an ontology action). This is deliberately crate-only:
+/// public callers must not use it to bypass the generic connected-app event
+/// policy with an arbitrary board or node target.
+pub(crate) async fn invoke_resolved_event(
+    state: AppState,
+    user: AppUser,
+    app_id: String,
+    event: flow_like::flow::event::Event,
+    query: InvokeEventQuery,
+    params: InvokeEventRequest,
+) -> Result<Response, ApiError> {
+    let event_id = event.id.clone();
+    invoke_event_impl(
+        state,
+        user,
+        app_id,
+        event_id,
+        query,
+        params,
+        Some(event),
+        true,
+    )
+    .await
+}
+
+async fn invoke_event_impl(
+    state: AppState,
+    user: AppUser,
+    app_id: String,
+    event_id: String,
+    query: InvokeEventQuery,
+    params: InvokeEventRequest,
+    resolved_event: Option<flow_like::flow::event::Event>,
+    governed_connected_app_call: bool,
+) -> Result<Response, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
     let sub = permission.effective_user_id().map_err(|_| {
         crate::error::ApiError::forbidden(
@@ -162,9 +201,16 @@ pub async fn invoke_event(
         _ => None,
     };
 
-    // Get event from database (validates event belongs to this app)
-    let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
-    super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
+    // A pre-resolved event is accepted only from another crate-private,
+    // governed contract. Generic event invocation always loads from the DB and
+    // applies the direct connected-app surface policy.
+    let event = match resolved_event {
+        Some(event) => event,
+        None => get_event_from_db(&state.db, &event_id, &app_id).await?,
+    };
+    if !governed_connected_app_call {
+        super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
+    }
     let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;

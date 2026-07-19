@@ -37,9 +37,12 @@ rig.workspace = true
 rmcp.workspace = true
 
 # Graph query engine
-lance-graph = { git = "https://github.com/Rheosoph/lance-graph", branch = "main", default-features = false, optional = true }
+# Pinned to a commit so upstream rebases cannot change behavior underneath us.
+lance-graph = { git = "https://github.com/Rheosoph/lance-graph", rev = "f7e96af88a0a991a2604e09567be55d7b1867eac", default-features = false, optional = true }
 serde_json = { version = "1", optional = true }
 tokio = { version = "1", features = ["time", "sync"], optional = true }
+petgraph = { version = "0.8", optional = true }
+tracing = { workspace = true, optional = true }
 
 # Data lake formats - Delta Lake 0.31.x aligns with Arrow 57 and DataFusion 52.
 deltalake = { version = "=0.31.1", optional = true, default-features = false, features = ["datafusion", "rustls"] }
@@ -64,7 +67,7 @@ iceberg = ["dep:iceberg", "dep:iceberg-datafusion"]
 all-lakes = ["delta", "iceberg"]
 
 # Graph query engine
-graph = ["dep:lance-graph", "dep:serde_json", "dep:tokio"]
+graph = ["dep:lance-graph", "dep:serde_json", "dep:tokio", "dep:petgraph", "dep:tracing"]
 
 # Federation feature for query push-down
 federation = ["datafusion-federation"]
