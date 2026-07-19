@@ -261,6 +261,8 @@ impl NodeLogic for LLMSuggestNextStepNode {
                 image_url: HistoryImageUrl {
                     url: format!("data:image/png;base64,{}", screenshot),
                     detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
                 },
             },
             Content::Text {

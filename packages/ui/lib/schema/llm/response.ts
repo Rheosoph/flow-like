@@ -1,3 +1,5 @@
+import type { IContent } from "./history";
+
 export interface IResponse {
 	choices: IChoice[];
 	created?: number | null;
@@ -43,6 +45,8 @@ export interface IResponseMessage {
 	annotations?: IAnnotation[] | null;
 	audio?: null | IAudio;
 	content?: null | string;
+	content_parts?: IContent[];
+	reasoning?: null | string;
 	refusal?: null | string;
 	role: string;
 	tool_calls?: IFunctionCall[];

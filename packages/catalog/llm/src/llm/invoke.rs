@@ -46,7 +46,7 @@ impl NodeLogic for InvokeLLM {
         let mut node = Node::new(
             "ai_generative_invoke",
             "Invoke Model",
-            "Invokes the configured model with the provided chat history and streams back chunks.",
+            "Invokes the configured model with the provided chat history. Set history streaming off to preserve and replay structured media responses.",
             "AI/Generative",
         );
         node.add_icon("/flow/icons/bot-invoke.svg");
@@ -140,6 +140,7 @@ impl NodeLogic for InvokeLLM {
             let context = Arc::new(Mutex::new(context.create_sub_context(&node).await));
             connected_nodes.insert(node.node.lock().await.id.clone(), context);
         }
+        let has_stream_consumers = !connected_nodes.is_empty();
 
         let parent_node_id = context.node.node.lock().await.id.clone();
         let ctx = context.clone();
@@ -200,7 +201,8 @@ impl NodeLogic for InvokeLLM {
         );
 
         let start = Instant::now();
-        let res = model.invoke(&history, Some(callback)).await?;
+        let callback = has_stream_consumers.then_some(callback);
+        let res = model.invoke(&history, callback).await?;
         let duration_ms = start.elapsed().as_millis() as u64;
 
         message.end();

@@ -7,7 +7,6 @@ use crate::{
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration, VertexConfig},
     response::Response,
-    response_chunk::ResponseChunk,
 };
 use flow_like_types::{Cacheable, Result, anyhow, async_trait};
 use google_cloud_auth::credentials::{
@@ -135,11 +134,12 @@ impl ModelLogic for VertexModel {
 
     #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
-        use crate::llm::{CompletionModelHandle, invoke_without_stream};
+        use crate::llm::{CompletionModelHandle, emit_response_to_callback, invoke_without_stream};
         use std::sync::Arc;
 
         let mut history = history.clone();
         history.normalize_for_alternation();
+        history.stream = Some(false);
 
         let model_name = self
             .default_model()
@@ -188,13 +188,7 @@ impl ModelLogic for VertexModel {
         let response = invoke_without_stream(builder, &model_name, None).await?;
 
         if let Some(callback) = lambda {
-            if let Some(content) = response.content() {
-                callback(ResponseChunk::from_text(&content, &model_name)).await?;
-            }
-
-            let mut finish = ResponseChunk::finish(&model_name, None);
-            finish.usage = Some(response.usage.clone());
-            callback(finish).await?;
+            emit_response_to_callback(&response, callback, &model_name).await?;
         }
 
         Ok(response)

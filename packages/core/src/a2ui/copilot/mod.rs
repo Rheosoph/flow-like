@@ -100,6 +100,9 @@ impl A2UICopilot {
                 "image/png" | "png" => Some(ImageMediaType::PNG),
                 "image/gif" | "gif" => Some(ImageMediaType::GIF),
                 "image/webp" | "webp" => Some(ImageMediaType::WEBP),
+                "image/heic" | "heic" => Some(ImageMediaType::HEIC),
+                "image/heif" | "heif" => Some(ImageMediaType::HEIF),
+                "image/svg+xml" | "svg" | "svg+xml" => Some(ImageMediaType::SVG),
                 _ => None,
             }
         };

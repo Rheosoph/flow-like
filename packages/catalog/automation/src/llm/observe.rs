@@ -224,6 +224,8 @@ impl NodeLogic for LLMObserveScreenNode {
                 image_url: HistoryImageUrl {
                     url: format!("data:image/png;base64,{}", screenshot),
                     detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
                 },
             },
             Content::Text {
@@ -461,6 +463,8 @@ impl NodeLogic for LLMDescribeElementNode {
                 image_url: HistoryImageUrl {
                     url: format!("data:image/png;base64,{}", screenshot),
                     detail: None,
+                    media_type: Some("image/png".to_string()),
+                    additional_params: None,
                 },
             },
             Content::Text {

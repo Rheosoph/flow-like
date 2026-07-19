@@ -71,7 +71,12 @@ async fn parse_messages(history: &History) -> Vec<HistoryMessage> {
                         Ok(url) => {
                             new_content.push(Content::Image {
                                 content_type: ContentType::ImageUrl,
-                                image_url: ImageUrl { url, detail: None },
+                                image_url: ImageUrl {
+                                    url,
+                                    detail: image_url.detail.clone(),
+                                    media_type: image_url.media_type.clone(),
+                                    additional_params: image_url.additional_params.clone(),
+                                },
                             });
                         }
                         Err(e) => {
@@ -83,6 +88,7 @@ async fn parse_messages(history: &History) -> Vec<HistoryMessage> {
                         }
                     }
                 }
+                other => new_content.push(other.clone()),
             }
         }
 

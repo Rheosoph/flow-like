@@ -1,6 +1,7 @@
 // Implementation according to
 // https://modelcontextprotocol.io/docs/concepts/sampling/
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like_types::{Value, anyhow, json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -12,10 +13,12 @@ use flow_like_types::Result;
 use rig::OneOrMany;
 use rig::completion::{Message as RigMessage, ToolDefinition};
 use rig::message::{
-    AssistantContent as RigAssistantContent, Audio as RigAudio, Document as RigDocument,
-    DocumentSourceKind, Image as RigImage, ImageDetail, ImageMediaType, Text as RigText,
-    ToolCall as RigToolCall, ToolChoice as RigToolChoice, ToolFunction as RigToolFunction,
-    UserContent as RigUserContent, Video as RigVideo,
+    AssistantContent as RigAssistantContent, Audio as RigAudio, AudioMediaType,
+    Document as RigDocument, DocumentMediaType, DocumentSourceKind, Image as RigImage, ImageDetail,
+    ImageMediaType, MimeType, Text as RigText, ToolCall as RigToolCall,
+    ToolChoice as RigToolChoice, ToolFunction as RigToolFunction,
+    ToolResultContent as RigToolResultContent, UserContent as RigUserContent, Video as RigVideo,
+    VideoMediaType,
 };
 
 /// Recursively normalize string values in a JSON Value tree,
@@ -108,14 +111,32 @@ impl HistoryMessage {
     pub fn from_response(response: Response) -> Self {
         let first_choice = response.choices.first();
 
-        let content = match first_choice {
-            Some(choice) => choice.message.content.clone(),
-            None => None,
-        };
+        let content = first_choice
+            .map(|choice| MessageContent::Contents(choice.message.ordered_content_parts()));
         let annotations = match first_choice {
             Some(choice) => choice.message.annotations.clone(),
             None => None,
         };
+        let tool_calls = first_choice
+            .map(|choice| {
+                choice
+                    .message
+                    .tool_calls
+                    .iter()
+                    .map(|tool_call| ToolCall {
+                        id: tool_call.id.clone(),
+                        r#type: tool_call
+                            .tool_type
+                            .clone()
+                            .unwrap_or_else(|| "function".to_string()),
+                        function: ToolCallFunction {
+                            name: tool_call.function.name.clone(),
+                            arguments: tool_call.function.arguments.clone(),
+                        },
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|tool_calls| !tool_calls.is_empty());
 
         let role: Role = match first_choice {
             Some(choice) => match choice.message.role.as_str() {
@@ -129,13 +150,10 @@ impl HistoryMessage {
 
         Self {
             role,
-            content: MessageContent::Contents(vec![Content::Text {
-                content_type: ContentType::Text,
-                text: content.unwrap_or_default(),
-            }]),
+            content: content.unwrap_or_else(|| MessageContent::Contents(Vec::new())),
             name: None,
             tool_call_id: None,
-            tool_calls: None,
+            tool_calls,
             annotations,
         }
     }
@@ -177,21 +195,22 @@ impl From<RigMessage> for HistoryMessage {
                     content.len() == 1 && matches!(content.first(), RigUserContent::ToolResult(_));
 
                 if is_single_tool_result && let RigUserContent::ToolResult(tr) = content.first() {
-                    let text = tr
+                    let contents = tr
                         .content
                         .iter()
-                        .filter_map(|c| match c {
-                            rig::message::ToolResultContent::Text(t) => Some(t.text.as_str()),
-                            _ => None,
+                        .map(|item| match item {
+                            RigToolResultContent::Text(text) => Content::Text {
+                                content_type: ContentType::Text,
+                                text: text.text.clone(),
+                            },
+                            RigToolResultContent::Image(image) => {
+                                Content::from_rig_image(image.clone())
+                            }
                         })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                        .collect();
                     return HistoryMessage {
                         role: Role::Tool,
-                        content: MessageContent::Contents(vec![Content::Text {
-                            content_type: ContentType::Text,
-                            text,
-                        }]),
+                        content: MessageContent::Contents(contents),
                         name: None,
                         tool_call_id: Some(tr.id.clone()),
                         tool_calls: None,
@@ -220,15 +239,15 @@ impl From<RigMessage> for HistoryMessage {
             }
             RigMessage::Assistant { id, content } => {
                 let mut tool_calls = Vec::new();
-                let mut text_content = String::new();
+                let mut contents = Vec::new();
 
                 for item in content.iter() {
                     match item {
                         RigAssistantContent::Text(text) => {
-                            if !text_content.is_empty() {
-                                text_content.push('\n');
-                            }
-                            text_content.push_str(&text.text);
+                            contents.push(Content::Text {
+                                content_type: ContentType::Text,
+                                text: text.text.clone(),
+                            });
                         }
                         RigAssistantContent::ToolCall(tool_call) => {
                             tool_calls.push(ToolCall {
@@ -240,13 +259,25 @@ impl From<RigMessage> for HistoryMessage {
                                 },
                             });
                         }
-                        RigAssistantContent::Reasoning(_) | RigAssistantContent::Image(_) => {}
+                        RigAssistantContent::Image(image) => {
+                            contents.push(Content::from_rig_image(image.clone()));
+                        }
+                        RigAssistantContent::Reasoning(_) => {}
                     }
                 }
 
+                let message_content = if contents.len() == 1 {
+                    match contents.pop().expect("length checked") {
+                        Content::Text { text, .. } => MessageContent::String(text),
+                        content => MessageContent::Contents(vec![content]),
+                    }
+                } else {
+                    MessageContent::Contents(contents)
+                };
+
                 HistoryMessage {
                     role: Role::Assistant,
-                    content: MessageContent::String(text_content),
+                    content: message_content,
                     name: id,
                     tool_calls: if tool_calls.is_empty() {
                         None
@@ -258,6 +289,17 @@ impl From<RigMessage> for HistoryMessage {
                 }
             }
         }
+    }
+}
+
+fn one_or_many_or_default<T: Clone>(
+    mut contents: Vec<T>,
+    default: impl FnOnce() -> T,
+) -> Result<OneOrMany<T>> {
+    match contents.len() {
+        0 => Ok(OneOrMany::one(default())),
+        1 => Ok(OneOrMany::one(contents.pop().expect("one content item"))),
+        _ => OneOrMany::many(contents).map_err(|error| anyhow!(error.to_string())),
     }
 }
 
@@ -305,13 +347,24 @@ impl TryFrom<HistoryMessage> for RigMessage {
                     }
                     MessageContent::Contents(contents) => {
                         for content in contents {
-                            if let Content::Text { text, .. } = content
-                                && !text.is_empty()
-                            {
-                                rig_contents.push(RigAssistantContent::Text(RigText {
-                                    text,
-                                    additional_params: None,
-                                }));
+                            match content {
+                                Content::Text { text, .. } if !text.is_empty() => {
+                                    rig_contents.push(RigAssistantContent::Text(RigText {
+                                        text,
+                                        additional_params: None,
+                                    }));
+                                }
+                                Content::Image { .. } => {
+                                    rig_contents.push(content.try_into_rig_assistant()?);
+                                }
+                                Content::Audio { .. }
+                                | Content::Video { .. }
+                                | Content::Document { .. } => {
+                                    // Rig's generic assistant history only accepts text and images.
+                                    // Keep richer response parts in Flow-Like's history/UI, but do
+                                    // not fail the next provider turn when replaying that history.
+                                }
+                                Content::Text { .. } => {}
                             }
                         }
                     }
@@ -352,14 +405,46 @@ impl TryFrom<HistoryMessage> for RigMessage {
                 })
             }
             Role::Tool | Role::Function => {
-                use rig::message::{ToolResult, ToolResultContent};
-                let text = msg.as_str();
+                use rig::message::ToolResult;
                 let tool_call_id = msg.tool_call_id.or(msg.name.clone()).unwrap_or_default();
+                let mut result_contents = Vec::new();
+                match msg.content {
+                    MessageContent::String(text) => {
+                        result_contents.push(RigToolResultContent::text(text));
+                    }
+                    MessageContent::Contents(contents) => {
+                        for content in contents {
+                            match content {
+                                Content::Text { text, .. } => {
+                                    result_contents.push(RigToolResultContent::text(text));
+                                }
+                                Content::Image { .. } => {
+                                    let RigAssistantContent::Image(image) =
+                                        content.try_into_rig_assistant()?
+                                    else {
+                                        unreachable!("image content converts to an image")
+                                    };
+                                    result_contents.push(RigToolResultContent::Image(image));
+                                }
+                                Content::Audio { .. }
+                                | Content::Video { .. }
+                                | Content::Document { .. } => {
+                                    return Err(anyhow!(
+                                        "Rig tool results support text and images, but not audio, video, or documents"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                let content = one_or_many_or_default(result_contents, || {
+                    RigToolResultContent::text(String::new())
+                })?;
                 Ok(RigMessage::User {
                     content: OneOrMany::one(RigUserContent::ToolResult(ToolResult {
                         id: tool_call_id,
                         call_id: None,
-                        content: OneOrMany::one(ToolResultContent::text(text)),
+                        content,
                     })),
                 })
             }
@@ -412,6 +497,10 @@ pub struct ImageUrl {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_params: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
@@ -432,17 +521,86 @@ pub enum Content {
         #[serde(rename = "type")]
         content_type: ContentType,
         audio_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        additional_params: Option<Value>,
     },
     Video {
         #[serde(rename = "type")]
         content_type: ContentType,
         video_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        additional_params: Option<Value>,
     },
     Document {
         #[serde(rename = "type")]
         content_type: ContentType,
         document_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        additional_params: Option<Value>,
     },
+}
+
+impl Content {
+    /// Converts a Rig image into Flow-Like's wire-compatible image content without losing
+    /// base64/raw payloads or their MIME type.
+    pub fn from_rig_image(image: RigImage) -> Self {
+        let detail = image
+            .detail
+            .map(|detail| format!("{detail:?}").to_lowercase());
+        let media_type = image
+            .media_type
+            .as_ref()
+            .map(MimeType::to_mime_type)
+            .map(ToOwned::to_owned);
+        let mime_type = media_type.as_deref().unwrap_or("application/octet-stream");
+        let additional_params = image.additional_params.clone();
+
+        Content::Image {
+            content_type: ContentType::ImageUrl,
+            image_url: ImageUrl {
+                url: source_to_wire_value(image.data, mime_type),
+                detail,
+                media_type,
+                additional_params,
+            },
+        }
+    }
+
+    /// Converts content that Rig permits in assistant messages. Rig 0.38 only supports text
+    /// and images here; audio, video, and documents are user-input content types.
+    pub fn try_into_rig_assistant(self) -> Result<RigAssistantContent> {
+        match self {
+            Content::Text { text, .. } => Ok(RigAssistantContent::Text(RigText {
+                text,
+                additional_params: None,
+            })),
+            Content::Image { image_url, .. } => Ok(RigAssistantContent::Image(
+                rig_image_from_wire_value(image_url),
+            )),
+            Content::Audio { .. } | Content::Video { .. } | Content::Document { .. } => {
+                Err(anyhow!(
+                    "Rig assistant messages support text and images, but not audio, video, or documents"
+                ))
+            }
+        }
+    }
+
+    /// Returns the URL/data URI carried by a media content part.
+    pub fn media_url(&self) -> Option<&str> {
+        match self {
+            Content::Text { .. } => None,
+            Content::Image { image_url, .. } => Some(&image_url.url),
+            Content::Audio { audio_url, .. } => Some(audio_url),
+            Content::Video { video_url, .. } => Some(video_url),
+            Content::Document { document_url, .. } => Some(document_url),
+        }
+    }
 }
 
 impl From<RigUserContent> for Content {
@@ -452,31 +610,66 @@ impl From<RigUserContent> for Content {
                 content_type: ContentType::Text,
                 text: text.text,
             },
-            RigUserContent::Image(image) => Content::Image {
-                content_type: ContentType::ImageUrl,
-                image_url: ImageUrl {
-                    url: image.data.to_string(),
-                    detail: image.detail.map(|d| format!("{:?}", d).to_lowercase()),
-                },
-            },
-            RigUserContent::Audio(audio) => Content::Audio {
-                content_type: ContentType::AudioUrl,
-                audio_url: audio.data.to_string(),
-            },
-            RigUserContent::Video(video) => Content::Video {
-                content_type: ContentType::VideoUrl,
-                video_url: video.data.to_string(),
-            },
-            RigUserContent::Document(doc) => Content::Document {
-                content_type: ContentType::DocumentUrl,
-                document_url: doc.data.to_string(),
-            },
+            RigUserContent::Image(image) => Content::from_rig_image(image),
+            RigUserContent::Audio(audio) => {
+                let media_type = audio
+                    .media_type
+                    .as_ref()
+                    .map(MimeType::to_mime_type)
+                    .map(ToOwned::to_owned);
+                Content::Audio {
+                    content_type: ContentType::AudioUrl,
+                    audio_url: source_to_wire_value(
+                        audio.data,
+                        media_type.as_deref().unwrap_or("application/octet-stream"),
+                    ),
+                    media_type,
+                    additional_params: audio.additional_params,
+                }
+            }
+            RigUserContent::Video(video) => {
+                let media_type = video
+                    .media_type
+                    .as_ref()
+                    .map(MimeType::to_mime_type)
+                    .map(ToOwned::to_owned);
+                Content::Video {
+                    content_type: ContentType::VideoUrl,
+                    video_url: source_to_wire_value(
+                        video.data,
+                        media_type.as_deref().unwrap_or("application/octet-stream"),
+                    ),
+                    media_type,
+                    additional_params: video.additional_params,
+                }
+            }
+            RigUserContent::Document(doc) => {
+                let media_type = doc
+                    .media_type
+                    .as_ref()
+                    .map(MimeType::to_mime_type)
+                    .map(ToOwned::to_owned);
+                Content::Document {
+                    content_type: ContentType::DocumentUrl,
+                    document_url: source_to_wire_value(
+                        doc.data,
+                        media_type.as_deref().unwrap_or("application/octet-stream"),
+                    ),
+                    media_type,
+                    additional_params: doc.additional_params,
+                }
+            }
             RigUserContent::ToolResult(tool_result) => {
+                if tool_result.content.len() == 1
+                    && let RigToolResultContent::Image(image) = tool_result.content.first()
+                {
+                    return Content::from_rig_image(image.clone());
+                }
                 let text = tool_result
                     .content
                     .iter()
                     .filter_map(|c| match c {
-                        rig::message::ToolResultContent::Text(t) => Some(t.text.as_str()),
+                        RigToolResultContent::Text(t) => Some(t.text.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -498,94 +691,257 @@ impl From<Content> for RigUserContent {
                 additional_params: None,
             }),
             Content::Image { image_url, .. } => {
-                // Detect media type from URL or default to PNG
-                let media_type = detect_image_media_type(&image_url.url);
-
-                // Prefer passing raw base64 payloads to rig providers when the input is a data URL.
-                // Some providers (notably OpenAI-compatible ones) are more reliable with base64 than
-                // with large `data:` URLs.
-                let data = if image_url.url.starts_with("data:") {
-                    // Expected shape: data:<mime>;base64,<payload>
-                    image_url
-                        .url
-                        .find(",")
-                        .and_then(|comma_pos| {
-                            let prefix = &image_url.url[..comma_pos];
-                            if prefix.contains(";base64") {
-                                Some(DocumentSourceKind::Base64(
-                                    image_url.url[(comma_pos + 1)..].to_string(),
-                                ))
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| DocumentSourceKind::url(&image_url.url))
-                } else {
-                    DocumentSourceKind::url(&image_url.url)
-                };
-
-                RigUserContent::Image(RigImage {
+                RigUserContent::Image(rig_image_from_wire_value(image_url))
+            }
+            Content::Audio {
+                audio_url,
+                media_type,
+                additional_params,
+                ..
+            } => {
+                let (data, wire_media_type) = source_from_wire_value(&audio_url);
+                RigUserContent::Audio(RigAudio {
                     data,
-                    media_type: Some(media_type),
-                    detail: Some(parse_image_detail(image_url.detail.as_deref())),
-                    additional_params: None,
+                    media_type: wire_media_type
+                        .and_then(audio_media_type_from_mime)
+                        .or_else(|| media_type.as_deref().and_then(audio_media_type_from_mime))
+                        .or_else(|| detect_audio_media_type(&audio_url)),
+                    additional_params,
                 })
             }
-            Content::Audio { audio_url, .. } => RigUserContent::Audio(RigAudio {
-                data: DocumentSourceKind::url(&audio_url),
-                media_type: None,
-                additional_params: None,
-            }),
-            Content::Video { video_url, .. } => RigUserContent::Video(RigVideo {
-                data: DocumentSourceKind::url(&video_url),
-                media_type: None,
-                additional_params: None,
-            }),
-            Content::Document { document_url, .. } => RigUserContent::Document(RigDocument {
-                data: DocumentSourceKind::url(&document_url),
-                media_type: None,
-                additional_params: None,
-            }),
+            Content::Video {
+                video_url,
+                media_type,
+                additional_params,
+                ..
+            } => {
+                let (data, wire_media_type) = source_from_wire_value(&video_url);
+                RigUserContent::Video(RigVideo {
+                    data,
+                    media_type: wire_media_type
+                        .and_then(video_media_type_from_mime)
+                        .or_else(|| media_type.as_deref().and_then(video_media_type_from_mime))
+                        .or_else(|| detect_video_media_type(&video_url)),
+                    additional_params,
+                })
+            }
+            Content::Document {
+                document_url,
+                media_type,
+                additional_params,
+                ..
+            } => {
+                let (data, wire_media_type) = source_from_wire_value(&document_url);
+                let media_type = wire_media_type
+                    .and_then(document_media_type_from_mime)
+                    .or_else(|| {
+                        media_type
+                            .as_deref()
+                            .and_then(document_media_type_from_mime)
+                    })
+                    .or_else(|| detect_document_media_type(&document_url));
+                RigUserContent::Document(RigDocument {
+                    data: decode_textual_document_source(data, media_type.as_ref()),
+                    media_type,
+                    additional_params,
+                })
+            }
         }
     }
 }
 
-/// Detects image media type from URL extension or data URL MIME type
-fn detect_image_media_type(url: &str) -> ImageMediaType {
-    // Check if it's a data URL with MIME type
-    if url.starts_with("data:")
-        && let Some(mime_start) = url.strip_prefix("data:")
-        && let Some(mime_end) = mime_start.find(';')
-    {
-        let mime_type = &mime_start[..mime_end];
-        return match mime_type {
-            "image/jpeg" | "image/jpg" => ImageMediaType::JPEG,
-            "image/png" => ImageMediaType::PNG,
-            "image/gif" => ImageMediaType::GIF,
-            "image/webp" => ImageMediaType::WEBP,
-            "image/heic" => ImageMediaType::HEIC,
-            "image/heif" => ImageMediaType::HEIF,
-            _ => ImageMediaType::PNG, // default fallback
-        };
+fn rig_image_from_wire_value(image_url: ImageUrl) -> RigImage {
+    let (data, wire_media_type) = source_from_wire_value(&image_url.url);
+    RigImage {
+        data,
+        media_type: wire_media_type
+            .and_then(image_media_type_from_mime)
+            .or_else(|| {
+                image_url
+                    .media_type
+                    .as_deref()
+                    .and_then(image_media_type_from_mime)
+            })
+            .or_else(|| detect_image_media_type(&image_url.url)),
+        detail: Some(parse_image_detail(image_url.detail.as_deref())),
+        additional_params: image_url.additional_params,
+    }
+}
+
+/// Converts every Rig source kind to a stable string representation. Binary/string payloads are
+/// emitted as valid data URIs; a private parameter preserves Rig's otherwise ambiguous source kind.
+fn source_to_wire_value(source: DocumentSourceKind, mime_type: &str) -> String {
+    match source {
+        DocumentSourceKind::Url(url) => url,
+        DocumentSourceKind::Base64(data) => format!("data:{mime_type};base64,{data}"),
+        DocumentSourceKind::FileId(file_id) => format!("file_id:{file_id}"),
+        DocumentSourceKind::Raw(bytes) => format!(
+            "data:{mime_type};flow-like-source=raw;base64,{}",
+            BASE64_STANDARD.encode(bytes)
+        ),
+        DocumentSourceKind::String(value) => format!(
+            "data:{mime_type};flow-like-source=string;base64,{}",
+            BASE64_STANDARD.encode(value.as_bytes())
+        ),
+        DocumentSourceKind::Unknown => String::new(),
+        _ => String::new(),
+    }
+}
+
+fn source_from_wire_value(value: &str) -> (DocumentSourceKind, Option<&str>) {
+    if value.is_empty() {
+        return (DocumentSourceKind::Unknown, None);
     }
 
-    // Check file extension
-    let lower_url = url.to_lowercase();
-    if lower_url.ends_with(".jpg") || lower_url.ends_with(".jpeg") {
-        ImageMediaType::JPEG
-    } else if lower_url.ends_with(".png") {
-        ImageMediaType::PNG
-    } else if lower_url.ends_with(".gif") {
-        ImageMediaType::GIF
-    } else if lower_url.ends_with(".webp") {
-        ImageMediaType::WEBP
-    } else if lower_url.ends_with(".heic") {
-        ImageMediaType::HEIC
-    } else if lower_url.ends_with(".heif") {
-        ImageMediaType::HEIF
-    } else {
-        // Default to PNG if we can't detect
-        ImageMediaType::PNG
+    if let Some(data_uri) = value.strip_prefix("data:")
+        && let Some((metadata, payload)) = data_uri.split_once(',')
+        && let Some(metadata) = metadata.strip_suffix(";base64")
+    {
+        let mut metadata_parts = metadata.split(';');
+        let mime_type = metadata_parts.next().filter(|mime| !mime.is_empty());
+        let source_kind = metadata_parts.find_map(|part| {
+            part.strip_prefix("flow-like-source=")
+                .map(str::to_ascii_lowercase)
+        });
+        let source = match source_kind.as_deref() {
+            Some("raw") => BASE64_STANDARD
+                .decode(payload)
+                .map(DocumentSourceKind::Raw)
+                .unwrap_or_else(|_| DocumentSourceKind::Base64(payload.to_string())),
+            Some("string") => BASE64_STANDARD
+                .decode(payload)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(DocumentSourceKind::String)
+                .unwrap_or_else(|| DocumentSourceKind::Base64(payload.to_string())),
+            _ => DocumentSourceKind::Base64(payload.to_string()),
+        };
+        return (source, mime_type);
+    }
+
+    if let Some(file_id) = value.strip_prefix("file_id:") {
+        return (DocumentSourceKind::FileId(file_id.to_string()), None);
+    }
+
+    (DocumentSourceKind::url(value), None)
+}
+
+/// Every [`DocumentMediaType`] except PDF is text-based, and providers forward such documents as
+/// plain text. A base64 payload would reach the model verbatim, so decode it back into a string.
+fn decode_textual_document_source(
+    source: DocumentSourceKind,
+    media_type: Option<&DocumentMediaType>,
+) -> DocumentSourceKind {
+    if matches!(media_type, None | Some(DocumentMediaType::PDF)) {
+        return source;
+    }
+
+    let DocumentSourceKind::Base64(payload) = &source else {
+        return source;
+    };
+
+    BASE64_STANDARD
+        .decode(payload)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map_or(source, DocumentSourceKind::String)
+}
+
+fn extension(value: &str) -> Option<&str> {
+    let path = value.split(['?', '#']).next()?;
+    path.rsplit_once('.').map(|(_, extension)| extension)
+}
+
+fn image_media_type_from_mime(value: &str) -> Option<ImageMediaType> {
+    match value.to_ascii_lowercase().as_str() {
+        "image/jpg" => Some(ImageMediaType::JPEG),
+        mime_type => ImageMediaType::from_mime_type(mime_type),
+    }
+}
+
+fn audio_media_type_from_mime(value: &str) -> Option<AudioMediaType> {
+    match value.to_ascii_lowercase().as_str() {
+        "audio/mpeg" | "audio/mpeg3" => Some(AudioMediaType::MP3),
+        "audio/x-wav" | "audio/wave" => Some(AudioMediaType::WAV),
+        "audio/x-aiff" => Some(AudioMediaType::AIFF),
+        "audio/mp4" | "audio/x-m4a" => Some(AudioMediaType::M4A),
+        mime_type => AudioMediaType::from_mime_type(mime_type),
+    }
+}
+
+fn video_media_type_from_mime(value: &str) -> Option<VideoMediaType> {
+    match value.to_ascii_lowercase().as_str() {
+        "video/x-msvideo" => Some(VideoMediaType::AVI),
+        "video/quicktime" => Some(VideoMediaType::MOV),
+        mime_type => VideoMediaType::from_mime_type(mime_type),
+    }
+}
+
+fn document_media_type_from_mime(value: &str) -> Option<DocumentMediaType> {
+    match value.to_ascii_lowercase().as_str() {
+        "application/rtf" => Some(DocumentMediaType::RTF),
+        "application/javascript" | "text/javascript" | "text/x-javascript" => {
+            Some(DocumentMediaType::Javascript)
+        }
+        "text/md" | "text/x-markdown" => Some(DocumentMediaType::MARKDOWN),
+        "text/x-python" => Some(DocumentMediaType::Python),
+        "application/xml" => Some(DocumentMediaType::XML),
+        mime_type => DocumentMediaType::from_mime_type(mime_type),
+    }
+}
+
+fn detect_image_media_type(value: &str) -> Option<ImageMediaType> {
+    match extension(value)?.to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => Some(ImageMediaType::JPEG),
+        "png" => Some(ImageMediaType::PNG),
+        "gif" => Some(ImageMediaType::GIF),
+        "webp" => Some(ImageMediaType::WEBP),
+        "heic" => Some(ImageMediaType::HEIC),
+        "heif" => Some(ImageMediaType::HEIF),
+        "svg" => Some(ImageMediaType::SVG),
+        _ => None,
+    }
+}
+
+fn detect_audio_media_type(value: &str) -> Option<AudioMediaType> {
+    match extension(value)?.to_ascii_lowercase().as_str() {
+        "wav" => Some(AudioMediaType::WAV),
+        "mp3" => Some(AudioMediaType::MP3),
+        "aif" | "aiff" => Some(AudioMediaType::AIFF),
+        "aac" => Some(AudioMediaType::AAC),
+        "ogg" | "oga" => Some(AudioMediaType::OGG),
+        "flac" => Some(AudioMediaType::FLAC),
+        "m4a" => Some(AudioMediaType::M4A),
+        "pcm16" => Some(AudioMediaType::PCM16),
+        "pcm24" => Some(AudioMediaType::PCM24),
+        _ => None,
+    }
+}
+
+fn detect_video_media_type(value: &str) -> Option<VideoMediaType> {
+    match extension(value)?.to_ascii_lowercase().as_str() {
+        "avi" => Some(VideoMediaType::AVI),
+        "mp4" => Some(VideoMediaType::MP4),
+        "mpeg" | "mpg" => Some(VideoMediaType::MPEG),
+        "mov" => Some(VideoMediaType::MOV),
+        "webm" => Some(VideoMediaType::WEBM),
+        _ => None,
+    }
+}
+
+fn detect_document_media_type(value: &str) -> Option<DocumentMediaType> {
+    match extension(value)?.to_ascii_lowercase().as_str() {
+        "pdf" => Some(DocumentMediaType::PDF),
+        "txt" => Some(DocumentMediaType::TXT),
+        "rtf" => Some(DocumentMediaType::RTF),
+        "html" | "htm" => Some(DocumentMediaType::HTML),
+        "css" => Some(DocumentMediaType::CSS),
+        "md" | "markdown" => Some(DocumentMediaType::MARKDOWN),
+        "csv" => Some(DocumentMediaType::CSV),
+        "xml" => Some(DocumentMediaType::XML),
+        "js" | "mjs" | "cjs" => Some(DocumentMediaType::Javascript),
+        "py" => Some(DocumentMediaType::Python),
+        _ => None,
     }
 }
 
@@ -1106,23 +1462,22 @@ impl From<Vec<RigMessage>> for History {
                 if tool_results.len() > 1 || (tool_results.len() == 1 && has_non_tool) {
                     for c in content.iter() {
                         if let RigUserContent::ToolResult(tr) = c {
-                            let text = tr
+                            let contents = tr
                                 .content
                                 .iter()
-                                .filter_map(|trc| match trc {
-                                    rig::message::ToolResultContent::Text(t) => {
-                                        Some(t.text.as_str())
+                                .map(|item| match item {
+                                    RigToolResultContent::Text(text) => Content::Text {
+                                        content_type: ContentType::Text,
+                                        text: text.text.clone(),
+                                    },
+                                    RigToolResultContent::Image(image) => {
+                                        Content::from_rig_image(image.clone())
                                     }
-                                    _ => None,
                                 })
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                                .collect();
                             history_messages.push(HistoryMessage {
                                 role: Role::Tool,
-                                content: MessageContent::Contents(vec![Content::Text {
-                                    content_type: ContentType::Text,
-                                    text,
-                                }]),
+                                content: MessageContent::Contents(contents),
                                 name: None,
                                 tool_call_id: Some(tr.id.clone()),
                                 tool_calls: None,
@@ -1215,4 +1570,368 @@ pub enum ToolChoice {
         r#type: ToolType,
         function: HistoryFunction,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_data_uris_become_typed_rig_inputs() {
+        let audio: RigUserContent = Content::Audio {
+            content_type: ContentType::AudioUrl,
+            audio_url: "data:audio/mpeg;base64,YXVkaW8=".to_string(),
+            media_type: None,
+            additional_params: None,
+        }
+        .into();
+        assert!(matches!(
+            audio,
+            RigUserContent::Audio(RigAudio {
+                data: DocumentSourceKind::Base64(data),
+                media_type: Some(AudioMediaType::MP3),
+                ..
+            }) if data == "YXVkaW8="
+        ));
+
+        let video: RigUserContent = Content::Video {
+            content_type: ContentType::VideoUrl,
+            video_url: "data:video/webm;base64,dmlkZW8=".to_string(),
+            media_type: None,
+            additional_params: None,
+        }
+        .into();
+        assert!(matches!(
+            video,
+            RigUserContent::Video(RigVideo {
+                data: DocumentSourceKind::Base64(data),
+                media_type: Some(VideoMediaType::WEBM),
+                ..
+            }) if data == "dmlkZW8="
+        ));
+
+        let document: RigUserContent = Content::Document {
+            content_type: ContentType::DocumentUrl,
+            document_url: "data:application/pdf;base64,JVBERg==".to_string(),
+            media_type: None,
+            additional_params: None,
+        }
+        .into();
+        assert!(matches!(
+            document,
+            RigUserContent::Document(RigDocument {
+                data: DocumentSourceKind::Base64(data),
+                media_type: Some(DocumentMediaType::PDF),
+                ..
+            }) if data == "JVBERg=="
+        ));
+    }
+
+    #[test]
+    fn explicit_mime_fills_generic_data_uris_without_guessing_unknown_images() {
+        let audio: RigUserContent = Content::Audio {
+            content_type: ContentType::AudioUrl,
+            audio_url: "data:application/octet-stream;base64,YXVkaW8=".to_string(),
+            media_type: Some("audio/mpeg".to_string()),
+            additional_params: None,
+        }
+        .into();
+        assert!(matches!(
+            audio,
+            RigUserContent::Audio(RigAudio {
+                media_type: Some(AudioMediaType::MP3),
+                ..
+            })
+        ));
+
+        let image = Content::Image {
+            content_type: ContentType::ImageUrl,
+            image_url: ImageUrl {
+                url: "https://example.com/signed-download".to_string(),
+                detail: None,
+                media_type: None,
+                additional_params: None,
+            },
+        }
+        .try_into_rig_assistant()
+        .expect("valid image");
+        assert!(matches!(
+            image,
+            RigAssistantContent::Image(RigImage {
+                media_type: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn chat_upload_mime_aliases_map_to_rig_types() {
+        assert_eq!(
+            audio_media_type_from_mime("audio/mpeg3"),
+            Some(AudioMediaType::MP3)
+        );
+        assert_eq!(
+            document_media_type_from_mime("text/md"),
+            Some(DocumentMediaType::MARKDOWN)
+        );
+        assert_eq!(
+            document_media_type_from_mime("text/x-javascript"),
+            Some(DocumentMediaType::Javascript)
+        );
+        assert_eq!(
+            document_media_type_from_mime("text/x-python"),
+            Some(DocumentMediaType::Python)
+        );
+    }
+
+    #[test]
+    fn rig_sources_round_trip_without_becoming_fake_urls() {
+        let raw_audio = RigUserContent::Audio(RigAudio {
+            data: DocumentSourceKind::Raw(b"audio".to_vec()),
+            media_type: Some(AudioMediaType::WAV),
+            additional_params: None,
+        });
+        let flow_audio: Content = raw_audio.into();
+        assert!(matches!(
+            &flow_audio,
+            Content::Audio { audio_url, .. }
+                if audio_url == "data:audio/wav;flow-like-source=raw;base64,YXVkaW8="
+        ));
+        let RigUserContent::Audio(round_trip) = flow_audio.into() else {
+            panic!("expected audio")
+        };
+        assert_eq!(round_trip.data, DocumentSourceKind::Raw(b"audio".to_vec()));
+        assert_eq!(round_trip.media_type, Some(AudioMediaType::WAV));
+
+        let file_image = Content::from_rig_image(RigImage {
+            data: DocumentSourceKind::FileId("file-123".to_string()),
+            media_type: Some(ImageMediaType::PNG),
+            detail: None,
+            additional_params: None,
+        });
+        assert!(matches!(
+            &file_image,
+            Content::Image { image_url, .. } if image_url.url == "file_id:file-123"
+        ));
+        let RigAssistantContent::Image(round_trip) = file_image
+            .try_into_rig_assistant()
+            .expect("image round trip")
+        else {
+            panic!("expected image")
+        };
+        assert_eq!(
+            round_trip.data,
+            DocumentSourceKind::FileId("file-123".to_string())
+        );
+
+        let string_document = RigUserContent::Document(RigDocument {
+            data: DocumentSourceKind::String("literal document text".to_string()),
+            media_type: Some(DocumentMediaType::TXT),
+            additional_params: None,
+        });
+        let flow_document: Content = string_document.into();
+        assert!(matches!(
+            &flow_document,
+            Content::Document { document_url, .. }
+                if document_url.starts_with("data:text/plain;flow-like-source=string;base64,")
+        ));
+        let RigUserContent::Document(round_trip) = flow_document.into() else {
+            panic!("expected document")
+        };
+        assert_eq!(
+            round_trip.data,
+            DocumentSourceKind::String("literal document text".to_string())
+        );
+    }
+
+    #[test]
+    fn textual_documents_are_decoded_instead_of_reaching_the_model_as_base64() {
+        let document = Content::Document {
+            content_type: ContentType::DocumentUrl,
+            document_url: "data:text/markdown;base64,SGVsbG8gd29ybGQ=".to_string(),
+            media_type: None,
+            additional_params: None,
+        };
+        let RigUserContent::Document(converted) = document.into() else {
+            panic!("expected document")
+        };
+        assert_eq!(converted.media_type, Some(DocumentMediaType::MARKDOWN));
+        assert_eq!(
+            converted.data,
+            DocumentSourceKind::String("Hello world".to_string())
+        );
+
+        let pdf = Content::Document {
+            content_type: ContentType::DocumentUrl,
+            document_url: "data:application/pdf;base64,SGVsbG8gd29ybGQ=".to_string(),
+            media_type: None,
+            additional_params: None,
+        };
+        let RigUserContent::Document(converted) = pdf.into() else {
+            panic!("expected document")
+        };
+        assert_eq!(
+            converted.data,
+            DocumentSourceKind::Base64("SGVsbG8gd29ybGQ=".to_string()),
+            "binary documents must stay base64"
+        );
+    }
+
+    #[test]
+    fn non_base64_data_urls_are_not_split_on_an_embedded_base64_marker() {
+        let svg =
+            "data:image/svg+xml,<svg><image href=\"data:image/png;base64,iVBORw0KGgo=\"/></svg>";
+        let image = Content::Image {
+            content_type: ContentType::ImageUrl,
+            image_url: ImageUrl {
+                url: svg.to_string(),
+                detail: None,
+                media_type: None,
+                additional_params: None,
+            },
+        };
+        let RigUserContent::Image(converted) = image.into() else {
+            panic!("expected image")
+        };
+        assert_eq!(
+            converted.data,
+            DocumentSourceKind::Url(svg.to_string()),
+            "an inline SVG carrying a nested base64 image must survive intact"
+        );
+    }
+
+    #[test]
+    fn assistant_images_survive_history_conversion() {
+        let message = RigMessage::Assistant {
+            id: Some("assistant-1".to_string()),
+            content: OneOrMany::many(vec![
+                RigAssistantContent::Text(RigText::new("caption")),
+                RigAssistantContent::Image(RigImage {
+                    data: DocumentSourceKind::Url("https://example.com/generated.webp".to_string()),
+                    media_type: Some(ImageMediaType::WEBP),
+                    detail: Some(ImageDetail::Auto),
+                    additional_params: Some(json::json!({
+                        "openrouter": {
+                            "response_only": true,
+                            "source": "assistant.images"
+                        }
+                    })),
+                }),
+            ])
+            .expect("multiple contents"),
+        };
+
+        let history_message: HistoryMessage = message.into();
+        let MessageContent::Contents(parts) = &history_message.content else {
+            panic!("multimodal assistant message should use content parts")
+        };
+        assert_eq!(parts.len(), 2);
+
+        let round_trip: RigMessage = history_message.try_into().expect("Rig round trip");
+        let RigMessage::Assistant { content, .. } = round_trip else {
+            panic!("expected assistant message")
+        };
+        let round_trip_image = content.iter().find_map(|part| match part {
+            RigAssistantContent::Image(image) => Some(image),
+            _ => None,
+        });
+        assert_eq!(
+            round_trip_image.and_then(|image| image.additional_params.as_ref()),
+            Some(&json::json!({
+                "openrouter": {
+                    "response_only": true,
+                    "source": "assistant.images"
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn unsupported_assistant_media_is_kept_in_history_but_skipped_on_replay() {
+        let history_message = HistoryMessage {
+            role: Role::Assistant,
+            content: MessageContent::Contents(vec![
+                Content::Text {
+                    content_type: ContentType::Text,
+                    text: "listen".to_string(),
+                },
+                Content::Audio {
+                    content_type: ContentType::AudioUrl,
+                    audio_url: "https://example.com/generated.mp3".to_string(),
+                    media_type: Some("audio/mpeg".to_string()),
+                    additional_params: None,
+                },
+                Content::Video {
+                    content_type: ContentType::VideoUrl,
+                    video_url: "https://example.com/generated.mp4".to_string(),
+                    media_type: Some("video/mp4".to_string()),
+                    additional_params: None,
+                },
+                Content::Document {
+                    content_type: ContentType::DocumentUrl,
+                    document_url: "https://example.com/generated.pdf".to_string(),
+                    media_type: Some("application/pdf".to_string()),
+                    additional_params: None,
+                },
+            ]),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            annotations: None,
+        };
+
+        let RigMessage::Assistant { content, .. } = history_message
+            .try_into()
+            .expect("unsupported response-only media must not break continuation")
+        else {
+            panic!("expected assistant message")
+        };
+        let parts: Vec<_> = content.iter().collect();
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(
+            parts[0],
+            RigAssistantContent::Text(text) if text.text == "listen"
+        ));
+    }
+
+    #[test]
+    fn tool_result_images_survive_history_conversion() {
+        let message = RigMessage::User {
+            content: OneOrMany::one(RigUserContent::ToolResult(rig::message::ToolResult {
+                id: "tool-1".to_string(),
+                call_id: None,
+                content: OneOrMany::many(vec![
+                    RigToolResultContent::text("chart"),
+                    RigToolResultContent::Image(RigImage {
+                        data: DocumentSourceKind::Base64("aW1hZ2U=".to_string()),
+                        media_type: Some(ImageMediaType::PNG),
+                        detail: None,
+                        additional_params: None,
+                    }),
+                ])
+                .expect("multiple tool result parts"),
+            })),
+        };
+
+        let history_message: HistoryMessage = message.into();
+        assert_eq!(history_message.role, Role::Tool);
+        let MessageContent::Contents(parts) = &history_message.content else {
+            panic!("tool result should keep content parts")
+        };
+        assert_eq!(parts.len(), 2);
+
+        let round_trip: RigMessage = history_message.try_into().expect("Rig round trip");
+        let RigMessage::User { content } = round_trip else {
+            panic!("expected Rig tool result")
+        };
+        let RigUserContent::ToolResult(result) = content.first() else {
+            panic!("expected tool result content")
+        };
+        assert!(
+            result
+                .content
+                .iter()
+                .any(|part| matches!(part, RigToolResultContent::Image(_)))
+        );
+    }
 }

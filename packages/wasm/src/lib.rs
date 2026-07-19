@@ -51,6 +51,7 @@ pub mod error;
 pub mod host_functions;
 pub mod instance;
 pub mod limits;
+mod llm_message;
 pub mod manifest;
 pub mod memory;
 pub mod module;

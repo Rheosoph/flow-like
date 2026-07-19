@@ -23,6 +23,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import type {
+	IContent,
 	IEvent,
 	IEventInput,
 	IIntercomEvent,
@@ -62,6 +63,42 @@ type IStreamAttachment =
 			anchor?: string;
 			page?: number;
 	  };
+
+function contentPartToStreamAttachment(
+	part: IContent,
+): IStreamAttachment | undefined {
+	if (part.image_url?.url) {
+		return {
+			url: part.image_url.url,
+			type: part.image_url.media_type ?? "image/*",
+		};
+	}
+	if (part.audio_url) {
+		return { url: part.audio_url, type: part.media_type ?? "audio/*" };
+	}
+	if (part.video_url) {
+		return { url: part.video_url, type: part.media_type ?? "video/*" };
+	}
+	if (part.document_url) {
+		return { url: part.document_url, type: part.media_type };
+	}
+	return undefined;
+}
+
+function mergeStreamAttachments(
+	existing: IStreamAttachment[],
+	incoming: IStreamAttachment[],
+): IStreamAttachment[] {
+	const byUrl = new Map<string, IStreamAttachment>();
+	for (const attachment of [...existing, ...incoming]) {
+		const url = typeof attachment === "string" ? attachment : attachment.url;
+		const previous = byUrl.get(url);
+		if (!previous || typeof attachment !== "string") {
+			byUrl.set(url, attachment);
+		}
+	}
+	return [...byUrl.values()];
+}
 
 interface IExecutionStep {
 	id: string;
@@ -719,6 +756,7 @@ export function GenericEventFormInterface({
 		setExecutionSteps([]);
 		setCurrentStepId(undefined);
 		setStreamingContent("");
+		setStreamAttachments([]);
 	}, [event.id]);
 
 	const handleNavigationEvents = useCallback(
@@ -1012,7 +1050,8 @@ export function GenericEventFormInterface({
 						// Handle plan updates (from chat_stream_partial or chat_stream)
 						if (
 							ev.event_type === "chat_stream_partial" ||
-							ev.event_type === "chat_stream"
+							ev.event_type === "chat_stream" ||
+							ev.event_type === "chat_out"
 						) {
 							if (ev.payload?.plan) {
 								const planData = ev.payload.plan as {
@@ -1067,16 +1106,85 @@ export function GenericEventFormInterface({
 									(prev) => prev + ev.payload.chunk.choices[0].delta.content,
 								);
 							}
+							const chunkParts =
+								ev.payload?.chunk?.choices?.[0]?.delta?.content_parts;
+							if (Array.isArray(chunkParts)) {
+								const media = chunkParts
+									.map((part: IContent) => contentPartToStreamAttachment(part))
+									.filter(
+										(
+											attachment: IStreamAttachment | undefined,
+										): attachment is IStreamAttachment =>
+											attachment !== undefined,
+									);
+								if (media.length)
+									setStreamAttachments((prev) =>
+										mergeStreamAttachments(prev, media),
+									);
+							}
 
-							// Handle full response content (chat_stream with response.choices[].message.content)
+							// Handle full response content from both intermediate and terminal chat events.
 							if (
-								ev.event_type === "chat_stream" &&
-								ev.payload?.response?.choices?.[0]?.message?.content
+								ev.event_type === "chat_stream" ||
+								ev.event_type === "chat_out"
 							) {
-								const fullContent =
-									ev.payload.response.choices[0].message.content;
+								const responseMessage =
+									ev.payload?.response?.choices?.[0]?.message;
+								const fullContent = responseMessage?.content;
+								const structuredText = Array.isArray(
+									responseMessage?.content_parts,
+								)
+									? responseMessage.content_parts
+											.filter((part: IContent) => typeof part.text === "string")
+											.map((part: IContent) => part.text)
+											.join("\n")
+									: "";
 								// Replace entire content since this is the full response
-								setStreamingContent(fullContent);
+								if (typeof fullContent === "string") {
+									setStreamingContent(fullContent);
+								} else if (structuredText) {
+									setStreamingContent(structuredText);
+								}
+								if (
+									typeof responseMessage?.reasoning === "string" &&
+									responseMessage.reasoning.trim() &&
+									!ev.payload?.plan
+								) {
+									setExecutionSteps((prev) =>
+										prev.length
+											? prev
+											: [
+													{
+														id: "response-reasoning",
+														title: "Thinking",
+														status:
+															ev.event_type === "chat_out"
+																? "done"
+																: "progress",
+														reasoning: responseMessage.reasoning,
+													},
+												],
+									);
+									if (ev.event_type !== "chat_out") {
+										setCurrentStepId("response-reasoning");
+									}
+								}
+								if (Array.isArray(responseMessage?.content_parts)) {
+									const media = responseMessage.content_parts
+										.map((part: IContent) =>
+											contentPartToStreamAttachment(part),
+										)
+										.filter(
+											(
+												attachment: IStreamAttachment | undefined,
+											): attachment is IStreamAttachment =>
+												attachment !== undefined,
+										);
+									if (media.length)
+										setStreamAttachments((prev) =>
+											mergeStreamAttachments(prev, media),
+										);
+								}
 							}
 
 							// Handle attachments from streaming response
@@ -1085,19 +1193,12 @@ export function GenericEventFormInterface({
 								Array.isArray(ev.payload.attachments) &&
 								ev.payload.attachments.length > 0
 							) {
-								setStreamAttachments((prev) => {
-									const newAttachments = ev.payload
-										.attachments as IStreamAttachment[];
-									// Dedupe by URL
-									const existingUrls = new Set(
-										prev.map((a) => (typeof a === "string" ? a : a.url)),
-									);
-									const unique = newAttachments.filter((a) => {
-										const url = typeof a === "string" ? a : a.url;
-										return !existingUrls.has(url);
-									});
-									return [...prev, ...unique];
-								});
+								setStreamAttachments((prev) =>
+									mergeStreamAttachments(
+										prev,
+										ev.payload.attachments as IStreamAttachment[],
+									),
+								);
 							}
 						}
 

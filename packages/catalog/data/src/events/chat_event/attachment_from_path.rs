@@ -10,6 +10,51 @@ use std::time::Duration;
 
 use super::{Attachment, ComplexAttachment};
 
+fn mime_from_extension(extension: &str) -> &'static str {
+    match extension {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "svg" => "image/svg+xml",
+        "avi" => "video/avi",
+        "mp4" => "video/mp4",
+        "mpeg" | "mpg" => "video/mpeg",
+        "mov" => "video/mov",
+        "webm" => "video/webm",
+        "wav" | "wave" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "aif" | "aiff" => "audio/aiff",
+        "aac" => "audio/aac",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/m4a",
+        "pcm16" => "audio/pcm16",
+        "pcm24" => "audio/pcm24",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "mjs" | "cjs" => "application/x-javascript",
+        "py" => "application/x-python",
+        "txt" => "text/plain",
+        "rtf" => "text/rtf",
+        "md" | "markdown" => "text/markdown",
+        "csv" => "text/csv",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct AttachmentFromPathNode {}
@@ -130,40 +175,10 @@ impl NodeLogic for AttachmentFromPathNode {
 
         let extension = runtime_path.path.extension().map(|s| s.to_lowercase());
 
-        let content_type = extension.as_ref().map(|ext| {
-            match ext.as_str() {
-                "pdf" => "application/pdf",
-                "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
-                "gif" => "image/gif",
-                "webp" => "image/webp",
-                "svg" => "image/svg+xml",
-                "mp4" => "video/mp4",
-                "webm" => "video/webm",
-                "mp3" => "audio/mpeg",
-                "wav" => "audio/wav",
-                "ogg" => "audio/ogg",
-                "json" => "application/json",
-                "xml" => "application/xml",
-                "html" => "text/html",
-                "css" => "text/css",
-                "js" => "application/javascript",
-                "txt" => "text/plain",
-                "md" => "text/markdown",
-                "doc" => "application/msword",
-                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "xls" => "application/vnd.ms-excel",
-                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "ppt" => "application/vnd.ms-powerpoint",
-                "pptx" => {
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                }
-                "csv" => "text/csv",
-                "zip" => "application/zip",
-                _ => "application/octet-stream",
-            }
-            .to_string()
-        });
+        let content_type = extension
+            .as_deref()
+            .map(mime_from_extension)
+            .map(ToString::to_string);
 
         let display_name = if name.is_empty() {
             filename.clone()
@@ -196,5 +211,32 @@ impl NodeLogic for AttachmentFromPathNode {
         context.activate_exec_pin("exec_out").await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mime_from_extension;
+
+    #[test]
+    fn maps_every_rig_native_media_family_from_paths() {
+        assert_eq!(mime_from_extension("heic"), "image/heic");
+        assert_eq!(mime_from_extension("heif"), "image/heif");
+        assert_eq!(mime_from_extension("aiff"), "audio/aiff");
+        assert_eq!(mime_from_extension("flac"), "audio/flac");
+        assert_eq!(mime_from_extension("m4a"), "audio/m4a");
+        assert_eq!(mime_from_extension("avi"), "video/avi");
+        assert_eq!(mime_from_extension("mov"), "video/mov");
+        assert_eq!(mime_from_extension("rtf"), "text/rtf");
+        assert_eq!(mime_from_extension("py"), "application/x-python");
+    }
+
+    #[test]
+    fn keeps_non_rig_attachments_typed_without_claiming_rig_support() {
+        assert_eq!(
+            mime_from_extension("docx"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(mime_from_extension("unknown"), "application/octet-stream");
     }
 }

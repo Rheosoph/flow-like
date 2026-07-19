@@ -1,7 +1,12 @@
 import { createId } from "@paralleldrive/cuid2";
 import { Response } from "../../../lib/llm/response";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
-import { IRole } from "../../../lib/schema/llm/history";
+import {
+	IContentType,
+	type IContent,
+	IRole,
+} from "../../../lib/schema/llm/history";
+import type { IResponseMessage } from "../../../lib/schema/llm/response";
 import type {
 	IAttachment,
 	IChatUsageStat,
@@ -19,6 +24,20 @@ export interface ProcessChatEventsResult {
 	done: boolean;
 	shouldUpdate: boolean;
 	interactions?: IInteractionRequest[];
+}
+
+function visibleResponseContent(
+	message: IResponseMessage,
+): string | IContent[] {
+	const parts = message.content_parts ?? [];
+	if (parts.length === 0) return message.content ?? "";
+	if (
+		message.content &&
+		!parts.some((part) => part.type === IContentType.Text)
+	) {
+		return [{ type: IContentType.Text, text: message.content }, ...parts];
+	}
+	return [...parts];
 }
 
 interface BackendReasoning {
@@ -94,9 +113,17 @@ function sanitizeReasoningForDisplay(reasoning: string): string {
 		: reasoning;
 }
 
+/**
+ * Messages whose plan is the single synthesized "Thinking" step rather than a real backend plan.
+ * Only those may be replaced wholesale with the run-wide accumulated reasoning — backend steps
+ * are scoped per step and would otherwise absorb every earlier step's text.
+ */
+const syntheticReasoningPlans = new WeakSet<IMessage>();
+
 function appendFallbackReasoningStep(
 	responseMessage: IMessage,
 	reasoning: string,
+	replace = false,
 ) {
 	const sanitizedReasoning = sanitizeReasoningForDisplay(reasoning);
 
@@ -117,6 +144,13 @@ function appendFallbackReasoningStep(
 			},
 		];
 		responseMessage.current_step_id = "step-0";
+		syntheticReasoningPlans.add(responseMessage);
+		return;
+	}
+
+	// The run-wide reasoning transcript may only overwrite the synthesized step. Real backend
+	// plans carry their own per-step text, which parseBackendPlan already keeps up to date.
+	if (replace && !syntheticReasoningPlans.has(responseMessage)) {
 		return;
 	}
 
@@ -138,9 +172,11 @@ function appendFallbackReasoningStep(
 		return;
 	}
 
-	currentStep.reasoning = sanitizeReasoningForDisplay(
-		(currentStep.reasoning || "") + sanitizedReasoning,
-	);
+	currentStep.reasoning = replace
+		? sanitizedReasoning
+		: sanitizeReasoningForDisplay(
+				(currentStep.reasoning || "") + sanitizedReasoning,
+			);
 	responseMessage.current_step_id = currentStep.id;
 }
 
@@ -365,7 +401,14 @@ export function processChatEvents(
 				IRole.Assistant,
 			);
 			if (lastMessage) {
-				responseMessage.inner.content = lastMessage.content ?? "";
+				responseMessage.inner.content = visibleResponseContent(lastMessage);
+				if (lastMessage.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(
+						responseMessage,
+						lastMessage.reasoning,
+						true,
+					);
+				}
 			}
 
 			// Handle plan updates
@@ -374,6 +417,7 @@ export function processChatEvents(
 				const { steps, currentStepId } = parseBackendPlan(planData);
 				responseMessage.plan_steps = steps;
 				responseMessage.current_step_id = currentStepId;
+				syntheticReasoningPlans.delete(responseMessage);
 				shouldUpdate = true;
 			}
 
@@ -398,7 +442,14 @@ export function processChatEvents(
 					IRole.Assistant,
 				);
 				if (lastMessage) {
-					responseMessage.inner.content = lastMessage.content ?? "";
+					responseMessage.inner.content = visibleResponseContent(lastMessage);
+					if (lastMessage.reasoning && !ev.payload.plan) {
+						appendFallbackReasoningStep(
+							responseMessage,
+							lastMessage.reasoning,
+							true,
+						);
+					}
 					shouldUpdate = true;
 				}
 			}
@@ -408,6 +459,7 @@ export function processChatEvents(
 				const { steps, currentStepId } = parseBackendPlan(planData);
 				responseMessage.plan_steps = steps;
 				responseMessage.current_step_id = currentStepId;
+				syntheticReasoningPlans.delete(responseMessage);
 				shouldUpdate = true;
 			}
 			if (ev.payload.widgets) {
@@ -423,10 +475,19 @@ export function processChatEvents(
 				const lastMessage = intermediateResponse.lastMessageOfRole(
 					IRole.Assistant,
 				);
-				const finalContent =
-					lastMessage?.content ?? responseMessage.inner.content;
+				const finalContent = lastMessage
+					? visibleResponseContent(lastMessage)
+					: responseMessage.inner.content;
 				if (finalContent !== responseMessage.inner.content) {
 					responseMessage.inner.content = finalContent ?? "";
+					shouldUpdate = true;
+				}
+				if (lastMessage?.reasoning && !ev.payload.plan) {
+					appendFallbackReasoningStep(
+						responseMessage,
+						lastMessage.reasoning,
+						true,
+					);
 					shouldUpdate = true;
 				}
 			}

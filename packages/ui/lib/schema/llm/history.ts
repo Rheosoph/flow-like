@@ -31,17 +31,27 @@ export interface IContent {
 	text?: string;
 	type: IContentType;
 	image_url?: IImageURL;
+	audio_url?: string;
+	video_url?: string;
+	document_url?: string;
+	media_type?: string;
+	additional_params?: unknown;
 	[property: string]: any;
 }
 
 export interface IImageURL {
 	detail?: null | string;
+	media_type?: string;
+	additional_params?: unknown;
 	url: string;
 	[property: string]: any;
 }
 
 export enum IContentType {
 	IImageURL = "image_url",
+	AudioURL = "audio_url",
+	VideoURL = "video_url",
+	DocumentURL = "document_url",
 	Text = "text",
 }
 

@@ -541,10 +541,39 @@ export const MessageComponent = memo(
 					text += `${part.text}\n`;
 					continue;
 				}
-				if (part.image_url?.url) attachments.push(part.image_url?.url);
+				if (part.image_url?.url)
+					attachments.push({
+						url: part.image_url.url,
+						type: part.image_url.media_type ?? "image/*",
+					});
+				else if (part.audio_url)
+					attachments.push({
+						url: part.audio_url,
+						type: part.media_type,
+					});
+				else if (part.video_url)
+					attachments.push({
+						url: part.video_url,
+						type: part.media_type,
+					});
+				else if (part.document_url)
+					attachments.push({
+						url: part.document_url,
+						type: part.media_type,
+					});
 			}
 
-			return { text, attachments: [...attachments, ...(message.files ?? [])] };
+			const uniqueAttachments = new Map<string, IAttachment>();
+			for (const attachment of [...attachments, ...(message.files ?? [])]) {
+				const url =
+					typeof attachment === "string" ? attachment : attachment.url;
+				const existing = uniqueAttachments.get(url);
+				if (!existing || typeof attachment !== "string") {
+					uniqueAttachments.set(url, attachment);
+				}
+			}
+
+			return { text, attachments: [...uniqueAttachments.values()] };
 		}, [message.inner.content, message.files]);
 
 		const processedAttachments = useProcessedAttachments(

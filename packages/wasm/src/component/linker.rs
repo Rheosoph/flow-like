@@ -1,14 +1,15 @@
 use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
+use crate::llm_message::sdk_message_content;
 use futures::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::Linker;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
-use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
 use wasmtime_wasi_http::WasiHttpCtx;
+use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
 
 pub struct ComponentStoreData {
     pub host_state: HostState,
@@ -1050,52 +1051,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             _ => flow_like_model_provider::history::Role::User,
                         };
 
-                        // Extract text content (handles both "content": "text" and "parts")
-                        let content = if let Some(c) = msg.get("content").and_then(|v| v.as_str())
-                        {
-                            flow_like_model_provider::history::MessageContent::String(
-                                c.to_string(),
-                            )
-                        } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
-                            let mut contents = Vec::new();
-                            for part in parts {
-                                if let Some(text) =
-                                    part.get("text").and_then(|t| t.as_str())
-                                {
-                                    contents.push(
-                                        flow_like_model_provider::history::Content::Text {
-                                            content_type:
-                                                flow_like_model_provider::history::ContentType::Text,
-                                            text: text.to_string(),
-                                        },
-                                    );
-                                } else if let Some(reasoning) = part
-                                    .get("reasoning")
-                                    .and_then(|reasoning| reasoning.get("text"))
-                                    .and_then(|text| text.as_array())
-                                {
-                                    let text = reasoning
-                                        .iter()
-                                        .filter_map(|entry| entry.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
-                                    if !text.is_empty() {
-                                        contents.push(
-                                            flow_like_model_provider::history::Content::Text {
-                                                content_type:
-                                                    flow_like_model_provider::history::ContentType::Text,
-                                                text,
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                            flow_like_model_provider::history::MessageContent::Contents(contents)
-                        } else {
-                            flow_like_model_provider::history::MessageContent::String(
-                                String::new(),
-                            )
-                        };
+                        let content = sdk_message_content(msg);
 
                         // Extract tool calls (SDK format: {id, name, arguments})
                         let tool_calls = msg
@@ -1399,37 +1355,7 @@ fn register_models(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
                             "tool" => flow_like_model_provider::history::Role::Tool,
                             _ => flow_like_model_provider::history::Role::User,
                         };
-                        let content = if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                            flow_like_model_provider::history::MessageContent::String(c.to_string())
-                        } else if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
-                            let contents = parts.iter().filter_map(|part| {
-                                part
-                                    .get("text")
-                                    .and_then(|t| t.as_str())
-                                    .map(|text| text.to_string())
-                                    .or_else(|| {
-                                        part
-                                            .get("reasoning")
-                                            .and_then(|reasoning| reasoning.get("text"))
-                                            .and_then(|text| text.as_array())
-                                            .map(|entries| {
-                                                entries
-                                                    .iter()
-                                                    .filter_map(|entry| entry.as_str())
-                                                    .collect::<Vec<_>>()
-                                                    .join("\n")
-                                            })
-                                    })
-                                    .filter(|text| !text.is_empty())
-                                    .map(|text| flow_like_model_provider::history::Content::Text {
-                                        content_type: flow_like_model_provider::history::ContentType::Text,
-                                        text,
-                                    })
-                            }).collect();
-                            flow_like_model_provider::history::MessageContent::Contents(contents)
-                        } else {
-                            flow_like_model_provider::history::MessageContent::String(String::new())
-                        };
+                        let content = sdk_message_content(msg);
                         let tool_calls = msg.get("tool_calls").and_then(|v| v.as_array()).map(|tcs| {
                             tcs.iter().filter_map(|tc| {
                                 let id = tc.get("id")?.as_str()?.to_string();

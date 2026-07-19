@@ -114,7 +114,11 @@ async function prepareAttachments(
 			...(await fileToAttachment([audioFile], backend, isOffline)),
 		);
 	}
-	return { imageAttachments, otherAttachments };
+	return {
+		imageAttachments,
+		otherAttachments,
+		historyAttachments: [...imageAttachments, ...otherAttachments],
+	};
 }
 
 /**
@@ -152,10 +156,7 @@ function deduplicateConsecutiveMessages(messages: IMessage[]): IMessage[] {
 	return result;
 }
 
-function createHistoryMessage(
-	content: string,
-	imageAttachments: IAttachment[],
-) {
+function createHistoryMessage(content: string, attachments: IAttachment[]) {
 	const historyMessage: IHistoryMessage = {
 		content: [
 			{
@@ -166,14 +167,144 @@ function createHistoryMessage(
 		role: IRole.User,
 	};
 
-	for (const image of imageAttachments) {
-		const url = typeof image === "string" ? image : image.url;
-		(historyMessage.content as IContent[]).push({
-			type: IContentType.IImageURL,
-			image_url: {
-				url: url,
-			},
-		});
+	for (const attachment of attachments) {
+		const url = typeof attachment === "string" ? attachment : attachment.url;
+		const explicitMime =
+			typeof attachment === "string" ? undefined : attachment.type;
+		const dataMime = url.match(/^data:([^;,]+)/)?.[1];
+		const mime = (explicitMime || dataMime || "").toLowerCase();
+		const cleanUrl = url.split(/[?#]/, 1)[0].toLowerCase();
+		const canInferFromExtension = mime === "";
+		const parts = historyMessage.content as IContent[];
+
+		if (
+			[
+				"image/jpeg",
+				"image/jpg",
+				"image/png",
+				"image/gif",
+				"image/webp",
+				"image/heic",
+				"image/heif",
+				"image/svg+xml",
+			].includes(mime) ||
+			(canInferFromExtension &&
+				/\.(jpe?g|png|gif|webp|heic|heif|svg)$/.test(cleanUrl))
+		) {
+			parts.push({
+				type: IContentType.IImageURL,
+				image_url: { url, media_type: mime || undefined },
+			});
+			continue;
+		}
+		if (
+			[
+				"audio/wav",
+				"audio/x-wav",
+				"audio/wave",
+				"audio/mp3",
+				"audio/mpeg",
+				"audio/mpeg3",
+				"audio/aiff",
+				"audio/x-aiff",
+				"audio/aac",
+				"audio/ogg",
+				"audio/flac",
+				"audio/m4a",
+				"audio/x-m4a",
+				"audio/mp4",
+				"audio/pcm16",
+				"audio/pcm24",
+			].includes(mime) ||
+			(canInferFromExtension &&
+				/\.(wav|mp3|aiff?|aac|ogg|flac|m4a|pcm16|pcm24)$/.test(cleanUrl))
+		) {
+			parts.push({
+				type: IContentType.AudioURL,
+				audio_url: url,
+				media_type: mime || undefined,
+			});
+			continue;
+		}
+		if (
+			[
+				"video/avi",
+				"video/x-msvideo",
+				"video/mp4",
+				"video/mpeg",
+				"video/mov",
+				"video/quicktime",
+				"video/webm",
+			].includes(mime) ||
+			(canInferFromExtension && /\.(avi|mp4|mpe?g|mov|webm)$/.test(cleanUrl))
+		) {
+			parts.push({
+				type: IContentType.VideoURL,
+				video_url: url,
+				media_type: mime || undefined,
+			});
+			continue;
+		}
+		if (
+			[
+				"application/pdf",
+				"text/plain",
+				"text/rtf",
+				"application/rtf",
+				"text/html",
+				"text/css",
+				"text/markdown",
+				"text/md",
+				"text/x-markdown",
+				"text/csv",
+				"text/xml",
+				"application/xml",
+				"application/x-javascript",
+				"application/javascript",
+				"text/javascript",
+				"text/x-javascript",
+				"application/x-python",
+				"text/x-python",
+			].includes(mime) ||
+			(canInferFromExtension &&
+				/\.(pdf|txt|rtf|html?|css|md|markdown|csv|xml|m?js|cjs|py)$/.test(
+					cleanUrl,
+				))
+		) {
+			parts.push({
+				type: IContentType.DocumentURL,
+				document_url: url,
+				media_type: mime || undefined,
+			});
+			continue;
+		}
+
+		// Unrecognized media types must still reach the model: fall back to the MIME's top-level
+		// type so an attachment is never silently dropped from the outgoing message.
+		if (mime.startsWith("image/")) {
+			parts.push({
+				type: IContentType.IImageURL,
+				image_url: { url, media_type: mime },
+			});
+		} else if (mime.startsWith("audio/")) {
+			parts.push({
+				type: IContentType.AudioURL,
+				audio_url: url,
+				media_type: mime,
+			});
+		} else if (mime.startsWith("video/")) {
+			parts.push({
+				type: IContentType.VideoURL,
+				video_url: url,
+				media_type: mime,
+			});
+		} else {
+			parts.push({
+				type: IContentType.DocumentURL,
+				document_url: url,
+				media_type: mime || undefined,
+			});
+		}
 	}
 	return historyMessage;
 }
@@ -243,6 +374,11 @@ function createPayload(
 								type: c.type,
 								text: c.text,
 								image_url: c.image_url,
+								audio_url: c.audio_url,
+								video_url: c.video_url,
+								document_url: c.document_url,
+								media_type: c.media_type,
+								additional_params: c.additional_params,
 							})),
 			})),
 			historyMessage,
@@ -1094,14 +1230,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				// Clear pending message since OAuth is satisfied
 				pendingMessageRef.current = null;
 
-				const { imageAttachments, otherAttachments } = await prepareAttachments(
-					filesAttached,
-					audioFile,
-					backend,
-					isOffline,
-				);
+				const { otherAttachments, historyAttachments } =
+					await prepareAttachments(
+						filesAttached,
+						audioFile,
+						backend,
+						isOffline,
+					);
 
-				const historyMessage = createHistoryMessage(content, imageAttachments);
+				const historyMessage = createHistoryMessage(
+					content,
+					historyAttachments,
+				);
 
 				const userMessage = createUserMessage(
 					sessionIdParameter,

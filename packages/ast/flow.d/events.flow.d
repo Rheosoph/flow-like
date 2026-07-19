@@ -44,8 +44,8 @@ declare function eventsWidgetAction({ actionId?: string }): { widgetInstanceId: 
 // === Events/Chat ===
 
 /**
- * Pulls down image attachments referenced in the latest chat message
- * @param history — Chat history whose final message may contain image parts
+ * Pulls down image, audio, video, and document attachments referenced in the latest chat message
+ * @param history — Chat history whose final message may contain media parts
  * @param attachments (optional) — Existing attachments to merge with new downloads
  * @returns paths — Virtual file paths pointing to cached attachments
  * @impure has side effects / drives control flow
@@ -132,6 +132,20 @@ declare function eventsChatPushStep({ title: string, description: string }): int
  * @impure has side effects / drives control flow
  */
 declare function eventsChatPushTextToStep({ text: string }): void;
+
+/**
+ * Embeds an a2ui widget instance into the chat message. Connect the Element Ref of an Instantiate Widget node.
+ * @param elementRef — Widget instance to embed (from Instantiate Widget)
+ * @impure has side effects / drives control flow
+ */
+declare function eventsChatPushWidget({ elementRef: Struct }): void;
+
+/**
+ * Embeds multiple a2ui widget instances into the chat message. Add an Element Ref pin for each Instantiate Widget node.
+ * @param elementRef — Widget instance to embed (from Instantiate Widget). Add more pins for multiple widgets.
+ * @impure has side effects / drives control flow
+ */
+declare function eventsChatPushWidgets({ elementRef: Struct }): void;
 
 /**
  * Removes a step from the plan by its ID
@@ -223,6 +237,24 @@ declare function interactionSingleChoice({ name?: string, description?: string, 
  * @impure has side effects / drives control flow
  */
 declare function eventsGenericReturnResult({ response: any }): void;
+
+
+// === Events/Remote ===
+
+/**
+ * Invoke a chat, API or MCP event of a connected project. Pins adapt to the selected event. The project must have granted this app a role that allows executing events.
+ * @param flowRemoteAppId (optional) — Connected project to invoke the event in
+ * @param flowRemoteEvent (optional) — Event of the selected project to invoke
+ * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the input and output pins.
+ * @param payload — Input payload passed to the remote event
+ * @param waitForResult (optional) — Wait for the remote run to finish and return its result
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote run to finish
+ * @returns runId — Remote run id
+ * @returns status — Final run status
+ * @returns result — Result payload of the remote run
+ * @impure has side effects / drives control flow
+ */
+declare function callRemoteEvent({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, payload: any, waitForResult?: bool, timeoutSeconds?: int }): { runId: string, status: string, result: any };
 
 
 // === Events/Widget ===

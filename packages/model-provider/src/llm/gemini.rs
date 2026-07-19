@@ -474,7 +474,14 @@ impl ModelLogic for GeminiModel {
 
     #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
-        use crate::llm::{CompletionModelHandle, invoke_with_stream, invoke_without_stream};
+        use crate::llm::{
+            CompletionModelHandle, emit_response_to_callback, invoke_with_stream,
+            invoke_without_stream,
+        };
+
+        let mut history = history.clone();
+        let should_stream = lambda.is_some() && history.stream.unwrap_or(true);
+        history.stream = Some(should_stream);
 
         let model_name = self
             .default_model()
@@ -525,10 +532,21 @@ impl ModelLogic for GeminiModel {
             builder = builder.additional_params(params);
         }
 
-        if let Some(callback) = lambda {
-            invoke_with_stream(builder, callback, &model_name, model_additional_params).await
+        if should_stream {
+            invoke_with_stream(
+                builder,
+                lambda.expect("streaming requires a callback"),
+                &model_name,
+                model_additional_params,
+            )
+            .await
         } else {
-            invoke_without_stream(builder, &model_name, model_additional_params).await
+            let response =
+                invoke_without_stream(builder, &model_name, model_additional_params).await?;
+            if let Some(callback) = lambda {
+                emit_response_to_callback(&response, callback, &model_name).await?;
+            }
+            Ok(response)
         }
     }
 
