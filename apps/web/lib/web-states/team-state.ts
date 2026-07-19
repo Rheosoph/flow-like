@@ -447,7 +447,10 @@ export class WebTeamState implements ITeamState {
 		const params = new URLSearchParams();
 		params.set("group_id", groupId);
 		params.set("item", item);
-		params.set("extension", file.name.split(".").pop() ?? "");
+		params.set(
+			"extension",
+			file.name.includes(".") ? (file.name.split(".").pop() ?? "") : "",
+		);
 		params.set("language", language ?? "en");
 
 		const { signed_url } = await apiPut<{ signed_url: string }>(

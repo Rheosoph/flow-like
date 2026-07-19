@@ -65,14 +65,14 @@ export function GroupManagement({ appId }: Readonly<GroupManagementProps>) {
 		const data = connections.data;
 		if (!data) return [] as { id: string; name: string }[];
 		const list: { id: string; name: string }[] = [];
-		for (const conn of data.incoming) {
+		for (const conn of data.incoming ?? []) {
 			if (conn.status === "ACTIVE")
 				list.push({
 					id: conn.source_app_id,
 					name: conn.app_name ?? conn.source_app_id,
 				});
 		}
-		for (const conn of data.outgoing) {
+		for (const conn of data.outgoing ?? []) {
 			if (conn.status === "ACTIVE")
 				list.push({
 					id: conn.target_app_id,

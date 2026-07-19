@@ -81,12 +81,9 @@ pub async fn get_user_groups(
         .map(|m| m.group_id)
         .collect();
 
-    let mut group_ids: Vec<String> = owned_group_ids;
-    for group_id in member_group_ids {
-        if !group_ids.contains(&group_id) {
-            group_ids.push(group_id);
-        }
-    }
+    let mut unique_group_ids: HashSet<String> = owned_group_ids.into_iter().collect();
+    unique_group_ids.extend(member_group_ids);
+    let group_ids: Vec<String> = unique_group_ids.into_iter().collect();
 
     if group_ids.is_empty() {
         return Ok(Json(vec![]));

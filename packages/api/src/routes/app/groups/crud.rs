@@ -5,6 +5,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
+    TransactionTrait,
 };
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -72,6 +73,10 @@ pub async fn create_group(
     let group_id = create_id();
     let actor = permission.effective_user_id().ok();
 
+    // The group, its metadata and its anchor membership are one unit — a
+    // half-created suite would be invisible to every listing query.
+    let txn = state.db.begin().await?;
+
     // Suites always start private; publishing goes through the same review
     // pipeline as apps via PATCH /apps/{app_id}/groups/{group_id}/visibility.
     app_group::ActiveModel {
@@ -82,7 +87,7 @@ pub async fn create_group(
         created_at: Set(now),
         updated_at: Set(now),
     }
-    .insert(&state.db)
+    .insert(&txn)
     .await?;
 
     meta::ActiveModel {
@@ -97,7 +102,7 @@ pub async fn create_group(
         updated_at: Set(now),
         ..Default::default()
     }
-    .insert(&state.db)
+    .insert(&txn)
     .await?;
 
     app_group_member::ActiveModel {
@@ -112,8 +117,10 @@ pub async fn create_group(
         created_at: Set(now),
         updated_at: Set(now),
     }
-    .insert(&state.db)
+    .insert(&txn)
     .await?;
+
+    txn.commit().await?;
 
     if let Some(member_ids) = &payload.member_app_ids {
         let mut position = 1;

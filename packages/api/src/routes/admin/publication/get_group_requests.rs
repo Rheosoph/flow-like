@@ -107,8 +107,7 @@ pub async fn get_group_requests(
         .await?;
 
     let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(25).min(100);
-    let offset = (page - 1) * limit;
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
 
     let mut select = publication_request::Entity::find()
         .filter(publication_request::Column::GroupId.is_not_null())
@@ -132,7 +131,7 @@ pub async fn get_group_requests(
     let total = select.clone().count(&state.db).await?;
     let requests = select
         .paginate(&state.db, limit)
-        .fetch_page(offset / limit.max(1))
+        .fetch_page(page - 1)
         .await?;
 
     if requests.is_empty() {

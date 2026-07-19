@@ -109,8 +109,7 @@ pub async fn get_requests(
         .await?;
 
     let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(25).min(100);
-    let offset = (page - 1) * limit;
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
 
     // Suites are reviewed in their own, lighter queue — see
     // `get_group_requests` — so this one stays strictly app-scoped.
@@ -137,7 +136,7 @@ pub async fn get_requests(
 
     let requests = select
         .paginate(&state.db, limit)
-        .fetch_page(offset / limit.max(1))
+        .fetch_page(page - 1)
         .await?;
 
     if requests.is_empty() {
