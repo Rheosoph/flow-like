@@ -90,6 +90,7 @@ export interface GraphCanvasProps {
 	selectedNodeId?: string | null;
 	selectedEdgeKey?: string | null;
 	highlightedNodeIds?: Set<string>;
+	highlightedEdgeIds?: Set<string>;
 	hiddenLabels?: Set<string>;
 	onNodeClick?: (nodeId: string) => void;
 	onNodeShiftClick?: (nodeId: string, label: string) => void;
@@ -790,6 +791,7 @@ interface HighlightState {
 	selectedNodeId: string | null;
 	selectedEdgeKey: string | null;
 	highlightedNodeIds: Set<string> | undefined;
+	highlightedEdgeIds: Set<string> | undefined;
 	hiddenLabels: Set<string> | undefined;
 	neighborSet: Set<string> | null;
 	connectedEdgeSet: Set<string> | null;
@@ -1190,6 +1192,7 @@ export function GraphCanvas({
 	selectedNodeId,
 	selectedEdgeKey,
 	highlightedNodeIds,
+	highlightedEdgeIds,
 	hiddenLabels,
 	onNodeClick,
 	onNodeShiftClick,
@@ -1468,6 +1471,7 @@ export function GraphCanvas({
 		selectedNodeId: selectedNodeId ?? null,
 		selectedEdgeKey: selectedEdgeKey ?? null,
 		highlightedNodeIds,
+		highlightedEdgeIds,
 		hiddenLabels,
 		neighborSet: null,
 		connectedEdgeSet: null,
@@ -1477,6 +1481,7 @@ export function GraphCanvas({
 	highlightRef.current.selectedNodeId = selectedNodeId ?? null;
 	highlightRef.current.selectedEdgeKey = selectedEdgeKey ?? null;
 	highlightRef.current.highlightedNodeIds = highlightedNodeIds;
+	highlightRef.current.highlightedEdgeIds = highlightedEdgeIds;
 	highlightRef.current.hiddenLabels = hiddenLabels;
 
 	// Recompute neighbor sets when selectedNodeId changes
@@ -1494,7 +1499,7 @@ export function GraphCanvas({
 	}, [selectedNodeId, graph]);
 
 	// Force sigma refresh when visibility/highlight props change
-	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
+	const sigmaRefreshKey = `${hiddenLabels ? [...hiddenLabels].join(",") : ""}_${highlightedNodeIds ? [...highlightedNodeIds].join(",") : ""}_${highlightedEdgeIds ? [...highlightedEdgeIds].join(",") : ""}_${selectedEdgeKey ?? ""}_${themeTick}`;
 
 	// Stable reducers — read all dynamic state from ref
 	const nodeReducer = useCallback(
@@ -1578,10 +1583,13 @@ export function GraphCanvas({
 			const isHoveredEdge = hl.hoveredEdge === edge;
 
 			if (hl.highlightedNodeIds && hl.highlightedNodeIds.size > 0) {
-				if (
-					!hl.highlightedNodeIds.has(src) &&
-					!hl.highlightedNodeIds.has(tgt)
-				) {
+				const edgeId = graph.getEdgeAttribute(edge, "edgeId") as
+					| string
+					| undefined;
+				const isHighlighted = hl.highlightedEdgeIds
+					? Boolean(edgeId && hl.highlightedEdgeIds.has(edgeId))
+					: hl.highlightedNodeIds.has(src) || hl.highlightedNodeIds.has(tgt);
+				if (!isHighlighted) {
 					res.color = hexToRgba(origColor, CONTEXT_DIM_EDGE_ALPHA);
 					res.size = CONTEXT_DIM_EDGE_SIZE;
 					res.zIndex = 0;

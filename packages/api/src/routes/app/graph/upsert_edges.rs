@@ -64,7 +64,7 @@ pub async fn upsert_edges(
     );
 
     let (connection, overlay) =
-        super::load_scoped_overlay(&state, &user, &app_id, &overlay_id, &scope).await?;
+        super::load_scoped_overlay_for_write(&state, &user, &app_id, &overlay_id, &scope).await?;
     let store = lancegraph::LanceGraphStore::new(connection, overlay, None).await?;
 
     let upserted = store.upsert_edges(&payload.label, payload.rows).await?;

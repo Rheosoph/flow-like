@@ -12,7 +12,7 @@ import {
 	SelectTrigger,
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
-import { updateNodeCommand } from "../../../../lib";
+import { updateNodeCommand, upsertLayerCommand } from "../../../../lib";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -90,6 +90,7 @@ function useOntologyPinPersist(
 	appId: string,
 	boardId: string | undefined,
 	nodeId: string,
+	currentLayerId: string | undefined,
 	boardRef: RefObject<IBoard | undefined> | undefined,
 	setValue: (value: number[] | undefined) => void,
 ) {
@@ -109,7 +110,12 @@ function useOntologyPinPersist(
 		) => {
 			const encoded =
 				value === undefined ? undefined : convertJsonToUint8Array(value);
-			const boardNode = boardRef?.current?.nodes?.[nodeId];
+			const board = boardRef?.current;
+			const currentLayer = currentLayerId
+				? board?.layers?.[currentLayerId]
+				: undefined;
+			const layerNode = currentLayer?.nodes?.[nodeId];
+			const boardNode = layerNode ?? board?.nodes?.[nodeId];
 			if (!boardId || !boardNode) {
 				setValue(encoded ?? undefined);
 				return;
@@ -137,9 +143,26 @@ function useOntologyPinPersist(
 				if (target) pins[target.id] = { ...target, schema: update.schema };
 			}
 
-			const command = updateNodeCommand({
-				node: { ...boardNode, hash: undefined, coordinates, pins },
-			});
+			const updatedNode = {
+				...boardNode,
+				hash: undefined,
+				coordinates,
+				pins,
+			};
+			const command =
+				currentLayer && layerNode
+					? upsertLayerCommand({
+							current_layer: currentLayer.parent_id ?? null,
+							layer: {
+								...currentLayer,
+								nodes: {
+									...currentLayer.nodes,
+									[nodeId]: updatedNode,
+								},
+							},
+							node_ids: [],
+						})
+					: updateNodeCommand({ node: updatedNode });
 			try {
 				const result = await backend.boardState.executeCommand(
 					appId,
@@ -158,6 +181,7 @@ function useOntologyPinPersist(
 			backend.boardState,
 			boardId,
 			boardRef,
+			currentLayerId,
 			getNode,
 			invalidate,
 			nodeId,
@@ -387,6 +411,7 @@ export function OntologySelect({
 	appId,
 	boardId,
 	nodeId,
+	currentLayerId,
 	boardRef,
 	setValue,
 }: Readonly<{
@@ -395,6 +420,7 @@ export function OntologySelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	currentLayerId?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
@@ -410,6 +436,7 @@ export function OntologySelect({
 		appId,
 		boardId,
 		nodeId,
+		currentLayerId,
 		boardRef,
 		setValue,
 	);
@@ -448,6 +475,7 @@ export function OntologyObjectSelect({
 	appId,
 	boardId,
 	nodeId,
+	currentLayerId,
 	boardRef,
 	setValue,
 }: Readonly<{
@@ -456,6 +484,7 @@ export function OntologyObjectSelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	currentLayerId?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
@@ -469,6 +498,7 @@ export function OntologyObjectSelect({
 		appId,
 		boardId,
 		nodeId,
+		currentLayerId,
 		boardRef,
 		setValue,
 	);
@@ -518,6 +548,7 @@ export function OntologyActionSelect({
 	appId,
 	boardId,
 	nodeId,
+	currentLayerId,
 	boardRef,
 	setValue,
 }: Readonly<{
@@ -526,6 +557,7 @@ export function OntologyActionSelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	currentLayerId?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
@@ -541,6 +573,7 @@ export function OntologyActionSelect({
 		appId,
 		boardId,
 		nodeId,
+		currentLayerId,
 		boardRef,
 		setValue,
 	);
@@ -634,6 +667,7 @@ export function RemoteOntologySelect({
 	appId,
 	boardId,
 	nodeId,
+	currentLayerId,
 	boardRef,
 	setValue,
 }: Readonly<{
@@ -642,6 +676,7 @@ export function RemoteOntologySelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	currentLayerId?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
@@ -655,6 +690,7 @@ export function RemoteOntologySelect({
 		appId,
 		boardId,
 		nodeId,
+		currentLayerId,
 		boardRef,
 		setValue,
 	);
@@ -691,6 +727,7 @@ export function RemoteOntologyObjectSelect({
 	appId,
 	boardId,
 	nodeId,
+	currentLayerId,
 	boardRef,
 	setValue,
 }: Readonly<{
@@ -699,6 +736,7 @@ export function RemoteOntologyObjectSelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	currentLayerId?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
@@ -712,6 +750,7 @@ export function RemoteOntologyObjectSelect({
 		appId,
 		boardId,
 		nodeId,
+		currentLayerId,
 		boardRef,
 		setValue,
 	);
@@ -762,6 +801,7 @@ export function RemoteOntologyActionSelect({
 	appId,
 	boardId,
 	nodeId,
+	currentLayerId,
 	boardRef,
 	setValue,
 }: Readonly<{
@@ -770,6 +810,7 @@ export function RemoteOntologyActionSelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	currentLayerId?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 }>) {
@@ -783,6 +824,7 @@ export function RemoteOntologyActionSelect({
 		appId,
 		boardId,
 		nodeId,
+		currentLayerId,
 		boardRef,
 		setValue,
 	);

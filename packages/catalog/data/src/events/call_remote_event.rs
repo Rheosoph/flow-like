@@ -1,8 +1,8 @@
 use super::chat_event::Attachment;
 use crate::data::path::FlowPath;
 use crate::remote_util::{
-    RemoteAppSession, error_for_status, follow_get_redirect_without_credentials, http_client,
-    http_client_no_redirect, invoke_and_collect, post_json, validate_path_id,
+    RemoteAppSession, error_for_status, follow_get_redirect_without_credentials,
+    http_client_no_redirect, invoke_and_collect, post_json, remote_app_session, validate_path_id,
     with_event_registration_headers,
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -236,7 +236,7 @@ fn timeout_spec() -> PinSpec {
     PinSpec::new(
         "timeout_seconds",
         "Timeout (s)",
-        "Maximum time to wait for the remote run to finish",
+        "Maximum time to wait for the remote request to finish",
         VariableType::Integer,
     )
     .default(json!(120))
@@ -672,7 +672,7 @@ impl NodeLogic for CallRemoteEventNode {
             .unwrap_or_default();
         let meta: EventMeta = flow_like_types::json::from_str(&meta_raw).unwrap_or_default();
 
-        let session = RemoteAppSession::open(context, &remote_app_id).await?;
+        let session = remote_app_session(context, &remote_app_id).await?;
 
         match meta.event_type.as_str() {
             "simple_chat" => self.run_chat(context, &session, &event_id).await,
@@ -705,8 +705,21 @@ impl CallRemoteEventNode {
 
         if !wait_for_result {
             let url = session.url(&format!("events/{}/invoke/async", event_id));
-            let response = post_json(session, &url, &body).await?;
-            let queued: Value = response.json().await?;
+            let queued: Value = flow_like_types::tokio::time::timeout(
+                std::time::Duration::from_secs(timeout),
+                async {
+                    let response = post_json(session, &url, &body).await?;
+                    let queued: Value = response.json().await?;
+                    Ok::<_, flow_like_types::Error>(queued)
+                },
+            )
+            .await
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Remote event request did not finish within {} seconds",
+                    timeout
+                )
+            })??;
             context
                 .set_pin_value(
                     "run_id",
@@ -837,12 +850,14 @@ impl CallRemoteEventNode {
                 .evaluate_pin(&format!("param_{}", param))
                 .await
                 .unwrap_or_default();
-            path = path.replace(&format!("{{{}}}", param), value.trim());
+            let value = encode_path_parameter(&value)?;
+            path = path.replace(&format!("{{{}}}", param), &value);
         }
 
         let query: Value = context.evaluate_pin("query").await.unwrap_or(Value::Null);
         let body: Value = context.evaluate_pin("body").await.unwrap_or(Value::Null);
         let headers: Value = context.evaluate_pin("headers").await.unwrap_or(Value::Null);
+        let timeout = self.timeout_secs(context).await;
 
         let url = session.url(&format!(
             "events/{}/rest{}",
@@ -867,49 +882,63 @@ impl CallRemoteEventNode {
             request = request.json(&body);
         }
 
-        let mut response = request
-            .send()
+        let (status, header_map, content_type, bytes) =
+            flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(timeout), async {
+                let mut response = request
+                    .send()
+                    .await
+                    .map_err(|err| flow_like_types::anyhow!("Remote REST call failed: {}", err))?;
+
+                // Static file registrations redirect to a short-lived object-store URL.
+                // Follow it with a new request that carries neither the app token nor
+                // registration credentials. Custom headers are otherwise retained by
+                // reqwest across cross-origin redirects.
+                if is_file && response.status().is_redirection() {
+                    response = follow_get_redirect_without_credentials(response).await?;
+                }
+
+                // Non-file redirects are returned to the flow as status + Location
+                // rather than followed with credentials or treated as API failures.
+                let response = if response.status().is_redirection() {
+                    response
+                } else {
+                    error_for_status(response, "Remote REST call").await?
+                };
+
+                let status = response.status().as_u16() as i64;
+                let header_map: flow_like_types::json::Map<String, Value> = response
+                    .headers()
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        value
+                            .to_str()
+                            .ok()
+                            .map(|value| (name.to_string(), json!(value)))
+                    })
+                    .collect();
+                let content_type = response
+                    .headers()
+                    .get(flow_like_types::reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let bytes = response.bytes().await.map_err(|err| {
+                    flow_like_types::anyhow!("Failed to read REST response: {}", err)
+                })?;
+                Ok::<_, flow_like_types::Error>((status, header_map, content_type, bytes))
+            })
             .await
-            .map_err(|err| flow_like_types::anyhow!("Remote REST call failed: {}", err))?;
-
-        // Static file registrations redirect to a short-lived object-store URL.
-        // Follow it with a new request that carries neither the app token nor
-        // registration credentials. Custom headers are otherwise retained by
-        // reqwest across cross-origin redirects.
-        if is_file && response.status().is_redirection() {
-            response = follow_get_redirect_without_credentials(response).await?;
-        }
-
-        // Non-file redirects are returned to the flow as status + Location
-        // rather than followed with credentials or treated as API failures.
-        let response = if response.status().is_redirection() {
-            response
-        } else {
-            error_for_status(response, "Remote REST call").await?
-        };
-
-        let status = response.status().as_u16() as i64;
-        let header_map: flow_like_types::json::Map<String, Value> = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.to_string(), json!(v))))
-            .collect();
-        let content_type = response
-            .headers()
-            .get(flow_like_types::reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Remote REST call did not finish within {} seconds",
+                    timeout
+                )
+            })??;
 
         context.set_pin_value("status", json!(status)).await?;
         context
             .set_pin_value("response_headers", json!(header_map))
             .await?;
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| flow_like_types::anyhow!("Failed to read REST response: {}", err))?;
 
         if is_file || is_binary_content(&content_type) {
             let file =
@@ -936,15 +965,24 @@ impl CallRemoteEventNode {
     ) -> flow_like_types::Result<()> {
         let mode: String = context.evaluate_pin("mode").await.unwrap_or_default();
         let headers: Value = context.evaluate_pin("headers").await.unwrap_or(Value::Null);
+        let timeout = self.timeout_secs(context).await;
 
         if mode == MCP_MODE_READ_RESOURCE {
             let uri: String = context.evaluate_pin("resource").await.unwrap_or_default();
             if uri.trim().is_empty() {
                 return Err(flow_like_types::anyhow!("No resource selected"));
             }
-            let result = session
-                .mcp_request(event_id, "resources/read", json!({ "uri": uri }), &headers)
-                .await?;
+            let result = flow_like_types::tokio::time::timeout(
+                std::time::Duration::from_secs(timeout),
+                session.mcp_request(event_id, "resources/read", json!({ "uri": uri }), &headers),
+            )
+            .await
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Remote MCP request did not finish within {} seconds",
+                    timeout
+                )
+            })??;
             let contents = result
                 .get("contents")
                 .and_then(|c| c.as_array())
@@ -1010,14 +1048,22 @@ impl CallRemoteEventNode {
             }
         }
 
-        let result = session
-            .mcp_request(
+        let result = flow_like_types::tokio::time::timeout(
+            std::time::Duration::from_secs(timeout),
+            session.mcp_request(
                 event_id,
                 "tools/call",
                 json!({ "name": tool, "arguments": arguments }),
                 &headers,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            flow_like_types::anyhow!(
+                "Remote MCP request did not finish within {} seconds",
+                timeout
             )
-            .await?;
+        })??;
 
         if result
             .get("isError")
@@ -1051,6 +1097,18 @@ fn ensure_leading_slash(path: &str) -> String {
     } else {
         format!("/{}", path)
     }
+}
+
+fn encode_path_parameter(value: &str) -> flow_like_types::Result<String> {
+    // URL parsers normalize literal and percent-encoded dot-only segments
+    // before sending the request. Reject them explicitly so a dynamic route
+    // value can never escape the trusted event REST proxy path.
+    if value == "." || value == ".." {
+        return Err(flow_like_types::anyhow!(
+            "Remote REST path parameters cannot be '.' or '..'"
+        ));
+    }
+    Ok(urlencoding::encode(value).into_owned())
 }
 
 fn value_to_query(value: &Value) -> String {
@@ -1179,4 +1237,29 @@ fn extract_mcp_text(result: &Value) -> String {
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_path_parameter;
+
+    #[test]
+    fn remote_rest_path_parameters_stay_in_one_segment() {
+        assert_eq!(
+            encode_path_parameter("folder/name?x=1%done").unwrap(),
+            "folder%2Fname%3Fx%3D1%25done"
+        );
+        assert_eq!(
+            encode_path_parameter(" already-safe ").unwrap(),
+            "%20already-safe%20"
+        );
+    }
+
+    #[test]
+    fn remote_rest_path_parameters_reject_dot_segments() {
+        assert!(encode_path_parameter(".").is_err());
+        assert_eq!(encode_path_parameter(" .. ").unwrap(), "%20..%20");
+        assert_eq!(encode_path_parameter("...").unwrap(), "...");
+        assert_eq!(encode_path_parameter("%2e%2e").unwrap(), "%252e%252e");
+    }
 }

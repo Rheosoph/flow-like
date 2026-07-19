@@ -6,7 +6,7 @@ use axum::{
 use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
-    routes::app::db::{ScopeParams, resolve_connection},
+    routes::app::db::{ScopeParams, resolve_connection, resolve_write_connection},
     state::AppState,
 };
 use flow_like_storage::databases::graph::lancegraph::{self, GraphOverlayDef};
@@ -45,6 +45,28 @@ pub(crate) async fn load_scoped_overlay(
     scope: &ScopeParams,
 ) -> Result<(Connection, GraphOverlayDef), ApiError> {
     let connection = resolve_connection(state, user, app_id, scope).await?;
+    let overlay = lancegraph::load_overlay(&connection, overlay_id)
+        .await
+        .map_err(|_| ApiError::not_found("Graph overlay not found"))?;
+    if user.is_connected_app() && !overlay.exposed {
+        return Err(ApiError::forbidden(
+            "This ontology is not exposed to connected projects",
+        ));
+    }
+    Ok((connection, overlay))
+}
+
+/// Write-capable counterpart to [`load_scoped_overlay`]. This is deliberately
+/// separate so a new mutation cannot accidentally inherit read-only temporary
+/// credentials for a user-scoped database.
+pub(crate) async fn load_scoped_overlay_for_write(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    overlay_id: &str,
+    scope: &ScopeParams,
+) -> Result<(Connection, GraphOverlayDef), ApiError> {
+    let connection = resolve_write_connection(state, user, app_id, scope).await?;
     let overlay = lancegraph::load_overlay(&connection, overlay_id)
         .await
         .map_err(|_| ApiError::not_found("Graph overlay not found"))?;

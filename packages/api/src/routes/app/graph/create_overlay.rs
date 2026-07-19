@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection},
+    routes::app::db::{ScopeParams, resolve_write_connection},
     state::AppState,
 };
 use axum::{
@@ -78,11 +78,12 @@ pub async fn create_overlay(
         RolePermissions::WriteDatabase
     );
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
 
     let now = chrono::Utc::now().to_rfc3339();
     let overlay_id = uuid::Uuid::new_v4().to_string();
     let mut action_owner_sub = None;
+    let mut prepared_action_snapshots = Vec::new();
     let nodes = payload
         .nodes
         .iter()
@@ -105,7 +106,36 @@ pub async fn create_overlay(
             style: serde_json::to_value(&n.style).unwrap_or_default(),
         })
         .collect::<Vec<_>>();
-    let mut actions = payload
+    let edges = payload
+        .edges
+        .iter()
+        .map(|e| lancegraph::EdgeMappingDef {
+            id: e.id.clone(),
+            api_name: e.api_name.clone(),
+            label: e.label.clone(),
+            table: e.table.clone(),
+            src_column: e.src_column.clone(),
+            dst_column: e.dst_column.clone(),
+            src_label: e.src_label.clone(),
+            dst_label: e.dst_label.clone(),
+            src_node_column: e.src_node_column.clone(),
+            dst_node_column: e.dst_node_column.clone(),
+            containment: e.containment,
+            dst_ontology: e.dst_ontology.clone(),
+            dst_binding_id: e.dst_binding_id.clone(),
+            property_columns: e
+                .property_columns
+                .iter()
+                .map(|p| lancegraph::PropertyColumnDef {
+                    name: p.name.clone(),
+                    data_type: p.data_type.clone(),
+                    nullable: p.nullable,
+                })
+                .collect(),
+            style: serde_json::to_value(&e.style).unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let actions = payload
         .actions
         .iter()
         .map(|action| lancegraph::OntologyActionDef {
@@ -140,63 +170,14 @@ pub async fn create_overlay(
         if !permission.has_permission(RolePermissions::WriteEvents) {
             return Err(ApiError::FORBIDDEN);
         }
-        let sub = permission.sub()?;
-        action_owner_sub = Some(sub.clone());
-        if let Err(error) = super::actions::materialize_action_events(
-            &state,
-            &sub,
-            &app_id,
-            &overlay_id,
-            payload.exposed,
-            &nodes,
-            &mut actions,
-        )
-        .await
-        {
-            if let Err(cleanup_error) =
-                super::actions::remove_action_events(&state, &sub, &app_id, &overlay_id, &actions)
-                    .await
-            {
-                tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
-            }
-            return Err(error);
-        }
+        action_owner_sub = Some(permission.sub()?.clone());
     }
-
-    let def = lancegraph::GraphOverlayDef {
+    let mut def = lancegraph::GraphOverlayDef {
         id: overlay_id.clone(),
         name: payload.name.clone(),
         description: payload.description.clone(),
         nodes,
-        edges: payload
-            .edges
-            .iter()
-            .map(|e| lancegraph::EdgeMappingDef {
-                id: e.id.clone(),
-                api_name: e.api_name.clone(),
-                label: e.label.clone(),
-                table: e.table.clone(),
-                src_column: e.src_column.clone(),
-                dst_column: e.dst_column.clone(),
-                src_label: e.src_label.clone(),
-                dst_label: e.dst_label.clone(),
-                src_node_column: e.src_node_column.clone(),
-                dst_node_column: e.dst_node_column.clone(),
-                containment: e.containment,
-                dst_ontology: e.dst_ontology.clone(),
-                dst_binding_id: e.dst_binding_id.clone(),
-                property_columns: e
-                    .property_columns
-                    .iter()
-                    .map(|p| lancegraph::PropertyColumnDef {
-                        name: p.name.clone(),
-                        data_type: p.data_type.clone(),
-                        nullable: p.nullable,
-                    })
-                    .collect(),
-                style: serde_json::to_value(&e.style).unwrap_or_default(),
-            })
-            .collect(),
+        edges,
         object_views: payload
             .object_views
             .iter()
@@ -209,14 +190,20 @@ pub async fn create_overlay(
         actions,
         exposed: payload.exposed,
         bindings_enabled: payload.bindings_enabled,
+        property_projection_mode: lancegraph::PropertyProjectionMode::Dynamic,
         default_limit: payload.default_limit,
         created_at: now.clone(),
         updated_at: now.clone(),
     };
 
-    let report = lancegraph::validate_overlay_definition(&connection, &def)
-        .await
-        .map_err(|error| ApiError::internal(format!("Overlay validation failed: {error}")))?;
+    let report = match lancegraph::validate_overlay_definition(&connection, &def).await {
+        Ok(report) => report,
+        Err(error) => {
+            return Err(ApiError::internal(format!(
+                "Overlay validation failed: {error}"
+            )));
+        }
+    };
     if !report.ok {
         let mut issues = report.issues;
         for mapping in &report.mappings {
@@ -224,6 +211,48 @@ pub async fn create_overlay(
                 issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
             }
         }
+        return Err(ApiError::bad_request(format!(
+            "The overlay definition is invalid: {}",
+            issues.join("; ")
+        )));
+    }
+
+    // Validate the complete draft before publishing boards or creating
+    // managed events. Invalid mappings must not leave action side effects or
+    // immutable snapshot fragments behind.
+    if let Some(sub) = action_owner_sub.as_ref() {
+        match super::actions::materialize_action_events(
+            &state,
+            sub,
+            &app_id,
+            &overlay_id,
+            def.exposed,
+            &def.nodes,
+            &def.edges,
+            def.property_projection_mode,
+            &mut def.actions,
+        )
+        .await
+        {
+            Ok(prepared) => prepared_action_snapshots = prepared,
+            Err(error) => {
+                if let Err(cleanup_error) = super::actions::remove_action_events(
+                    &state,
+                    sub,
+                    &app_id,
+                    &overlay_id,
+                    &def.actions,
+                )
+                .await
+                {
+                    tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    if let Err(error) = lancegraph::save_overlay(&connection, &def).await {
         if let Some(sub) = action_owner_sub.as_ref()
             && let Err(cleanup_error) = super::actions::remove_action_events(
                 &state,
@@ -236,26 +265,20 @@ pub async fn create_overlay(
         {
             tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
         }
-        return Err(ApiError::bad_request(format!(
-            "The overlay definition is invalid: {}",
-            issues.join("; ")
-        )));
-    }
-
-    if let Err(error) = lancegraph::save_overlay(&connection, &def).await {
-        if let Some(sub) = action_owner_sub
-            && let Err(cleanup_error) = super::actions::remove_action_events(
-                &state,
-                &sub,
-                &app_id,
-                &overlay_id,
-                &def.actions,
-            )
-            .await
-        {
-            tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
-        }
         return Err(error.into());
+    }
+    if let Some(sub) = action_owner_sub.as_ref()
+        && let Err(error) = super::actions::commit_action_board_snapshots(
+            &state,
+            sub,
+            &app_id,
+            &prepared_action_snapshots,
+        )
+        .await
+    {
+        // The ontology and immutable snapshots are already committed and are
+        // executable. A later reconciliation safely retries this pointer move.
+        tracing::warn!(%error, "Could not advance a prepared action board draft");
     }
     Ok(Json(super::list_overlays::def_to_overlay(def)))
 }

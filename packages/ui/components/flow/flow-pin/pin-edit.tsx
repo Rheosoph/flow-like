@@ -178,6 +178,7 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 			appId,
 			boardId,
 			nodeId,
+			currentLayerId,
 			boardRef,
 			setValue: updateDefaultValue,
 		} as const;

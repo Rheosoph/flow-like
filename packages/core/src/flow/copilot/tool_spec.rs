@@ -1027,14 +1027,23 @@ fn graph_query_tool_schema() -> Value {
             "params": { "type": "object", "description": "Cypher query parameters." },
             "limit": { "type": "integer", "description": "Maximum rows/nodes to return." },
             "label": { "type": "string", "description": "Node label (neighbors, sample)." },
-            "node_id": { "type": "string", "description": "Anchor node id (neighbors)." },
+            "node_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Anchor node id (neighbors). Accepts the scalar type used by the mapped id column."
+            },
             "direction": { "type": "string", "enum": ["in", "out", "both"], "description": "Traversal direction (neighbors)." },
             "depth": { "type": "integer", "description": "Traversal depth 1-5 (neighbors, subgraph)." },
             "seeds": { "type": "array", "items": { "type": "object" }, "description": "Seed nodes for subgraph as [{label, id}]." },
             "from_label": { "type": "string", "description": "Path source label (paths)." },
-            "from_id": { "type": "string", "description": "Path source id (paths)." },
+            "from_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Path source id (paths). Accepts the scalar type used by the mapped id column."
+            },
             "to_label": { "type": "string", "description": "Path target label (paths)." },
-            "to_id": { "type": "string", "description": "Path target id (paths)." },
+            "to_id": {
+                "oneOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }],
+                "description": "Path target id (paths). Accepts the scalar type used by the mapped id column."
+            },
             "max_depth": { "type": "integer", "description": "Maximum path length (paths)." },
             "n": { "type": "integer", "description": "Sample size (sample)." }
         },
@@ -1219,6 +1228,21 @@ mod tests {
         assert_eq!(schema["required"], json!(["app_id", "board_id", "run_id"]));
         for field in ["filter", "limit", "offset", "run_metadata"] {
             assert!(schema["properties"].get(field).is_some(), "missing {field}");
+        }
+    }
+
+    #[test]
+    fn graph_query_ids_accept_non_string_scalars() {
+        let schema = graph_query_tool_schema();
+        for field in ["node_id", "from_id", "to_id"] {
+            let variants = schema["properties"][field]["oneOf"]
+                .as_array()
+                .expect("scalar id union");
+            let types = variants
+                .iter()
+                .filter_map(|variant| variant["type"].as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(types, vec!["string", "number", "boolean"]);
         }
     }
 }

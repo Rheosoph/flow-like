@@ -54,7 +54,12 @@ impl NodeLogic for GraphSearchNode {
         )
         .set_default_value(Some(json!(50)));
 
-        node.add_output_pin("exec_out", "Done", "Search completed", VariableType::Execution);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Search completed",
+            VariableType::Execution,
+        );
         node.add_output_pin("error", "Error", "Search failed", VariableType::Execution);
         node.add_output_pin(
             "error_message",
@@ -83,15 +88,17 @@ impl NodeLogic for GraphSearchNode {
         let conn: NodeGraphConnection = context.evaluate_pin("graph").await?;
         let query: String = context.evaluate_pin("query").await?;
         let limit: i64 = context.evaluate_pin("limit").await.unwrap_or(50);
-        let limit = if limit > 0 { Some(limit as usize) } else { None };
+        let limit = if limit > 0 {
+            Some(limit as usize)
+        } else {
+            None
+        };
 
         let store = super::load_graph_store(context, &conn.cache_key).await?;
 
         match store.search_nodes(&query, limit).await {
             Ok(result) => {
-                context
-                    .set_pin_value("result_nodes", json!(result))
-                    .await?;
+                context.set_pin_value("result_nodes", json!(result)).await?;
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {

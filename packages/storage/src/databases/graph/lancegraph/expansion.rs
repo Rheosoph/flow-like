@@ -4,6 +4,8 @@
 //! here: breadth-first frontier expansion with batched `IN` scans directly on
 //! the mapped Lance tables, and petgraph for path reconstruction and metrics.
 
+#[cfg(test)]
+use super::PropertyProjectionMode;
 use super::{
     GraphOverlayDef, LanceGraphStore, filter_identifier, load_overlay, resolve_object_mapping,
     resolve_property_names, value_sql_literal, value_to_id_string,
@@ -211,6 +213,7 @@ impl LanceGraphStore {
                     &self.connection,
                     &edge.table,
                     &edge.property_columns,
+                    self.overlay.property_projection_mode,
                     &mut schema_cache,
                     &excluded,
                     &[],
@@ -370,6 +373,7 @@ impl LanceGraphStore {
                 &self.connection,
                 &mapping.table,
                 &mapping.property_columns,
+                self.overlay.property_projection_mode,
                 schema_cache,
                 &excluded,
                 &always_include,
@@ -390,8 +394,11 @@ impl LanceGraphStore {
                     .iter()
                     .map(value_sql_literal)
                     .collect::<Result<Vec<_>>>()?;
-                let predicate =
-                    format!("{} IN ({})", filter_identifier(&id_col), literals.join(", "));
+                let predicate = format!(
+                    "{} IN ({})",
+                    filter_identifier(&id_col),
+                    literals.join(", ")
+                );
                 let batches = table
                     .query()
                     .only_if(predicate)
@@ -554,6 +561,7 @@ impl LanceGraphStore {
                 &self.connection,
                 &edge.table,
                 &edge.property_columns,
+                self.overlay.property_projection_mode,
                 &mut schema_cache,
                 &excluded,
                 &[],
@@ -734,6 +742,7 @@ impl LanceGraphStore {
                 &self.connection,
                 &mapping.table,
                 &mapping.property_columns,
+                self.overlay.property_projection_mode,
                 schema_cache,
                 &excluded,
                 &always_include,
@@ -775,7 +784,11 @@ impl LanceGraphStore {
             if literals.is_empty() {
                 continue;
             }
-            let predicate = format!("{} IN ({})", filter_identifier(&id_col), literals.join(", "));
+            let predicate = format!(
+                "{} IN ({})",
+                filter_identifier(&id_col),
+                literals.join(", ")
+            );
             let batches = match table
                 .query()
                 .only_if(predicate)
@@ -851,12 +864,13 @@ impl LanceGraphStore {
         max_depth: usize,
         node_limit: usize,
     ) -> Result<GraphPathsResult> {
+        let max_depth = max_depth.clamp(1, self.safety.max_depth);
         let from_full = format!("{}:{}", from.0, value_to_id_string(Some(&from.1)));
         let target_full = format!("{}:{}", to.0, value_to_id_string(Some(&to.1)));
         let expansion = self
             .expand_subgraph(
                 vec![from, to],
-                max_depth.clamp(1, self.safety.max_depth),
+                max_depth,
                 TraversalDirection::Both,
                 node_limit,
             )
@@ -903,6 +917,13 @@ impl LanceGraphStore {
                 if cost >= 1_000_000 {
                     break;
                 }
+                let path_length = node_indices.len().saturating_sub(1);
+                // Bidirectional expansion can expose a route up to twice the
+                // requested depth. The API contract bounds the final route,
+                // not each half of the discovery process.
+                if path_length > max_depth {
+                    break;
+                }
                 let node_ids = node_indices
                     .iter()
                     .map(|index| graph[*index].clone())
@@ -916,7 +937,7 @@ impl LanceGraphStore {
                     }
                 }
                 paths.push(GraphPath {
-                    length: node_ids.len().saturating_sub(1),
+                    length: path_length,
                     node_ids,
                     edge_ids,
                 });
@@ -977,17 +998,20 @@ impl LanceGraphStore {
         }
 
         let edge_budget = edge_limit.clamp(1, ANALYTICS_MAX_EDGES);
-        let per_mapping_cap = if self.overlay.edges.is_empty() {
-            0
-        } else {
-            (edge_budget / self.overlay.edges.len()).max(1)
-        };
+        let edge_mapping_count = self.overlay.edges.len();
+        let base_mapping_cap = edge_budget / edge_mapping_count.max(1);
+        let mappings_with_extra_row = edge_budget % edge_mapping_count.max(1);
 
         let mut graph = petgraph::Graph::<(String, String), (), petgraph::Directed>::new();
         let mut index_of: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
         let mut edge_count = 0usize;
 
-        for edge in &self.overlay.edges {
+        for (mapping_index, edge) in self.overlay.edges.iter().enumerate() {
+            // Quotient/remainder allocation keeps the sum of accepted rows at
+            // exactly `edge_budget`. Mappings assigned zero rows still query
+            // one sentinel so `truncated` reflects omitted data.
+            let per_mapping_cap = base_mapping_cap
+                .saturating_add(usize::from(mapping_index < mappings_with_extra_row));
             let table = match self.open_table_cached(&edge.table, &mut table_cache).await {
                 Ok(table) => table,
                 Err(error) => {
@@ -999,7 +1023,7 @@ impl LanceGraphStore {
             let batches = match table
                 .query()
                 .select(lancedb::query::Select::Columns(columns))
-                .limit(per_mapping_cap)
+                .limit(per_mapping_cap.saturating_add(1))
                 .execute()
                 .await
             {
@@ -1016,15 +1040,19 @@ impl LanceGraphStore {
                 }
             };
             let mut mapping_rows = 0usize;
-            for batch in &batches {
+            'mapping: for batch in &batches {
                 for row in record_batch_to_value(batch)? {
+                    mapping_rows += 1;
+                    if mapping_rows > per_mapping_cap {
+                        truncated = true;
+                        break 'mapping;
+                    }
                     let Value::Object(map) = row else { continue };
                     let src_key = value_to_id_string(map.get(&edge.src_column));
                     let dst_key = value_to_id_string(map.get(&edge.dst_column));
                     if src_key.is_empty() || dst_key.is_empty() {
                         continue;
                     }
-                    mapping_rows += 1;
                     let src_full = format!("{}:{}", edge.src_label, src_key);
                     let dst_full = format!("{}:{}", edge.dst_label, dst_key);
                     let src_index = *index_of.entry(src_full.clone()).or_insert_with(|| {
@@ -1037,34 +1065,37 @@ impl LanceGraphStore {
                     edge_count += 1;
                 }
             }
-            if mapping_rows >= per_mapping_cap {
-                truncated = true;
-            }
         }
 
-        let node_count = graph.node_count();
-        let mut union_find: UnionFind<usize> = UnionFind::new(node_count);
+        let sampled_node_count = graph.node_count();
+        let mut union_find: UnionFind<usize> = UnionFind::new(sampled_node_count);
         for edge_ref in graph.edge_indices() {
             if let Some((source, target)) = graph.edge_endpoints(edge_ref) {
                 union_find.union(source.index(), target.index());
             }
         }
-        let mut component_of = vec![0usize; node_count];
+        let mut component_of = vec![0usize; sampled_node_count];
         let mut component_sizes: HashMap<usize, usize> = HashMap::new();
         for index in graph.node_indices() {
             let root = union_find.find(index.index());
             component_of[index.index()] = root;
             *component_sizes.entry(root).or_default() += 1;
         }
-        let component_count = component_sizes.len();
+        let total_declared_nodes: usize = label_counts.iter().map(|entry| entry.nodes).sum();
+        // Edge rows are bounded, while node counts are exact table counts. Nodes
+        // absent from the sampled edge snapshot are singleton components in that
+        // snapshot. When `truncated` is true, component/isolation metrics are
+        // explicitly sample-relative rather than claims about the full edge set.
+        let snapshot_isolated_node_count = total_declared_nodes.saturating_sub(sampled_node_count);
+        let component_count = component_sizes
+            .len()
+            .saturating_add(snapshot_isolated_node_count);
         let mut largest_components = component_sizes.values().copied().collect::<Vec<_>>();
+        largest_components.extend(std::iter::repeat_n(1, snapshot_isolated_node_count.min(10)));
         largest_components.sort_unstable_by(|left, right| right.cmp(left));
         largest_components.truncate(10);
 
-        let total_declared_nodes: usize = label_counts.iter().map(|entry| entry.nodes).sum();
-        let isolated_node_count = total_declared_nodes.saturating_sub(node_count);
-
-        let pagerank = if node_count > 0 {
+        let pagerank = if sampled_node_count > 0 {
             petgraph::algo::page_rank(&graph, 0.85_f64, 20)
         } else {
             Vec::new()
@@ -1116,14 +1147,20 @@ impl LanceGraphStore {
         self.attach_captions(&mut top_by_pagerank, &mut table_cache, &mut warnings)
             .await;
 
+        if truncated {
+            warnings.push(format!(
+                "Analytics sampled at most {edge_budget} edge rows; edge count, components, isolation, degree, and PageRank describe that bounded snapshot"
+            ));
+        }
+
         Ok(GraphAnalyticsResult {
-            node_count,
+            node_count: total_declared_nodes,
             edge_count,
             truncated,
             label_counts,
             component_count,
             largest_components,
-            isolated_node_count,
+            isolated_node_count: snapshot_isolated_node_count,
             top_by_degree,
             top_by_pagerank,
             warnings,
@@ -1179,7 +1216,11 @@ impl LanceGraphStore {
             if literals.is_empty() {
                 continue;
             }
-            let predicate = format!("{} IN ({})", filter_identifier(&id_col), literals.join(", "));
+            let predicate = format!(
+                "{} IN ({})",
+                filter_identifier(&id_col),
+                literals.join(", ")
+            );
             let result = table
                 .query()
                 .only_if(predicate)
@@ -1220,5 +1261,211 @@ impl LanceGraphStore {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::databases::graph::GraphStore;
+    use crate::databases::graph::lancegraph::{CypherSafetyConfig, EdgeMappingDef, NodeMappingDef};
+    use arrow::array::{RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use lancedb::connect;
+    use std::sync::Arc;
+
+    async fn graph_fixture(
+        node_count: usize,
+        edge_pairs: &[(&str, &str)],
+    ) -> Result<(LanceGraphStore, String)> {
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+
+        let node_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let nodes = RecordBatch::try_new(
+            node_schema,
+            vec![Arc::new(StringArray::from_iter_values(
+                (1..=node_count).map(|id| id.to_string()),
+            ))],
+        )?;
+        connection
+            .create_table("people", vec![nodes])
+            .execute()
+            .await?;
+
+        let edges = if edge_pairs.is_empty() {
+            Vec::new()
+        } else {
+            let edge_schema = Arc::new(Schema::new(vec![
+                Field::new("source", DataType::Utf8, false),
+                Field::new("target", DataType::Utf8, false),
+            ]));
+            let rows = RecordBatch::try_new(
+                edge_schema,
+                vec![
+                    Arc::new(StringArray::from_iter_values(
+                        edge_pairs.iter().map(|(source, _)| *source),
+                    )),
+                    Arc::new(StringArray::from_iter_values(
+                        edge_pairs.iter().map(|(_, target)| *target),
+                    )),
+                ],
+            )?;
+            connection
+                .create_table("links", vec![rows])
+                .execute()
+                .await?;
+            vec![EdgeMappingDef {
+                id: Some("knows".to_string()),
+                api_name: Some("knows".to_string()),
+                label: "KNOWS".to_string(),
+                table: "links".to_string(),
+                src_column: "source".to_string(),
+                dst_column: "target".to_string(),
+                src_label: "Person".to_string(),
+                dst_label: "Person".to_string(),
+                src_node_column: None,
+                dst_node_column: None,
+                containment: false,
+                dst_ontology: None,
+                dst_binding_id: None,
+                property_columns: Vec::new(),
+                style: Value::Null,
+            }]
+        };
+        let overlay = GraphOverlayDef {
+            id: "ontology".to_string(),
+            name: "Ontology".to_string(),
+            description: None,
+            nodes: vec![NodeMappingDef {
+                id: Some("person".to_string()),
+                api_name: Some("person".to_string()),
+                label: "Person".to_string(),
+                table: "people".to_string(),
+                id_column: "id".to_string(),
+                display_column: None,
+                property_columns: Vec::new(),
+                style: Value::Null,
+            }],
+            edges,
+            object_views: Vec::new(),
+            actions: Vec::new(),
+            exposed: false,
+            bindings_enabled: false,
+            property_projection_mode: PropertyProjectionMode::Dynamic,
+            default_limit: 100,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let store =
+            LanceGraphStore::new(connection, overlay, Some(CypherSafetyConfig::default())).await?;
+        Ok((store, test_path))
+    }
+
+    #[tokio::test]
+    async fn shortest_path_never_exceeds_requested_depth() -> Result<()> {
+        let (store, test_path) =
+            graph_fixture(5, &[("1", "2"), ("2", "3"), ("3", "4"), ("4", "5")]).await?;
+
+        let bounded = store
+            .shortest_paths(
+                ("Person".to_string(), Value::String("1".to_string())),
+                ("Person".to_string(), Value::String("5".to_string())),
+                2,
+                Some(100),
+            )
+            .await?;
+        assert!(!bounded.found);
+        assert!(bounded.paths.is_empty());
+
+        let permitted = store
+            .shortest_paths(
+                ("Person".to_string(), Value::String("1".to_string())),
+                ("Person".to_string(), Value::String("5".to_string())),
+                4,
+                Some(100),
+            )
+            .await?;
+        assert!(permitted.found);
+        assert_eq!(permitted.paths[0].length, 4);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn analytics_counts_all_nodes_when_there_are_no_edges() -> Result<()> {
+        let (store, test_path) = graph_fixture(5, &[]).await?;
+        let analytics = store.analytics(Some(100)).await?;
+
+        assert_eq!(analytics.node_count, 5);
+        assert_eq!(analytics.edge_count, 0);
+        assert_eq!(analytics.component_count, 5);
+        assert_eq!(analytics.isolated_node_count, 5);
+        assert_eq!(analytics.largest_components, vec![1, 1, 1, 1, 1]);
+        assert!(!analytics.truncated);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn analytics_includes_unsampled_nodes_as_snapshot_singletons() -> Result<()> {
+        let (store, test_path) = graph_fixture(4, &[("1", "2"), ("2", "3")]).await?;
+        let analytics = store.analytics(Some(1)).await?;
+
+        assert_eq!(analytics.node_count, 4);
+        assert_eq!(analytics.edge_count, 1);
+        assert_eq!(analytics.component_count, 3);
+        assert_eq!(analytics.isolated_node_count, 2);
+        assert_eq!(analytics.largest_components, vec![2, 1, 1]);
+        assert!(analytics.truncated);
+        assert!(
+            analytics
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("bounded snapshot"))
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn analytics_edge_budget_is_global_across_mappings() -> Result<()> {
+        let (mut store, test_path) = graph_fixture(3, &[("1", "2")]).await?;
+        let second_edge_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Utf8, false),
+            Field::new("target", DataType::Utf8, false),
+        ]));
+        let second_edge_rows = RecordBatch::try_new(
+            second_edge_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["2"])),
+                Arc::new(StringArray::from(vec!["3"])),
+            ],
+        )?;
+        store
+            .connection()
+            .create_table("second_links", vec![second_edge_rows])
+            .execute()
+            .await?;
+        let mut second_mapping = store.overlay.edges[0].clone();
+        second_mapping.id = Some("likes".to_string());
+        second_mapping.api_name = Some("likes".to_string());
+        second_mapping.label = "LIKES".to_string();
+        second_mapping.table = "second_links".to_string();
+        store.overlay.edges.push(second_mapping);
+
+        let analytics = store.analytics(Some(1)).await?;
+        assert_eq!(
+            analytics.edge_count, 1,
+            "the budget is global, not per mapping"
+        );
+        assert!(analytics.truncated);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
     }
 }

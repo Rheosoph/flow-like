@@ -2,7 +2,9 @@ use flow_like::flow_like_storage::{
     databases::graph::lancegraph,
     databases::workbench::{
         self, WorkbenchSurface, WorkbenchView,
-        saved_query::{self, SavedQueryDef, SavedQueryKind, SavedQuerySurface},
+        saved_query::{
+            self, SavedQueryDef, SavedQueryKind, SavedQuerySaveResult, SavedQuerySurface,
+        },
     },
     lancedb::Connection,
 };
@@ -31,26 +33,34 @@ pub struct SavedQueryInput {
     pub default_limit: Option<usize>,
 }
 
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SavedQueryUpdateInput {
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub description: Option<Option<String>>,
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
     pub surface: Option<String>,
-    #[serde(default)]
-    pub overlay_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub overlay_id: Option<Option<String>>,
     #[serde(default)]
     pub sql: Option<String>,
-    #[serde(default)]
-    pub param_schema: Option<Value>,
-    #[serde(default)]
-    pub viz_config: Option<Value>,
-    #[serde(default)]
-    pub default_limit: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub param_schema: Option<Option<Value>>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub viz_config: Option<Option<Value>>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub default_limit: Option<Option<usize>>,
     #[serde(default)]
     pub expected_updated_at: Option<String>,
 }
@@ -87,6 +97,84 @@ fn parse_surface(value: &str) -> flow_like_types::Result<SavedQuerySurface> {
             other
         )),
     }
+}
+
+fn validate_table_name(name: &str) -> flow_like_types::Result<()> {
+    if name.is_empty() || name.len() > 256 {
+        return Err(flow_like_types::anyhow!(
+            "Table name must be 1-256 characters"
+        ));
+    }
+    if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(flow_like_types::anyhow!(
+            "Table name contains forbidden characters"
+        ));
+    }
+    if !name
+        .chars()
+        .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    {
+        return Err(flow_like_types::anyhow!(
+            "Table name contains invalid characters"
+        ));
+    }
+    if flow_like_catalog::is_reserved_table(name) {
+        return Err(flow_like_types::anyhow!(
+            "Table name is reserved for internal use"
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_saved_query(
+    connection: &Connection,
+    def: &SavedQueryDef,
+) -> flow_like_types::Result<()> {
+    match def.surface {
+        SavedQuerySurface::Overlay => {
+            let overlay_id = def
+                .overlay_id
+                .as_deref()
+                .filter(|overlay_id| !overlay_id.trim().is_empty())
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "A non-empty overlay id is required for overlay queries"
+                    )
+                })?;
+            lancegraph::load_overlay(connection, overlay_id)
+                .await
+                .map_err(|_| {
+                    flow_like_types::anyhow!("The selected graph overlay does not exist")
+                })?;
+        }
+        SavedQuerySurface::Native if def.overlay_id.is_some() => {
+            return Err(flow_like_types::anyhow!(
+                "overlay_id must be omitted for native queries"
+            ));
+        }
+        SavedQuerySurface::Native => {}
+    }
+    workbench::validate_workbench_sql(&def.sql)?;
+
+    if def.kind == SavedQueryKind::View {
+        if def.sql.contains('$') {
+            return Err(flow_like_types::anyhow!(
+                "Views must not declare parameters"
+            ));
+        }
+        validate_table_name(&def.name)?;
+        let tables = connection.table_names().execute().await?;
+        if tables
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&def.name))
+        {
+            return Err(flow_like_types::anyhow!(
+                "View name '{}' collides with an existing table",
+                def.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn collect_views(
@@ -155,8 +243,26 @@ pub async fn query_saved_create(
         created_at: now.clone(),
         updated_at: now,
     };
-    workbench::validate_workbench_sql(&def.sql)?;
-    saved_query::save_saved_query(&conn, &def).await?;
+    validate_saved_query(&conn, &def).await?;
+    match saved_query::save_saved_query(&conn, &def).await? {
+        SavedQuerySaveResult::Saved => {}
+        SavedQuerySaveResult::ViewNameConflict { .. } => {
+            return Err(TauriFunctionError::new(&format!(
+                "View name '{}' is already used by another saved view on this surface",
+                def.name
+            )));
+        }
+        SavedQuerySaveResult::RevisionConflict => {
+            return Err(TauriFunctionError::new(
+                "A saved query with this ID was created concurrently. Retry the request.",
+            ));
+        }
+        SavedQuerySaveResult::ViewLimitExceeded { limit } => {
+            return Err(TauriFunctionError::new(&format!(
+                "A workbench surface can contain at most {limit} saved views"
+            )));
+        }
+    }
     serde_json::to_value(def).map_err(|e| e.into())
 }
 
@@ -171,9 +277,10 @@ pub async fn query_saved_update(
     let conn = graph_connection(&app_handle, &app_id, user_scoped.unwrap_or(false)).await?;
     let previous = saved_query::load_saved_query(&conn, &query_id).await?;
 
-    if let Some(expected) = payload.expected_updated_at.as_deref()
-        && expected != previous.updated_at
-    {
+    let expected_updated_at = payload.expected_updated_at.clone().ok_or_else(|| {
+        TauriFunctionError::new("expected_updated_at is required when updating a saved query")
+    })?;
+    if expected_updated_at != previous.updated_at {
         return Err(TauriFunctionError::new(
             "This saved query was modified elsewhere. Reload and try again.",
         ));
@@ -183,8 +290,8 @@ pub async fn query_saved_update(
     if let Some(name) = payload.name {
         def.name = name;
     }
-    if payload.description.is_some() {
-        def.description = payload.description;
+    if let Some(description) = payload.description {
+        def.description = description;
     }
     if let Some(kind) = payload.kind {
         def.kind = parse_kind(&kind)?;
@@ -192,30 +299,42 @@ pub async fn query_saved_update(
     if let Some(surface) = payload.surface {
         def.surface = parse_surface(&surface)?;
     }
-    if payload.overlay_id.is_some() {
-        def.overlay_id = payload.overlay_id;
+    if let Some(overlay_id) = payload.overlay_id {
+        def.overlay_id = overlay_id;
     }
     if let Some(sql) = payload.sql {
         def.sql = sql;
     }
-    if payload.param_schema.is_some() {
-        def.param_schema = payload.param_schema;
+    if let Some(param_schema) = payload.param_schema {
+        def.param_schema = param_schema;
     }
-    if payload.viz_config.is_some() {
-        def.viz_config = payload.viz_config;
+    if let Some(viz_config) = payload.viz_config {
+        def.viz_config = viz_config;
     }
-    if payload.default_limit.is_some() {
-        def.default_limit = payload.default_limit;
+    if let Some(default_limit) = payload.default_limit {
+        def.default_limit = default_limit;
     }
-    def.updated_at = chrono::Utc::now().to_rfc3339();
+    def.updated_at = saved_query::next_updated_at(&previous.updated_at);
 
-    workbench::validate_workbench_sql(&def.sql)?;
-    let saved =
-        saved_query::save_saved_query_if_unchanged(&conn, &def, &previous.updated_at).await?;
-    if !saved {
-        return Err(TauriFunctionError::new(
-            "This saved query was modified elsewhere. Reload and try again.",
-        ));
+    validate_saved_query(&conn, &def).await?;
+    match saved_query::save_saved_query_if_unchanged(&conn, &def, &expected_updated_at).await? {
+        SavedQuerySaveResult::Saved => {}
+        SavedQuerySaveResult::RevisionConflict => {
+            return Err(TauriFunctionError::new(
+                "This saved query was modified elsewhere. Reload and try again.",
+            ));
+        }
+        SavedQuerySaveResult::ViewNameConflict { .. } => {
+            return Err(TauriFunctionError::new(&format!(
+                "View name '{}' is already used by another saved view on this surface",
+                def.name
+            )));
+        }
+        SavedQuerySaveResult::ViewLimitExceeded { limit } => {
+            return Err(TauriFunctionError::new(&format!(
+                "A workbench surface can contain at most {limit} saved views"
+            )));
+        }
     }
     serde_json::to_value(def).map_err(|e| e.into())
 }
@@ -267,4 +386,31 @@ pub async fn query_execute_sql(
     )
     .await?;
     serde_json::to_value(result).map_err(|e| e.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SavedQueryUpdateInput;
+    use serde_json::json;
+
+    #[test]
+    fn nullable_update_fields_distinguish_omission_and_clear() {
+        let omitted: SavedQueryUpdateInput = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(omitted.description, None);
+        assert_eq!(omitted.default_limit, None);
+
+        let cleared: SavedQueryUpdateInput = serde_json::from_value(json!({
+            "description": null,
+            "overlay_id": null,
+            "param_schema": null,
+            "viz_config": null,
+            "default_limit": null
+        }))
+        .unwrap();
+        assert_eq!(cleared.description, Some(None));
+        assert_eq!(cleared.overlay_id, Some(None));
+        assert_eq!(cleared.param_schema, Some(None));
+        assert_eq!(cleared.viz_config, Some(None));
+        assert_eq!(cleared.default_limit, Some(None));
+    }
 }

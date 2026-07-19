@@ -463,6 +463,12 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		backend.graphState,
 		[appId],
 	);
+	const userOntologies = useInvoke(
+		backend.graphState.listOverlays,
+		backend.graphState,
+		[appId, true],
+		activeView === "queries",
+	);
 	const boards = useInvoke(
 		backend.boardState.getBoards,
 		backend.boardState,
@@ -577,6 +583,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		[router, pathname, searchParams],
 	);
 
+	const setQueryScope = useCallback(
+		(userScoped: boolean) => {
+			const params = new URLSearchParams(searchParams?.toString() ?? "");
+			params.set("view", "queries");
+			if (userScoped) params.set("scope", "user");
+			else params.delete("scope");
+			router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+		},
+		[router, pathname, searchParams],
+	);
+
 	const createOntology = useCallback(
 		async (payload: CreateOverlayPayload) => {
 			await backend.graphState.createOverlay(appId, payload);
@@ -608,15 +625,20 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 
 	const saveEdges = useCallback(
 		async (ontologyId: string, edges: EdgeLabelMapping[]) => {
-			const ontology = ontologies.data?.find(
-				(candidate) => candidate.id === ontologyId,
-			);
+			// Relationship controls can enqueue several edits in quick succession.
+			// Resolve the current concurrency token for each serialized write instead
+			// of capturing the ontology list from the render that started the queue.
+			const ontology = await backend.graphState.getOverlay(appId, ontologyId);
 			await backend.graphState.updateOverlay(appId, ontologyId, {
-				expected_updated_at: ontology?.updated_at,
+				expected_updated_at: ontology.updated_at,
 				edges,
 			});
-			await ontologies.refetch();
-			await invalidate(backend.boardState.getCatalog, [appId]);
+			// Once the mutation succeeds, a transient refresh failure must not make
+			// the editor roll back a relationship that is already persisted.
+			await Promise.allSettled([
+				ontologies.refetch(),
+				invalidate(backend.boardState.getCatalog, [appId]),
+			]);
 			toast.success("Ontology model saved");
 		},
 		[appId, backend.graphState, backend.boardState, invalidate, ontologies],
@@ -1006,12 +1028,17 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				<TabsContent value="queries" className="min-h-0 flex-1 p-0">
 					<QueryWorkbench
 						appId={appId}
-						ontologies={ontologyData}
+						ontologies={
+							searchParams.get("scope") === "user"
+								? (userOntologies.data ?? [])
+								: ontologyData
+						}
 						remoteImports={usableImports}
 						resolveSourceName={resolveSourceName}
 						projectTables={tables.data ?? []}
 						userTables={userTables.data ?? []}
 						userScoped={searchParams.get("scope") === "user"}
+						onScopeChange={setQueryScope}
 					/>
 				</TabsContent>
 			</Tabs>
@@ -1395,6 +1422,9 @@ function mergeSubgraphData(
 
 	const nodeIds = new Set(current.nodes.map((node) => node.id));
 	const edgeIds = new Set(current.edges.map((edge) => edge.id));
+	const warnings = Array.from(
+		new Set([...(current.warnings ?? []), ...(incoming.warnings ?? [])]),
+	);
 
 	return {
 		nodes: [
@@ -1406,6 +1436,7 @@ function mergeSubgraphData(
 			...incoming.edges.filter((edge) => !edgeIds.has(edge.id)),
 		],
 		truncated: current.truncated || incoming.truncated,
+		...(warnings.length > 0 ? { warnings } : {}),
 	};
 }
 
@@ -1503,6 +1534,7 @@ const OverlayView: React.FC<{
 		new Map(),
 	);
 	const styleRevertRef = useRef<Map<string, LabelStyle>>(new Map());
+	const initialLoadRequestRef = useRef(0);
 
 	useEffect(() => {
 		overlayRef.current = overlay;
@@ -1527,6 +1559,7 @@ const OverlayView: React.FC<{
 
 	const loadInitialData = useCallback(
 		async (currentOverlay: GraphOverlay, limitOverride?: number) => {
+			const requestId = ++initialLoadRequestRef.current;
 			setLoading(true);
 			setError(null);
 			try {
@@ -1540,12 +1573,16 @@ const OverlayView: React.FC<{
 					depth: 1,
 					limit: graphLimit,
 				});
+				if (initialLoadRequestRef.current !== requestId) return;
 				setData(enrichSubgraphWithStyles(result, currentOverlay));
 			} catch (err) {
+				if (initialLoadRequestRef.current !== requestId) return;
 				setError(extractErrorMessage(err));
 				setData({ nodes: [], edges: [], truncated: false });
 			} finally {
-				setLoading(false);
+				if (initialLoadRequestRef.current === requestId) {
+					setLoading(false);
+				}
 			}
 		},
 		[backend.graphState, appId, overlayId],
@@ -1576,6 +1613,7 @@ const OverlayView: React.FC<{
 		})();
 		return () => {
 			cancelled = true;
+			initialLoadRequestRef.current += 1;
 		};
 	}, [backend.graphState, appId, overlayId, loadInitialData]);
 
@@ -1725,7 +1763,7 @@ const OverlayView: React.FC<{
 			const clampedLimit = Math.min(newLimit, GRAPH_VIEW_LIMIT_MAX);
 			setNodeLimit(clampedLimit);
 			if (overlay) {
-				loadInitialData(overlay, clampedLimit);
+				void loadInitialData(overlay, clampedLimit);
 			}
 		},
 		[overlay, loadInitialData],
@@ -1838,6 +1876,7 @@ const OverlayView: React.FC<{
 									nodes: result.nodes,
 									edges: result.edges,
 									truncated: result.truncated,
+									warnings: result.warnings,
 								},
 								current,
 							),
@@ -1869,15 +1908,12 @@ const OverlayView: React.FC<{
 		): Promise<OntologyActionRun> => {
 			const current = overlayRef.current;
 			if (!current) throw new Error("The overlay is still loading.");
-			const mapping = current.nodes.find(
-				(candidate) => candidate.label === node.label,
-			);
-			const objectType =
-				mapping?.id ?? mapping?.api_name ?? mapping?.label ?? node.label;
-
 			let payload: InvokeOntologyActionPayload = {
 				object_refs: [
-					{ object_type: objectType, id: getNodeRawId(node, current) },
+					{
+						object_type: action.object_type,
+						id: getNodeRawId(node, current),
+					},
 				],
 				parameters,
 				idempotency_key: createId(),

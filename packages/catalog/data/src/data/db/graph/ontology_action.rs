@@ -183,6 +183,9 @@ impl NodeLogic for OntologyActionRequestNode {
         }) else {
             return fail(context, "The action object type is no longer mapped").await;
         };
+        let identity_column =
+            lancegraph::effective_node_id_column(&ontology, &object_mapping.label)
+                .unwrap_or_else(|| object_mapping.id_column.clone());
         let Some(objects) = objects.as_array() else {
             return fail(context, "Action objects must be an array").await;
         };
@@ -217,12 +220,12 @@ impl NodeLogic for OntologyActionRequestNode {
             let Some(object) = object.as_object() else {
                 return fail(context, "Each selected action object must be an object").await;
             };
-            let Some(id) = object.get(&object_mapping.id_column) else {
+            let Some(id) = object.get(&identity_column) else {
                 return fail(
                     context,
                     format!(
                         "Selected objects must include identity property '{}'",
-                        object_mapping.id_column
+                        identity_column
                     ),
                 )
                 .await;

@@ -54,7 +54,12 @@ impl NodeLogic for GraphSampleNode {
         )
         .set_default_value(Some(json!(DEFAULT_GRAPH_SAMPLE_SIZE)));
 
-        node.add_output_pin("exec_out", "Done", "Sample retrieved", VariableType::Execution);
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Sample retrieved",
+            VariableType::Execution,
+        );
         node.add_output_pin("error", "Error", "Sampling failed", VariableType::Execution);
         node.add_output_pin(
             "error_message",
@@ -62,13 +67,8 @@ impl NodeLogic for GraphSampleNode {
             "Error details",
             VariableType::String,
         );
-        node.add_output_pin(
-            "rows",
-            "Objects",
-            "Sampled objects",
-            VariableType::Struct,
-        )
-        .set_value_type(flow_like::flow::pin::ValueType::Array);
+        node.add_output_pin("rows", "Objects", "Sampled objects", VariableType::Struct)
+            .set_value_type(flow_like::flow::pin::ValueType::Array);
 
         node
     }

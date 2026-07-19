@@ -85,9 +85,21 @@ export interface CreateSavedQueryPayload {
 }
 
 export interface UpdateSavedQueryPayload
-	extends Partial<CreateSavedQueryPayload> {
-	/** Optimistic-concurrency token: the `updated_at` last loaded. */
-	expected_updated_at?: string;
+	extends Omit<
+		Partial<CreateSavedQueryPayload>,
+		| "description"
+		| "overlay_id"
+		| "param_schema"
+		| "viz_config"
+		| "default_limit"
+	> {
+	description?: string | null;
+	overlay_id?: string | null;
+	param_schema?: Record<string, unknown> | null;
+	viz_config?: VizConfig | null;
+	default_limit?: number | null;
+	/** Required optimistic-concurrency token: the `updated_at` last loaded. */
+	expected_updated_at: string;
 }
 
 export interface IQueryState {

@@ -63,6 +63,11 @@ async fn open_import_target(
             "The remote ontology is no longer exposed to connected projects",
         ));
     }
+    if live.updated_at != import.source_updated_at {
+        return Err(ApiError::conflict(
+            "The remote ontology changed after this contract was installed. Refresh the installed ontology before reading it.",
+        ));
+    }
 
     Ok((import, target))
 }
@@ -181,7 +186,7 @@ pub async fn query_import(
     let params = payload.params.unwrap_or(Value::Null);
     let result = workbench::execute_readonly_sql(
         &target,
-        WorkbenchSurface::Overlay(import.contract),
+        WorkbenchSurface::RemoteOverlay(import.contract),
         Vec::new(),
         &payload.sql,
         &params,

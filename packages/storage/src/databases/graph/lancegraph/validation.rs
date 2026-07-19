@@ -4,6 +4,8 @@
 //! surface per-mapping problems before an overlay is saved.
 
 use super::GraphOverlayDef;
+#[cfg(test)]
+use super::PropertyProjectionMode;
 use flow_like_types::Result;
 use lancedb::Connection;
 use std::collections::{HashMap, HashSet};
@@ -157,6 +159,7 @@ pub async fn validate_overlay_definition(
         .iter()
         .map(|node| node.label.as_str())
         .collect::<HashSet<_>>();
+    let mut identity_overrides: HashMap<String, String> = HashMap::new();
     for edge in &overlay.edges {
         let mut issues = Vec::new();
         if edge.label.trim().is_empty() {
@@ -215,6 +218,43 @@ pub async fn validate_overlay_definition(
                 }
             }
         }
+        for (role, label, override_column) in [
+            (
+                "Source",
+                edge.src_label.as_str(),
+                edge.src_node_column.as_deref(),
+            ),
+            (
+                "Target",
+                edge.dst_label.as_str(),
+                edge.dst_node_column.as_deref(),
+            ),
+        ] {
+            let Some(override_column) = override_column else {
+                continue;
+            };
+            if let Some(existing) = identity_overrides.get(label) {
+                if existing != override_column {
+                    issues.push(format!(
+                        "{} object type '{}' conflicts with node identity override '{}' already declared as '{}'",
+                        role, label, override_column, existing
+                    ));
+                }
+            } else {
+                identity_overrides.insert(label.to_string(), override_column.to_string());
+            }
+            let Some(node) = overlay.nodes.iter().find(|node| node.label == label) else {
+                continue;
+            };
+            if let Some(columns) = table_columns(connection, &node.table, &mut schema_cache).await
+                && !columns.contains(override_column)
+            {
+                issues.push(format!(
+                    "{} node join column '{}' does not exist in table '{}' for object type '{}'",
+                    role, override_column, node.table, label
+                ));
+            }
+        }
         report.mappings.push(MappingValidation {
             kind: "edge".to_string(),
             label: edge.label.clone(),
@@ -225,4 +265,113 @@ pub async fn validate_overlay_definition(
 
     report.ok = report.issues.is_empty() && report.mappings.iter().all(|mapping| mapping.ok);
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::databases::graph::lancegraph::{EdgeMappingDef, NodeMappingDef};
+    use arrow::array::{RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use flow_like_types::Value;
+    use lancedb::connect;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn rejects_missing_and_conflicting_node_side_join_overrides() -> Result<()> {
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+
+        let node_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        connection
+            .create_table(
+                "people",
+                vec![RecordBatch::try_new(
+                    node_schema,
+                    vec![Arc::new(StringArray::from(vec!["1"]))],
+                )?],
+            )
+            .execute()
+            .await?;
+        let edge_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Utf8, false),
+            Field::new("target", DataType::Utf8, false),
+        ]));
+        connection
+            .create_table(
+                "links",
+                vec![RecordBatch::try_new(
+                    edge_schema,
+                    vec![
+                        Arc::new(StringArray::from(vec!["1"])),
+                        Arc::new(StringArray::from(vec!["1"])),
+                    ],
+                )?],
+            )
+            .execute()
+            .await?;
+
+        let overlay = GraphOverlayDef {
+            id: "ontology".to_string(),
+            name: "Ontology".to_string(),
+            description: None,
+            nodes: vec![NodeMappingDef {
+                id: Some("person".to_string()),
+                api_name: Some("person".to_string()),
+                label: "Person".to_string(),
+                table: "people".to_string(),
+                id_column: "id".to_string(),
+                display_column: None,
+                property_columns: Vec::new(),
+                style: Value::Null,
+            }],
+            edges: vec![EdgeMappingDef {
+                id: Some("knows".to_string()),
+                api_name: Some("knows".to_string()),
+                label: "KNOWS".to_string(),
+                table: "links".to_string(),
+                src_column: "source".to_string(),
+                dst_column: "target".to_string(),
+                src_label: "Person".to_string(),
+                dst_label: "Person".to_string(),
+                src_node_column: Some("external_id".to_string()),
+                dst_node_column: Some("alternate_id".to_string()),
+                containment: false,
+                dst_ontology: None,
+                dst_binding_id: None,
+                property_columns: Vec::new(),
+                style: Value::Null,
+            }],
+            object_views: Vec::new(),
+            actions: Vec::new(),
+            exposed: false,
+            bindings_enabled: false,
+            property_projection_mode: PropertyProjectionMode::Dynamic,
+            default_limit: 100,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let report = validate_overlay_definition(&connection, &overlay).await?;
+        let edge = report
+            .mappings
+            .iter()
+            .find(|mapping| mapping.kind == "edge")
+            .unwrap();
+        assert!(!report.ok);
+        assert!(
+            edge.issues
+                .iter()
+                .any(|issue| issue.contains("external_id") && issue.contains("people"))
+        );
+        assert!(
+            edge.issues
+                .iter()
+                .any(|issue| issue.contains("conflicts with node identity override"))
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
 }

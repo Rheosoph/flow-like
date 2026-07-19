@@ -162,8 +162,11 @@ export function GraphViewer({
 
 	const [pathSource, setPathSource] = useState<SubgraphNode | null>(null);
 	const [pathHighlight, setPathHighlight] = useState<Set<string> | null>(null);
+	const [pathEdgeHighlight, setPathEdgeHighlight] =
+		useState<Set<string> | null>(null);
 	const [pathOutcome, setPathOutcome] = useState<PathOutcome | null>(null);
 	const [pathFinding, setPathFinding] = useState(false);
+	const latestPathRequestRef = useRef(0);
 	const [dismissedWarningsKey, setDismissedWarningsKey] = useState<
 		string | null
 	>(null);
@@ -382,13 +385,18 @@ export function GraphViewer({
 		async (target: SubgraphNode) => {
 			if (!pathSource || !onFindPaths || target.id === pathSource.id) return;
 			const source = pathSource;
+			const requestId = latestPathRequestRef.current + 1;
+			latestPathRequestRef.current = requestId;
 			setPathFinding(true);
 			setPathOutcome(null);
 			try {
 				const result = await onFindPaths(source, target);
+				if (latestPathRequestRef.current !== requestId) return;
 				const ids = new Set<string>();
+				const edgeIds = new Set<string>();
 				for (const path of result.paths) {
 					for (const id of path.node_ids) ids.add(id);
+					for (const id of path.edge_ids) edgeIds.add(id);
 				}
 				ids.add(source.id);
 				ids.add(target.id);
@@ -397,13 +405,16 @@ export function GraphViewer({
 					Number.POSITIVE_INFINITY,
 				);
 				setPathHighlight(result.found && ids.size > 0 ? ids : null);
+				setPathEdgeHighlight(result.found ? edgeIds : null);
 				setPathOutcome({
 					found: result.found,
 					hops: Number.isFinite(shortest) ? shortest : 0,
 					alternatives: Math.max(0, result.paths.length - 1),
 				});
 			} catch (error) {
+				if (latestPathRequestRef.current !== requestId) return;
 				setPathHighlight(null);
+				setPathEdgeHighlight(null);
 				setPathOutcome({
 					found: false,
 					hops: 0,
@@ -411,22 +422,29 @@ export function GraphViewer({
 					error: getSearchErrorMessage(error),
 				});
 			} finally {
-				setPathFinding(false);
-				setPathSource(null);
+				if (latestPathRequestRef.current === requestId) {
+					setPathFinding(false);
+					setPathSource(null);
+				}
 			}
 		},
 		[onFindPaths, pathSource],
 	);
 
 	const handleArmPath = useCallback((node: SubgraphNode) => {
+		latestPathRequestRef.current += 1;
+		setPathFinding(false);
 		setPathSource(node);
 		setPathHighlight(null);
+		setPathEdgeHighlight(null);
 		setPathOutcome(null);
 	}, []);
 
 	const exitPathMode = useCallback(() => {
+		latestPathRequestRef.current += 1;
 		setPathSource(null);
 		setPathHighlight(null);
+		setPathEdgeHighlight(null);
 		setPathOutcome(null);
 		setPathFinding(false);
 	}, []);
@@ -753,6 +771,9 @@ export function GraphViewer({
 						highlightedNodeIds={
 							pathHighlight ??
 							(searchHighlight.size > 0 ? searchHighlight : undefined)
+						}
+						highlightedEdgeIds={
+							pathHighlight ? (pathEdgeHighlight ?? undefined) : undefined
 						}
 						hiddenLabels={hiddenLabels.size > 0 ? hiddenLabels : undefined}
 						onNodeClick={handleNodeClick}

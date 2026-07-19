@@ -1,5 +1,6 @@
 use flow_like::{
     app::App,
+    flow::board::{Board, PreparedBoardSnapshot},
     flow::event::{Event, EventExecutionMode, EventExposure},
     flow_like_storage::{
         Path,
@@ -102,14 +103,30 @@ fn managed_event_binding_is_current(
     ontology_id: &str,
     ontology_exposed: bool,
     objects: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    projection_mode: lancegraph::PropertyProjectionMode,
     action: &lancegraph::OntologyActionDef,
 ) -> bool {
-    let Some(object) = action_object(objects, action) else {
+    let Ok(projection) = lancegraph::governed_object_projection_from_event_config(&event.config)
+    else {
         return false;
     };
-    let Ok(contract_hash) =
-        lancegraph::ontology_action_contract_hash(ontology_id, ontology_exposed, action, object)
-    else {
+    let Ok(object) = lancegraph::validate_governed_object_projection_for_mappings(
+        objects,
+        edges,
+        projection_mode,
+        action,
+        &projection,
+    ) else {
+        return false;
+    };
+    let Ok(contract_hash) = lancegraph::ontology_action_contract_hash(
+        ontology_id,
+        ontology_exposed,
+        action,
+        object,
+        &projection,
+    ) else {
         return false;
     };
     let saved_contract_hash =
@@ -153,6 +170,21 @@ fn action_object<'a>(
     })
 }
 
+fn validated_action_parameter_schema(
+    board: &Board,
+    start_node_id: &str,
+) -> flow_like_types::Result<Option<flow_like_types::Value>> {
+    let schema = board.action_parameter_schema(start_node_id)?;
+    if let Some(schema) = schema.as_ref() {
+        flow_like_catalog::ontology_action_parameter_validator(schema).map_err(|error| {
+            flow_like_types::anyhow!(
+                "The action's implementation has an invalid parameter schema: {error}"
+            )
+        })?;
+    }
+    Ok(schema)
+}
+
 /// Reads the authoritative parameter schema from the pinned board version's
 /// start node. Loading the pinned snapshot (rather than the working board)
 /// guarantees the schema matches the exact implementation that executes, even
@@ -168,18 +200,129 @@ async fn derive_action_parameter_schema(
         .map(str::trim)
         .filter(|node_id| !node_id.is_empty())
     else {
-        return Ok(None);
+        return Err(flow_like_types::anyhow!(
+            "The ontology action has no start node"
+        ));
     };
     let board = app
-        .open_board(action.board_id.clone(), Some(false), Some(pinned))
+        .open_board_authoritative(action.board_id.clone(), Some(pinned))
         .await
         .map_err(|error| {
             flow_like_types::anyhow!(
                 "Could not load the action's pinned board version to derive its parameter schema: {error}"
             )
         })?;
-    let schema = board.lock().await.action_parameter_schema(start_node_id);
-    Ok(schema)
+    let guard = board.lock().await;
+    validated_action_parameter_schema(&guard, start_node_id)
+}
+
+/// Ensure a governed action pins an immutable board snapshot. If the working
+/// board has changed after its current version was first published, preserve
+/// the old snapshot and publish the draft at a fresh patch version.
+async fn ensure_action_board_published_with_mode(
+    app: &App,
+    action: &mut lancegraph::OntologyActionDef,
+    publish_draft: bool,
+) -> flow_like_types::Result<Option<PreparedBoardSnapshot>> {
+    if action.board_id.trim().is_empty() {
+        return Ok(None);
+    }
+    let board = app
+        .open_board_authoritative(action.board_id.clone(), None)
+        .await
+        .map_err(|_| {
+            flow_like_types::anyhow!(
+                "The action's implementation board '{}' could not be opened",
+                action.board_id
+            )
+        })?;
+    let (current, existing) = {
+        let guard = board.lock().await;
+        (guard.version, guard.get_versions(None).await?)
+    };
+    let mut pinned = match action.board_version {
+        Some([major, minor, patch]) => (major, minor, patch),
+        None if !publish_draft => {
+            return Err(flow_like_types::anyhow!(
+                "The persisted ontology action does not pin a board version"
+            ));
+        }
+        None => {
+            action.board_version = Some([current.0, current.1, current.2]);
+            current
+        }
+    };
+    let may_publish_current_draft = publish_draft
+        && (pinned == current
+            || (existing.contains(&pinned)
+                && pinned.0 == current.0
+                && pinned.1 == current.1
+                && pinned.2 > current.2));
+    if may_publish_current_draft {
+        let start_node_id = action
+            .start_node_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|node_id| !node_id.is_empty())
+            .ok_or_else(|| flow_like_types::anyhow!("The ontology action has no start node"))?;
+        let guard = board.lock().await;
+        validated_action_parameter_schema(&guard, start_node_id)?;
+    }
+    let mut prepared = None;
+    if pinned == current {
+        let guard = board.lock().await;
+        if existing.contains(&pinned) {
+            if publish_draft && !guard.snapshot_matches_current(pinned, None).await? {
+                let snapshot = guard.prepare_snapshot_at_fresh_patch_version(None).await?;
+                pinned = snapshot.version();
+                action.board_version = Some([pinned.0, pinned.1, pinned.2]);
+                prepared = Some(snapshot);
+            }
+        } else {
+            if !publish_draft {
+                return Err(flow_like_types::anyhow!(
+                    "The persisted action board version {}.{}.{} is missing",
+                    pinned.0,
+                    pinned.1,
+                    pinned.2
+                ));
+            }
+            if guard
+                .snapshot_version_slot_is_compatible(pinned, None)
+                .await?
+            {
+                guard.snapshot_at_version(pinned, None).await?;
+            } else {
+                let snapshot = guard.prepare_snapshot_at_fresh_patch_version(None).await?;
+                pinned = snapshot.version();
+                action.board_version = Some([pinned.0, pinned.1, pinned.2]);
+                prepared = Some(snapshot);
+            }
+        }
+    } else if !existing.contains(&pinned) {
+        return Err(flow_like_types::anyhow!(
+            "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
+            pinned.0,
+            pinned.1,
+            pinned.2
+        ));
+    } else if publish_draft
+        && pinned.0 == current.0
+        && pinned.1 == current.1
+        && pinned.2 > current.2
+    {
+        let guard = board.lock().await;
+        if guard.snapshot_matches_current(pinned, None).await? {
+            prepared = Some(guard.prepared_snapshot_at_version(pinned, None).await?);
+        } else {
+            let snapshot = guard.prepare_snapshot_at_fresh_patch_version(None).await?;
+            pinned = snapshot.version();
+            action.board_version = Some([pinned.0, pinned.1, pinned.2]);
+            prepared = Some(snapshot);
+        }
+    }
+    action.parameter_schema = derive_action_parameter_schema(app, action, pinned).await?;
+    Ok(prepared)
 }
 
 fn validate_action_object_types(
@@ -212,16 +355,66 @@ fn validate_action_object_types(
     Ok(())
 }
 
+async fn validate_overlay_for_save(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+) -> Result<(), TauriFunctionError> {
+    let report = lancegraph::validate_overlay_definition(connection, overlay)
+        .await
+        .map_err(|error| TauriFunctionError::new(&format!("Overlay validation failed: {error}")))?;
+    if report.ok {
+        return Ok(());
+    }
+
+    let mut issues = report.issues;
+    for mapping in report.mappings {
+        for issue in mapping.issues {
+            issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
+        }
+    }
+    Err(TauriFunctionError::new(&format!(
+        "The overlay definition is invalid: {}",
+        issues.join("; ")
+    )))
+}
+
 async fn materialize_action_events(
     app_handle: &AppHandle,
     app_id: &str,
     ontology_id: &str,
     ontology_exposed: bool,
     objects: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    projection_mode: lancegraph::PropertyProjectionMode,
     actions: &mut [lancegraph::OntologyActionDef],
-) -> flow_like_types::Result<()> {
+) -> flow_like_types::Result<Vec<PreparedBoardSnapshot>> {
+    materialize_action_events_with_mode(
+        app_handle,
+        app_id,
+        ontology_id,
+        ontology_exposed,
+        objects,
+        edges,
+        projection_mode,
+        actions,
+        true,
+    )
+    .await
+}
+
+async fn materialize_action_events_with_mode(
+    app_handle: &AppHandle,
+    app_id: &str,
+    ontology_id: &str,
+    ontology_exposed: bool,
+    objects: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    projection_mode: lancegraph::PropertyProjectionMode,
+    actions: &mut [lancegraph::OntologyActionDef],
+    publish_drafts: bool,
+) -> flow_like_types::Result<Vec<PreparedBoardSnapshot>> {
     if actions.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let mut action_ids = std::collections::HashSet::with_capacity(actions.len());
@@ -236,15 +429,40 @@ async fn materialize_action_events(
                 "Ontology actions must have a name"
             ));
         }
+        if action.board_id.trim().is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "The ontology action has no implementation board"
+            ));
+        }
+        if action
+            .start_node_id
+            .as_deref()
+            .is_none_or(|node_id| node_id.trim().is_empty())
+        {
+            return Err(flow_like_types::anyhow!(
+                "The ontology action has no start node"
+            ));
+        }
     }
 
     let flow_like_state = TauriFlowLikeState::construct(app_handle)
         .await
         .map_err(|error| flow_like_types::anyhow!(error.to_string()))?;
     let mut app = App::load(app_id.to_string(), flow_like_state).await?;
+    let connection = graph_connection(app_handle, app_id, false).await?;
 
     let mut app_changed = false;
+    let mut republished_versions: std::collections::HashMap<(String, [u32; 3]), [u32; 3]> =
+        std::collections::HashMap::new();
+    let mut prepared_snapshots = Vec::new();
     for action in actions {
+        if let Some(old_version) = action.board_version
+            && let Some(new_version) =
+                republished_versions.get(&(action.board_id.clone(), old_version))
+        {
+            action.board_version = Some(*new_version);
+        }
+        let requested_board_version = action.board_version;
         let start_node_id = action
             .start_node_id
             .clone()
@@ -255,10 +473,6 @@ async fn materialize_action_events(
                 "The ontology action has no implementation board"
             ));
         }
-        let board_version = action.board_version.ok_or_else(|| {
-            flow_like_types::anyhow!("The ontology action must pin an exact board version")
-        })?;
-
         let requested_event_id = action
             .event_id
             .clone()
@@ -267,12 +481,41 @@ async fn materialize_action_events(
             Some(event_id) => app.get_event(event_id, None).await.ok(),
             None => None,
         };
+        // Resolve the governed data surface before creating an immutable board
+        // snapshot. A broken mapping must not leave snapshot fragments behind.
+        let projection = lancegraph::resolve_governed_object_projection_for_mappings(
+            &connection,
+            objects,
+            edges,
+            projection_mode,
+            action,
+        )
+        .await?;
+        // Board content can change independently of ontology metadata, so
+        // reconcile the immutable implementation pin before the fast path.
+        if let Some(prepared) =
+            ensure_action_board_published_with_mode(&app, action, publish_drafts).await?
+            && !prepared_snapshots.contains(&prepared)
+        {
+            prepared_snapshots.push(prepared);
+        }
+        if let (Some(old_version), Some(new_version)) =
+            (requested_board_version, action.board_version)
+            && old_version != new_version
+        {
+            republished_versions.insert((action.board_id.clone(), old_version), new_version);
+        }
+        let board_version = action.board_version.ok_or_else(|| {
+            flow_like_types::anyhow!("The ontology action must pin an exact board version")
+        })?;
         if let Some(event) = existing.as_ref()
             && managed_event_binding_is_current(
                 event,
                 ontology_id,
                 ontology_exposed,
                 objects,
+                edges,
+                projection_mode,
                 action,
             )
         {
@@ -291,49 +534,6 @@ async fn materialize_action_events(
             })
             .unwrap_or_else(create_id);
         let now = std::time::SystemTime::now();
-        // Publish the pinned board version as an immutable snapshot so the
-        // managed event's reference validation and later invocation can load
-        // it (mirror of the API materialization path).
-        let pinned = (board_version[0], board_version[1], board_version[2]);
-        {
-            let board = app
-                .open_board(action.board_id.clone(), Some(false), None)
-                .await
-                .map_err(|_| {
-                    flow_like_types::anyhow!(
-                        "The action's implementation board '{}' could not be opened",
-                        action.board_id
-                    )
-                })?;
-            let (current, existing) = {
-                let guard = board.lock().await;
-                (
-                    guard.version,
-                    guard.get_versions(None).await.unwrap_or_default(),
-                )
-            };
-            if pinned == current {
-                // Pinning the working draft: always re-snapshot so the pinned
-                // version reflects the latest edits. `snapshot_at_version` does
-                // not bump the board version, so a prior save can leave a stale
-                // snapshot at this number that is missing nodes added since —
-                // the managed event's reference validation then fails with
-                // "node not found in board" (mirror of the API path).
-                board.lock().await.snapshot_at_version(pinned, None).await?;
-            } else if !existing.contains(&pinned) {
-                return Err(flow_like_types::anyhow!(
-                    "The action's board version {}.{}.{} no longer exists. Re-select the board in Data Studio.",
-                    pinned.0,
-                    pinned.1,
-                    pinned.2
-                ));
-            }
-        }
-        // Derive the authoritative parameter schema from the pinned board's
-        // start node, overwriting any client-supplied schema before hashing so
-        // the contract can never advertise a shape the board does not honor
-        // (mirror of the API materialization path).
-        action.parameter_schema = derive_action_parameter_schema(&app, action, pinned).await?;
         let object = action_object(objects, action).ok_or_else(|| {
             flow_like_types::anyhow!(
                 "Ontology action '{}' references unknown object type '{}'",
@@ -346,6 +546,7 @@ async fn materialize_action_events(
             ontology_exposed,
             action,
             object,
+            &projection,
         )?;
         let mut event = Event {
             id: event_id,
@@ -360,6 +561,7 @@ async fn materialize_action_events(
                 "ontology_id": ontology_id,
                 "action_id": action.id,
                 "contract_hash": contract_hash,
+                "object_projection": projection,
             }))
             .unwrap_or_default(),
             active: action.enabled,
@@ -389,6 +591,38 @@ async fn materialize_action_events(
     if app_changed {
         app.updated_at = std::time::SystemTime::now();
         app.save().await?;
+    }
+    Ok(prepared_snapshots)
+}
+
+async fn commit_action_board_snapshots(
+    app_handle: &AppHandle,
+    app_id: &str,
+    prepared_snapshots: &[PreparedBoardSnapshot],
+) -> flow_like_types::Result<()> {
+    if prepared_snapshots.is_empty() {
+        return Ok(());
+    }
+    let flow_like_state = TauriFlowLikeState::construct(app_handle)
+        .await
+        .map_err(|error| flow_like_types::anyhow!(error.to_string()))?;
+    let app = App::load(app_id.to_string(), flow_like_state).await?;
+    for prepared in prepared_snapshots {
+        let board = app
+            .open_board_authoritative(prepared.board_id().to_string(), None)
+            .await?;
+        let committed = board
+            .lock()
+            .await
+            .commit_prepared_snapshot(prepared, None)
+            .await?;
+        if !committed {
+            tracing::info!(
+                board_id = prepared.board_id(),
+                version = ?prepared.version(),
+                "Left a concurrently changed board draft at its current version"
+            );
+        }
     }
     Ok(())
 }
@@ -433,6 +667,8 @@ async fn rollback_action_event_changes(
     ontology_id: &str,
     ontology_exposed: bool,
     objects: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    projection_mode: lancegraph::PropertyProjectionMode,
     previous_actions: &[lancegraph::OntologyActionDef],
     attempted_actions: &[lancegraph::OntologyActionDef],
 ) -> flow_like_types::Result<()> {
@@ -465,15 +701,22 @@ async fn rollback_action_event_changes(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let restore_result = materialize_action_events(
+    // Restore exactly what the persisted ontology pins. Publishing the current
+    // draft during compensation would make the rolled-back event disagree
+    // with the ontology revision that actually won.
+    let restore_result = materialize_action_events_with_mode(
         app_handle,
         app_id,
         ontology_id,
         ontology_exposed,
         objects,
+        edges,
+        projection_mode,
         &mut overwritten,
+        false,
     )
-    .await;
+    .await
+    .map(|_| ());
     match (removal_error, restore_result) {
         (Some(error), _) => Err(error),
         (None, result) => result,
@@ -540,6 +783,7 @@ pub async fn graph_create_overlay(
         actions: payload.actions,
         exposed: payload.exposed,
         bindings_enabled: payload.bindings_enabled,
+        property_projection_mode: lancegraph::PropertyProjectionMode::Dynamic,
         default_limit: payload.default_limit.unwrap_or(DEFAULT_GRAPH_OVERLAY_LIMIT),
         created_at: now.clone(),
         updated_at: now,
@@ -553,23 +797,29 @@ pub async fn graph_create_overlay(
         action.event_id = None;
     }
     validate_action_object_types(&overlay.actions, &overlay.nodes)?;
-    if let Err(error) = materialize_action_events(
+    validate_overlay_for_save(&conn, &overlay).await?;
+    let prepared_snapshots = match materialize_action_events(
         &app_handle,
         &app_id,
         &overlay.id,
         overlay.exposed,
         &overlay.nodes,
+        &overlay.edges,
+        overlay.property_projection_mode,
         &mut overlay.actions,
     )
     .await
     {
-        if let Err(cleanup_error) =
-            remove_action_events(&app_handle, &app_id, &overlay.id, &overlay.actions).await
-        {
-            tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if let Err(cleanup_error) =
+                remove_action_events(&app_handle, &app_id, &overlay.id, &overlay.actions).await
+            {
+                tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
+            }
+            return Err(error.into());
         }
-        return Err(error.into());
-    }
+    };
     if let Err(error) = lancegraph::save_overlay(&conn, &overlay).await {
         if let Err(cleanup_error) =
             remove_action_events(&app_handle, &app_id, &overlay.id, &overlay.actions).await
@@ -577,6 +827,11 @@ pub async fn graph_create_overlay(
             tracing::error!(%cleanup_error, "Failed to roll back ontology action bindings");
         }
         return Err(error.into());
+    }
+    if let Err(error) =
+        commit_action_board_snapshots(&app_handle, &app_id, &prepared_snapshots).await
+    {
+        tracing::warn!(%error, "Could not advance a prepared action board draft");
     }
     Ok(overlay)
 }
@@ -668,15 +923,6 @@ pub async fn graph_prepare_ontology_action(
             "Idempotency keys must contain between 1 and 200 characters",
         ));
     }
-    if let Some(schema) = &action.parameter_schema {
-        flow_like_catalog::validate_ontology_action_parameters(schema, &payload.parameters)
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Action parameters do not match the schema: {error}"
-                ))
-            })?;
-    }
-
     let ids = payload
         .object_refs
         .iter()
@@ -690,9 +936,6 @@ pub async fn graph_prepare_ontology_action(
             Ok(reference.id.clone())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let objects =
-        lancegraph::load_overlay_objects(&connection, &ontology, &action.object_type, &ids).await?;
-
     // Repair missing or tampered managed events lazily so older local
     // ontologies remain executable without trusting a stale event ID.
     let event_is_valid = if let Some(event_id) = ontology.actions[action_index].event_id.as_deref()
@@ -705,6 +948,8 @@ pub async fn graph_prepare_ontology_action(
                     &ontology_id,
                     ontology.exposed,
                     &ontology.nodes,
+                    &ontology.edges,
+                    ontology.property_projection_mode,
                     &action,
                 )
             }),
@@ -714,15 +959,41 @@ pub async fn graph_prepare_ontology_action(
         false
     };
     if !event_is_valid {
-        materialize_action_events(
+        let prepared_snapshots = match materialize_action_events(
             &app_handle,
             &app_id,
             &ontology_id,
             ontology.exposed,
             &ontology.nodes,
+            &ontology.edges,
+            ontology.property_projection_mode,
             std::slice::from_mut(&mut ontology.actions[action_index]),
         )
-        .await?;
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let persisted = lancegraph::load_overlay(&connection, &ontology_id)
+                    .await
+                    .unwrap_or_else(|_| previous_ontology.clone());
+                if let Err(rollback_error) = rollback_action_event_changes(
+                    &app_handle,
+                    &app_id,
+                    &ontology_id,
+                    persisted.exposed,
+                    &persisted.nodes,
+                    &persisted.edges,
+                    persisted.property_projection_mode,
+                    &persisted.actions,
+                    std::slice::from_ref(&ontology.actions[action_index]),
+                )
+                .await
+                {
+                    tracing::error!(%rollback_error, "Failed to roll back partial ontology action repair");
+                }
+                return Err(error.into());
+            }
+        };
         ontology.updated_at = chrono::Utc::now().to_rfc3339();
         let save_result = lancegraph::save_overlay_if_unchanged(
             &connection,
@@ -741,6 +1012,8 @@ pub async fn graph_prepare_ontology_action(
                     &ontology_id,
                     persisted.exposed,
                     &persisted.nodes,
+                    &persisted.edges,
+                    persisted.property_projection_mode,
                     &persisted.actions,
                     std::slice::from_ref(&ontology.actions[action_index]),
                 )
@@ -757,11 +1030,56 @@ pub async fn graph_prepare_ontology_action(
                 };
             }
         }
+        if let Err(error) =
+            commit_action_board_snapshots(&app_handle, &app_id, &prepared_snapshots).await
+        {
+            tracing::warn!(%error, "Could not advance a repaired action board draft");
+        }
     }
     let event_id = ontology.actions[action_index]
         .event_id
         .clone()
         .ok_or_else(|| TauriFunctionError::new("Ontology action event is unavailable"))?;
+    let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
+    let app = App::load(app_id.clone(), flow_like_state).await?;
+    let event = app
+        .get_event(&event_id, None)
+        .await
+        .map_err(|_| TauriFunctionError::new("Ontology action event is unavailable"))?;
+    let bound_action = &ontology.actions[action_index];
+    if !managed_event_binding_is_current(
+        &event,
+        &ontology_id,
+        ontology.exposed,
+        &ontology.nodes,
+        &ontology.edges,
+        ontology.property_projection_mode,
+        bound_action,
+    ) {
+        return Err(TauriFunctionError::new(
+            "The ontology action binding no longer matches its governed implementation",
+        ));
+    }
+    // Lazy repair can publish a changed implementation board and derive a new
+    // parameter schema. Validate against that repaired, persisted contract —
+    // not the stale action clone captured before materialization.
+    if let Some(schema) = &bound_action.parameter_schema {
+        flow_like_catalog::validate_ontology_action_parameters(schema, &payload.parameters)
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Action parameters do not match the schema: {error}"
+                ))
+            })?;
+    }
+    let projection = lancegraph::governed_object_projection_from_event_config(&event.config)?;
+    let objects = lancegraph::load_overlay_objects_with_projection(
+        &connection,
+        &ontology,
+        bound_action,
+        &projection,
+        &ids,
+    )
+    .await?;
     let object_ids = ids
         .iter()
         .map(|id| match id {
@@ -822,6 +1140,7 @@ pub async fn graph_update_overlay(
     let actions_supplied = payload.actions.is_some();
     let mut removed_action_events = Vec::new();
     let mut action_rollback = None;
+    let mut prepared_action_snapshots = Vec::new();
 
     if let Some(name) = payload.name {
         overlay.name = name;
@@ -881,37 +1200,46 @@ pub async fn graph_update_overlay(
     // Mapping-only edits cannot leave an existing governed action pointing at
     // an object type that no longer exists in the ontology.
     validate_action_object_types(&overlay.actions, &overlay.nodes)?;
+    validate_overlay_for_save(&conn, &overlay).await?;
     if governed_contract_changed && !overlay.actions.is_empty() {
         let mut reconciled_actions = overlay.actions.clone();
-        if let Err(error) = materialize_action_events(
+        let prepared = match materialize_action_events(
             &app_handle,
             &app_id,
             &overlay.id,
             overlay.exposed,
             &overlay.nodes,
+            &overlay.edges,
+            overlay.property_projection_mode,
             &mut reconciled_actions,
         )
         .await
         {
-            let persisted = lancegraph::load_overlay(&conn, &overlay_id)
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let persisted = lancegraph::load_overlay(&conn, &overlay_id)
+                    .await
+                    .unwrap_or_else(|_| previous_overlay.clone());
+                if let Err(rollback_error) = rollback_action_event_changes(
+                    &app_handle,
+                    &app_id,
+                    &overlay.id,
+                    persisted.exposed,
+                    &persisted.nodes,
+                    &persisted.edges,
+                    persisted.property_projection_mode,
+                    &persisted.actions,
+                    &reconciled_actions,
+                )
                 .await
-                .unwrap_or_else(|_| previous_overlay.clone());
-            if let Err(rollback_error) = rollback_action_event_changes(
-                &app_handle,
-                &app_id,
-                &overlay.id,
-                persisted.exposed,
-                &persisted.nodes,
-                &persisted.actions,
-                &reconciled_actions,
-            )
-            .await
-            {
-                tracing::error!(%rollback_error, "Failed to roll back ontology action bindings");
+                {
+                    tracing::error!(%rollback_error, "Failed to roll back ontology action bindings");
+                }
+                return Err(error.into());
             }
-            return Err(error.into());
-        }
+        };
         overlay.actions = reconciled_actions.clone();
+        prepared_action_snapshots = prepared;
         action_rollback = Some(reconciled_actions);
     }
     if actions_supplied {
@@ -943,6 +1271,8 @@ pub async fn graph_update_overlay(
                     &overlay.id,
                     persisted.exposed,
                     &persisted.nodes,
+                    &persisted.edges,
+                    persisted.property_projection_mode,
                     &persisted.actions,
                     &attempted_actions,
                 )
@@ -958,6 +1288,11 @@ pub async fn graph_update_overlay(
                 Ok(true) => unreachable!(),
             };
         }
+    }
+    if let Err(error) =
+        commit_action_board_snapshots(&app_handle, &app_id, &prepared_action_snapshots).await
+    {
+        tracing::warn!(%error, "Could not advance a prepared action board draft");
     }
     if let Err(error) =
         remove_action_events(&app_handle, &app_id, &overlay.id, &removed_action_events).await

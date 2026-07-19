@@ -26,6 +26,7 @@ import type {
 	QueryColumn,
 	QuerySurface,
 	SavedQuery,
+	UpdateSavedQueryPayload,
 	VizConfig,
 } from "../../../../state/backend-state/query-state";
 import { Badge } from "../../../ui/badge";
@@ -55,6 +56,10 @@ import { SaveQueryDialog } from "./save-query-dialog";
 import { SavedQuerySidebar } from "./saved-query-sidebar";
 
 const DEFAULT_LIMIT = 1000;
+
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+	return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
 
 interface ArrowField {
 	name: string;
@@ -125,6 +130,7 @@ export function QueryWorkbench({
 	projectTables,
 	userTables,
 	userScoped,
+	onScopeChange,
 }: Readonly<{
 	appId: string;
 	ontologies: GraphOverlay[];
@@ -133,12 +139,13 @@ export function QueryWorkbench({
 	projectTables: string[];
 	userTables: string[];
 	userScoped: boolean;
+	onScopeChange: (userScoped: boolean) => void;
 }>) {
 	const backend = useBackend();
 	const savedQueriesQuery = useInvoke(
 		backend.queryState.listSavedQueries,
 		backend.queryState,
-		[appId],
+		[appId, userScoped],
 	);
 	const savedQueries = savedQueriesQuery.data ?? [];
 
@@ -179,6 +186,14 @@ export function QueryWorkbench({
 
 	const paramNames = useMemo(() => extractParams(sql), [sql]);
 	const referencedTables = useMemo(() => extractReferencedTables(sql), [sql]);
+	const activeNativeTables = useMemo(
+		() => (userScoped ? userTables : projectTables),
+		[userScoped, userTables, projectTables],
+	);
+	const columnCacheKey = useCallback(
+		(table: string) => `${userScoped ? "user" : "project"}:${table}`,
+		[userScoped],
+	);
 
 	const paramSchema = useMemo(() => {
 		const loadedProps =
@@ -213,24 +228,28 @@ export function QueryWorkbench({
 		if (surface !== "native") return;
 		const missing = referencedTables.filter(
 			(table) =>
-				!(table in columnCacheRef.current) &&
-				(projectTables.includes(table) || userTables.includes(table)),
+				activeNativeTables.includes(table) &&
+				!(columnCacheKey(table) in columnCacheRef.current),
 		);
 		if (missing.length === 0) return;
 		let cancelled = false;
 		void (async () => {
 			for (const table of missing) {
-				const isUser =
-					!projectTables.includes(table) && userTables.includes(table);
+				const cacheKey = columnCacheKey(table);
 				try {
-					const schema = await backend.dbState.getSchema(appId, table, isUser);
+					const schema = await backend.dbState.getSchema(
+						appId,
+						table,
+						userScoped,
+					);
 					if (!cancelled)
 						setColumnCache((prev) => ({
 							...prev,
-							[table]: arrowFieldsToColumns(schema),
+							[cacheKey]: arrowFieldsToColumns(schema),
 						}));
 				} catch {
-					if (!cancelled) setColumnCache((prev) => ({ ...prev, [table]: [] }));
+					if (!cancelled)
+						setColumnCache((prev) => ({ ...prev, [cacheKey]: [] }));
 				}
 			}
 		})();
@@ -240,10 +259,11 @@ export function QueryWorkbench({
 	}, [
 		referencedTables,
 		surface,
-		projectTables,
-		userTables,
+		activeNativeTables,
+		columnCacheKey,
 		appId,
 		backend.dbState,
+		userScoped,
 	]);
 
 	const catalog = useMemo(() => {
@@ -271,18 +291,11 @@ export function QueryWorkbench({
 			};
 		}
 		return {
-			tables: [
-				...projectTables.map((name) => ({
-					name,
-					scope: "project" as const,
-					columns: columnCache[name],
-				})),
-				...userTables.map((name) => ({
-					name,
-					scope: "user" as const,
-					columns: columnCache[name],
-				})),
-			],
+			tables: activeNativeTables.map((name) => ({
+				name,
+				scope: userScoped ? ("user" as const) : ("project" as const),
+				columns: columnCache[columnCacheKey(name)],
+			})),
 			views: savedQueries
 				.filter((query) => query.kind === "view" && query.surface === "native")
 				.map((query) => ({ name: query.name })),
@@ -294,11 +307,12 @@ export function QueryWorkbench({
 		remoteImportId,
 		remoteImports,
 		ontologies,
-		projectTables,
-		userTables,
+		activeNativeTables,
+		columnCacheKey,
 		columnCache,
 		savedQueries,
 		paramNames,
+		userScoped,
 	]);
 
 	const runQuery = useCallback(async () => {
@@ -388,6 +402,19 @@ export function QueryWorkbench({
 		setRunError(null);
 		setLastRun(null);
 	}, []);
+	const savedQueryScopeRef = useRef(userScoped);
+	useEffect(() => {
+		if (savedQueryScopeRef.current === userScoped) return;
+		savedQueryScopeRef.current = userScoped;
+		startNewQuery();
+	}, [startNewQuery, userScoped]);
+	useEffect(() => {
+		if (surface !== "overlay") return;
+		if (overlayId && ontologies.some((overlay) => overlay.id === overlayId)) {
+			return;
+		}
+		setOverlayId(ontologies[0]?.id);
+	}, [ontologies, overlayId, surface]);
 
 	const deleteSavedQuery = useCallback(
 		async (query: SavedQuery) => {
@@ -427,19 +454,56 @@ export function QueryWorkbench({
 				default_limit: limit ?? undefined,
 			};
 			try {
-				const saved =
-					editing !== null
-						? await backend.queryState.updateSavedQuery(
-								appId,
-								editing.id,
-								{ ...payload, expected_updated_at: editing.updated_at },
-								userScoped,
-							)
-						: await backend.queryState.createSavedQuery(
-								appId,
-								payload,
-								userScoped,
-							);
+				let saved: SavedQuery;
+				if (editing) {
+					const update: UpdateSavedQueryPayload = {
+						expected_updated_at: editing.updated_at,
+					};
+					if (payload.name !== editing.name) update.name = payload.name;
+					if (payload.kind !== editing.kind) update.kind = payload.kind;
+					if (payload.surface !== editing.surface)
+						update.surface = payload.surface;
+					if (payload.sql !== editing.sql) update.sql = payload.sql;
+
+					const nextDescription = payload.description ?? null;
+					if (nextDescription !== (editing.description ?? null)) {
+						update.description = nextDescription;
+					}
+					const nextOverlayId = payload.overlay_id ?? null;
+					if (nextOverlayId !== (editing.overlay_id ?? null)) {
+						update.overlay_id = nextOverlayId;
+					}
+					const nextParamSchema = payload.param_schema ?? null;
+					if (!jsonValuesEqual(nextParamSchema, editing.param_schema)) {
+						update.param_schema = nextParamSchema;
+					}
+					const nextVizConfig = payload.viz_config ?? null;
+					if (
+						!jsonValuesEqual(
+							nextVizConfig,
+							editing.viz_config ?? { view: "table" },
+						)
+					) {
+						update.viz_config = nextVizConfig;
+					}
+					const nextDefaultLimit = payload.default_limit ?? null;
+					if (nextDefaultLimit !== (editing.default_limit ?? DEFAULT_LIMIT)) {
+						update.default_limit = nextDefaultLimit;
+					}
+
+					saved = await backend.queryState.updateSavedQuery(
+						appId,
+						editing.id,
+						update,
+						userScoped,
+					);
+				} else {
+					saved = await backend.queryState.createSavedQuery(
+						appId,
+						payload,
+						userScoped,
+					);
+				}
 				setEditing(saved);
 				setSaveOpen(false);
 				await savedQueriesQuery.refetch();
@@ -648,6 +712,24 @@ export function QueryWorkbench({
 									<Cloud className="h-3.5 w-3.5" /> Remote
 								</button>
 							</div>
+
+							{surface !== "remote" && (
+								<Select
+									value={userScoped ? "user" : "project"}
+									onValueChange={(value) => onScopeChange(value === "user")}
+								>
+									<SelectTrigger
+										className="h-8 w-32"
+										aria-label="Database scope"
+									>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="project">Project</SelectItem>
+										<SelectItem value="user">Personal</SelectItem>
+									</SelectContent>
+								</Select>
+							)}
 
 							{surface === "overlay" && (
 								<Select value={overlayId} onValueChange={setOverlayId}>

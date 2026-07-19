@@ -33,6 +33,7 @@ import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import {
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -41,7 +42,6 @@ import {
 } from "../../ui/dialog";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
-import { ScrollArea } from "../../ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -283,7 +283,7 @@ export function TableDesignerDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="grid gap-4 sm:grid-cols-[1fr_200px]">
+				<div className="grid gap-4 shrink-0 sm:grid-cols-[1fr_200px]">
 					<div className="space-y-1.5">
 						<Label htmlFor="table-designer-name">Table name</Label>
 						<Input
@@ -314,14 +314,14 @@ export function TableDesignerDialog({
 					</div>
 				</div>
 
-				<div className="flex items-center justify-between">
+				<div className="flex shrink-0 items-center justify-between">
 					<Label>Columns</Label>
 					<Button variant="outline" size="sm" onClick={addColumn}>
 						<Plus className="h-4 w-4" /> Add column
 					</Button>
 				</div>
 
-				<ScrollArea className="flex-1 min-h-0 -mx-1 px-1">
+				<DialogBody className="-mx-1 px-1">
 					<DndContext
 						sensors={sensors}
 						collisionDetection={closestCenter}
@@ -345,7 +345,7 @@ export function TableDesignerDialog({
 							</div>
 						</SortableContext>
 					</DndContext>
-				</ScrollArea>
+				</DialogBody>
 
 				<DialogFooter>
 					<Button

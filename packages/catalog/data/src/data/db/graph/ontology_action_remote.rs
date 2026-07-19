@@ -213,6 +213,20 @@ impl NodeLogic for RemoteOntologyActionRequestNode {
             )
             .await;
         };
+        let identity_column = match lancegraph::effective_node_id_column_checked(
+            &import.contract,
+            &object_mapping.label,
+        ) {
+            Ok(Some(column)) => column,
+            Ok(None) => {
+                return fail(
+                    context,
+                    "The action object type has no governed identity column",
+                )
+                .await;
+            }
+            Err(error) => return fail(context, error).await,
+        };
 
         let Some(objects) = objects.as_array() else {
             return fail(context, "Action objects must be an array").await;
@@ -250,12 +264,12 @@ impl NodeLogic for RemoteOntologyActionRequestNode {
             let Some(object) = object.as_object() else {
                 return fail(context, "Each selected action object must be an object").await;
             };
-            let Some(id) = object.get(&object_mapping.id_column) else {
+            let Some(id) = object.get(&identity_column) else {
                 return fail(
                     context,
                     format!(
                         "Selected objects must include identity property '{}'",
-                        object_mapping.id_column
+                        identity_column
                     ),
                 )
                 .await;
@@ -285,6 +299,7 @@ impl NodeLogic for RemoteOntologyActionRequestNode {
             context,
             &import.target_app_id,
             &import.remote_ontology_id,
+            None,
         )
         .await
         {

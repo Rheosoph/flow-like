@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection},
+    routes::app::db::{ScopeParams, resolve_write_connection},
     state::AppState,
 };
 use axum::{
@@ -49,7 +49,7 @@ pub async fn delete_overlay(
         RolePermissions::WriteDatabase
     );
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
     let overlay = lancegraph::load_overlay(&connection, &overlay_id).await?;
     let action_owner = if !overlay.actions.is_empty() {
         if !permission.has_permission(RolePermissions::WriteEvents) {

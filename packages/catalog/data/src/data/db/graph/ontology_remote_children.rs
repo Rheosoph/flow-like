@@ -168,6 +168,7 @@ impl NodeLogic for QueryRemoteOntologyChildrenNode {
             context,
             &import.target_app_id,
             &import.remote_ontology_id,
+            Some(&import.source_updated_at),
         )
         .await
         {

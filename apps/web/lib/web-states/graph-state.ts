@@ -13,6 +13,7 @@ import type {
 	OntologyActionPrerun,
 	OntologyActionRun,
 	OntologyActionStreamEvent,
+	OverlayChildrenPayload,
 	PathsPayload,
 	RemoteImportQueryPayload,
 	RemoteOntologyImport,
@@ -21,6 +22,8 @@ import type {
 	SubgraphPayload,
 	SubgraphResult,
 	UpdateOverlayPayload,
+	UpsertGraphElementsPayload,
+	UpsertGraphElementsResult,
 	ValidationResult,
 } from "@flow-like/flow-like-ui";
 import { applyOntologyActionStreamEvent } from "@flow-like/flow-like-ui";
@@ -259,6 +262,19 @@ export class WebGraphState implements IGraphState {
 		);
 	}
 
+	async children(
+		appId: string,
+		overlayId: string,
+		payload: OverlayChildrenPayload,
+		userScoped?: boolean,
+	): Promise<SubgraphResult> {
+		return apiPost<SubgraphResult>(
+			`apps/${appId}/graph/${overlayId}/children${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
 	async subgraph(
 		appId: string,
 		overlayId: string,
@@ -328,6 +344,32 @@ export class WebGraphState implements IGraphState {
 		const qs = params.toString();
 		return apiGet<unknown[]>(
 			`apps/${appId}/graph/${overlayId}/sample${qs ? `?${qs}` : ""}`,
+			this.backend.auth,
+		);
+	}
+
+	async upsertNodes(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult> {
+		return apiPost<UpsertGraphElementsResult>(
+			`apps/${appId}/graph/${overlayId}/nodes${scopeQuery(userScoped)}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async upsertEdges(
+		appId: string,
+		overlayId: string,
+		payload: UpsertGraphElementsPayload,
+		userScoped?: boolean,
+	): Promise<UpsertGraphElementsResult> {
+		return apiPost<UpsertGraphElementsResult>(
+			`apps/${appId}/graph/${overlayId}/edges${scopeQuery(userScoped)}`,
+			payload,
 			this.backend.auth,
 		);
 	}

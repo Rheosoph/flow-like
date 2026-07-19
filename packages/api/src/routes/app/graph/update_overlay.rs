@@ -3,7 +3,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::db::{ScopeParams, resolve_connection},
+    routes::app::db::{ScopeParams, resolve_write_connection},
     state::AppState,
 };
 use axum::{
@@ -74,12 +74,13 @@ pub async fn update_overlay(
         RolePermissions::WriteDatabase
     );
 
-    let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
+    let connection = resolve_write_connection(&state, &user, &app_id, &scope).await?;
     let mut def = lancegraph::load_overlay(&connection, &overlay_id).await?;
     let previous_def = def.clone();
     let actions_supplied = payload.actions.is_some();
     let mut removed_action_events = None;
     let mut action_rollback = None;
+    let mut prepared_action_snapshots = None;
 
     if let Some(name) = payload.name {
         def.name = name;
@@ -240,37 +241,45 @@ pub async fn update_overlay(
     if governed_contract_changed && !def.actions.is_empty() {
         let sub = permission.sub()?;
         let mut reconciled_actions = def.actions.clone();
-        if let Err(error) = super::actions::materialize_action_events(
+        let prepared = match super::actions::materialize_action_events(
             &state,
             &sub,
             &app_id,
             &overlay_id,
             def.exposed,
             &def.nodes,
+            &def.edges,
+            def.property_projection_mode,
             &mut reconciled_actions,
         )
         .await
         {
-            let persisted = lancegraph::load_overlay(&connection, &overlay_id)
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let persisted = lancegraph::load_overlay(&connection, &overlay_id)
+                    .await
+                    .unwrap_or_else(|_| previous_def.clone());
+                if let Err(rollback_error) = super::actions::rollback_action_event_changes(
+                    &state,
+                    &sub,
+                    &app_id,
+                    &overlay_id,
+                    persisted.exposed,
+                    &persisted.nodes,
+                    &persisted.edges,
+                    persisted.property_projection_mode,
+                    &persisted.actions,
+                    &reconciled_actions,
+                )
                 .await
-                .unwrap_or_else(|_| previous_def.clone());
-            if let Err(rollback_error) = super::actions::rollback_action_event_changes(
-                &state,
-                &sub,
-                &app_id,
-                &overlay_id,
-                persisted.exposed,
-                &persisted.nodes,
-                &persisted.actions,
-                &reconciled_actions,
-            )
-            .await
-            {
-                tracing::error!(%rollback_error, "Failed to restore ontology action bindings");
+                {
+                    tracing::error!(%rollback_error, "Failed to restore ontology action bindings");
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
         def.actions = reconciled_actions.clone();
+        prepared_action_snapshots = Some((sub.clone(), prepared));
         action_rollback = Some((sub, reconciled_actions));
     }
     if actions_supplied && !previous_def.actions.is_empty() {
@@ -302,6 +311,8 @@ pub async fn update_overlay(
                     &overlay_id,
                     persisted.exposed,
                     &persisted.nodes,
+                    &persisted.edges,
+                    persisted.property_projection_mode,
                     &persisted.actions,
                     &attempted,
                 )
@@ -317,6 +328,12 @@ pub async fn update_overlay(
                 Ok(true) => unreachable!(),
             };
         }
+    }
+    if let Some((sub, prepared)) = prepared_action_snapshots
+        && let Err(error) =
+            super::actions::commit_action_board_snapshots(&state, &sub, &app_id, &prepared).await
+    {
+        tracing::warn!(%error, "Could not advance a prepared action board draft");
     }
     if let Some((sub, removed)) = removed_action_events {
         if let Err(error) =

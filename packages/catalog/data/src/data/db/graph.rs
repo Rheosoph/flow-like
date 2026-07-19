@@ -497,6 +497,7 @@ impl NodeLogic for CreateGraphOverlayNode {
             actions: Vec::new(),
             exposed: false,
             bindings_enabled: overlay.bindings_enabled,
+            property_projection_mode: lancegraph::PropertyProjectionMode::Dynamic,
             default_limit: overlay.default_limit,
             created_at: now.clone(),
             updated_at: now,

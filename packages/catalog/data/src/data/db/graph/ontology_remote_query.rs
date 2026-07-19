@@ -152,11 +152,24 @@ impl NodeLogic for QueryRemoteOntologyObjectsNode {
             )
             .await;
         };
+        let identity_column =
+            match lancegraph::effective_node_id_column_checked(&import.contract, &object.label) {
+                Ok(Some(column)) => column,
+                Ok(None) => {
+                    return fail(
+                        context,
+                        format!("Object type '{}' has no identity column", object_type),
+                    )
+                    .await;
+                }
+                Err(error) => return fail(context, error).await,
+            };
 
         if let Err(error) = ensure_remote_ontology_exposed(
             context,
             &import.target_app_id,
             &import.remote_ontology_id,
+            Some(&import.source_updated_at),
         )
         .await
         {
@@ -177,6 +190,8 @@ impl NodeLogic for QueryRemoteOntologyObjectsNode {
         let objects = match lancegraph::sample_overlay_object(
             &remote_connection,
             object,
+            &identity_column,
+            import.contract.property_projection_mode,
             limit.clamp(1, 500) as usize,
         )
         .await

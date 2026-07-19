@@ -118,19 +118,24 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
         let registration_headers: HashMap<String, String> =
             context.evaluate_pin("headers").await.unwrap_or_default();
 
-        let remote_app_id = remote_app_id.trim();
-        let event_id = event_id.trim();
-        if remote_app_id.is_empty() || event_id.is_empty() {
-            return Err(flow_like_types::anyhow!(
-                "Both a project and an MCP event must be selected"
-            ));
-        }
+        let remote_app_id = flow_like_catalog_data::remote_util::validate_path_id(
+            &remote_app_id,
+            "remote project",
+        )?;
+        let event_id =
+            flow_like_catalog_data::remote_util::validate_path_id(&event_id, "remote event")?;
 
-        let (token, base_url) = mint_app_connection_token(context, remote_app_id).await?;
-        let uri = format!(
-            "{}/apps/{}/events/{}/mcp",
-            base_url, remote_app_id, event_id
-        );
+        // Resolve once here to validate access and warm the run cache. The
+        // bearer itself is deliberately not serialized into the Agent; it is
+        // resolved again (normally a cache hit) immediately before transport
+        // construction so a delayed invocation never freezes a near-expiry
+        // token.
+        let session = flow_like_catalog_data::remote_util::remote_app_session_for_mcp(
+            context,
+            &remote_app_id,
+        )
+        .await?;
+        let uri = session.url(&format!("events/{event_id}/mcp"));
 
         let tool_filter = if tool_filter.is_empty() {
             None
@@ -151,7 +156,9 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
         agent.add_mcp_server(super::McpServerConfig {
             uri,
             tool_filter,
-            auth_header: Some(token),
+            auth_header: None,
+            remote_app_id: Some(remote_app_id),
+            remote_event_id: Some(event_id),
             custom_headers,
         });
 
@@ -167,90 +174,4 @@ impl NodeLogic for RegisterRemoteMcpToolsNode {
             "LLM processing requires the 'execute' feature"
         ))
     }
-}
-
-/// Resolves the API base url from the runtime profile, appending `/api/v1`.
-#[cfg(feature = "execute")]
-fn api_base_url(hub: &str, secure: bool) -> Option<String> {
-    let hub = hub.trim().trim_end_matches('/');
-    if hub.is_empty() {
-        return None;
-    }
-    let origin = if hub.starts_with("http://") || hub.starts_with("https://") {
-        hub.to_string()
-    } else {
-        let protocol = if secure { "https" } else { "http" };
-        format!("{protocol}://{hub}")
-    };
-    if origin.ends_with("/api/v1") {
-        return Some(origin);
-    }
-    Some(format!("{origin}/api/v1"))
-}
-
-/// Exchanges the runtime token for a short-lived app-to-app token bound to the
-/// origin app and the connected target app.
-#[cfg(feature = "execute")]
-async fn mint_app_connection_token(
-    context: &ExecutionContext,
-    target_app_id: &str,
-) -> flow_like_types::Result<(String, String)> {
-    let context_cache = context
-        .execution_cache
-        .clone()
-        .ok_or_else(|| flow_like_types::anyhow!("No execution cache found"))?;
-    let origin_app_id = context_cache.app_id.clone();
-
-    if origin_app_id == target_app_id {
-        return Err(flow_like_types::anyhow!(
-            "The remote project is the current project"
-        ));
-    }
-
-    let token = context
-        .token
-        .clone()
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| {
-            flow_like_types::anyhow!(
-                "Working with a connected app requires a connected session (no auth token available)"
-            )
-        })?;
-    let base_url = api_base_url(&context.profile.hub, context.profile.secure).ok_or_else(|| {
-        flow_like_types::anyhow!("No hub URL configured on the execution profile")
-    })?;
-
-    let url = format!(
-        "{}/apps/{}/connections/{}/token",
-        base_url, origin_app_id, target_app_id
-    );
-    let response = flow_like_types::reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(token.trim())
-        .json(&flow_like_types::json::json!({ "ttl_seconds": 900 }))
-        .send()
-        .await
-        .map_err(|err| {
-            flow_like_types::anyhow!("Failed to request app connection token: {}", err)
-        })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        let body: String = body.chars().take(500).collect();
-        return Err(flow_like_types::anyhow!(
-            "App connection token request failed with status {}: {}",
-            status,
-            body
-        ));
-    }
-
-    let value: flow_like_types::Value = response.json().await?;
-    let token = value
-        .get("token")
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| flow_like_types::anyhow!("App connection token response missing token"))?
-        .to_string();
-
-    Ok((token, base_url))
 }

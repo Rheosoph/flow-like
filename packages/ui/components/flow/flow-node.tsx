@@ -83,7 +83,6 @@ import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
-
 export interface RemoteSelectionParticipant {
 	clientId: number;
 	/** The sub (subject) from the auth token - use to resolve user info via API */
@@ -550,6 +549,7 @@ const FlowNodeInner = memo(
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.currentLayerId,
 				props.data.selectorDataVersion,
 			],
 		);
@@ -590,6 +590,7 @@ const FlowNodeInner = memo(
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.currentLayerId,
 				props.data.selectorDataVersion,
 			],
 		);
@@ -1499,6 +1500,7 @@ function flowNodeAreEqual(
 		prev.data.remoteSelections === next.data.remoteSelections &&
 		prev.data.peerUsers === next.data.peerUsers &&
 		prev.data.remoteExecuting === next.data.remoteExecuting &&
+		prev.data.currentLayerId === next.data.currentLayerId &&
 		prev.data.selectorDataVersion === next.data.selectorDataVersion
 	);
 }

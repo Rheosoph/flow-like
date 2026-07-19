@@ -279,8 +279,8 @@ pub fn ontology_binding_nodes(ontologies: &[GraphOverlay], catalog: &[Node]) -> 
                     parameters.schema = Some(schema.to_string());
                 }
                 if let Some(object) = ontology.nodes.iter().find(|object| {
-                    object.id.as_deref() == Some(&action.object_type)
-                        || object.api_name.as_deref() == Some(&action.object_type)
+                    object.id.as_deref() == Some(action.object_type.as_str())
+                        || object.api_name.as_deref() == Some(action.object_type.as_str())
                         || object.label == action.object_type
                 }) && let Some(objects) =
                     binding.pins.values_mut().find(|pin| pin.name == "objects")
@@ -437,8 +437,8 @@ pub fn remote_ontology_binding_nodes(
                     parameters.schema = Some(schema.to_string());
                 }
                 if let Some(object) = import.contract.nodes.iter().find(|object| {
-                    object.id.as_deref() == Some(&action.object_type)
-                        || object.api_name.as_deref() == Some(&action.object_type)
+                    object.id.as_deref() == Some(action.object_type.as_str())
+                        || object.api_name.as_deref() == Some(action.object_type.as_str())
                         || object.label == action.object_type
                 }) && let Some(objects) =
                     binding.pins.values_mut().find(|pin| pin.name == "objects")
@@ -578,10 +578,26 @@ mod tests {
         prototype.add_input_pin("action_id", "Action", "", VariableType::String);
         prototype.add_input_pin("objects", "Objects", "", VariableType::Struct);
         prototype.add_input_pin("parameters", "Parameters", "", VariableType::Struct);
+        let object = NodeLabelMapping {
+            id: Some("shipment".to_string()),
+            api_name: Some("shipment_api".to_string()),
+            label: "Shipment".to_string(),
+            table: "shipments".to_string(),
+            id_column: "id".to_string(),
+            display_column: Some("tracking_number".to_string()),
+            property_columns: vec![PropertyColumn {
+                name: "id".to_string(),
+                data_type: "Utf8".to_string(),
+                nullable: false,
+            }],
+            style: Default::default(),
+        };
+        let expected_objects_schema = object_schema(&object);
         let ontology = GraphOverlay {
             id: "operations".to_string(),
             name: "Operations".to_string(),
             bindings_enabled: true,
+            nodes: vec![object],
             actions: vec![OntologyActionDefinition {
                 id: "approve_shipment".to_string(),
                 name: "Approve shipment".to_string(),
@@ -629,6 +645,16 @@ mod tests {
             .find(|pin| pin.name == "param_reason")
             .unwrap();
         assert_eq!(param_pin.data_type, VariableType::String);
+        assert_eq!(
+            bindings[0]
+                .pins
+                .values()
+                .find(|pin| pin.name == "objects")
+                .unwrap()
+                .schema
+                .as_deref(),
+            Some(expected_objects_schema.as_str())
+        );
     }
 
     #[test]
@@ -765,6 +791,21 @@ mod tests {
         prototype.add_input_pin("action_id", "Action", "", VariableType::String);
         prototype.add_input_pin("objects", "Objects", "", VariableType::Struct);
         prototype.add_input_pin("parameters", "Parameters", "", VariableType::Struct);
+        let object = NodeLabelMapping {
+            id: Some("shipment_record".to_string()),
+            api_name: Some("shipment".to_string()),
+            label: "Shipment".to_string(),
+            table: "shipments".to_string(),
+            id_column: "id".to_string(),
+            display_column: Some("tracking_number".to_string()),
+            property_columns: vec![PropertyColumn {
+                name: "id".to_string(),
+                data_type: "Utf8".to_string(),
+                nullable: false,
+            }],
+            style: Default::default(),
+        };
+        let expected_objects_schema = object_schema(&object);
         let import = RemoteOntologyImport {
             id: "warehouse-app::operations".to_string(),
             target_app_id: "warehouse-app".to_string(),
@@ -772,20 +813,7 @@ mod tests {
             contract: GraphOverlay {
                 id: "operations".to_string(),
                 name: "Operations".to_string(),
-                nodes: vec![NodeLabelMapping {
-                    id: Some("shipment".to_string()),
-                    api_name: Some("shipment".to_string()),
-                    label: "Shipment".to_string(),
-                    table: "shipments".to_string(),
-                    id_column: "id".to_string(),
-                    display_column: Some("tracking_number".to_string()),
-                    property_columns: vec![PropertyColumn {
-                        name: "id".to_string(),
-                        data_type: "Utf8".to_string(),
-                        nullable: false,
-                    }],
-                    style: Default::default(),
-                }],
+                nodes: vec![object],
                 actions: vec![OntologyActionDefinition {
                     id: "approve_shipment".to_string(),
                     name: "Approve shipment".to_string(),
@@ -848,6 +876,16 @@ mod tests {
                 .pins
                 .values()
                 .any(|pin| pin.name == "param_reason")
+        );
+        assert_eq!(
+            bindings[0]
+                .pins
+                .values()
+                .find(|pin| pin.name == "objects")
+                .unwrap()
+                .schema
+                .as_deref(),
+            Some(expected_objects_schema.as_str())
         );
     }
 

@@ -1133,9 +1133,22 @@ pub async fn execute_agent_streaming(
     let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
     for mcp_config in &agent.mcp_servers {
-        let transport = rmcp::transport::StreamableHttpClientTransport::from_config(
-            crate::agent::mcp_transport_config(mcp_config),
-        );
+        let transport_config =
+            match crate::agent::mcp_transport_config_for_execution(mcp_config, context).await {
+                Ok(config) => config,
+                Err(error) => {
+                    context.log_message(
+                        &format!(
+                            "Failed to authorize MCP server {}: {}",
+                            mcp_config.uri, error
+                        ),
+                        LogLevel::Error,
+                    );
+                    continue;
+                }
+            };
+        let transport =
+            rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
         let client = match client_info.clone().serve(transport).await {
             Ok(c) => c,
             Err(e) => {
@@ -2248,7 +2261,6 @@ async fn handle_memory_tool_call(
     tool_name: &str,
     arguments: &Value,
 ) -> flow_like_types::Result<Value> {
-    use flow_like_catalog_core::CachedDB;
     use flow_like_storage::databases::vector::{
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
@@ -2262,17 +2274,7 @@ async fn handle_memory_tool_call(
         .as_ref()
         .ok_or_else(|| anyhow!("Memory not configured on agent"))?;
 
-    let cached_db: CachedDB = {
-        let cache = context.cache.read().await;
-        let entry = cache
-            .get(&memory.database.cache_key)
-            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
-        entry
-            .as_any()
-            .downcast_ref::<CachedDB>()
-            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
-            .clone()
-    };
+    let cached_db = memory.database.load(context).await?;
 
     match tool_name {
         "_memory_search" => {
@@ -2478,7 +2480,6 @@ async fn store_evicted_to_memory(
     agent: &Agent,
     evicted: &[rig::message::Message],
 ) -> flow_like_types::Result<()> {
-    use flow_like_catalog_core::CachedDB;
     use flow_like_storage::databases::vector::{
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
@@ -2556,17 +2557,7 @@ async fn store_evicted_to_memory(
         "timestamp": now,
     });
 
-    let cached_db: CachedDB = {
-        let cache = context.cache.read().await;
-        let entry = cache
-            .get(&memory.database.cache_key)
-            .ok_or_else(|| anyhow!("Memory database not found in cache"))?;
-        entry
-            .as_any()
-            .downcast_ref::<CachedDB>()
-            .ok_or_else(|| anyhow!("Failed to downcast memory database"))?
-            .clone()
-    };
+    let cached_db = memory.database.load(context).await?;
 
     let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
     db.insert(vec![record]).await?;

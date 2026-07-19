@@ -33,6 +33,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../../hooks/use-invoke";
 import type { IBoard } from "../../../lib/schema/flow/board";
 import { IVersionType } from "../../../lib/schema/flow/version-type";
@@ -1846,16 +1847,50 @@ export function OntologyModelPanel({
 	useEffect(() => {
 		if (selected) setSelectedId(selected.id);
 	}, [selected]);
-	const [syncedEdges, setSyncedEdges] = useState<
-		EdgeLabelMapping[] | undefined
-	>(() => ontologies[0]?.edges);
 	const [edgesDraft, setEdgesDraft] = useState<EdgeLabelMapping[]>(
 		() => ontologies[0]?.edges ?? [],
 	);
-	if (selected && selected.edges !== syncedEdges) {
-		setSyncedEdges(selected.edges);
-		setEdgesDraft(selected.edges);
-	}
+	const edgesDraftRef = useRef(edgesDraft);
+	const confirmedEdgesRef = useRef(
+		new Map<string, EdgeLabelMapping[]>(
+			ontologies[0] ? [[ontologies[0].id, ontologies[0].edges]] : [],
+		),
+	);
+	const edgesDraftsRef = useRef(
+		new Map<string, EdgeLabelMapping[]>(
+			ontologies[0] ? [[ontologies[0].id, ontologies[0].edges]] : [],
+		),
+	);
+	const selectedIdRef = useRef(selected?.id);
+	const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+	const latestSaveVersionRef = useRef(new Map<string, number>());
+	const pendingSavesRef = useRef(new Map<string, number>());
+
+	useEffect(() => {
+		if (!selected) return;
+		const selectionChanged = selectedIdRef.current !== selected.id;
+		selectedIdRef.current = selected.id;
+		const hasPendingSave = (pendingSavesRef.current.get(selected.id) ?? 0) > 0;
+		if (!hasPendingSave) {
+			confirmedEdgesRef.current.set(selected.id, selected.edges);
+			edgesDraftsRef.current.set(selected.id, selected.edges);
+			edgesDraftRef.current = selected.edges;
+			setEdgesDraft(selected.edges);
+		} else if (selectionChanged) {
+			// Preserve this ontology's optimistic draft while its serialized save is
+			// still pending, even if the user briefly viewed another ontology.
+			const draft = edgesDraftsRef.current.get(selected.id) ?? selected.edges;
+			if (!confirmedEdgesRef.current.has(selected.id)) {
+				confirmedEdgesRef.current.set(selected.id, selected.edges);
+			}
+			edgesDraftRef.current = draft;
+			setEdgesDraft(draft);
+		} else {
+			// A successful earlier item in the queue may have refreshed the parent
+			// while a later draft is still pending. Track it as the rollback point.
+			confirmedEdgesRef.current.set(selected.id, selected.edges);
+		}
+	}, [selected]);
 	const otherOntologies = useMemo(
 		() => ontologies.filter((ontology) => ontology.id !== selected?.id),
 		[ontologies, selected?.id],
@@ -1863,13 +1898,57 @@ export function OntologyModelPanel({
 	const handleEdgeChange = useCallback(
 		(index: number, patch: Partial<EdgeLabelMapping>) => {
 			if (!selected || !onSaveEdges) return;
-			const next = edgesDraft.map((edge, edgeIndex) =>
+			const next = edgesDraftRef.current.map((edge, edgeIndex) =>
 				edgeIndex === index ? { ...edge, ...patch } : edge,
 			);
+			edgesDraftRef.current = next;
+			edgesDraftsRef.current.set(selected.id, next);
 			setEdgesDraft(next);
-			void onSaveEdges(selected.id, next);
+
+			const ontologyId = selected.id;
+			const saveEdges = onSaveEdges;
+			const saveVersion =
+				(latestSaveVersionRef.current.get(ontologyId) ?? 0) + 1;
+			latestSaveVersionRef.current.set(ontologyId, saveVersion);
+			pendingSavesRef.current.set(
+				ontologyId,
+				(pendingSavesRef.current.get(ontologyId) ?? 0) + 1,
+			);
+			saveQueueRef.current = saveQueueRef.current
+				.then(async () => {
+					const isLatestSave = () =>
+						latestSaveVersionRef.current.get(ontologyId) === saveVersion;
+					try {
+						await saveEdges(ontologyId, next);
+						confirmedEdgesRef.current.set(ontologyId, next);
+						if (selectedIdRef.current === ontologyId && isLatestSave()) {
+							edgesDraftsRef.current.set(ontologyId, next);
+							edgesDraftRef.current = next;
+							setEdgesDraft(next);
+						}
+					} catch (error) {
+						if (isLatestSave()) {
+							const confirmed = confirmedEdgesRef.current.get(ontologyId) ?? [];
+							edgesDraftsRef.current.set(ontologyId, confirmed);
+							if (selectedIdRef.current === ontologyId) {
+								edgesDraftRef.current = confirmed;
+								setEdgesDraft(confirmed);
+							}
+							toast.error(
+								error instanceof Error
+									? `Failed to save relationship: ${error.message}`
+									: "Failed to save relationship",
+							);
+						}
+					}
+				})
+				.finally(() => {
+					const pending = (pendingSavesRef.current.get(ontologyId) ?? 1) - 1;
+					if (pending > 0) pendingSavesRef.current.set(ontologyId, pending);
+					else pendingSavesRef.current.delete(ontologyId);
+				});
 		},
-		[edgesDraft, onSaveEdges, selected],
+		[onSaveEdges, selected],
 	);
 	if (ontologies.length === 0)
 		return (

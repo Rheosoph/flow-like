@@ -173,7 +173,8 @@ pub async fn install_remote_ontology(
     if !contract.exposed {
         return Err(ApiError::not_found("The remote ontology is not exposed"));
     }
-    let contract = sanitize_remote_contract(contract);
+    let mut contract = sanitize_remote_contract(contract);
+    lancegraph::freeze_remote_contract_projection(&target_database, &mut contract).await?;
 
     let local_builder = credentials.to_db(&app_id).await?;
     let local_database = local_builder.execute().await?;
@@ -254,7 +255,7 @@ pub async fn uninstall_remote_ontology(
 mod tests {
     use super::sanitize_remote_contract;
     use flow_like_storage::databases::graph::lancegraph::{
-        EdgeMappingDef, GraphOverlayDef, OntologyActionDef,
+        EdgeMappingDef, GraphOverlayDef, OntologyActionDef, PropertyProjectionMode,
     };
 
     fn action(id: &str, exposed: bool) -> OntologyActionDef {
@@ -286,6 +287,7 @@ mod tests {
             actions: vec![action("public", true), action("private", false)],
             exposed: true,
             bindings_enabled: false,
+            property_projection_mode: PropertyProjectionMode::Dynamic,
             default_limit: 100,
             created_at: "t".to_string(),
             updated_at: "t".to_string(),
@@ -339,6 +341,7 @@ mod tests {
             actions: Vec::new(),
             exposed: true,
             bindings_enabled: false,
+            property_projection_mode: PropertyProjectionMode::Dynamic,
             default_limit: 100,
             created_at: "t".to_string(),
             updated_at: "t".to_string(),

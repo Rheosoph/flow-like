@@ -78,13 +78,20 @@ pub struct NodeMetric {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphAnalyticsResult {
+    /// Exact sum of mapped node-table row counts (for tables that could be
+    /// counted), independent of the edge sampling limit.
     pub node_count: usize,
+    /// Edges included in the bounded analytics snapshot.
     pub edge_count: usize,
+    /// True when the edge snapshot was capped. If true, component, isolation,
+    /// degree, and PageRank fields describe the sampled snapshot.
     pub truncated: bool,
     pub label_counts: Vec<LabelCount>,
     pub component_count: usize,
     /// Sizes of the largest weakly connected components, descending.
     pub largest_components: Vec<usize>,
+    /// Nodes with no incident edge in the bounded snapshot. This is exact for
+    /// an untruncated snapshot and a sample-relative upper bound otherwise.
     pub isolated_node_count: usize,
     pub top_by_degree: Vec<NodeMetric>,
     pub top_by_pagerank: Vec<NodeMetric>,

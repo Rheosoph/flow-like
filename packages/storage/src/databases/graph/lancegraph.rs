@@ -62,9 +62,22 @@ pub struct GraphOverlayDef {
     pub exposed: bool,
     #[serde(default)]
     pub bindings_enabled: bool,
+    /// Controls the meaning of an empty `property_columns` list. Local
+    /// overlays stay dynamic (empty = all scalar columns); installed remote
+    /// contracts are frozen (empty = deliberately no additional properties).
+    #[serde(default)]
+    pub property_projection_mode: PropertyProjectionMode,
     pub default_limit: usize,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PropertyProjectionMode {
+    #[default]
+    Dynamic,
+    Frozen,
 }
 
 /// A sanitized ontology contract pinned into a consuming project.
@@ -134,6 +147,19 @@ pub struct PropertyColumnDef {
     pub nullable: bool,
 }
 
+/// The exact object surface a managed ontology action was authorized to read
+/// when its protected event binding was materialized.
+///
+/// Unlike an ordinary local overlay, this projection never treats an empty
+/// property list as a schema wildcard. The concrete identity and columns are
+/// stored in the event config and covered by its contract hash.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GovernedObjectProjection {
+    pub table: String,
+    pub identity_column: String,
+    pub columns: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeMappingDef {
     #[serde(default)]
@@ -175,6 +201,7 @@ pub fn ontology_action_contract_hash(
     exposed: bool,
     action: &OntologyActionDef,
     object: &NodeMappingDef,
+    projection: &GovernedObjectProjection,
 ) -> Result<String> {
     let contract = serde_json::json!({
         "ontology_id": ontology_id,
@@ -200,7 +227,8 @@ pub fn ontology_action_contract_hash(
             "id_column": object.id_column,
             "display_column": object.display_column,
             "property_columns": object.property_columns,
-        }
+        },
+        "resolved_object_projection": projection,
     });
     let encoded = serde_json::to_vec(&canonical_json(&contract))?;
     Ok(blake3::hash(&encoded).to_hex().to_string())
@@ -225,7 +253,8 @@ pub fn ontology_action_contract_hash_for_overlay(
                 action.object_type
             )
         })?;
-    ontology_action_contract_hash(&overlay.id, overlay.exposed, action, object)
+    let projection = declared_governed_object_projection(overlay, action)?;
+    ontology_action_contract_hash(&overlay.id, overlay.exposed, action, object, &projection)
 }
 
 pub fn ontology_action_contracts_equal(
@@ -606,6 +635,7 @@ impl GraphStore for LanceGraphStore {
                 &self.connection,
                 &node.table,
                 &node.property_columns,
+                self.overlay.property_projection_mode,
                 &mut schema_cache,
                 &excluded,
                 &always_include,
@@ -1290,6 +1320,7 @@ async fn resolve_property_names(
     connection: &Connection,
     table_name: &str,
     configured: &[PropertyColumnDef],
+    projection_mode: PropertyProjectionMode,
     schema_cache: &mut HashMap<String, Vec<String>>,
     excluded: &HashSet<String>,
     always_include: &[String],
@@ -1299,6 +1330,8 @@ async fn resolve_property_names(
             .iter()
             .map(|p| p.name.clone())
             .collect::<Vec<_>>()
+    } else if projection_mode == PropertyProjectionMode::Frozen {
+        Vec::new()
     } else if let Some(columns) = schema_cache.get(table_name) {
         columns.clone()
     } else {
@@ -1352,32 +1385,14 @@ async fn build_graph_config(
     let mut builder = GraphConfig::builder();
     let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
 
-    // Collect per-label id_field overrides from edges.
-    // If an edge specifies src_node_column/dst_node_column, that overrides the
-    // node's default id_column for the join.
-    let mut label_id_overrides: HashMap<String, String> = HashMap::new();
-    for edge in &overlay.edges {
-        if let Some(ref col) = edge.src_node_column {
-            label_id_overrides
-                .entry(edge.src_label.clone())
-                .or_insert_with(|| col.clone());
-        }
-        if let Some(ref col) = edge.dst_node_column {
-            label_id_overrides
-                .entry(edge.dst_label.clone())
-                .or_insert_with(|| col.clone());
-        }
-    }
-
     for node in &overlay.nodes {
-        let id_col = label_id_overrides
-            .get(&node.label)
-            .unwrap_or(&node.id_column);
+        let id_col = effective_node_id_column_checked(overlay, &node.label)?
+            .ok_or_else(|| anyhow!("Object type '{}' has no identity column", node.label))?;
         let excluded = HashSet::from([id_col.clone()]);
         let always_include = node
             .display_column
             .as_ref()
-            .filter(|column| *column != id_col)
+            .filter(|column| column.as_str() != id_col.as_str())
             .cloned()
             .into_iter()
             .collect::<Vec<_>>();
@@ -1385,13 +1400,14 @@ async fn build_graph_config(
             connection,
             &node.table,
             &node.property_columns,
+            overlay.property_projection_mode,
             &mut schema_cache,
             &excluded,
             &always_include,
         )
         .await?;
         let mapping =
-            lance_graph::NodeMapping::new(&node.label, id_col).with_properties(prop_names);
+            lance_graph::NodeMapping::new(&node.label, &id_col).with_properties(prop_names);
         builder = builder.with_node_mapping(mapping);
     }
 
@@ -1401,6 +1417,7 @@ async fn build_graph_config(
             connection,
             &edge.table,
             &edge.property_columns,
+            overlay.property_projection_mode,
             &mut schema_cache,
             &excluded,
             &[],
@@ -1522,20 +1539,55 @@ pub async fn load_overlay(connection: &Connection, overlay_id: &str) -> Result<G
 /// lookups must resolve the column the same way, or an id a client derived from a
 /// rendered node will not match the column the query filters on.
 pub fn effective_node_id_column(overlay: &GraphOverlayDef, label: &str) -> Option<String> {
-    let node = overlay.nodes.iter().find(|node| node.label == label)?;
-    for edge in &overlay.edges {
-        if edge.src_label == label
-            && let Some(column) = &edge.src_node_column
-        {
-            return Some(column.clone());
-        }
-        if edge.dst_label == label
-            && let Some(column) = &edge.dst_node_column
-        {
-            return Some(column.clone());
+    effective_node_id_column_checked(overlay, label)
+        .ok()
+        .flatten()
+}
+
+/// Checked identity resolution used at every governed/remote boundary. Edge
+/// overrides may replace a node's base id column, but all overrides for one
+/// label must agree; accepting the first one would make identity depend on
+/// mapping order.
+pub fn effective_node_id_column_checked(
+    overlay: &GraphOverlayDef,
+    label: &str,
+) -> Result<Option<String>> {
+    effective_node_id_column_for_mappings(&overlay.nodes, &overlay.edges, label)
+}
+
+pub fn effective_node_id_column_for_mappings(
+    nodes: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    label: &str,
+) -> Result<Option<String>> {
+    let Some(node) = nodes.iter().find(|node| node.label == label) else {
+        return Ok(None);
+    };
+    let mut override_column: Option<String> = None;
+    for edge in edges {
+        for (matches_label, column) in [
+            (edge.src_label == label, edge.src_node_column.as_ref()),
+            (edge.dst_label == label, edge.dst_node_column.as_ref()),
+        ] {
+            let Some(column) = column.filter(|_| matches_label) else {
+                continue;
+            };
+            if let Some(existing) = override_column.as_deref()
+                && existing != column
+            {
+                return Err(anyhow!(
+                    "Object type '{}' has conflicting node identity overrides '{}' and '{}'",
+                    label,
+                    existing,
+                    column
+                ));
+            }
+            override_column = Some(column.clone());
         }
     }
-    Some(node.id_column.clone())
+    Ok(Some(
+        override_column.unwrap_or_else(|| node.id_column.clone()),
+    ))
 }
 
 /// Resolves an object type by any of its identities — stable id, API name, or
@@ -1544,11 +1596,401 @@ pub fn resolve_object_mapping<'a>(
     overlay: &'a GraphOverlayDef,
     object_type: &str,
 ) -> Option<&'a NodeMappingDef> {
-    overlay.nodes.iter().find(|node| {
+    resolve_object_mapping_from_nodes(&overlay.nodes, object_type)
+}
+
+fn resolve_object_mapping_from_nodes<'a>(
+    nodes: &'a [NodeMappingDef],
+    object_type: &str,
+) -> Option<&'a NodeMappingDef> {
+    nodes.iter().find(|node| {
         node.id.as_deref() == Some(object_type)
             || node.api_name.as_deref() == Some(object_type)
             || node.label == object_type
     })
+}
+
+fn required_object_columns(mapping: &NodeMappingDef, identity_column: &str) -> Vec<String> {
+    let mut columns = vec![identity_column.to_string(), mapping.id_column.clone()];
+    if let Some(display_column) = &mapping.display_column {
+        columns.push(display_column.clone());
+    }
+    let mut seen = HashSet::new();
+    columns.retain(|column| seen.insert(column.clone()));
+    columns
+}
+
+/// Returns the explicit portion of a governed projection without consulting a
+/// live schema. This is used when comparing ontology definitions, where an
+/// effective identity override must count as a governed contract change even
+/// if the node mapping itself is byte-for-byte unchanged.
+fn declared_governed_object_projection(
+    overlay: &GraphOverlayDef,
+    action: &OntologyActionDef,
+) -> Result<GovernedObjectProjection> {
+    let mapping = resolve_object_mapping(overlay, &action.object_type).ok_or_else(|| {
+        anyhow!(
+            "Ontology action '{}' references unknown object type '{}'",
+            action.id,
+            action.object_type
+        )
+    })?;
+    let identity_column = effective_node_id_column_checked(overlay, &mapping.label)?
+        .ok_or_else(|| anyhow!("Object type '{}' has no identity column", mapping.label))?;
+    let mut columns = required_object_columns(mapping, &identity_column);
+    columns.extend(
+        mapping
+            .property_columns
+            .iter()
+            .map(|property| property.name.clone()),
+    );
+    let mut seen = HashSet::new();
+    columns.retain(|column| seen.insert(column.clone()));
+    Ok(GovernedObjectProjection {
+        table: mapping.table.clone(),
+        identity_column,
+        columns,
+    })
+}
+
+/// Resolves the live local wildcard once, producing the concrete projection
+/// that will be protected by a managed action event.
+pub async fn resolve_governed_object_projection(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+    action: &OntologyActionDef,
+) -> Result<GovernedObjectProjection> {
+    resolve_governed_object_projection_for_mappings(
+        connection,
+        &overlay.nodes,
+        &overlay.edges,
+        overlay.property_projection_mode,
+        action,
+    )
+    .await
+}
+
+pub async fn resolve_governed_object_projection_for_mappings(
+    connection: &Connection,
+    nodes: &[NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    projection_mode: PropertyProjectionMode,
+    action: &OntologyActionDef,
+) -> Result<GovernedObjectProjection> {
+    let mapping =
+        resolve_object_mapping_from_nodes(nodes, &action.object_type).ok_or_else(|| {
+            anyhow!(
+                "Ontology action '{}' references unknown object type '{}'",
+                action.id,
+                action.object_type
+            )
+        })?;
+    let identity_column = effective_node_id_column_for_mappings(nodes, edges, &mapping.label)?
+        .ok_or_else(|| anyhow!("Object type '{}' has no identity column", mapping.label))?;
+    let columns = resolve_object_projection(
+        connection,
+        &mapping.table,
+        &mapping.property_columns,
+        projection_mode,
+        required_object_columns(mapping, &identity_column),
+    )
+    .await?;
+    Ok(GovernedObjectProjection {
+        table: mapping.table.clone(),
+        identity_column,
+        columns,
+    })
+}
+
+/// Confirms that a stored action projection still belongs to the current
+/// ontology contract. Dynamic local mappings may keep the concrete columns
+/// captured at materialization; explicit and frozen mappings must match their
+/// declared surface exactly.
+pub fn validate_governed_object_projection<'a>(
+    overlay: &'a GraphOverlayDef,
+    action: &OntologyActionDef,
+    projection: &GovernedObjectProjection,
+) -> Result<&'a NodeMappingDef> {
+    validate_governed_object_projection_for_mappings(
+        &overlay.nodes,
+        &overlay.edges,
+        overlay.property_projection_mode,
+        action,
+        projection,
+    )
+}
+
+pub fn validate_governed_object_projection_for_mappings<'a>(
+    nodes: &'a [NodeMappingDef],
+    edges: &[EdgeMappingDef],
+    projection_mode: PropertyProjectionMode,
+    action: &OntologyActionDef,
+    projection: &GovernedObjectProjection,
+) -> Result<&'a NodeMappingDef> {
+    let mapping =
+        resolve_object_mapping_from_nodes(nodes, &action.object_type).ok_or_else(|| {
+            anyhow!(
+                "Ontology action '{}' references unknown object type '{}'",
+                action.id,
+                action.object_type
+            )
+        })?;
+    let identity_column = effective_node_id_column_for_mappings(nodes, edges, &mapping.label)?
+        .ok_or_else(|| anyhow!("Object type '{}' has no identity column", mapping.label))?;
+    if projection.table != mapping.table || projection.identity_column != identity_column {
+        return Err(anyhow!(
+            "The stored action object identity no longer matches object type '{}'",
+            action.object_type
+        ));
+    }
+    if projection.columns.is_empty() || projection.columns.iter().any(|column| column.is_empty()) {
+        return Err(anyhow!(
+            "The stored action object projection is empty or invalid"
+        ));
+    }
+    let projected = projection
+        .columns
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if projected.len() != projection.columns.len() {
+        return Err(anyhow!(
+            "The stored action object projection contains duplicate columns"
+        ));
+    }
+    let mut expected = required_object_columns(mapping, &identity_column);
+    for required in &expected {
+        if !projected.contains(required.as_str()) {
+            return Err(anyhow!(
+                "The stored action object projection is missing required column '{}'",
+                required
+            ));
+        }
+    }
+    if projection_mode == PropertyProjectionMode::Frozen || !mapping.property_columns.is_empty() {
+        expected.extend(
+            mapping
+                .property_columns
+                .iter()
+                .map(|property| property.name.clone()),
+        );
+        let mut seen = HashSet::new();
+        expected.retain(|column| seen.insert(column.clone()));
+        let expected = expected.iter().map(String::as_str).collect::<HashSet<_>>();
+        if projected != expected {
+            return Err(anyhow!(
+                "The stored action object projection no longer matches object type '{}'",
+                action.object_type
+            ));
+        }
+    }
+    Ok(mapping)
+}
+
+/// Reads a managed action's protected projection from its event config.
+pub fn governed_object_projection_from_event_config(
+    config: &[u8],
+) -> Result<GovernedObjectProjection> {
+    let config = serde_json::from_slice::<serde_json::Value>(config)
+        .map_err(|error| anyhow!("Invalid managed action event config: {}", error))?;
+    let projection = config
+        .get("object_projection")
+        .cloned()
+        .ok_or_else(|| anyhow!("The managed action event has no protected object projection"))?;
+    serde_json::from_value(projection)
+        .map_err(|error| anyhow!("Invalid managed action object projection: {}", error))
+}
+
+async fn freeze_property_columns(
+    connection: &Connection,
+    table_name: &str,
+    configured: &[PropertyColumnDef],
+    excluded: &HashSet<String>,
+) -> Result<Vec<PropertyColumnDef>> {
+    let table = connection
+        .open_table(table_name)
+        .execute()
+        .await
+        .map_err(|error| anyhow!("Failed to open table '{}': {}", table_name, error))?;
+    let schema = table
+        .schema()
+        .await
+        .map_err(|error| anyhow!("Failed to read schema for '{}': {}", table_name, error))?;
+    let schema_names = schema
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect::<HashSet<_>>();
+    let mut missing_required = excluded
+        .iter()
+        .filter(|column| !schema_names.contains(column.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    missing_required.sort_unstable();
+    if !missing_required.is_empty() {
+        return Err(anyhow!(
+            "Required columns [{}] do not exist in table '{}'",
+            missing_required.join(", "),
+            table_name
+        ));
+    }
+    let configured_names = configured
+        .iter()
+        .map(|property| property.name.as_str())
+        .filter(|name| !excluded.contains(*name))
+        .collect::<HashSet<_>>();
+    let explicit = !configured.is_empty();
+    let mut properties = Vec::new();
+    for field in schema.fields() {
+        if excluded.contains(field.name())
+            || (explicit && !configured_names.contains(field.name().as_str()))
+            || (!explicit && !include_default_property(field.data_type()))
+        {
+            continue;
+        }
+        properties.push(PropertyColumnDef {
+            name: field.name().clone(),
+            data_type: format!("{:?}", field.data_type()),
+            nullable: field.is_nullable(),
+        });
+    }
+    if explicit && properties.len() != configured_names.len() {
+        let resolved = properties
+            .iter()
+            .map(|property| property.name.as_str())
+            .collect::<HashSet<_>>();
+        let missing = configured_names
+            .difference(&resolved)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(anyhow!(
+            "Configured properties [{}] do not exist in table '{}'",
+            missing,
+            table_name
+        ));
+    }
+    Ok(properties)
+}
+
+/// Resolve every dynamic property wildcard against the producer's live schema
+/// and mark the installed contract frozen. A resolved empty list remains empty
+/// forever instead of gaining columns added to the physical table later.
+pub async fn freeze_remote_contract_projection(
+    connection: &Connection,
+    overlay: &mut GraphOverlayDef,
+) -> Result<()> {
+    if overlay.property_projection_mode == PropertyProjectionMode::Frozen {
+        return Ok(());
+    }
+    let identities = overlay
+        .nodes
+        .iter()
+        .map(|node| {
+            Ok((
+                node.label.clone(),
+                effective_node_id_column_checked(overlay, &node.label)?.ok_or_else(|| {
+                    anyhow!("Object type '{}' has no identity column", node.label)
+                })?,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>>>()?;
+
+    for node in &mut overlay.nodes {
+        let identity = identities
+            .get(&node.label)
+            .expect("identity was resolved for every node");
+        let mut excluded = HashSet::from([identity.clone(), node.id_column.clone()]);
+        if let Some(display) = &node.display_column {
+            excluded.insert(display.clone());
+        }
+        node.property_columns =
+            freeze_property_columns(connection, &node.table, &node.property_columns, &excluded)
+                .await?;
+    }
+    for edge in &mut overlay.edges {
+        let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
+        edge.property_columns =
+            freeze_property_columns(connection, &edge.table, &edge.property_columns, &excluded)
+                .await?;
+    }
+    overlay.property_projection_mode = PropertyProjectionMode::Frozen;
+    Ok(())
+}
+
+/// Contract-approved columns grouped by physical table. Used to expose a
+/// projected remote SQL surface without ever registering the underlying full
+/// Lance tables in the DataFusion catalog.
+pub fn frozen_remote_table_projections(
+    overlay: &GraphOverlayDef,
+) -> Result<HashMap<String, Vec<String>>> {
+    if overlay.property_projection_mode != PropertyProjectionMode::Frozen {
+        return Err(anyhow!(
+            "Remote ontology contract does not contain a frozen property projection"
+        ));
+    }
+    let mut projections: HashMap<String, Vec<String>> = HashMap::new();
+    for node in &overlay.nodes {
+        let columns = projections.entry(node.table.clone()).or_default();
+        columns.push(
+            effective_node_id_column_checked(overlay, &node.label)?
+                .ok_or_else(|| anyhow!("Object type '{}' has no identity column", node.label))?,
+        );
+        columns.push(node.id_column.clone());
+        if let Some(display) = &node.display_column {
+            columns.push(display.clone());
+        }
+        columns.extend(
+            node.property_columns
+                .iter()
+                .map(|property| property.name.clone()),
+        );
+    }
+    for edge in &overlay.edges {
+        let columns = projections.entry(edge.table.clone()).or_default();
+        columns.push(edge.src_column.clone());
+        columns.push(edge.dst_column.clone());
+        columns.extend(
+            edge.property_columns
+                .iter()
+                .map(|property| property.name.clone()),
+        );
+    }
+    for columns in projections.values_mut() {
+        let mut seen = HashSet::new();
+        columns.retain(|column| seen.insert(column.clone()));
+    }
+    Ok(projections)
+}
+
+/// Builds a projection for an ontology mapping. An empty property list means
+/// "all scalar/non-vector properties", matching graph traversal and Cypher
+/// hydration. Required identity/display columns are always retained.
+async fn resolve_object_projection(
+    connection: &Connection,
+    table_name: &str,
+    configured: &[PropertyColumnDef],
+    projection_mode: PropertyProjectionMode,
+    required: Vec<String>,
+) -> Result<Vec<String>> {
+    let excluded = required.iter().cloned().collect::<HashSet<_>>();
+    let mut schema_cache = HashMap::new();
+    let properties = resolve_property_names(
+        connection,
+        table_name,
+        configured,
+        projection_mode,
+        &mut schema_cache,
+        &excluded,
+        &[],
+    )
+    .await?;
+
+    let mut columns = required;
+    columns.extend(properties);
+    let mut seen = HashSet::new();
+    columns.retain(|column| seen.insert(column.clone()));
+    Ok(columns)
 }
 
 pub async fn sample_overlay(
@@ -1557,39 +1999,45 @@ pub async fn sample_overlay(
     label: &str,
     limit: usize,
 ) -> Result<Vec<Value>> {
-    let (table_name, columns) = if let Some(node) = resolve_object_mapping(overlay, label) {
-        let mut columns = vec![node.id_column.clone()];
-        if let Some(display_column) = &node.display_column {
-            columns.push(display_column.clone());
-        }
-        columns.extend(
-            node.property_columns
-                .iter()
-                .map(|property| property.name.clone()),
-        );
-        (node.table.as_str(), columns)
-    } else if let Some(edge) = overlay.edges.iter().find(|edge| {
-        edge.id.as_deref() == Some(label)
-            || edge.api_name.as_deref() == Some(label)
-            || edge.label == label
-    }) {
-        let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
-        columns.extend(edge.src_node_column.clone());
-        columns.extend(edge.dst_node_column.clone());
-        columns.extend(
-            edge.property_columns
-                .iter()
-                .map(|property| property.name.clone()),
-        );
-        (edge.table.as_str(), columns)
-    } else {
-        return Err(anyhow!("Label '{}' not found in overlay", label));
-    };
-    let mut seen = HashSet::new();
-    let columns = columns
-        .into_iter()
-        .filter(|column| seen.insert(column.clone()))
-        .collect::<Vec<_>>();
+    let (table_name, configured, required) =
+        if let Some(node) = resolve_object_mapping(overlay, label) {
+            let mut required = vec![
+                effective_node_id_column_checked(overlay, &node.label)?
+                    .unwrap_or_else(|| node.id_column.clone()),
+                node.id_column.clone(),
+            ];
+            if let Some(display_column) = &node.display_column {
+                required.push(display_column.clone());
+            }
+            (
+                node.table.as_str(),
+                node.property_columns.as_slice(),
+                required,
+            )
+        } else if let Some(edge) = overlay.edges.iter().find(|edge| {
+            edge.id.as_deref() == Some(label)
+                || edge.api_name.as_deref() == Some(label)
+                || edge.label == label
+        }) {
+            // `src_node_column`/`dst_node_column` live on the corresponding
+            // node tables; only the edge endpoint columns belong here.
+            let required = vec![edge.src_column.clone(), edge.dst_column.clone()];
+            (
+                edge.table.as_str(),
+                edge.property_columns.as_slice(),
+                required,
+            )
+        } else {
+            return Err(anyhow!("Label '{}' not found in overlay", label));
+        };
+    let columns = resolve_object_projection(
+        connection,
+        table_name,
+        configured,
+        overlay.property_projection_mode,
+        required,
+    )
+    .await?;
 
     let table = connection
         .open_table(table_name)
@@ -1621,20 +2069,22 @@ pub async fn sample_overlay(
 pub async fn sample_overlay_object(
     connection: &Connection,
     object: &NodeMappingDef,
+    identity_column: &str,
+    projection_mode: PropertyProjectionMode,
     limit: usize,
 ) -> Result<Vec<Value>> {
-    let mut columns = vec![object.id_column.clone()];
+    let mut required = vec![identity_column.to_string(), object.id_column.clone()];
     if let Some(display_column) = &object.display_column {
-        columns.push(display_column.clone());
+        required.push(display_column.clone());
     }
-    columns.extend(
-        object
-            .property_columns
-            .iter()
-            .map(|property| property.name.clone()),
-    );
-    let mut seen = HashSet::new();
-    columns.retain(|column| seen.insert(column.clone()));
+    let columns = resolve_object_projection(
+        connection,
+        &object.table,
+        &object.property_columns,
+        projection_mode,
+        required,
+    )
+    .await?;
 
     let table = connection
         .open_table(&object.table)
@@ -1671,15 +2121,6 @@ pub async fn load_overlay_objects(
     object_type: &str,
     ids: &[Value],
 ) -> Result<Vec<Value>> {
-    if ids.is_empty() {
-        return Err(anyhow!("At least one object identity is required"));
-    }
-    if ids.len() > 100 {
-        return Err(anyhow!(
-            "At most 100 object identities may be loaded at once"
-        ));
-    }
-
     let mapping = resolve_object_mapping(overlay, object_type).ok_or_else(|| {
         anyhow!(
             "Object type '{}' was not found in the ontology",
@@ -1689,9 +2130,59 @@ pub async fn load_overlay_objects(
     // The graph identifies nodes by the effective id column (which honors
     // edge-level `src_node_column`/`dst_node_column` overrides), so the id the
     // client sends is a value of that column, not necessarily `mapping.id_column`.
-    let id_column = effective_node_id_column(overlay, &mapping.label)
-        .unwrap_or_else(|| mapping.id_column.clone());
+    let id_column = effective_node_id_column_checked(overlay, &mapping.label)?
+        .ok_or_else(|| anyhow!("Object type '{}' has no identity column", mapping.label))?;
+    let mut required = vec![id_column.clone(), mapping.id_column.clone()];
+    if let Some(display_column) = &mapping.display_column {
+        required.push(display_column.clone());
+    }
+    let columns = resolve_object_projection(
+        connection,
+        &mapping.table,
+        &mapping.property_columns,
+        overlay.property_projection_mode,
+        required,
+    )
+    .await?;
 
+    load_projected_overlay_objects(connection, &mapping.table, &id_column, &columns, ids).await
+}
+
+/// Loads governed action objects through the concrete projection stored in
+/// the managed event, never by re-resolving a local wildcard at invocation.
+pub async fn load_overlay_objects_with_projection(
+    connection: &Connection,
+    overlay: &GraphOverlayDef,
+    action: &OntologyActionDef,
+    projection: &GovernedObjectProjection,
+    ids: &[Value],
+) -> Result<Vec<Value>> {
+    validate_governed_object_projection(overlay, action, projection)?;
+    load_projected_overlay_objects(
+        connection,
+        &projection.table,
+        &projection.identity_column,
+        &projection.columns,
+        ids,
+    )
+    .await
+}
+
+async fn load_projected_overlay_objects(
+    connection: &Connection,
+    table_name: &str,
+    id_column: &str,
+    columns: &[String],
+    ids: &[Value],
+) -> Result<Vec<Value>> {
+    if ids.is_empty() {
+        return Err(anyhow!("At least one object identity is required"));
+    }
+    if ids.len() > 100 {
+        return Err(anyhow!(
+            "At most 100 object identities may be loaded at once"
+        ));
+    }
     let mut seen = HashSet::with_capacity(ids.len());
     let mut literals = Vec::with_capacity(ids.len());
     for id in ids {
@@ -1708,27 +2199,15 @@ pub async fn load_overlay_objects(
     }
 
     let table = connection
-        .open_table(&mapping.table)
+        .open_table(table_name)
         .execute()
         .await
-        .map_err(|error| anyhow!("Failed to open table '{}': {}", mapping.table, error))?;
+        .map_err(|error| anyhow!("Failed to open table '{}': {}", table_name, error))?;
     let predicate = format!(
         "{} IN ({})",
-        filter_identifier(&id_column),
+        filter_identifier(id_column),
         literals.join(", ")
     );
-    let mut columns = vec![id_column.clone(), mapping.id_column.clone()];
-    if let Some(display_column) = &mapping.display_column {
-        columns.push(display_column.clone());
-    }
-    columns.extend(
-        mapping
-            .property_columns
-            .iter()
-            .map(|property| property.name.clone()),
-    );
-    let mut seen_columns = HashSet::new();
-    columns.retain(|column| seen_columns.insert(column.clone()));
 
     // Do not clamp to ids.len(): if the identity column has duplicate rows, a
     // tight limit can return only some ids' duplicates and report the rest as
@@ -1738,7 +2217,7 @@ pub async fn load_overlay_objects(
     let batches = table
         .query()
         .only_if(&predicate)
-        .select(lancedb::query::Select::Columns(columns))
+        .select(lancedb::query::Select::Columns(columns.to_vec()))
         .limit(ids.len().saturating_mul(64).max(1_000))
         .execute()
         .await
@@ -1747,16 +2226,7 @@ pub async fn load_overlay_objects(
         .await
         .map_err(|error| anyhow!("Failed to collect ontology objects: {}", error))?;
 
-    let mut allowed_columns = mapping
-        .property_columns
-        .iter()
-        .map(|property| property.name.as_str())
-        .collect::<HashSet<_>>();
-    allowed_columns.insert(id_column.as_str());
-    allowed_columns.insert(mapping.id_column.as_str());
-    if let Some(display_column) = mapping.display_column.as_deref() {
-        allowed_columns.insert(display_column);
-    }
+    let allowed_columns = columns.iter().map(String::as_str).collect::<HashSet<_>>();
 
     let mut rows_by_id = HashMap::with_capacity(ids.len());
     for batch in &batches {
@@ -1764,7 +2234,7 @@ pub async fn load_overlay_objects(
             let Some(row_object) = row.as_object_mut() else {
                 continue;
             };
-            let key = value_to_id_string(row_object.get(&id_column));
+            let key = value_to_id_string(row_object.get(id_column));
             if !key.is_empty() {
                 row_object.retain(|column, _| allowed_columns.contains(column.as_str()));
                 rows_by_id.insert(key, row);
@@ -2208,9 +2678,16 @@ mod tests {
             parameter_schema: None,
             exposed: true,
         };
-        let exposed_hash = ontology_action_contract_hash("ont", true, &action, &object).unwrap();
+        let projection = GovernedObjectProjection {
+            table: object.table.clone(),
+            identity_column: object.id_column.clone(),
+            columns: vec![object.id_column.clone()],
+        };
+        let exposed_hash =
+            ontology_action_contract_hash("ont", true, &action, &object, &projection).unwrap();
         action.exposed = false;
-        let hidden_hash = ontology_action_contract_hash("ont", true, &action, &object).unwrap();
+        let hidden_hash =
+            ontology_action_contract_hash("ont", true, &action, &object, &projection).unwrap();
         assert_ne!(exposed_hash, hidden_hash);
     }
 
@@ -2281,6 +2758,7 @@ mod tests {
             actions: Vec::new(),
             exposed: false,
             bindings_enabled: false,
+            property_projection_mode: PropertyProjectionMode::Dynamic,
             default_limit: 200,
             created_at: String::new(),
             updated_at: String::new(),
@@ -2332,6 +2810,85 @@ mod tests {
             Some("id"),
             "edge dst_node_column override must win over the node id_column"
         );
+    }
+
+    #[test]
+    fn action_contract_comparison_detects_effective_identity_changes() {
+        let edge = EdgeMappingDef {
+            id: Some("knows".to_string()),
+            api_name: Some("knows".to_string()),
+            label: "KNOWS".to_string(),
+            table: "links".to_string(),
+            src_column: "source".to_string(),
+            dst_column: "target".to_string(),
+            src_label: "Person".to_string(),
+            dst_label: "Person".to_string(),
+            src_node_column: Some("external_id".to_string()),
+            dst_node_column: Some("external_id".to_string()),
+            containment: false,
+            dst_ontology: None,
+            dst_binding_id: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        };
+        let mut left = overlay_with(vec![node_mapping("Person", "people", "id")], vec![edge]);
+        left.actions.push(OntologyActionDef {
+            id: "approve".to_string(),
+            name: "Approve".to_string(),
+            description: None,
+            object_type: "person".to_string(),
+            board_id: "board".to_string(),
+            board_version: Some([1, 0, 0]),
+            start_node_id: Some("start".to_string()),
+            event_id: None,
+            enabled: true,
+            allow_bulk: false,
+            parameter_schema: None,
+            exposed: false,
+        });
+        let mut right = left.clone();
+        right.edges[0].src_node_column = Some("alternate_id".to_string());
+        right.edges[0].dst_node_column = Some("alternate_id".to_string());
+
+        assert!(!ontology_action_contracts_equal(&left, &right).unwrap());
+    }
+
+    #[tokio::test]
+    async fn freezing_remote_contract_rejects_missing_required_columns() -> Result<()> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["1"]))])?;
+        connection
+            .create_table("people", vec![batch])
+            .execute()
+            .await?;
+
+        let mut overlay = overlay_with(
+            vec![NodeMappingDef {
+                id: Some("person".to_string()),
+                api_name: Some("person".to_string()),
+                label: "Person".to_string(),
+                table: "people".to_string(),
+                id_column: "id".to_string(),
+                display_column: Some("missing_display".to_string()),
+                property_columns: Vec::new(),
+                style: Value::Null,
+            }],
+            Vec::new(),
+        );
+        let error = freeze_remote_contract_projection(&connection, &mut overlay)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing_display"));
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
     }
 
     // Faithful reproduction of the reported "Object '<id>' was not found" bug:
@@ -2404,6 +2961,285 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn empty_property_mapping_projects_all_scalar_columns() -> Result<()> {
+        use arrow::array::{BinaryArray, RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+            Field::new("embedding", DataType::Binary, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["1"])),
+                Arc::new(StringArray::from(vec!["Ada"])),
+                Arc::new(StringArray::from(vec!["active"])),
+                Arc::new(BinaryArray::from(vec![Some(&b"vector"[..])])),
+            ],
+        )?;
+        connection
+            .create_table("people", vec![batch])
+            .execute()
+            .await?;
+
+        let mapping = NodeMappingDef {
+            id: Some("person".to_string()),
+            api_name: Some("person".to_string()),
+            label: "Person".to_string(),
+            table: "people".to_string(),
+            id_column: "id".to_string(),
+            display_column: Some("name".to_string()),
+            property_columns: Vec::new(),
+            style: Value::Null,
+        };
+        let overlay = overlay_with(vec![mapping.clone()], Vec::new());
+        let action = OntologyActionDef {
+            id: "inspect".to_string(),
+            name: "Inspect".to_string(),
+            description: None,
+            object_type: "person".to_string(),
+            board_id: "board".to_string(),
+            board_version: Some([1, 0, 0]),
+            start_node_id: Some("start".to_string()),
+            event_id: None,
+            enabled: true,
+            allow_bulk: false,
+            parameter_schema: None,
+            exposed: false,
+        };
+        let governed_projection =
+            resolve_governed_object_projection(&connection, &overlay, &action).await?;
+
+        let sampled = sample_overlay(&connection, &overlay, "person", 1).await?;
+        let directly_sampled = sample_overlay_object(
+            &connection,
+            &mapping,
+            &mapping.id_column,
+            PropertyProjectionMode::Dynamic,
+            1,
+        )
+        .await?;
+        let loaded = load_overlay_objects(
+            &connection,
+            &overlay,
+            "person",
+            &[Value::String("1".to_string())],
+        )
+        .await?;
+
+        for rows in [&sampled, &directly_sampled, &loaded] {
+            assert_eq!(
+                rows[0].get("status").and_then(Value::as_str),
+                Some("active")
+            );
+            assert!(
+                rows[0].get("embedding").is_none(),
+                "vector/binary columns must stay out of the default projection"
+            );
+        }
+
+        let mut frozen_overlay = overlay.clone();
+        frozen_overlay.property_projection_mode = PropertyProjectionMode::Frozen;
+        let frozen_sample = sample_overlay(&connection, &frozen_overlay, "person", 1).await?;
+        let frozen_direct = sample_overlay_object(
+            &connection,
+            &mapping,
+            &mapping.id_column,
+            PropertyProjectionMode::Frozen,
+            1,
+        )
+        .await?;
+        let frozen_loaded = load_overlay_objects(
+            &connection,
+            &frozen_overlay,
+            "person",
+            &[Value::String("1".to_string())],
+        )
+        .await?;
+        for rows in [&frozen_sample, &frozen_direct, &frozen_loaded] {
+            assert!(
+                rows[0].get("status").is_none(),
+                "a frozen empty property set must not re-expand against the live schema"
+            );
+            assert_eq!(rows[0].get("id").and_then(Value::as_str), Some("1"));
+        }
+
+        use lancedb::table::NewColumnTransform;
+        connection
+            .open_table("people")
+            .execute()
+            .await?
+            .add_columns(
+                NewColumnTransform::SqlExpressions(vec![(
+                    "secret".to_string(),
+                    "'added later'".to_string(),
+                )]),
+                None,
+            )
+            .await?;
+        let explored = load_overlay_objects(
+            &connection,
+            &overlay,
+            "person",
+            &[Value::String("1".to_string())],
+        )
+        .await?;
+        assert_eq!(
+            explored[0].get("secret").and_then(Value::as_str),
+            Some("added later"),
+            "ordinary local exploration keeps its dynamic wildcard"
+        );
+        let governed = load_overlay_objects_with_projection(
+            &connection,
+            &overlay,
+            &action,
+            &governed_projection,
+            &[Value::String("1".to_string())],
+        )
+        .await?;
+        assert!(
+            governed[0].get("secret").is_none(),
+            "a governed action must use the stored concrete projection"
+        );
+        assert_eq!(
+            governed[0].get("status").and_then(Value::as_str),
+            Some("active")
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn object_loading_uses_effective_edge_join_identity() -> Result<()> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("external_id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["internal-1"])),
+                Arc::new(StringArray::from(vec!["public-1"])),
+                Arc::new(StringArray::from(vec!["Ada"])),
+            ],
+        )?;
+        connection
+            .create_table("people", vec![batch])
+            .execute()
+            .await?;
+        let edge_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Utf8, false),
+            Field::new("target", DataType::Utf8, false),
+        ]));
+        let edge_batch = RecordBatch::try_new(
+            edge_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["public-1"])),
+                Arc::new(StringArray::from(vec!["public-1"])),
+            ],
+        )?;
+        connection
+            .create_table("links", vec![edge_batch])
+            .execute()
+            .await?;
+
+        let edge = EdgeMappingDef {
+            id: Some("knows".to_string()),
+            api_name: Some("knows".to_string()),
+            label: "KNOWS".to_string(),
+            table: "links".to_string(),
+            src_column: "source".to_string(),
+            dst_column: "target".to_string(),
+            src_label: "Person".to_string(),
+            dst_label: "Person".to_string(),
+            src_node_column: Some("external_id".to_string()),
+            dst_node_column: Some("external_id".to_string()),
+            containment: false,
+            dst_ontology: None,
+            dst_binding_id: None,
+            property_columns: Vec::new(),
+            style: Value::Null,
+        };
+        let overlay = overlay_with(
+            vec![NodeMappingDef {
+                id: Some("person".to_string()),
+                api_name: Some("person".to_string()),
+                label: "Person".to_string(),
+                table: "people".to_string(),
+                id_column: "id".to_string(),
+                display_column: Some("name".to_string()),
+                property_columns: vec![PropertyColumnDef {
+                    name: "name".to_string(),
+                    data_type: "Utf8".to_string(),
+                    nullable: false,
+                }],
+                style: Value::Null,
+            }],
+            vec![edge],
+        );
+
+        let sampled = sample_overlay(&connection, &overlay, "person", 1).await?;
+        assert_eq!(
+            sampled[0].get("external_id").and_then(Value::as_str),
+            Some("public-1")
+        );
+        let frozen_remote_sample = sample_overlay_object(
+            &connection,
+            &overlay.nodes[0],
+            "external_id",
+            PropertyProjectionMode::Frozen,
+            1,
+        )
+        .await?;
+        assert_eq!(
+            frozen_remote_sample[0]
+                .get("external_id")
+                .and_then(Value::as_str),
+            Some("public-1"),
+            "a frozen remote sample must retain the effective edge identity override"
+        );
+        let sampled_edges = sample_overlay(&connection, &overlay, "knows", 1).await?;
+        assert_eq!(
+            sampled_edges[0].get("source").and_then(Value::as_str),
+            Some("public-1")
+        );
+        let loaded = load_overlay_objects(
+            &connection,
+            &overlay,
+            "person",
+            &[Value::String("public-1".to_string())],
+        )
+        .await?;
+        assert_eq!(
+            loaded[0].get("id").and_then(Value::as_str),
+            Some("internal-1")
+        );
+        assert_eq!(
+            loaded[0].get("external_id").and_then(Value::as_str),
+            Some("public-1")
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
     // LanceDB's `only_if` filter parser reads a double-quoted `"col"` as a
     // string LITERAL, so `quote_identifier` there silently matches nothing;
     // backticks delimit the column. This pins that dialect distinction.
@@ -2419,7 +3255,9 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, false)]));
         let batch = RecordBatch::try_new(
             schema,
-            vec![Arc::new(StringArray::from(vec!["nppvjlghzrlto3iefrk9bx36"]))],
+            vec![Arc::new(StringArray::from(vec![
+                "nppvjlghzrlto3iefrk9bx36",
+            ]))],
         )?;
         connection
             .create_table("names", vec![batch])

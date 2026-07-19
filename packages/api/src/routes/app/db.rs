@@ -47,6 +47,21 @@ pub struct ScopedPaginationParams {
     pub scope: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionAccess {
+    Read,
+    Write,
+}
+
+impl ConnectionAccess {
+    fn credentials_access(self) -> CredentialsAccess {
+        match self {
+            Self::Read => CredentialsAccess::InvokeRead,
+            Self::Write => CredentialsAccess::InvokeWrite,
+        }
+    }
+}
+
 impl ScopedPaginationParams {
     pub fn scope_params(&self) -> ScopeParams {
         ScopeParams {
@@ -90,10 +105,33 @@ pub async fn resolve_connection(
     app_id: &str,
     scope: &ScopeParams,
 ) -> Result<Connection, ApiError> {
+    resolve_connection_with_access(state, user, app_id, scope, ConnectionAccess::Read).await
+}
+
+/// Resolve an app database connection for a mutating operation. Project-scoped
+/// connections use the same master database, while user-scoped connections
+/// receive write-capable temporary credentials rather than the read-only
+/// credentials used by [`resolve_connection`].
+pub async fn resolve_write_connection(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    scope: &ScopeParams,
+) -> Result<Connection, ApiError> {
+    resolve_connection_with_access(state, user, app_id, scope, ConnectionAccess::Write).await
+}
+
+async fn resolve_connection_with_access(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    scope: &ScopeParams,
+    access: ConnectionAccess,
+) -> Result<Connection, ApiError> {
     if scope.is_user_scoped() {
         let sub = user.sub()?;
         let credentials = state
-            .scoped_credentials(&sub, app_id, CredentialsAccess::InvokeRead)
+            .scoped_credentials(&sub, app_id, access.credentials_access())
             .await?;
         let builder = credentials.to_db_scoped(&sub, app_id).await?;
         Ok(builder.execute().await?)

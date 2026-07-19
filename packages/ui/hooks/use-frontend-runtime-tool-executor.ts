@@ -12,7 +12,7 @@ import {
 	markExplicitSchemaCreateUnavailable,
 	retainPendingDatabaseSchema,
 } from "../lib/database-capability-session";
-import { useBackend } from "../state/backend-state";
+import { type IBackendState, useBackend } from "../state/backend-state";
 import type { IBoardState } from "../state/backend-state/board-state";
 import { IIndexType } from "../state/backend-state/db-state";
 import type {
@@ -617,7 +617,7 @@ function getArgOverlayId(
  * resolved by the caller (arg value, else the current Data Studio page default).
  */
 async function executeGraphTool(
-	graphState: IGraphState,
+	backend: IBackendState,
 	toolName: FrontendRuntimeToolName,
 	operation: string,
 	args: Record<string, unknown>,
@@ -625,6 +625,7 @@ async function executeGraphTool(
 	overlayId: string,
 	userScoped: boolean,
 ): Promise<unknown> {
+	const graphState: IGraphState = backend.graphState;
 	const limit = getArgString(args, "limit")
 		? getArgNumber(args, "limit")
 		: (args.limit as number | undefined);
@@ -884,24 +885,27 @@ async function executeGraphTool(
 					const action = (overlay.actions ?? []).find(
 						(candidate) => candidate.id === actionId,
 					);
-					const prerun = await graphState.prerunOntologyAction(
-						appId,
-						overlayId,
-						actionId,
-					);
+					const isOffline = await backend.isOffline(appId);
+					const prerun = isOffline
+						? { oauth_requirements: [], signature: "" }
+						: await graphState.prerunOntologyAction(appId, overlayId, actionId);
 					return { status: "ok", action, prerun };
 				}
-				case "prerun_action":
+				case "prerun_action": {
+					const isOffline = await backend.isOffline(appId);
 					return {
 						status: "ok",
-						prerun: await graphState.prerunOntologyAction(
-							appId,
-							overlayId,
-							actionId,
-						),
+						prerun: isOffline
+							? { oauth_requirements: [], signature: "" }
+							: await graphState.prerunOntologyAction(
+									appId,
+									overlayId,
+									actionId,
+								),
 					};
+				}
 				case "invoke_action": {
-					const payload: InvokeOntologyActionPayload = {
+					let payload: InvokeOntologyActionPayload = {
 						object_refs: (args.object_refs as OntologyObjectRef[]) ?? [],
 						parameters: args.parameters as Record<string, unknown> | undefined,
 						idempotency_key: getArgString(
@@ -910,6 +914,37 @@ async function executeGraphTool(
 							"idempotencyKey",
 						),
 					};
+					const isOffline = await backend.isOffline(appId);
+					if (!isOffline && backend.eventState.checkOAuthRequirements) {
+						const [overlay, prerun] = await Promise.all([
+							graphState.getOverlay(appId, overlayId, userScoped),
+							graphState.prerunOntologyAction(appId, overlayId, actionId),
+						]);
+						const action = (overlay.actions ?? []).find(
+							(candidate) => candidate.id === actionId,
+						);
+						const oauth = await backend.eventState.checkOAuthRequirements(
+							appId,
+							prerun.oauth_requirements,
+						);
+						if (oauth.missingProviders.length > 0) {
+							window.dispatchEvent(
+								new CustomEvent("flow:oauth-required", {
+									detail: {
+										missingProviders: oauth.missingProviders,
+										appId,
+										boardId: action?.board_id ?? "",
+										nodeId: action?.start_node_id ?? "",
+										payload,
+									},
+								}),
+							);
+							throw new Error(
+								"OAuth authorization is required. Complete authorization, then confirm the action again.",
+							);
+						}
+						payload = { ...payload, oauth_tokens: oauth.tokens };
+					}
 					return {
 						status: "ok",
 						run: await graphState.invokeOntologyAction(
@@ -1523,7 +1558,7 @@ export function useFrontendRuntimeToolExecutor(
 						false,
 					);
 					return executeGraphTool(
-						backend.graphState,
+						backend,
 						toolName,
 						operation,
 						args,
@@ -1534,18 +1569,6 @@ export function useFrontendRuntimeToolExecutor(
 				}
 			}
 		},
-		[
-			backend.boardState,
-			backend.dbState,
-			backend.eventState,
-			backend.graphState,
-			backend.pageState,
-			backend.storageState,
-			backend.widgetState,
-			defaultAppId,
-			defaultBoardId,
-			defaultOverlayId,
-			executionService,
-		],
+		[backend, defaultAppId, defaultBoardId, defaultOverlayId, executionService],
 	);
 }
