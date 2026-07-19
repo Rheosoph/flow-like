@@ -32,6 +32,7 @@ mod db_backfills;
 pub mod error;
 pub mod mail;
 pub mod permission;
+pub mod publication;
 pub mod push_notifications;
 pub mod state;
 pub mod storage_config;

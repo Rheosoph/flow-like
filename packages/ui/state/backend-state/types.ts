@@ -189,6 +189,114 @@ export interface IProcessGraphResponse {
 	flows: IProcessFlow[];
 }
 
+/** A curated, store-facing bundle of related apps presented as one unit ("suite"). */
+export interface IGroup {
+	id: string;
+	owner_app_id: string;
+	/** "ACTIVE" | "INACTIVE" | "ARCHIVED" */
+	status: string;
+	/** "PUBLIC" | "PUBLIC_REQUEST_ACCESS" | "PRIVATE" | "PROTOTYPE" | "OFFLINE" */
+	visibility: string;
+	name?: string | null;
+	description?: string | null;
+	/** Optional suite label distinct from the anchor app name. */
+	use_case?: string | null;
+	/** Presigned icon URL. */
+	icon?: string | null;
+	/** Presigned banner URL. */
+	banner?: string | null;
+	tags: string[];
+	member_count: number;
+	members: IGroupMember[];
+	created_at: number;
+	updated_at: number;
+}
+
+export interface IGroupMember {
+	id: string;
+	app_id: string;
+	/** "PRIMARY" (the anchor app) | "MEMBER" */
+	kind: string;
+	/** "PENDING" | "ACTIVE" */
+	status: string;
+	position: number;
+	app_name?: string | null;
+	app_description?: string | null;
+	app_icon?: string | null;
+}
+
+/** A pending invitation for this app to be featured in another app's group. */
+export interface IGroupMembershipRequest {
+	membership_id: string;
+	group_id: string;
+	owner_app_id: string;
+	group_name?: string | null;
+	group_icon?: string | null;
+	created_at: number;
+}
+
+/**
+ * Suites always start PRIVATE — visibility moves only through the reviewed
+ * `changeGroupVisibility` endpoint. Artwork is uploaded via `pushGroupMedia`,
+ * never passed as a raw string.
+ */
+export interface ICreateGroupPayload {
+	name: string;
+	description?: string;
+	use_case?: string;
+	tags?: string[];
+	member_app_ids?: string[];
+}
+
+export interface IUpdateGroupPayload {
+	name?: string;
+	description?: string;
+	use_case?: string;
+	tags?: string[];
+	/** "ACTIVE" | "INACTIVE" | "ARCHIVED" */
+	status?: string;
+}
+
+export interface IGroupPublicationLog {
+	id: string;
+	authorId?: string | null;
+	message?: string | null;
+	visibility?: string | null;
+	createdAt: string;
+}
+
+export interface IGroupPublicationRequest {
+	id: string;
+	groupId: string;
+	targetVisibility: string;
+	status: string;
+	createdAt: string;
+	updatedAt: string;
+	logs: IGroupPublicationLog[];
+}
+
+/** Why a member app does or doesn't clear the suite's publish gate. */
+export interface IMemberReadiness {
+	appId: string;
+	aiActStatus?: string | null;
+	ready: boolean;
+}
+
+export interface IGroupPublicationStatus {
+	currentVisibility: string;
+	requests: IGroupPublicationRequest[];
+	memberReadiness: IMemberReadiness[];
+	canRequestPublication: boolean;
+}
+
+export interface IChangeGroupVisibilityResult {
+	/** True when the change needed review rather than taking effect now. */
+	reviewRequested: boolean;
+	visibility: string;
+	requestId?: string | null;
+	group: IGroup;
+}
+
 /** An end-to-end process case: a causal execution tree across apps/events. */
 export interface IProcessCase {
 	case_id: string;

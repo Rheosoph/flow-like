@@ -1,7 +1,18 @@
-import type { ITeamState } from "@flow-like/flow-like-ui";
+import {
+	type IAppVisibility,
+	type IMediaItem,
+	type ITeamState,
+	isAzureBlobStorageUrl,
+	toWireVisibility,
+} from "@flow-like/flow-like-ui";
 import type {
 	IAccessibleApp,
 	IAppConnectionsResponse,
+	IChangeGroupVisibilityResult,
+	ICreateGroupPayload,
+	IGroup,
+	IGroupMembershipRequest,
+	IGroupPublicationStatus,
 	IInvite,
 	IInviteLink,
 	IJoinRequest,
@@ -12,11 +23,13 @@ import type {
 	IProcessNote,
 	IRemoteEvent,
 	IRemoteEventDetail,
+	IUpdateGroupPayload,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import {
 	type WebBackendRef,
 	apiDelete,
 	apiGet,
+	apiPatch,
 	apiPost,
 	apiPut,
 } from "./api-utils";
@@ -337,6 +350,157 @@ export class WebTeamState implements ITeamState {
 	async deleteProcessNote(appId: string, noteId: string): Promise<void> {
 		await apiDelete(
 			`apps/${appId}/connections/notes/${noteId}`,
+			this.backend.auth,
+		);
+	}
+
+	async createGroup(
+		appId: string,
+		payload: ICreateGroupPayload,
+	): Promise<IGroup> {
+		return await apiPost<IGroup>(
+			`apps/${appId}/groups`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async listGroups(appId: string): Promise<IGroup[]> {
+		return await apiGet<IGroup[]>(`apps/${appId}/groups`, this.backend.auth);
+	}
+
+	async getGroup(appId: string, groupId: string): Promise<IGroup> {
+		return await apiGet<IGroup>(
+			`apps/${appId}/groups/${groupId}`,
+			this.backend.auth,
+		);
+	}
+
+	async updateGroup(
+		appId: string,
+		groupId: string,
+		payload: IUpdateGroupPayload,
+	): Promise<IGroup> {
+		return await apiPut<IGroup>(
+			`apps/${appId}/groups/${groupId}`,
+			payload,
+			this.backend.auth,
+		);
+	}
+
+	async deleteGroup(appId: string, groupId: string): Promise<void> {
+		await apiDelete(`apps/${appId}/groups/${groupId}`, this.backend.auth);
+	}
+
+	async addGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<IGroup> {
+		return await apiPost<IGroup>(
+			`apps/${appId}/groups/${groupId}/members`,
+			{ member_app_id: memberAppId },
+			this.backend.auth,
+		);
+	}
+
+	async removeGroupMember(
+		appId: string,
+		groupId: string,
+		memberAppId: string,
+	): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/groups/${groupId}/members/${memberAppId}`,
+			this.backend.auth,
+		);
+	}
+
+	async listGroupRequests(appId: string): Promise<IGroupMembershipRequest[]> {
+		return await apiGet<IGroupMembershipRequest[]>(
+			`apps/${appId}/groups/requests`,
+			this.backend.auth,
+		);
+	}
+
+	async acceptGroupRequest(appId: string, memberId: string): Promise<void> {
+		await apiPost(
+			`apps/${appId}/groups/requests/${memberId}`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async declineGroupRequest(appId: string, memberId: string): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/groups/requests/${memberId}`,
+			this.backend.auth,
+		);
+	}
+
+	async pushGroupMedia(
+		appId: string,
+		groupId: string,
+		item: IMediaItem,
+		file: File,
+		language?: string,
+	): Promise<void> {
+		const params = new URLSearchParams();
+		params.set("group_id", groupId);
+		params.set("item", item);
+		params.set(
+			"extension",
+			file.name.includes(".") ? (file.name.split(".").pop() ?? "") : "",
+		);
+		params.set("language", language ?? "en");
+
+		const { signed_url } = await apiPut<{ signed_url: string }>(
+			`apps/${appId}/meta/media?${params}`,
+			undefined,
+			this.backend.auth,
+		);
+
+		const headers: HeadersInit = { "Content-Type": file.type };
+		// Azure Blob Storage rejects a PUT without this header.
+		if (isAzureBlobStorageUrl(signed_url)) {
+			headers["x-ms-blob-type"] = "BlockBlob";
+		}
+
+		const response = await fetch(signed_url, {
+			method: "PUT",
+			body: file,
+			headers,
+		});
+		if (!response.ok) {
+			throw new Error(`Failed to upload media: ${response.statusText}`);
+		}
+	}
+
+	async changeGroupVisibility(
+		appId: string,
+		groupId: string,
+		visibility: IAppVisibility,
+		message?: string,
+	): Promise<IChangeGroupVisibilityResult> {
+		return await apiPatch<IChangeGroupVisibilityResult>(
+			`apps/${appId}/groups/${groupId}/visibility`,
+			{ visibility: toWireVisibility(visibility), message },
+			this.backend.auth,
+		);
+	}
+
+	async getGroupPublication(
+		appId: string,
+		groupId: string,
+	): Promise<IGroupPublicationStatus> {
+		return await apiGet<IGroupPublicationStatus>(
+			`apps/${appId}/groups/${groupId}/publication`,
+			this.backend.auth,
+		);
+	}
+
+	async leaveGroup(appId: string, groupId: string): Promise<void> {
+		await apiDelete(
+			`apps/${appId}/groups/${groupId}/membership`,
 			this.backend.auth,
 		);
 	}

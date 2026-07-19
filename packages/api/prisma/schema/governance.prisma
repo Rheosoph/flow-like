@@ -5,6 +5,10 @@ enum PublicationRequestStatus {
   REJECTED
 }
 
+/// A review of a visibility change. Targets exactly one of an App or an
+/// AppGroup ("suite") — the XOR cannot be expressed as a Prisma constraint and
+/// is enforced in Rust by `routes::publication::PublicationTarget`, which is
+/// the only sanctioned way to construct or read the target.
 model PublicationRequest {
   id String @id
 
@@ -13,12 +17,17 @@ model PublicationRequest {
   approver   User?   @relation(fields: [approverId], references: [id], onDelete: SetNull)
   approverId String?
 
-  app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
-  appId String
+  app   App?    @relation(fields: [appId], references: [id], onDelete: Cascade)
+  appId String?
+
+  group   AppGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId String?
 
   status PublicationRequestStatus
 
   /// Binds the submitted AI Act assessment to this review (record-keeping).
+  /// Always null for suite targets — a suite is gated on the aggregate of its
+  /// member apps' assessments, which it does not own.
   aiActAssessmentId String?
 
   logs PublicationLog[]
@@ -28,6 +37,7 @@ model PublicationRequest {
 
   @@index([status])
   @@index([appId])
+  @@index([groupId])
   @@index([approverId])
   @@index([aiActAssessmentId])
 }

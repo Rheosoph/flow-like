@@ -42,3 +42,4 @@ export * from "./css-utils";
 export * from "./chat-appearance";
 export * from "./chat-theme-presets";
 export * from "./idb-cleanup";
+export * from "./seed-gradient";

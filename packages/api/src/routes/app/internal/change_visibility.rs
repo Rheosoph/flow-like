@@ -1,8 +1,6 @@
 use crate::{
     audit_branch, ensure_permission,
-    entity::{
-        app, membership, publication_log, publication_request, sea_orm_active_enums::Visibility,
-    },
+    entity::{app, membership, publication_log, sea_orm_active_enums::Visibility},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -14,9 +12,8 @@ use axum::{
 };
 use flow_like_types::create_id;
 use sea_orm::{
-    ActiveModelTrait,
-    ActiveValue::{NotSet, Set},
-    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -145,18 +142,15 @@ pub async fn change_visibility(
         let mut updated_app = app.into_active_model();
         updated_app.updated_at = Set(chrono::Utc::now().naive_utc());
 
-        let request = publication_request::ActiveModel {
-            id: Set(create_id()),
-            app_id: Set(app_id.clone()),
-            approver_id: NotSet,
-            target_visibility: Set(body.visibility.clone()),
-            status: Set(crate::entity::sea_orm_active_enums::PublicationRequestStatus::Pending),
-            ai_act_assessment_id: NotSet,
-            created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
-        };
-
-        let request = request.insert(&txn).await?;
+        let request = crate::publication::target::new_request(
+            create_id(),
+            &crate::publication::PublicationTarget::App(app_id.clone()),
+            body.visibility.clone(),
+            None,
+            chrono::Utc::now().naive_utc(),
+        )
+        .insert(&txn)
+        .await?;
 
         let log_entry = publication_log::ActiveModel {
             id: Set(create_id()),

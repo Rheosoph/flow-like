@@ -72,10 +72,10 @@ impl Default for Metadata {
 
 impl Metadata {
     pub async fn presign(&mut self, prefix: Path, store: &FlowLikeStore) {
-        if let Some(icon) = &self.icon {
-            if icon.starts_with("http://") || icon.starts_with("https://") {
-                return;
-            }
+        if let Some(icon) = &self.icon
+            && !icon.starts_with("http://")
+            && !icon.starts_with("https://")
+        {
             let icon_path = prefix.child(format!("{icon}.webp"));
             if let Ok(url) = store
                 .sign(
@@ -89,10 +89,10 @@ impl Metadata {
             }
         }
 
-        if let Some(thumbnail) = &self.thumbnail {
-            if thumbnail.starts_with("http://") || thumbnail.starts_with("https://") {
-                return;
-            }
+        if let Some(thumbnail) = &self.thumbnail
+            && !thumbnail.starts_with("http://")
+            && !thumbnail.starts_with("https://")
+        {
             let thumbnail_path = prefix.child(format!("{thumbnail}.webp"));
             if let Ok(url) = store
                 .sign(

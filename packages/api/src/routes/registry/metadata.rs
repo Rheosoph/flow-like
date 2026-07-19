@@ -528,6 +528,7 @@ pub async fn upsert_meta(
             preview_media: Set(None),
             age_rating: Set(body.age_rating),
             wasm_package_id: Set(Some(package_id)),
+            group_id: Set(None),
             app_id: Set(None),
             bit_id: Set(None),
             course_id: Set(None),

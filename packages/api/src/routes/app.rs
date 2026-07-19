@@ -25,6 +25,7 @@ pub mod db;
 pub mod events;
 pub mod fork;
 pub mod graph;
+pub mod groups;
 pub mod invoke;
 pub mod meta;
 pub mod notifications;
@@ -74,6 +75,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/{app_id}/roles", roles::routes())
         .nest("/{app_id}/team", team::routes())
         .nest("/{app_id}/connections", connection::routes())
+        .nest("/{app_id}/groups", groups::routes())
         .nest("/{app_id}/analytics", analytics::routes())
         .nest("/{app_id}/sales", sales::routes())
         .nest("/{app_id}/events", events::routes())

@@ -1,4 +1,3 @@
-import { createId } from "@paralleldrive/cuid2";
 import type {
 	AppCommentsResponse,
 	IApp,
@@ -16,6 +15,7 @@ import {
 	ILogLevel,
 	isAzureBlobStorageUrl,
 } from "@flow-like/flow-like-ui";
+import type { IGroup } from "@flow-like/flow-like-ui";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -26,6 +26,7 @@ import type {
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
+import { createId } from "@paralleldrive/cuid2";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -141,6 +142,32 @@ export class WebAppState implements IAppState {
 				`apps/search?${params}`,
 				this.backend.auth,
 			);
+		} catch {
+			return [];
+		}
+	}
+
+	async getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]> {
+		const params = new URLSearchParams();
+		if (offset !== undefined) params.set("offset", offset.toString());
+		if (limit !== undefined) params.set("limit", limit.toString());
+		try {
+			return await apiGet<IGroup[]>(
+				`store/groups?${params}`,
+				this.backend.auth,
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	async getStoreGroup(groupId: string): Promise<IGroup> {
+		return await apiGet<IGroup>(`store/groups/${groupId}`, this.backend.auth);
+	}
+
+	async getMyGroups(): Promise<IGroup[]> {
+		try {
+			return await apiGet<IGroup[]>("user/groups", this.backend.auth);
 		} catch {
 			return [];
 		}

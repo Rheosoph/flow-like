@@ -234,3 +234,75 @@ model PushNotificationTarget {
   @@index([provider, platform])
   @@index([invalidatedAt])
 }
+
+enum AppGroupMemberStatus {
+  PENDING
+  ACTIVE
+}
+
+enum AppGroupMemberKind {
+  PRIMARY
+  MEMBER
+}
+
+/// A curated, store-facing bundle of related apps presented as a single unit
+/// (a "suite"). Branding (name/icon/banner/description) lives in Meta,
+/// per-language, exactly like apps — no bespoke columns here. The group is
+/// governed by its owner app's Owner/Admins.
+model AppGroup {
+  id String @id
+
+  status     Status     @default(ACTIVE)
+  visibility Visibility @default(PRIVATE)
+
+  meta Meta[]
+
+  /// The app whose Owner/Admins may edit this group; also the default branding
+  /// anchor when the group has no Meta of its own.
+  ownerApp   App    @relation("ownedGroups", fields: [ownerAppId], references: [id], onDelete: Cascade)
+  ownerAppId String
+
+  members AppGroupMember[]
+
+  /// Suites go through the same review pipeline as apps to reach a public
+  /// visibility; see `PublicationRequest`.
+  publicationRequests PublicationRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerAppId])
+  @@index([visibility])
+  @@index([createdAt])
+}
+
+/// Curated membership of an app in a group. Consent: adding an app the caller
+/// owns/admins — or that already has an active AppConnection with the group's
+/// apps — activates immediately; otherwise the row stays PENDING until the
+/// member app's owner accepts. This is a presentation grant only and never
+/// changes runtime data-access permissions.
+model AppGroupMember {
+  id String @id
+
+  group   AppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId String
+
+  app   App    @relation("appGroupMemberships", fields: [appId], references: [id], onDelete: Cascade)
+  appId String
+
+  kind   AppGroupMemberKind   @default(MEMBER)
+  status AppGroupMemberStatus @default(PENDING)
+
+  /// Curated display order within the group.
+  position Int @default(0)
+
+  addedByUserId    String?
+  approvedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([groupId, appId])
+  @@index([groupId, status])
+  @@index([appId, status])
+}

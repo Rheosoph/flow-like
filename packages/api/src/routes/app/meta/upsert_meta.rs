@@ -23,7 +23,8 @@ use sea_orm::{ActiveModelTrait, TransactionTrait};
         ("language" = Option<String>, Query, description = "Language code (default en)"),
         ("template_id" = Option<String>, Query, description = "Template ID"),
         ("course_id" = Option<String>, Query, description = "Course ID"),
-        ("widget_id" = Option<String>, Query, description = "Widget ID")
+        ("widget_id" = Option<String>, Query, description = "Widget ID"),
+        ("group_id" = Option<String>, Query, description = "Suite (app group) ID")
     ),
     request_body = String,
     responses(
@@ -59,6 +60,7 @@ pub async fn upsert_meta(
     model.app_id = None;
     model.course_id = None;
     model.widget_id = None;
+    model.group_id = None;
 
     match &mode {
         MetaMode::Template(id) => {
@@ -72,6 +74,9 @@ pub async fn upsert_meta(
         }
         MetaMode::Widget(id) => {
             model.widget_id = Some(id.clone());
+        }
+        MetaMode::Group(id) => {
+            model.group_id = Some(id.clone());
         }
     }
 

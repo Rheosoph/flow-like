@@ -7,6 +7,7 @@ import {
 	ChevronRight,
 	Download,
 	Eye,
+	Layers,
 	LayoutGrid,
 	Package,
 	RefreshCw,
@@ -196,6 +197,7 @@ interface RawPackageRequestListResponse {
 export interface AdminPublicationsPageProps {
 	onNavigateToPackage?: (packageId: string) => void;
 	onSelectRequest?: (requestId: string) => void;
+	onNavigateToSuites?: () => void;
 }
 
 type AppStatusFilter = "all" | RequestStatus;
@@ -679,6 +681,7 @@ function PackageRequestsTab({
 export function AdminPublicationsPage({
 	onNavigateToPackage,
 	onSelectRequest,
+	onNavigateToSuites,
 }: AdminPublicationsPageProps) {
 	const [activeTab, setActiveTab] = useState<"apps" | "packages">("apps");
 	const [appStatusFilter, setAppStatusFilter] =
@@ -746,6 +749,12 @@ export function AdminPublicationsPage({
 									<SelectItem value="disabled">Disabled</SelectItem>
 								</SelectContent>
 							</Select>
+						)}
+						{onNavigateToSuites && (
+							<Button variant="outline" size="sm" onClick={onNavigateToSuites}>
+								<Layers className="mr-2 h-4 w-4" />
+								Suite Requests
+							</Button>
 						)}
 						<Button variant="outline" size="sm" onClick={handleRefresh}>
 							<RefreshCw className="mr-2 h-4 w-4" />

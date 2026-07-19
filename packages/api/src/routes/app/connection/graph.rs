@@ -399,6 +399,17 @@ pub(crate) async fn presign_media(
     state: &AppState,
     metas: &HashMap<String, AppMetaPreview>,
 ) -> HashMap<String, (Option<String>, Option<String>)> {
+    presign_media_under(state, "apps", metas).await
+}
+
+/// Same as [`presign_media`] but for entities whose media lives outside
+/// `media/apps/…` — suites keep their artwork under `media/groups/{group_id}`
+/// so it survives independently of any single app.
+pub(crate) async fn presign_media_under(
+    state: &AppState,
+    segment: &str,
+    metas: &HashMap<String, AppMetaPreview>,
+) -> HashMap<String, (Option<String>, Option<String>)> {
     let mut out: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
     let store = match state.master_credentials().await {
         Ok(creds) => match creds.to_store(false).await {
@@ -413,7 +424,7 @@ pub(crate) async fn presign_media(
     let tasks = metas
         .iter()
         .filter(|(_, meta)| meta.icon.is_some() || meta.banner.is_some())
-        .map(|(app_id, meta)| {
+        .map(|(entity_id, meta)| {
             let store = &store;
             async move {
                 let mut metadata = Metadata {
@@ -421,9 +432,11 @@ pub(crate) async fn presign_media(
                     thumbnail: meta.banner.clone(),
                     ..Default::default()
                 };
-                let prefix = FlowPath::from("media").child("apps").child(app_id.clone());
+                let prefix = FlowPath::from("media")
+                    .child(segment.to_string())
+                    .child(entity_id.clone());
                 metadata.presign(prefix, store).await;
-                (app_id.clone(), (metadata.icon, metadata.thumbnail))
+                (entity_id.clone(), (metadata.icon, metadata.thumbnail))
             }
         });
     out.extend(futures::future::join_all(tasks).await);

@@ -65,6 +65,10 @@ pub fn routes() -> Router<AppState> {
             patch(publication::upsert_requests::upsert_request),
         )
         .route(
+            "/publication/suites",
+            get(publication::get_group_requests::get_group_requests),
+        )
+        .route(
             "/publication/apps/{app_id}/content",
             get(publication::get_app_content::get_app_content),
         )

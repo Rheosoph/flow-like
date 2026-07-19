@@ -6,6 +6,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    publication::{PublicationTarget, target::new_request},
     state::AppState,
 };
 use axum::{
@@ -140,17 +141,15 @@ pub async fn request_publication(
     let request_id = create_id();
     let author_id = user.sub().ok();
 
-    let new_request = publication_request::ActiveModel {
-        id: Set(request_id.clone()),
-        app_id: Set(app_id.clone()),
-        target_visibility: Set(target_visibility.clone()),
-        status: Set(PublicationRequestStatus::Pending),
-        approver_id: Set(None),
-        ai_act_assessment_id: Set(bound_assessment_id),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
-    new_request.insert(&state.db).await?;
+    new_request(
+        request_id.clone(),
+        &PublicationTarget::App(app_id.clone()),
+        target_visibility.clone(),
+        bound_assessment_id,
+        now,
+    )
+    .insert(&state.db)
+    .await?;
 
     let log = publication_log::ActiveModel {
         id: Set(create_id()),

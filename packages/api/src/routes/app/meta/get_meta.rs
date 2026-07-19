@@ -12,7 +12,6 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::bit::Metadata;
-use flow_like_storage::Path as FlowPath;
 use sea_orm::TransactionTrait;
 
 #[utoipa::path(
@@ -25,7 +24,8 @@ use sea_orm::TransactionTrait;
         ("language" = Option<String>, Query, description = "Language code (default en)"),
         ("template_id" = Option<String>, Query, description = "Template ID"),
         ("course_id" = Option<String>, Query, description = "Course ID"),
-        ("widget_id" = Option<String>, Query, description = "Widget ID")
+        ("widget_id" = Option<String>, Query, description = "Widget ID"),
+        ("group_id" = Option<String>, Query, description = "Suite (app group) ID")
     ),
     responses(
         (status = 200, description = "Metadata", body = String, content_type = "application/json"),
@@ -56,9 +56,14 @@ pub async fn get_meta(
         if !state.platform_config.features.unauthorized_read {
             user.sub()?;
         }
-        match mode {
+        match &mode {
             MetaMode::App(_) => {
                 ensure_app_publicly_visible(&app_id, &state).await?;
+            }
+            MetaMode::Group(group_id) => {
+                if !MetaMode::is_publicly_visible_group(group_id, &state).await? {
+                    return Err(ApiError::FORBIDDEN);
+                }
             }
             _ => return Err(ApiError::FORBIDDEN),
         }
@@ -76,7 +81,6 @@ pub async fn get_meta(
 
     let master_store = state.master_credentials().await?;
     let store = master_store.to_store(false).await?;
-    let prefix = FlowPath::from("media").child("apps").child(app_id);
-    metadata.presign(prefix, &store).await;
+    metadata.presign(mode.media_prefix(&app_id), &store).await;
     Ok(Json(metadata))
 }

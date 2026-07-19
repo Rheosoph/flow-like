@@ -1,7 +1,3 @@
-import { createId } from "@paralleldrive/cuid2";
-import { invoke } from "@tauri-apps/api/core";
-import { dirname, resolve } from "@tauri-apps/api/path";
-import { mkdir, open as openFile } from "@tauri-apps/plugin-fs";
 import {
 	type AppCommentsResponse,
 	type IApp,
@@ -17,6 +13,7 @@ import {
 	type UpsertAppCommentResponse,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import type { IGroup } from "@flow-like/flow-like-ui";
 import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-search-query";
 import type {
 	IBeginOfflineForkBody,
@@ -27,6 +24,10 @@ import type {
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
+import { createId } from "@paralleldrive/cuid2";
+import { invoke } from "@tauri-apps/api/core";
+import { dirname, resolve } from "@tauri-apps/api/path";
+import { mkdir, open as openFile } from "@tauri-apps/plugin-fs";
 import { fetcher, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
@@ -275,6 +276,45 @@ export class AppState implements IAppState {
 			console.error("Failed to search apps:", error);
 			return [];
 		}
+	}
+
+	async getStoreGroups(offset?: number, limit?: number): Promise<IGroup[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		const params = new URLSearchParams();
+		if (offset !== undefined) params.set("offset", offset.toString());
+		if (limit !== undefined) params.set("limit", limit.toString());
+		return await fetcher(
+			this.backend.profile,
+			`store/groups?${params}`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async getStoreGroup(groupId: string): Promise<IGroup> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			`store/groups/${groupId}`,
+			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async getMyGroups(): Promise<IGroup[]> {
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth context not available");
+		}
+		return await fetcher(
+			this.backend.profile,
+			"user/groups",
+			undefined,
+			this.backend.auth,
+		);
 	}
 
 	async getApps(): Promise<[IApp, IMetadata | undefined][]> {

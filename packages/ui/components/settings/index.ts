@@ -1,4 +1,5 @@
 export * from "./team/team-page";
+export * from "./team/suites-page";
 export * from "./roles/roles-page";
 export * from "./connections/process-graph";
 export * from "./events/events-page";
